@@ -1,4 +1,4 @@
-- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126. Items 1 to 6 are done in PR 2 (the import apply); 7 and 8 remain, and so does the cut-over of `maintenance.audible-read-status` to the new fixer.
+- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126. The delete/retention, parser and matcher items and the master-list auth-off route are done in PR 2 (the import apply); the rest remain, and so does the cut-over of `maintenance.audible-read-status` to the new fixer.
   - [x] No delete route or retention for stored lists (`mlist:list:` / `mlist:row:`): `DELETE /api/v1/master-lists/:id` and per-uploader retention (`master_list_retention`, default 10, pruned on upload).
   - [x] `masterlist.ClassifyASIN` only tried the ISBN-10 reading when the code was all digits, so an ISBN-10 whose check digit is `X` was classified as an ASIN.
   - [x] A generic `isbn` column that disagrees with an `isbn10` / `isbn13` column on the same row was dropped without an `identifier_conflict` issue.
@@ -6,5 +6,7 @@
   - [x] An ambiguous ASIN tier returned without trying the ISBN tier, so a row whose ISBN would settle the match was left `ambiguous`.
   - [x] `checkAgreement` ignored survivors of trashed books when comparing the ASIN and ISBN hits.
   - [ ] A runtime change of the upload limit gives the minimum of the middleware limit and the handler limit until restart.
-  - [ ] `RequireAdmin` answers 401 (not a pass-through) when `EnableAuth=false`, unlike `s.perm`, so the master-list routes are unreachable in a no-auth dev run.
+  - [x] `RequireAdmin` answered 401 (not a pass-through) when `EnableAuth=false`, so the master-list routes were unreachable in a no-auth dev run: fixed for the master-list routes only, through `Server.adminRole()` in `wire_master_list_routes.go`.
+  - [ ] `servermiddleware.RequireAdmin` itself still answers 401 with `EnableAuth=false` for its other users (retired wipe stub, cache introspection, admin debug API, `/system` wipe routes). Decide per route whether auth-off should open it, then give each the same pass-through; do not change `RequireAdmin` globally, it also guards destructive routes.
+  - [ ] Plan rows of a Repairs fixer are readable by any `library.view` holder, including the master-list plan rows (list titles and authors, the target user's read status): gate the Repairs plan-rows read (PR #4148).
   - [ ] Cut over `maintenance.audible-read-status` to the `master-list-import` fixer (its Audible-specific input becomes a list upload) and retire the old op.

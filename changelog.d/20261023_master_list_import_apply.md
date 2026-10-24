@@ -19,3 +19,12 @@ A row that matches no library book, with no title candidates and no trashed copy
 - A JSON list with a wrongly typed field in one row keeps the file: the row carries a `bad_field` finding (or `bad_row` when the row itself is not an object).
 - A row whose ASIN names several editions is settled by its ISBN-13 when that names one of them, and held for review as `identifier_conflict` when the ISBN names a book outside them.
 - The ASIN and ISBN agreement check follows a trashed copy to its live survivor, so an ISBN carried only by a book merged away is no longer invisible to it.
+- A row that matches no library book but has a data problem of its own (a bad identifier, a bad or future finish time, conflicting identifiers) is held as `unmatched` for review instead of becoming a bulk-applicable read-elsewhere record, and the row's reason says why.
+- A list time that is in the future when the apply re-plans is its own skip, `skipped_future_timestamp`, for matched rows and read-elsewhere records alike, and is never copied into a record.
+- A read-elsewhere record is now one per book for a user, not one per identifier: a row whose ASIN, ISBN-13 or source id is already recorded for the user by another list is `skipped_already_recorded`.
+- Apply re-reads the target user and book at the write: a removed user, or a book that was trashed or merged after the re-plan, writes nothing and reports `changed_since_plan` (a merged book is held, not followed to its survivor; re-plan to match through the survivor). A dry run for a removed user fails the row instead of saying `would_apply`.
+- Undo preflight now predicts a read-elsewhere record's removal the way the revert performs it, so it no longer reports a record replaced by another list's as safe.
+- `DELETE /api/v1/master-lists/:id` removes a list whose stored metadata no longer decodes.
+- The master-list routes pass through when authentication is disabled (as the rest of the API does) instead of answering 401 to everyone. Any admin holding `users.manage` may delete any stored list: lists are shared admin input and the plan accepts any list id.
+- The master-list design is committed as `docs/design/2026-10-23-master-list-import-design.md`, with a note of where the implementation departs from the draft.
+- Known and tracked separately: until PR #4148 merges, the Repairs plan rows (including this fixer's list titles, authors and the target user's read status) are readable by any `library.view` holder.

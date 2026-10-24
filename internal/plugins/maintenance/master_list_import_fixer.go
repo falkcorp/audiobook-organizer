@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b0c5f4a-6d0a-4f0e-9d8e-3f1f7a9a52c1
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -30,7 +30,7 @@ import (
 )
 
 // masterListImportFixerID is the Repairs-lane id of the master-list import
-// (design: .claude/notes/2026-10-23-master-list-import-design.md).
+// (design: docs/design/2026-10-23-master-list-import-design.md).
 const masterListImportFixerID = "master-list-import"
 
 // mlLibraryPage is the page size of the whole-library read.
@@ -47,7 +47,7 @@ const mlLibraryPage = 5000
 //     (skipped_already_finished, skipped_newer_local, skipped_user_abandoned,
 //     skipped_no_timestamp, skipped_no_progress, skipped_local_progress,
 //     skipped_manual_unstarted, skipped_no_status, skipped_not_started,
-//     skipped_list_abandoned, error_state_unreadable).
+//     skipped_list_abandoned, skipped_future_timestamp, error_state_unreadable).
 //   - matched_review: a match a person confirms: by title and author, a
 //     swapped title, a runtime or series disagreement, a list-side data problem,
 //     a trashed copy followed to its survivor, or a book two list rows claim.
@@ -56,7 +56,11 @@ const mlLibraryPage = 5000
 //   - read_elsewhere: no live book fits and nothing in the library could be it
 //     (no title candidate, no trashed copy carrying an identifier). Applicable:
 //     Apply keeps the row as a read-elsewhere record (never as a book).
-//     skipped_already_recorded when the record exists.
+//     skipped_already_recorded when the record exists, under this identifier or
+//     any other the same book carries in another list. A row with a data problem
+//     of its own (bad identifier, bad or future time, conflicting identifiers) is
+//     held as unmatched instead: a dropped identifier may have been the one that
+//     matched.
 //   - duplicate_in_list: the row names the same book as an earlier row (same
 //     ASIN, ISBN-13 or source id, transitively); the earlier row carries the
 //     combined status and the match.
@@ -112,11 +116,19 @@ func (f *masterListImportFixer) Description() string {
 }
 
 // RequiredPermissions implements repairs.PermissionScoped: the plan names any
-// user as target_user_id and reads an uploaded list, so it is a user-management
-// act, above the lane's default library.edit_metadata. Without it an editor
-// could plan against another user's list. It is the same permission the
-// upload routes demand (wire_master_list_routes.go), so one grant covers the
-// whole import.
+// user as target_user_id and reads an uploaded list, so starting a plan or an
+// apply is a user-management act, above the lane's default
+// library.edit_metadata. Without it an editor could plan against another user's
+// list. It is the same permission the master-list routes demand
+// (wire_master_list_routes.go), so one grant covers the whole import.
+//
+// It gates the writes (StartPlan, StartApply, OwnerApply) only. The READS of a
+// finished plan are not gated by it yet: GET /repairs/:fixer/plan/:op/rows and
+// the last_plan / last_apply op ids in GET /repairs need only library.view, and
+// each row carries the list row, the target user and (for a matched row) that
+// user's current state on the book. Until falkcorp/audiobook-organizer#4148
+// (the Repairs framework applies RequiredPermissions to those reads) merges, do
+// not read this fixer's rows as private to users.manage holders.
 func (f *masterListImportFixer) RequiredPermissions() []auth.Permission {
 	return []auth.Permission{auth.PermUsersManage}
 }
@@ -286,6 +298,8 @@ type mlApplyScope struct {
 	once sync.Once
 	m    *mlMatcher
 	err  error
+	// elsewhere is the run's read-elsewhere index (mlElsewhereIndex).
+	elsewhere mlElsewhereIndex
 }
 
 type mlApplyScopeKey struct{}
@@ -306,6 +320,15 @@ func (f *masterListImportFixer) matcherFor(ctx context.Context, store OpsStore, 
 	}
 	sc.once.Do(func() { sc.m, sc.err = f.loadMatcher(ctx, store, ext) })
 	return sc.m, sc.err
+}
+
+// elsewhereFor is the run's shared read-elsewhere index, or a fresh one when
+// Replan is called outside an apply run.
+func (f *masterListImportFixer) elsewhereFor(ctx context.Context) *mlElsewhereIndex {
+	if sc, ok := ctx.Value(mlApplyScopeKey{}).(*mlApplyScope); ok {
+		return &sc.elsewhere
+	}
+	return &mlElsewhereIndex{}
 }
 
 // Plan matches every list row against the library, then decides each matched
@@ -365,7 +388,7 @@ func (f *masterListImportFixer) Plan(ctx context.Context, raw json.RawMessage, r
 	// target user's state as it is now. Each worker writes only rows[i] for
 	// its own i; rows of one book never share a target (duplicate targets were
 	// demoted above), and the reads are of the user's state, never writes.
-	d := &mlDecider{now: f.now, us: us, lists: lists, m: m}
+	d := &mlDecider{now: f.now, us: us, lists: lists, m: m, elsewhere: &mlElsewhereIndex{}}
 	var decide []int
 	needs := make([]bool, len(rows))
 	states := make([]mlRowState, len(rows))
@@ -428,6 +451,11 @@ func (f *masterListImportFixer) Replan(ctx context.Context, _ json.RawMessage, p
 	if st.User == "" || st.ListID == "" {
 		return repairs.Row{}, fmt.Errorf("row %s: the plan stored no list or user", planned.RowID)
 	}
+	// parseMLParams' check of the target user, repeated: the plan stored the id,
+	// and a dry run should not report would_apply for a user that is gone.
+	if err := f.recheckUser(st.User); err != nil {
+		return repairs.Row{}, fmt.Errorf("row %s: %w", planned.RowID, err)
+	}
 	m, err := f.matcherFor(ctx, store, ext)
 	if err != nil {
 		return repairs.Row{}, err
@@ -448,7 +476,7 @@ func (f *masterListImportFixer) Replan(ctx context.Context, _ json.RawMessage, p
 		return repairs.Row{}, fmt.Errorf("row %s: decode own state: %w", planned.RowID, err)
 	}
 	if mlNeedsDecision(fresh, fst) {
-		d := &mlDecider{now: f.now, us: us, lists: lists, m: m}
+		d := &mlDecider{now: f.now, us: us, lists: lists, m: m, elsewhere: f.elsewhereFor(ctx)}
 		return d.decide(fresh, fst), nil
 	}
 	mlFinalize(&fresh)
@@ -467,7 +495,7 @@ func (f *masterListImportFixer) Replan(ctx context.Context, _ json.RawMessage, p
 func (f *masterListImportFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	switch d := fresh.Detail.(type) {
 	case *mlDecision:
-		if err := w.SetUserState(ctx, d.user, d.book, d.expect, d.next); err != nil {
+		if err := w.SetUserStateChecked(ctx, d.user, d.book, d.expect, d.next, func() error { return f.recheckTarget(d.user, d.book) }); err != nil {
 			if errors.Is(err, repairs.ErrChangedSincePlan) || errors.Is(err, repairs.ErrPartiallyApplied) {
 				return err
 			}
@@ -480,6 +508,59 @@ func (f *masterListImportFixer) Apply(ctx context.Context, w *repairs.Writer, fr
 	return fmt.Errorf("%s: row %s carries no decision", masterListImportFixerID, fresh.RowID)
 }
 
+// recheckTarget is what Apply re-reads under the write (the Writer's merge lock
+// and the (user, book) stripe), because the apply run's library snapshot is
+// loaded once and a row can wait behind thousands of others: the target user
+// must still exist, and the matched book must still be a live book. A book
+// merged into another is held, not followed: the match was made, and reviewed
+// as high confidence, for THIS book, and its survivor's state and copies were
+// never read; a re-plan matches the survivor through its trashed twin and files
+// it for review (via_trashed). Both refusals wrap repairs.ErrChangedSincePlan,
+// so the row reports changed_since_plan with the reason. (The framework guard
+// does not cover this: it skips a trashed book as having nothing left to
+// protect, it does not refuse it.)
+func (f *masterListImportFixer) recheckTarget(user, book string) error {
+	if err := f.recheckUser(user); err != nil {
+		return err
+	}
+	store := f.p.deps.OpsStore()
+	if store == nil {
+		return fmt.Errorf("%s: database not initialized", masterListImportFixerID)
+	}
+	b, err := store.GetBookByID(book)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s: re-read book %s: %w", masterListImportFixerID, book, err)
+	case b == nil:
+		return fmt.Errorf("book %s no longer exists: %w", book, repairs.ErrChangedSincePlan)
+	case b.MergedIntoBookID != nil && *b.MergedIntoBookID != "":
+		return fmt.Errorf("book %s was merged into %s since the plan; re-plan to review the match on the survivor: %w", book, *b.MergedIntoBookID, repairs.ErrChangedSincePlan)
+	case b.IsSoftDeleted():
+		return fmt.Errorf("book %s was moved to the trash since the plan: %w", book, repairs.ErrChangedSincePlan)
+	}
+	return nil
+}
+
+// recheckUser: the target user still exists, and is still not the iTunes sync
+// user (the plan checked both; Replan keeps the plan's user from the row).
+func (f *masterListImportFixer) recheckUser(user string) error {
+	us := f.p.deps.UserReadStateStore()
+	if us == nil {
+		return fmt.Errorf("%s: the store cannot read user listening state", masterListImportFixerID)
+	}
+	if user == arsLocalUserID {
+		return fmt.Errorf("%s: target user %q is the iTunes sync user", masterListImportFixerID, user)
+	}
+	u, err := us.GetUserByID(user)
+	if err != nil {
+		return fmt.Errorf("%s: re-read user %s: %w", masterListImportFixerID, user, err)
+	}
+	if u == nil {
+		return fmt.Errorf("target user %s no longer exists: %w", user, repairs.ErrChangedSincePlan)
+	}
+	return nil
+}
+
 // applyElsewhere creates the record, journaled first
 // (undo.ChangeTypeMasterListElsewhereCreate) so the apply op's revert deletes
 // it again while it is still what this apply made. The journal row names no
@@ -490,6 +571,12 @@ func (f *masterListImportFixer) applyElsewhere(w *repairs.Writer, fresh repairs.
 	lists := f.p.deps.MasterLists()
 	if lists == nil {
 		return fmt.Errorf("%s: the store cannot keep master lists", masterListImportFixerID)
+	}
+	// The record names the target user: one that was removed since the plan
+	// gets none. (Nothing is locked here, so the check is as close to the write
+	// as the store allows; the create itself is atomic.)
+	if err := f.recheckUser(d.rec.UserID); err != nil {
+		return err
 	}
 	rec := d.rec
 	rec.CreatedAt = f.now().UTC()
@@ -654,6 +741,13 @@ func (f *masterListImportFixer) matchRow(rc mlRowContext, lib *mlLibrary, key st
 			r.Class = mlMatchedReview
 			r.Reason = "the list row has data problems (" + strings.Join(mlIssueFlags(row), ", ") + "); confirm the match"
 		}
+	}
+	// The unmatched twin of the demotion above: a row that nothing in the
+	// library could be would become a read-elsewhere record, but with a data
+	// problem of its own (a dropped bad identifier may have been the one that
+	// matched) it is held, still unmatched, for a person.
+	if mlElsewhereCandidate(r, st) && len(row.Issues) > 0 {
+		r.Reason += "; held for review rather than kept as a read-elsewhere record: the list row has data problems (" + strings.Join(mlIssueFlags(row), ", ") + ")"
 	}
 	for _, id := range o.candidates {
 		if b := lib.books[id]; b != nil {

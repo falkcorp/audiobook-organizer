@@ -1,7 +1,7 @@
 // file: internal/database/master_list_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e49355ec-8cf3-4b4d-b7a4-732d4c7f90e7
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -17,8 +17,8 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// Master-list store (design: .claude/notes/2026-10-23-master-list-import-
-// design.md, section 3). An uploaded list (a CSV or JSON file of books with
+// Master-list store (design: docs/design/2026-10-23-master-list-import-design.md,
+// section 3). An uploaded list (a CSV or JSON file of books with
 // their ISBN, ASIN and read status) is kept so the Repairs plan can read it by
 // id instead of taking the rows in a request body, and so every plan row has a
 // durable source line.
@@ -200,10 +200,19 @@ func (s *MasterListStore) ListLists() ([]MasterListMeta, error) {
 // whose ScanRows fails on the missing rows. Rows that outlive such a crash are
 // unreachable (list ids are never reused), which is the cost of the ordering.
 // It returns ErrMasterListNotFound for an unknown id.
+//
+// Whether the list exists is decided by its key, not by decoding it: a list
+// whose metadata no longer decodes is exactly the one an admin needs to be able
+// to remove, and GetList would answer with the decode error instead.
 func (s *MasterListStore) DeleteList(id string) error {
-	if _, err := s.GetList(id); err != nil {
-		return err
+	_, closer, err := s.db.Get([]byte(masterListPrefix + id))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return ErrMasterListNotFound
 	}
+	if err != nil {
+		return fmt.Errorf("master list %s: read metadata: %w", id, err)
+	}
+	_ = closer.Close()
 	if err := s.db.Delete([]byte(masterListPrefix+id), pebble.Sync); err != nil {
 		return fmt.Errorf("master list %s: delete metadata: %w", id, err)
 	}

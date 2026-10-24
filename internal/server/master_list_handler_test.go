@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -320,24 +320,31 @@ func TestMasterListUpload_RetentionPrunesTheUploadersOldestLists(t *testing.T) {
 }
 
 // A retention that is unset or invalid falls back to the default (10): it can
-// never become "keep nothing" and prune the list just stored.
+// never become "keep nothing" and prune the list just stored. Uploading past
+// the default shows the fallback is the number that is applied: ten lists stay,
+// the two oldest go.
 func TestMasterListUpload_RetentionDefaultsWhenUnsetOrInvalid(t *testing.T) {
 	for _, n := range []int{0, -5} {
 		f := setupCredGuardServer(t)
 		prev := config.AppConfig.MasterListRetention
 		config.AppConfig.MasterListRetention = n
-		for i := 0; i < 3; i++ {
-			assert.Empty(t, f.uploadMasterListID(t).PrunedLists, "retention %d", n)
+		t.Cleanup(func() { config.AppConfig.MasterListRetention = prev })
+
+		require.Equal(t, database.DefaultMasterListRetention, masterListRetention(), "retention %d", n)
+
+		var ids []string
+		for i := 0; i < database.DefaultMasterListRetention+2; i++ {
+			resp := f.uploadMasterListID(t)
+			assert.Empty(t, resp.PruneError, "retention %d, upload %d", n, i)
+			ids = append(ids, resp.List.ID)
 		}
-		assert.Len(t, masterListIDs(t, f), 3, "retention %d", n)
+		remaining := masterListIDs(t, f)
+		assert.Len(t, remaining, database.DefaultMasterListRetention, "retention %d keeps the default, not 0 and not everything", n)
+		assert.NotContains(t, remaining, ids[0], "retention %d: the oldest went", n)
+		assert.NotContains(t, remaining, ids[1], "retention %d: the second oldest went", n)
+		assert.Contains(t, remaining, ids[len(ids)-1], "retention %d: the list just stored stays", n)
 		config.AppConfig.MasterListRetention = prev
 	}
-	assert.Equal(t, database.DefaultMasterListRetention, func() int {
-		prev := config.AppConfig.MasterListRetention
-		defer func() { config.AppConfig.MasterListRetention = prev }()
-		config.AppConfig.MasterListRetention = 0
-		return masterListRetention()
-	}())
 }
 
 func TestMasterListDelete_RemovesTheListAndItsRows(t *testing.T) {
@@ -434,4 +441,38 @@ func TestMasterListElsewhere_ListsRecordsNewestFirstAndFiltersByUser(t *testing.
 	require.Equal(t, 2, u1.Count)
 	assert.Equal(t, "Newer", u1.Records[0].Title)
 	assert.Equal(t, 0, get("?user_id=nobody").Count)
+}
+
+// With authentication switched off the master-list routes are open, like the
+// rest of the API in that mode: there is no user to hold users.manage, and the
+// admin-role gate used to answer 401 to every call.
+func TestMasterListRoutes_AuthDisabledIsOpen(t *testing.T) {
+	f := setupCredGuardServerWith(t, func(c *config.Config) { c.EnableAuth = false })
+
+	w := f.postMasterList(t, "", bytes.NewBufferString(masterListTestCSV), "text/csv", "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var up masterListUploadResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &up))
+
+	w = f.doMasterList(t, http.MethodGet, "/api/v1/master-lists", "")
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	w = f.doMasterList(t, http.MethodGet, "/api/v1/master-lists/elsewhere", "")
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	w = f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/"+up.List.ID, "")
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Empty(t, masterListIDs(t, f))
+}
+
+// Policy: lists are shared admin input, the plan accepts any list_id, so any
+// admin holding users.manage may delete any list, not only their own upload.
+// This pins that choice; a change to it should be deliberate.
+func TestMasterListDelete_AnyAdminMayDeleteAnyList(t *testing.T) {
+	f := setupCredGuardServer(t)
+	up := f.uploadMasterListID(t)
+
+	sess, err := f.store.CreateSessionWithOrigin(f.targetID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	require.NoError(t, err)
+	w := f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/"+up.List.ID, sess.ID)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Empty(t, masterListIDs(t, f), "the second admin deleted the first admin's list")
 }
