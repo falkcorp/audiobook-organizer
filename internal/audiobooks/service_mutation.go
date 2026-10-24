@@ -1507,14 +1507,14 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	//
 	// A retire shell owns no live row, so that check passes it; its deletion
 	// would drop the record of where its retired versions came from, so the
-	// same closure refuses it (merge.RefuseRetiredShell). The retire repair
+	// same closure refuses it (database.RefuseRetiredShell). The retire repair
 	// takes the merge lock too, so the run under the lock catches a shell
 	// retired since this read.
 	refuseIfBlocked := func() error {
 		if err := database.CheckBookOwnsNoFiles(svc.store, id, "hard delete"); err != nil {
 			return err
 		}
-		return merge.RefuseRetiredShell(svc.store, id, "hard delete")
+		return database.RefuseRetiredShell(svc.store, id, "hard delete")
 	}
 	if err := refuseIfBlocked(); err != nil {
 		return nil, err

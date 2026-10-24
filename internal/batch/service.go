@@ -865,7 +865,7 @@ func (bs *BatchService) hardDeleteLocked(id string, purges *trashPurges) error {
 	// it; deleting it would drop the record of where its retired versions came
 	// from. A trashed shell is refused by the purge above (purgeGate); this is
 	// the same refusal for a shell that is not in the trash.
-	if err := merge.RefuseRetiredShell(bs.db, id, "hard delete"); err != nil {
+	if err := database.RefuseRetiredShell(bs.db, id, "hard delete"); err != nil {
 		return err
 	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
@@ -879,7 +879,7 @@ func (bs *BatchService) hardDeleteLocked(id string, purges *trashPurges) error {
 			}
 			// Under the merge lock the retire repair also takes: a shell
 			// retired since the check above is caught before the carry.
-			return merge.RefuseRetiredShell(bs.db, book.ID, "hard delete")
+			return database.RefuseRetiredShell(bs.db, book.ID, "hard delete")
 		},
 		func() error { return bs.db.DeleteBook(book.ID) })
 	if err == nil {

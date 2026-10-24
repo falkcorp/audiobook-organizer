@@ -200,7 +200,7 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 	// trash until its versions no longer hold rows. After the undo hold, so a
 	// shell an undo can still use is counted as that. Fail closed: an unreadable
 	// answer is not proof the book is not a shell.
-	if rerr := merge.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
+	if rerr := database.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
 		if errors.Is(rerr, database.ErrBookIsRetiredShell) {
 			return purgeOutcome{kind: purgeRetiredShell}, true
 		}

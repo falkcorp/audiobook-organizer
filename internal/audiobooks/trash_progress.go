@@ -709,7 +709,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		return nil, fmt.Errorf("%w: %s", ErrNotInTrash, id)
 	}
 	// A retire shell is refused before anything else is read or recorded.
-	if err := merge.RefuseRetiredShell(svc.store, id, "discard progress and purge"); err != nil {
+	if err := database.RefuseRetiredShell(svc.store, id, "discard progress and purge"); err != nil {
 		return nil, err
 	}
 	rec := svc.recorder()
@@ -801,7 +801,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 			return fmt.Errorf("discard progress and purge %s: %w", id, ErrPurgeUndoPossible)
 		}
 		// And the retired-shell refusal, before any state is cleared.
-		if rerr := merge.RefuseRetiredShell(svc.store, id, "discard progress and purge"); rerr != nil {
+		if rerr := database.RefuseRetiredShell(svc.store, id, "discard progress and purge"); rerr != nil {
 			return rerr
 		}
 		book = cur
