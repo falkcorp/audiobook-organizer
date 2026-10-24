@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-28
 
@@ -191,6 +191,20 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 		return purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(err), errs: []string{fmt.Sprintf("%s: not purged: cannot tell whether an undo still needs it: %v", book.ID, err)}}, true
 	case held:
 		return purgeOutcome{kind: purgeKeptUndo}, true
+	}
+	// A retire shell. The retired-versions repair re-keys a trashed book's file
+	// rows onto the live book it lost to, so the shell owns no row and the file
+	// check above passes it. Purging it would drop the only record of where
+	// those versions came from, with no journaled snapshot to restore a version
+	// from (the purge that writes one is not built yet), so it stays in the
+	// trash until its versions no longer hold rows. After the undo hold, so a
+	// shell an undo can still use is counted as that. Fail closed: an unreadable
+	// answer is not proof the book is not a shell.
+	if rerr := merge.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
+		if errors.Is(rerr, database.ErrBookIsRetiredShell) {
+			return purgeOutcome{kind: purgeRetiredShell}, true
+		}
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %v", book.ID, rerr)}}, true
 	}
 	return purgeOutcome{}, false
 }
@@ -599,6 +613,9 @@ func (r *PurgeResult) Summary() string {
 func (r *PurgeResult) summary() string {
 	// Left out of the bound: not decided, so it is said, not folded into a kept count.
 	after := ""
+	if r.SkippedRetiredShell > 0 {
+		after += fmt.Sprintf("; %d kept: the shell of a retired version that still holds its files", r.SkippedRetiredShell)
+	}
 	if r.NotYetDue > 0 {
 		after += fmt.Sprintf("; %d not yet past the retention window (not touched)", r.NotYetDue)
 	}
@@ -634,7 +651,7 @@ func (r *PurgeResult) summary() string {
 // that was restored or purged meanwhile counts in none of them, so on a very
 // busy trash it can read a little low; it is a progress figure, not a ledger.
 func (r *PurgeResult) Decided() int {
-	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.SkippedHoldsRetiredVersions + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed + r.TrashedAfterPreview + r.NotYetDue + r.NotInPreview
+	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.SkippedHoldsRetiredVersions + r.SkippedRetiredShell + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed + r.TrashedAfterPreview + r.NotYetDue + r.NotInPreview
 	// CarriedToSibling is also counted in Purged/Purgeable.
 	if n > r.Attempted {
 		return r.Attempted
@@ -657,6 +674,7 @@ func (r *PurgeResult) Capped(n int) *PurgeResult {
 	}
 	c.SkippedOwnsFilesIDs = cut(r.SkippedOwnsFilesIDs)
 	c.SkippedHoldsRetiredVersionsIDs = cut(r.SkippedHoldsRetiredVersionsIDs)
+	c.SkippedRetiredShellIDs = cut(r.SkippedRetiredShellIDs)
 	c.CarriedToSiblingIDs = cut(r.CarriedToSiblingIDs)
 	c.KeptHasProgressIDs = cut(r.KeptHasProgressIDs)
 	c.KeptUndoPossibleIDs = cut(r.KeptUndoPossibleIDs)
@@ -681,9 +699,10 @@ type PurgeBreakdown struct {
 	// Purgeable is how many a real pass would purge now.
 	Purgeable int `json:"purgeable"`
 	// Blocked, by reason. OwnsFiles includes the books that hold only retired
-	// versions (PurgeResult.SkippedHoldsRetiredVersions): the listing has no
-	// separate figure for them yet, and each is blocked because book_file rows
-	// are keyed under it.
+	// versions (PurgeResult.SkippedHoldsRetiredVersions) and the shells those
+	// versions were retired from (PurgeResult.SkippedRetiredShell): the listing
+	// has no separate figure for them yet, and each is blocked because of
+	// book_file rows keyed under it or under the book it was retired onto.
 	OwnsFiles         int `json:"owns_files"`
 	UndoPossible      int `json:"undo_possible"`
 	HasListeningState int `json:"has_listening_state"`
@@ -700,7 +719,7 @@ func breakdownOf(r *PurgeResult, at time.Time) PurgeBreakdown {
 	b := PurgeBreakdown{
 		ComputedAt:        at,
 		FromPreview:       r.DryRun,
-		OwnsFiles:         r.SkippedOwnsFiles + r.SkippedHoldsRetiredVersions,
+		OwnsFiles:         r.SkippedOwnsFiles + r.SkippedHoldsRetiredVersions + r.SkippedRetiredShell,
 		UndoPossible:      r.KeptUndoPossible,
 		HasListeningState: r.KeptHasProgress,
 		Failed:            r.Failed + r.CarryFailed,
