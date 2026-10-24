@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_retired_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f4b7d29-6a1c-4e83-9d52-c8e1a7b30f64
 // last-edited: 2026-10-23
 
@@ -7,6 +7,7 @@ package versions
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,6 +40,7 @@ func newRetiredFixture(t *testing.T, withRow bool) *retiredFixture {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	store.WaitForWarmup() // BookFilesAtPath (PurgeVersion's guard) needs the memdb
 
 	bookDir := t.TempDir()
 	holder, err := store.CreateBook(&database.Book{Title: "Holder", FilePath: filepath.Join(bookDir, "book.m4b")})
@@ -237,10 +239,15 @@ func TestAutoPromoteAlt_IgnoresRetired(t *testing.T) {
 	}
 }
 
-// The trash cleanup never lists or purges a retired version, however old: a
-// trashed alt is purged, the retired version beside it keeps its slot, its
-// files and its status. A retired version forced into the cleanup's re-read
-// path is refused by PurgeVersion itself.
+// A retired version named by a stale trash listing is never purged, however
+// old the listing says it is: a trashed alt is purged, the retired version beside
+// it keeps its slot, its files and its status. The store never lists a retired
+// version as trashed, so the listing is replaced with one that does name it,
+// stamped as a trashed version past its window. What the test pins is that the
+// cleanup acts on the re-read of the real row and never on the listing entry
+// (it fails if the cleanup trusts the snapshot). The refusal inside PurgeVersion
+// is a further guard the cleanup cannot reach while the re-read holds; it is
+// covered directly by TestPurgeVersion_RefusesRetiredBeforeTouchingDisk.
 func TestCleanupTrashedVersions_NeverPurgesRetired(t *testing.T) {
 	f := newRetiredFixture(t, true)
 	trashedAt := time.Now().Add(-40 * day)
@@ -270,7 +277,12 @@ func TestCleanupTrashedVersions_NeverPurgesRetired(t *testing.T) {
 		}
 	}
 
-	if n := cleanupTrashedVersionsAt(f.store, time.Now()); n != 1 {
+	forged := f.reread(t)
+	forged.Status = database.BookVersionStatusTrash
+	forged.TrashedAt = &trashedAt
+	snapshot := append(listed, *forged)
+
+	if n := cleanupTrashedVersionsAt(staleListStore{f.store, snapshot}, time.Now()); n != 1 {
 		t.Fatalf("purged %d, want 1 (the trashed alt only)", n)
 	}
 	if _, err := os.Stat(trashedFile); !os.IsNotExist(err) {
@@ -281,4 +293,175 @@ func TestCleanupTrashedVersions_NeverPurgesRetired(t *testing.T) {
 	if got := f.reread(t); got.Status != database.BookVersionStatusRetired {
 		t.Errorf("retired version status = %s, want retired", got.Status)
 	}
+}
+
+// sharedPathFixture is a holder with a TRASHED version whose purge is due, and a
+// retired version (holding a shell's rows) that names some of the same files:
+//
+//	ownOnly     own row of the trashed version, in its slot  -> removed
+//	slotShared  own row + a retired row, in its slot         -> kept
+//	rowShared   own row + a retired row, outside the slot    -> kept
+//	retiredOnly retired row only, in the slot, no own row    -> kept (the old
+//	            RemoveAll of the slot would have taken it)
+//	unrowed     in the slot, no row of any kind              -> removed
+type sharedPathFixture struct {
+	store     *database.PebbleStore
+	holderID  string
+	trashed   *database.BookVersion
+	ownOnly   string
+	slotShare string
+	rowShared string
+	retOnly   string
+	unrowed   string
+}
+
+func newSharedPathFixture(t *testing.T) *sharedPathFixture {
+	t.Helper()
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	store.WaitForWarmup() // BookFilesAtPath (PurgeVersion's guard) needs the memdb
+
+	bookDir := t.TempDir()
+	holder, err := store.CreateBook(&database.Book{Title: "Holder", FilePath: filepath.Join(bookDir, "book.m4b")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell, err := store.CreateBook(&database.Book{Title: "Shell", FilePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trashedAt := time.Now().Add(-40 * day)
+	trashed, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: holder.ID, Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported", TrashedAt: &trashedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retiredAt := time.Now()
+	retired, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: holder.ID, Status: database.BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-1", RetiredAt: &retiredAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slot := VersionSlotDir(bookDir, trashed.ID)
+	outside := t.TempDir()
+	f := &sharedPathFixture{
+		store: store, holderID: holder.ID, trashed: trashed,
+		ownOnly:   filepath.Join(slot, "own_only.m4b"),
+		slotShare: filepath.Join(slot, "slot_shared.m4b"),
+		rowShared: filepath.Join(outside, "row_shared.m4b"),
+		retOnly:   filepath.Join(slot, "retired_only.m4b"),
+		unrowed:   filepath.Join(slot, "unrowed.m4b"),
+	}
+	for _, p := range []string{f.ownOnly, f.slotShare, f.rowShared, f.retOnly, f.unrowed} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("audio"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, p := range []string{f.ownOnly, f.slotShare, f.rowShared} {
+		if err := store.CreateBookFile(&database.BookFile{
+			BookID: holder.ID, FilePath: p, VersionID: trashed.ID, TrackNumber: i + 1,
+		}); err != nil {
+			t.Fatalf("own row %s: %v", p, err)
+		}
+	}
+	var ids []string
+	for i, p := range []string{f.slotShare, f.rowShared, f.retOnly} {
+		row := &database.BookFile{BookID: shell.ID, FilePath: p, TrackNumber: i + 1}
+		if err := store.CreateBookFile(row); err != nil {
+			t.Fatalf("shell row %s: %v", p, err)
+		}
+		ids = append(ids, row.ID)
+	}
+	if err := store.RetireBookFiles([]database.BookFileMove{{FileIDs: ids, SourceBookID: shell.ID}}, holder.ID, retired.ID); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func requireGone(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("%s is still on disk (stat err %v)", path, err)
+	}
+}
+
+// Purging a trashed version removes only the files no other row names. A file
+// a retired row still names survives, whether the version's own row shares it
+// or it merely sits in the version's slot; the files nothing else names go.
+// The removed files are the control: the same call does delete.
+func TestPurgeVersion_KeepsFilesARetiredRowStillNames(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, err := f.store.GetBookVersion(f.trashed.ID)
+	if err != nil || v == nil {
+		t.Fatalf("reread: %v", err)
+	}
+	if err := PurgeVersion(f.store, v); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	requireOnDisk(t, f.slotShare)
+	requireOnDisk(t, f.rowShared)
+	requireOnDisk(t, f.retOnly)
+	requireGone(t, f.ownOnly)
+	requireGone(t, f.unrowed)
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if got.Status != database.BookVersionStatusInactivePurged {
+		t.Errorf("status = %s, want inactive_purged", got.Status)
+	}
+	// The retired rows are untouched.
+	retired, err := f.store.GetRetiredBookFiles(f.holderID)
+	if err != nil || len(retired) != 3 {
+		t.Fatalf("retired rows = %d (%v), want 3", len(retired), err)
+	}
+}
+
+// The same guard holds on the nightly cleanup path.
+func TestCleanupTrashedVersions_KeepsFilesARetiredRowStillNames(t *testing.T) {
+	f := newSharedPathFixture(t)
+	if n := cleanupTrashedVersionsAt(f.store, time.Now()); n != 1 {
+		t.Fatalf("purged %d, want 1", n)
+	}
+	requireOnDisk(t, f.slotShare)
+	requireOnDisk(t, f.rowShared)
+	requireOnDisk(t, f.retOnly)
+	requireGone(t, f.ownOnly)
+}
+
+// pathLookupStore makes the path lookup fail the way a store without memdb does.
+type pathLookupStore struct{ *database.PebbleStore }
+
+func (pathLookupStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	return nil, fmt.Errorf("%w: injected", database.ErrBookFilesAtPathUnavailable)
+}
+
+// When it cannot tell who else names a path, PurgeVersion fails closed: it
+// returns the error, deletes nothing (not even the files nothing shares) and
+// leaves the version in the trash for the next run.
+func TestPurgeVersion_FailsClosedWhenPathOwnersUnknown(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	err := PurgeVersion(pathLookupStore{f.store}, v)
+	if !errors.Is(err, database.ErrBookFilesAtPathUnavailable) {
+		t.Fatalf("PurgeVersion = %v, want ErrBookFilesAtPathUnavailable", err)
+	}
+	for _, p := range []string{f.ownOnly, f.slotShare, f.rowShared, f.retOnly, f.unrowed} {
+		requireOnDisk(t, p)
+	}
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if got.Status != database.BookVersionStatusTrash || got.PurgedDate != nil {
+		t.Errorf("status=%s PurgedDate=%v, want the version left in the trash", got.Status, got.PurgedDate)
+	}
+	if n := cleanupTrashedVersionsAt(pathLookupStore{f.store}, time.Now()); n != 0 {
+		t.Errorf("cleanup purged %d with the lookup down, want 0", n)
+	}
+	requireOnDisk(t, f.ownOnly)
 }

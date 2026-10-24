@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_prop_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: d4c4cd2b-c578-4a11-8229-83a516271b1b
 // last-edited: 2026-10-23
 
@@ -58,6 +58,9 @@ func newPropLifecycleStore(t *rapid.T) database.Store {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// PurgeVersion asks BookFilesAtPath, which needs the memdb the open warms
+	// up asynchronously.
+	store.WaitForWarmup()
 	return store
 }
 

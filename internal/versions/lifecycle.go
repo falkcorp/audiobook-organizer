@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-23
 //
@@ -27,7 +27,9 @@ package versions
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -40,9 +42,11 @@ const TrashTTLDays = 14
 
 var lifecycleLog = logger.New("versions.lifecycle")
 
-// ErrRetiredVersion is returned by every lifecycle step that would trash,
-// restore, swap, promote or purge a retired version. Callers branch on it
-// with errors.Is; the server answers it with a 409.
+// ErrRetiredVersion is returned by the lifecycle steps that refuse a retired
+// version: MarkTrashed, MarkRestored and PurgeVersion. Callers branch on it
+// with errors.Is; the server answers it with a 409. AutoPromoteAlt never
+// returns it (it skips a retired version silently), and swap has no guard yet:
+// it is tracked in the todo fragment for this stack.
 var ErrRetiredVersion = errors.New("a retired version is not part of the version lifecycle")
 
 // refuseRetired is the one place a lifecycle step checks for a retired
@@ -95,10 +99,11 @@ func MarkRestored(v *database.BookVersion) error {
 // AutoPromoteAlt selects the most recent alt version and promotes it
 // to active. Called when the active version is trashed.
 //
-// Only an alt version is a candidate. A retired version is never promoted, and
-// it is skipped by name so that a retired version newer than every alt does
-// not win the "most recent" comparison before the status test: promoting it
-// would put the retired files of another book into the holder's active slot.
+// Only an alt version is a candidate, so a retired version is never promoted
+// even when it is newer than every alt: the status test runs before the date
+// comparison. Promoting it would put the retired files of another book into the
+// holder's active slot. TestAutoPromoteAlt_IgnoresRetired pins this; it fails if
+// the status test is loosened to admit any status but trash.
 func AutoPromoteAlt(store altPromoter, bookID string) error {
 	allVers, err := store.GetBookVersionsByBookID(bookID)
 	if err != nil {
@@ -107,9 +112,6 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 	var bestAlt *database.BookVersion
 	for i := range allVers {
 		v := &allVers[i]
-		if v.Status == database.BookVersionStatusRetired {
-			continue
-		}
 		if v.Status != database.BookVersionStatusAlt {
 			continue
 		}
@@ -128,9 +130,19 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 // inactive_purged. Keeps the DB rows for fingerprint matching.
 //
 // It refuses a retired version (ErrRetiredVersion) before touching the disk.
-// The refusal has to come first: RemoveVersionSlot below deletes from disk
-// before UpdateBookVersion, whose own refusal comes too late, and the files of
-// a retired version belong to a book the library still keeps.
+// The refusal has to come first: the file removal below happens before
+// UpdateBookVersion, whose own refusal comes too late, and the files of a
+// retired version belong to a book the library still keeps.
+//
+// It also never removes a file that some other book_file row still names. A
+// retired version keeps the rows of a book that was retired into this one's
+// book, and those rows can name the very paths this version's own rows name
+// (PLAN section 5.1 rule 4: the holder's active rows hold every path of the
+// shell), so purging this version must leave those files alone. The decision
+// is made for every path before the first removal and fails closed: a path
+// whose owners cannot be listed (database.ErrBookFilesAtPathUnavailable) aborts
+// the purge with nothing deleted and the version unchanged, so the next run
+// retries it.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	if err := refuseRetired(ver, "purge"); err != nil {
 		return err
@@ -152,25 +164,112 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 		}
 	}
 
+	// Everything this purge would delete: the files under the version's slot,
+	// plus any file directly associated with this version by a row.
+	own, err := store.GetBookFiles(ver.BookID)
+	if err != nil {
+		return fmt.Errorf("purge version %s: list book files: %w", ver.ID, err)
+	}
+	targets := make(map[string]struct{})
 	if bookDir != "" {
-		if err := RemoveVersionSlot(bookDir, ver.ID); err != nil {
-			lifecycleLog.Warn("remove version slot for %s failed: %v", ver.ID, err)
+		slotFiles, err := versionSlotFiles(bookDir, ver.ID)
+		if err != nil {
+			return fmt.Errorf("purge version %s: list slot: %w", ver.ID, err)
 		}
-		_ = PruneEmptyVersionsDir(bookDir)
+		for _, p := range slotFiles {
+			targets[p] = struct{}{}
+		}
+	}
+	for _, f := range own {
+		if f.VersionID == ver.ID && f.FilePath != "" {
+			targets[f.FilePath] = struct{}{}
+		}
 	}
 
-	// Also remove any files directly associated with this version.
-	files, _ := store.GetBookFiles(ver.BookID)
-	for _, f := range files {
-		if f.VersionID == ver.ID {
-			_ = os.Remove(f.FilePath)
+	// Decide first, delete after, so a lookup failure leaves the disk alone.
+	var doomed []string
+	for p := range targets {
+		owner, err := otherRowNamingPath(store, p, ver)
+		if err != nil {
+			return fmt.Errorf("purge version %s: cannot verify %s is unreferenced: %w", ver.ID, p, err)
 		}
+		if owner != nil {
+			lifecycleLog.Warn("purge version %s: keeping %s, book_file %s of book %s (version %q, retired=%t) still names it",
+				ver.ID, p, owner.ID, owner.BookID, owner.VersionID, owner.Retired)
+			continue
+		}
+		doomed = append(doomed, p)
+	}
+	for _, p := range doomed {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			lifecycleLog.Warn("purge version %s: remove %s failed: %v", ver.ID, p, err)
+		}
+	}
+	if bookDir != "" {
+		pruneEmptyDirs(VersionSlotDir(bookDir, ver.ID))
+		_ = PruneEmptyVersionsDir(bookDir)
 	}
 
 	now := time.Now()
 	ver.Status = database.BookVersionStatusInactivePurged
 	ver.PurgedDate = &now
 	return store.UpdateBookVersion(ver)
+}
+
+// otherRowNamingPath returns a book_file row that names path and is not one of
+// ver's own rows (same book, same version), or nil when none does. Retired
+// rows are included: BookFilesAtPath does not filter them. Any lookup error is
+// returned, so the caller fails closed.
+func otherRowNamingPath(store versionPurger, path string, ver *database.BookVersion) (*database.BookFile, error) {
+	rows, err := store.BookFilesAtPath(path)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].BookID == ver.BookID && rows[i].VersionID == ver.ID {
+			continue
+		}
+		return &rows[i], nil
+	}
+	return nil, nil
+}
+
+// versionSlotFiles lists every non-directory entry under the version's
+// .versions slot. A slot that does not exist has no files. Symlinks are listed
+// as themselves, never followed.
+func versionSlotFiles(bookDir, versionID string) ([]string, error) {
+	slot := VersionSlotDir(bookDir, versionID)
+	if _, err := os.Lstat(slot); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var files []string
+	err := filepath.WalkDir(slot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
+}
+
+// pruneEmptyDirs removes dir and its subdirectories bottom-up, but only the
+// empty ones: a directory that still holds a kept file stays, and so do its
+// parents. Idempotent when dir does not exist.
+func pruneEmptyDirs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			pruneEmptyDirs(filepath.Join(dir, e.Name()))
+		}
+	}
+	// os.Remove refuses a non-empty directory, which is the check.
+	_ = os.Remove(dir)
 }
 
 // CleanupTrashedVersions is the maintenance task that purges versions

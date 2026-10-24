@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_retired_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2a9c41-3b7e-4f08-a5d1-7e9b04c8f326
 // last-edited: 2026-10-23
 
@@ -126,5 +126,62 @@ func TestHandlePurgeVersion_RefusesRetiredVersion(t *testing.T) {
 	}
 	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusRetired {
 		t.Errorf("status = %s, want retired", got.Status)
+	}
+}
+
+// The restore route answers a retired version with a 409 and leaves it
+// retired. A retired version is never in the trash, so before the retired check
+// moved ahead of the not-in-trash check this answered 400 "version is not in
+// trash" and the 409 branch was dead. The controls pin both neighbours: a
+// trashed version is restored (200), and an alt that is merely not in the trash
+// keeps the 400, so the 409 is specific to the retired status.
+func TestHandleRestoreVersion_RefusesRetiredVersion(t *testing.T) {
+	for _, withRow := range []bool{true, false} {
+		name := "with a retired row"
+		if !withRow {
+			name = "without any retired row"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv, store := setupVersionLifecycleServer(t)
+			holderID, ver, _ := seedRetiredVersion(t, store, withRow)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/"+holderID+"/versions/"+ver.ID+"/restore", nil)
+			w := httptest.NewRecorder()
+			srv.router.ServeHTTP(w, req)
+			if w.Code != http.StatusConflict {
+				t.Fatalf("restore of a retired version: expected 409, got %d: %s", w.Code, w.Body.String())
+			}
+			got, _ := store.GetBookVersion(ver.ID)
+			if got.Status != database.BookVersionStatusRetired {
+				t.Errorf("status = %s, want the retired version untouched", got.Status)
+			}
+		})
+	}
+
+	srv, store := setupVersionLifecycleServer(t)
+	_, _ = store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1.m4b", Format: "m4b"})
+	trashedAt := time.Now()
+	trashed, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported", TrashedAt: &trashedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alt, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		ver  string
+		want int
+	}{{trashed.ID, http.StatusOK}, {alt.ID, http.StatusBadRequest}} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+c.ver+"/restore", nil)
+		w := httptest.NewRecorder()
+		srv.router.ServeHTTP(w, req)
+		if w.Code != c.want {
+			t.Errorf("control: restore of version %s: expected %d, got %d: %s", c.ver, c.want, w.Code, w.Body.String())
+		}
 	}
 }

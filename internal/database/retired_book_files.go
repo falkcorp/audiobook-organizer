@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-23
 
@@ -32,6 +32,13 @@ func refuseRetiredInsert(f *BookFile) error {
 	}
 	return nil
 }
+
+// ErrBookIsRetiredShell is returned by a restore from the trash of a book that
+// is the shell of a retired version which still holds retired rows: the book's
+// audio now lives, retired, under another book, so restoring the shell would
+// bring back a book with no files. The version is restored as a separate book
+// instead. Callers answer it as a conflict.
+var ErrBookIsRetiredShell = errors.New("book is the shell of a retired version that still holds its files")
 
 // ErrBookFileNotRetired is returned by UnretireBookFiles for a row that is not
 // retired.

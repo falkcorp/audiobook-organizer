@@ -1,11 +1,12 @@
 // file: internal/merge/trash_restore_retired_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a1e5d93-2c48-4f06-b3a9-0d6c82f1e574
 // last-edited: 2026-10-23
 
 package merge
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -87,4 +88,63 @@ func TestRestoreFromTrash_HolderKeepsRetiredVersionsAndStaysOrganized(t *testing
 	live, err := f.S.GetBookFiles(holder)
 	require.NoError(t, err)
 	require.Len(t, live, 1, "the retired row is still not one of the holder's own files")
+}
+
+// retiredLookupDownStore makes the retired-version lookup fail, the way a store
+// that cannot read retired rows does.
+type retiredLookupDownStore struct{ *database.PebbleStore }
+
+func (retiredLookupDownStore) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
+	return nil, errors.New("injected lookup failure")
+}
+
+// Restoring a trashed SHELL (a book whose files were retired into a holder) is
+// refused with database.ErrBookIsRetiredShell and writes nothing: the shell
+// stays in the trash and its retired rows stay under the holder. Without the
+// refusal the restore wrote library_state=imported on a book with no live
+// files, which ABS never lists, and took it out of the trash.
+//
+// Controls: a trashed book with no retired version restores; so does the same
+// shell once its retired version holds no rows (they were un-retired), so the
+// refusal is specific to a version that still holds rows. A failing lookup
+// refuses too (fail closed) rather than restoring blind.
+func TestRestoreFromTrash_RefusesRetiredShell(t *testing.T) {
+	f := combineUndoFixture(t)
+	holder := f.Book(t, vptest.Spec{ID: "holder", Primary: "nil"})
+	shell := f.Book(t, vptest.Spec{ID: "shell", Primary: "nil"})
+	control := f.Book(t, vptest.Spec{ID: "control", Primary: "nil"})
+	ver := retireShellInto(t, f, holder, shell)
+	f.SoftDelete(t, shell)
+	f.SoftDelete(t, control)
+
+	res, err := RestoreFromTrash(f.S, shell, nil, nil)
+	require.ErrorIs(t, err, database.ErrBookIsRetiredShell)
+	require.Contains(t, err.Error(), "Restore as separate book")
+	require.False(t, res.Restored)
+	got, err := f.S.GetBookByID(shell)
+	require.NoError(t, err)
+	require.True(t, database.IsInTrash(got), "a refused restore leaves the shell in the trash")
+	retired, err := f.S.GetRetiredBookFiles(holder)
+	require.NoError(t, err)
+	require.Len(t, retired, 1, "the retired row stays under the holder")
+
+	// Fail closed: the same call with the lookup down is an error, not a restore.
+	_, err = RestoreFromTrash(retiredLookupDownStore{f.S}, shell, nil, nil)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, database.ErrBookIsRetiredShell))
+	got, err = f.S.GetBookByID(shell)
+	require.NoError(t, err)
+	require.True(t, database.IsInTrash(got))
+
+	// Control 1: a trashed book that is nobody's shell restores.
+	ctl, err := RestoreFromTrash(f.S, control, nil, nil)
+	require.NoError(t, err)
+	require.True(t, ctl.Restored)
+
+	// Control 2: with the version's rows un-retired the shell is restorable.
+	require.NoError(t, f.S.UnretireBookFiles(
+		[]database.BookFileMove{{FileIDs: []string{"bf-" + shell}, SourceBookID: holder}}, shell, ver.ID, nil))
+	again, err := RestoreFromTrash(f.S, shell, nil, nil)
+	require.NoError(t, err)
+	require.True(t, again.Restored)
 }

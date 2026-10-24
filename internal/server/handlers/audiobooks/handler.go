@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.3
+// version: 1.37.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-23
 
@@ -1156,6 +1156,12 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 	id := c.Param("id")
 	updated, err := h.audiobookService.RestoreAudiobook(c.Request.Context(), id)
 	if err != nil {
+		// A retired shell is refused on purpose (the book exists; its files
+		// are kept as a retired version), so it is a conflict, not a 404.
+		if errors.Is(err, database.ErrBookIsRetiredShell) {
+			httputil.RespondWithConflict(c, err.Error())
+			return
+		}
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}

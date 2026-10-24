@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-23
 //
@@ -91,6 +91,13 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 	}
 	if ver.BookID != bookID {
 		httputil.RespondWithBadRequest(c, "version/book mismatch")
+		return
+	}
+	// A retired version is answered with its own 409 before the not-in-trash
+	// check, as purge-now does: it is never in the trash, so "not in trash"
+	// would be a misleading 400. MarkRestored refuses it as well.
+	if ver.Status == database.BookVersionStatusRetired {
+		httputil.RespondWithConflict(c, "version is a retired version; restore it as a separate book instead")
 		return
 	}
 	if ver.Status != database.BookVersionStatusTrash {

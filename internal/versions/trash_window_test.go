@@ -1,5 +1,5 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
 // last-edited: 2026-10-23
 
@@ -50,6 +50,7 @@ func newTrashFixtureStamped(t *testing.T, createdAt time.Time, status string, tr
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	store.WaitForWarmup() // BookFilesAtPath (PurgeVersion's guard) needs the memdb
 
 	bookDir := t.TempDir()
 	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Trash Window Book", FilePath: filepath.Join(bookDir, "book.m4b")}); err != nil {

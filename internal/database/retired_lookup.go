@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
 // last-edited: 2026-10-23
 
@@ -74,6 +74,22 @@ func BookFilesIncludingRetired(s any, bookID string) ([]BookFile, error) {
 		return g.GetBookFiles(bookID)
 	}
 	return nil, fmt.Errorf("book_files of %s: %w", bookID, ErrRetiredReaderUnavailable)
+}
+
+// RetiredVersionsFromBook returns the retired versions that were retired out of
+// shellID (RetiredBookFileReader.GetRetiredVersionsFromBook) for callers that
+// hold a narrowed store. Same capability resolution and fallback as
+// AllBookFilesCoreIncludingRetired: a store that declares NoRetiredBookFiles has
+// none by construction, and any other store without the reader returns
+// ErrRetiredReaderUnavailable, never an empty answer.
+func RetiredVersionsFromBook(s any, shellID string) ([]BookVersion, error) {
+	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
+		return r.GetRetiredVersionsFromBook(shellID)
+	}
+	if plainReadsAreComplete(s) {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("retired versions of %s: %w", shellID, ErrRetiredReaderUnavailable)
 }
 
 // BookFileByPIDIncludingRetired is GetBookFileByPID that also answers a PID
