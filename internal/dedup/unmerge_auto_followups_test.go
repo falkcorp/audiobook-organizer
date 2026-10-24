@@ -1,7 +1,7 @@
 // file: internal/dedup/unmerge_auto_followups_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d2a9e64-1c7b-4f03-b8e6-0a4f3c9d7b12
-// last-edited: 2026-10-11
+// last-edited: 2026-10-24
 
 package dedup
 
@@ -172,8 +172,15 @@ func TestUnmergeAuto_HandsOffWithoutSiblings(t *testing.T) {
 // revertFailStore fails RevertBookToVersion for one book until cleared.
 type revertFailStore struct {
 	Store
+	// real is the full store Store was narrowed from, so Unwrap can hand it to
+	// database.AsCapability.
+	real    database.Store
 	failFor string
 }
+
+// Unwrap opts the decorator into database.AsCapability, so the retired-shell
+// guard reads retired rows through it instead of refusing (fail closed).
+func (s *revertFailStore) Unwrap() database.Store { return s.real }
 
 func (s *revertFailStore) RevertBookToVersion(id string, ts time.Time) (*database.Book, error) {
 	if id == s.failFor {
@@ -191,7 +198,7 @@ func TestUnmergeAuto_FailedRevertIsRetryable(t *testing.T) {
 	_, keys, err := engine.MergeBooksJournaled(0, []string{l, k}, k, "t")
 	require.NoError(t, err)
 
-	fs := &revertFailStore{Store: f.S, failFor: l}
+	fs := &revertFailStore{Store: f.S, real: f.S, failFor: l}
 	engine.bookStore = fs
 	require.ErrorContains(t, engine.UnmergeAuto(keys[0]), "injected revert failure")
 	entry, err := es.GetAutoMergeJournalEntry(keys[0])

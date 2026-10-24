@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-10-05
+// last-edited: 2026-10-24
 
 package dedup
 
@@ -451,6 +451,23 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	}
 	if entry.SiblingJournalID != "" && de.mergeService == nil {
 		return fmt.Errorf("unmerge-auto: merge service not initialised; the siblings of %s cannot be restored, nothing reverted", journalKey)
+	}
+
+	// A side that is the shell of a retired version cannot take a whole-row
+	// revert (it would un-trash the shell and clear its merged-into link while
+	// its files stay retired under the other book). Refuse before the sibling
+	// undo, the first write, so nothing is half done; the store refuses the
+	// same revert itself as a backstop.
+	for _, side := range []struct {
+		role, id string
+		ts       int64
+	}{{"loser", entry.LoserID, entry.LoserPreMergeTS}, {"winner", entry.WinnerID, entry.WinnerPreMergeTS}} {
+		if side.ts == 0 {
+			continue // nothing is reverted for this side
+		}
+		if err := merge.RefuseRetiredShell(de.bookStore, side.id, "unmerge the "+side.role); err != nil {
+			return fmt.Errorf("unmerge-auto: %w; nothing reverted", err)
+		}
 	}
 
 	var errs []string

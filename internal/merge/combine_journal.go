@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -863,6 +863,13 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	inCombine := map[string]bool{j.SurvivorID: true}
 	for _, a := range j.Absorbed {
 		inCombine[a.BookID] = true
+		// The undo restores each absorbed book whole (restoreAbsorbedRow). One
+		// the retired-versions repair has since turned into a shell cannot come
+		// back: it would be an empty book beside audio retired under another.
+		// Refused here, before the first write, so the undo does not half run.
+		if err := RefuseRetiredShell(ms.db, a.BookID, "restore"); err != nil {
+			reasons = append(reasons, fmt.Sprintf("absorbed book %s: %v", a.BookID, err))
+		}
 	}
 	checkOwner := func(fm CombineFileMove) {
 		if fm.Created || inCombine[fm.FromBookID] {
@@ -2144,6 +2151,12 @@ func (ms *Service) restoreAbsorbedRow(a CombineAbsorbed) (restored bool, warning
 	}
 	if !retiredByJournal(a, b) {
 		return false, "", nil
+	}
+	// Defensive: undoPreconditions refuses a shell before any write; this holds
+	// the same line under the lock the restore takes, should a retire land
+	// between the two.
+	if err := RefuseRetiredShell(ms.db, a.BookID, "restore"); err != nil {
+		return false, "", fmt.Errorf("absorbed book %s: not restored: %w", a.BookID, err)
 	}
 	b.MarkedForDeletion = nil
 	b.MarkedForDeletionAt = nil

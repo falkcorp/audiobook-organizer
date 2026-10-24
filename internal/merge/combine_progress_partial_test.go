@@ -1,7 +1,7 @@
 // file: internal/merge/combine_progress_partial_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1e5a9c7d-2b48-4f36-8d0e-b7c4f2a9e613
-// last-edited: 2026-09-19
+// last-edited: 2026-10-24
 
 package merge
 
@@ -22,6 +22,10 @@ type corruptUserPositionsStore struct {
 	database.Store
 	userID string
 }
+
+// Unwrap opts the decorator into database.AsCapability, so the retired-shell
+// guards read retired rows through it instead of refusing (fail closed).
+func (s corruptUserPositionsStore) Unwrap() database.Store { return s.Store }
 
 func (s corruptUserPositionsStore) ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error) {
 	if userID == s.userID {
