@@ -1,5 +1,5 @@
 // file: internal/merge/retire_link.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b3ee74d4-1ccc-4309-8939-7fe3a7b5f62f
 // last-edited: 2026-10-24
 
@@ -119,11 +119,11 @@ type RetireReversal struct {
 	// that cannot be recreated). Only meaningful when Live.
 	Reasons []string
 	// PendingFileIDs are the shell's book_file rows the retire took and has not
-	// given back; RevertedFileIDs the ones it took and a revert gave back (live
-	// on the shell again). Both are the shell's own rows, so the combine undo's
-	// "given N files" check can count them as the shell's: the retire hides the
-	// first from GetBookFiles, and a revert of it makes the second look gained.
-	PendingFileIDs, RevertedFileIDs []string
+	// given back. The retire hides them from GetBookFiles, so the combine
+	// undo's "given N files" check counts them from here: they are rows the
+	// shell was given since the combine. (Rows a revert gave back are live on
+	// the shell again and are counted from GetBookFiles like any other.)
+	PendingFileIDs []string
 	// Revert reverses the pending rows, from the rows this plan read. nil when
 	// not Live. It must run only while RetireUndoer.LockRetireOps holds the
 	// retire op's lock.
@@ -135,14 +135,15 @@ type RetireReversal struct {
 // undo is injected: audiobooks.RevertService wires one in where it builds the
 // merge service for a combine row (SetRetireUndoer).
 //
-// PlanRetireRevert, LockRetireOps and the Revert a plan returns all run with
+// ReadRetireOp, PlanShell, LockRetireOps and the Revert a plan returns all run with
 // the merge lock HELD (UndoCombine holds it, and it is not re-entrant), so an
 // implementation must never take it (it may take locks that are only ever TRIED
 // under it).
 type RetireUndoer interface {
-	// PlanRetireRevert reads retire op opID once and returns its rows for
-	// shellID (see RetireReversal). It writes nothing.
-	PlanRetireRevert(opID, shellID string) (*RetireReversal, error)
+	// ReadRetireOp reads retire op opID once. UndoCombine plans every link of
+	// the op from that one read (a retire op can hold ~190k rows and one op
+	// can retire several absorbed shells of a combine). It writes nothing.
+	ReadRetireOp(opID string) (RetireOp, error)
 	// LockRetireOps takes, without waiting, the revert lock of each retire op
 	// in opIDs (distinct) and returns the release that frees them all. It
 	// returns an error, holding none, when one is busy: another revert of that
@@ -151,6 +152,13 @@ type RetireUndoer interface {
 	// retry mark included) and holds the locks through every Revert, so a busy
 	// op refuses the undo cleanly instead of failing it half-way.
 	LockRetireOps(opIDs []string) (release func(), err error)
+}
+
+// RetireOp is one retire op as ReadRetireOp read it.
+type RetireOp interface {
+	// PlanShell returns the op's rows for shellID (see RetireReversal) and the
+	// reversal that runs from the read. It writes nothing.
+	PlanShell(shellID string) (*RetireReversal, error)
 }
 
 // SetRetireUndoer wires the undoer UndoCombine reverses linked retires with.

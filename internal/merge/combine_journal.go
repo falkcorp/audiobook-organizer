@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-28
 
@@ -1039,48 +1039,54 @@ func (ms *Service) undoPreconditions(j *CombineJournal, plans *retirePlans) []st
 		// refused by the store, so a retired row here is never a gain since
 		// the combine (counting it refused every undo of such a combine).
 		//
-		// The rows a linked retire took from this shell are the shell's own
-		// (retiredFiles): GetBookFiles does not show them while they are
-		// retired, and shows them again once step 0 has given them back.
-		if shellRecreated {
-			// Nothing to read: the book is not there yet, and the rows the
-			// retire took from it are judged as the shell's below.
-		} else if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
-			reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
-		} else {
-			// On a retry the failed attempt may already have moved some of
-			// this book's own rows back (a row the combine created included:
-			// it is repointed, never deleted); those are expected, and so are
-			// the rows an earlier attempt's step 0 un-retired (or the retire
-			// still holds, for step 0 of this attempt). Any other row is a file
-			// the book gained since, and still refuses.
-			pending, reverted := shellRetires.fileIDs()
-			ownRows := map[string]bool{}
-			if lenient {
-				for _, fm := range a.Files {
-					ownRows[fm.FileID] = true
-				}
-				for _, id := range pending {
-					ownRows[id] = true
-				}
-				for _, id := range reverted {
-					ownRows[id] = true
+		// The rows a linked retire took from this shell are another matter:
+		// GetBookFiles does not show them while they are retired, but they
+		// are rows the shell was given since the combine, so they are counted
+		// from the plan's pending ids.
+		//
+		// The shell's own rows are exactly a.Files: the combine moved every
+		// live row of an absorbed book onto the survivor in one batch and
+		// journaled each (a row it created for the book included), and
+		// nothing afterwards puts a row back on a trashed shell except an
+		// undo's step 2. So on a retry (or for a LeftLive book, which the
+		// merge never emptied) the rows of a.Files may be on the shell, and
+		// they are expected. Every other row is a file the book gained since,
+		// whichever way it got there and wherever it is now: live on the
+		// shell, hidden from it by a linked retire that still holds it
+		// (pending), or given back by a revert of that retire outside this
+		// undo (live again). A first attempt has no own rows at all.
+		own := map[string]bool{}
+		if lenient {
+			for _, fm := range a.Files {
+				own[fm.FileID] = true
+			}
+		}
+		gained := map[string]bool{}
+		retiredAway := 0
+		loaded := true
+		if !shellRecreated {
+			// A shell a linked retire will recreate is not there to read: it
+			// has no live rows until step 0 recreates it.
+			if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
+				reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
+				loaded = false
+			} else {
+				for _, f := range files {
+					if !own[f.ID] {
+						gained[f.ID] = true
+					}
 				}
 			}
-			foreign, retiredAway := 0, 0
-			for _, f := range files {
-				if !ownRows[f.ID] {
-					foreign++
+		}
+		if loaded {
+			for _, id := range shellRetires.pendingFileIDs() {
+				if !own[id] && !gained[id] {
+					gained[id] = true
+					retiredAway++
 				}
 			}
-			if !lenient {
-				// A first attempt: a row the retire took is a row the book was
-				// given since the combine (the combine left it none), exactly as
-				// it would be without the retire, which only hides it.
-				retiredAway = len(pending)
-			}
-			if foreign+retiredAway > 0 {
-				reasons = append(reasons, fmt.Sprintf("absorbed book %s has since been given %d file(s)%s", a.BookID, foreign+retiredAway,
+			if len(gained) > 0 {
+				reasons = append(reasons, fmt.Sprintf("absorbed book %s has since been given %d file(s)%s", a.BookID, len(gained),
 					retiredAwayNote(retiredAway)))
 			}
 		}
@@ -1154,8 +1160,8 @@ func (p retireLinkPlan) live() bool { return p.rev != nil && p.rev.Live }
 
 // retirePlans reads the combine's retire links and plans each one's reversal
 // with the RetireUndoer, once, on first use: UndoCombine shares one value
-// between undoPreconditions and applyUndo, so a retire op is decoded once per
-// link however many places consult it. Not safe for concurrent use; UndoCombine
+// between undoPreconditions and applyUndo, so a retire op is read once per op
+// however many links and places consult it. Not safe for concurrent use; UndoCombine
 // holds the merge-serialize lock for its whole life.
 type retirePlans struct {
 	ms    *Service
@@ -1177,6 +1183,12 @@ func (rp *retirePlans) get() ([]retireLinkPlan, error) {
 		rp.err = err
 		return nil, err
 	}
+	// One read per retire op, however many of the combine's shells it retired.
+	type opRead struct {
+		op  RetireOp
+		err error
+	}
+	ops := map[string]opRead{}
 	for _, l := range links {
 		p := retireLinkPlan{link: l}
 		switch {
@@ -1186,7 +1198,16 @@ func (rp *retirePlans) get() ([]retireLinkPlan, error) {
 			// retire still holds the rows of.
 			p.problem = fmt.Sprintf("absorbed book %s was retired into a version by op %s and this service cannot reverse a retire", l.ShellID, l.OpID)
 		default:
-			rev, err := rp.ms.retireUndo.PlanRetireRevert(l.OpID, l.ShellID)
+			r, seen := ops[l.OpID]
+			if !seen {
+				r.op, r.err = rp.ms.retireUndo.ReadRetireOp(l.OpID)
+				ops[l.OpID] = r
+			}
+			var rev *RetireReversal
+			err := r.err
+			if err == nil {
+				rev, err = r.op.PlanShell(l.ShellID)
+			}
 			if err != nil {
 				p.problem = fmt.Sprintf("check the retire of absorbed book %s (op %s): %v", l.ShellID, l.OpID, err)
 			} else {
@@ -1256,17 +1277,16 @@ func (sr shellRetires) recreatesShell() bool {
 	return false
 }
 
-// fileIDs are the shell's book_file rows its retires took and still hold
-// (pending) and the ones they took and gave back (reverted).
-func (sr shellRetires) fileIDs() (pending, reverted []string) {
+// pendingFileIDs are the shell's book_file rows its retires took and still
+// hold: GetBookFiles does not show them while they are retired.
+func (sr shellRetires) pendingFileIDs() []string {
+	var ids []string
 	for _, p := range sr {
-		if p.rev == nil {
-			continue
+		if p.rev != nil {
+			ids = append(ids, p.rev.PendingFileIDs...)
 		}
-		pending = append(pending, p.rev.PendingFileIDs...)
-		reverted = append(reverted, p.rev.RevertedFileIDs...)
 	}
-	return pending, reverted
+	return ids
 }
 
 // purgedShellReason is the refusal for an absorbed book that no longer exists

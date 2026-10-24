@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
 // last-edited: 2026-10-24
 
@@ -265,7 +265,7 @@ func (s *revertScope) recordID(operationID string) string {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	return operationID + "#scope:" + strings.Join(ids, ",")
+	return operationID + scopedRecordMarker + strings.Join(ids, ",")
 }
 
 // isRetireRowType reports one of the three types a retire adds.
@@ -387,14 +387,27 @@ type retireUndoer struct{ rs *RevertService }
 // revert builds for a combine row.
 func (rs *RevertService) retireUndoer() merge.RetireUndoer { return retireUndoer{rs: rs} }
 
-// PlanRetireRevert implements merge.RetireUndoer: it reads retire op opID once
-// and returns the shell's rows, every refusal, and the reversal that runs from
-// the same read. It writes nothing.
-func (u retireUndoer) PlanRetireRevert(opID, shellID string) (*merge.RetireReversal, error) {
+// retireOpRead is merge.RetireOp: one retire op's changes, read once.
+type retireOpRead struct {
+	u       retireUndoer
+	opID    string
+	changes []*database.OperationChange
+}
+
+// ReadRetireOp implements merge.RetireUndoer: it reads retire op opID once.
+// Every shell of the op is planned from that read (retireOpRead.PlanShell).
+func (u retireUndoer) ReadRetireOp(opID string) (merge.RetireOp, error) {
 	changes, err := u.rs.db.GetOperationChanges(opID)
 	if err != nil {
 		return nil, fmt.Errorf("read the changes of retire op %s: %w", opID, err)
 	}
+	return retireOpRead{u: u, opID: opID, changes: changes}, nil
+}
+
+// PlanShell implements merge.RetireOp: it returns the shell's rows, every
+// refusal, and the reversal that runs from the same read. It writes nothing.
+func (o retireOpRead) PlanShell(shellID string) (*merge.RetireReversal, error) {
+	u, opID, changes := o.u, o.opID, o.changes
 	scope := newRevertScope([]string{shellID})
 	rev := &merge.RetireReversal{}
 	var pending []*database.OperationChange
@@ -407,9 +420,7 @@ func (u retireUndoer) PlanRetireRevert(opID, shellID string) (*merge.RetireRever
 			// The file rows of this shell (a row that does not decode names no
 			// file: it is refused below).
 			if r, derr := undo.DecodeBookFileRetire(c); derr == nil {
-				if done {
-					rev.RevertedFileIDs = append(rev.RevertedFileIDs, r.FileID)
-				} else {
+				if !done {
 					rev.PendingFileIDs = append(rev.PendingFileIDs, r.FileID)
 				}
 			}
@@ -470,7 +481,7 @@ func (u retireUndoer) LockRetireOps(opIDs []string) (func(), error) {
 var errRetireOpBusy = errors.New("another revert of this retire operation is running; try the undo again when it finishes")
 
 // revert reverses pending (the shell's un-reverted rows, read by
-// PlanRetireRevert from changes) with the merge lock and the retire op's
+// PlanShell from changes) with the merge lock and the retire op's
 // operation lock (LockRetireOps) already held by the caller. It refuses, before writing anything, a row the plan refuses to
 // predict: such a row's case could take a lock the caller holds.
 func (u retireUndoer) revert(opID, shellID string, scope *revertScope, changes, pending []*database.OperationChange) error {

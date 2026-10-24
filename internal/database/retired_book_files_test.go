@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
 // last-edited: 2026-10-28
 
@@ -939,6 +939,40 @@ func TestRestoreRetiredVersionHolder_RefusesAMissingHolderAndTheShell(t *testing
 	require.ErrorIs(t, fx.ps.RestoreRetiredVersionHolder(fx.version.ID, "no-such-book"), ErrBookFileOwnerMissing)
 	require.ErrorIs(t, fx.ps.RestoreRetiredVersionHolder(fx.version.ID, fx.shell.ID), ErrRetiredVersionMismatch,
 		"a version never goes back to the book it was retired out of")
+	v, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	require.Equal(t, newHolder.ID, v.BookID, "a refused restore writes nothing")
+}
+
+// The destination is checked once the version stripe is held, not before the
+// wait for it: a holder purged while the restore waits for the stripe is
+// refused, and the version stays where it was.
+func TestRestoreRetiredVersionHolder_ChecksTheHolderUnderTheVersionStripe(t *testing.T) {
+	fx := newRetiredFixture(t)
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/s/01.mp3"})
+	require.NoError(t, fx.retire(t, x))
+	newHolder, err := fx.ps.CreateBook(&Book{Title: "Chain Holder", FilePath: "/lib/ret/chain-s"})
+	require.NoError(t, err)
+	require.NoError(t, fx.ps.RehomeRetiredVersion(fx.version.ID, newHolder.ID))
+
+	unlock := fx.ps.lockBookVersion(fx.version.ID)
+	done := make(chan error, 1)
+	go func() { done <- fx.ps.RestoreRetiredVersionHolder(fx.version.ID, fx.holder.ID) }()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("the restore did not wait for the version stripe: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	require.NoError(t, fx.ps.DeleteBook(fx.holder.ID), "the holder is purged while the restore waits")
+	unlock()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrBookFileOwnerMissing)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore never returned")
+	}
 	v, err := fx.ps.GetBookVersion(fx.version.ID)
 	require.NoError(t, err)
 	require.Equal(t, newHolder.ID, v.BookID, "a refused restore writes nothing")

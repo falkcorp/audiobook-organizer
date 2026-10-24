@@ -1,5 +1,5 @@
 // file: internal/undo/retire.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 78716d7c-a378-4584-9b30-edcdab627347
 // last-edited: 2026-10-24
 
@@ -246,8 +246,12 @@ func CheckRetireCurrent(onHolder, onShell *database.BookFile, r BookFileRetire) 
 // CheckVersionCreateCurrent is the compare-and-set of a
 // ChangeTypeBookVersionCreate row. cur is the version now (nil: gone).
 // ErrAlreadyRestored: it is gone. Otherwise it must still be the retired
-// version of the holder the row journaled; the store's own refusal to delete a
-// version that still holds rows is the dependency gate.
+// version of the holder the row journaled, and still carry what the row
+// journaled in the fields the revert throws away with it (what the version
+// describes: format, source and original path, torrent hash, metadata, the op
+// and shell it records). An edit to any of them since is a later change the
+// delete would lose silently, so it refuses as changed since. The store's own
+// refusal to delete a version that still holds rows is the dependency gate.
 func CheckVersionCreateCurrent(cur *database.BookVersion, c *database.OperationChange) error {
 	if cur == nil {
 		return ErrAlreadyRestored
@@ -255,6 +259,24 @@ func CheckVersionCreateCurrent(cur *database.BookVersion, c *database.OperationC
 	if cur.Status != database.BookVersionStatusRetired || cur.BookID != c.BookID {
 		return refuse(ReasonChangedSince, "book version %s is now %q of book %s, not the retired version of %s the operation created",
 			cur.ID, cur.Status, cur.BookID, c.BookID)
+	}
+	made, err := DecodeBookVersionCreate(c)
+	if err != nil {
+		return refuse(ReasonOldValueUnparsable, "%v", err)
+	}
+	for _, f := range []struct{ name, now, made string }{
+		{"format", cur.Format, made.Format},
+		{"source", cur.Source, made.Source},
+		{"source_original_path", cur.SourceOriginalPath, made.SourceOriginalPath},
+		{"torrent_hash", cur.TorrentHash, made.TorrentHash},
+		{"metadata_json", cur.MetadataJSON, made.MetadataJSON},
+		{"retire_op_id", cur.RetireOpID, made.RetireOpID},
+		{"retired_from_book_id", cur.RetiredFromBookID, made.RetiredFromBookID},
+	} {
+		if f.now != f.made {
+			return refuse(ReasonChangedSince, "book version %s was edited since the operation created it (%s is %q, the operation wrote %q); deleting it would lose the edit",
+				cur.ID, f.name, f.now, f.made)
+		}
 	}
 	return nil
 }
