@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package database
 
@@ -248,6 +248,16 @@ var opChangePruneBeforeCommit func()
 // pointer for a merge's merge.SiblingMoveJournal (the version-group siblings
 // it carried into its group), kept for the same reason.
 //
+// "book_version_create", "book_file_retire" and "retired_version_rehome"
+// (undo.ChangeTypeBookVersionCreate, ChangeTypeBookFileRetire,
+// ChangeTypeRetiredVersionRehome) are the journal of a retire: the only record
+// of which shell each retired file row came from and which version it carried.
+// A combine's undo finds its retire through the merge:combine-retire: link and
+// treats a link whose op has no pending rows as already reversed, so a pruned
+// retire would be indistinguishable from a reversed one and the undo would
+// restore the shell while its files stayed retired on the holder. The combine
+// journal is never pruned; these must not be either. One row per retired file.
+//
 // "user_content_follow" (undo.ChangeTypeUserContentFollow) is what a retire's
 // carry journaled about a user's own content: the survivor's ratings, and, for
 // each static collection or playlist the retired book was in, the row on the
@@ -260,6 +270,7 @@ var OpChangeTypesKeptByPrune = map[string]bool{
 	"repair_plan_record": true, "repair_owner_apply": true,
 	"merge_combine_journal": true, "merge_sibling_journal": true,
 	"user_content_follow": true,
+	"book_version_create": true, "book_file_retire": true, "retired_version_rehome": true,
 }
 
 // PruneOperationChanges deletes operation change entries older than the given
