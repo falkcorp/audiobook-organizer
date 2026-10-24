@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package itunes
 
@@ -212,10 +212,28 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		return fmt.Errorf("external ID backfill: read book files: %w", err)
 	}
 	// allFiles is dead after this loop; only the PID subset stays resident.
+	//
+	// A PID a live (non-retired) row carries belongs to that row's book, and a
+	// retired row never claims it: BulkCreateExternalIDMappings keeps the first
+	// mapping it sees for a key, so letting a retired row's holder come first in
+	// snapshot order would map the PID to the holder and the next import would
+	// link the track onto the wrong book. livePIDs (files here, books below)
+	// is therefore known before any mapping is emitted. A PID only retired rows
+	// carry maps to the lowest holder book ID, so the answer does not depend on
+	// the order the store returned the rows in.
 	filesByBook := make(map[string][]database.BookFileCore)
+	livePIDs := make(map[string]struct{})
+	retiredHolder := make(map[string]string)
 	for _, f := range allFiles {
 		if f.ITunesPersistentID == "" {
 			continue
+		}
+		if f.Retired {
+			if cur, ok := retiredHolder[f.ITunesPersistentID]; !ok || f.BookID < cur {
+				retiredHolder[f.ITunesPersistentID] = f.BookID
+			}
+		} else {
+			livePIDs[f.ITunesPersistentID] = struct{}{}
 		}
 		filesByBook[f.BookID] = append(filesByBook[f.BookID], f)
 	}
@@ -230,6 +248,12 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		// loop fall through to the track-PID pass and mark the whole
 		// backfill "done" despite skipping the rest of the library.
 		return fmt.Errorf("external ID backfill: read books: %w", err)
+	}
+
+	for i := range allBooks {
+		if pid := allBooks[i].ITunesPersistentID; pid != nil && *pid != "" {
+			livePIDs[*pid] = struct{}{}
+		}
 	}
 
 	// The snapshot is walked in chunks only to bound each bulk write and to
@@ -267,6 +291,11 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 			// — served from the single batch read above (PERF-5); only
 			// PID-bearing files were retained, so no per-file filter is needed.
 			for _, f := range filesByBook[book.ID] {
+				if f.Retired {
+					if _, live := livePIDs[f.ITunesPersistentID]; live || retiredHolder[f.ITunesPersistentID] != book.ID {
+						continue // a live row owns this PID, or another holder is its retired owner
+					}
+				}
 				batch = append(batch, database.ExternalIDMapping{
 					Source:     "itunes",
 					ExternalID: f.ITunesPersistentID,

@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c9d0e1f2-a3b4-c5d6-e7f8-a9b0c1d2e3f4
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package itunes
 
@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -595,5 +597,65 @@ func TestBackfillITunesTrackPIDsCanceledDuringIndexBuild(t *testing.T) {
 	}
 	if registered != 0 || len(mockStore.externalIDMaps) != 0 {
 		t.Fatalf("registered = %d, mappings = %d; want 0/0 after cancellation", registered, len(mockStore.externalIDMaps))
+	}
+}
+
+// pidMappings is the (PID -> book IDs) the backfill wrote, in write order.
+func pidMappings(m *MockBackfillStore) map[string][]string {
+	out := map[string][]string{}
+	for _, e := range m.externalIDMaps {
+		out[e.ExternalID] = append(out[e.ExternalID], e.BookID)
+	}
+	return out
+}
+
+// A PID that a live row carries is never mapped to a retired row's holder, even
+// when the holder sorts (and so is walked) first: the store keeps the first
+// mapping it sees for a key, so the loser must not be emitted at all.
+func TestBackfillExternalIDs_LiveRowWinsOverRetiredHolderForSamePID(t *testing.T) {
+	m := NewMockBackfillStore()
+	m.books["a-holder"] = database.Book{ID: "a-holder", Title: "Holder"}
+	m.books["z-live"] = database.Book{ID: "z-live", Title: "Live"}
+	m.bookFiles = []database.BookFileCore{
+		{ID: "r1", BookID: "a-holder", Retired: true, FilePath: "/r1.mp3", ITunesPersistentID: "PID-SHARED"},
+		{ID: "l1", BookID: "z-live", FilePath: "/l1.mp3", ITunesPersistentID: "PID-SHARED"},
+		{ID: "r2", BookID: "a-holder", Retired: true, FilePath: "/r2.mp3", ITunesPersistentID: "PID-RETIRED-ONLY"},
+	}
+	require.NoError(t, BackfillExternalIDs(context.Background(), m, nil))
+
+	got := pidMappings(m)
+	require.Equal(t, []string{"z-live"}, got["PID-SHARED"], "the live row's book is the only mapping for a PID a live row carries")
+	require.Equal(t, []string{"a-holder"}, got["PID-RETIRED-ONLY"], "a PID only a retired row carries still maps to its holder")
+}
+
+// A live book-level PID counts as a live claim too.
+func TestBackfillExternalIDs_LiveBookLevelPIDWinsOverRetiredHolder(t *testing.T) {
+	m := NewMockBackfillStore()
+	pid := "PID-BOOK-LEVEL"
+	m.books["a-holder"] = database.Book{ID: "a-holder", Title: "Holder"}
+	m.books["z-live"] = database.Book{ID: "z-live", Title: "Live", ITunesPersistentID: &pid}
+	m.bookFiles = []database.BookFileCore{
+		{ID: "r1", BookID: "a-holder", Retired: true, FilePath: "/r1.mp3", ITunesPersistentID: pid},
+	}
+	require.NoError(t, BackfillExternalIDs(context.Background(), m, nil))
+	require.Equal(t, []string{"z-live"}, pidMappings(m)[pid])
+}
+
+// A PID only retired rows carry, under two holders, maps to the lowest holder ID
+// whatever order the store returns the rows in.
+func TestBackfillExternalIDs_RetiredOnlyPIDIsDeterministicAcrossHolders(t *testing.T) {
+	rows := []database.BookFileCore{
+		{ID: "r-b", BookID: "b-holder", Retired: true, FilePath: "/b.mp3", ITunesPersistentID: "PID-TWO"},
+		{ID: "r-a", BookID: "a-holder", Retired: true, FilePath: "/a.mp3", ITunesPersistentID: "PID-TWO"},
+	}
+	for _, order := range [][]int{{0, 1}, {1, 0}} {
+		m := NewMockBackfillStore()
+		m.books["a-holder"] = database.Book{ID: "a-holder"}
+		m.books["b-holder"] = database.Book{ID: "b-holder"}
+		for _, i := range order {
+			m.bookFiles = append(m.bookFiles, rows[i])
+		}
+		require.NoError(t, BackfillExternalIDs(context.Background(), m, nil))
+		require.Equal(t, []string{"a-holder"}, pidMappings(m)["PID-TWO"], "order %v", order)
 	}
 }
