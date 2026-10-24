@@ -1,0 +1,715 @@
+// file: internal/plugins/maintenance/junk_title_evidence_test.go
+// version: 1.0.0
+// guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
+// last-edited: 2026-10-23
+
+package maintenance
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+)
+
+// Every title in this file is invented. The shapes are the ones an Opus review
+// of the 2026-10-23 prod plan found wrong (513 of 624 rows proposed from a
+// transcription, filename, folder or series and number), reduced to a pattern
+// and given made-up words: no row of a real library is a fixture here.
+
+func TestStripSeriesTail(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// "Book N of/in …" tails, digit and spelled
+		{"Harbor Lights, Book 2 of the Ember series", "Harbor Lights"},
+		{"Harbor Lights Book 5 of The Ember Wars", "Harbor Lights"},
+		{"Harbor Lights, Book Two of Ember Wars, a Starship Mage story", "Harbor Lights"},
+		{"Harbor Lights, Book 6 in the Ember Series", "Harbor Lights"},
+		{"Harbor Lights, Book IV of the Ember Cycle", "Harbor Lights"},
+		{"Harbor Lights (Book 3 of the Ember Wars)", "Harbor Lights"},
+		// genre tails
+		{"Harbor Lights, a crunchy LitRPG adventure", "Harbor Lights"},
+		{"Harbor Lights, a novel", "Harbor Lights"},
+		{"Harbor Lights, an Alpha World Adventure", "Harbor Lights"},
+		{"Harbor Lights, a Space Fleet Saga of Many Ships", "Harbor Lights"},
+		// series-name tails
+		{"Harbor Lights, The Ember Cycle", "Harbor Lights"},
+		{"Harbor Lights, The Ember Wars Series", "Harbor Lights"},
+		// a bare book number is NOT a tail: reviewers accepted these
+		{"Harbor Lights, Book 9", "Harbor Lights, Book 9"},
+		{"The Lantern Keeper, book 10", "The Lantern Keeper, book 10"},
+		{"Wrath of the Marsh, Book V", "Wrath of the Marsh, Book V"},
+		// nothing to strip
+		{"Harbor Lights", "Harbor Lights"},
+		{"Harbor Lights: A Tale of Salt", "Harbor Lights: A Tale of Salt"},
+		{"Life, the universe, and tides", "Life, the universe, and tides"},
+		{"  Harbor Lights  ", "Harbor Lights"},
+		// only the tail
+		{"Book One of Ember Wars", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, stripSeriesTail(c.in), c.in)
+	}
+}
+
+func TestBookNumberOf(t *testing.T) {
+	cases := map[string]int{
+		"Harbor Lights, Book 2 of the Ember series": 2,
+		"Harbor Lights Book Two":                    2,
+		"Harbor Lights, Book IV":                    4,
+		"Harbor Lights book 12":                     12,
+		"Harbor Lights":                             0,
+		"Bookshelf 3":                               0,
+		"Book of Tides":                             0,
+	}
+	for in, want := range cases {
+		require.Equal(t, want, bookNumberOf(in), in)
+	}
+}
+
+// The comma no longer opens a subtitle, the tails are dropped from both sides,
+// and two named book numbers that differ are two books.
+func TestJunkEvidenceAgrees(t *testing.T) {
+	cases := []struct {
+		name     string
+		cand     string
+		evidence []string
+		want     bool
+	}{
+		{"same title", "Harbor Lights", []string{"Harbor Lights"}, true},
+		{"colon subtitle", "Harbor Lights: A Tale of Salt", []string{"Harbor Lights"}, true},
+		{"parenthesis subtitle", "Harbor Lights (Unabridged Tide)", []string{"Harbor Lights"}, true},
+		{"dash subtitle", "Harbor Lights - Salt Edition", []string{"Harbor Lights"}, true},
+		{"apostrophes ignored", "Captain's Tide", []string{"Captains Tide"}, true},
+		{"book-of tail agrees with the folder", "Harbor Lights, Book 2 of the Ember series", []string{"Harbor Lights"}, true},
+		{"genre tail agrees", "Harbor Lights, a crunchy LitRPG adventure", []string{"Harbor Lights"}, true},
+		{"tail on the evidence side", "Harbor Lights", []string{"Harbor Lights, Book Two of Ember Wars"}, true},
+		{"comma is not a subtitle", "Harbor Lights, The Second Tide", []string{"Harbor Lights"}, false},
+		{"comma is not a subtitle (reverse)", "Harbor Lights", []string{"Harbor Lights, The Second Tide"}, false},
+		{"different book of the series", "Ember Court, Book 2 of the Ember series", []string{"Ember Court, Book 3"}, false},
+		{"another book of the series vetoes a number-less folder", "Ember Court, Book 2 of the Ember series", []string{"Ember Court, Book 3", "Ember Court"}, false},
+		{"same book number", "Ember Court, Book 2 of the Ember series", []string{"Ember Court, Book 2"}, true},
+		{"other title", "Lantern Keepers", []string{"Harbor Lights"}, false},
+		{"longer title is another work", "Harbor Lights Son", []string{"Harbor Lights"}, false},
+		{"series-name tail leaves a different title", "Lantern Keepers, The Ember Cycle", []string{"Harbor Lights"}, false},
+		{"no evidence", "Harbor Lights", nil, false},
+		{"empty candidate", "", []string{"Harbor Lights"}, false},
+		{"only a tail", "Book One of Ember Wars", []string{"Harbor Lights"}, false},
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, junkEvidenceAgrees(c.cand, c.evidence), c.name)
+	}
+	// titleAgreesWithAny, which the swapped title/author fixer reads, keeps
+	// its comma.
+	require.True(t, titleAgreesWithAny("Harbor Lights, The Second Tide", []string{"Harbor Lights"}))
+}
+
+// Transcription filters: the announcer, the format word, the sentence.
+func TestJunkProposalCheck_TranscriptionAnnouncersAndSentences(t *testing.T) {
+	pc := junkProposalCheck{stored: "read by narrator", people: []string{"Zed Writer"}}
+	refused := map[string]string{
+		// announcer phrases and idents
+		"an unabridged recording of Harbor Lights":        "announcer",
+		"the unabridged recording of Harbor Lights":       "announcer",
+		"Gate Studios presents, Harbor Lights":            "announcer",
+		"Simon Example presents Harbor Lights":            "announcer",
+		"Marble Gate Audio is pleased to present Tides":   "announcer",
+		"You're listening to Harbor Lights, Volume 5":     "announcer",
+		"You’re listening to Harbor Lights":               "announcer",
+		"you are listening to Harbor Lights":              "announcer",
+		"And now, part two, of fourteen":                  "announcer",
+		"And now Part 2 of Harbor Lights":                 "announcer",
+		"This concludes Harbor Lights":                    "announcer",
+		"This has been Harbor Lights Book one":            "announcer",
+		"Welcome to Harbor Lights":                        "announcer",
+		"Side four a lamp upon the sea":                   "announcer",
+		"Side 9, Salt and Stone":                          "announcer",
+		"Book One of Scathing Tides":                      "announcer",
+		"Episode 1 Harbor Lights a Romance of Many Tides": "announcer",
+		// a format, edition or disc marker
+		"Harbor Lights (Unabridged)": "format",
+		"Harbor Lights MP3":          "format",
+		"Harbor Lights Tape 3":       "format",
+		"Harbor Lights CD 2":         "format",
+		// sentences of the text
+		"He turned toward the door":          "prose",
+		"She walked into the harbor light":   "prose",
+		"They were gone by morning":          "prose",
+		"Kate grabbed Bobby":                 "prose",
+		"Marta looked at the tide":           "prose",
+		"The tide came in.":                  "prose",
+		"A cold wind blew across the water,": "prose",
+		"The captain said \"hold fast\"":     "prose",
+		"“Hold fast” said the captain":       "prose",
+	}
+	for c, want := range refused {
+		got := pc.refusal(c, junkSrcTranscribed)
+		if want == "" {
+			continue
+		}
+		require.NotEmpty(t, got, "%q must be refused", c)
+		require.Contains(t, got, want, c)
+	}
+	// Titles, the shapes a reviewer accepted: short, name-led, pronoun alone,
+	// ending in ? or !, a trailing abbreviation, a subtitle.
+	for _, c := range []string{
+		"Going Postal", "It", "Cell", "Misery", "Wolves", "The Hunted", "Kate Grabbed the Moon",
+		"She Walks in Beauty", "They Both Sail at the End", "I, Robot", "Who Goes There?", "Fantastic Mr Fox!",
+		"Harbor Lights: A Tale of Salt", "Harbor Lights, Book 9", "Gifts and Presents",
+		"Sidewalk Tides", "Welcomed Guests", "Episodes of Salt",
+	} {
+		require.Empty(t, pc.refusal(c, junkSrcTranscribed), c)
+	}
+	// The format list used to apply to folder and filename evidence only.
+	require.Contains(t, pc.refusal("Harbor Lights Tape 3", junkSrcTranscribed), "format")
+	// None of this reaches a candidate or provider title.
+	require.Empty(t, pc.refusal("Gate Studios presents, Harbor Lights", junkSrcProvider))
+	require.Empty(t, pc.refusal("He turned toward the door", junkSrcCandidate))
+}
+
+// Folder and filename proposals: chapter, track and credit tokens count
+// anywhere in the title, not only at the start.
+func TestJunkProposalCheck_FolderAndFilenameTokens(t *testing.T) {
+	pc := junkProposalCheck{stored: "read by narrator", people: []string{"Zed Writer"}, narrators: nil,
+		isPerson: func(s string) bool { return strings.EqualFold(s, "Known Person") }}
+	refused := map[string]string{
+		"35.Chapter 27 - 08) Tides - read by narrator": "marker",
+		"Tides - Chapter 4":                            "marker",
+		"Volume 1 0 - Prologue + Chapter 1":            "marker",
+		"Harbor Lights Track 07":                       "marker",
+		"Afterword - 2006 Harbor Lights":               "marker",
+		"Intro - Harbor Lights 2033":                   "marker",
+		"Recap - The Ember Wars 9":                     "marker",
+		"Unknown Album (3 13 2012 2 -10 -37 PM)":       "marker",
+		"Harbor Lights - Unknown Author":               "marker",
+		"Harbor Lights (read by Some Narrator)":        "marker",
+		"Harbor Lights narrated by Some Narrator":      "marker",
+		"Harbor Lights - Known Person":                 "author credit",
+		"Harbor Lights 3 - Q. V. Example":              "author credit",
+		"Harbor Lights, Book 2 - Cassius Example":      "author credit",
+		"Harbor Lights - Zed Writer":                   "author",
+		"Zed Writer - Harbor Lights":                   "person",
+		"Ripped Harbor Lights (Unabridged)":            "format",
+		"Harbor Lights [B002V1OF70]":                   "ASIN",
+	}
+	for c, want := range refused {
+		for _, src := range []string{junkSrcFolder, junkSrcFilename} {
+			got := pc.refusal(c, src)
+			require.NotEmpty(t, got, "%q (%s) must be refused", c, src)
+			require.Contains(t, got, want, "%q (%s)", c, src)
+		}
+	}
+	for _, c := range []string{
+		"Harbor Lights", "Harbor Lights - Salt Winds 2", "Dark Harbor - The Salt Wind Part 2", "The Chapter House",
+		"Salt and Stone", "Charity Tides", "Trackless Sea", "Harbor Lights - The Second Tide",
+		"Dark Harbor - Time Lord", // looks like a name; refused below only when the segment is two capitalised words
+	} {
+		got := pc.refusal(c, junkSrcFolder)
+		if c == "Dark Harbor - Time Lord" {
+			require.Contains(t, got, "author credit", "a segment shaped like a name is refused, not guessed: "+c)
+			continue
+		}
+		require.Empty(t, got, c)
+	}
+	// The same tokens do not reach a stripped title: chapterHeadingRe and the
+	// shared refusals still decide those.
+	require.Empty(t, pc.refusal("Harbor Lights - Unknown Author", junkSrcStripped))
+}
+
+func TestStripReadByCredit(t *testing.T) {
+	cases := map[string]string{
+		"Harbor Lights (read by Some Narrator)":             "Harbor Lights",
+		"Harbor Lights [read by Some Narrator]":             "Harbor Lights",
+		"Afterword - 2006 Harbor Lights - read by narrator": "Afterword - 2006 Harbor Lights",
+		"35.Chapter 27 - 08) Tides - read by narrator":      "35.Chapter 27 - 08) Tides",
+		"Harbor Lights":      "Harbor Lights",
+		"Read by Moonlight":  "Read by Moonlight",
+		"Tides (Unabridged)": "Tides (Unabridged)",
+	}
+	for in, want := range cases {
+		require.Equal(t, want, stripReadByCredit(in), in)
+	}
+}
+
+func TestJunkStoredAuthor(t *testing.T) {
+	for _, junk := range []string{"", "  ", "Unknown Author", "unknown", "read by narrator", "Unknown Title"} {
+		require.True(t, junkStoredAuthor(junk), "%q is junk", junk)
+	}
+	for _, real := range []string{"Zed Writer", "Q. V. Example", "Marta Quill"} {
+		require.False(t, junkStoredAuthor(real), "%q is a person", real)
+	}
+}
+
+func TestSeriesNumberRefusal(t *testing.T) {
+	seq := func(n int) *int { return &n }
+	cases := []struct {
+		name      string
+		series    string
+		title     string
+		seq       *int
+		agreeWith []string
+		wantWhy   string
+	}{
+		{"a real series, the recorded position", "Ember Wars", "03", seq(3), nil, ""},
+		{"no recorded position", "Ember Wars", "03", nil, nil, "no recorded series position"},
+		{"disc title", "Ember Wars", "Disc 03", seq(3), nil, "position inside a book"},
+		{"CD title", "Ember Wars", "CD5", seq(5), nil, "position inside a book"},
+		{"N of M title", "Ember Wars", "01 of 19", seq(1), nil, "position inside a book"},
+		{"part title", "Ember Wars", "Part 02", seq(2), nil, "position inside a book"},
+		{"series is a disc", "Disc 04", "04", seq(4), nil, "not a real series name"},
+		{"series is a junk title", "read by narrator", "04", seq(4), nil, "not a real series name"},
+		{"series is a placeholder album", "Unknown Album", "04", seq(4), nil, "not a real series name"},
+		{"series is the stored title", "03", "03", seq(3), nil, "not a real series name"},
+		{"series is the book's folder", "Prince Tides", "03", seq(3), []string{"Prince Tides"}, "own folder or title"},
+	}
+	for _, c := range cases {
+		b := database.BookCore{Title: c.title, SeriesSequence: c.seq}
+		got := seriesNumberRefusal(c.series, b, nil, c.agreeWith)
+		if c.wantWhy == "" {
+			require.Empty(t, got, c.name)
+			continue
+		}
+		require.Contains(t, got, c.wantWhy, c.name)
+	}
+}
+
+// ---- plan-level decisions ----
+
+// evLib is a small real Pebble library for the plan-level decisions of the
+// evidence ranking. Each case adds its own books.
+type evLib struct {
+	*junkLib
+	t *testing.T
+}
+
+func newEvLib(t *testing.T) *evLib {
+	t.Helper()
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	return &evLib{junkLib: &junkLib{store: st, ids: map[string]string{}}, t: t}
+}
+
+type evBook struct {
+	name, title, path string
+	author            *int
+	series            *int
+	seq               *int
+	duration          *int
+	state             string
+	transcribed       string
+	files             []string
+	// providerTitle and providerAuthor are what a provider recorded for the
+	// title and author (JSON-encoded when stored).
+	providerTitle, providerAuthor string
+}
+
+func (l *evLib) add(b evBook) string {
+	l.t.Helper()
+	st := l.store
+	book := &database.Book{Title: b.title, FilePath: b.path, AuthorID: b.author, SeriesID: b.series,
+		SeriesSequence: b.seq, Duration: b.duration, Format: "mp3"}
+	if b.state != "" {
+		s := b.state
+		book.LibraryState = &s
+	}
+	created, err := st.CreateBook(book)
+	require.NoError(l.t, err)
+	for _, f := range b.files {
+		require.NoError(l.t, st.CreateBookFile(&database.BookFile{BookID: created.ID, FilePath: f, Format: "mp3"}))
+	}
+	if b.transcribed != "" {
+		_, err := st.ModifyBook(created.ID, func(bk *database.Book) error { bk.TranscribedTitle = &b.transcribed; return nil })
+		require.NoError(l.t, err)
+	}
+	if b.providerTitle != "" {
+		v := `"` + b.providerTitle + `"`
+		require.NoError(l.t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: created.ID, Field: "title",
+			FetchedValue: &v, UpdatedAt: time.Now()}))
+	}
+	if b.providerAuthor != "" {
+		v := `"` + b.providerAuthor + `"`
+		require.NoError(l.t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: created.ID, Field: "author_name",
+			FetchedValue: &v, UpdatedAt: time.Now()}))
+	}
+	l.ids[b.name] = created.ID
+	return created.ID
+}
+
+func (l *evLib) author(name string) *int {
+	l.t.Helper()
+	a, err := l.store.CreateAuthor(name)
+	require.NoError(l.t, err)
+	return &a.ID
+}
+
+func intp(n int) *int { return &n }
+
+func (l *evLib) rows(f *junkTitleFixer) map[string]repairs.Row {
+	l.t.Helper()
+	series, err := l.store.GetAllSeries()
+	require.NoError(l.t, err)
+	res, err := repairs.RunPlan(context.Background(), f, nil,
+		repairs.PlanDeps{Guard: l.store, Series: repairs.SeriesNamesFrom(series)}, &fakeReporter{})
+	require.NoError(l.t, err)
+	out := map[string]repairs.Row{}
+	for name, id := range l.ids {
+		for _, r := range res.Rows {
+			if r.RowID == id {
+				out[name] = r
+			}
+		}
+	}
+	return out
+}
+
+func (l *evLib) fixer() *junkTitleFixer {
+	return newJunkTitleFixer(&Plugin{deps: fakeDeps{store: l.store}, standDownWait: noWait})
+}
+
+// Fix 1: a provider's title and the title without its prefix outrank the
+// transcription; a series tail of the transcription is dropped; a transcription
+// that names another book of the series is a conflict.
+func TestJunkTitleFixer_EvidenceRanking(t *testing.T) {
+	l := newEvLib(t)
+	a := l.author("Zed Writer")
+	weak := func(name string) []string { return []string{"/lib/Zed Writer/" + name + "/zz.mp3"} }
+	// The provider recorded the title under the book's author; the
+	// transcription misheard it. The weak filename stem "zz" is no evidence.
+	l.add(evBook{name: "provider-over-heard", title: "read by narrator", path: weak("p1")[0], author: a,
+		files: weak("p1"), providerTitle: "Lantern Keepers", providerAuthor: "Zed Writer", transcribed: "Lantern Keeprs"})
+	// The transcription is the same title plus the publisher's series line.
+	l.add(evBook{name: "tail-dropped", title: "read by narrator", path: weak("p2")[0], author: a,
+		files: weak("p2"), transcribed: "Orchard Keep, Book Two of the Ember Wars, a Starship Mage story"})
+	// The stripped title and the transcription agree (a subtitle); the
+	// stripped one is proposed, at low risk, not the longer transcription.
+	l.add(evBook{name: "stripped-over-heard", title: "05 - Harbor Lights", path: "/lib/Zed Writer/Harbor Lights/Harbor Lights.mp3", author: a,
+		files: []string{"/lib/Zed Writer/Harbor Lights/Harbor Lights.mp3"}, transcribed: "Harbor Lights: A Tale of Salt"})
+	// "X, Book N of …" no longer counts as the folder's subtitle when it is
+	// another book of the series than the title's own.
+	l.add(evBook{name: "other-book", title: "03 - Ember Court, Book 3", path: "/lib/Zed Writer/Ember Court/Ember Court.mp3", author: a,
+		files: []string{"/lib/Zed Writer/Ember Court/Ember Court.mp3"}, transcribed: "Ember Court, Book 2 of the Ember series"})
+	// A transcription of a different title still conflicts with the path.
+	l.add(evBook{name: "plain-conflict", title: "06 - Salt Garden", path: "/lib/Zed Writer/Salt Garden/Salt Garden.mp3", author: a,
+		files: []string{"/lib/Zed Writer/Salt Garden/Salt Garden.mp3"}, transcribed: "Salt Orchard, Book 6 of the Ember Wars"})
+	rows := l.rows(l.fixer())
+
+	r := rows["provider-over-heard"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Lantern Keepers", r.Proposed["title"])
+	require.Contains(t, r.Reason, "proposed from provider_value")
+	require.Contains(t, r.Reason, `transcription: "Lantern Keeprs"`)
+
+	r = rows["tail-dropped"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Orchard Keep", r.Proposed["title"])
+	require.Contains(t, r.Reason, "proposed from transcription")
+	require.Contains(t, r.Reason, "tail of the transcription")
+	require.Equal(t, repairs.RiskReview, r.Risk)
+
+	r = rows["stripped-over-heard"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Harbor Lights", r.Proposed["title"])
+	require.Contains(t, r.Reason, "proposed from title_prefix_stripped")
+	require.Equal(t, repairs.RiskLow, r.Risk)
+
+	r = rows["other-book"]
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "conflicting evidence")
+
+	r = rows["plain-conflict"]
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "conflicting evidence")
+}
+
+// Fix 2 at plan level: an announcer transcription is refused and nothing is
+// proposed from it.
+func TestJunkTitleFixer_AnnouncerTranscriptionIsNotProposed(t *testing.T) {
+	l := newEvLib(t)
+	a := l.author("Zed Writer")
+	for i, heard := range []string{
+		"an unabridged recording of Harbor Lights", "Gate Studios presents, Harbor Lights",
+		"You're listening to Harbor Lights, Volume 5", "And now, part two, of fourteen", "Kate grabbed Bobby",
+	} {
+		name := string(rune('a' + i))
+		p := "/lib/Zed Writer/" + name + "/zz.mp3"
+		l.add(evBook{name: name, title: "read by narrator", path: p, author: a, files: []string{p}, transcribed: heard})
+	}
+	for name, r := range l.rows(l.fixer()) {
+		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s: %v", name, r.Proposed)
+		require.Contains(t, r.SkipReason, "only a weak filename stem", name)
+	}
+}
+
+// Fix 3 and 4 at plan level: a filename that carries only a placeholder author
+// after the title, and a folder with a chapter token in the middle.
+func TestJunkTitleFixer_FilenameAndFolderShapes(t *testing.T) {
+	l := newEvLib(t)
+	a := l.author("Zed Writer")
+	l.author("Q. V. Example") // a library author: a filename's " - Q. V. Example" is a credit
+	l.add(evBook{name: "placeholder-author", title: "read by narrator", author: nil,
+		path:  "/lib/Books/Marble Gate - Unknown Author - read by narrator.mp3",
+		files: []string{"/lib/Books/Marble Gate - Unknown Author - read by narrator.mp3"}})
+	l.add(evBook{name: "library-author-suffix", title: "read by narrator", author: nil,
+		path:  "/lib/Books/Salt Road 3 - Q. V. Example.mp3",
+		files: []string{"/lib/Books/Salt Road 3 - Q. V. Example.mp3"}})
+	l.add(evBook{name: "unknown-name-suffix", title: "read by narrator", author: nil,
+		path:  "/lib/Books/Iron Tide - Cassius Example.mp3",
+		files: []string{"/lib/Books/Iron Tide - Cassius Example.mp3"}})
+	l.add(evBook{name: "credit-only", title: "read by narrator", author: a,
+		path: "/lib/Books/read by Some Narrator.mp3", files: []string{"/lib/Books/read by Some Narrator.mp3"}})
+	l.add(evBook{name: "chapter-folder", title: "read by narrator", author: a,
+		path:  "/lib/Zed Writer/35.Chapter 27 - 08) Tides - read by narrator/01.mp3",
+		files: []string{"/lib/Zed Writer/35.Chapter 27 - 08) Tides - read by narrator/01.mp3", "/lib/Zed Writer/35.Chapter 27 - 08) Tides - read by narrator/02.mp3"}})
+	l.add(evBook{name: "credit-in-folder", title: "read by narrator", author: a,
+		path:  "/lib/Zed Writer/Glass Orchard (read by Some Narrator)/01.mp3",
+		files: []string{"/lib/Zed Writer/Glass Orchard (read by Some Narrator)/01.mp3", "/lib/Zed Writer/Glass Orchard (read by Some Narrator)/02.mp3"}})
+	rows := l.rows(l.fixer())
+
+	r := rows["placeholder-author"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Marble Gate", r.Proposed["title"])
+	require.Contains(t, r.Reason, "proposed from filename")
+
+	r = rows["library-author-suffix"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Salt Road 3", r.Proposed["title"])
+
+	r = rows["unknown-name-suffix"]
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, "an author-shaped tail is refused, not guessed")
+	require.Contains(t, r.SkipReason, "author credit")
+
+	for _, name := range []string{"credit-only", "chapter-folder"} {
+		require.Equal(t, junkSkipNeedsManual, rows[name].Skipped, "%s: %v %s", name, rows[name].Proposed, rows[name].SkipReason)
+	}
+	require.Contains(t, rows["chapter-folder"].SkipReason, "chapter, track, credit or placeholder marker")
+
+	// A credit in brackets is dropped and the title kept.
+	r = rows["credit-in-folder"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Glass Orchard", r.Proposed["title"])
+}
+
+// Fix 5 at plan level: "<series>, Book <N>" is proposed only for a real series
+// and the book's own series position. Every case is its own library: the
+// generic folder "Books" gives the chapter-titled book no folder proposal, and
+// a second book there would make the pair a possible fragment.
+func TestJunkTitleFixer_SeriesAndNumber(t *testing.T) {
+	cases := []struct {
+		name, title, series string
+		seq                 *int
+		wantTitle           string // "" = not proposed
+	}{
+		{"real series, own position", "03", "Ember Wars", intp(3), "Ember Wars, Book 3"},
+		{"number is not the position", "03", "Ember Wars", intp(4), ""},
+		{"no recorded position", "03", "Ember Wars", nil, ""},
+		{"disc title", "Disc 03", "Ember Wars", intp(3), ""},
+		{"CD title", "CD5", "Ember Wars", intp(5), ""},
+		{"track of a total", "01 of 19", "Ember Wars", intp(1), ""},
+		{"part title", "Part 02", "Ember Wars", intp(2), ""},
+		{"series is a disc", "04", "Disc 04", intp(4), ""},
+		{"series is a placeholder album", "02", "Unknown Album", intp(2), ""},
+		{"series is a junk title", "02", "read by narrator", intp(2), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := newEvLib(t)
+			ser, err := l.store.CreateSeries(c.series, nil)
+			require.NoError(t, err)
+			l.add(evBook{name: "b", title: c.title, path: "/lib/Books/01.mp3", series: &ser.ID, seq: c.seq,
+				files: []string{"/lib/Books/01.mp3", "/lib/Books/02.mp3"}})
+			r := l.rows(l.fixer())["b"]
+			if c.wantTitle == "" {
+				require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+				require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+				return
+			}
+			require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+			require.Equal(t, c.wantTitle, r.Proposed["title"])
+			require.Contains(t, r.Reason, "proposed from series_and_number")
+		})
+	}
+}
+
+// Fix 6: a book under the minimum duration, or flagged suspicious, is not
+// retitled from a transcription, folder or filename; the prefix-stripped title
+// is the file's own and holds either way; an unknown duration is not gated.
+func TestJunkTitleFixer_DurationAndSuspiciousGate(t *testing.T) {
+	cases := []struct {
+		name     string
+		title    string
+		duration *int
+		state    string
+		min      *int // nil = the default
+		want     string
+		skipWhy  string
+	}{
+		{"9 s intro fragment", "read by narrator", intp(9), "", nil, "", "runs 9 s"},
+		{"five minute track", "read by narrator", intp(300), "", nil, "", "under the 1800 s"},
+		{"just under", "read by narrator", intp(1799), "", nil, "", "runs 1799 s"},
+		{"exactly the minimum", "read by narrator", intp(1800), "", nil, "Lantern Keepers", ""},
+		{"a whole book", "read by narrator", intp(36000), "", nil, "Lantern Keepers", ""},
+		{"unknown duration", "read by narrator", nil, "", nil, "Lantern Keepers", ""},
+		{"zero duration is unknown", "read by narrator", intp(0), "", nil, "Lantern Keepers", ""},
+		{"suspicious", "read by narrator", intp(36000), "suspicious", nil, "", "marked the book suspicious"},
+		{"suspicious, unknown duration", "read by narrator", nil, "Suspicious", nil, "", "marked the book suspicious"},
+		{"another library state", "read by narrator", intp(36000), "imported", nil, "Lantern Keepers", ""},
+		{"gate off", "read by narrator", intp(9), "", intp(0), "Lantern Keepers", ""},
+		{"stripped prefix is not gated", "05 - Lantern Keepers", intp(9), "", nil, "Lantern Keepers", ""},
+		{"stripped prefix, suspicious", "05 - Lantern Keepers", intp(9), "suspicious", nil, "Lantern Keepers", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := newEvLib(t)
+			a := l.author("Zed Writer")
+			l.add(evBook{name: "b", title: c.title, path: "/lib/Zed Writer/Lantern Keepers.mp3", author: a,
+				files: []string{"/lib/Zed Writer/zz.mp3"}, duration: c.duration, state: c.state, transcribed: "Lantern Keepers"})
+			f := l.fixer()
+			if c.min != nil {
+				f.minDurationSec = *c.min
+			}
+			r := l.rows(f)["b"]
+			if c.want == "" {
+				require.Equal(t, junkSkipPossibleFragment, r.Skipped, "proposed %q: %s", r.Proposed["title"], r.SkipReason)
+				require.Contains(t, r.SkipReason, c.skipWhy)
+				return
+			}
+			require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+			require.Equal(t, c.want, r.Proposed["title"])
+		})
+	}
+}
+
+// Fix 8: a junk stored author cannot vouch for a provider's title by author,
+// so the title must agree with the path or the transcription; when it does not,
+// the row is skipped and the folder is not used instead.
+func TestJunkTitleFixer_ProviderTitleWithJunkAuthor(t *testing.T) {
+	l := newEvLib(t)
+	real := l.author("Zed Writer")
+	junk, err := l.store.CreateAuthor("Unknown Author")
+	require.NoError(t, err)
+	folder := func(name string) []string {
+		return []string{"/lib/Books/" + name + "/01.mp3", "/lib/Books/" + name + "/02.mp3"}
+	}
+	// the provider title and the transcription agree: accepted although the
+	// recorded author cannot be compared with the stored one
+	l.add(evBook{name: "agrees-with-transcription", title: "read by narrator", author: &junk.ID, path: "/lib/Books/zz.mp3",
+		files: []string{"/lib/Books/zz.mp3"}, providerTitle: "Dungeon Keeper One", providerAuthor: "Zed Writer", transcribed: "Dungeon Keeper One"})
+	// the provider title extends the folder with a subtitle: accepted
+	l.add(evBook{name: "agrees-with-folder", title: "read by narrator", author: nil, path: folder("Real Folder")[0],
+		files: folder("Real Folder"), providerTitle: "Real Folder: The Sequel", providerAuthor: "Zed Writer"})
+	// the provider title names something else than the folder: skipped, and
+	// the folder is not the fallback
+	l.add(evBook{name: "contradicts-folder", title: "read by narrator", author: &junk.ID, path: folder("Other Folder")[0],
+		files: folder("Other Folder"), providerTitle: "Totally Different Book", providerAuthor: "Zed Writer"})
+	// no evidence at all but the provider's title: skipped, never guessed
+	l.add(evBook{name: "provider-alone", title: "read by narrator", author: nil, path: "/lib/Books/yy.mp3",
+		files: []string{"/lib/Books/yy.mp3"}, providerTitle: "Lone Provider Title", providerAuthor: "Zed Writer"})
+	// a REAL stored author keeps the author gate: recorded under someone
+	// else, the provider's title is not used and the folder stands
+	l.add(evBook{name: "real-author-other-recorded", title: "read by narrator", author: real, path: folder("Third Folder")[0],
+		files: folder("Third Folder"), providerTitle: "Totally Different Book", providerAuthor: "Somebody Else"})
+	rows := l.rows(l.fixer())
+
+	r := rows["agrees-with-transcription"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Dungeon Keeper One", r.Proposed["title"])
+	require.Contains(t, r.Reason, "proposed from provider_value")
+
+	r = rows["agrees-with-folder"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Real Folder: The Sequel", r.Proposed["title"])
+	require.Contains(t, r.Reason, "proposed from provider_value")
+
+	for _, name := range []string{"contradicts-folder", "provider-alone"} {
+		r = rows[name]
+		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s proposed %q", name, r.Proposed["title"])
+		require.Contains(t, r.SkipReason, "stored author is junk", name)
+	}
+
+	r = rows["real-author-other-recorded"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Third Folder", r.Proposed["title"])
+	require.Contains(t, r.Reason, "not recorded under this book's author")
+}
+
+// Fix 7: the duplicate guard is keyed on the proposal's owner, the provider's
+// or the folder's author when the stored one is junk, and a proposal two junk
+// rows share is a possible fragment for both.
+func TestJunkTitleFixer_DuplicateGuardWithJunkAuthor(t *testing.T) {
+	prev := config.AppConfig.RootDir
+	config.AppConfig.RootDir = "/lib"
+	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+
+	l := newEvLib(t)
+	zed := l.author("Zed Writer")
+	unknown, err := l.store.CreateAuthor("Unknown Author")
+	require.NoError(t, err)
+	unknownTitle, err := l.store.CreateAuthor("Unknown Title")
+	require.NoError(t, err)
+	two := func(dir string) []string { return []string{dir + "/01.mp3", dir + "/02.mp3"} }
+
+	// the library already has a real book of Zed Writer's
+	l.add(evBook{name: "existing", title: "Marble Gate", author: zed, path: "/lib/Zed Writer/Marble Gate/book.m4b",
+		files: []string{"/lib/Zed Writer/Marble Gate/book.m4b"}})
+	// junk author, folder author is Zed Writer: the same book
+	l.add(evBook{name: "same-folder-author", title: "read by narrator", author: &unknown.ID,
+		path: "/lib/Zed Writer/Marble Gate/01.mp3", files: two("/lib/Zed Writer/Marble Gate")})
+	// junk author, provider names Zed Writer: the same book
+	l.add(evBook{name: "same-provider-author", title: "read by narrator", author: &unknownTitle.ID,
+		path: "/mnt/x/Marble Gate/01.mp3", files: two("/mnt/x/Marble Gate"), providerTitle: "Marble Gate", providerAuthor: "Zed Writer"})
+	// junk author, folder author is someone else: not the same book
+	l.add(evBook{name: "other-folder-author", title: "read by narrator", author: &unknown.ID,
+		path: "/lib/Other Person/Marble Gate/01.mp3", files: two("/lib/Other Person/Marble Gate")})
+	// junk author, no author known at all: the title alone decides
+	l.add(evBook{name: "no-identity", title: "read by narrator", author: &unknown.ID,
+		path: "/mnt/y/Marble Gate/01.mp3", files: two("/mnt/y/Marble Gate")})
+	// two junk rows, two different junk authors, no identity, one proposal
+	l.add(evBook{name: "twin-a", title: "read by narrator", author: &unknown.ID,
+		path: "/mnt/a/Lone Tower/01.mp3", files: two("/mnt/a/Lone Tower")})
+	l.add(evBook{name: "twin-b", title: "read by narrator", author: &unknownTitle.ID,
+		path: "/mnt/b/Lone Tower/01.mp3", files: two("/mnt/b/Lone Tower")})
+	// two junk rows, one proposal, two different folder authors: two books
+	l.add(evBook{name: "apart-a", title: "read by narrator", author: &unknown.ID,
+		path: "/lib/Alpha Person/Cold Spire/01.mp3", files: two("/lib/Alpha Person/Cold Spire")})
+	l.add(evBook{name: "apart-b", title: "read by narrator", author: &unknownTitle.ID,
+		path: "/lib/Beta Person/Cold Spire/01.mp3", files: two("/lib/Beta Person/Cold Spire")})
+	rows := l.rows(l.fixer())
+
+	for _, name := range []string{"same-folder-author", "same-provider-author", "no-identity"} {
+		r := rows[name]
+		require.Equal(t, junkSkipPossibleFragment, r.Skipped, "%s proposed %q (%s)", name, r.Proposed["title"], r.SkipReason)
+		require.Contains(t, r.SkipReason, `a book titled "Marble Gate"`, name)
+	}
+	require.Contains(t, rows["same-folder-author"].SkipReason, "a book by Zed Writer already has")
+	require.Contains(t, rows["no-identity"].SkipReason, "any author")
+
+	r := rows["other-folder-author"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Marble Gate", r.Proposed["title"])
+
+	for _, name := range []string{"twin-a", "twin-b"} {
+		r := rows[name]
+		require.Equal(t, junkSkipPossibleFragment, r.Skipped, name)
+		require.Contains(t, r.SkipReason, `would all be retitled "Lone Tower"`, name)
+	}
+	for _, name := range []string{"apart-a", "apart-b"} {
+		r := rows[name]
+		require.True(t, r.Applicable(), "%s: %s: %s", name, r.Skipped, r.SkipReason)
+		require.Equal(t, "Cold Spire", r.Proposed["title"])
+	}
+}
+
+// A position in a work ("Volume II") is title text even when a scan stored it
+// as the book's author: a reviewer accepted "Harbor Lights - Volume II".
+func TestTitleFromFilename_PositionSegmentIsNotAnAuthor(t *testing.T) {
+	require.Equal(t, "Harbor Lights - Volume II", titleFromFilename("Harbor Lights - Volume II.mp3", "Volume II"))
+	require.Equal(t, "Harbor Lights - Part 3", titleFromFilename("Harbor Lights - Part 3.mp3", ""))
+	require.Equal(t, "Harbor Lights", titleFromFilename("Harbor Lights - Zed Writer.mp3", "Zed Writer"))
+}

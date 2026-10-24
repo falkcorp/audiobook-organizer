@@ -1,11 +1,14 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
-// last-edited: 2026-09-28
+// last-edited: 2026-10-23
 
 package maintenance
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 🔴 THE CORRUPTION THIS MUST NOT CAUSE. Dropping the last " - " segment after
 // the credit is the obvious implementation and it silently eats real title text
@@ -204,5 +207,62 @@ func TestDeriveJunkTitleReplacement_NoHopOutOfAClassifierJunkFolder(t *testing.T
 		if got, method, ok := DeriveJunkTitleReplacement("intro", "", paths); ok {
 			t.Fatalf("%v: derived %q via %s, want nothing", paths, got, method)
 		}
+	}
+}
+
+// The stored author is junk on most of the rows that carry a filename credit,
+// so the strip cannot depend on it: a placeholder author goes whether or not
+// the stem has a "read by" credit, and so does a name the caller recognises.
+// Title text with a " - " in it stays. (Shapes of the 2026-10-23 review, with
+// invented titles.)
+func TestTitleFromFilenameWith_StripsAuthorSegmentsWithoutTheStoredAuthor(t *testing.T) {
+	known := map[string]bool{"zed writer": true, "q. v. example": true}
+	isPerson := func(s string) bool { return known[strings.ToLower(strings.TrimSpace(s))] }
+	cases := []struct {
+		name, file, author, want string
+	}{
+		{"placeholder, no credit", "Marble Gate - Unknown Author.mp3", "", "Marble Gate"},
+		{"placeholder, with credit", "Marble Gate - Unknown Author - read by narrator.mp3", "", "Marble Gate"},
+		{"placeholder, stored author junk", "Marble Gate - Unknown Author.m4b", "read by narrator", "Marble Gate"},
+		{"unknown alone", "Marble Gate - Unknown.mp3", "", "Marble Gate"},
+		{"two segments of credit", "Marble Gate - Zed Writer - Unknown Author.mp3", "", "Marble Gate"},
+		{"library author, no credit", "Marble Gate - Zed Writer.mp3", "", "Marble Gate"},
+		{"library author with initials", "Marble Gate 3 - Q. V. Example.mp3", "", "Marble Gate 3"},
+		{"stored author still works", "Marble Gate - Someone New.mp3", "Someone New", "Marble Gate"},
+		{"title text survives", "Dark Harbor - The Salt Wind Part 2 - Unknown Author.mp3", "", "Dark Harbor - The Salt Wind Part 2"},
+		{"unknown segment that is not an author", "Dark Harbor - Salt Wind.mp3", "", "Dark Harbor - Salt Wind"},
+		{"no separator", "Marble Gate.mp3", "", "Marble Gate"},
+		{"only a placeholder after the separator", "Unknown Author - Marble Gate.mp3", "", "Unknown Author - Marble Gate"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := titleFromFilenameWith(c.file, c.author, isPerson); got != c.want {
+				t.Errorf("titleFromFilenameWith(%q, %q) = %q, want %q", c.file, c.author, got, c.want)
+			}
+		})
+	}
+	// Without the recogniser a name that is not the stored author stays.
+	if got := titleFromFilename("Marble Gate - Zed Writer.mp3", ""); got != "Marble Gate - Zed Writer" {
+		t.Errorf("no recogniser: got %q", got)
+	}
+}
+
+// A stem that is only an author credit has no title.
+func TestTitleFromFilename_AuthorCreditOnlyStemHasNoTitle(t *testing.T) {
+	for _, file := range []string{"read by Some Narrator.mp3", "Read By Some Narrator", "narrated by Some Narrator.m4b", "  read by narrator  .mp3"} {
+		if got := titleFromFilename(file, "Some Author"); got != "" {
+			t.Errorf("titleFromFilename(%q) = %q, want no title", file, got)
+		}
+	}
+	// "Read by Moonlight" is a title when it is not a credit shape of a name:
+	// the lead is the words "read by" only, and refusing it here is the safe
+	// side (the classifier names narrator credits junk the same way).
+}
+
+func TestDeriveJunkTitleReplacement_FilenameAuthorSuffixIsDropped(t *testing.T) {
+	got, method, ok := deriveJunkTitleReplacement("read by narrator", "",
+		[]string{"/lib/Books/Marble Gate - Unknown Author - read by narrator.mp3"}, nil)
+	if !ok || got != "Marble Gate" || method != "filename" {
+		t.Fatalf("got (%q, %q, %v), want (Marble Gate, filename, true)", got, method, ok)
 	}
 }
