@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-21
+// last-edited: 2026-10-23
 
 package undo
 
@@ -799,6 +799,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return ChangeTypeBookTagAdd + ":(unparsable)"
+	case ChangeTypeMasterListElsewhereCreate:
+		if _, err := DecodeMasterListElsewhereCreate(c); err != nil {
+			return ChangeTypeMasterListElsewhereCreate + ":(unparsable)"
+		}
+		return ""
 	case ChangeTypeUserContentFollow:
 		if validUserContentFollowRow(c) {
 			return ""

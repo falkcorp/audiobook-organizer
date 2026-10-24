@@ -1,9 +1,10 @@
-- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126 (none blocks the preview; the first must land before PR 2 apply).
-  - [ ] No delete route or retention for stored lists (`mlist:list:` / `mlist:row:`): every upload is kept forever. Needed before PR 2 apply, which makes a list the input of a write.
-  - [ ] `masterlist.ClassifyASIN` only tries the ISBN-10 reading when the code is all digits, so an ISBN-10 whose check digit is `X` is classified as an ASIN instead of an ISBN-10.
-  - [ ] A generic `isbn` column that disagrees with an `isbn10` / `isbn13` column on the same row is dropped without an `identifier_conflict` issue.
-  - [ ] `ParseJSON`: one row with a wrong JSON type fails the whole file instead of becoming a row issue.
-  - [ ] An ambiguous ASIN tier returns without trying the ISBN tier, so a row whose ISBN would settle the match is left `ambiguous`.
-  - [ ] `checkAgreement` ignores survivors of trashed books when comparing the ASIN and ISBN hits.
+- [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126. Items 1 to 6 are done in PR 2 (the import apply); 7 and 8 remain, and so does the cut-over of `maintenance.audible-read-status` to the new fixer.
+  - [x] No delete route or retention for stored lists (`mlist:list:` / `mlist:row:`): `DELETE /api/v1/master-lists/:id` and per-uploader retention (`master_list_retention`, default 10, pruned on upload).
+  - [x] `masterlist.ClassifyASIN` only tried the ISBN-10 reading when the code was all digits, so an ISBN-10 whose check digit is `X` was classified as an ASIN.
+  - [x] A generic `isbn` column that disagrees with an `isbn10` / `isbn13` column on the same row was dropped without an `identifier_conflict` issue.
+  - [x] `ParseJSON`: one row with a wrong JSON type failed the whole file instead of becoming a row issue.
+  - [x] An ambiguous ASIN tier returned without trying the ISBN tier, so a row whose ISBN would settle the match was left `ambiguous`.
+  - [x] `checkAgreement` ignored survivors of trashed books when comparing the ASIN and ISBN hits.
   - [ ] A runtime change of the upload limit gives the minimum of the middleware limit and the handler limit until restart.
   - [ ] `RequireAdmin` answers 401 (not a pass-through) when `EnableAuth=false`, unlike `s.perm`, so the master-list routes are unreachable in a no-auth dev run.
+  - [ ] Cut over `maintenance.audible-read-status` to the `master-list-import` fixer (its Audible-specific input becomes a list upload) and retire the old op.

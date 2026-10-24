@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.61.1
+// version: 1.62.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package config
 
@@ -1463,6 +1463,10 @@ func applySetting(key, value, typ string) error {
 		case "upload_body_limit_mb":
 			if i, err := strconv.Atoi(value); err == nil {
 				c.UploadBodyLimitMB = i
+			}
+		case "master_list_retention":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.MasterListRetention = i
 			}
 		case "enable_auth":
 			if b, err := strconv.ParseBool(value); err == nil {

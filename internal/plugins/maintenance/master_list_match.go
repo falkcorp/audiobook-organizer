@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_match.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bc498082-c7d9-434e-82a6-37e0eb55dd61
 // last-edited: 2026-10-23
 
@@ -25,8 +25,11 @@ import (
 
 // Plan row classes (Row.Class). Every count of the plan is a filter of the
 // rows endpoint (?class=<class>), so every number on the page lists its rows.
-// Only matched_high can ever be applied (by PR 2); the others are listed,
-// never written, and are also the row's Skipped kind.
+// Two classes are applicable: matched_high (the row's read status is written to
+// the matched book for the target user, unless the decision pass finds a
+// reason not to, which is then the row's class) and read_elsewhere (a row that
+// matches no library book is kept as a record, never as a book). Every other
+// class is listed, never written, and is also the row's Skipped kind.
 const (
 	mlMatchedHigh   = "matched_high"
 	mlMatchedReview = "matched_review"
@@ -34,10 +37,37 @@ const (
 	mlUnmatched     = "unmatched"
 	mlDuplicate     = "duplicate_in_list"
 	mlInvalid       = "invalid"
+	// mlReadElsewhere: an unmatched row nothing in the library could be (no
+	// title candidates, no trashed copy carrying an identifier). Applicable:
+	// the apply creates a read-elsewhere record for it.
+	mlReadElsewhere = "read_elsewhere"
 	// mlUnreadable: a store read the row's decision needs failed. The row is
 	// refused rather than planned from a guess (an unreadable book is not "no
 	// book", and "unmatched" would offer to record a book the library has).
 	mlUnreadable = "error_unreadable"
+)
+
+// Classes of a matched_high row the decision pass declined to write (each is
+// also the row's Skipped kind, so every count is a filter of the rows
+// endpoint). They mirror the Audible import's: the import never un-finishes a
+// book, never overwrites a user's choice, and newer local activity wins.
+const (
+	mlSkipNoStatus        = "skipped_no_status"
+	mlSkipNotStarted      = "skipped_not_started"
+	mlSkipListAbandoned   = "skipped_list_abandoned"
+	mlSkipNoTimestamp     = "skipped_no_timestamp"
+	mlSkipNoProgress      = "skipped_no_progress"
+	mlSkipAlreadyFinished = "skipped_already_finished"
+	mlSkipNewerLocal      = "skipped_newer_local"
+	mlSkipLocalProgress   = "skipped_local_progress"
+	mlSkipUserAbandoned   = "skipped_user_abandoned"
+	mlSkipManualUnstarted = "skipped_manual_unstarted"
+	// mlSkipAlreadyRecorded: a read-elsewhere record for this row and user
+	// already exists (an earlier import of it, from this list or another).
+	mlSkipAlreadyRecorded = "skipped_already_recorded"
+	// mlStateUnreadable: a read the decision needs (the user's state, a
+	// book's files, the record) failed; the row is refused, not guessed.
+	mlStateUnreadable = "error_state_unreadable"
 )
 
 // Match tiers (the evidence and the stored state name them).
@@ -150,9 +180,12 @@ type mlOutcome struct {
 	target     string
 	candidates []string
 	trashed    []string
-	flags      []string
-	evidence   []string
-	reason     string
+	// hits are the live books the matching identifier hit, before resolution
+	// to a version-group primary: their listening counts as the target's.
+	hits     []string
+	flags    []string
+	evidence []string
+	reason   string
 	// runtimeKnown: both the list and the target gave a runtime, so the
 	// runtime check ran. A match without it is planned at review risk.
 	runtimeKnown bool
@@ -313,6 +346,20 @@ func (c *mlCall) survivors(trashed []string) (live, noLive []string, err error) 
 	return uniqSorted(live), noLive, nil
 }
 
+// outcome is classify with the two failures turned into classes: a row that
+// names no book is invalid, and a failed read fails the ROW closed (an
+// unreadable book is not "no book").
+func (m *mlMatcher) outcome(row masterlist.Row) mlOutcome {
+	if !row.HasIdentity() {
+		return mlOutcome{class: mlInvalid, reason: "the row has no title, identifier or source id"}
+	}
+	o, err := m.classify(row)
+	if err != nil {
+		return mlOutcome{class: mlUnreadable, reason: err.Error()}
+	}
+	return o
+}
+
 // classify decides one combined row. It reads the library only, never the
 // target user's state (the fixer's decision step does).
 func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
@@ -434,7 +481,7 @@ func (c *mlCall) checkAgreement(o *mlOutcome, later []string) error {
 // resolveID turns an identifier tier's live hits into one outcome.
 func (c *mlCall) resolveID(tier, note string, raw []string, viaTrashed bool, trashed []string) (mlOutcome, error) {
 	lib := c.m.lib
-	o := mlOutcome{tier: tier, trashed: trashed}
+	o := mlOutcome{tier: tier, trashed: trashed, hits: uniqSorted(raw)}
 	o.evidence = append(o.evidence, "matched by "+strings.ReplaceAll(tier, "_", " ")+": "+note)
 	if viaTrashed {
 		o.evidence = append(o.evidence, fmt.Sprintf("only a trashed copy (%s) carries it; followed to its live survivor", strings.Join(trashed, ", ")))
