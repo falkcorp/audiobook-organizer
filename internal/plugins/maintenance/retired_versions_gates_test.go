@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
-// version: 1.3.1
+// version: 1.4.1
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
 // last-edited: 2026-10-28
 
@@ -83,6 +83,10 @@ func (errVetoes) PairVetoed(string, string, string, string) (bool, error) {
 func (errVetoes) SubjectRejected(string, string, string) (bool, error) {
 	return false, errors.New("vetoes unavailable")
 }
+
+func (errVetoes) Load(context.Context) error { return nil }
+
+func (errVetoes) Unresolved() []decisions.UnresolvedID { return nil }
 
 type errJournals struct{}
 

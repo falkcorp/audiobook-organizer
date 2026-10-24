@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91e6c0d4-3b2a-4f75-8d18-6a4f2c97e0b3
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -18,16 +18,30 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
-// retireInto writes the retired book_versions row a retire of shell onto
-// holder leaves (the index idx:bv:from:<shell> the resolver follows). It moves
-// no book_file row: the resolver reads only the version.
-func (rf *retiredFixture) retireInto(shell, holder string) {
+// retireInto retires one file row of shell onto holder, as the apply does: a
+// retired book_versions row (the index idx:bv:from:<shell> the resolver
+// follows) and a book_file row re-keyed under the holder and flagged retired.
+// The resolver counts a retired version only while it still holds a row, so a
+// version without one would prove nothing. It returns the version and row ids
+// for unretire.
+func (rf *retiredFixture) retireInto(shell, holder string) (versionID, rowID string) {
 	rf.t.Helper()
-	_, err := rf.st.CreateBookVersion(&database.BookVersion{
+	row := &database.BookFile{BookID: rf.ids[shell], FilePath: "/lib/retired/" + shell + "-" + holder + ".mp3", Format: "mp3"}
+	require.NoError(rf.t, rf.st.CreateBookFile(row))
+	v, err := rf.st.CreateBookVersion(&database.BookVersion{
 		BookID: rf.ids[holder], Status: database.BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
 		RetiredFromBookID: rf.ids[shell], RetireOpID: "op-retire", RetiredAt: retiredPtr(rf.now),
 	})
 	require.NoError(rf.t, err)
+	require.NoError(rf.t, rf.st.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: rf.ids[shell]}}, rf.ids[holder], v.ID))
+	return v.ID, row.ID
+}
+
+// unretire reverts a retireInto: the row goes back under the shell. The version
+// row stays, status retired, holding nothing (what a revert leaves).
+func (rf *retiredFixture) unretire(shell, holder, versionID, rowID string) {
+	rf.t.Helper()
+	require.NoError(rf.t, rf.st.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rowID}, SourceBookID: rf.ids[holder]}}, rf.ids[shell], versionID, nil))
 }
 
 // purge deletes a fixture book's row, as the purge that follows a retire does.
@@ -63,7 +77,7 @@ func (rf *retiredFixture) rejectShell(name string) {
 
 func (rf *retiredFixture) vetoReader() OwnerVetoReader {
 	rf.t.Helper()
-	r := NewOwnerVetoReader(rf.st)
+	r := NewOwnerVetoReader(rf.st, nil)
 	require.NotNil(rf.t, r)
 	return r
 }
@@ -83,6 +97,8 @@ func TestOwnerVetoReader_ResolverFollowsTheIndexAndComposesWithTheMergeSurvivor(
 	rf.live("holder", "")
 	rf.live("survivor", "")
 	rf.live("other", "")
+	rf.trashed("other-alias", "", 30)
+	rf.mergedInto("other-alias", "other")
 	rf.trashed("shell", "", 30)
 	rf.retireInto("shell", "holder")
 	rf.reject("shell", "other", decisions.FamilySameWork)
@@ -101,7 +117,10 @@ func TestOwnerVetoReader_ResolverFollowsTheIndexAndComposesWithTheMergeSurvivor(
 	// 1. The shell is trashed: the index leads to the holder.
 	r := rf.vetoReader()
 	require.True(t, pairVetoed(t, r, rf.ids["holder"], rf.ids["other"], decisions.FamilySameWork))
-	require.True(t, pairVetoed(t, r, rf.ids["shell"], rf.ids["other"], decisions.FamilySameWork), "the old id still answers")
+	// Both ends are asked by names the reject does not carry (the shell's
+	// holder and an alias of the other book), so only the resolver can answer.
+	require.True(t, pairVetoed(t, r, rf.ids["holder"], rf.ids["other-alias"], decisions.FamilySameWork), "an alias of the other end resolves too")
+	require.True(t, pairVetoed(t, r, rf.ids["shell"], rf.ids["other-alias"], decisions.FamilySameWork), "the old id still answers, through the alias")
 	require.False(t, pairVetoed(t, r, rf.ids["holder"], rf.ids["other"], decisions.FamilySameCopy), "family scoped")
 	require.False(t, pairVetoed(t, r, rf.ids["survivor"], rf.ids["other"], decisions.FamilySameWork))
 
@@ -126,11 +145,15 @@ func TestOwnerVetoReader_LiveBookIsNotRedirected(t *testing.T) {
 	rf.live("holder", "")
 	rf.live("restored", "")
 	rf.live("other", "")
+	rf.trashed("other-alias", "", 30)
+	rf.mergedInto("other-alias", "other")
 	rf.retireInto("restored", "holder")
 	rf.reject("restored", "other", decisions.FamilySameWork)
 	r := rf.vetoReader()
-	require.True(t, pairVetoed(t, r, rf.ids["restored"], rf.ids["other"], decisions.FamilySameWork))
-	require.False(t, pairVetoed(t, r, rf.ids["holder"], rf.ids["other"], decisions.FamilySameWork))
+	require.True(t, pairVetoed(t, r, rf.ids["restored"], rf.ids["other"], decisions.FamilySameWork), "control: the names the reject carries")
+	require.True(t, pairVetoed(t, r, rf.ids["restored"], rf.ids["other-alias"], decisions.FamilySameWork), "the live book still answers, with the other end resolved")
+	require.False(t, pairVetoed(t, r, rf.ids["holder"], rf.ids["other"], decisions.FamilySameWork), "a live book is not redirected to the holder")
+	require.False(t, pairVetoed(t, r, rf.ids["holder"], rf.ids["other-alias"], decisions.FamilySameWork))
 }
 
 // The plan drops a row whose shell the owner rejected, whatever its target, and
