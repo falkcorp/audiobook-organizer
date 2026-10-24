@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/masterlist"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
@@ -209,7 +209,8 @@ func (s *Server) uploadMasterList(c *gin.Context) {
 	}
 	if perr != nil {
 		resp.PruneError = perr.Error()
-		slog.Warn("master list retention stopped early", "list", stored.ID, "uploaded_by", stored.UploadedBy, "pruned", len(pruned), "err", perr)
+		logger.New("master-list").Warn("master list retention stopped early: list=%s pruned=%d err=%s",
+			logger.SanitizeLogValue(stored.ID), len(pruned), logger.SanitizeLogValue(perr.Error()))
 	}
 	c.JSON(http.StatusCreated, resp)
 }
