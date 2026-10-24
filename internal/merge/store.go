@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package merge
 
@@ -50,6 +50,9 @@ type BookWriter interface {
 type mergeBookFileStore interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	// BookFilesAtPath is the complete, retired-inclusive row lookup the virtual
+	// file plan needs: GetBookFileByPath never returns a retired row.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	CreateBookFile(file *database.BookFile) error
 	MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error
 	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error

@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_integrity_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: c9a3e714-0d62-4b58-9f21-6e4a2c8b1d70
-// last-edited: 2026-09-02
+// last-edited: 2026-10-23
 
 package itunes
 
@@ -14,12 +14,39 @@ import (
 // pidCensusMock is a minimal PIDIntegrityStore: a flat book_file list plus a
 // book-by-id map (including soft-deleted books, which GetBookByID must return).
 type pidCensusMock struct {
+	noRetiredRows
 	files []database.BookFileCore
 	books map[string]*database.Book
 }
 
 func (m *pidCensusMock) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return m.files, nil
+}
+
+// GetAllBookFilesCoreIncludingRetired: this fake holds no retired row.
+func (m *pidCensusMock) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return m.GetAllBookFilesCore()
+}
+
+// noRetiredRows supplies the RetiredBookFileReader methods a fake that never
+// holds a retired row has no use for. The audits resolve the reader and fail
+// closed without it (database.AllBookFilesCoreIncludingRetired), so every fake
+// they run against declares itself one; a fake that holds retired rows
+// (retiredAwareMock) overrides what it needs.
+type noRetiredRows struct{}
+
+func (noRetiredRows) GetBookFilesIncludingRetired(string) ([]database.BookFile, error) {
+	return nil, nil
+}
+func (noRetiredRows) GetRetiredBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+func (noRetiredRows) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
+	return nil, nil
+}
+func (noRetiredRows) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
+func (noRetiredRows) GetBookFileByPathIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
 }
 
 func (m *pidCensusMock) GetBookByID(id string) (*database.Book, error) {
