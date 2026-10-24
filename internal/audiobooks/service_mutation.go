@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
 // version: 1.31.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -1468,6 +1468,11 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	}
 	blocked := false
 	del := func() error {
+		// Under the merge lock: the retire repair takes it too, so a shell
+		// retired since the check above is caught before the hash block.
+		if err := merge.RefuseRetiredShell(svc.store, id, "hard delete"); err != nil {
+			return err
+		}
 		// Optionally block the hash right before deleting.
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
 			if err := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); err != nil {

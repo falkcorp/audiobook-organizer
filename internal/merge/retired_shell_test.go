@@ -1,7 +1,7 @@
 // file: internal/merge/retired_shell_test.go
 // version: 1.0.0
 // guid: 4d8b0c63-1e27-4a95-b3f8-6c19e7a02d54
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package merge
 
@@ -61,7 +61,7 @@ func TestRestoreFromTrash_RefusesARetireShell(t *testing.T) {
 	require.True(t, res.Restored, "control: an ordinary trashed book still restores")
 
 	// A shell whose retired rows went back (unretire) holds nothing.
-	require.NoError(t, s.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rows[0].ID}, SourceBookID: "shell"}}, "shell", "rv-shell", nil))
+	require.NoError(t, s.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rows[0].ID}, SourceBookID: "holder"}}, "shell", "rv-shell", nil))
 	n, err = RetiredRowsHeldFor(s, "shell")
 	require.NoError(t, err)
 	require.Zero(t, n)

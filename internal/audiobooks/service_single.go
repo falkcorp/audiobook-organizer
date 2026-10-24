@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
 // version: 1.23.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -465,6 +465,10 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot re-read it under the merge lock: %v", book.ID, r.readErr)}}
 	case r.notInTrash:
 		return purgeOutcome{kind: purgeNotInTrash}
+	case errors.Is(r.retiredErr, merge.ErrBookIsRetiredShell):
+		return purgeOutcome{kind: purgeRetiredShell}
+	case r.retiredErr != nil:
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %v", book.ID, r.retiredErr)}}
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
@@ -491,6 +495,11 @@ type statelessPurge struct {
 	notInTrash                   bool
 	hasState                     bool
 	readErr, stateErr, deleteErr error
+	// retiredErr: the retired-shell refusal (merge.ErrBookIsRetiredShell) or a
+	// failed lookup, read under the lock: the retire repair takes the same lock,
+	// so a check made outside it could pass a book the repair retired a moment
+	// later, and the delete would then find no row key under it.
+	retiredErr error
 }
 
 // purgeIfStateless re-reads book, checks it for listening state and, when it
@@ -528,6 +537,9 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, probe *merge.
 		return r
 	}
 	r.fresh = cur
+	if r.retiredErr = merge.RefuseRetiredShell(svc.store, cur.ID, "purge"); r.retiredErr != nil {
+		return r
+	}
 	r.hasState, r.stateErr = probe.Has(cur.ID)
 	if r.stateErr != nil || r.hasState {
 		return r
@@ -588,6 +600,10 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		if cur == nil || !cur.IsSoftDeleted() {
 			return fmt.Errorf("%w: %s was restored meanwhile", ErrNotInTrash, book.ID)
 		}
+		// Under the lock: a retire shell is never purged (see purgeOne step 0a).
+		if rerr := merge.RefuseRetiredShell(svc.store, book.ID, "purge"); rerr != nil {
+			return rerr
+		}
 		doomed = cur
 		return targetCheck()
 	}
@@ -597,6 +613,8 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 	switch {
 	case errors.Is(err, ErrNotInTrash):
 		return purgeOutcome{kind: purgeNotInTrash}
+	case errors.Is(err, merge.ErrBookIsRetiredShell):
+		return purgeOutcome{kind: purgeRetiredShell}
 	case errors.Is(err, merge.ErrCarryTargetUnreadable):
 		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: %v", book.ID, err)}}
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, merge.ErrBookHasListeningState):

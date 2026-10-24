@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
 // version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package batch
 
@@ -605,7 +605,13 @@ func (bs *BatchService) hardDelete(book *database.Book) error {
 	if !ok {
 		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
 	}
-	if _, err := merge.HardDeleteKeepingUserState(merger, bs.db, book, func() error { return bs.db.DeleteBook(book.ID) }); err != nil {
+	if _, err := merge.HardDeleteKeepingUserState(merger, bs.db, book, func() error {
+		// Under the merge lock (see the check above).
+		if err := merge.RefuseRetiredShell(bs.db, book.ID, "hard delete"); err != nil {
+			return err
+		}
+		return bs.db.DeleteBook(book.ID)
+	}); err != nil {
 		if errors.Is(err, merge.ErrBookHasListeningState) {
 			return fmt.Errorf("%w; soft-delete it and purge it from the trash instead, where the progress can be moved or discarded on purpose", err)
 		}
