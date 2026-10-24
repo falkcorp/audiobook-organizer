@@ -1,6 +1,7 @@
 // file: internal/server/changelog_service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3dcbb4a3-7fa5-425f-8247-5f96f81f2f22
+// last-edited: 2026-10-24
 
 package server
 
@@ -23,14 +24,14 @@ func TestChangelogService_GetBookChangelog_Empty(t *testing.T) {
 	svc := server.changelogService
 	require.NotNil(t, svc)
 
-	entries, err := svc.GetBookChangelog("nonexistent-book-id")
+	entries, err := svc.GetBookChangelog("nonexistent-book-id", nil)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
 
 func TestChangelogService_GetBookChangelog_NilDB(t *testing.T) {
 	svc := activity.NewChangelogService(nil)
-	_, err := svc.GetBookChangelog("some-id")
+	_, err := svc.GetBookChangelog("some-id", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database not initialized")
 }
@@ -56,7 +57,7 @@ func TestChangelogService_WithPathHistory(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	entries, err := server.changelogService.GetBookChangelog(book.ID)
+	entries, err := server.changelogService.GetBookChangelog(book.ID, nil)
 	require.NoError(t, err)
 	// CreateBook records an implicit import entry, so the manual rename
 	// is one of several entries. Find the specific one we recorded.

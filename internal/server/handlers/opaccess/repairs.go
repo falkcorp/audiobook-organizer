@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-24
 
@@ -17,10 +17,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // Repairs decides who may read the data of a Repairs operation
-// (repairs.plan, repairs.apply) through the generic operations routes.
+// (repairs.plan, repairs.apply) through the generic routes.
 //
 // Those operations carry other users' data: a plan's stored result and an
 // apply's per-row results (including owner_user_id), the logs the engine writes
@@ -28,16 +29,27 @@ import (
 // listening state, the operation's change journal (every user's state and
 // positions before and after). The generic routes (GET /operations/:id/result,
 // /changes, /undo/preflight, /operations/v2/:id and its logs, the system log
-// reader's operation_id branch, /operations/timeline and /operations/events)
-// are library.view reads, and guests hold the viewer role. So for these two
-// definitions the caller must hold every permission of the op's fixer
-// (repairs.RequiredPermissions, the same set the Repairs routes check in
-// fixerPermitted), and every other operation is unaffected.
+// reader's operation_id branch, /operations/timeline, /operations/events, and
+// the per-book journal reads GET /audiobooks/:id/changes and
+// /audiobooks/:id/changelog) are library.view reads, and guests hold the
+// viewer role. So for these two definitions the caller must hold every
+// permission of the op's fixer (repairs.RequiredPermissions, the same set the
+// Repairs routes check in fixerPermitted), and every other operation is
+// unaffected.
 //
-// The fixer is read from the op's params (both ops carry fixer_id) and, when
-// they do not state it, from its stored result. A repairs op whose fixer cannot
-// be resolved is refused (fail closed), and so is every repairs op for a nil
-// *Repairs: a handler the server did not wire cannot leak.
+// Two checks, because the data lives in two places:
+//
+//   - MayRead takes an operation row. The fixer is read from the op's params
+//     (both ops carry fixer_id) and, when they do not state it, from its
+//     stored result. A repairs op whose fixer cannot be resolved is refused
+//     (fail closed).
+//   - MayReadChange takes one change-journal row and needs no operation row,
+//     because the journal outlives it: registry.Discard deletes the op row and
+//     keeps its opchange rows. The row names its fixer itself
+//     (OperationChange.Source, stamped by repairs.Writer).
+//
+// Every repairs op, and every journal row that is Repairs data, is refused for
+// a nil *Repairs: a handler the server did not wire cannot leak.
 type Repairs struct {
 	fixers FixerLookup
 	holds  func(c *gin.Context, p auth.Permission) bool
@@ -80,9 +92,10 @@ func repairsOpFixerID(row *database.OperationV2Row) string {
 	return ""
 }
 
-// Reader answers, for one request, whether the caller may read the
-// data of an operation row. It remembers the verdict per fixer, because a
-// timeline can hold hundreds of repairs rows and each check asks the store.
+// Reader answers, for one request, whether the caller may read the data of
+// an operation row or a change-journal row. It remembers the verdict per
+// fixer, because a timeline or a journal can hold hundreds of repairs rows and
+// each check asks the store.
 type Reader struct {
 	a       *Repairs
 	c       *gin.Context
@@ -100,24 +113,90 @@ func (r *Reader) MayRead(row *database.OperationV2Row) bool {
 	if row == nil || !IsRepairsOp(row.DefID) {
 		return true
 	}
-	if r.a == nil || r.a.fixers == nil || r.a.holds == nil {
+	if !r.wired() {
 		return false
 	}
 	id := repairsOpFixerID(row)
 	if id == "" {
 		return false
 	}
+	return r.fixerPermitted(id)
+}
+
+// MayReadChange reports whether the caller may read one change-journal row.
+// It decides from the row alone, so it holds after the row's operation has
+// been discarded (registry.Discard keeps the journal).
+//
+// A row is Repairs data when either holds:
+//
+//   - its ChangeType is undo.ChangeTypeUserBookStateSet: one user's listening
+//     state and positions, before and after. Only repairs.Writer.SetUserState
+//     writes it, so it is always scoped: to the fixer its Source names, or,
+//     when Source names no registered fixer (or none at all), to the strictest
+//     set (see fixerPermitted). Every such row names its fixer: Source
+//     stamping landed on 2026-10-03 (563a229e9) and the only writer of this
+//     change type, the Audible read-status fixer, on 2026-10-05 (7f437d343).
+//   - its Source is a registered fixer's id: the fixer's permissions.
+//
+// Any other row is readable. A non-empty Source alone does not make a row
+// Repairs data: the v3 op writer stamps its definition id there too
+// (registry's v3 adapter via opswriter.NewBookHistory), and that history is
+// library.view data. A removed fixer's rows other than user state therefore
+// read as ordinary history here; the operation routes still apply MayRead to
+// the op row while it exists.
+//
+// Unwired (nil *Repairs or no fixer registry), user-state rows are refused and
+// so is every row with a Source, since which Sources are fixers is unknown.
+func (r *Reader) MayReadChange(ch *database.OperationChange) bool {
+	if ch == nil {
+		return true
+	}
+	userState := ch.ChangeType == undo.ChangeTypeUserBookStateSet
+	if !r.wired() {
+		return !userState && ch.Source == ""
+	}
+	if !userState {
+		if ch.Source == "" {
+			return true
+		}
+		if _, ok := r.a.fixers.Get(ch.Source); !ok {
+			return true
+		}
+	}
+	return r.fixerPermitted(ch.Source)
+}
+
+// ReadableChanges is changes without the rows the caller may not read
+// (MayReadChange), in order. It never returns nil.
+func (r *Reader) ReadableChanges(changes []*database.OperationChange) []*database.OperationChange {
+	out := make([]*database.OperationChange, 0, len(changes))
+	for _, ch := range changes {
+		if r.MayReadChange(ch) {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+func (r *Reader) wired() bool {
+	return r.a != nil && r.a.fixers != nil && r.a.holds != nil
+}
+
+// fixerPermitted reports whether the caller holds every permission fixer id
+// requires, asking once per fixer per request. An id this build does not
+// register (a fixer removed or renamed since it ran, or "" for a user-state
+// row that names none) has an unknown scope, so it needs every permission
+// there is (auth.All(), the admin role's set): nothing a fixer could name,
+// such as master-list-import's users.manage, is left out.
+func (r *Reader) fixerPermitted(id string) bool {
 	if v, ok := r.verdict[id]; ok {
 		return v
 	}
 	var perms []auth.Permission
-	if f, ok := r.a.fixers.Get(id); ok {
+	if f, ok := r.a.fixers.Get(id); ok && id != "" {
 		perms = repairs.RequiredPermissions(f)
 	} else {
-		// A fixer this build does not know (removed or renamed since the op
-		// ran): its scope is unknown, so ask for the lane's permission and the
-		// strictest one a fixer names.
-		perms = []auth.Permission{repairs.DefaultPermission, auth.PermSettingsManage}
+		perms = auth.All()
 	}
 	ok := true
 	for _, p := range perms {
