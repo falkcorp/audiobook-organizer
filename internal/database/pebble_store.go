@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.2
+// version: 1.234.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -3064,6 +3064,7 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	now := time.Now()
 	book.CreatedAt = &now
 	book.UpdatedAt = &now
+	enforceTrashStamp(book, nil, now)
 
 	// Series follows SeriesID on create exactly as on update; there is no
 	// stored row to take an object from, and none to lose one from, so
@@ -3263,6 +3264,11 @@ type bookWriteOpts struct {
 	// series), which the stale-series relink repairs. Only
 	// SeedLegacyBookRowForTest sets it (pebble_store_legacy_seed.go).
 	legacySeries bool
+	// legacyTrash writes the trash columns exactly as given, skipping
+	// enforceTrashStamp, so tests can seed a row an older build trashed
+	// without a stamp (or left a stale one on). Only SeedLegacyBookRowForTest
+	// sets it.
+	legacyTrash bool
 	// stage, when set, adds writes to the row's batch before it commits, so
 	// they land atomically with the row. ModifyBookCredits stages the
 	// book's credit lists through it (credits_store.go). An error aborts the
@@ -3305,6 +3311,9 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	}
 	now := time.Now()
 	book.UpdatedAt = &now
+	if !opts.legacyTrash {
+		enforceTrashStamp(book, oldBook, now)
+	}
 
 	// Preserve fields stripped by stripBookForMemdb (STOR-1). Callers that
 	// sourced `book` from the memdb projection (GetAllBooks on the production
@@ -4780,7 +4789,7 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 		if book.MarkedForDeletion == nil || !*book.MarkedForDeletion {
 			return nil
 		}
-		if olderThan != nil && book.MarkedForDeletionAt != nil && book.MarkedForDeletionAt.After(*olderThan) {
+		if olderThan != nil && trashedAfter(&book, *olderThan) {
 			return nil
 		}
 		books = append(books, book)

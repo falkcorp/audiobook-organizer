@@ -1,7 +1,7 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
-// last-edited: 2026-10-13
+// last-edited: 2026-10-24
 
 package database
 
@@ -27,9 +27,10 @@ var softDeletedCountLog = logger.New("database.soft-deleted-count")
 type SoftDeletedCountStore interface {
 	// CountSoftDeletedBooks reports how many books are soft-deleted, honouring
 	// the same olderThan semantics as ListSoftDeletedBooks: when olderThan is
-	// non-nil, a book is counted unless its MarkedForDeletionAt is set AND
-	// after the cutoff (a nil timestamp is counted — identical to the listing,
-	// so the count can never disagree with the list it paginates).
+	// non-nil, a book is counted only when its trash time (Book.TrashedAt: the
+	// stamp, else the row's last write) is known and not after the cutoff — a
+	// row with no known trash time is not counted, identical to the listing, so
+	// the count can never disagree with the list it paginates.
 	CountSoftDeletedBooks(olderThan *time.Time) (int, error)
 }
 
@@ -73,7 +74,7 @@ func (m *MemStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 	n := 0
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if olderThan != nil && b.MarkedForDeletionAt != nil && b.MarkedForDeletionAt.After(*olderThan) {
+		if olderThan != nil && trashedAfter(b, *olderThan) {
 			continue
 		}
 		n++
@@ -109,7 +110,7 @@ func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 		if book.MarkedForDeletion == nil || !*book.MarkedForDeletion {
 			return nil
 		}
-		if olderThan != nil && book.MarkedForDeletionAt != nil && book.MarkedForDeletionAt.After(*olderThan) {
+		if olderThan != nil && trashedAfter(&book, *olderThan) {
 			return nil
 		}
 		n++
