@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package server
 
@@ -64,6 +64,10 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/:id/segments/:segmentId/tags", s.perm(auth.PermLibraryView), audiobooksH.GetSegmentTags)
 	protected.GET("/audiobooks/:id/files", s.perm(auth.PermLibraryView), audiobooksH.ListBookFiles)
 	protected.PATCH("/audiobooks/:id/files/:file_id", s.perm(auth.PermLibraryEditMetadata), audiobooksH.PatchBookFile)
+	// Retired versions (PLAN.md section 3.2, PR 9): the versions of a shell book
+	// that were moved onto this one, and the per-version restore.
+	protected.GET("/audiobooks/:id/retired-versions", s.perm(auth.PermLibraryView), audiobooksH.ListRetiredVersions)
+	protected.POST("/audiobooks/:id/retired-versions/:vid/restore", s.perm(auth.PermLibraryOrganize), audiobooksH.RestoreRetiredVersion)
 	protected.GET("/audiobooks/:id/changelog", s.perm(auth.PermLibraryView), audiobooksH.GetBookChangelog)
 	// Retired (01-P81d, owner decision D9): no caller in the repo. The stub is
 	// removed after one release; auth and the permission guard run first.
