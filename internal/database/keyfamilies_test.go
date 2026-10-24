@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8b2a931b-6ce8-4a3d-89ad-38f8bb08e66b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-23
 
 package database
 
@@ -130,4 +130,15 @@ func TestKeyFamilies_A5IndexesPreRegistered(t *testing.T) {
 	}
 	require.True(t, have["opv2:open:"])
 	require.True(t, have["opv2:done:"])
+}
+
+// A retire's link to the combine that absorbed its shell is a raw key the
+// census and the keyspace partition must attribute to its own family, not to
+// "unregistered" (retired-versions plan 6.5), and it must sit in the merge
+// journal's neighbourhood without being swallowed by a sibling prefix.
+func TestKeyFamilies_CombineRetireLinkIsRegistered(t *testing.T) {
+	ranges := keyFamilyRanges(KeyFamilies())
+	require.Equal(t, "merge:combine-retire:", familyForKey(ranges, []byte("merge:combine-retire:01JCOMBINE:shell-1")))
+	require.Equal(t, "merge:combine-journal:", familyForKey(ranges, []byte("merge:combine-journal:01JCOMBINE")))
+	require.Equal(t, "merge:survivor-reconcile:", familyForKey(ranges, []byte("merge:survivor-reconcile:x")))
 }
