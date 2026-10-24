@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // Resolves, once, the stored row a scanned book already is.
 
@@ -137,11 +137,12 @@ func lookupScanExisting(book *Book, verdict fileOwnershipVerdict, fileHash *stri
 // its hash; a segment list by the segments' hashes (kept on book.SegmentHashes
 // by lookupSegments) at the same 80% bar the live segment vote uses.
 //
-// BookFilesWithHash is the one complete per-hash read, and it fails with
-// ErrBookFilesWithHashUnavailable instead of answering short. That is returned:
-// the book cannot be proven not to be a retired version, so the import is
-// skipped (the file is untouched and imports on a later scan once the store
-// recovers), the same rule as a failing duplicate-hash lookup.
+// database.RetiredHoldersOfHash is the lookup: it needs no memdb while no
+// retired version exists and reads Pebble while memdb is warming. It fails
+// only for a store that cannot say either way, and that is returned: the book
+// cannot be proven not to be a retired version, so the import is skipped (the
+// file is untouched and imports on a later scan once the store recovers), the
+// same rule as a failing duplicate-hash lookup.
 func (e *scanExisting) lookupRetiredContent(book *Book, fileHash *string) error {
 	store := getStore()
 	if len(book.SegmentFiles) > 1 {
@@ -188,21 +189,19 @@ func (e *scanExisting) lookupRetiredContent(book *Book, fileHash *string) error 
 // retiredHolderOfHash returns the retired version holding hash, or nil when no
 // retired row has it or any non-retired row does (a live copy is the live
 // lookups' business, not a retired-content skip).
+//
+// It asks database.RetiredHoldersOfHash, which answers "none" without memdb
+// while no retired version exists and falls back to a Pebble-only read while
+// memdb is warming, so a new import is never refused for warmup alone.
 func retiredHolderOfHash(store any, hash string) (*retiredContentHit, error) {
-	rows, err := database.BookFilesHoldingHash(store, hash)
+	retired, liveHolds, err := database.RetiredHoldersOfHash(store, hash)
 	if err != nil {
 		return nil, err
 	}
-	var hit *retiredContentHit
-	for i := range rows {
-		if !rows[i].Retired {
-			return nil, nil
-		}
-		if hit == nil {
-			hit = &retiredContentHit{holder: rows[i].BookID, versionID: rows[i].VersionID}
-		}
+	if liveHolds || len(retired) == 0 {
+		return nil, nil
 	}
-	return hit, nil
+	return &retiredContentHit{holder: retired[0].BookID, versionID: retired[0].VersionID}, nil
 }
 
 // row is the existing row the folder-parse hold keeps the stored identity

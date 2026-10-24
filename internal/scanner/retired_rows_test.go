@@ -1,7 +1,7 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package scanner
 
@@ -240,15 +240,65 @@ func TestLookupScanExisting_RetiredSegmentVoteNeedsTheBar(t *testing.T) {
 	require.Equal(t, 3, e.retired.total)
 }
 
-// hashUnavailableStore fails the complete per-hash read, the way a store does
-// while memdb is not serving.
+// A new import is never refused while memdb is warming up (UseMemDB off makes
+// the complete per-hash read refuse, the way an unpublished memdb does) when no
+// retired version exists: there is nothing retired to find.
+func TestLookupScanExisting_NoRetiredVersionsImportsWhileMemdbNotServing(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	require.NoError(t, f.store.DeleteBookVersion(f.version.ID), "the fixture's version holds no rows")
+	f.store.UseMemDB = false
+	p := f.write("incoming/01.mp3", "fresh-bytes")
+	hash, err := ComputeFileHash(p)
+	require.NoError(t, err)
+	_, werr := f.store.BookFilesWithHash(hash)
+	require.ErrorIs(t, werr, database.ErrBookFilesWithHashUnavailable, "memdb is not serving")
+
+	e, lerr := lookupScanExisting(&Book{FilePath: p}, fileOwnershipVerdict{}, &hash)
+	require.NoError(t, lerr, "no retired version exists, so warmup alone must not block the import")
+	require.Nil(t, e.retired)
+	require.Nil(t, e.row())
+}
+
+// Once a retired version holds rows, the check does not fail open while memdb
+// is not serving: it reads Pebble, still finds the retired content, and still
+// lets a fresh file and a live copy through.
+func TestLookupScanExisting_RetiredContentFoundWhileMemdbNotServing(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	oldPath := f.write("shell/01.mp3", "same-bytes")
+	hash, err := ComputeFileHash(oldPath)
+	require.NoError(t, err)
+	f.retiredRow(oldPath, hash)
+	f.store.UseMemDB = false
+	_, werr := f.store.BookFilesWithHash(hash)
+	require.ErrorIs(t, werr, database.ErrBookFilesWithHashUnavailable, "memdb is not serving")
+
+	e, lerr := lookupScanExisting(&Book{FilePath: f.write("incoming/01.mp3", "same-bytes")}, fileOwnershipVerdict{}, &hash)
+	require.NoError(t, lerr)
+	require.NotNil(t, e.retired, "retired content is still recognised while memdb warms up")
+	require.Equal(t, f.holder.ID, e.retired.holder)
+
+	fresh := f.write("incoming/02.mp3", "fresh-bytes")
+	freshHash, err := ComputeFileHash(fresh)
+	require.NoError(t, err)
+	e, lerr = lookupScanExisting(&Book{FilePath: fresh}, fileOwnershipVerdict{}, &freshHash)
+	require.NoError(t, lerr)
+	require.Nil(t, e.retired)
+}
+
+// hashUnavailableStore fails the complete per-hash read AND the Pebble-only
+// fallback, the way a store does that has retired versions and cannot read
+// them.
 type hashUnavailableStore struct{ *database.PebbleStore }
 
 func (hashUnavailableStore) BookFilesWithHash(string) ([]database.BookFile, error) {
 	return nil, database.ErrBookFilesWithHashUnavailable
 }
 
-// When the retired-content check cannot be answered completely, the import is
+func (hashUnavailableStore) RetiredBookFilesWithHash(string) ([]database.BookFile, bool, error) {
+	return nil, false, database.ErrBookFilesWithHashUnavailable
+}
+
+// When the retired-content check cannot be answered at all, the import is
 // skipped with an error (the file imports on a later scan), not treated as new.
 func TestLookupScanExisting_RetiredCheckUnavailableFailsClosed(t *testing.T) {
 	f := newRetiredScanFixture(t)
