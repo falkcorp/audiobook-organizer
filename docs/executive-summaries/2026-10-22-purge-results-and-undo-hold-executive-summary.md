@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-10-24 -->
 
 # Merging, combining and purging no longer freeze the page, and purging no longer destroys undo
 
@@ -144,11 +144,25 @@ undo above. Books that own files are still never purged.
   The check records the moment it was taken; the purge it starts carries that
   moment and leaves alone any book put in the trash later (a merge that trashes
   its losers, someone else deleting a book), including a book that was restored
-  and trashed again. A purge started without a check is refused. With "also
-  delete files" ticked, the check now lists the files that would be deleted and
-  how many stay (outside the library folder, or still used by another book), and
-  the purge deletes exactly those. The nightly purge is unaffected: it has no
-  screen to match, and keeps purging by its retention window.
+  and trashed again. It also leaves alone a book the check showed as KEPT that
+  has since become purgeable (its undo ran out, say): the screen you approved
+  did not say it would go. A purge started without a check is refused, and so
+  is one whose check the server no longer remembers (after a restart, or once
+  more than four newer checks were run): run the check again. With "also delete
+  files" ticked, the check now lists the files that would be deleted and how
+  many stay (outside the library folder, protected, or also named by another
+  book, even one that stays in the trash), and the purge deletes exactly those:
+  a file is never removed while any trashed book still names it. The check also
+  counts the books still inside the retention window, so its numbers add up to
+  the trash total. The nightly purge is unaffected: it has no screen to match,
+  and keeps purging by its retention window.
+- Every way a book can be put in the trash now records when, including the
+  diagnostics "delete orphan" fix, and the database refuses to store a trashed
+  book without it. A book put in the trash again after an earlier restore used
+  to keep its old trash time and could be purged at once, skipping the
+  retention window; it now gets a fresh one. A trashed book whose time is
+  unknown (written before this) is judged by its last change instead of being
+  treated as long overdue.
 - The nightly purge used to report success even when it had refused to run (a
   damaged undo record, or the operation journal not ready) or had stopped
   halfway. It now fails visibly with the reason and logs the same full summary
