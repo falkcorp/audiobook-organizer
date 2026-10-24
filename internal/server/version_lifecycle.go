@@ -165,7 +165,7 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		// flagged incomplete): nothing was deleted and the version is still in
 		// the trash, so this is "try again", not a server fault.
 		if errors.Is(err, database.ErrBookFilesAtPathUnavailable) {
-			httputil.RespondWithServiceUnavailable(c, "the database is still starting up and cannot yet say whether another book uses these files; nothing was deleted, try again shortly")
+			httputil.RespondWithServiceUnavailable(c, "the book_file index cannot yet say whether another book uses these files (the database is still starting up, or the index is flagged incomplete until a restart); nothing was deleted, try again shortly: "+err.Error())
 			return
 		}
 		httputil.InternalError(c, "purge version", err)
