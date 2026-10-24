@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.54.1
+// version: 1.54.2
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-28
 //
@@ -148,6 +148,17 @@ func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*databas
 			continue
 		}
 		restorable = append(restorable, c)
+	}
+
+	if blocked := RetireRevertBlock(operationID, changes); blocked != nil {
+		// The revert refuses the whole operation (RetireRevertBlock): every
+		// restorable row is refused, none is Safe, so no Undo is offered.
+		for _, c := range restorable {
+			report.CheckFailed = append(report.CheckFailed, UndoConflictItem{
+				ChangeID: c.ID, BookID: c.BookID, ChangeType: c.ChangeType, Reason: ReasonRetireOpNotRevertible,
+			})
+		}
+		return report, nil
 	}
 
 	var files func(string) ([]database.BookFile, error)

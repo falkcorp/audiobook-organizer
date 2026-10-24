@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-10-28
 
@@ -691,9 +691,13 @@ func (h *Handler) RevertOperation(c *gin.Context) {
 		result = result.WithoutUserData()
 	}
 	var notRestorable *audiobooks.NotRestorableError
+	var retireBlocked *undo.RetireRevertBlockedError
 	switch {
 	case errors.As(err, &notRestorable):
 		httputil.RespondWithConflict(c, notRestorable.Error())
+		return
+	case errors.As(err, &retireBlocked):
+		httputil.RespondWithConflict(c, retireBlocked.Error())
 		return
 	case err != nil && result != nil:
 		slog.Error("operation revert partially failed", "operation", logger.SanitizeLogValue(id),
