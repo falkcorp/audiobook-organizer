@@ -1,7 +1,7 @@
 // file: web/src/hooks/usePurgeRun.ts
-// version: 2.0.0
+// version: 2.1.0
 // guid: c41e7a92-5b08-4d3f-9a6e-2f8d0b7c1e35
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../services/api';
@@ -32,7 +32,12 @@ export type PurgeRunEnd =
 export interface PurgeRunController {
   state: PurgeRunState;
   running: boolean;
-  start: (deleteFiles: boolean) => Promise<void>;
+  /**
+   * Starts the purge. `trashedBefore` is the preview's `trashed_before`, passed
+   * through as the string the server sent (never re-formatted through Date,
+   * which would round its nanoseconds).
+   */
+  start: (trashedBefore: string, deleteFiles: boolean) => Promise<void>;
   /** Back to idle; ignored while a run is in progress. */
   reset: () => void;
 }
@@ -117,12 +122,12 @@ export function usePurgeRun(
   );
 
   const start = useCallback(
-    async (deleteFiles: boolean) => {
+    async (trashedBefore: string, deleteFiles: boolean) => {
       if (startingRef.current) return;
       startingRef.current = true;
       setLocal({ ...IDLE, phase: 'running' });
       try {
-        const handle = await api.purgeSoftDeletedBooks(deleteFiles);
+        const handle = await api.purgeSoftDeletedBooks(trashedBefore, deleteFiles);
         setLocal((s) => (s.phase === 'running' ? { ...s, operationId: handle.id } : s));
         // Say it started before the tracker starts following (its first poll
         // can already toast "still checking", which must come after).

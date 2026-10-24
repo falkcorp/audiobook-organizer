@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.purgeBackground.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e1c4b92-3a68-4d05-9f27-b84d0c6a1e53
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 /**
  * Library "Purge Deleted": the purge is a background operation. Clicking
@@ -113,6 +113,7 @@ const preview = {
   files_deleted: 0,
   skipped_owns_files: 0,
   kept_undo_possible: 1,
+  trashed_before: '2026-10-23T12:00:00.123456789Z',
   errors: [],
 };
 

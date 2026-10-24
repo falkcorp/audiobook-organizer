@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
-<!-- last-edited: 2026-10-22 -->
+<!-- last-edited: 2026-10-23 -->
 
 # Merging, combining and purging no longer freeze the page, and purging no longer destroys undo
 
@@ -129,10 +129,27 @@ undo above. Books that own files are still never purged.
   following merge, combine and purge operations while you move between pages
   or reload, and says so when it loses track of one instead of hanging.
 - A combine that runs out of time or is stopped by a server shutdown now stops
-  between books and offers Undo for what it had already moved.
+  and offers Undo for what it had already moved. Files are moved for every
+  absorbed book in one step, so once that step has happened the combine
+  finishes retiring every book whose files moved (leaving none live with no
+  files); books it had not touched yet stay exactly as they were, and the
+  message says how many of each.
 - If a record of a past combine is damaged and cannot be read, the purge now
   stops and deletes nothing, because that record might be an undo that still
   needs one of the trashed books. The message names the damaged record, and a
   new read-only check ("combine journal check") lists every damaged one. The
   cost is that one damaged record pauses all purging, the nightly one
   included, until someone fixes or removes it.
+- The "Purge" button now deletes only what the check in front of you showed.
+  The check records the moment it was taken; the purge it starts carries that
+  moment and leaves alone any book put in the trash later (a merge that trashes
+  its losers, someone else deleting a book), including a book that was restored
+  and trashed again. A purge started without a check is refused. With "also
+  delete files" ticked, the check now lists the files that would be deleted and
+  how many stay (outside the library folder, or still used by another book), and
+  the purge deletes exactly those. The nightly purge is unaffected: it has no
+  screen to match, and keeps purging by its retention window.
+- The nightly purge used to report success even when it had refused to run (a
+  damaged undo record, or the operation journal not ready) or had stopped
+  halfway. It now fails visibly with the reason and logs the same full summary
+  as the manual purge.

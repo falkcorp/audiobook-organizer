@@ -1,7 +1,7 @@
 // file: web/src/utils/purgeSummary.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b2e8f13-9c47-4d60-a3e1-8f0d6b4a7c25
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 import { describe, expect, it } from 'vitest';
 import type { PurgeResult } from '../services/api';
@@ -15,6 +15,7 @@ import {
   outcomeSeverity,
   monotonicProgress,
   previewHeadline,
+  previewFiles,
   previewNotes,
   progressPercent,
 } from './purgeSummary';
@@ -172,6 +173,34 @@ describe('undecided books are named, not hidden', () => {
   });
   it('flags failed books that have no recorded details', () => {
     expect(errorDetails({ ...base, failed: 2 }).noDetails).toBe(true);
+  });
+});
+
+describe('books trashed after the preview', () => {
+  const r: PurgeResult = { ...base, attempted: 5, purged: 3, trashed_after_preview: 2 };
+  it('counts as decided, so a finished pass adds up to the trash total', () => {
+    expect(decidedCount(r)).toBe(5);
+  });
+  it('is named in the outcome notes, not hidden', () => {
+    expect(outcomeNotes(r).join(' ')).toMatch(/2 books were put in the trash after the preview/);
+    expect(outcomeNotes({ ...r, trashed_after_preview: 1 }).join(' ')).toMatch(
+      /1 book was put in the trash after the preview/
+    );
+    expect(outcomeNotes({ ...r, trashed_after_preview: 0 })).toEqual([]);
+  });
+});
+
+describe('previewFiles', () => {
+  it('is null when the server sent no file list', () => {
+    expect(previewFiles(base)).toBeNull();
+  });
+  it('caps the paths and counts the rest from the exact total', () => {
+    const files = Array.from({ length: 4 }, (_, i) => `/lib/${i}.m4b`);
+    const f = previewFiles(
+      { ...base, files_to_delete: files, files_to_delete_count: 9, files_kept: 2 },
+      3
+    );
+    expect(f).toEqual({ count: 9, kept: 2, shown: files.slice(0, 3), more: 6 });
   });
 });
 

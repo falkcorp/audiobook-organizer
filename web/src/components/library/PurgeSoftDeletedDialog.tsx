@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -27,6 +27,7 @@ import {
   outcomeHeadline,
   outcomeNotes,
   outcomeSeverity,
+  previewFiles,
   previewHeadline,
   previewNotes,
   progressPercent,
@@ -54,8 +55,10 @@ function messageOf(e: unknown): string {
 /**
  * The "Purge soft-deleted" dialog. It does not promise a count: on open it runs
  * a PREVIEW (a dry run of the real purge, same rules) and says how many books a
- * purge would remove now and how many it keeps, by reason. Confirming starts
- * the purge as an operation through `run`, shows its progress, and ends with
+ * purge would remove now and how many it keeps, by reason, and with "also delete
+ * files" ticked which files it would remove from disk and which stay. Confirming
+ * starts the purge as an operation through `run`, bound to that preview (it
+ * carries the preview's trashed_before, so it takes no book trashed since), shows its progress, and ends with
  * the full breakdown of what was purged and what was kept. Reopening the
  * dialog while a purge runs shows the running state, not a new preview.
  */
@@ -117,6 +120,11 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
     }
   }, [runPhase, queuedId, onClose]);
   const purgeable = preview?.purgeable ?? 0;
+  // The purge is bound to this preview: it carries the instant the preview was
+  // taken at and takes no book trashed after it. A preview without one cannot
+  // be purged from.
+  const trashedBefore = preview?.trashed_before ?? null;
+  const files = preview ? previewFiles(preview) : null;
   const progress = run.state.progress;
   const percent = progressPercent(progress);
   const errorText = runPhase === 'error' ? run.state.error : previewError;
@@ -175,7 +183,41 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
                 <Alert severity="warning" sx={{ mt: 2 }}>
                   This cannot be undone. The {books(purgeable)} above are removed for good
                   {deleteFiles ? ', and their files are deleted from disk' : ''}.
+                  {trashedBefore === null
+                    ? ' The server did not say which books this check covered, so the purge is off; try again.'
+                    : ' Books put in the trash after this check are left alone.'}
                 </Alert>
+                {deleteFiles && files && (
+                  <Box sx={{ mt: 1 }} data-testid="purge-files-preview">
+                    <Typography variant="body2">
+                      {files.count === 0
+                        ? 'No file would be deleted from disk.'
+                        : `${files.count.toLocaleString()} ${files.count === 1 ? 'file' : 'files'} would be deleted from disk:`}
+                      {files.kept > 0
+                        ? ` ${files.kept.toLocaleString()} ${files.kept === 1 ? 'file stays' : 'files stay'} where ${files.kept === 1 ? 'it is' : 'they are'} (outside the library folder, or still used by another book).`
+                        : ''}
+                    </Typography>
+                    <Box component="ul" sx={{ mt: 0.5, mb: 0, pl: 3 }}>
+                      {files.shown.map((p) => (
+                        <li key={p}>
+                          <Typography
+                            variant="body2"
+                            sx={{ color: 'text.secondary', wordBreak: 'break-all' }}
+                          >
+                            {p}
+                          </Typography>
+                        </li>
+                      ))}
+                      {files.more > 0 && (
+                        <li>
+                          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+                            and {files.more.toLocaleString()} more
+                          </Typography>
+                        </li>
+                      )}
+                    </Box>
+                  </Box>
+                )}
               </>
             )}
           </>
@@ -230,12 +272,13 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
         {showPreview && phase === 'ready' && (
           <Button
             onClick={() => {
+              if (trashedBefore === null) return;
               closeOnStartRef.current = true;
-              void run.start(deleteFiles);
+              void run.start(trashedBefore, deleteFiles);
             }}
             color="error"
             variant="contained"
-            disabled={purgeable === 0}
+            disabled={purgeable === 0 || trashedBefore === null}
           >
             {purgeable === 0 ? 'Nothing to purge' : `Purge ${books(purgeable)}`}
           </Button>

@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-22 -->
+<!-- last-edited: 2026-10-23 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -191,8 +191,8 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | GET | `/audiobooks/count` | `countAudiobooks` | Returns `{count: N}` |
 | GET | `/audiobooks/search` | `searchAudiobooks` | `?q=` query |
 | GET | `/audiobooks/soft-deleted` | `listSoftDeletedBooks` | `?limit=&offset=&older_than_days=` |
-| DELETE | `/audiobooks/purge-soft-deleted` | `purgeSoftDeletedBooks` | `?delete_files=&older_than_days=`. **Async: answers 202** with the `library.purge-soft-deleted` operation id (it answered 200 with the result before); the breakdown is the operation result (`GET /operations/:id/result`: `purged`, `skipped_owns_files`, `kept_undo_possible`, `kept_has_progress`, `carried_to_sibling`, `carry_failed`, `failed`, `stopped_early`, `stop_reason`). Refuses while the operation-journal by-book index is not built (`maintenance.opchange-book-index-rebuild`), and while any combine-journal row (`merge:combine-journal:<id>`) or auto-merge journal row cannot be decoded (fail closed; the refusal names the key, and `maintenance.combine-journal-check` lists the unreadable combine-journal rows; repair is manual). |
-| POST | `/audiobooks/purge-soft-deleted/preview` | `previewPurgeSoftDeleted` | 202; runs the same operation as a dry run that classifies every trashed book and changes nothing |
+| DELETE | `/audiobooks/purge-soft-deleted` | `purgeSoftDeletedBooks` | `?delete_files=&older_than_days=&trashed_before=`. `trashed_before` (RFC 3339) is **required**: it is the instant the preview returned, and the purge takes no book trashed after it (400 without it or with a malformed one). **Async: answers 202** with the `library.purge-soft-deleted` operation id (it answered 200 with the result before); the breakdown is the operation result (`GET /operations/:id/result`: `purged`, `skipped_owns_files`, `kept_undo_possible`, `kept_has_progress`, `carried_to_sibling`, `carry_failed`, `failed`, `stopped_early`, `stop_reason`). Refuses while the operation-journal by-book index is not built (`maintenance.opchange-book-index-rebuild`), and while any combine-journal row (`merge:combine-journal:<id>`) or auto-merge journal row cannot be decoded (fail closed; the refusal names the key, and `maintenance.combine-journal-check` lists the unreadable combine-journal rows; repair is manual). |
+| POST | `/audiobooks/purge-soft-deleted/preview` | `previewPurgeSoftDeleted` | 202; runs the same operation as a dry run that classifies every trashed book and changes nothing. The result carries `trashed_before` (send it to the purge), `trashed_after_preview`, and the files a purge with `delete_files` would remove (`files_to_delete` capped, `files_to_delete_count`, `files_kept`) |
 | POST | `/audiobooks/link` | `linkBooks` | 202; queues `dedup.book-merge` (versions in a group). 409 for a soft-deleted keep book or an iTunes-protected selected book. Result: `merged`, `skipped`, `no_op`, `failed`, `partial`, `error` |
 | POST | `/audiobooks/combine` | `combineBooks` | **Async: answers 202** (it answered 200 with the finished result before); queues `dedup.book-combine`. 400 malformed ids, 404 missing book, 409 soft-deleted or iTunes-protected book. Result: `primary_id`, `files_moved`, `books_deleted`, `journal_id`, `operation_id` (always set on success; revert it with `POST /operations/:id/revert`), `journal_pending`, `warnings`, `message`, and on failure `failed`, `incomplete`, `error` |
 | GET | `/audiobooks/:id` | `getAudiobook` | Full book with enrichment |

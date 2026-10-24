@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.202.1
+// version: 2.203.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-23
 
@@ -1577,6 +1577,23 @@ export interface PurgeResult {
   stopped_early?: boolean;
   /** why it stopped: "cancelled", "timed out", or other short text */
   stop_reason?: string;
+  /**
+   * The instant this pass was bound to (RFC 3339, an opaque string: send it back
+   * unchanged). A preview returns it; the purge started from that preview must
+   * carry it, and then takes no book trashed after it.
+   */
+  trashed_before?: string;
+  /** books trashed after `trashed_before`: left alone, so not in any count above */
+  trashed_after_preview?: number;
+  /**
+   * Preview only: the files a purge with delete_files would remove from disk
+   * (capped; `files_to_delete_count` is exact). Listed whether or not the
+   * preview was asked for delete_files.
+   */
+  files_to_delete?: string[];
+  files_to_delete_count?: number;
+  /** preview only: purgeable books whose file a purge keeps (outside the library, or still in use) */
+  files_kept?: number;
   errors: string[];
 }
 
@@ -1593,13 +1610,17 @@ async function startPurgeOperation(
   method: 'DELETE' | 'POST',
   deleteFiles: boolean,
   olderThanDays: number | undefined,
-  failure: string
+  failure: string,
+  trashedBefore?: string
 ): Promise<PurgeOperationHandle> {
   const params = new URLSearchParams({
     delete_files: String(deleteFiles),
   });
   if (olderThanDays && olderThanDays > 0) {
     params.set('older_than_days', String(olderThanDays));
+  }
+  if (trashedBefore) {
+    params.set('trashed_before', trashedBefore);
   }
   const response = await apiFetch(`${API_BASE}${path}?${params.toString()}`, { method });
   if (!response.ok) {
@@ -1614,8 +1635,13 @@ async function startPurgeOperation(
  * library.purge-soft-deleted operation and answers 202 with its id; the purge
  * runs there. Follow it with awaitPurgeResult. (It used to run inside the
  * request and return the counts.)
+ *
+ * `trashedBefore` is the `trashed_before` the preview returned, sent back
+ * unchanged: the purge is bound to the books that preview showed and takes none
+ * trashed after it. The server answers 400 without it, so it is required here.
  */
 export function purgeSoftDeletedBooks(
+  trashedBefore: string,
   deleteFiles = false,
   olderThanDays?: number
 ): Promise<PurgeOperationHandle> {
@@ -1624,7 +1650,8 @@ export function purgeSoftDeletedBooks(
     'DELETE',
     deleteFiles,
     olderThanDays,
-    'Failed to purge soft-deleted books'
+    'Failed to purge soft-deleted books',
+    trashedBefore
   );
 }
 

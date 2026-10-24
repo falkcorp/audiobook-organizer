@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +42,10 @@ function Harness({
   );
 }
 
+// Nanosecond precision on purpose: the dialog must hand the server's string back
+// unchanged, and a trip through Date would round it to milliseconds.
+const PREVIEW_AT = '2026-10-23T12:00:00.123456789Z';
+
 const preview: PurgeResult = {
   dry_run: true,
   attempted: 40,
@@ -51,6 +55,7 @@ const preview: PurgeResult = {
   skipped_owns_files: 30,
   kept_undo_possible: 5,
   kept_has_progress: 2,
+  trashed_before: PREVIEW_AT,
   errors: [],
 };
 
@@ -151,7 +156,7 @@ describe('PurgeSoftDeletedDialog', () => {
 
     // The dialog does not wait for the purge.
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(false);
+    expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(PREVIEW_AT, false);
     expect(onStarted).toHaveBeenCalledWith('op-run');
     expect(screen.getByTestId('in-progress')).toHaveTextContent('true');
     expect(onFinished).not.toHaveBeenCalled();
@@ -231,7 +236,50 @@ describe('PurgeSoftDeletedDialog', () => {
     fireEvent.click(screen.getByLabelText('Also delete files from disk (if they still exist)'));
     fireEvent.click(screen.getByRole('button', { name: 'Purge 3 books' }));
     await waitFor(() => expect(onFinished).toHaveBeenCalled());
-    expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(true);
+    expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(PREVIEW_AT, true);
+  });
+
+  it('cannot purge from a preview that did not say what it covered', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({ ...preview, trashed_before: undefined });
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    expect(screen.getByRole('button', { name: 'Purge 3 books' })).toBeDisabled();
+    expect(screen.getByText(/did not say which books this check covered/)).toBeInTheDocument();
+    expect(api.purgeSoftDeletedBooks).not.toHaveBeenCalled();
+  });
+
+  it('with delete files ticked, lists the files a purge would remove and how many stay', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      ...preview,
+      files_to_delete: ['/library/A/one.m4b', '/library/B/two.m4b'],
+      files_to_delete_count: 12,
+      files_kept: 1,
+    });
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    // Nothing about files until the box is ticked.
+    expect(screen.queryByTestId('purge-files-preview')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Also delete files from disk (if they still exist)'));
+    const box = await screen.findByTestId('purge-files-preview');
+    expect(box).toHaveTextContent('12 files would be deleted from disk');
+    expect(box).toHaveTextContent('1 file stays where it is');
+    expect(box).toHaveTextContent('/library/A/one.m4b');
+    expect(box).toHaveTextContent('and 10 more');
+  });
+
+  it('says so when no file would be deleted', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      ...preview,
+      files_to_delete: [],
+      files_to_delete_count: 0,
+      files_kept: 3,
+    });
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    fireEvent.click(screen.getByLabelText('Also delete files from disk (if they still exist)'));
+    expect(await screen.findByTestId('purge-files-preview')).toHaveTextContent(
+      'No file would be deleted from disk.'
+    );
   });
 
   it('shows the failure reason when the preview failed, and offers to try again', async () => {

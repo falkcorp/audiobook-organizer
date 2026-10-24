@@ -1,7 +1,7 @@
 // file: web/src/utils/purgeSummary.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c3a9e15-2d84-4b60-a1f7-5e0d8b4c6a29
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 import type { PurgeBreakdown, PurgeResult } from '../services/api';
 
@@ -141,6 +141,8 @@ export function outcomeNotes(r: PurgeResult): string[] {
   if (failed > 0) {
     notes.push(undecidedNote(failed));
   }
+  const after = r.trashed_after_preview ?? 0;
+  if (after > 0) notes.push(afterPreviewNote(after));
   return notes;
 }
 
@@ -162,8 +164,13 @@ export function decidedCount(r: PurgeResult): number {
     (r.kept_undo_possible ?? 0) +
     (r.kept_has_progress ?? 0) +
     (r.carry_failed ?? 0) +
-    (r.failed ?? 0)
+    (r.failed ?? 0) +
+    (r.trashed_after_preview ?? 0)
   );
+}
+
+function afterPreviewNote(n: number): string {
+  return `${books(n)} ${plural(n, 'was', 'were')} put in the trash after the preview you confirmed, so ${plural(n, 'it was', 'they were')} left alone. Open the purge again to see ${plural(n, 'it', 'them')}.`;
 }
 
 function undecidedNote(failed: number): string {
@@ -186,6 +193,26 @@ export function previewNotes(r: PurgeResult): string[] {
   const failed = r.failed ?? 0;
   if (failed > 0) notes.push(undecidedNote(failed));
   return notes;
+}
+
+/**
+ * What a purge with "delete files" would do to files on disk, from a preview:
+ * how many it removes, how many it leaves (outside the library, or still used
+ * by another book), and the first `cap` paths. null when the server sent no
+ * file list (an older server) so the dialog shows nothing it cannot back.
+ */
+export function previewFiles(
+  r: PurgeResult,
+  cap = 10
+): { count: number; kept: number; shown: string[]; more: number } | null {
+  if (r.files_to_delete_count === undefined) return null;
+  const all = r.files_to_delete ?? [];
+  return {
+    count: r.files_to_delete_count,
+    kept: r.files_kept ?? 0,
+    shown: all.slice(0, cap),
+    more: Math.max(0, r.files_to_delete_count - Math.min(all.length, cap)),
+  };
 }
 
 /** The result's error lines, capped, with how many were left out. */
