@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_preview_bound_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c8e21-93a4-4b7f-8e16-2a7f1c4b9d03
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -30,16 +30,12 @@ func previewOnce(t *testing.T, svc *AudiobookService, days *int) *PurgeResult {
 }
 
 // trashedNow adds a book trashed at this instant, after any earlier preview.
-func trashedNow(t *testing.T, store *database.PebbleStore, id, path string, stamp bool) {
+func trashedNow(t *testing.T, store *database.PebbleStore, id, path string) {
 	t.Helper()
 	time.Sleep(2 * time.Millisecond)
 	yes := true
-	b := &database.Book{ID: id, Title: id, FilePath: path, MarkedForDeletion: &yes}
-	if stamp {
-		now := time.Now()
-		b.MarkedForDeletionAt = &now
-	}
-	_, err := store.CreateBook(b)
+	now := time.Now()
+	_, err := store.CreateBook(&database.Book{ID: id, Title: id, FilePath: path, MarkedForDeletion: &yes, MarkedForDeletionAt: &now})
 	require.NoError(t, err)
 }
 
@@ -63,7 +59,7 @@ func TestRunPurge_BookTrashedAfterThePreviewIsNotPurged(t *testing.T) {
 	require.Equal(t, 1, pv.Purgeable, "%+v", pv)
 	require.Zero(t, pv.TrashedAfterPreview)
 
-	trashedNow(t, store, "late", "", true)
+	trashedNow(t, store, "late", "")
 
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{TrashedBefore: pv.TrashedBefore})
 	require.NoError(t, err)
@@ -81,17 +77,18 @@ func TestRunPurge_BookTrashedAfterThePreviewIsNotPurged(t *testing.T) {
 	assert.Zero(t, pv2.TrashedAfterPreview)
 }
 
-// Many trash writers set the flag with no stamp (the iTunes importer, a
-// diagnostics fix); the row's last write stands in, so such a book trashed after
-// the preview is still left out, and one trashed before it is still shown.
+// A row older code trashed with no stamp (every writer stamps now, and the
+// store stamps any write that trashes a row, so such rows exist only from before)
+// is judged by its last write: trashed after the preview and it is left out,
+// trashed before it and it is still shown.
 func TestRunPurge_UnstampedTrashFallsBackToTheLastWrite(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	trashedNow(t, store, "early-nostamp", "", false)
+	trashedLegacy(t, store, "early-nostamp")
 
 	pv := previewOnce(t, svc, nil)
 	require.Equal(t, 1, pv.Purgeable, "%+v", pv)
 
-	trashedNow(t, store, "late-nostamp", "", false)
+	trashedLegacy(t, store, "late-nostamp")
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{TrashedBefore: pv.TrashedBefore})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Purged, "%+v", res)
@@ -100,7 +97,26 @@ func TestRunPurge_UnstampedTrashFallsBackToTheLastWrite(t *testing.T) {
 	assert.False(t, bookGone(t, store, "late-nostamp"))
 }
 
-func TestTrashedByBound(t *testing.T) {
+// trashedLegacy adds a book trashed the way older code did: the flag set, no
+// stamp (the store stamps every write that trashes a row, so the row is seeded
+// through the legacy path).
+func trashedLegacy(t *testing.T, store *database.PebbleStore, id string) {
+	t.Helper()
+	time.Sleep(2 * time.Millisecond)
+	_, err := store.CreateBook(&database.Book{ID: id, Title: id})
+	require.NoError(t, err)
+	_, err = store.SeedLegacyBookRowForTest(id, func(b *database.Book) error {
+		yes := true
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, nil
+		return nil
+	})
+	require.NoError(t, err)
+	got, err := store.GetBookByID(id)
+	require.NoError(t, err)
+	require.Nil(t, got.MarkedForDeletionAt, "fixture: the row is unstamped")
+}
+
+func TestTrashedAtOrBefore(t *testing.T) {
 	bound := time.Now()
 	before, after := bound.Add(-time.Minute), bound.Add(time.Minute)
 	yes := true
@@ -118,7 +134,7 @@ func TestTrashedByBound(t *testing.T) {
 		{"nothing known is not provably older", database.Book{MarkedForDeletion: &yes}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, trashedByBound(&tc.book, bound))
+			assert.Equal(t, tc.want, trashedAtOrBefore(&tc.book, bound))
 		})
 	}
 }

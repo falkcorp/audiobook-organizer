@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_review_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3c9e7a15-6b2d-4f80-9a41-d5e8f2b6c073
-// last-edited: 2026-10-17
+// last-edited: 2026-10-24
 
 package jobs
 
@@ -52,7 +52,7 @@ func ddLiveExplicitPrimaries(t *testing.T, s *database.PebbleStore, vg string) [
 }
 
 // A "read by narrator" row naming a live book's file is retired with its
-// FilePath cleared, so PurgeSoftDeletedBooks(deleteFiles) cannot os.Remove
+// FilePath cleared, so PurgeSoftDeletedUnattended(deleteFiles) cannot os.Remove
 // the live book's audio through it. Every retired junk row loses its path.
 func TestDedupBooks_JunkSharingLivePathIsRetiredWithPathCleared(t *testing.T) {
 	s := ddRealStore(t)

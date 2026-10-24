@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.17.0
+// version: 2.17.1
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -1813,8 +1813,8 @@ func TestRestoreAudiobook(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w2.Code)
 }
 
-// TestPurgeSoftDeletedBooks tests purging soft-deleted books
-func TestPurgeSoftDeletedBooks(t *testing.T) {
+// TestPurgeSoftDeletedUnattended tests purging soft-deleted books
+func TestPurgeSoftDeletedUnattended(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 

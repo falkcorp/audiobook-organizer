@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -43,8 +43,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/gin-gonic/gin"
 )
+
+// autoPurgeLog logs the nightly purge's failures through internal/logger (the
+// log-injection barrier) rather than a direct slog call.
+var autoPurgeLog = logger.New("server.auto-purge")
 
 // buildAudiobookListResponse runs the full /api/v1/audiobooks list pipeline
 // (service call, quarantine filter, enrichment, batch file load, fingerprint
@@ -300,14 +305,14 @@ func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) error
 	}
 
 	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	result, err := s.audiobookService.PurgeSoftDeletedBooks(ctx, config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
+	result, err := s.audiobookService.PurgeSoftDeletedUnattended(ctx, config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
 	if err != nil {
 		// A refused pass still returns its result (StoppedEarly, StopReason).
 		if result != nil {
-			slog.Warn("Auto-purge failed", "err", err, "summary", result.Summary())
+			autoPurgeLog.Warn("Auto-purge failed: %s (%s)", logger.SanitizeLogValue(err.Error()), logger.SanitizeLogValue(result.Summary()))
 			activity.EmitInfo(s.activityWriter, opID, "purge-deleted", "purge-deleted", "Purge failed: "+result.Summary())
 		} else {
-			slog.Warn("Auto-purge failed", "err", err)
+			autoPurgeLog.Warn("Auto-purge failed: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		return fmt.Errorf("%s: %w", autoPurgeOpID, err)
 	}

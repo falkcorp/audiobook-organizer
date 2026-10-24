@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -71,6 +71,13 @@ type purgeEnv struct {
 	// pass re-checks it on the row it re-reads under the merge lock. nil: no
 	// bound (the nightly pass).
 	trashedBefore *time.Time
+	// preview is the preview the pass is bound to (purgePreviewRecord): the pass
+	// purges only the books it listed as purgeable and removes only the files it
+	// listed. nil: no preview binds the pass (the nightly one, and a preview).
+	preview *purgePreviewRecord
+	// files collects the removals a delete_files pass decides on, to be made once
+	// every book is decided (removeDeferredFiles). nil: not a delete_files pass.
+	files *pendingFiles
 	// lockHeld is set by an interactive caller that already holds the merge
 	// lock (merge.TryLockMergeRMWWithin, so it can answer ErrMergeBusy instead
 	// of hanging behind a combine): purgeIfStateless and purgeCarryingState
@@ -214,35 +221,20 @@ func (svc *AudiobookService) previewPurged(book *database.Book, kind purgeKind) 
 	return purgeOutcome{kind: kind, wouldRemove: v.remove, wouldKeepFile: v.protected || v.keptErr != nil}
 }
 
+// ErrPurgePreviewUnknown is what RunPurge refuses a bound pass with when no
+// preview that returned its trashed_before is remembered: the server restarted
+// since the preview, or the preview is older than the last few. The purge is
+// held to what its preview listed, so without the preview it cannot run.
+var ErrPurgePreviewUnknown = errors.New("purge refused: the preview that returned this trashed_before is no longer remembered (the server restarted, or newer previews replaced it), so what it listed cannot be checked; run the preview again")
+
 // ErrPurgePreviewRequired is what RunPurge refuses a real, interactive pass
 // with when it was not given the trashed_before of a preview (see
 // PurgeOptions.TrashedBefore).
 var ErrPurgePreviewRequired = errors.New("purge refused: it was not given the trashed_before of a preview, so nothing says which books the preview showed; run the preview first and send its trashed_before")
 
-// trashStamp is the instant book was trashed: MarkedForDeletionAt, which every
-// trash path is meant to set; for a row a path trashed without it, the last
-// write to the row (UpdatedAt, set on every write), which trashing is. nil when
-// neither is known: such a book cannot be shown to predate a bound.
-func trashStamp(b *database.Book) *time.Time {
-	if b.MarkedForDeletionAt != nil {
-		return b.MarkedForDeletionAt
-	}
-	return b.UpdatedAt
-}
-
-// trashedByBound reports whether b was trashed at or before bound, the test a
-// bounded pass applies to every book (the listing, and again under the merge
-// lock on the re-read row). A book with no stamp is not provably older, so it
-// is left out: the bound exists to keep a purge from taking what the preview
-// did not show.
-func trashedByBound(b *database.Book, bound time.Time) bool {
-	at := trashStamp(b)
-	return at != nil && !at.After(bound)
-}
-
 // RunPurge is one purge pass over the soft-deleted books (optionally only
 // those trashed at least OlderThanDays ago), or, with DryRun, a preview of it.
-// PurgeSoftDeletedBooks (the nightly job) is RunPurge with the zero options
+// PurgeSoftDeletedUnattended (the nightly job) is RunPurge with the zero options
 // besides its two parameters.
 //
 // What is purgeable is unchanged by this function: a book is purged only when
@@ -270,6 +262,21 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		}, ErrPurgePreviewRequired
 	}
 
+	// A pass that carries a preview's trashed_before is held to that preview:
+	// the books it listed as purgeable and the files it listed. One that cannot
+	// find the preview is refused before it reads anything.
+	var preview *purgePreviewRecord
+	if !opts.DryRun && !opts.Unattended {
+		if preview = svc.previewFor(*opts.TrashedBefore); preview == nil {
+			return &PurgeResult{
+				Errors:        []string{},
+				StoppedEarly:  true,
+				StopReason:    ErrPurgePreviewUnknown.Error(),
+				TrashedBefore: opts.TrashedBefore,
+			}, ErrPurgePreviewUnknown
+		}
+	}
+
 	started := time.Now()
 	var cutoff *time.Time
 	if opts.OlderThanDays != nil && *opts.OlderThanDays > 0 {
@@ -278,14 +285,19 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	}
 	// bound: the instant the books this pass may touch were trashed by. A
 	// purge takes the preview's; a preview takes the moment it starts, and
-	// returns it. With a retention window the bound is no later than the
-	// window's own cutoff, which the preview's window put earlier than a later
-	// purge's: a book that only aged into the window since the preview was
-	// not counted by it.
+	// returns it. A caller-supplied bound after the pass began (a future
+	// instant) is clamped to the start: it would otherwise let in books trashed
+	// while the pass runs, which no preview could have shown. With a retention
+	// window the bound is no later than the window's own cutoff, which the
+	// preview's window put earlier than a later purge's: a book that only aged
+	// into the window since the preview was not counted by it.
 	var bound *time.Time
 	switch {
 	case opts.TrashedBefore != nil:
 		b := *opts.TrashedBefore
+		if b.After(started) {
+			b = started
+		}
 		bound = &b
 	case opts.DryRun:
 		b := started
@@ -295,28 +307,33 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		bound = cutoff
 	}
 
-	listed, err := svc.store.ListSoftDeletedBooks(1_000_000, 0, cutoff)
+	// The whole trash, not the retention window's share of it: a book the
+	// window leaves out still owns its file (settlePreviewFiles,
+	// removeDeferredFiles), and the counts add up to the trash only if every
+	// book is in them.
+	all, err := svc.store.ListSoftDeletedBooks(purgeListLimit, 0, nil)
 	if err != nil {
 		return nil, err
 	}
-	books := listed
-	notShown := 0
-	if bound != nil {
-		books = make([]database.Book, 0, len(listed))
-		for i := range listed {
-			if trashedByBound(&listed[i], *bound) {
-				books = append(books, listed[i])
-			} else {
-				notShown++
-			}
+	books := make([]database.Book, 0, len(all))
+	notDue, notShown := 0, 0
+	for i := range all {
+		switch {
+		case cutoff != nil && !trashedAtOrBefore(&all[i], *cutoff):
+			notDue++
+		case bound != nil && !trashedAtOrBefore(&all[i], *bound):
+			notShown++
+		default:
+			books = append(books, all[i])
 		}
 	}
 
 	result := &PurgeResult{
-		Attempted:           len(listed),
+		Attempted:           len(all),
 		DryRun:              opts.DryRun,
 		TrashedBefore:       bound,
 		TrashedAfterPreview: notShown,
+		NotYetDue:           notDue,
 		Errors:              []string{},
 	}
 	// Users, combine journals and the other undo records are read once per
@@ -334,13 +351,18 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 			return result, fmt.Errorf("purge refused: %w", err)
 		}
 		env.trashedBefore = bound
+		env.preview = preview
+		if !opts.DryRun && opts.DeleteFiles {
+			env.files = &pendingFiles{}
+		}
 	}
 
 	var mu sync.Mutex
 	var decided atomic.Int64
-	// The books the bound left out are decided (not touched) from the start.
-	decided.Store(int64(notShown))
-	total := len(listed)
+	// The books the bound and the retention window left out are decided (not
+	// touched) from the start.
+	decided.Store(int64(notShown + notDue))
+	total := len(all)
 	// Progress is reported in order: the workers finish books concurrently,
 	// so a bare "n := decided.Add(1)" lets a later worker's callback run
 	// before an earlier one's and the figure goes backwards.
@@ -410,6 +432,18 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		result.StoppedEarly = true
 		result.StopReason = fmt.Sprintf("stopped early: %v", err)
 	}
+	// Every book is decided: now the files. A real pass removes what its books
+	// named and nothing else names; a preview settles the same question for its
+	// list. Both run even on a pass that stopped, because the rows they belong
+	// to are already gone (or, for a preview, the counts say what was decided).
+	if env.files != nil {
+		n, errs := svc.removeDeferredFiles(env.files, env.preview)
+		result.FilesDeleted += n
+		result.Errors = append(result.Errors, errs...)
+	}
+	if opts.DryRun && len(result.fileCands) > 0 {
+		result.settlePreviewFiles(all)
+	}
 	result.sortIDs()
 	report(int(decided.Load()), true)
 
@@ -417,6 +451,9 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		svc.InvalidateListCache()
 	}
 	svc.rememberPurge(result)
+	if opts.DryRun {
+		svc.rememberPreview(result)
+	}
 	return result, nil
 }
 
@@ -433,8 +470,14 @@ func (r *PurgeResult) Summary() string {
 func (r *PurgeResult) summary() string {
 	// Left out of the bound: not decided, so it is said, not folded into a kept count.
 	after := ""
+	if r.NotYetDue > 0 {
+		after += fmt.Sprintf("; %d not yet past the retention window (not touched)", r.NotYetDue)
+	}
 	if r.TrashedAfterPreview > 0 {
-		after = fmt.Sprintf("; %d trashed after the preview (not touched)", r.TrashedAfterPreview)
+		after += fmt.Sprintf("; %d trashed after the preview (not touched)", r.TrashedAfterPreview)
+	}
+	if r.NotInPreview > 0 {
+		after += fmt.Sprintf("; %d would be purged now but the preview had not listed them (not touched)", r.NotInPreview)
 	}
 	if r.DryRun {
 		return fmt.Sprintf("Purge preview of %d soft-deleted books: %d purgeable now (%d of them would carry listening state to a sibling), %d kept: still own book_file rows, %d kept: an undo (combine, operation or auto-merge) can still run, %d kept: listening state with no listed sibling, %d could not be decided (carry_failed=%d, failed=%d); with delete_files it would remove %d file(s) and leave %d in place%s",
@@ -449,7 +492,7 @@ func (r *PurgeResult) summary() string {
 // that was restored or purged meanwhile counts in none of them, so on a very
 // busy trash it can read a little low; it is a progress figure, not a ledger.
 func (r *PurgeResult) Decided() int {
-	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed + r.TrashedAfterPreview
+	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed + r.TrashedAfterPreview + r.NotYetDue + r.NotInPreview
 	// CarriedToSibling is also counted in Purged/Purgeable.
 	if n > r.Attempted {
 		return r.Attempted

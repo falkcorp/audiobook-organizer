@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6a1c8e53-0d72-4f9b-b3e4-9c5a2d7f1e08
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -112,7 +112,7 @@ func TestPurgeSoftDeletedOp_LivePurgeStoresResultAndLogsSummary(t *testing.T) {
 	s, st := purgeOpWorld(t, "a", "b")
 	require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: "b", FilePath: "/x/b.m4b", Format: "m4b"}))
 
-	rep, err := runPurgeOp(t, s, livePurgeParams())
+	rep, err := runPurgeOp(t, s, livePurgeParams(t, s))
 	require.NoError(t, err)
 	res := purgeResultOf(t, rep)
 	assert.False(t, res.DryRun)
@@ -132,15 +132,21 @@ func TestPurgeSoftDeletedOp_LivePurgeStoresResultAndLogsSummary(t *testing.T) {
 	assert.Equal(t, [2]int{2, 2}, rep.progress[len(rep.progress)-1])
 }
 
-// livePurgeParams is a real purge bound to a preview taken now.
-func livePurgeParams() string {
-	return fmt.Sprintf(`{"dry_run":false,"trashed_before":%q}`, time.Now().Format(time.RFC3339Nano))
+// livePurgeParams runs a preview through the op and returns the params of a real
+// purge bound to it. A purge needs a preview the server remembers (what the
+// preview showed is what the purge may take), so a made-up instant is refused.
+func livePurgeParams(t *testing.T, s *Server) string {
+	t.Helper()
+	rep, err := runPurgeOp(t, s, `{"dry_run":true}`)
+	require.NoError(t, err)
+	res := purgeResultOf(t, rep)
+	require.NotNil(t, res.TrashedBefore, "a preview returns the instant it is bound to")
+	return fmt.Sprintf(`{"dry_run":false,"trashed_before":%q}`, res.TrashedBefore.Format(time.RFC3339Nano))
 }
 
 // A real pass with no trashed_before (an op started by a caller that skipped
 // the preview) is refused: nothing says which books the preview showed. The
-// op fails, the stored result says why, and nothing is deleted. A purge bound
-// to an earlier instant takes only the books trashed by then.
+// op fails, the stored result says why, and nothing is deleted.
 func TestPurgeSoftDeletedOp_RealPassNeedsAPreviewsTrashedBefore(t *testing.T) {
 	s, st := purgeOpWorld(t, "a")
 
@@ -152,13 +158,28 @@ func TestPurgeSoftDeletedOp_RealPassNeedsAPreviewsTrashedBefore(t *testing.T) {
 	assert.Contains(t, res.StopReason, "trashed_before")
 	assert.False(t, purgeBookGone(t, st, "a"), "a refused pass deletes nothing")
 
-	early := time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
-	rep, err = runPurgeOp(t, s, fmt.Sprintf(`{"dry_run":false,"trashed_before":%q}`, early))
+	// An instant no preview returned is refused too: nothing remembers what it
+	// showed, so nothing can be held to it.
+	made := time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	rep, err = runPurgeOp(t, s, fmt.Sprintf(`{"dry_run":false,"trashed_before":%q}`, made))
+	require.Error(t, err)
+	require.ErrorIs(t, err, audiobookspkg.ErrPurgePreviewUnknown)
+	assert.True(t, purgeResultOf(t, rep).StoppedEarly)
+	assert.False(t, purgeBookGone(t, st, "a"), "a refused pass deletes nothing")
+
+	// A book trashed after the preview is left alone; the one it listed goes.
+	params := livePurgeParams(t, s)
+	marked := true
+	at := time.Now()
+	_, cerr := st.CreateBook(&database.Book{ID: "late", Title: "late", MarkedForDeletion: &marked, MarkedForDeletionAt: &at})
+	require.NoError(t, cerr)
+	rep, err = runPurgeOp(t, s, params)
 	require.NoError(t, err)
 	res = purgeResultOf(t, rep)
-	assert.Zero(t, res.Purged)
+	assert.Equal(t, 1, res.Purged)
 	assert.Equal(t, 1, res.TrashedAfterPreview)
-	assert.False(t, purgeBookGone(t, st, "a"), "trashed an hour ago, after an instant two hours ago")
+	assert.True(t, purgeBookGone(t, st, "a"))
+	assert.False(t, purgeBookGone(t, st, "late"), "trashed after the preview the purge is bound to")
 }
 
 func TestPurgeSoftDeletedOp_RejectsConflictingModeSpellings(t *testing.T) {

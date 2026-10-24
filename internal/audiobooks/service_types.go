@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -95,18 +95,33 @@ type PurgeResult struct {
 	// the preview (or restored and trashed again), or with no stamp to show
 	// they were not. Not touched, and not in any kept count.
 	TrashedAfterPreview int `json:"trashed_after_preview"`
+	// NotYetDue counts the books the retention window (PurgeOptions.
+	// OlderThanDays) left out because they were trashed less than that long ago.
+	// Attempted counts them: it is the whole trash.
+	NotYetDue int `json:"not_yet_due"`
+	// NotInPreview counts the books a bound pass found it could purge but the
+	// preview it is bound to had not listed as purgeable (it showed them as kept:
+	// they owned files, an undo could still run, or they held listening state,
+	// and that changed since). Not touched; a new preview lists them.
+	NotInPreview int `json:"not_in_preview"`
 	// FilesToDelete, on a preview, lists the files and empty directories a
 	// purge WITH delete_files would remove for the books it would purge
 	// (purgeFinish's own checks: inside the library root, not protected, named
 	// by no book_file row or live book). FilesToDeleteCount is the exact count
-	// when the list is capped; FilesKept counts purged books whose file the
-	// purge would leave in place (protected, outside the root, still
-	// referenced). Computed whether or not the preview asked for delete_files.
+	// when the list is capped; FilesKept counts the files the purge would leave
+	// in place (protected, outside the root, still referenced, or also named by
+	// a trashed book that is itself kept). Computed whether or not the preview
+	// asked for delete_files.
 	FilesToDelete      []string `json:"files_to_delete,omitempty"`
 	FilesToDeleteCount int      `json:"files_to_delete_count"`
 	FilesKept          int      `json:"files_kept"`
-	// filesSeen dedupes FilesToDelete: two trashed rows can name one path.
-	filesSeen map[string]struct{}
+	// fileCands are the paths a preview's purgeable books would remove, before
+	// settlePreviewFiles decides which stay (two trashed rows can name one path,
+	// and a kept row's file is its own). purgeable is the set of books the
+	// preview says would be purged, kept by the service for the purge bound to
+	// it.
+	fileCands map[string]struct{}
+	purgeable map[string]struct{}
 	// DryRun is set on a preview: nothing was deleted or moved. Purged is then
 	// 0 and Purgeable is the number a real run would purge right now, the
 	// books that would carry listening state to a sibling included

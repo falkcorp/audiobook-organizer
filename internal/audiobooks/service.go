@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.57.0
+// version: 1.57.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -222,6 +222,11 @@ type AudiobookService struct {
 	// measurement, rebuilt by the next pass.
 	purgeBreakdownMu sync.Mutex
 	purgeBreakdown   *PurgeBreakdown
+	// purgePreviews are the last few finished previews (purge_files.go), so the
+	// purge that carries a preview's trashed_before is held to what that
+	// preview decided. In memory only.
+	purgePreviewMu sync.Mutex
+	purgePreviews  []*purgePreviewRecord
 	// runtimeIdx caches canonical book runtimes for the duration: list
 	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
 	// stored Book.Duration aggregate.

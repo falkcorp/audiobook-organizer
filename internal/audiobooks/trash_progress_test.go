@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 98427cba-9b8a-4313-ace0-44b5115e8d6c
-// last-edited: 2026-10-05
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -68,7 +68,7 @@ func TestPurge_CarriesStateToLiveSiblingThenPurges(t *testing.T) {
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Empty(t, res.Errors)
 	require.Equal(t, 1, res.Purged)
@@ -92,7 +92,7 @@ func TestPurge_CarryPrefersABSListedSibling(t *testing.T) {
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.CarriedToSibling, "result %+v", res)
 	require.Equal(t, 40, userPct(t, store, u.ID, "z-listed"))
@@ -107,7 +107,7 @@ func TestPurge_TrashedSiblingIsNotACarryTarget(t *testing.T) {
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.KeptHasProgress, "result %+v", res)
 	require.Equal(t, []string{"dup"}, res.KeptHasProgressIDs)
@@ -139,7 +139,7 @@ func TestPurge_CarryFailureKeepsBook(t *testing.T) {
 	u := purgeSeedProgress(t, store, "dup")
 	svc := NewAudiobookService(&purgeFaultStore{PebbleStore: store, failStateOn: "keep"})
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.CarryFailed, "result %+v", res)
 	require.Equal(t, []string{"dup"}, res.CarryFailedIDs)
@@ -174,7 +174,7 @@ func TestPurge_CarryAcrossManyGroups(t *testing.T) {
 		}
 	}
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Empty(t, res.Errors)
 	require.Equal(t, 2*groups, res.CarriedToSibling)
@@ -430,7 +430,7 @@ func TestPurge_HiddenSiblingIsNotACarryTarget(t *testing.T) {
 			groupBook(t, store, "dup", "g1", true, false)
 			u := purgeSeedProgress(t, store, "dup")
 
-			res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+			res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, res.KeptHasProgress, "result %+v", res)
 			require.Zero(t, res.CarriedToSibling)
@@ -474,7 +474,7 @@ func TestPurge_SiblingUnlistedBeforeCarryKeepsBook(t *testing.T) {
 	u := purgeSeedProgress(t, store, "dup")
 	svc := NewAudiobookService(&unlistAfterChoiceStore{PebbleStore: store, t: t, sibling: "keep"})
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.KeptHasProgress, "result %+v", res)
 	require.Zero(t, res.CarriedToSibling)

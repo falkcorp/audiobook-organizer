@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -22,7 +22,7 @@ import (
 // Trash books that hold users' listening state (owner decision 2026-10-05).
 //
 // The nightly purge carries such a book's state to a live version-group
-// sibling and then purges it (PurgeSoftDeletedBooks). With no live sibling it
+// sibling and then purges it (PurgeSoftDeletedUnattended). With no live sibling it
 // keeps the book; the trash listing flags it (TrashProgress) and the owner
 // can restore it or drop its progress with it (DiscardProgressAndPurge).
 
@@ -51,6 +51,11 @@ const (
 	// stamp after the pass's bound (restored and trashed again since the
 	// preview). Nothing was done to it.
 	purgeAfterBound
+	// purgeNotInPreview: the pass is bound to a preview that did not list this
+	// book as purgeable, and re-read under the merge lock the book would be
+	// purged. Nothing was done to it: it was shown as kept, and what kept it
+	// has changed since.
+	purgeNotInPreview
 )
 
 // purgeOutcome is one book's result in a purge pass.
@@ -88,15 +93,12 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	r.FilesDeleted += o.filesDeleted
 	r.Errors = append(r.Errors, o.errs...)
 	if o.wouldRemove != "" {
-		// Two trashed rows can name one path; the purge removes it once.
-		if _, dup := r.filesSeen[o.wouldRemove]; !dup {
-			if r.filesSeen == nil {
-				r.filesSeen = map[string]struct{}{}
-			}
-			r.filesSeen[o.wouldRemove] = struct{}{}
-			r.FilesToDeleteCount++
-			r.FilesToDelete = append(r.FilesToDelete, o.wouldRemove)
+		// Two trashed rows can name one path; the purge removes it once, and
+		// only when no kept book names it (settlePreviewFiles).
+		if r.fileCands == nil {
+			r.fileCands = map[string]struct{}{}
 		}
+		r.fileCands[o.wouldRemove] = struct{}{}
 	}
 	if o.wouldKeepFile {
 		r.FilesKept++
@@ -104,6 +106,10 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	purged := func() {
 		if r.DryRun {
 			r.Purgeable++
+			if r.purgeable == nil {
+				r.purgeable = map[string]struct{}{}
+			}
+			r.purgeable[bookID] = struct{}{}
 		} else {
 			r.Purged++
 		}
@@ -133,6 +139,8 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 		// restored or purged meanwhile: nothing to count
 	case purgeAfterBound:
 		r.TrashedAfterPreview++
+	case purgeNotInPreview:
+		r.NotInPreview++
 	}
 }
 
@@ -318,10 +326,11 @@ func (svc *AudiobookService) fillCarryOutlook(id string, info *TrashProgressInfo
 // than that) would take book at now.
 func purgeEligible(book *database.Book, now time.Time) bool {
 	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	if days <= 0 || book.MarkedForDeletionAt == nil {
+	at := book.TrashedAt()
+	if days <= 0 || at == nil {
 		return false
 	}
-	return book.MarkedForDeletionAt.Before(now.AddDate(0, 0, -days))
+	return at.Before(now.AddDate(0, 0, -days))
 }
 
 // progressSummary describes each user's state on bookID in a few words,
@@ -695,7 +704,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if err != nil {
 		return nil, err
 	}
-	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles)
+	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, nil)
 	svc.InvalidateListCache()
 	release()
 

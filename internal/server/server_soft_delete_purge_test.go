@@ -1,7 +1,7 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -129,7 +129,7 @@ func seedOldSoftDeletedBook(t *testing.T, name string) *database.Book {
 
 // The merged maintenance.purge-deleted op hands its own context to the purge,
 // so the def's Timeout and a cancel stop it. Before 04-P4b the server copy
-// passed context.Background() and neither could reach PurgeSoftDeletedBooks.
+// passed context.Background() and neither could reach PurgeSoftDeletedUnattended.
 func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
