@@ -1,12 +1,13 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobooks
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -84,6 +85,28 @@ type PurgeResult struct {
 	// Failed counts books the purge could not decide or finish (unreadable
 	// file rows, a store error on the delete); each has a line in Errors.
 	Failed int `json:"failed"`
+	// TrashedBefore is the instant the pass was bound to (PurgeOptions.
+	// TrashedBefore): a preview returns the one it used, the dialog sends it
+	// back with the purge, and a purge echoes the one it ran under. A book
+	// trashed (or, without a stamp, written) after it is left alone. nil on a
+	// pass with no bound (the nightly one).
+	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
+	// TrashedAfterPreview counts the books the bound left out: trashed after
+	// the preview (or restored and trashed again), or with no stamp to show
+	// they were not. Not touched, and not in any kept count.
+	TrashedAfterPreview int `json:"trashed_after_preview"`
+	// FilesToDelete, on a preview, lists the files and empty directories a
+	// purge WITH delete_files would remove for the books it would purge
+	// (purgeFinish's own checks: inside the library root, not protected, named
+	// by no book_file row or live book). FilesToDeleteCount is the exact count
+	// when the list is capped; FilesKept counts purged books whose file the
+	// purge would leave in place (protected, outside the root, still
+	// referenced). Computed whether or not the preview asked for delete_files.
+	FilesToDelete      []string `json:"files_to_delete,omitempty"`
+	FilesToDeleteCount int      `json:"files_to_delete_count"`
+	FilesKept          int      `json:"files_kept"`
+	// filesSeen dedupes FilesToDelete: two trashed rows can name one path.
+	filesSeen map[string]struct{}
 	// DryRun is set on a preview: nothing was deleted or moved. Purged is then
 	// 0 and Purgeable is the number a real run would purge right now, the
 	// books that would carry listening state to a sibling included

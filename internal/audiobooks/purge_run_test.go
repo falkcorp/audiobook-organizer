@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_run_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8d2e6a41-5f07-4b93-a1c8-3e9b7d04f5a2
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -54,7 +54,7 @@ func TestRunPurge_UndoHeldShellIsKeptAndCounted(t *testing.T) {
 	softDeleted(t, store, "shell", "")
 	j := holdByCombine(t, store, "shell")
 
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Purged, "%+v", res)
 	assert.Equal(t, 1, res.KeptUndoPossible)
@@ -66,7 +66,7 @@ func TestRunPurge_UndoHeldShellIsKeptAndCounted(t *testing.T) {
 	// Once the combine is undone the journal no longer holds it.
 	j.Status = merge.CombineJournalUndone
 	require.NoError(t, merge.WriteCombineJournal(store, j))
-	res, err = svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err = svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Purged, "%+v", res)
 	assert.True(t, bookGone(t, store, "shell"))
@@ -85,7 +85,7 @@ func TestRunPurge_ShellWithStaleStampIsNotHeld(t *testing.T) {
 	_, err = store.UpdateBook("shell", row)
 	require.NoError(t, err)
 
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Purged, "%+v", res)
 	assert.Zero(t, res.KeptUndoPossible)
@@ -99,7 +99,7 @@ func TestRunPurge_OwnsFilesIsCountedBeforeUndoHold(t *testing.T) {
 	ownFile(t, store, "both")
 	holdByCombine(t, store, "both")
 
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.SkippedOwnsFiles)
 	assert.Zero(t, res.KeptUndoPossible)
@@ -134,7 +134,7 @@ func TestRunPurge_PreviewAgreesWithRunAndChangesNothing(t *testing.T) {
 	assert.Equal(t, 5, b.Total)
 	assert.Equal(t, 2, b.Purgeable)
 
-	run, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	run, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	assert.Equal(t, prev.Purgeable, run.Purged)
 	assert.Equal(t, prev.SkippedOwnsFiles, run.SkippedOwnsFiles)
@@ -167,7 +167,7 @@ func TestRunPurge_ProgressIsCalledConcurrentlySafely(t *testing.T) {
 	var mu sync.Mutex
 	var last [2]int
 	var seen []int
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{Progress: func(done, total int) {
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, Progress: func(done, total int) {
 		calls.Add(1)
 		mu.Lock()
 		last = [2]int{done, total}

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-23
 
@@ -47,13 +47,22 @@ const (
 	// journaled soft-delete, or an auto-merge's loser. Purging it would make
 	// that undo fail or apply only part of itself.
 	purgeKeptUndo
+	// purgeAfterBound: re-read under the merge lock, the book carries a trash
+	// stamp after the pass's bound (restored and trashed again since the
+	// preview). Nothing was done to it.
+	purgeAfterBound
 )
 
 // purgeOutcome is one book's result in a purge pass.
 type purgeOutcome struct {
 	kind         purgeKind
 	filesDeleted int
-	errs         []string
+	// wouldRemove and wouldKeepFile are a preview's account of purgeFinish for
+	// a book it says would be purged: the file or empty directory the purge
+	// would remove with delete_files, or that it would leave in place.
+	wouldRemove   string
+	wouldKeepFile bool
+	errs          []string
 	// abort, when set, is a failure that will repeat for every remaining book
 	// (the by-book ledger index lost its trust mid-pass: ErrUndoLedgerNotReady).
 	// RunPurge stops the pass with it as the StopReason instead of failing each
@@ -78,6 +87,20 @@ func purgeAbortOf(err error) error {
 func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	r.FilesDeleted += o.filesDeleted
 	r.Errors = append(r.Errors, o.errs...)
+	if o.wouldRemove != "" {
+		// Two trashed rows can name one path; the purge removes it once.
+		if _, dup := r.filesSeen[o.wouldRemove]; !dup {
+			if r.filesSeen == nil {
+				r.filesSeen = map[string]struct{}{}
+			}
+			r.filesSeen[o.wouldRemove] = struct{}{}
+			r.FilesToDeleteCount++
+			r.FilesToDelete = append(r.FilesToDelete, o.wouldRemove)
+		}
+	}
+	if o.wouldKeepFile {
+		r.FilesKept++
+	}
 	purged := func() {
 		if r.DryRun {
 			r.Purgeable++
@@ -108,6 +131,8 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 		r.Failed++
 	case purgeNotInTrash:
 		// restored or purged meanwhile: nothing to count
+	case purgeAfterBound:
+		r.TrashedAfterPreview++
 	}
 }
 
@@ -119,6 +144,7 @@ func (r *PurgeResult) sortIDs() {
 	slices.Sort(r.KeptHasProgressIDs)
 	slices.Sort(r.KeptUndoPossibleIDs)
 	slices.Sort(r.CarryFailedIDs)
+	slices.Sort(r.FilesToDelete)
 	slices.Sort(r.Errors)
 }
 

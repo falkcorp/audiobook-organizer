@@ -1,7 +1,7 @@
 // file: internal/audiobooks/undo_hold_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3c9e5a17-8d42-4b60-a1f3-7e0b6d2c9a48
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package audiobooks
 
@@ -82,7 +82,7 @@ func restoreAndRetrash(t *testing.T, store *database.PebbleStore, id string) {
 
 func purgeOnce(t *testing.T, svc *AudiobookService) *PurgeResult {
 	t.Helper()
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	return res
 }
@@ -215,7 +215,7 @@ func TestRunPurge_UnreadableAutoMergeJournalRefusesThePass(t *testing.T) {
 	softDeleted(t, store, "plain", "")
 	require.NoError(t, store.DB().Set([]byte("dedup:automerge:ffffffffffffffff"), []byte("{not json"), nil))
 
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auto-merge journal")
 	require.NotNil(t, res)
@@ -232,7 +232,7 @@ func TestPurge_FailsClosedUntilTheLedgerIndexIsBuilt(t *testing.T) {
 	require.False(t, store.OpChangeByBookIndexUsable())
 
 	for _, dry := range []bool{false, true} {
-		res, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: dry})
+		res, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: dry, Unattended: true})
 		require.Error(t, err, "dry=%t", dry)
 		assert.True(t, errors.Is(err, ErrUndoLedgerNotReady), "%v", err)
 		assert.Contains(t, err.Error(), "maintenance.opchange-book-index-rebuild")
@@ -360,7 +360,7 @@ func TestPurge_UnreadableCombineJournalRowRefusesEveryPurgePath(t *testing.T) {
 	require.NoError(t, store.SetRaw(badKey, []byte("{not json")))
 
 	for _, dry := range []bool{false, true} {
-		res, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: dry})
+		res, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: dry, Unattended: true})
 		require.Error(t, err, "dry=%t", dry)
 		assert.Contains(t, err.Error(), badKey, "dry=%t", dry)
 		assert.Contains(t, err.Error(), merge.CombineJournalCheckOp, "dry=%t", dry)
@@ -447,7 +447,7 @@ func TestRunPurge_LostLedgerTrustMidPassStopsThePassWithAReason(t *testing.T) {
 	}
 	svc.store = &distrustAfterStore{PebbleStore: store, trusted: 60}
 
-	res, err := svc.RunPurge(context.Background(), PurgeOptions{})
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)
 	assert.True(t, res.StoppedEarly, "%+v", res)
 	assert.Contains(t, res.StopReason, "purge stopped")
