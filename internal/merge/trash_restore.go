@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package merge
 
@@ -187,6 +187,17 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		// The file rows decide whether the row may come back "organized"
 		// (database.RestoreLibraryStateFromTrash) and whether it keeps its
 		// merge redirect (database.RestoredRowIsABSListable).
+		//
+		// This read is LIVE rows only on purpose, though a trashed book can be the
+		// holder of retired versions (the reader census listed this site as one
+		// that includes them; that was wrong for this read). Both predicates
+		// demote the row when ANY row sits outside the library folder, and a
+		// retired row is a version of another book that routinely does (iTunes
+		// paths, /newbooks): counting it would take a holder whose own audio is
+		// organized out of ABS the moment it is restored. The retired versions
+		// need no carrying here: they are keyed under the holder and a restore
+		// never moves a row, so they come back with it untouched
+		// (TestRestoreFromTrash_HolderKeepsRetiredVersionsAndStaysOrganized).
 		if files, err = store.GetBookFiles(id); err != nil {
 			return res, fmt.Errorf("read files of %s: %w", id, err)
 		}
