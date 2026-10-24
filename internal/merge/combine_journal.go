@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-23
 
@@ -849,6 +849,11 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			reasons = append(reasons, fmt.Sprintf("load file %s: %v", fm.FileID, err))
 		case f == nil:
 			reasons = append(reasons, fmt.Sprintf("file %s (%s) is no longer on survivor %s (moved, deleted, or re-merged)", fm.FileID, fm.FilePath, j.SurvivorID))
+		case f.Retired:
+			// A row retired into another book's version since is that
+			// version's, not the combine's: moving it back would rewrite a
+			// version the owner keeps.
+			reasons = append(reasons, fmt.Sprintf("file %s was retired into version %q since the combine; its retire is reversed first, never overwritten", fm.FileID, f.VersionID))
 		case f.FilePath != fm.FilePath:
 			reasons = append(reasons, fmt.Sprintf("file %s moved on disk since the combine (%s -> %s)", fm.FileID, fm.FilePath, f.FilePath))
 		}
@@ -904,7 +909,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		case a.MarkedForDeletionAt == nil || b.MarkedForDeletionAt == nil || !b.MarkedForDeletionAt.Equal(*a.MarkedForDeletionAt):
 			reasons = append(reasons, fmt.Sprintf("absorbed book %s was re-deleted since the combine", a.BookID))
 		}
-		if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
+		if files, err := ms.filesIncludingRetired(a.BookID); err != nil {
 			reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
 		} else {
 			// On a retry the failed attempt may already have moved some of
@@ -958,6 +963,69 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			reasons = append(reasons, "survivor author was edited since the combine")
 		}
 	}
+	return append(reasons, ms.retireReasons(j)...)
+}
+
+// filesIncludingRetired lists every book_file row keyed under bookID, the rows
+// retired into it as well as its live ones, when the store can say
+// (database.RetiredBookFileReader); otherwise the live rows, which are then all
+// there are. The undo asks it wherever it decides whether a book "has gained"
+// files or what a restored book owns: GetBookFiles alone leaves a retired
+// version out.
+func (ms *Service) filesIncludingRetired(bookID string) ([]database.BookFile, error) {
+	if r, ok := database.AsCapability[database.RetiredBookFileReader](ms.db); ok {
+		return r.GetBookFilesIncludingRetired(bookID)
+	}
+	return ms.db.GetBookFiles(bookID)
+}
+
+// combineRetireLinks returns the retire links of the combine's absorbed
+// shells (ListCombineRetireLinks), in key order. A link is only a pointer:
+// whether the retire it names still has anything to reverse is the
+// RetireUndoer's to say.
+func (ms *Service) combineRetireLinks(j *CombineJournal) ([]CombineRetireLink, error) {
+	links, err := ListCombineRetireLinks(ms.db, j.ID)
+	if err != nil {
+		return nil, err
+	}
+	absorbed := make(map[string]bool, len(j.Absorbed))
+	for _, a := range j.Absorbed {
+		absorbed[a.BookID] = true
+	}
+	out := links[:0]
+	for _, l := range links {
+		if absorbed[l.ShellID] {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// retireReasons is the read-only half of reversing the retires of the
+// combine's absorbed shells: one reason per retire that cannot be reversed
+// right now. A link with no live retire rows under it is dead and is not
+// mentioned. With no undoer wired a link cannot be told live from dead, so it
+// refuses (fail closed): the undo must never restore a shell a retire still
+// holds the rows of.
+func (ms *Service) retireReasons(j *CombineJournal) []string {
+	links, err := ms.combineRetireLinks(j)
+	if err != nil {
+		return []string{fmt.Sprintf("read the retires of the absorbed books: %v", err)}
+	}
+	var reasons []string
+	for _, l := range links {
+		if ms.retireUndo == nil {
+			reasons = append(reasons, fmt.Sprintf("absorbed book %s was retired into a version by op %s and this service cannot reverse a retire", l.ShellID, l.OpID))
+			continue
+		}
+		live, why, err := ms.retireUndo.CheckRetireRevert(l.OpID, l.ShellID)
+		switch {
+		case err != nil:
+			reasons = append(reasons, fmt.Sprintf("check the retire of absorbed book %s (op %s): %v", l.ShellID, l.OpID, err))
+		case live && len(why) > 0:
+			reasons = append(reasons, fmt.Sprintf("retire op %s of absorbed book %s cannot be reversed: %s", l.OpID, l.ShellID, strings.Join(why, "; ")))
+		}
+	}
 	return reasons
 }
 
@@ -981,7 +1049,8 @@ func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool
 	if f == nil {
 		return fm.Created
 	}
-	return f.FilePath == fm.FilePath
+	// A row retired since is not "back where the undo puts it".
+	return !f.Retired && f.FilePath == fm.FilePath
 }
 
 // overrideAuthorsToRestore returns the author links the undo of an author
@@ -1171,6 +1240,9 @@ func (ms *Service) restoreSurvivorFileNumbers(j *CombineJournal, fm CombineFileM
 	f, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
 	if err != nil || f == nil {
 		return fmt.Errorf("reload survivor file %s: %v", fm.FileID, err)
+	}
+	if f.Retired {
+		return fmt.Errorf("survivor file %s was retired into version %q since the combine; its numbers are not restored", fm.FileID, f.VersionID)
 	}
 	if f.DiscNumber == fm.DiscBefore && f.TrackNumber == fm.TrackBefore {
 		return nil
@@ -2184,6 +2256,24 @@ func (ms *Service) restoreAbsorbedRow(a CombineAbsorbed) (restored bool, warning
 func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	res := &CombineUndoResult{JournalID: j.ID, SurvivorID: j.SurvivorID}
 
+	// 0. Reverse the retires of the absorbed shells first (retired-versions
+	//    plan 6.5), so the restore below sees each shell as the combine left
+	//    it. undoPreconditions has already proved every live one reversible.
+	//    A retry finds the ones this attempt reversed dead (no pending rows)
+	//    and RevertRetire does nothing for them.
+	links, err := ms.combineRetireLinks(j)
+	if err != nil {
+		return res, err
+	}
+	for _, l := range links {
+		if ms.retireUndo == nil {
+			return res, fmt.Errorf("shell %s was retired by op %s and no retire undoer is wired", l.ShellID, l.OpID)
+		}
+		if err := ms.retireUndo.RevertRetire(l.OpID, l.ShellID); err != nil {
+			return res, fmt.Errorf("reverse the retire of absorbed shell %s (op %s): %w", l.ShellID, l.OpID, err)
+		}
+	}
+
 	// 1. Restore the absorbed rows first, so the file moves below land on live
 	//    books. Re-fetch and patch only the fields the combine changed:
 	//    UpdateBook is a full-column replace.
@@ -2250,6 +2340,9 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 				// Not on the survivor: back on its owner already, never
 				// moved, or (a created row) never created.
 				continue
+			}
+			if cur.Retired {
+				return fmt.Errorf("file %s was retired into version %q since the combine; it is not moved back", fm.FileID, cur.VersionID)
 			}
 			if fm.Created && fm.FromBookID == j.SurvivorID {
 				// The survivor's own materialized row stays where it is. Its
@@ -2323,7 +2416,7 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		if !retired[a.BookID] {
 			continue
 		}
-		files, err := ms.db.GetBookFiles(a.BookID)
+		files, err := ms.filesIncludingRetired(a.BookID)
 		if err != nil {
 			return res, fmt.Errorf("read files of absorbed book %s: %w", a.BookID, err)
 		}

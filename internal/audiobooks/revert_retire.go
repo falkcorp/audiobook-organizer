@@ -329,3 +329,16 @@ func (u retireUndoer) RevertRetire(opID, shellID string) error {
 	}
 	return nil
 }
+
+// filesIncludingRetired lists every book_file row keyed under bookID, the rows
+// retired into it as well as its live ones (database.RetiredBookFileReader),
+// for the reads that decide who claims a path or what a file move must repoint.
+// GetBookFiles alone would call a retired version's path free and leave its row
+// pointing at a folder that moved. A store without the reader has no retired
+// rows, so its live listing is the whole set.
+func (rs *RevertService) filesIncludingRetired(bookID string) ([]database.BookFile, error) {
+	if r, ok := database.AsCapability[database.RetiredBookFileReader](rs.db); ok {
+		return r.GetBookFilesIncludingRetired(bookID)
+	}
+	return rs.db.GetBookFiles(bookID)
+}

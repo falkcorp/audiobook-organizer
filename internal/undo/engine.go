@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-23
 //
@@ -324,8 +324,12 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// edited since the operation is refused, not overwritten.
 		return verdictOf(CheckBookFieldCurrent(book, c))
 	case "tag_write":
-		// The revert reads the book before it touches the file.
+		// The revert reads the book before it touches the file, and refuses a
+		// file row that was retired into another book's version since.
 		_, refusal := CheckRestoreBook(store, c.BookID)
+		if refusal == nil {
+			refusal = tagWriteRowRetired(store, c)
+		}
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeTitleRelinkCredits, ChangeTypeJunkAuthorCredits,
 		ChangeTypeAuthorMergeCredits, ChangeTypeAuthorReclassifyCredits:
@@ -788,6 +792,25 @@ func checkFsRegroupRowOn(store ConflictChecker, c *database.OperationChange, hol
 	}
 	if holds != nil && !holds(f) {
 		return refuse(ReasonChangedSince, "book_file %s changed since the operation", id)
+	}
+	return nil
+}
+
+// tagWriteRowRetired is the refusal for a tag_write row whose file row has
+// been retired since (RetiredRowRefusal), nil when it is not, cannot be read
+// here (the revert reads it itself and refuses on its own) or the field names
+// no file.
+func tagWriteRowRetired(store ConflictChecker, c *database.OperationChange) error {
+	r, ok := store.(bookFileByIDReader)
+	if !ok {
+		return nil
+	}
+	_, fileID, ok := TagWriteFromField(c.FieldName)
+	if !ok {
+		return nil
+	}
+	if f, err := r.GetBookFileByID(c.BookID, fileID); err == nil && f != nil && f.Retired {
+		return RetiredRowRefusal(f)
 	}
 	return nil
 }
