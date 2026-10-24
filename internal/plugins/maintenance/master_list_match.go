@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/master_list_match.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bc498082-c7d9-434e-82a6-37e0eb55dd61
 // last-edited: 2026-10-23
 
@@ -313,13 +313,17 @@ func (c *mlCall) survivors(trashed []string) (live, noLive []string, err error) 
 	return uniqSorted(live), noLive, nil
 }
 
-// classify decides one combined row. It reads the library only (no user
-// state: nothing is applied in this PR).
+// classify decides one combined row. It reads the library only, never the
+// target user's state (the fixer's decision step does).
 func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
 	c := &mlCall{m: m, row: row, listSec: float64(row.RuntimeMin) * 60, durations: map[string]float64{}}
 	var trashedOnly []string
 
 	idTiers := []string{mlTierASIN, mlTierISBN, mlTierSource}
+	// ambiguous is the first identifier tier that hit several books it could
+	// not settle. It does not end the match: a later identifier of the same row
+	// (the ISBN, when the ASIN is on two editions) may name one of them.
+	var ambiguous *mlOutcome
 	for ti, tier := range idTiers {
 		h, err := c.hits(tier)
 		if err != nil {
@@ -342,12 +346,48 @@ func (m *mlMatcher) classify(row masterlist.Row) (mlOutcome, error) {
 			continue
 		}
 		o, err := c.resolveID(tier, h.note, raw, viaTrashed, shown)
-		if err != nil || o.target == "" {
+		if err != nil {
 			return o, err
+		}
+		if o.target == "" {
+			if ambiguous == nil {
+				first := o
+				ambiguous = &first
+			}
+			continue
+		}
+		if ambiguous != nil {
+			c.reconcileAmbiguous(&o, ambiguous)
 		}
 		return o, c.checkAgreement(&o, idTiers[ti+1:])
 	}
+	if ambiguous != nil {
+		return *ambiguous, nil
+	}
 	return c.byTitle(trashedOnly)
+}
+
+// reconcileAmbiguous folds an earlier identifier tier that was ambiguous into
+// the match a later tier settled. A later identifier that names one of the
+// earlier tier's candidates settles it: the evidence says so and the match
+// keeps its class. One that names a book outside them means the row's
+// identifiers disagree, so the match is held for review (identifier_conflict),
+// as when two settled tiers name different books.
+func (c *mlCall) reconcileAmbiguous(o, amb *mlOutcome) {
+	earlier := strings.ReplaceAll(amb.tier, "_", " ")
+	later := strings.ReplaceAll(o.tier, "_", " ")
+	if slices.Contains(amb.candidates, o.target) {
+		o.evidence = append(o.evidence, fmt.Sprintf("the row's %s named %d books (%s); its %s names one of them",
+			earlier, len(amb.candidates), strings.Join(amb.candidates, ", "), later))
+		return
+	}
+	why := fmt.Sprintf("the row's %s names %d books (%s), none of them the book matched by %s: %s",
+		earlier, len(amb.candidates), strings.Join(amb.candidates, ", "), later, o.target)
+	o.flag(mlFlagIDConflict)
+	o.evidence = append(o.evidence, why)
+	if o.class == mlMatchedHigh {
+		o.class, o.reason = mlMatchedReview, why
+	}
 }
 
 // checkAgreement holds an identifier match for review when a LATER identifier
@@ -361,15 +401,27 @@ func (c *mlCall) checkAgreement(o *mlOutcome, later []string) error {
 		if err != nil {
 			return err
 		}
-		if len(h.live) == 0 {
+		// A tier that only a trashed copy carries names the book that copy was
+		// merged into, exactly as it does when it is the tier that matches
+		// (classify): comparing live hits alone would let the ASIN and the ISBN
+		// disagree unseen whenever the disagreeing one had been merged away.
+		live, via := h.live, ""
+		if len(live) == 0 && len(h.trashed) > 0 {
+			surv, _, err := c.survivors(h.trashed)
+			if err != nil {
+				return err
+			}
+			live, via = surv, " (followed from a trashed copy to its live survivor)"
+		}
+		if len(live) == 0 {
 			continue
 		}
-		other := c.m.lib.targets(h.live)
+		other := c.m.lib.targets(live)
 		if len(other) == 0 || slices.Contains(other, o.target) {
 			continue
 		}
-		why := fmt.Sprintf("the row's %s (%s) names a different book than the one matched by %s: %s",
-			strings.ReplaceAll(tier, "_", " "), h.note, strings.ReplaceAll(o.tier, "_", " "), strings.Join(other, ", "))
+		why := fmt.Sprintf("the row's %s (%s%s) names a different book than the one matched by %s: %s",
+			strings.ReplaceAll(tier, "_", " "), h.note, via, strings.ReplaceAll(o.tier, "_", " "), strings.Join(other, ", "))
 		o.flag(mlFlagIDConflict)
 		o.evidence = append(o.evidence, why)
 		if o.class == mlMatchedHigh {
