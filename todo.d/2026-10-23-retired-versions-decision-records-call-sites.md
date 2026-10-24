@@ -8,3 +8,14 @@
       does not yet write a `repairs:retired-versions` reject (entity = the
       shell, `decisions.RetiredVersionsSubjectKey`), and that op kind has no
       reject-reason taxonomy of its own (it gets the common and `repairs:` ones).
+
+      Two more things the future reject route and revert must know. (1) Reopen
+      is not unreject: the retired-versions fixer asks `SubjectRejected` with
+      material hash "" (a sticky ask), so ANY live reject of the shell blocks
+      it, including one that was reopened. A reject route for op kind
+      `repairs:retired-versions` must offer unreject to release a shell, not
+      only reopen. (2) A revert (PR 5) puts the rows back under the shell and
+      leaves the retired version row behind with no rows; the resolver ignores
+      such a version, so that is safe, and the version can stay. Any future
+      writer of a `decision:` key outside `decisions.Store.Record` would leave
+      the `RowCache` stale; `TestDecisionKeysHaveOneWriter` fails if one appears.
