@@ -186,7 +186,7 @@ func TestMasterListImport_DecisionClasses(t *testing.T) {
 	}
 	require.Equal(t, 4, plan.Applicable)
 	require.Equal(t, 4, plan.ByClass[mlMatchedHigh])
-	require.Equal(t, 1, plan.ByClass[mlSkipAlreadyFinished]-1, "two rows, both counted under their class")
+	require.Equal(t, 2, plan.ByClass[mlSkipAlreadyFinished], "two rows, both counted under their class")
 	require.Contains(t, rows["asin:B100000017"].Reason, l.ids["twin2"], "the newer listen was on the other copy")
 
 	// The row proposes what the list says and shows what is there now.
