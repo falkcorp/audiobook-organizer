@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package audiobookshandler_test
 
@@ -181,6 +181,7 @@ func TestDiscardProgressAndPurge_StatusMapping(t *testing.T) {
 		{"not found", audiobookspkg.ErrAudiobookNotFound, http.StatusNotFound, ""},
 		{"not in trash", fmt.Errorf("%w: b1", audiobookspkg.ErrNotInTrash), http.StatusConflict, "CONFLICT"},
 		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
+		{"retired shell", fmt.Errorf("discard progress and purge b1 refused: %w (1 retired file record(s) still held)", database.ErrBookIsRetiredShell), http.StatusConflict, "RETIRED_SHELL"},
 		{"refused", fmt.Errorf("%w: pending repair", audiobookspkg.ErrDiscardRefused), http.StatusConflict, "CONFLICT"},
 		// The progress WAS erased and the delete then refused: a different
 		// code from OWNS_FILES ("nothing was deleted"), so a client can say so.
@@ -245,6 +246,8 @@ func TestDeleteAudiobook_StatusMapping(t *testing.T) {
 		{"live carry incomplete", fmt.Errorf("hard delete b1: %w: b1 -> b2: boom", merge.ErrStateCarryIncomplete), http.StatusInternalServerError, "CARRY_FAILED"},
 		{"live carry target unreadable", fmt.Errorf("hard delete b1: %w: boom", merge.ErrCarryTargetUnreadable), http.StatusInternalServerError, "CARRY_FAILED"},
 		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
+		{"retired shell (purge now)", fmt.Errorf("purge b1: %w; restore one of its retired versions as a separate book instead", database.ErrBookIsRetiredShell), http.StatusConflict, "RETIRED_SHELL"},
+		{"retired shell (live hard delete)", fmt.Errorf("hard delete b1 refused: %w (1 retired file record(s) still held)", database.ErrBookIsRetiredShell), http.StatusConflict, "RETIRED_SHELL"},
 		{"live delete owns files after carry", fmt.Errorf("hard delete b1: delete book b1: %w (1 row(s))", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
 		// The state WAS moved and the delete then failed: not the OWNS_FILES
 		// "nothing was deleted", so a client can tell the two apart.

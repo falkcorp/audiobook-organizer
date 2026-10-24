@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-28
 
@@ -629,6 +629,45 @@ func TestRestoreAudiobook_NotFound(t *testing.T) {
 	h.RestoreAudiobook(c)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// RestoreAudiobook answers 404 only for a missing book, 409 RETIRED_SHELL for a
+// retire shell, and 500 for any other failure: a fail-closed shell check that
+// could not read retired rows must not read as "audiobook not found".
+func TestRestoreAudiobook_StatusMapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		want     int
+		wantCode string
+	}{
+		{"not found", audiobookspkg.ErrAudiobookNotFound, http.StatusNotFound, ""},
+		{"retired shell", fmt.Errorf("restore x refused: %w (1 retired file record(s) still held)", database.ErrBookIsRetiredShell), http.StatusConflict, "RETIRED_SHELL"},
+		{"retired lookup failed", fmt.Errorf("restore x refused: %w", database.ErrRetiredReaderUnavailable), http.StatusInternalServerError, ""},
+		{"other", errString("pebble closed"), http.StatusInternalServerError, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.svc.EXPECT().RestoreAudiobook(mock.Anything, "x").Return(nil, tc.err)
+			c, w := newCtx("POST", "/audiobooks/x/restore", nil, p("id", "x"))
+			h.RestoreAudiobook(c)
+			if w.Code != tc.want {
+				t.Fatalf("want %d, got %d (%s)", tc.want, w.Code, w.Body.String())
+			}
+			if tc.wantCode != "" {
+				var body struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Code != tc.wantCode {
+					t.Fatalf("code = %q, want %q", body.Code, tc.wantCode)
+				}
+			}
+		})
 	}
 }
 

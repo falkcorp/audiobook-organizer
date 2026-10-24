@@ -1,5 +1,5 @@
 // file: internal/undo/retire_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 54f67c90-9235-45fd-b826-66a6f3be19d9
 // last-edited: 2026-10-28
 
@@ -244,7 +244,7 @@ func TestPreflightUndoConflicts_RetireRowsOnPurgedShell(t *testing.T) {
 	if err := st.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{f.ID}, SourceBookID: shell.ID}}, holder.ID, "v1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DeleteBook(shell.ID); err != nil {
+	if err := st.DeleteRetiredShellForTest(shell.ID); err != nil {
 		t.Fatal(err)
 	}
 	row := retireRow("c1", "op1", f.ID, shell.ID, holder.ID, "v1")
