@@ -2700,9 +2700,12 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtua
 	// and creating one would put a second row on the file, so the plan attaches
 	// nothing. The retired row keeps the file; the merge goes on without a row for
 	// it. GetBookFileByPath cannot see the retired row (it answers live rows
-	// only), so ask the complete lookup. An answer that cannot be complete
-	// (memdb not serving) is treated the same way rather than as "free".
-	rows, rowsErr := database.BookFileRowsAtPath(ms.db, b.FilePath)
+	// only), so ask the complete lookup, and the STRICT one: the non-strict
+	// variant falls back to GetBookFileByPath when memdb is not serving, which
+	// is exactly the lookup that cannot see a retired row, so it would answer
+	// "free" for a retired-held path during startup warmup. An answer that
+	// cannot be complete is treated like a claim rather than as "free".
+	rows, rowsErr := database.BookFileRowsAtPathStrict(ms.db, b.FilePath)
 	if rowsErr != nil {
 		slog.Warn("combine: cannot tell whether a retired version holds the file; no row planned for it",
 			"book", b.ID, "path", logger.SanitizeLogValue(b.FilePath), "err", rowsErr)
