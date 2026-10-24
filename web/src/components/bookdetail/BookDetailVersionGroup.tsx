@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-10-06
+// last-edited: 2026-10-23
 import {
   Alert,
   Box,
@@ -117,6 +117,13 @@ export interface BookDetailVersionGroupProps {
   expandedVersionIds: Set<string>;
   expandedSegmentVersionIds: Set<string>;
   bookFiles: BookFile[];
+  /**
+   * The current book's retired rows, shown read-only below its files when the
+   * Files tab's "Show retired files" switch is on. Kept apart from bookFiles on
+   * purpose: bookFiles feeds selection, split, move, relocate and the hash
+   * chain, and a retired row can take part in none of them.
+   */
+  retiredFiles?: BookFile[];
   segments: BookSegment[];
   versionSegments: Record<string, BookSegment[]>;
   versionFileTags: Record<string, BookTags | null>;
@@ -146,6 +153,7 @@ export const BookDetailVersionGroup = ({
   expandedVersionIds,
   expandedSegmentVersionIds,
   bookFiles,
+  retiredFiles,
   segments,
   versionSegments,
   versionFileTags,
@@ -876,6 +884,49 @@ export const BookDetailVersionGroup = ({
                     </Box>
                   );
                 })()}
+
+              {/* Retired files: read-only, current book only (never in vSegs, so they
+                  cannot be selected, split, moved or relocated). */}
+              {isCurrent && retiredFiles && retiredFiles.length > 0 && (
+                <Box sx={{ mt: 2 }} data-testid="retired-files-section">
+                  <Typography variant="subtitle2" sx={{ color: 'text.secondary', mb: 0.5 }}>
+                    Retired files ({retiredFiles.length})
+                  </Typography>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>File</TableCell>
+                          <TableCell>Version</TableCell>
+                          <TableCell>Duration</TableCell>
+                          <TableCell align="right">Size</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {retiredFiles.map((f) => (
+                          <TableRow key={f.id}>
+                            <TableCell sx={{ wordBreak: 'break-all', fontSize: '0.8rem' }}>
+                              <Chip
+                                label="Retired"
+                                size="small"
+                                variant="outlined"
+                                color="warning"
+                                sx={{ mr: 1 }}
+                              />
+                              {f.file_path}
+                            </TableCell>
+                            <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                              {f.version_id ?? '\u2014'}
+                            </TableCell>
+                            <TableCell>{formatDuration(f.duration)}</TableCell>
+                            <TableCell align="right">{formatBytes(f.file_size)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              )}
 
               {/* Hash chain per file (HASH-CHAIN-2, #1270). Only the current
                   version carries per-file hash data (bookFiles); non-current

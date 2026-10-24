@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.204.1
+// version: 2.204.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-28
 
@@ -370,6 +370,13 @@ export interface BookFile {
   // Stored flag; only changes when a scan or repair notices. Compare with
   // file_exists, which is a live disk check made for this response.
   missing: boolean;
+  // Set only on a row that belongs to a retired version of this book (a file of
+  // a trashed or merged book that was moved onto it). Such a row is returned
+  // only by getBookFiles(..., { includeRetired: true }); version_id names the
+  // retired version it belongs to. A retired row is not a playable file of the
+  // book and cannot be moved, split or deleted.
+  retired?: boolean;
+  version_id?: string;
   // true/false when the stat answered, null when it could not (permission,
   // I/O error, or the per-request deadline on a hung mount): see file_check_error.
   file_exists?: boolean | null;
@@ -2170,12 +2177,22 @@ export async function getBookFiles(
   // skipDiskCheck: the server stats every file by default (file_exists).
   // Set it when only paths are needed across many books at once; file_exists
   // then comes back null with file_check_error "not checked".
-  options?: { limit?: number; offset?: number; signal?: AbortSignal; skipDiskCheck?: boolean }
+  // includeRetired adds the book's retired rows (flagged retired: true) to the
+  // listing; without it they are left out, so every caller that wants "this
+  // book's files" keeps getting only the live ones.
+  options?: {
+    limit?: number;
+    offset?: number;
+    signal?: AbortSignal;
+    skipDiskCheck?: boolean;
+    includeRetired?: boolean;
+  }
 ): Promise<{ files: BookFile[]; count: number }> {
   const params = new URLSearchParams();
   if (options?.limit !== undefined) params.append('limit', String(options.limit));
   if (options?.offset !== undefined) params.append('offset', String(options.offset));
   if (options?.skipDiskCheck) params.append('disk_check', 'false');
+  if (options?.includeRetired) params.append('include_retired', 'true');
   const qs = params.toString();
   const url = `${API_BASE}/audiobooks/${bookId}/files${qs ? '?' + qs : ''}`;
   const response = await apiFetch(url, { signal: options?.signal });
