@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_retire.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a82a965b-b258-4d39-b08b-abd352a891e7
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package repairs
 
@@ -43,6 +43,12 @@ type rawKVWriter interface {
 	SetRaw(key string, value []byte) error
 }
 
+// shellReader reads the shell book, so RetireVersion can check it is still in
+// the trash. Resolved with database.AsCapability from the Writer's stores.
+type shellReader interface {
+	GetBookByID(id string) (*database.Book, error)
+}
+
 // RetireSpec names one shell's retire into a holder.
 type RetireSpec struct {
 	// Shell is the trashed book the rows leave; Holder the live book that keeps
@@ -53,7 +59,10 @@ type RetireSpec struct {
 	// version and rows its cut-off run already wrote.
 	VersionID string
 	// FileIDs are the shell's book_file rows to retire. A row already retired
-	// into VersionID under the holder (a resumed run) is left as it is.
+	// into VersionID under the holder (a resumed run) is left as it is. May be
+	// empty: a shell whose rows a combine moved off it has none, and its
+	// external ids and merged-into pointer (journaled by the caller) are still
+	// what the combine's undo has to reverse, so CombineJournalID links anyway.
 	FileIDs []string
 	// Format and Source describe the retired version (BookVersion.Format and
 	// .Source); both may be empty.
@@ -76,10 +85,14 @@ type RetireSpec struct {
 // where its cut-off run stopped:
 //
 //  1. When spec.CombineJournalID is set, the raw link
-//     merge:combine-retire:<combine id>:<shell id> -> this op id, BEFORE the
-//     first change row. A link whose retire never wrote anything is dead
-//     (UndoCombine finds no unreverted row under it) and harmless; rows
-//     without a link would be the unreversible case, so the link goes first.
+//     merge:combine-retire:<combine id>:<shell id>:<this op id>, BEFORE the
+//     first change row, and whether or not there are file rows (a combine-
+//     absorbed shell has none: CombineBooks moved them all to the survivor).
+//     A link whose retire never wrote anything is dead (UndoCombine finds no
+//     unreverted row under it) and harmless; rows without a link would be the
+//     unreversible case, so the link goes first. The shell must still be in
+//     the trash (ErrChangedSincePlan otherwise): a resumed run after the
+//     combine was undone would otherwise retire, and link, a restored book.
 //  2. undo.ChangeTypeBookVersionCreate, then CreateBookVersion. A version
 //     already in the store (a resumed run) is verified, not created again.
 //  3. One undo.ChangeTypeBookFileRetire row per row, all created in ONE commit
@@ -106,7 +119,20 @@ func (w *Writer) RetireVersion(spec RetireSpec) error {
 		return fmt.Errorf("repairs: retire needs two different books, got shell %q holder %q", spec.Shell, spec.Holder)
 	case spec.VersionID == "":
 		return errors.New("repairs: retire needs the version id its plan minted")
-	case len(spec.FileIDs) == 0:
+	}
+	if err := w.requireShellTrashed(spec.Shell); err != nil {
+		return err
+	}
+	// The link goes before anything else is decided, including the "nothing to
+	// retire" return below: a shell with no file rows still has the external-id
+	// and merged-into rows the caller journals, and those are what the
+	// combine's undo has to find.
+	if spec.CombineJournalID != "" {
+		if err := w.linkCombineRetire(spec); err != nil {
+			return err
+		}
+	}
+	if len(spec.FileIDs) == 0 {
 		return nil
 	}
 	retirer, ok := database.AsCapability[database.RetiredBookFileWriter](w.files)
@@ -118,15 +144,31 @@ func (w *Writer) RetireVersion(spec RetireSpec) error {
 		return errors.New("repairs: the store cannot create book versions")
 	}
 
-	if spec.CombineJournalID != "" {
-		if err := w.linkCombineRetire(spec); err != nil {
-			return err
-		}
-	}
 	if err := w.ensureRetiredVersion(versions, spec); err != nil {
 		return err
 	}
 	return w.retireRows(retirer, spec)
+}
+
+// requireShellTrashed refuses (ErrChangedSincePlan) a shell that is no longer
+// in the trash: it was restored since the plan (a combine undone, say), and
+// retiring its rows would take them from a live book. A shell that is gone is
+// left to the store's own refusal.
+func (w *Writer) requireShellTrashed(shellID string) error {
+	r, ok := database.AsCapability[shellReader](w.files)
+	if !ok {
+		if r, ok = database.AsCapability[shellReader](w.store); !ok {
+			return errors.New("repairs: the store cannot read the shell book")
+		}
+	}
+	b, err := r.GetBookByID(shellID)
+	if err != nil {
+		return fmt.Errorf("read shell book %s: %w", shellID, err)
+	}
+	if b != nil && !b.IsSoftDeleted() {
+		return fmt.Errorf("%w: book %s is no longer in the trash, so its files are not retired", ErrChangedSincePlan, shellID)
+	}
+	return nil
 }
 
 // linkCombineRetire writes the raw combine-retire link (RetireVersion, stage

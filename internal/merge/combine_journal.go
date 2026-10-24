@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package merge
 
@@ -764,7 +764,11 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 			return ms.recordAppliedUndo(j, applied)
 		}
 	}
-	if reasons := ms.undoPreconditions(j); len(reasons) > 0 {
+	// Read once per link, lazily, and shared by the checks below and by step 0
+	// of applyUndo: a retire op can hold ~190k rows and this runs under the
+	// merge-serialize lock.
+	plans := &retirePlans{ms: ms, j: j}
+	if reasons := ms.undoPreconditions(j, plans); len(reasons) > 0 {
 		return nil, &CombineUndoRefusedError{JournalID: j.ID, Reasons: reasons}
 	}
 	// Mark an Applied journal as a retry BEFORE the first write. undo_failed
@@ -784,7 +788,7 @@ func (ms *Service) UndoCombine(journalID string) (*CombineUndoResult, error) {
 		}
 	}
 
-	res, applyErr := ms.applyUndo(j)
+	res, applyErr := ms.applyUndo(j, plans)
 	now := time.Now().UTC()
 	if applyErr != nil {
 		j.Status = CombineJournalUndoFailed
@@ -910,7 +914,7 @@ func (ms *Service) recordAppliedUndo(j *CombineJournal, a *combineUndoApplied) (
 // still a refusal. What a retry cannot tell apart is "reversed by the failed
 // attempt" from "put back by hand to exactly the recorded state"; both leave
 // the row where the undo wants it, so treating them alike is safe.
-func (ms *Service) undoPreconditions(j *CombineJournal) []string {
+func (ms *Service) undoPreconditions(j *CombineJournal, plans *retirePlans) []string {
 	var reasons []string
 	// A Pending journal is a merge that stopped part-way (a crash, or a
 	// journal that could not be finalized). It records every step done so
@@ -997,12 +1001,21 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		// replay tolerance.
 		lenient := retry || a.LeftLive
 		b, err := ms.db.GetBookByID(a.BookID)
+		// shellRecreated: the shell was purged, and a linked retire that is
+		// still live will recreate it from its purge snapshot as step 0 of the
+		// undo, before the shell is restored. Its own row is then judged by
+		// the retire's plan (its Reasons say whether it can be recreated), not
+		// here: the snapshot is the shell as the retire left it.
+		shellRecreated := false
+		shellRetires := plans.forShell(a.BookID)
 		switch {
 		case err != nil:
 			reasons = append(reasons, fmt.Sprintf("load absorbed book %s: %v", a.BookID, err))
 			continue
+		case b == nil && shellRetires.recreatesShell():
+			shellRecreated = true
 		case b == nil:
-			reasons = append(reasons, fmt.Sprintf("absorbed book %s no longer exists (purged)", a.BookID))
+			reasons = append(reasons, purgedShellReason(a.BookID, shellRetires))
 			continue
 		case !b.IsSoftDeleted() && lenient:
 			// Restored by the failed attempt (step 1 runs first).
@@ -1015,27 +1028,50 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		// combine still holds it, and a retire into a soft-deleted shell is
 		// refused by the store, so a retired row here is never a gain since
 		// the combine (counting it refused every undo of such a combine).
-		if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
+		//
+		// The rows a linked retire took from this shell are the shell's own
+		// (retiredFiles): GetBookFiles does not show them while they are
+		// retired, and shows them again once step 0 has given them back.
+		if shellRecreated {
+			// Nothing to read: the book is not there yet, and the rows the
+			// retire took from it are judged as the shell's below.
+		} else if files, err := ms.db.GetBookFiles(a.BookID); err != nil {
 			reasons = append(reasons, fmt.Sprintf("load files of absorbed book %s: %v", a.BookID, err))
 		} else {
 			// On a retry the failed attempt may already have moved some of
 			// this book's own rows back (a row the combine created included:
-			// it is repointed, never deleted); those are expected. Any other
-			// row is a file the book gained since, and still refuses.
+			// it is repointed, never deleted); those are expected, and so are
+			// the rows an earlier attempt's step 0 un-retired (or the retire
+			// still holds, for step 0 of this attempt). Any other row is a file
+			// the book gained since, and still refuses.
+			pending, reverted := shellRetires.fileIDs()
 			ownRows := map[string]bool{}
 			if lenient {
 				for _, fm := range a.Files {
 					ownRows[fm.FileID] = true
 				}
+				for _, id := range pending {
+					ownRows[id] = true
+				}
+				for _, id := range reverted {
+					ownRows[id] = true
+				}
 			}
-			foreign := 0
+			foreign, retiredAway := 0, 0
 			for _, f := range files {
 				if !ownRows[f.ID] {
 					foreign++
 				}
 			}
-			if foreign > 0 {
-				reasons = append(reasons, fmt.Sprintf("absorbed book %s has since been given %d file(s)", a.BookID, foreign))
+			if !lenient {
+				// A first attempt: a row the retire took is a row the book was
+				// given since the combine (the combine left it none), exactly as
+				// it would be without the retire, which only hides it.
+				retiredAway = len(pending)
+			}
+			if foreign+retiredAway > 0 {
+				reasons = append(reasons, fmt.Sprintf("absorbed book %s has since been given %d file(s)%s", a.BookID, foreign+retiredAway,
+					retiredAwayNote(retiredAway)))
 			}
 		}
 		for _, fm := range a.Files {
@@ -1069,7 +1105,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			reasons = append(reasons, "survivor author was edited since the combine")
 		}
 	}
-	return append(reasons, ms.retireReasons(j)...)
+	return append(reasons, ms.retireReasons(plans)...)
 }
 
 // combineRetireLinks returns the retire links of the combine's absorbed
@@ -1094,29 +1130,147 @@ func (ms *Service) combineRetireLinks(j *CombineJournal) ([]CombineRetireLink, e
 	return out, nil
 }
 
+// retireLinkPlan is one link's reversal plan: read once (retirePlans.get).
+type retireLinkPlan struct {
+	link CombineRetireLink
+	// rev is the undoer's read of the retire; nil when it could not be made,
+	// and then problem says why.
+	rev     *RetireReversal
+	problem string
+}
+
+// live reports a retire that still has rows to reverse.
+func (p retireLinkPlan) live() bool { return p.rev != nil && p.rev.Live }
+
+// retirePlans reads the combine's retire links and plans each one's reversal
+// with the RetireUndoer, once, on first use: UndoCombine shares one value
+// between undoPreconditions and applyUndo, so a retire op is decoded once per
+// link however many places consult it. Not safe for concurrent use; UndoCombine
+// holds the merge-serialize lock for its whole life.
+type retirePlans struct {
+	ms    *Service
+	j     *CombineJournal
+	done  bool
+	plans []retireLinkPlan
+	err   error
+}
+
+// get returns the plans in link order (shell, then op id), or the error that
+// stopped the links being read.
+func (rp *retirePlans) get() ([]retireLinkPlan, error) {
+	if rp.done {
+		return rp.plans, rp.err
+	}
+	rp.done = true
+	links, err := rp.ms.combineRetireLinks(rp.j)
+	if err != nil {
+		rp.err = err
+		return nil, err
+	}
+	for _, l := range links {
+		p := retireLinkPlan{link: l}
+		switch {
+		case rp.ms.retireUndo == nil:
+			// With no undoer a link cannot be told live from dead, so it
+			// refuses (fail closed): the undo must never restore a shell a
+			// retire still holds the rows of.
+			p.problem = fmt.Sprintf("absorbed book %s was retired into a version by op %s and this service cannot reverse a retire", l.ShellID, l.OpID)
+		default:
+			rev, err := rp.ms.retireUndo.PlanRetireRevert(l.OpID, l.ShellID)
+			if err != nil {
+				p.problem = fmt.Sprintf("check the retire of absorbed book %s (op %s): %v", l.ShellID, l.OpID, err)
+			} else {
+				p.rev = rev
+			}
+		}
+		rp.plans = append(rp.plans, p)
+	}
+	return rp.plans, nil
+}
+
+// shellRetires are the plans of the links of one shell.
+type shellRetires []retireLinkPlan
+
+// forShell returns the plans of shellID's links; empty when there are none or
+// the links cannot be read (the undo then refuses on the read, by retireReasons).
+func (rp *retirePlans) forShell(shellID string) shellRetires {
+	plans, err := rp.get()
+	if err != nil {
+		return nil
+	}
+	var out shellRetires
+	for _, p := range plans {
+		if p.link.ShellID == shellID {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// recreatesShell reports a purged shell the undo can still restore: a linked
+// retire that is live and has no reason it cannot be reversed. The undoer's
+// reasons include whether the shell can be recreated (nothing can, until the
+// purge keeps snapshots), so a live, clean plan is the answer "step 0 recreates
+// it".
+func (sr shellRetires) recreatesShell() bool {
+	for _, p := range sr {
+		if p.live() && len(p.rev.Reasons) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// fileIDs are the shell's book_file rows its retires took and still hold
+// (pending) and the ones they took and gave back (reverted).
+func (sr shellRetires) fileIDs() (pending, reverted []string) {
+	for _, p := range sr {
+		if p.rev == nil {
+			continue
+		}
+		pending = append(pending, p.rev.PendingFileIDs...)
+		reverted = append(reverted, p.rev.RevertedFileIDs...)
+	}
+	return pending, reverted
+}
+
+// purgedShellReason is the refusal for an absorbed book that no longer exists
+// and that no linked retire can bring back.
+func purgedShellReason(shellID string, sr shellRetires) string {
+	if len(sr) == 0 {
+		return fmt.Sprintf("absorbed book %s no longer exists (purged)", shellID)
+	}
+	ops := make([]string, 0, len(sr))
+	for _, p := range sr {
+		ops = append(ops, p.link.OpID)
+	}
+	return fmt.Sprintf("absorbed book %s no longer exists (purged), and the retire op(s) linked to it (%s) cannot recreate it: the undo recreates a purged shell from its purge snapshot only when a retire that is still live names it and nothing refuses that retire",
+		shellID, strings.Join(ops, ", "))
+}
+
+func retiredAwayNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d of them taken by a retire since, still held by it)", n)
+}
+
 // retireReasons is the read-only half of reversing the retires of the
 // combine's absorbed shells: one reason per retire that cannot be reversed
 // right now. A link with no live retire rows under it is dead and is not
-// mentioned. With no undoer wired a link cannot be told live from dead, so it
-// refuses (fail closed): the undo must never restore a shell a retire still
-// holds the rows of.
-func (ms *Service) retireReasons(j *CombineJournal) []string {
-	links, err := ms.combineRetireLinks(j)
+// mentioned.
+func (ms *Service) retireReasons(rp *retirePlans) []string {
+	plans, err := rp.get()
 	if err != nil {
 		return []string{fmt.Sprintf("read the retires of the absorbed books: %v", err)}
 	}
 	var reasons []string
-	for _, l := range links {
-		if ms.retireUndo == nil {
-			reasons = append(reasons, fmt.Sprintf("absorbed book %s was retired into a version by op %s and this service cannot reverse a retire", l.ShellID, l.OpID))
-			continue
-		}
-		live, why, err := ms.retireUndo.CheckRetireRevert(l.OpID, l.ShellID)
+	for _, p := range plans {
 		switch {
-		case err != nil:
-			reasons = append(reasons, fmt.Sprintf("check the retire of absorbed book %s (op %s): %v", l.ShellID, l.OpID, err))
-		case live && len(why) > 0:
-			reasons = append(reasons, fmt.Sprintf("retire op %s of absorbed book %s cannot be reversed: %s", l.OpID, l.ShellID, strings.Join(why, "; ")))
+		case p.problem != "":
+			reasons = append(reasons, p.problem)
+		case p.live() && len(p.rev.Reasons) > 0:
+			reasons = append(reasons, fmt.Sprintf("retire op %s of absorbed book %s cannot be reversed: %s", p.link.OpID, p.link.ShellID, strings.Join(p.rev.Reasons, "; ")))
 		}
 	}
 	return reasons
@@ -2361,24 +2515,30 @@ func (ms *Service) restoreAbsorbedRow(a CombineAbsorbed) (restored bool, warning
 }
 
 // applyUndo performs the reversal. Preconditions have passed.
-func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
+func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoResult, error) {
 	res := &CombineUndoResult{JournalID: j.ID, SurvivorID: j.SurvivorID}
 
 	// 0. Reverse the retires of the absorbed shells first (retired-versions
 	//    plan 6.5), so the restore below sees each shell as the combine left
-	//    it. undoPreconditions has already proved every live one reversible.
-	//    A retry finds the ones this attempt reversed dead (no pending rows)
-	//    and RevertRetire does nothing for them.
-	links, err := ms.combineRetireLinks(j)
+	//    it. undoPreconditions has already proved every live one reversible,
+	//    from the same plans. A shell with two retire ops (a second one after a
+	//    partial revert of the first) is reversed newest op first. A retry finds
+	//    the retires this attempt reversed dead (no pending rows) and skips
+	//    them.
+	plans, err := rp.get()
 	if err != nil {
 		return res, err
 	}
-	for _, l := range links {
-		if ms.retireUndo == nil {
-			return res, fmt.Errorf("shell %s was retired by op %s and no retire undoer is wired", l.ShellID, l.OpID)
+	for i := len(plans) - 1; i >= 0; i-- {
+		p := plans[i]
+		if p.problem != "" {
+			return res, errors.New(p.problem)
 		}
-		if err := ms.retireUndo.RevertRetire(l.OpID, l.ShellID); err != nil {
-			return res, fmt.Errorf("reverse the retire of absorbed shell %s (op %s): %w", l.ShellID, l.OpID, err)
+		if !p.live() {
+			continue
+		}
+		if err := p.rev.Revert(); err != nil {
+			return res, fmt.Errorf("reverse the retire of absorbed shell %s (op %s): %w", p.link.ShellID, p.link.OpID, err)
 		}
 	}
 

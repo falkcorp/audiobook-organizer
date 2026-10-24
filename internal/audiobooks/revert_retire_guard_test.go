@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a2dc3c4-95fe-49aa-95aa-9d97cd9599db
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -45,6 +45,7 @@ func newGuardFx(t *testing.T) *guardFx {
 	f := &database.BookFile{BookID: shell.ID, FilePath: path, FileHash: "hash-guard", TrackNumber: 1}
 	require.NoError(t, st.CreateBookFile(f))
 	fx := &guardFx{st: st, holder: holder, shell: shell, file: f, path: path}
+	trashBook(t, st, shell) // a retire acts on a trashed shell
 	w := repairs.NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-retire")
 	require.NoError(t, w.RetireVersion(repairs.RetireSpec{Shell: shell.ID, Holder: holder.ID, VersionID: "ver-guard",
 		FileIDs: []string{f.ID}, Format: "mp3", Source: "retired_book"}))

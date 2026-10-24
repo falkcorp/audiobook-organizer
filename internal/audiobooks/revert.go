@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.3
+// version: 1.97.4
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -533,18 +533,24 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 }
 
 // RevertOperationForBooks is RevertOperation for the rows of an operation that
-// concern the named books only: the book_file_retire rows whose SHELL (the book
-// the rows left) is one of them, the retired versions created from those
-// shells, the rehomes of those versions, and every other non-ledger row whose
-// BookID is one of them (the shell's external-id moves and merged-into
-// pointer). It selects by shell and version, never by a retire row's BookID,
-// which is the holder: a retire op that retired several shells into one holder
-// is reversed one shell at a time.
+// concern the named books only. The books named must be SHELLS of the operation
+// (a book a retire took rows from, or a trashed holder it rehomed a version
+// off): the book_file_retire rows whose shell (the book the rows left) is one of
+// them, the retired versions created from those shells, the rehomes of those
+// versions and the rehomes that took a version off one of them, and every other
+// non-ledger row whose BookID is one of them (the shell's external-id moves and
+// merged-into pointer). It selects by shell and version, never by a retire row's
+// BookID, which is the holder: a retire op that retired several shells into one
+// holder is reversed one shell at a time. A book the operation never names as a
+// shell (the holder, say) is refused rather than selected, because it would
+// pick up every holder-keyed row of every other type.
 //
 // The operation's ledger-only rows (the plan record) are never selected and
 // never marked: they are marked only together with the whole operation, by a
 // RevertOperation that finds every other row reverted. Everything else
-// (ordering, gating, refusals, marking) is RevertOperation's.
+// (ordering, gating, refusals, marking) is RevertOperation's. The owed-settle
+// record a scoped run reads and writes is its own (revertScope.recordID), so it
+// never clears or rewrites the whole operation's.
 func (rs *RevertService) RevertOperationForBooks(operationID string, bookIDs []string) (*RevertResult, error) {
 	if len(bookIDs) == 0 {
 		return nil, errors.New("revert for books: no books named")
@@ -555,30 +561,44 @@ func (rs *RevertService) RevertOperationForBooks(operationID string, bookIDs []s
 
 // revertOperation is the body of RevertOperation and RevertOperationForBooks;
 // scope nil reverts the whole operation. The caller holds the operation lock
-// (or, for the combine undo's retire reversal, deliberately does not: see
-// retireUndoer).
+// (or, for the combine undo's retire reversal, took it with tryLockOperation:
+// see retireUndoer).
 func (rs *RevertService) revertOperation(operationID string, scope *revertScope) (*RevertResult, error) {
 	changes, err := rs.db.GetOperationChanges(operationID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get operation changes: %w", err)
 	}
+	return rs.revertLoaded(operationID, scope, changes)
+}
+
+// revertLoaded is revertOperation over the operation's rows already read, for
+// the combine undo's retire reversal, which has read them once to plan the
+// reversal and must not decode a whole retire op again under the merge lock.
+func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, changes []*database.OperationChange) (*RevertResult, error) {
+	// The owed-settle record this run reads and writes: the operation's own, or
+	// a scoped run's (see revertScope.recordID).
+	record := operationID
 	if scope != nil {
+		if err := scope.requireShellsOf(operationID, changes); err != nil {
+			return nil, err
+		}
 		if changes = scope.filter(changes); len(changes) == 0 {
 			return nil, fmt.Errorf("operation %s has no rows for the named books", operationID)
 		}
+		record = scope.recordID(operationID)
 	}
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	retryOwed := func() (*RevertResult, error) {
 		if msgs := rs.settleGroups(operationID, settleInput{
-			crowned: handOffEvidenceOf(changes), priorPending: rs.settlePendingGroups(operationID),
+			crowned: handOffEvidenceOf(changes), priorPending: rs.settlePendingGroups(record), recordID: record,
 		}, result); len(msgs) > 0 {
 			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), joinRevertErrors(msgs))
 		}
 		return result, nil
 	}
 	if len(changes) == 0 {
-		if rs.hasSettleOwed(operationID) {
+		if rs.hasSettleOwed(record) {
 			// The rows are gone (purged) but a group settle is owed.
 			return retryOwed()
 		}
@@ -648,14 +668,14 @@ func (rs *RevertService) revertOperation(operationID string, scope *revertScope)
 		return nil, &NotRestorableError{OperationID: operationID, Total: result.Total, Types: result.NotRestorableTypes}
 	}
 	if len(restorable) == 0 {
-		if rs.hasSettleOwed(operationID) {
+		if rs.hasSettleOwed(record) {
 			// Every row is reverted but a group settle failed last time:
 			// retry it (settleGroups).
 			return retryOwed()
 		}
 		// A pending intent alone is stale here (rows are marked only after
 		// their settle ran): drop it, nothing is owed.
-		rs.clearSettleOwed(operationID)
+		rs.clearSettleOwed(record)
 		if len(ledger) > 0 {
 			// Every other row is reverted: the whole run is undone, so its
 			// plan record goes with it.
@@ -709,7 +729,7 @@ func (rs *RevertService) revertOperation(operationID string, scope *revertScope)
 	// leaves exactly the groups it changed. The next run counts a row it
 	// finds already restored as evidence only when the book's group is in
 	// that earlier run's pending set (priorPending).
-	priorPending := rs.settlePendingGroups(operationID)
+	priorPending := rs.settlePendingGroups(record)
 	pendingNow := map[string]bool{}
 	plan.NoteHandOffs(changes)
 	for _, c := range plan.Order {
@@ -826,7 +846,7 @@ func (rs *RevertService) revertOperation(operationID string, scope *revertScope)
 				touched = append(touched, t)
 				if gid != "" && !pendingNow[gid] {
 					pendingNow[gid] = true
-					rs.markSettlePending(operationID, gid)
+					rs.markSettlePending(record, gid)
 				}
 			case gid != "" && priorPending[gid]:
 				touched = append(touched, t)
@@ -875,7 +895,7 @@ func (rs *RevertService) revertOperation(operationID string, scope *revertScope)
 	// already restored by the next run, with the groups already settled.
 	errMsgs = append(errMsgs, rs.settleGroups(operationID, settleInput{
 		plan: plan, touched: touched, refusedDemote: refusedDemote, crowned: handOffEvidenceOf(changes),
-		priorPending: priorPending,
+		priorPending: priorPending, recordID: record,
 	}, result)...)
 
 	// Mark only the rows that were actually restored, and the superseded
@@ -2427,7 +2447,17 @@ func (rs *RevertService) siblingRowAt(bookID, exceptID, path string) bool {
 // value the book had before the operation, which may be a pointer that
 // predates it.
 func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamps undo.SoftDeleteStamps) error {
-	files, err := rs.filesIncludingRetired(c.BookID)
+	// The library state is decided on the book's LIVE rows, as the user-facing
+	// restore (merge.RestoreFromTrash) and the combine undo decide it: a
+	// retired version sitting under the old /books/newbooks tree says nothing
+	// about whether the book's own files are organized, and counting it demoted
+	// an organized holder to "imported" (out of the ABS listing). Only a book
+	// with no live row at all falls back to its retired rows, so that a holder
+	// whose only files are retired versions is not demoted for having none.
+	files, err := rs.db.GetBookFiles(c.BookID)
+	if err == nil && len(files) == 0 {
+		files, err = rs.filesIncludingRetired(c.BookID)
+	}
 	if err != nil {
 		return fmt.Errorf("read files of %s: %w", c.BookID, err)
 	}
@@ -3387,8 +3417,14 @@ func (rs *RevertService) repointPathIndexAwayFrom(atPath bookFilesAtPathReader, 
 	if hidden != nil && !hidden.IsSoftDeleted() {
 		return nil
 	}
-	// Live rows only: a retired row never holds a path key (RetireBookFiles
-	// gives it to a live row or drops it), so there is none to re-index away.
+	// Live rows only. A retired row CAN hold a path key (when no live row
+	// carries that path RetireBookFiles leaves the key with the retired row, so
+	// restore lookups still find it), but it holds one only while no live row
+	// wants it: a live row always wins the key, on retire and on any later
+	// write of a retired row (the single-owner index rule,
+	// database/retired_book_files.go). So the rows to re-index away from the
+	// hidden book are its live ones; a key a retired row holds has no live
+	// claimant to hand it to.
 	rows, err := rs.db.GetBookFiles(bookID)
 	if err != nil {
 		return fmt.Errorf("rows of hidden book %s: %w", bookID, err)

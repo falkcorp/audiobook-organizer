@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_retire_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d4146810-528b-4b28-ab80-cf4d4aa0bdf1
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package repairs
 
@@ -41,6 +41,12 @@ func newRetireFx(t *testing.T) *retireFx {
 		require.NoError(t, st.CreateBookFile(row))
 		fx.rows = append(fx.rows, row)
 	}
+	// A retire acts on a trashed shell (the combine soft-deleted it); the
+	// writer refuses a live one.
+	trashed := true
+	shell.MarkedForDeletion = &trashed
+	_, err = st.UpdateBook(shell.ID, shell)
+	require.NoError(t, err)
 	return fx
 }
 
@@ -108,7 +114,7 @@ func TestRetireVersion_ResumeJournalsNothingTwice(t *testing.T) {
 	require.Len(t, after, len(before))
 }
 
-func TestRetireVersion_LinksCombineBeforeAnyChangeRow(t *testing.T) {
+func TestRetireVersion_LinksCombineAndStampsTheRows(t *testing.T) {
 	fx := newRetireFx(t)
 	spec := fx.spec()
 	spec.CombineJournalID = "cj-syn"
@@ -127,6 +133,115 @@ func TestRetireVersion_LinksCombineBeforeAnyChangeRow(t *testing.T) {
 		r, err := undo.DecodeBookFileRetire(c)
 		require.NoError(t, err)
 		require.Equal(t, "cj-syn", r.CombineJournalID, "the combine rides inside the row so the link can be rebuilt from the journal")
+	}
+}
+
+// orderStore records, in call order, the combine-retire link write ("link")
+// and every change-row write ("change"), so a test can assert the link goes
+// first.
+type orderStore struct {
+	*database.PebbleStore
+	events *[]string
+}
+
+func (s orderStore) SetRaw(key string, value []byte) error {
+	*s.events = append(*s.events, "link")
+	return s.PebbleStore.SetRaw(key, value)
+}
+
+func (s orderStore) CreateOperationChange(c *database.OperationChange) error {
+	*s.events = append(*s.events, "change")
+	return s.PebbleStore.CreateOperationChange(c)
+}
+
+func (s orderStore) CreateOperationChanges(cs []*database.OperationChange) error {
+	*s.events = append(*s.events, "change")
+	return s.PebbleStore.CreateOperationChanges(cs)
+}
+
+// The link must exist before the first change row: rows without a link are the
+// one case the combine's undo cannot find. Asserted on the order of the writes,
+// not only on both being there.
+func TestRetireVersion_LinkIsWrittenBeforeTheFirstChangeRow(t *testing.T) {
+	fx := newRetireFx(t)
+	var events []string
+	st := orderStore{PebbleStore: fx.st, events: &events}
+	spec := fx.spec()
+	spec.CombineJournalID = "cj-order"
+	w := NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-order")
+	require.NoError(t, w.RetireVersion(spec))
+
+	require.NotEmpty(t, events)
+	require.Equal(t, "link", events[0], "the link is the first write: %v", events)
+	linkAt := -1
+	for i, e := range events {
+		if e == "link" {
+			linkAt = i
+		}
+	}
+	require.Equal(t, 0, linkAt, "and the only link write, before every change row: %v", events)
+	require.Contains(t, events, "change")
+}
+
+// A shell the combine moved every file off has no rows to retire, but still has
+// the external-id and merged-into rows the combine's undo reverses, so the link
+// is written before the empty-plan return.
+func TestRetireVersion_FilelessShellStillLinksToTheCombine(t *testing.T) {
+	fx := newRetireFx(t)
+	spec := fx.spec()
+	spec.FileIDs = nil
+	spec.CombineJournalID = "cj-empty"
+	w := NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, "op-empty")
+	require.NoError(t, w.RetireVersion(spec))
+
+	links, err := merge.ListCombineRetireLinks(fx.st, "cj-empty")
+	require.NoError(t, err)
+	require.Equal(t, []merge.CombineRetireLink{{ShellID: fx.shell.ID, OpID: "op-empty"}}, links)
+	v, err := fx.st.GetBookVersion("ver-syn-1")
+	require.NoError(t, err)
+	require.Nil(t, v, "no rows to retire means no version is created")
+}
+
+// A second retire op of the same shell adds a link; it does not replace the
+// first op's.
+func TestRetireVersion_SecondOpOfTheSameShellAddsALink(t *testing.T) {
+	fx := newRetireFx(t)
+	for _, op := range []string{"op-first", "op-second"} {
+		spec := fx.spec()
+		spec.FileIDs = nil
+		spec.CombineJournalID = "cj-two"
+		w := NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, op)
+		require.NoError(t, w.RetireVersion(spec))
+	}
+	links, err := merge.ListCombineRetireLinks(fx.st, "cj-two")
+	require.NoError(t, err)
+	require.Equal(t, []merge.CombineRetireLink{{ShellID: fx.shell.ID, OpID: "op-first"}, {ShellID: fx.shell.ID, OpID: "op-second"}}, links)
+}
+
+// A shell restored since the plan (the combine was undone) is not retired and
+// is not linked: its rows would be taken from a live book.
+func TestRetireVersion_RefusesAShellThatIsNoLongerTrashed(t *testing.T) {
+	fx := newRetireFx(t)
+	live := false
+	fx.shell.MarkedForDeletion = &live
+	fx.shell.MarkedForDeletionAt = nil
+	_, err := fx.st.UpdateBook(fx.shell.ID, fx.shell)
+	require.NoError(t, err)
+	spec := fx.spec()
+	spec.CombineJournalID = "cj-live"
+	w := NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, "op-live")
+	require.ErrorIs(t, w.RetireVersion(spec), ErrChangedSincePlan)
+
+	links, err := merge.ListCombineRetireLinks(fx.st, "cj-live")
+	require.NoError(t, err)
+	require.Empty(t, links)
+	rows, err := fx.st.GetOperationChanges("op-live")
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	for _, id := range fx.ids() {
+		got, err := fx.st.GetBookFileByID(fx.shell.ID, id)
+		require.NoError(t, err)
+		require.NotNil(t, got, "the row never moved")
 	}
 }
 
