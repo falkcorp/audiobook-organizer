@@ -1,5 +1,5 @@
 // file: internal/merge/combine_retire_undo_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 169db87a-6f56-43c0-91a1-9a1fa5f526ea
 // last-edited: 2026-10-24
 
@@ -21,13 +21,12 @@ import (
 type fakeRetireUndoer struct {
 	t     *testing.T
 	store database.Store
-	// live and reasons are what PlanRetireRevert answers; planErr fails it.
+	// live and reasons are what PlanShell answers; planErr fails ReadRetireOp.
 	live    bool
 	reasons []string
 	planErr error
-	// pendingIDs and revertedIDs are the shell's rows the plan reports as held
-	// by the retire and as given back by an earlier attempt.
-	pendingIDs, revertedIDs []string
+	// pendingIDs are the shell's rows the plan reports as held by the retire.
+	pendingIDs []string
 	// revertErr fails the Revert the plan returns.
 	revertErr error
 	// shell is the book whose soft-delete is read at Revert time: the retire
@@ -46,8 +45,8 @@ type fakeRetireUndoer struct {
 	// heldAtRevert is what held was when each Revert ran.
 	heldAtRevert []int
 
-	planned, reverted []string
-	shellSoftDeleted  []bool
+	opsRead, planned, reverted []string
+	shellSoftDeleted           []bool
 }
 
 func (f *fakeRetireUndoer) LockRetireOps(opIDs []string) (func(), error) {
@@ -59,13 +58,26 @@ func (f *fakeRetireUndoer) LockRetireOps(opIDs []string) (func(), error) {
 	return func() { f.held-- }, nil
 }
 
-func (f *fakeRetireUndoer) PlanRetireRevert(opID, shellID string) (*RetireReversal, error) {
-	key := opID + "/" + shellID
-	f.planned = append(f.planned, key)
+// ReadRetireOp records each op read: UndoCombine reads an op once, however
+// many of its shells it plans.
+func (f *fakeRetireUndoer) ReadRetireOp(opID string) (RetireOp, error) {
+	f.opsRead = append(f.opsRead, opID)
 	if f.planErr != nil {
 		return nil, f.planErr
 	}
-	rev := &RetireReversal{Live: f.live, Reasons: f.reasons, PendingFileIDs: f.pendingIDs, RevertedFileIDs: f.revertedIDs}
+	return fakeRetireOp{f: f, opID: opID}, nil
+}
+
+type fakeRetireOp struct {
+	f    *fakeRetireUndoer
+	opID string
+}
+
+func (o fakeRetireOp) PlanShell(shellID string) (*RetireReversal, error) {
+	f := o.f
+	key := o.opID + "/" + shellID
+	f.planned = append(f.planned, key)
+	rev := &RetireReversal{Live: f.live, Reasons: f.reasons, PendingFileIDs: f.pendingIDs}
 	if f.live {
 		rev.Revert = func() error {
 			f.reverted = append(f.reverted, key)
@@ -434,40 +446,80 @@ func TestUndoCombine_StraightUndoCountsTheRowsARetireTookAsGiven(t *testing.T) {
 	assert.Equal(t, preFiles, postFiles)
 }
 
-// A retry after a failed attempt: the attempt's step 0 had already given the
-// retire's rows back to the shell, so they are live on it and would look like
-// files it was given. They are the shell's own, and the retry tolerates them;
-// without the plan naming them as reverted ids they still refuse.
-func TestUndoCombine_RetryToleratesRowsAnEarlierAttemptsRevertGaveBack(t *testing.T) {
-	failFirst := func(t *testing.T) (database.Store, undoFixture, *Service, string, *database.BookFile) {
+// A retry after a failed attempt counts what the shell was given since the
+// combine exactly as a first attempt does. The failed attempt left the shell
+// trashed (step 0 failed before step 1 restored it), so the shell can be given
+// a row after it and a retire can then take that row: the retire hides it from
+// GetBookFiles, and it is still a file given since. The rows of the combine's
+// own journal (Absorbed[].Files) are the only ones a retry expects on the
+// shell.
+func TestUndoCombine_RetryCountsRowsGainedAfterAFailedAttempt(t *testing.T) {
+	failFirst := func(t *testing.T) (database.Store, undoFixture, *Service, string) {
 		store, f, ms, journalID := combined(t)
 		require.NoError(t, WriteCombineRetireLink(store, journalID, f.absA, "retire-op-1"))
-		u := &fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA, revertErr: errors.New("boom")}
-		ms.SetRetireUndoer(u)
+		ms.SetRetireUndoer(&fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA, revertErr: errors.New("boom")})
 		_, err := ms.UndoCombine(journalID)
 		require.Error(t, err)
 		j, gerr := ms.GetCombineJournal(journalID)
 		require.NoError(t, gerr)
 		require.Equal(t, CombineJournalUndoFailed, j.Status)
-		// What the failed attempt's revert did before it failed: the row is
-		// live on the shell again.
-		row := &database.BookFile{ID: "01SYNTHETICGAVEBACKROW0000", BookID: f.absA, FilePath: "/tmp/undo/giveback/01.mp3", Format: "mp3", TrackNumber: 1}
-		require.NoError(t, store.CreateBookFile(row))
-		return store, f, ms, journalID, row
+		return store, f, ms, journalID
 	}
 
-	t.Run("named as reverted", func(t *testing.T) {
-		store, f, ms, journalID, row := failFirst(t)
-		ms.SetRetireUndoer(&fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA, revertedIDs: []string{row.ID}})
+	t.Run("a row given since and held by a retire", func(t *testing.T) {
+		store, f, ms, journalID := failFirst(t)
+		require.NoError(t, WriteCombineRetireLink(store, journalID, f.absA, "retire-op-2"))
+		u := &fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA, pendingIDs: []string{"01SYNTHETICGAINEDROW00000"}}
+		ms.SetRetireUndoer(u)
+		preBooks, preFiles := snapshot(t, store, f)
+
 		_, err := ms.UndoCombine(journalID)
-		require.NoError(t, err, "the shell's own rows an earlier revert gave back are not a gift since the combine")
+		text := refusalText(t, err)
+		assert.Contains(t, text, "has since been given 1 file(s)")
+		assert.Contains(t, text, "taken by a retire")
+		assert.Empty(t, u.reverted, "refused before step 0")
+		postBooks, postFiles := snapshot(t, store, f)
+		assert.Equal(t, preBooks, postBooks)
+		assert.Equal(t, preFiles, postFiles)
 	})
-	t.Run("not named", func(t *testing.T) {
-		store, f, ms, journalID, _ := failFirst(t)
+	t.Run("a row given since, live on the shell", func(t *testing.T) {
+		store, f, ms, journalID := failFirst(t)
+		row := &database.BookFile{ID: "01SYNTHETICGAINEDROW00000", BookID: f.absA, FilePath: "/tmp/undo/gained/01.mp3", Format: "mp3", TrackNumber: 1}
+		require.NoError(t, store.CreateBookFile(row))
 		ms.SetRetireUndoer(&fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA})
 		_, err := ms.UndoCombine(journalID)
 		assert.Contains(t, refusalText(t, err), "has since been given 1 file(s)")
 	})
+	t.Run("a row given since and then given back by a revert outside the undo", func(t *testing.T) {
+		// The retire was reversed on its own: the row is live on the shell
+		// again and nothing names it as the shell's. It was never in the
+		// combine's journal, so it is still a gift.
+		store, f, ms, journalID := failFirst(t)
+		row := &database.BookFile{ID: "01SYNTHETICGAVEBACKROW0000", BookID: f.absA, FilePath: "/tmp/undo/giveback/01.mp3", Format: "mp3", TrackNumber: 1}
+		require.NoError(t, store.CreateBookFile(row))
+		ms.SetRetireUndoer(&fakeRetireUndoer{t: t, store: store, live: false, shell: f.absA})
+		_, err := ms.UndoCombine(journalID)
+		assert.Contains(t, refusalText(t, err), "has since been given 1 file(s)")
+	})
+	t.Run("nothing given since", func(t *testing.T) {
+		store, f, ms, journalID := failFirst(t)
+		ms.SetRetireUndoer(&fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA})
+		_, err := ms.UndoCombine(journalID)
+		require.NoError(t, err, "the retry runs: the failed attempt's own rows are not gifts")
+	})
+}
+
+// A retire op is read once, however many of the combine's shells it retired.
+func TestUndoCombine_ReadsEachRetireOpOnce(t *testing.T) {
+	store, f, ms, journalID := combined(t)
+	require.NoError(t, WriteCombineRetireLink(store, journalID, f.absA, "retire-op-1"))
+	require.NoError(t, WriteCombineRetireLink(store, journalID, f.absB, "retire-op-1"))
+	u := &fakeRetireUndoer{t: t, store: store, live: true, shell: f.absA}
+	ms.SetRetireUndoer(u)
+	_, err := ms.UndoCombine(journalID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"retire-op-1"}, u.opsRead, "one op, one read")
+	assert.Equal(t, []string{"retire-op-1/" + f.absA, "retire-op-1/" + f.absB}, u.planned, "both shells planned from it")
 }
 
 // A shell retired twice (a second retire after a partial revert of the first)

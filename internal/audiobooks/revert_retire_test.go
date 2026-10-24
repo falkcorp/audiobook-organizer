@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
 // last-edited: 2026-10-24
 
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -406,12 +407,11 @@ func TestRetireUndoer_PlanAndRevertAShell(t *testing.T) {
 	fx.retire(t, fx.writer("op-undoer"), "ver-undoer")
 	u := NewRevertService(fx.st).retireUndoer()
 
-	plan, err := u.PlanRetireRevert("op-undoer", fx.shell.ID)
+	plan, err := planRetire(u, "op-undoer", fx.shell.ID)
 	require.NoError(t, err)
 	assert.True(t, plan.Live)
 	assert.Empty(t, plan.Reasons)
 	assert.ElementsMatch(t, fx.ids(), plan.PendingFileIDs, "the shell's rows the retire holds")
-	assert.Empty(t, plan.RevertedFileIDs)
 	require.NotNil(t, plan.Revert)
 	// The plan wrote nothing.
 	for _, id := range fx.ids() {
@@ -428,7 +428,7 @@ func TestRetireUndoer_PlanAndRevertAShell(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	plan, err = u.PlanRetireRevert("op-undoer", fx.shell.ID)
+	plan, err = planRetire(u, "op-undoer", fx.shell.ID)
 	require.NoError(t, err)
 	assert.True(t, plan.Live)
 	require.NotEmpty(t, plan.Reasons)
@@ -440,18 +440,17 @@ func TestRetireUndoer_PlanAndRevertAShell(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	plan, err = u.PlanRetireRevert("op-undoer", fx.shell.ID)
+	plan, err = planRetire(u, "op-undoer", fx.shell.ID)
 	require.NoError(t, err)
 	require.Empty(t, plan.Reasons)
 	require.NoError(t, plan.Revert())
 	for _, id := range fx.ids() {
 		assert.Equal(t, fx.shell.ID, view(t, fx.st, fx.shell.ID, id).BookID)
 	}
-	plan, err = u.PlanRetireRevert("op-undoer", fx.shell.ID)
+	plan, err = planRetire(u, "op-undoer", fx.shell.ID)
 	require.NoError(t, err)
 	assert.False(t, plan.Live, "a reverted retire is a dead link")
 	assert.Empty(t, plan.PendingFileIDs)
-	assert.ElementsMatch(t, fx.ids(), plan.RevertedFileIDs, "and its rows are the shell's own again")
 	assert.Nil(t, plan.Revert)
 }
 
@@ -463,7 +462,7 @@ func TestRetireUndoer_RefusesRowsTheCombineUndoDoesNotReverse(t *testing.T) {
 		FieldName: "title", OldValue: "a", NewValue: "b",
 	}))
 	u := NewRevertService(fx.st).retireUndoer()
-	plan, err := u.PlanRetireRevert("op-extra", fx.shell.ID)
+	plan, err := planRetire(u, "op-extra", fx.shell.ID)
 	require.NoError(t, err)
 	assert.True(t, plan.Live)
 	require.Len(t, plan.Reasons, 1)
@@ -523,4 +522,13 @@ func TestRevertRetire_RestoresAPriorVersionID(t *testing.T) {
 	_, err = NewRevertService(fx.st).RevertOperation("op-prior")
 	require.NoError(t, err)
 	assert.Equal(t, before, fx.snapshot(t), "the prior version id is back with everything else")
+}
+
+// planRetire plans one shell of one retire op: a read of the op, then the plan.
+func planRetire(u merge.RetireUndoer, opID, shellID string) (*merge.RetireReversal, error) {
+	op, err := u.ReadRetireOp(opID)
+	if err != nil {
+		return nil, err
+	}
+	return op.PlanShell(shellID)
 }

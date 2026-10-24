@@ -1,5 +1,5 @@
 // file: internal/undo/retire_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 54f67c90-9235-45fd-b826-66a6f3be19d9
 // last-edited: 2026-10-24
 
@@ -96,11 +96,18 @@ func TestRetiredRowRefusalIsChangedSince(t *testing.T) {
 }
 
 func TestCheckVersionCreateAndRehomeCurrent(t *testing.T) {
-	c := &database.OperationChange{BookID: "holder"}
+	made := database.BookVersion{ID: "v1", BookID: "holder", Status: database.BookVersionStatusRetired,
+		Format: "mp3", Source: "retired_book", RetiredFromBookID: "shell", RetireOpID: "op-1"}
+	enc, err := EncodeBookVersionCreate(made)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &database.OperationChange{BookID: "holder", FieldName: BookVersionField("v1"), NewValue: enc}
 	if err := CheckVersionCreateCurrent(nil, c); !errors.Is(err, ErrAlreadyRestored) {
 		t.Errorf("gone version: %v", err)
 	}
-	if err := CheckVersionCreateCurrent(&database.BookVersion{ID: "v1", BookID: "holder", Status: database.BookVersionStatusRetired}, c); err != nil {
+	same := made
+	if err := CheckVersionCreateCurrent(&same, c); err != nil {
 		t.Errorf("still the retired version: %v", err)
 	}
 	for _, v := range []*database.BookVersion{
@@ -110,6 +117,28 @@ func TestCheckVersionCreateAndRehomeCurrent(t *testing.T) {
 		if RefusalReason(CheckVersionCreateCurrent(v, c)) != ReasonChangedSince {
 			t.Errorf("version %+v should be changed since", v)
 		}
+	}
+	// An edit since to what the version describes is lost by the delete.
+	for name, edit := range map[string]func(*database.BookVersion){
+		"format":       func(v *database.BookVersion) { v.Format = "m4b" },
+		"source":       func(v *database.BookVersion) { v.Source = "manual" },
+		"torrent":      func(v *database.BookVersion) { v.TorrentHash = "abc" },
+		"original":     func(v *database.BookVersion) { v.SourceOriginalPath = "/x" },
+		"metadata":     func(v *database.BookVersion) { v.MetadataJSON = "{}" },
+		"retire op":    func(v *database.BookVersion) { v.RetireOpID = "op-2" },
+		"retired from": func(v *database.BookVersion) { v.RetiredFromBookID = "other" },
+	} {
+		v := made
+		edit(&v)
+		if RefusalReason(CheckVersionCreateCurrent(&v, c)) != ReasonChangedSince {
+			t.Errorf("%s edited since: want a changed_since refusal", name)
+		}
+	}
+	// What a rehome or a later touch changes (holder aside) is not an edit.
+	touched := made
+	touched.Version, touched.UpdatedAt = 7, time.Now()
+	if err := CheckVersionCreateCurrent(&touched, c); err != nil {
+		t.Errorf("a bumped version counter is not an edit: %v", err)
 	}
 
 	rh := &database.OperationChange{FieldName: BookVersionField("v1"), OldValue: "old", NewValue: "new"}
