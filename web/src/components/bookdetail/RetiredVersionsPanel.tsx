@@ -1,5 +1,5 @@
 // file: web/src/components/bookdetail/RetiredVersionsPanel.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6bf6e70d-098a-4a16-b274-4894ef465062
 // last-edited: 2026-10-23
 
@@ -25,13 +25,9 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Link as RouterLink } from 'react-router-dom';
-import {
-  listRetiredVersions,
-  restoreRetiredVersion,
-  type RetiredVersion,
-} from '../../services/versionApi';
+import { listRetiredVersions, type RetiredVersion } from '../../services/versionApi';
 import { describeRequestError } from '../../utils/apiResponse';
-import { isAuthRedirectError } from '../../utils/apiFetch';
+import { useCanOrganizeLibrary } from '../../hooks/useCanOrganizeLibrary';
 import { formatBytes, formatDateTime, formatDuration } from './bookDetailUtils';
 
 interface RetiredVersionsPanelProps {
@@ -39,34 +35,47 @@ interface RetiredVersionsPanelProps {
   bookId: string;
   /** Bumped by the page to make the panel reload (for example after a revert). */
   refreshKey?: number;
-  /** Called after a restore succeeded, so the page can reload the book and its files. */
-  onRestored?: () => void;
 }
 
-type Notice = { severity: 'success' | 'error'; text: string } | null;
+/**
+ * Why Restore is not available for v, shown as the disabled button's tooltip.
+ * Restoring is not available at all yet: the server answers its restore route
+ * with 501 until restores are journaled (a direct restore would drop each
+ * file's version link and leave no undo), so the last reason always applies.
+ * The more specific reasons come first because they stay true after journaling
+ * lands; the journaled restore adds a null result (no reason, button enabled)
+ * for a version that can be restored.
+ */
+function restoreBlockedReason(v: RetiredVersion): string {
+  if (!v.shell_exists) {
+    return 'The book these files were retired from has been purged, so they cannot be restored here yet.';
+  }
+  if (!v.shell_in_trash) {
+    return 'The book these files were retired from is no longer in the trash, so they cannot be restored to it.';
+  }
+  return 'Restore will be available once restores are journaled.';
+}
 
 // RetiredVersionsPanel lists the retired versions a book holds: the files of a
 // trashed or merged book that the retire-versions repair moved onto this one so
-// the trash could be emptied without deleting any file row. Each version can be
-// restored, which moves its files back to the trashed book they came from.
+// the trash could be emptied without deleting any file row. Restoring a version
+// (moving its files back to the book they came from) is shown but disabled with
+// its reason until restores are journaled; the button is not shown at all to a
+// caller without the library-organize permission the restore will need.
 //
 // Collapsed by default: a retired version is not part of the book's playable
 // files, so it must not compete with them for attention.
-export function RetiredVersionsPanel({ bookId, refreshKey = 0, onRestored }: RetiredVersionsPanelProps) {
+export function RetiredVersionsPanel({ bookId, refreshKey = 0 }: RetiredVersionsPanelProps) {
+  const canOrganize = useCanOrganizeLibrary();
   const [versions, setVersions] = useState<RetiredVersion[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [openFiles, setOpenFiles] = useState<Set<string>>(new Set());
-  const [restoringId, setRestoringId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<Notice>(null);
 
-  // Bumped to make the effect below fetch again (after a restore).
-  const [reloadTick, setReloadTick] = useState(0);
-
-  // Fetch on mount, when the page bumps refreshKey and after a restore. The
-  // page keys this component by book, so state never carries over from another
-  // book; a response that arrives after unmount or a newer fetch is dropped.
+  // Fetch on mount and when the page bumps refreshKey. The page keys this
+  // component by book, so state never carries over from another book; a
+  // response that arrives after unmount or a newer fetch is dropped.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -86,7 +95,7 @@ export function RetiredVersionsPanel({ bookId, refreshKey = 0, onRestored }: Ret
     return () => {
       cancelled = true;
     };
-  }, [bookId, refreshKey, reloadTick]);
+  }, [bookId, refreshKey]);
 
   const toggleFiles = (versionId: string) => {
     setOpenFiles((prev) => {
@@ -95,39 +104,6 @@ export function RetiredVersionsPanel({ bookId, refreshKey = 0, onRestored }: Ret
       else next.add(versionId);
       return next;
     });
-  };
-
-  const handleRestore = async (v: RetiredVersion) => {
-    const from = v.retired_from_title || v.retired_from_book_id || 'the original book';
-    if (
-      !confirm(
-        `Restore ${v.file_count} file${v.file_count === 1 ? '' : 's'} to "${from}"? ` +
-          'They leave this book and go back to that book in the trash.'
-      )
-    ) {
-      return;
-    }
-    setRestoringId(v.id);
-    setNotice(null);
-    try {
-      const result = await restoreRetiredVersion(bookId, v.id);
-      setNotice({
-        severity: 'success',
-        text: `Restored ${result.restored_files} file${result.restored_files === 1 ? '' : 's'} to "${from}".`,
-      });
-      // The restore changed this book's retired set (and the shell's files):
-      // refetch the list and let the page reload what it shows.
-      setReloadTick((t) => t + 1);
-      onRestored?.();
-    } catch (err) {
-      const message = err instanceof Error && err.message ? err.message : 'Restore failed';
-      setNotice({
-        severity: 'error',
-        text: isAuthRedirectError(err) ? describeRequestError(err, message) : message,
-      });
-    } finally {
-      setRestoringId(null);
-    }
   };
 
   const count = loaded && !loadError ? ` (${versions.length})` : '';
@@ -150,11 +126,6 @@ export function RetiredVersionsPanel({ bookId, refreshKey = 0, onRestored }: Ret
           Files of trashed or merged books that were moved onto this book so the trash could be
           emptied. They are not part of this book&apos;s files and are never played.
         </Typography>
-        {notice && (
-          <Alert severity={notice.severity} sx={{ mb: 1 }} onClose={() => setNotice(null)}>
-            {notice.text}
-          </Alert>
-        )}
         {!loaded ? (
           <Typography sx={{ color: 'text.secondary' }}>Loading...</Typography>
         ) : loadError ? (
@@ -211,24 +182,15 @@ export function RetiredVersionsPanel({ bookId, refreshKey = 0, onRestored }: Ret
                             <Button size="small" onClick={() => toggleFiles(v.id)}>
                               {filesOpen ? 'Hide files' : 'Show files'}
                             </Button>
-                            <Tooltip
-                              title={
-                                v.shell_exists
-                                  ? ''
-                                  : 'The book these files were retired from has been purged, so they cannot be restored here yet.'
-                              }
-                            >
-                              <span>
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  disabled={!v.shell_exists || restoringId !== null}
-                                  onClick={() => handleRestore(v)}
-                                >
-                                  {restoringId === v.id ? 'Restoring...' : 'Restore'}
-                                </Button>
-                              </span>
-                            </Tooltip>
+                            {canOrganize && (
+                              <Tooltip title={restoreBlockedReason(v)}>
+                                <span>
+                                  <Button size="small" variant="outlined" disabled>
+                                    Restore
+                                  </Button>
+                                </span>
+                              </Tooltip>
+                            )}
                           </Stack>
                         </TableCell>
                       </TableRow>

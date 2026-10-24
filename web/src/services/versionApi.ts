@@ -1,5 +1,5 @@
 // file: web/src/services/versionApi.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-23
 
@@ -51,8 +51,10 @@ export interface RetiredVersion {
   book_id: string;
   retired_from_book_id?: string;
   retired_from_title?: string;
-  /** False when the book it was retired out of has been purged; restore is refused then. */
+  /** False when the book it was retired out of has been purged; a restore needs it to exist. */
   shell_exists: boolean;
+  /** True when that book still exists and is in the trash, the state a restore needs it in. */
+  shell_in_trash: boolean;
   retire_op_id?: string;
   retired_at?: string;
   source?: string;
@@ -63,12 +65,6 @@ export interface RetiredVersion {
   /** Seconds. */
   total_duration: number;
   files: RetiredVersionFile[];
-}
-
-export interface RestoreRetiredVersionResult {
-  version_id: string;
-  restored_to_book: string;
-  restored_files: number;
 }
 
 export interface UndoConflictReport {
@@ -131,22 +127,6 @@ export async function hardDeleteVersion(versionId: string): Promise<void> {
 export async function listRetiredVersions(bookId: string): Promise<RetiredVersion[]> {
   const body = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/retired-versions`);
   return unwrapData<{ versions?: RetiredVersion[] }>(body).versions ?? [];
-}
-
-/**
- * Moves a retired version's files back to the trashed book they were retired
- * out of. The server refuses (409) when that book was purged or is not in the
- * trash; the thrown error carries the reason in `.message`.
- */
-export async function restoreRetiredVersion(
-  bookId: string,
-  versionId: string
-): Promise<RestoreRetiredVersionResult> {
-  const body = await jsonFetch(
-    `${API_BASE}/audiobooks/${bookId}/retired-versions/${versionId}/restore`,
-    { method: 'POST' }
-  );
-  return unwrapData<RestoreRetiredVersionResult>(body);
 }
 
 export async function getUndoPreflight(operationId: string): Promise<UndoConflictReport> {
