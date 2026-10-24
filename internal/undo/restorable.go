@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.42.0
+// version: 1.42.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package undo
 
@@ -839,6 +839,8 @@ func NotRestorableLabel(c *database.OperationChange) string {
 			return ""
 		}
 		return ChangeTypeMergeSiblingJournal + ":(no journal id)"
+	case ChangeTypeBookFileRetire, ChangeTypeBookVersionCreate, ChangeTypeRetiredVersionRehome:
+		return retireRowLabel(c)
 	case "metadata_update":
 		if IsRevertableBookField(c.FieldName) {
 			return ""
