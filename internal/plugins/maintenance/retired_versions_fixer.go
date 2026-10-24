@@ -135,11 +135,16 @@ const (
 	// retCatAlreadyRetired is a book whose file records are already retired
 	// onto a live book (a finished apply): it owns no live row, and a
 	// retired version names it as its shell. Skipped, so a second plan and a
-	// second apply count it done and write nothing. A re-plan of a row whose
-	// apply was cut off before its external-id, merged-into or chain steps
-	// returns it applicable again, with the planned fingerprint, so the run
-	// finishes those steps (see Replan).
+	// second apply count it done and write nothing. Only a book a retired
+	// version names AND that version holds rows for counts: a version left
+	// empty by a failed commit does not make its shell retired.
 	retCatAlreadyRetired = "already_retired"
+	// retCatTailPending is an already-retired book whose external-id,
+	// merged-into or chain steps a cut-off apply left unfinished, onto a live
+	// holder. It is applicable, so a FRESH plan can finish it; Apply writes
+	// only that tail (no version, no rows). A re-plan of a row the cut-off run
+	// was planned as returns it with the planned fingerprint (see Replan).
+	retCatTailPending = "retire_tail_pending"
 	// retCatCombineLinkPending is the Replan-only hold on a combine_undo_aware
 	// row while apply is on: retiring it must be reversible by undoing its
 	// combine (plan section 6.5), and that link is not built yet.
@@ -301,7 +306,7 @@ func (f *retiredVersionsFixer) Description() string {
 			"side, Doctor Who / Big Finish / Torchwood on either side (the owner applies those by hand), " +
 			"labelled deleted, or an owner veto on the pair. A book that a combine journal not yet undone names " +
 			"as absorbed is flagged combine_undo_aware and is held (retry_later) at apply until its retire can be " +
-			"undone with that combine. A book already retired shows as already_retired and is not written again."
+			"undone with that combine. A book already retired shows as already_retired and is not written again; one whose retire was cut off part way shows as retire_tail_pending and an Apply finishes just the unfinished steps."
 	}
 	return "Preview only. Classifies every book in the trash by what retiring it would do: its file records " +
 		"moved onto the live book it lost to, as a hidden retired version, never deleted. Each row names its " +
@@ -1318,10 +1323,13 @@ func retiredSummary(rows []repairs.Row) string {
 //     written for it and the same plan can be applied again once it is;
 //   - a book whose rows an interrupted apply already retired, but whose
 //     external-id, merged-into or chain steps are unfinished, comes back
-//     applicable again with the PLANNED fingerprint (the row it was planned as
-//     is the row being finished), carrying the unfinished steps for Apply. A
-//     book with nothing left to do stays already_retired, which the engine
-//     reports as skipped, so a second run applies nothing.
+//     applicable again (retire_tail_pending) carrying the unfinished steps for
+//     Apply. When the planned row was an ordinary retire onto that holder it
+//     keeps the PLANNED fingerprint (the row it was planned as is the row being
+//     finished); a fresh plan finds the same row on its own. A book with
+//     nothing left to do that the plan had as applicable comes back skipped
+//     under the planned fingerprint, which the engine reports as not_applicable
+//     (skipped), not changed_since_plan: the work is done, not different.
 func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
 	run, err := f.newRun(params)
 	if err != nil {
@@ -1343,7 +1351,7 @@ func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessag
 		return row, err
 	}
 	switch {
-	case row.Class == retCatAlreadyRetired:
+	case row.Class == retCatAlreadyRetired || row.Class == retCatTailPending:
 		return resumeRetired(row, planned), nil
 	case row.Applicable() && slices.Contains(row.Flags, retFlagCombineUndoAware):
 		return holdCombineLink(row), nil
@@ -1368,22 +1376,28 @@ func holdCombineLink(row repairs.Row) repairs.Row {
 	return held
 }
 
-// resumeRetired is the Replan answer for a book that is already retired. When
-// the planned row was applicable, its retire landed in the holder the plan
-// named, and unfinished steps remain, the row is applicable again as the
-// planned row (same fingerprint, same class) carrying a resume Detail.
-// Otherwise it is the already_retired skip.
+// resumeRetired is the Replan answer for a book that is already retired
+// (done is already_retired or retire_tail_pending). When the planned row was
+// applicable and its retire landed in the holder the plan named, the answer
+// carries the planned fingerprint: with a tail left the row is applicable again
+// (the work the plan promised is being finished) and without one it stays the
+// already_retired skip, so the engine settles it as not_applicable rather than
+// as a row that changed under the plan. A planned row that was itself a
+// retire_tail_pending row only needs to be returned as classified; any other
+// holder is a different answer and keeps its own fingerprint (changed_since_plan).
 func resumeRetired(done, planned repairs.Row) repairs.Row {
 	d, ok := done.Detail.(*retiredDetail)
-	if !ok || !d.done || !d.pending.any() || !planned.Applicable() ||
-		d.holder == "" || d.holder != planned.Current["target_book_id"] {
+	if !ok || !d.done || !planned.Applicable() || d.holder == "" || d.holder != planned.Current["target_book_id"] {
 		return done
 	}
-	done.Skipped, done.SkipReason = "", ""
-	done.Class = planned.Class
+	if done.Class == retCatTailPending {
+		if planned.Class == retCatTailPending {
+			return done
+		}
+		done.Class = planned.Class
+		done.Reason = "resume: the file records are already retired onto " + d.holder + "; finishing " + d.pending.String()
+		done.Proposed = planned.Proposed
+	}
 	done.Fingerprint = planned.Fingerprint
-	done.Reason = "resume: the file records are already retired onto " + d.holder + "; finishing " + d.pending.String()
-	done.Proposed = planned.Proposed
-	d.resume = true
 	return done
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -255,6 +255,10 @@ func TestRetiredApply_SecondRunAppliesNothing(t *testing.T) {
 
 	again := rf.applyRows(rf.f, res, ids, false, "op-again")
 	require.Zero(t, again.Applied, "%v", again.ByOutcome)
+	// Work that is done is skipped, not "changed since the plan": the book did
+	// not change under the plan, the plan's work was finished.
+	require.Equal(t, 3, again.ByOutcome[repairs.OutcomeNotApplicable], "%v %+v", again.ByOutcome, again.Rows)
+	require.Zero(t, again.ByOutcome[repairs.OutcomeChangedSincePlan], "%v", again.ByOutcome)
 	require.Zero(t, again.BookWrites)
 	require.Zero(t, again.JournalRows)
 	require.Empty(t, rf.journalByType("op-again"))
@@ -491,4 +495,168 @@ func TestRetiredApply_OneHolderIsOnePartition(t *testing.T) {
 
 	peak, _ = run(true)
 	require.Greater(t, peak, 1, "control: without the shared holder the rows do overlap")
+}
+
+// retiredPlanRow is the row of a plan result for one named book.
+func (rf *retiredFixture) retiredPlanRow(res *repairs.PlanResult, name string) repairs.Row {
+	rf.t.Helper()
+	for _, r := range res.Rows {
+		if r.RowID == rf.ids[name] {
+			return r
+		}
+	}
+	rf.t.Fatalf("no row for %s", name)
+	return repairs.Row{}
+}
+
+// A retire cut off after its commit point is finishable from a FRESH plan, not
+// only from the plan the cut-off run started from: the book owns no live row
+// and a retired version holding rows names it, so the fresh plan lists it
+// applicable (retire_tail_pending) and Apply writes just the unfinished steps.
+func TestRetiredApply_FreshPlanFinishesACutOffRetire(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	var armed atomic.Bool
+	armed.Store(true)
+	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
+		inner, err := rf.f.newJournaledRetireWriter(w)
+		return failingExternalIDs{inner, &armed}, err
+	}
+	wr, holder := rf.ids["would-retire"], rf.ids["primary"]
+	out := rf.applyRows(rf.f, res, []string{wr}, false, "op-cut")
+	require.Equal(t, 1, out.Partial, "%v %+v", out.ByOutcome, out.Rows)
+	armed.Store(false)
+
+	fresh := rf.planAll()
+	row := rf.retiredPlanRow(fresh, "would-retire")
+	require.Equal(t, retCatTailPending, row.Class)
+	require.True(t, row.Applicable(), "a cut-off retire must be finishable from a fresh plan: %+v", row)
+	require.Contains(t, row.Reason, "external id")
+	require.Contains(t, rf.applicableIDs(fresh), wr)
+
+	out = rf.applyRows(rf.f, fresh, []string{wr}, false, "op-fresh")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	j := rf.journalByType("op-fresh")
+	require.Zero(t, j[retChangeBookVersionCreate], "%v", j)
+	require.Zero(t, j[retChangeBookFileRetire], "%v", j)
+	require.Zero(t, j[undo.ChangeTypeRepairPlanRecord], "the tail needs no plan record: %v", j)
+	require.Equal(t, 1, j[undo.ChangeTypeExternalIDReassign], "%v", j)
+	require.Equal(t, 1, j[undo.ChangeTypeBookMergedInto], "%v", j)
+	onHolder, err := rf.st.GetExternalIDsForBook(holder)
+	require.NoError(t, err)
+	require.Len(t, onHolder, 1)
+	vs, err := rf.st.GetRetiredVersionsFromBook(wr)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+
+	// Done now: the next plan says so, and the plan that listed it applies nothing.
+	require.Equal(t, retCatAlreadyRetired, rf.retiredPlanRow(rf.planAll(), "would-retire").Class)
+	again := rf.applyRows(rf.f, fresh, []string{wr}, false, "op-fresh-again")
+	require.Zero(t, again.Applied, "%v", again.ByOutcome)
+	require.Equal(t, 1, again.ByOutcome[repairs.OutcomeNotApplicable], "%v", again.ByOutcome)
+}
+
+// A retired version that holds no rows (what a retire cut off before its commit
+// point, or a purge, leaves) does not make its shell "retired": nothing moved
+// off the shell, so its external ids must stay with it, not follow it onto a
+// holder that never got the audio.
+func TestRetiredApply_EmptyVersionIsNotAFinishedRetire(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.live("primary", "g1", rf.file("g1/primary.mp3"))
+	rf.trashed("ghost", "g1", 30)
+	rf.addExternalID("ghost", "PID-GHOST")
+	retiredAt := rf.now.Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	_, err := rf.st.CreateBookVersion(&database.BookVersion{ID: "rv-empty-ghost", BookID: rf.ids["primary"],
+		Status: database.BookVersionStatusRetired, Source: retiredVersionSource,
+		RetiredFromBookID: rf.ids["ghost"], RetireOpID: "op-failed", RetiredAt: &retiredAt})
+	require.NoError(t, err)
+
+	res := rf.planAll()
+	row := rf.retiredPlanRow(res, "ghost")
+	require.NotEqual(t, retCatAlreadyRetired, row.Class, "%+v", row)
+	require.NotEqual(t, retCatTailPending, row.Class, "%+v", row)
+	require.False(t, row.Applicable(), "%+v", row)
+	require.Empty(t, rf.applicableIDs(res))
+	onGhost, err := rf.st.GetExternalIDsForBook(rf.ids["ghost"])
+	require.NoError(t, err)
+	require.Len(t, onGhost, 1, "the external id stays on the book the audio never left")
+	onHolder, err := rf.st.GetExternalIDsForBook(rf.ids["primary"])
+	require.NoError(t, err)
+	require.Empty(t, onHolder)
+}
+
+// A retire of a shell that already has an empty retired version onto the same
+// holder adopts it instead of leaving a second empty version, and journals no
+// create (another op made it).
+func TestRetiredApply_AdoptsAnEmptyVersionLeftByAFailedRetire(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.live("primary", "g1", rf.file("g1/primary.mp3"))
+	rf.trashed("adopt", "g1", 30, rf.file("g1/adopt-1.mp3"))
+	retiredAt := rf.now.Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	_, err := rf.st.CreateBookVersion(&database.BookVersion{ID: "rv-left-over", BookID: rf.ids["primary"],
+		Status: database.BookVersionStatusRetired, Source: retiredVersionSource,
+		RetiredFromBookID: rf.ids["adopt"], RetireOpID: "op-failed", RetiredAt: &retiredAt})
+	require.NoError(t, err)
+
+	res := rf.planAll()
+	require.Equal(t, retCatWouldRetire, rf.retiredPlanRow(res, "adopt").Class)
+	out := rf.applyRows(rf.f, res, []string{rf.ids["adopt"]}, false, "op-adopt")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	vs, err := rf.st.GetRetiredVersionsFromBook(rf.ids["adopt"])
+	require.NoError(t, err)
+	require.Len(t, vs, 1, "the empty version was adopted, not joined by a second")
+	require.Equal(t, "rv-left-over", vs[0].ID)
+	held, err := rf.st.GetRetiredBookFiles(rf.ids["primary"])
+	require.NoError(t, err)
+	require.Len(t, held, 1)
+	require.Equal(t, "rv-left-over", held[0].VersionID)
+	j := rf.journalByType("op-adopt")
+	require.Zero(t, j[retChangeBookVersionCreate], "%v", j)
+	require.Equal(t, 1, j[retChangeBookFileRetire], "%v", j)
+}
+
+// staleMergedIntoReader reports the shell with no merged-into link whatever the
+// store holds: the window between SetMergedInto's read and its write.
+type staleMergedIntoReader struct{ real retiredBookGetter }
+
+func (s staleMergedIntoReader) GetBookByID(id string) (*database.Book, error) {
+	b, err := s.real.GetBookByID(id)
+	if b != nil {
+		c := *b
+		c.MergedIntoBookID = nil
+		return &c, err
+	}
+	return b, err
+}
+
+// A merged-into write that finds the link already set (another writer won
+// between the read and the write) writes nothing, so it is not reported as a
+// write and leaves no standing journal row.
+func TestRetiredApply_SetMergedIntoThatSkipsIsNotAWrite(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.live("primary", "g1", rf.file("g1/primary.mp3"))
+	rf.trashed("shell", "g1", 30, rf.file("g1/shell.mp3"))
+	rf.mergedInto("shell", "primary")
+	opID := "op-merged-skip"
+	w := repairs.NewWriter(rf.st, rf.st, rf.f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, opID).WithFieldStates(rf.st)
+	rw, err := rf.f.newJournaledRetireWriter(w)
+	require.NoError(t, err)
+	jw := rw.(*journaledRetireWriter)
+	jw.books = staleMergedIntoReader{real: jw.books}
+
+	wrote, err := jw.SetMergedInto(rf.ids["shell"], rf.ids["primary"])
+	require.NoError(t, err)
+	require.False(t, wrote, "the skipped write must not be reported as made")
+	changes, err := rf.st.GetOperationChanges(opID)
+	require.NoError(t, err)
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeBookMergedInto {
+			require.True(t, c.Voided, "a skipped write leaves no standing journal row: %+v", c)
+		}
+	}
 }
