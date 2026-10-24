@@ -413,29 +413,41 @@ type retiredRun struct {
 	groups  sync.Map // version group id -> *onceVal[[]database.Book]
 	targets sync.Map // target book id -> *onceVal[*retiredTarget]
 	undo    sync.Map // "journals" -> *onceVal[map[string][]string]
+	// sessionUndo is the unreversed-combine index an apply run read once
+	// (retiredSession); nil outside one, where undo above reads it lazily.
+	sessionUndo *retiredUndo
 }
 
-func (f *retiredVersionsFixer) newRun(params json.RawMessage) (*retiredRun, error) {
+func (f *retiredVersionsFixer) newRun(ctx context.Context, params json.RawMessage) (*retiredRun, error) {
 	minAge, err := parseRetiredVersionsParams(params)
 	if err != nil {
 		return nil, err
 	}
-	return f.newRunWithMinAge(minAge)
+	return f.newRunWithMinAge(ctx, minAge)
 }
 
-// newRunWithMinAge is newRun for a caller that already holds the age gate: an
-// Apply, which is handed no params and takes the gate its Replan used from the
-// row's retiredDetail.
-func (f *retiredVersionsFixer) newRunWithMinAge(minAge time.Duration) (*retiredRun, error) {
+// retiredShared is what every row of one run needs and no row changes: the
+// series names the owner-manual check reads, the listing of users the
+// listening-state probe asks, and the index of unreversed combine journals.
+// Each is a whole-library read (every series, every user, every combine
+// journal), so a run reads them ONCE. An apply row reads them from its
+// retiredSession; a plan reads them once for its single run.
+type retiredShared struct {
+	series  repairs.SeriesNamer
+	probe   *merge.UserStateProbe
+	vetoes  OwnerVetoReader
+	journal CombineJournalScanner
+}
+
+// loadShared reads the run-invariant state. Without the series names the
+// owner-manual check cannot see a Doctor Who book whose path does not say so,
+// so a failed read fails the run (the plan op does the same).
+func (f *retiredVersionsFixer) loadShared() (*retiredShared, error) {
 	ops := f.p.deps.OpsStore()
-	paths := f.p.deps.FragmentRepairReader()
 	users := f.p.deps.MergeUserStateStore()
-	if ops == nil || paths == nil || users == nil {
+	if ops == nil || users == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	// Without the series names the owner-manual check cannot see a Doctor Who
-	// book whose path does not say so, so a failed read fails the run (the
-	// plan op does the same).
 	all, err := ops.GetAllSeries()
 	if err != nil {
 		return nil, fmt.Errorf("%s: list series for the owner-manual check: %w", retiredVersionsFixerID, err)
@@ -447,6 +459,33 @@ func (f *retiredVersionsFixer) newRunWithMinAge(minAge time.Duration) (*retiredR
 	probe, err := merge.NewUserStateProbe(users)
 	if err != nil {
 		return nil, fmt.Errorf("%s: list users for the listening-state check: %w", retiredVersionsFixerID, err)
+	}
+	return &retiredShared{series: repairs.SeriesNamesFrom(all), probe: probe, vetoes: vetoes, journal: journals}, nil
+}
+
+// newRunWithMinAge is newRun for a caller that already holds the age gate: an
+// Apply, which is handed no params and takes the gate its Replan used from the
+// row's retiredDetail. Inside an apply run (BeginApply) the run-invariant state
+// is the session's, read before the first row and so never under the merge
+// lock; otherwise it is read now.
+func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time.Duration) (*retiredRun, error) {
+	ops := f.p.deps.OpsStore()
+	paths := f.p.deps.FragmentRepairReader()
+	if ops == nil || paths == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	var sh *retiredShared
+	sess := retiredSessionFrom(ctx)
+	if sess != nil {
+		if sess.err != nil {
+			return nil, sess.err
+		}
+		sh = sess.shared
+	} else {
+		var err error
+		if sh, err = f.loadShared(); err != nil {
+			return nil, err
+		}
 	}
 	now := time.Now
 	if f.now != nil {
@@ -460,10 +499,13 @@ func (f *retiredVersionsFixer) newRunWithMinAge(minAge time.Duration) (*retiredR
 	if bound <= 0 {
 		bound = 15 * time.Second
 	}
-	run := &retiredRun{f: f, store: ops, paths: paths, probe: probe, vetoes: vetoes, journals: journals,
-		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: repairs.SeriesNamesFrom(all),
+	run := &retiredRun{f: f, store: ops, paths: paths, probe: sh.probe, vetoes: sh.vetoes, journals: sh.journal,
+		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: sh.series,
 		minAge: minAge, now: now(),
 		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}
+	if sess != nil {
+		run.sessionUndo = &sess.undo
+	}
 	if rr, ok := database.AsCapability[database.RetiredBookFileReader](ops); ok {
 		run.retired = rr
 	}
@@ -581,6 +623,9 @@ func (r *retiredRun) ownerManual(id string) (string, error) {
 // undoShells reads the combine-journal index once per run: absorbed book id ->
 // the unreversed journals that name it.
 func (r *retiredRun) undoShells() (map[string][]string, error) {
+	if r.sessionUndo != nil {
+		return r.sessionUndo.idx, r.sessionUndo.err
+	}
 	return cachedOnce(&r.undo, "journals", func() (map[string][]string, error) {
 		idx, err := merge.UnreversedCombineShells(r.journals)
 		if err != nil {
@@ -1209,7 +1254,7 @@ func retiredErrorRow(shell database.BookCore, err error) repairs.Row {
 
 // Plan classifies every book in the trash. Read-only.
 func (f *retiredVersionsFixer) Plan(ctx context.Context, params json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	run, err := f.newRun(params)
+	run, err := f.newRun(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1331,7 +1376,7 @@ func retiredSummary(rows []repairs.Row) string {
 //     under the planned fingerprint, which the engine reports as not_applicable
 //     (skipped), not changed_since_plan: the work is done, not different.
 func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	run, err := f.newRun(params)
+	run, err := f.newRun(ctx, params)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1347,7 +1392,7 @@ func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessag
 		return r, nil
 	}
 	row, err := run.classify(ctx, b.Core())
-	if err != nil || !f.applyOn() {
+	if err != nil || !f.applyOnFor(ctx) {
 		return row, err
 	}
 	switch {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-24
 
@@ -614,6 +614,10 @@ func retiredApplyErr(err error) error {
 		return err
 	case errors.Is(err, database.ErrRetireIndexIncomplete):
 		return fmt.Errorf("%w: %w", repairs.ErrRetryLater, err)
+	case errors.Is(err, repairs.ErrNoWritesWriter):
+		// The engine ran this apply without the scan stand-down (it read the
+		// flag off), and the flag is on now: nothing was written, run it again.
+		return fmt.Errorf("%w: the apply flag changed as the run started: %w", repairs.ErrRetryLater, err)
 	case errors.Is(err, database.ErrBookFileOwnerMissing), errors.Is(err, database.ErrBookFileRetired),
 		errors.Is(err, database.ErrRetiredVersionMismatch):
 		return fmt.Errorf("%w: %w", repairs.ErrChangedSincePlan, err)
@@ -625,8 +629,8 @@ func retiredApplyErr(err error) error {
 // Detail carries what Replan read. While the flag is off this refuses, as the
 // routes and the engine already did.
 func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	if !f.applyOn() {
-		return fmt.Errorf("%w (row %s)", errRetiredApplyDisabled, fresh.RowID)
+	if !f.applyOnFor(ctx) {
+		return retiredFlagFlipped(fresh.RowID)
 	}
 	d, ok := fresh.Detail.(*retiredDetail)
 	if !ok || d == nil {
@@ -651,7 +655,7 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 	}
 	defer merge.UnlockMergeRMW()
 
-	run, err := f.newRunWithMinAge(d.minAge)
+	run, err := f.newRunWithMinAge(ctx, d.minAge)
 	if err != nil {
 		return err
 	}
