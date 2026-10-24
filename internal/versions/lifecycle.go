@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
@@ -14,10 +14,18 @@
 // moves trash back to alt. Purge physically deletes files and
 // marks inactive_purged (keeps metadata for fingerprint). Hard
 // delete removes all traces.
+//
+// A retired version (database.BookVersionStatusRetired) is outside this
+// machine. It holds the retired book_file rows of a book that was retired into
+// the version's own book, it is created in that state and leaves it only
+// through UnretireBookFiles, and every transition here refuses it with
+// ErrRetiredVersion: trashing it would start the 14-day clock that ends in
+// PurgeVersion, and PurgeVersion deletes files from disk.
 
 package versions
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -32,29 +40,65 @@ const TrashTTLDays = 14
 
 var lifecycleLog = logger.New("versions.lifecycle")
 
+// ErrRetiredVersion is returned by every lifecycle step that would trash,
+// restore, swap, promote or purge a retired version. Callers branch on it
+// with errors.Is; the server answers it with a 409.
+var ErrRetiredVersion = errors.New("a retired version is not part of the version lifecycle")
+
+// refuseRetired is the one place a lifecycle step checks for a retired
+// version. The store refuses to change a retired version only while it still
+// holds retired rows (database.ErrRetiredVersionHasFiles); a retired version
+// that holds none, or a step that acts on the caller's copy before it writes
+// (PurgeVersion removes files first), is not covered by that, so each step
+// refuses here, up front, from the status the caller holds.
+func refuseRetired(v *database.BookVersion, action string) error {
+	if v != nil && v.Status == database.BookVersionStatusRetired {
+		return fmt.Errorf("%s version %s: %w (it holds the retired files of book %s; restore it as a separate book instead)",
+			action, v.ID, ErrRetiredVersion, v.RetiredFromBookID)
+	}
+	return nil
+}
+
 // MarkTrashed moves v into the trash in memory and stamps TrashedAt with now.
 // A version already in the trash keeps its stamp, so a repeated trash request
 // neither restarts nor shortens its window. The caller persists v; the store
 // enforces the same rule on write (database.PebbleStore.UpdateBookVersion),
 // this just makes the stamp visible on the caller's copy too.
-func MarkTrashed(v *database.BookVersion, now time.Time) {
+//
+// It refuses a retired version (ErrRetiredVersion) and leaves v untouched: a
+// retired version in the trash would reach PurgeVersion 14 days later.
+func MarkTrashed(v *database.BookVersion, now time.Time) error {
+	if err := refuseRetired(v, "trash"); err != nil {
+		return err
+	}
 	if v.Status == database.BookVersionStatusTrash && v.TrashedAt != nil {
-		return
+		return nil
 	}
 	stamp := now
 	v.Status = database.BookVersionStatusTrash
 	v.TrashedAt = &stamp
+	return nil
 }
 
 // MarkRestored moves a trashed v back to alt in memory and clears TrashedAt.
-// The caller persists v.
-func MarkRestored(v *database.BookVersion) {
+// The caller persists v. It refuses a retired version (ErrRetiredVersion),
+// which is not in the trash and must not become an alt.
+func MarkRestored(v *database.BookVersion) error {
+	if err := refuseRetired(v, "restore"); err != nil {
+		return err
+	}
 	v.Status = database.BookVersionStatusAlt
 	v.TrashedAt = nil
+	return nil
 }
 
 // AutoPromoteAlt selects the most recent alt version and promotes it
 // to active. Called when the active version is trashed.
+//
+// Only an alt version is a candidate. A retired version is never promoted, and
+// it is skipped by name so that a retired version newer than every alt does
+// not win the "most recent" comparison before the status test: promoting it
+// would put the retired files of another book into the holder's active slot.
 func AutoPromoteAlt(store altPromoter, bookID string) error {
 	allVers, err := store.GetBookVersionsByBookID(bookID)
 	if err != nil {
@@ -63,6 +107,9 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 	var bestAlt *database.BookVersion
 	for i := range allVers {
 		v := &allVers[i]
+		if v.Status == database.BookVersionStatusRetired {
+			continue
+		}
 		if v.Status != database.BookVersionStatusAlt {
 			continue
 		}
@@ -79,7 +126,15 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 
 // PurgeVersion physically deletes the version's files and marks it
 // inactive_purged. Keeps the DB rows for fingerprint matching.
+//
+// It refuses a retired version (ErrRetiredVersion) before touching the disk.
+// The refusal has to come first: RemoveVersionSlot below deletes from disk
+// before UpdateBookVersion, whose own refusal comes too late, and the files of
+// a retired version belong to a book the library still keeps.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
+	if err := refuseRetired(ver, "purge"); err != nil {
+		return err
+	}
 	book, err := store.GetBookByID(ver.BookID)
 	if err != nil || book == nil {
 		return fmt.Errorf("book %s not found", ver.BookID)
@@ -160,6 +215,9 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			lifecycleLog.Warn("trash cleanup: re-read version %s failed, skipping it this run: %v", id, err)
 			continue
 		}
+		// Only a trashed version is ever purged here. A retired version is not
+		// trashed (MarkTrashed refuses it) and would not be listed; PurgeVersion
+		// refuses it as well, so a stale or hand-edited row cannot reach the disk.
 		if v == nil || v.Status != database.BookVersionStatusTrash {
 			continue
 		}
