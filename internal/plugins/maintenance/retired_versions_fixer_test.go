@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -371,9 +371,13 @@ func TestRetiredVersions_NoWritesAndApplyRefuses(t *testing.T) {
 		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: &countingStandDown{}}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Zero(t, out.Applied, "%v", out.ByOutcome)
-	require.Equal(t, len(ids), out.Failed, "%v", out.ByOutcome)
+	// Not failed: the flag is a switch an owner flips, and a row that finds it
+	// closed wrote nothing and can be applied again once it is open (the same
+	// answer a flip between the engine's read and the run's gets).
+	require.Equal(t, len(ids), out.RetryLater, "%v", out.ByOutcome)
+	require.Zero(t, out.Failed, "%v", out.ByOutcome)
 	for _, rr := range out.Rows {
-		require.Equal(t, repairs.OutcomeFailed, rr.Outcome)
+		require.Equal(t, repairs.OutcomeRetryLater, rr.Outcome)
 		require.Contains(t, rr.Error, "retire_versions_apply_enabled")
 	}
 	require.Zero(t, out.BookWrites)

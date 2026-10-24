@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
 // last-edited: 2026-10-24
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -658,5 +659,132 @@ func TestRetiredApply_SetMergedIntoThatSkipsIsNotAWrite(t *testing.T) {
 		if c.ChangeType == undo.ChangeTypeBookMergedInto {
 			require.True(t, c.Voided, "a skipped write leaves no standing journal row: %+v", c)
 		}
+	}
+}
+
+// runReads counts the whole-library reads one apply run makes.
+type runReads struct{ series, users, journals atomic.Int32 }
+
+type countingOpsStore struct {
+	*database.PebbleStore
+	c *runReads
+}
+
+func (o countingOpsStore) GetAllSeries() ([]database.Series, error) {
+	o.c.series.Add(1)
+	return o.PebbleStore.GetAllSeries()
+}
+
+type countingUserStore struct {
+	merge.UserStateRepairStore
+	c *runReads
+}
+
+func (u countingUserStore) ListUsers() ([]database.User, error) {
+	u.c.users.Add(1)
+	return u.UserStateRepairStore.ListUsers()
+}
+
+type countingJournals struct {
+	CombineJournalScanner
+	c *runReads
+}
+
+func (j countingJournals) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	j.c.journals.Add(1)
+	return j.CombineJournalScanner.ScanPrefix(prefix)
+}
+
+type runReadsDeps struct {
+	fakeDeps
+	ops   countingOpsStore
+	users countingUserStore
+	jr    countingJournals
+}
+
+func (d runReadsDeps) OpsStore() OpsStore                              { return d.ops }
+func (d runReadsDeps) MergeUserStateStore() merge.UserStateRepairStore { return d.users }
+func (d runReadsDeps) CombineJournals() CombineJournalScanner          { return d.jr }
+
+// An apply run reads every series, every user and every combine journal ONCE,
+// before its first row, not once per row's re-plan and again per row under the
+// global merge lock.
+func TestRetiredApply_ReadsTheLibraryWideStateOncePerRun(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.live("primary", "g1", rf.file("g1/primary.mp3"))
+	for i := range 4 {
+		rf.trashed(fmt.Sprintf("shell-%d", i), "g1", 30, rf.file(fmt.Sprintf("g1/%d.mp3", i)))
+	}
+	res := rf.planAll()
+	ids := rf.applicableIDs(res)
+	require.Len(t, ids, 4)
+
+	c := &runReads{}
+	base := fakeDeps{store: rf.st}
+	deps := runReadsDeps{fakeDeps: base,
+		ops:   countingOpsStore{PebbleStore: rf.st, c: c},
+		users: countingUserStore{UserStateRepairStore: base.MergeUserStateStore(), c: c},
+		jr:    countingJournals{CombineJournalScanner: base.CombineJournals(), c: c}}
+	f := newRetiredVersionsFixer(&Plugin{deps: deps})
+	f.now = rf.f.now
+	f.applyEnabled = func() bool { return true }
+
+	out := rf.applyRows(f, res, ids, false, "op-once")
+	require.Equal(t, 4, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	require.EqualValues(t, 1, c.series.Load(), "series are listed once per run, not per row")
+	require.EqualValues(t, 1, c.users.Load(), "users are listed once per run, not per row")
+	require.EqualValues(t, 1, c.journals.Load(), "the combine journals are scanned once per run, not per row")
+}
+
+// flagSequence answers the apply flag from a script, one read at a time, then
+// repeats the last answer.
+func flagSequence(answers ...bool) func() bool {
+	var n atomic.Int32
+	return func() bool {
+		i := int(n.Add(1)) - 1
+		if i >= len(answers) {
+			i = len(answers) - 1
+		}
+		return answers[i]
+	}
+}
+
+// The flag is read by the engine (PlanOnly, then NoScanStandDown) before the
+// run starts and by the fixer once when it begins. A flip between those reads
+// is not a failed row: nothing was written and the same plan applies again.
+func TestRetiredApply_FlagFlippingAsTheRunStartsIsRetryLaterNotFailed(t *testing.T) {
+	cases := []struct {
+		name    string
+		answers []bool
+	}{
+		// The engine saw it on; it is off when the run begins.
+		{"off_at_begin", []bool{true, true, false}},
+		// The engine saw it off for the stand-down (so its Writer refuses every
+		// write) and on for everything else.
+		{"off_for_the_stand_down_decision", []bool{true, false, true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rf := newRetiredFixture(t)
+			rf.enableApply()
+			rf.live("primary", "g1", rf.file("g1/primary.mp3"))
+			rf.trashed("shell", "g1", 30, rf.file("g1/shell.mp3"))
+			res := rf.planAll()
+			ids := rf.applicableIDs(res)
+			require.Len(t, ids, 1)
+
+			rf.f.applyEnabled = flagSequence(tc.answers...)
+			out := rf.applyRows(rf.f, res, ids, false, "op-flip")
+			require.Zero(t, out.Failed, "%v %+v", out.ByOutcome, out.Rows)
+			require.Equal(t, 1, out.RetryLater, "%v %+v", out.ByOutcome, out.Rows)
+			files, err := rf.st.GetBookFiles(rf.ids["shell"])
+			require.NoError(t, err)
+			require.NotEmpty(t, files, "nothing was written")
+
+			rf.enableApply()
+			out = rf.applyRows(rf.f, res, ids, false, "op-flip-again")
+			require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+		})
 	}
 }
