@@ -1,5 +1,5 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
 // last-edited: 2026-10-24
 
@@ -309,4 +309,139 @@ func TestLookupScanExisting_RetiredCheckUnavailableFailsClosed(t *testing.T) {
 
 	_, lerr := lookupScanExisting(&Book{FilePath: p}, fileOwnershipVerdict{}, &hash)
 	require.ErrorIs(t, lerr, database.ErrBookFilesWithHashUnavailable)
+}
+
+// retiredShellAt makes a trashed single-file shell whose own FilePath is the
+// file, retires its one row into the holder under a version of its own, and
+// returns the shell, the retired row and the file's hash.
+func (f *retiredScanFixture) retiredShellAt(rel, body string) (*database.Book, *database.BookFile, string) {
+	f.t.Helper()
+	path := f.write(rel, body)
+	hash, err := ComputeFileHash(path)
+	require.NoError(f.t, err)
+	shell, err := f.store.CreateBook(&database.Book{Title: "Single-file shell", FilePath: path, MarkedForDeletion: new(true)})
+	require.NoError(f.t, err)
+	v, err := f.store.CreateBookVersion(&database.BookVersion{
+		BookID: f.holder.ID, Status: database.BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-shell", RetiredAt: new(time.Now()),
+	})
+	require.NoError(f.t, err)
+	row := &database.BookFile{BookID: shell.ID, FilePath: path, FileHash: hash, Format: "mp3", TrackNumber: 1}
+	require.NoError(f.t, f.store.CreateBookFile(row))
+	require.NoError(f.t, f.store.RetireBookFiles(
+		[]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: shell.ID}}, f.holder.ID, v.ID))
+	return shell, row, hash
+}
+
+// liveRowsAt is every non-retired book_file row at path.
+func (f *retiredScanFixture) liveRowsAt(path string) []database.BookFile {
+	f.t.Helper()
+	rows, err := f.store.BookFilesAtPath(path)
+	require.NoError(f.t, err)
+	var live []database.BookFile
+	for _, r := range rows {
+		if !r.Retired {
+			live = append(live, r)
+		}
+	}
+	return live
+}
+
+// A forced rescan of a retired shell's OWN path (the shell row sits at the
+// file) must not take the "update of the book at this path" shortcut: the
+// file's only claim is a retired row, so the scan is skipped with the retired
+// reason, saveBookToDatabase refuses it, and no live row appears on the file.
+func TestRetiredShellOwnPath_RescanIsSkippedAndMintsNoSecondRow(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, row, hash := f.retiredShellAt("shell-own/B.mp3", "shell-own-bytes")
+	book := &Book{Title: "Single-file shell", FilePath: row.FilePath, FileHash: hash}
+
+	v, err := checkFileOwnership(book)
+	require.NoError(t, err)
+	require.True(t, v.skip, "a retired shell's own path is not an update of that book")
+	require.Equal(t, []string{f.holder.ID}, v.owners)
+	require.Contains(t, v.reason, "retired version of book "+f.holder.ID)
+
+	serr := saveBookToDatabase(t.Context(), book)
+	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
+
+	// The backstop behind the checks: even if a caller reaches the row-minting
+	// step for the shell (an older caller, a new scan route), the shell gets no
+	// live row on the retired file.
+	createSingleFileBookFile(book, defaultLog)
+	require.Empty(t, f.liveRowsAt(row.FilePath), "no live row may appear beside the retired one")
+	shellRows, err := f.store.GetBookFiles(shell.ID)
+	require.NoError(t, err)
+	require.Empty(t, shellRows)
+	all, err := f.store.BookFilesAtPath(row.FilePath)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	require.True(t, all[0].Retired)
+}
+
+// A control for the shortcut: a book that is NOT a shell still takes it, so an
+// ordinary single-file rescan is unchanged.
+func TestRetiredShellOwnPath_OrdinaryBookAtPathStillProceeds(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	p := f.write("ordinary/B.mp3", "ordinary-bytes")
+	b, err := f.store.CreateBook(&database.Book{Title: "Ordinary", FilePath: p})
+	require.NoError(t, err)
+	require.NoError(t, f.store.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: p, TrackNumber: 1}))
+
+	v, err := checkFileOwnership(&Book{FilePath: p})
+	require.NoError(t, err)
+	require.False(t, v.skip, "reason: %s", v.reason)
+}
+
+// A file tagged with the shell's organizer ID but sitting at another path is
+// the shell's retired content: lookupScanExisting names the shell by ID, and
+// must still report the retired hit instead of accepting the shell as the row
+// (the relink would repoint the shell at the file and mint a live row on it).
+func TestRetiredShellOrganizerID_TaggedCopyOfRetiredContentIsRetiredHit(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, _, hash := f.retiredShellAt("shell-tag/B.mp3", "tagged-bytes")
+	moved := f.write("moved/B.mp3", "tagged-bytes")
+
+	e, lerr := lookupScanExisting(&Book{FilePath: moved, BookOrganizerID: shell.ID}, fileOwnershipVerdict{}, &hash)
+	require.NoError(t, lerr)
+	require.NotNil(t, e.byOrgID, "the shell is still named by its tag")
+	require.NotNil(t, e.retired, "but the content is a retired version's")
+	require.Equal(t, f.holder.ID, e.retired.holder)
+
+	serr := saveBookToDatabase(t.Context(), &Book{Title: "Tagged", FilePath: moved, FileHash: hash, BookOrganizerID: shell.ID})
+	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
+	got, err := f.store.GetBookByID(shell.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, moved, got.FilePath, "the shell must not be relinked onto the retired content")
+	require.Empty(t, f.liveRowsAt(moved))
+}
+
+// A tagged file whose bytes are NOT a retired version's is unaffected: the
+// shell is still the existing row and nothing is flagged retired.
+func TestRetiredShellOrganizerID_TaggedFileWithOtherContentIsNotAHit(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, _, _ := f.retiredShellAt("shell-tag2/B.mp3", "shell-bytes")
+	other := f.write("moved2/B.mp3", "other-bytes")
+	otherHash, err := ComputeFileHash(other)
+	require.NoError(t, err)
+
+	e, lerr := lookupScanExisting(&Book{FilePath: other, BookOrganizerID: shell.ID}, fileOwnershipVerdict{}, &otherHash)
+	require.NoError(t, lerr)
+	require.Nil(t, e.retired)
+	require.NotNil(t, e.byOrgID)
+}
+
+// The shell's own path with changed bytes (a force_update rescan after the
+// file changed) is judged by the path claim, not the content hash: the retired
+// row still claims the path, so the scan is skipped.
+func TestRetiredShellOwnPath_ChangedBytesAreStillSkippedByPathClaim(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	_, row, _ := f.retiredShellAt("shell-changed/B.mp3", "before")
+	require.NoError(t, os.WriteFile(row.FilePath, []byte("after-the-file-changed"), 0o644))
+	newHash, err := ComputeFileHash(row.FilePath)
+	require.NoError(t, err)
+
+	serr := saveBookToDatabase(t.Context(), &Book{Title: "Changed", FilePath: row.FilePath, FileHash: newHash})
+	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
+	require.Empty(t, f.liveRowsAt(row.FilePath))
 }

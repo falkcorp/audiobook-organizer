@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
 // last-edited: 2026-10-24
 //
@@ -50,12 +50,14 @@ type scanExisting struct {
 	segCount     int
 	segThreshold int
 
-	// retired is set when nothing above found a row and the scanned content
-	// is a retired version's content (lookupRetiredContent): the library
-	// already holds these bytes as a version another book keeps out of its
-	// live files, so the import is skipped. The holder is never offered as
-	// byHash, bySegments or row(): that would read the retired version as
-	// the book's own file and version-link a new row to it.
+	// retired is set when nothing above found a row -- or the row found by
+	// path or organizer ID is a retired shell, which is not the book -- and
+	// the scanned content is a retired version's content
+	// (lookupRetiredContent): the library already holds these bytes as a
+	// version another book keeps out of its live files, so the import is
+	// skipped. The holder is never offered as byHash, bySegments or row():
+	// that would read the retired version as the book's own file and
+	// version-link a new row to it.
 	retired *retiredContentHit
 }
 
@@ -110,6 +112,29 @@ func lookupScanExisting(book *Book, verdict fileOwnershipVerdict, fileHash *stri
 		}
 	}
 	if e.byPath != nil || e.byOrgID != nil {
+		// The row named by path or organizer ID is normally the book and ends
+		// the lookup. A retired SHELL named that way is not: its files live on
+		// as retired rows under another book, so a copy of that content
+		// (the shell's own file rescanned after a change of mtime or size, or a
+		// file still tagged with the shell's organizer ID) is retired content,
+		// and saving it onto the shell would mint a live row beside the
+		// retired one. Judge the content before the shell is accepted.
+		for _, named := range []*database.Book{e.byPath, e.byOrgID} {
+			if named == nil {
+				continue
+			}
+			shell, serr := isRetiredShell(store, named.ID)
+			if serr != nil {
+				return nil, fmt.Errorf("skipping import of %s: retired-version check undeterminable: %w", book.FilePath, serr)
+			}
+			if !shell {
+				continue
+			}
+			if err := e.lookupRetiredContent(book, fileHash); err != nil {
+				return nil, err
+			}
+			break
+		}
 		return e, nil
 	}
 	if err := e.lookupHashes(book, fileHash); err != nil {

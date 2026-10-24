@@ -1,7 +1,7 @@
 // file: internal/database/retired_lookup.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -104,6 +104,22 @@ func BookFileByPathIncludingRetired(s any, filePath string) (*BookFile, error) {
 		return g.GetBookFileByPath(filePath)
 	}
 	return nil, fmt.Errorf("book_file by path %s: %w", filePath, ErrRetiredReaderUnavailable)
+}
+
+// RetiredVersionsFromBook returns the retired versions that were retired out of
+// shellID (the trashed or merged book their files used to belong to), with the
+// same capability resolution and fallback as AllBookFilesCoreIncludingRetired.
+// A non-empty answer means shellID is a shell: its files live on as retired
+// rows under another book, and a scan that reaches the shell by path or by
+// organizer ID must not read it as a book that still owns them.
+func RetiredVersionsFromBook(s any, shellID string) ([]BookVersion, error) {
+	if r, ok := AsCapability[RetiredBookFileReader](s); ok {
+		return r.GetRetiredVersionsFromBook(shellID)
+	}
+	if plainReadsAreComplete(s) {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("retired versions of %s: %w", shellID, ErrRetiredReaderUnavailable)
 }
 
 // BookFilesHoldingHash is BookFilesWithHash for callers that hold a store as

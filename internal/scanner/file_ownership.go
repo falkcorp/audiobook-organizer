@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package scanner
 
@@ -192,7 +192,18 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	// A segment list is the one shape whose FilePath is merely its first file;
 	// every other shape's FilePath names the whole book.
 	if !segmentList && atPath != nil {
-		return directoryBookArrivals(store, book, atPath)
+		// A retired shell at the path is not "this same book": its files live
+		// on as retired rows under another book, so a rescan of the shell's own
+		// path must still be judged by who claims the scanned files. The
+		// full check below skips a file only retired rows claim, where the
+		// shortcut would let the scan mint a second, live row on it.
+		shell, serr := isRetiredShell(store, atPath.ID)
+		if serr != nil {
+			return fileOwnershipVerdict{}, fmt.Errorf("retired versions of book %s: %w", atPath.ID, serr)
+		}
+		if !shell {
+			return directoryBookArrivals(store, book, atPath)
+		}
 	}
 	files, err := scannedFilesOf(book)
 	if err != nil {
@@ -343,6 +354,18 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	}
 	return fileOwnershipVerdict{skip: true, owners: owners,
 		reason: "some files are owned by another book and some are not"}, nil
+}
+
+// isRetiredShell reports whether bookID is a book some retired version was
+// retired out of: a trashed or merged shell whose files now live as retired
+// rows under another book. A store that cannot say fails the check, and the
+// caller fails closed.
+func isRetiredShell(store any, bookID string) (bool, error) {
+	versions, err := database.RetiredVersionsFromBook(store, bookID)
+	if err != nil {
+		return false, err
+	}
+	return len(versions) > 0, nil
 }
 
 // retiredClaim is one retired version's claim on a scanned file: the live
