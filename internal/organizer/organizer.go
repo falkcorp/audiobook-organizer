@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-22
+// last-edited: 2026-10-23
 
 package organizer
 
@@ -177,12 +177,32 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("cannot organize %q (id=%s): cannot tell whether another book already holds this file: %w", book.Title, book.ID, err)
 		}
+		// What the refusal protects: the library gaining a second copy of bytes
+		// it already holds under another row. A book still OUTSIDE the root
+		// (an import path, a protected original) would gain one by being
+		// organized, so a twin inside the root refuses it. A book already
+		// INSIDE the root adds nothing to the library by being re-laid-out:
+		// the pair exists whether or not this organize runs, so refusing only
+		// blocks a rename (after a metadata edit, say) on every run until
+		// dedup resolves the pair. It is reported to dedup instead
+		// (inRootTwins) and the organize goes on, except where the twin
+		// occupies the very target (below): that would write a _copyN of
+		// identical bytes beside it.
+		bookInRoot := pathutil.IsWithin(book.FilePath, o.config.RootDir)
+		var inRootTwins []string
 		for _, existingBook := range holders {
 			// Not this book; a trashed holder is not a library book to collide
 			// with (its file is not offered to anything); one outside the
 			// library root is not an organized copy.
 			if existingBook.ID == book.ID || database.IsInTrash(existingBook) ||
 				!pathutil.IsWithin(existingBook.FilePath, o.config.RootDir) {
+				continue
+			}
+			// Another row over the very file this book names: the same bytes
+			// at the same path, not a second copy anywhere. "Duplicate file
+			// already organized at <its own path>" would be the error, and
+			// nothing would be copied into the library by organizing.
+			if existingBook.FilePath == book.FilePath {
 				continue
 			}
 			// The hash twin is another version of THIS book -- in
@@ -198,6 +218,12 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 			if SameVersionGroup(book, existingBook) {
 				return "", "", &LibraryCopyExistsError{BookID: book.ID, CopyID: existingBook.ID, CopyPath: existingBook.FilePath}
 			}
+			// An organized book re-laid-out to a path its twin does not hold:
+			// report the pair, keep going.
+			if bookInRoot && existingBook.FilePath != targetPath {
+				inRootTwins = append(inRootTwins, existingBook.FilePath)
+				continue
+			}
 			// Content-identical book already organized under a
 			// different row. This is a true duplicate — fire the
 			// collision hook so the dedup tab picks it up.
@@ -205,6 +231,13 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 				o.hooks.OnCollision(book.ID, existingBook.FilePath)
 			}
 			return existingBook.FilePath, "", fmt.Errorf("duplicate file already organized at: %s", existingBook.FilePath)
+		}
+		// Reached only when nothing refused (a LibraryCopyExistsError or a
+		// duplicate refusal returned above), so the pairs are reported once.
+		if o.hooks != nil {
+			for _, twinPath := range inRootTwins {
+				o.hooks.OnCollision(book.ID, twinPath)
+			}
 		}
 	}
 
