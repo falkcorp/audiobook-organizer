@@ -1,10 +1,10 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
 // last-edited: 2026-10-24
 
 // The Repairs lane's per-fixer permission check as the server wires it
-// (wireRepairsRoutes + permCheck): the same semantics as s.perm, driven
+// (wireRepairsRoutes + permHolds): the same semantics as s.perm, driven
 // through the real router for the Missing files fixer, which requires
 // settings.manage.
 
