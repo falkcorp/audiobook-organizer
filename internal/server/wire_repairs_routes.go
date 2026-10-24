@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.3.0
+// version: 1.6.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-14
+// last-edited: 2026-10-24
 
 package server
 
@@ -10,23 +10,29 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	repairshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/repairs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // wireRepairsRoutes registers the Repairs lane routes on the protected group.
-// Reads need library.view; starting a plan or an apply changes (or leads to
-// changing) the library, so both POSTs need library.edit_metadata, matching
-// the review-queue mutations. A fixer that needs more
-// (repairs.PermissionScoped, e.g. the missing-files fixer's settings.manage)
-// is checked by the handler once it knows the fixer, with the same semantics
-// as s.perm.
+// The route gates are library.view for the two list reads and the rows read,
+// and library.edit_metadata for starting a plan or an apply (which change, or
+// lead to changing, the library), matching the review-queue mutations. They
+// are only the floor: once the handler knows the fixer it checks every
+// permission the fixer requires (repairs.RequiredPermissions: the lane's
+// library.edit_metadata, or what a repairs.PermissionScoped fixer names, e.g.
+// the missing-files fixer's settings.manage), with the same semantics as
+// s.perm, on the plan, apply and owner-apply POSTs and also on the rows read,
+// because plan rows carry other users' data and a guest holds library.view.
+// GET /repairs lists every fixer to a library.view caller but leaves the
+// last-run pointers off the ones the caller may not use.
 func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 	var enq repairshandler.Enqueuer
 	if s.opRegistry != nil {
 		enq = s.opRegistry
 	}
-	h := repairshandler.New(s.repairFixers, enq, s.storeForWiring()).WithPermissionCheck(s.permCheck())
+	h := repairshandler.New(s.repairFixers, enq, s.storeForWiring()).WithPermissionCheck(s.permHolds())
 	protected.GET("/repairs", s.perm(auth.PermLibraryView), h.ListFixers)
 	protected.GET("/repairs/owner-status", s.perm(auth.PermLibraryView), h.GetOwnerStatus)
 	protected.POST("/repairs/:fixer/plan", s.perm(auth.PermLibraryEditMetadata), h.StartPlan)
@@ -40,13 +46,47 @@ func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 
 // permCheck is s.perm as a check a handler runs inline, for a permission it
 // learns only from the request: every permission is held with auth disabled
-// (read once, as s.perm does) and while no user exists (first run).
-func (s *Server) permCheck() repairshandler.PermissionCheck {
+// (read once, as s.perm does) and while no user exists (first run). When the
+// caller does not hold the permission it writes the 401/403 itself, which is
+// what the ops v3 handlers (opsV3Authz.Require) rely on: they return on false
+// and write nothing else. A caller that must ask without answering the
+// request uses permHolds.
+func (s *Server) permCheck() func(*gin.Context, auth.Permission) bool {
+	holds := s.permHolds()
+	return func(c *gin.Context, p auth.Permission) bool {
+		if holds(c, p) {
+			return true
+		}
+		servermiddleware.RespondPermissionDenied(c, p)
+		return false
+	}
+}
+
+// permHolds is permCheck's question without the answer: it reports whether the
+// caller holds p and writes nothing, for a handler that decides what to do on
+// a refusal itself (the Repairs lane, which lists a fixer the caller may not
+// use without its last runs, and refuses a read with its own 403).
+func (s *Server) permHolds() repairshandler.PermissionCheck {
 	if !config.AppConfig.EnableAuth {
 		return func(*gin.Context, auth.Permission) bool { return true }
 	}
 	store := s.storeForWiring()
 	return func(c *gin.Context, p auth.Permission) bool {
-		return servermiddleware.CheckPermission(store, c, p)
+		return servermiddleware.HoldsPermission(store, c, p)
 	}
+}
+
+// repairsOpAccess is the check the generic operations routes apply to a
+// Repairs operation's data (result, logs, change journal, listings): the
+// caller must hold the op's fixer's permissions, as the Repairs routes require
+// (see opaccess.Repairs). It asks permHolds, so auth disabled and a first run
+// hold everything, as everywhere else.
+func (s *Server) repairsOpAccess() *opaccess.Repairs {
+	// A nil *repairs.Registry must not become a non-nil interface: the check
+	// then refuses every repairs op rather than calling Get on nil.
+	var fixers opaccess.FixerLookup
+	if s.repairFixers != nil {
+		fixers = s.repairFixers
+	}
+	return opaccess.NewRepairs(fixers, s.permHolds())
 }

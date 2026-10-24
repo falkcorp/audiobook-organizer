@@ -1,10 +1,10 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.1.1
+// version: 1.2.1
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
-// last-edited: 2026-10-15
+// last-edited: 2026-10-24
 
 // The Repairs lane's per-fixer permission check as the server wires it
-// (wireRepairsRoutes + permCheck): the same semantics as s.perm, driven
+// (wireRepairsRoutes + permHolds): the same semantics as s.perm, driven
 // through the real router for the Missing files fixer, which requires
 // settings.manage.
 
@@ -152,4 +152,46 @@ func TestRepairsRoutes_MissingFilesApplyNeedsSettingsManage(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 	require.NotContains(t, w.Body.String(), "permission denied")
 	require.Contains(t, w.Body.String(), "Owner actions are turned off")
+}
+
+func getRepairs(srv *Server, token, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	return w
+}
+
+// TestRepairsRoutes_PlanRowsNeedTheFixersPermission: the rows route is
+// library.view at the router, and the handler then asks for every permission
+// the fixer requires, as the POSTs do (security fix 2026-10-24: a guest holds
+// the viewer role and plan rows carry other users' data). A viewer (a guest's
+// role) and an editor are 403 on the Missing files fixer's rows, naming
+// settings.manage, and an admin reaches the handler (404, unknown plan).
+// GET /repairs still answers a viewer, with the fixer marked not permitted.
+// Not parallel: it swaps the process-wide config.
+func TestRepairsRoutes_PlanRowsNeedTheFixersPermission(t *testing.T) {
+	const rowsPath = "/api/v1/repairs/reconcile.missing-files/plan/op-nope/rows"
+	srv, editor, admin := repairsPermServer(t, true, true)
+	store := srv.storeForWiring()
+	guest, err := store.CreateUser("guest", "guest@x.test", "bcrypt", "hash", []string{auth.SeedRoleViewer}, "active")
+	require.NoError(t, err)
+	gs, err := store.CreateSession(guest.ID, "127.0.0.1", "test", time.Hour)
+	require.NoError(t, err)
+
+	for name, token := range map[string]string{"viewer": gs.ID, "editor": editor} {
+		w := getRepairs(srv, token, rowsPath)
+		require.Equal(t, http.StatusForbidden, w.Code, name+": "+w.Body.String())
+		require.Contains(t, w.Body.String(), "permission denied: settings.manage", name)
+	}
+	w := getRepairs(srv, admin, rowsPath)
+	require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), "permission denied")
+
+	w = getRepairs(srv, gs.ID, "/api/v1/repairs")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"permitted":false`)
+	require.NotContains(t, w.Body.String(), `"permitted":true`)
 }

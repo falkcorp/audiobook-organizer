@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.5.2
+// version: 1.6.1
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-10-20
+// last-edited: 2026-10-24
 
 package server
 
@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
@@ -586,4 +587,49 @@ func TestOpsV3Routes_ViewerCannotStartARun(t *testing.T) {
 	// nothing is queued.
 	w := post(editor, "/api/v3/ops/defs/library.scan/runs", `{"mode":"preview"}`)
 	require.Equal(t, http.StatusConflict, w.Code, "an editor holds scan.trigger: %s", w.Body.String())
+}
+
+// TestOpsV3Routes_DeniedInHandlerAnswers403: the permission checks the route
+// table cannot make (the definition's own permission on a start, the
+// approver's on an approve) run inside the handlers through opsV3Authz.Require,
+// which has to write the 403 itself: the handler returns on false and writes
+// nothing else, so a Require that only answered the question would leave a
+// denied caller with an empty 200. An editor holds the routes' floors
+// (scan.trigger, library.view) but not settings.manage, which
+// maintenance.file-integrity-check declares and an approve defaults to.
+// Not parallel: it swaps the process-wide config.
+func TestOpsV3Routes_DeniedInHandlerAnswers403(t *testing.T) {
+	srv, _, _ := repairsPermServer(t, true, true)
+	store, ok := srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok, "the test server runs on a PebbleStore")
+	// Approving needs an interactive sign-in (verifiedForApproval), which the
+	// helper's plain sessions are not.
+	signIn := func(username string) string {
+		u, err := store.GetUserByUsername(username)
+		require.NoError(t, err)
+		require.NotNil(t, u)
+		sess, err := store.CreateSessionWithOrigin(u.ID, "192.0.2.10", "test", time.Hour, database.SessionOriginPassword)
+		require.NoError(t, err)
+		return sess.ID
+	}
+	editor, admin := signIn("editor"), signIn("admin")
+	require.NoError(t, store.InsertRunV3(database.RunRecord{
+		SchemaVersion: 3, ID: "run-awaiting-approval", DefID: "maintenance.file-integrity-check",
+		Kind: "op", Mode: "live", Trigger: "manual", Params: json.RawMessage(`{}`),
+	}))
+
+	for _, r := range []struct{ name, path, body string }{
+		{"start by definition", "/api/v3/ops/defs/maintenance.file-integrity-check/runs", `{"mode":"live"}`},
+		{"start by body", "/api/v3/ops/runs", `{"def":"maintenance.file-integrity-check","mode":"live"}`},
+		{"approve", "/api/v3/ops/runs/run-awaiting-approval/approve", `{}`},
+	} {
+		w := postRepairs(srv, editor, r.path, r.body)
+		require.Equal(t, http.StatusForbidden, w.Code, "editor %s: %s", r.name, w.Body.String())
+		require.Contains(t, w.Body.String(), "permission denied: settings.manage", r.name)
+	}
+
+	// The admin passes the same check: the approve reaches the handler's own
+	// 501 (no approver is wired to a runner).
+	w := postRepairs(srv, admin, "/api/v3/ops/runs/run-awaiting-approval/approve", `{}`)
+	require.Equal(t, http.StatusNotImplemented, w.Code, "admin approve: %s", w.Body.String())
 }

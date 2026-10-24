@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-10-18
+// last-edited: 2026-10-24
 
 package middleware
 
@@ -465,17 +465,33 @@ type UserCounter interface {
 // fixer's RequiredPermissions). It reports whether the caller holds p and,
 // when not, writes the 401 (no user on the context) or 403 response; the
 // caller returns without writing anything else. The first-run bypass is the
-// same: with no users yet, every permission is held.
+// same: with no users yet, every permission is held. It is HoldsPermission
+// followed by RespondPermissionDenied.
 func CheckPermission(store UserCounter, c *gin.Context, p auth.Permission) bool {
+	if HoldsPermission(store, c, p) {
+		return true
+	}
+	RespondPermissionDenied(c, p)
+	return false
+}
+
+// HoldsPermission reports whether the request's caller holds p, writing
+// nothing: for a handler that has to ask the question without answering the
+// request (a list that leaves out what the caller may not use). The first-run
+// bypass applies: with no users yet, every permission is held.
+func HoldsPermission(store UserCounter, c *gin.Context, p auth.Permission) bool {
 	// First-run bypass — RequireAuth uses the same pattern.
 	if store != nil {
 		if n, err := store.CountUsers(); err == nil && n == 0 {
 			return true
 		}
 	}
-	if auth.Can(c.Request.Context(), p) {
-		return true
-	}
+	return auth.Can(c.Request.Context(), p)
+}
+
+// RespondPermissionDenied writes the refusal of a caller that does not hold p:
+// 401 when no user is on the context, 403 naming p when there is one.
+func RespondPermissionDenied(c *gin.Context, p auth.Permission) {
 	// Distinguish unauth (no user on ctx) from authz fail (user present but
 	// missing perm) so API clients get a meaningful status code.
 	if _, ok := auth.UserFromContext(c.Request.Context()); !ok {
@@ -483,7 +499,6 @@ func CheckPermission(store UserCounter, c *gin.Context, p auth.Permission) bool 
 	} else {
 		httputil.RespondWithForbidden(c, "permission denied: "+string(p))
 	}
-	return false
 }
 
 // RequireAdmin is a middleware that checks the authenticated user has the "admin" role.

@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.57.0
+// version: 2.58.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package server
 
@@ -215,9 +215,11 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 	// enforcePerms mirrors s.perm(): when auth is disabled there is no permission
 	// set on the request context, so enforcing would 403 every trigger.
+	repairsOps := s.repairsOpAccess()
 	opsV2H := handlers.NewOperationsV2Handler(opsV2, opReg, opEventHub,
 		config.AppConfig.EnableAuth,
-		handlers.WithAIScanCancellation(v2Pipeline, v2ScanStore))
+		handlers.WithAIScanCancellation(v2Pipeline, v2ScanStore),
+		handlers.WithRepairsOpAccess(repairsOps))
 
 	// Operations domain handler (scan/organize/optimize/transcode triggers,
 	// operation status/logs/result/changes/revert, stale-op management, DB
@@ -275,7 +277,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// revertOperation also drops the series caches when a series_rename
 		// row was restored (series_rename_ops.go).
 		s.revertOperation,
-	)
+	).WithRepairsOpAccess(repairsOps)
 	// getSystemLogs (system handler) delegates its operation_id branch to
 	// operationsH.GetOperationLogs; stash it on the Server for that call.
 	s.operationsHandler = operationsH

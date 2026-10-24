@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-09
+// last-edited: 2026-10-24
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/gin-gonic/gin"
 )
 
@@ -74,6 +75,23 @@ type OperationsV2Handler struct {
 	// no permission set, so enforcing when auth is disabled would 403 every
 	// trigger in that deployment.
 	enforcePerms bool
+
+	// repairsAccess decides who may read a Repairs operation's data (result,
+	// logs, listing). Unset (nil) refuses every repairs op: see
+	// WithRepairsOpAccess.
+	repairsAccess *opaccess.Repairs
+}
+
+// WithRepairsOpAccess installs the check that keeps a Repairs operation's data
+// (GET /operations/v2/:id, its logs and log download, the system log reader's
+// operation_id branch, /operations/timeline and /operations/events) to callers
+// who hold the op's fixer's permissions. It is an option rather than a
+// positional parameter only because NewOperationsV2Handler has dozens of test
+// call sites; omitting it fails closed (every repairs op is refused and left
+// out of the listings), and TestWireHandlers_RepairsOpAccessIsInstalled pins
+// the server's wiring.
+func WithRepairsOpAccess(a *opaccess.Repairs) OperationsV2Option {
+	return func(h *OperationsV2Handler) { h.repairsAccess = a }
 }
 
 // ScanCanceler is the narrow *aiscan.PipelineManager subset needed to cancel an
@@ -327,7 +345,14 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// vocabulary that has moved on, and those need opposite next actions. The
 	// rows are already in hand, so saying which statuses ARE present costs a map.
 	statusesPresent := make(map[string]struct{})
+	repairsReader := h.repairsAccess.For(c)
 	for _, r := range rows {
+		// A Repairs op the caller may not read is not in their timeline at all,
+		// and is not counted in matched either: the id, status and counts of
+		// the op name the plan whose rows they may not read.
+		if !repairsReader.MayRead(&r) {
+			continue
+		}
 		if defID != "" && h.canonicalDefID(r.DefID) != defID {
 			continue
 		}
@@ -392,6 +417,9 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "operation", id)
 		return
 	}
+	if !h.repairsAccess.For(c).Require(row) {
+		return
+	}
 
 	// ?limit= makes this a superset of the retired GET /operations/:id/logs?tail=,
 	// which is what let that route be deleted rather than kept alongside. The 50
@@ -440,6 +468,10 @@ func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
 		return
 	}
 
+	if !h.mayReadLogsOf(c, id) {
+		return
+	}
+
 	logs, err := h.opsStore.GetOpLogsV2(id, 0)
 	if err != nil {
 		httputil.InternalError(c, "failed to fetch operation logs", err)
@@ -481,6 +513,10 @@ func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
 		return
 	}
 
+	if !h.mayReadLogsOf(c, id) {
+		return
+	}
+
 	// ?tail= is accepted as an alias for ?limit=: the retired route spelled it
 	// that way and diagnostics callers may still send it.
 	limit := 50
@@ -505,6 +541,20 @@ func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
 	// Both keys: the retired route answered `items`, the v2 single-op route
 	// answers `logs`, and callers of this provider read one or the other.
 	httputil.RespondWithOK(c, gin.H{"items": resp, "logs": resp})
+}
+
+// mayReadLogsOf is the repairs-op read check for a route that serves an op's
+// logs and has not loaded its row: false means the response is written (403, or
+// 500 when the row cannot be read, which fails closed). An id with no row is not
+// a Repairs op the caller could be refused, so it passes and the route answers
+// as it did.
+func (h *OperationsV2Handler) mayReadLogsOf(c *gin.Context, id string) bool {
+	row, err := h.opsStore.GetOperationV2(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to fetch operation", err)
+		return false
+	}
+	return h.repairsAccess.For(c).Require(row)
 }
 
 // CancelOperationV2 implements DELETE /api/v1/operations/v2/:id.
@@ -862,6 +912,7 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 	c.Writer.Flush()
 
 	notify := c.Request.Context().Done()
+	feed := &opEventFilter{h: h, reader: h.repairsAccess.For(c), seen: map[string]bool{}}
 	for {
 		select {
 		case <-notify:
@@ -872,6 +923,9 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 				// Hub closed the channel (server shutdown).
 				return
 			}
+			if !feed.mayReceive(ev) {
+				continue
+			}
 			b, err := json.Marshal(ev.Payload)
 			if err != nil {
 				continue
@@ -880,6 +934,53 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 			c.Writer.Flush()
 		}
 	}
+}
+
+// opEventFilter keeps the events of a Repairs op the caller may not read off
+// their /operations/events stream: an op.created or op.terminal event names the
+// op and its def, and op.log carries the engine's log lines (the owner's user id
+// on an owner apply). The verdict for an op is read once per stream.
+type opEventFilter struct {
+	h      *OperationsV2Handler
+	reader *opaccess.Reader
+	seen   map[string]bool // op id -> may receive
+}
+
+// mayReceive reports whether ev may go to this stream. An event that names no
+// operation (op_id, else parent_id) is not an op's data and passes. One that
+// names an op passes when the op is not a Repairs op or the caller may read it;
+// an op whose row cannot be read is withheld (fail closed) and asked again on
+// its next event.
+func (f *opEventFilter) mayReceive(ev opsregistry.Event) bool {
+	m, ok := ev.Payload.(map[string]any)
+	if !ok {
+		return true
+	}
+	id, _ := m["op_id"].(string)
+	if id == "" {
+		id, _ = m["parent_id"].(string)
+	}
+	if id == "" {
+		return true
+	}
+	if v, ok := f.seen[id]; ok {
+		return v
+	}
+	if defID, _ := m["def_id"].(string); defID != "" && !opaccess.IsRepairsOp(defID) {
+		f.seen[id] = true
+		return true
+	}
+	if f.h.opsStore == nil {
+		// No store, so no repairs op row exists to protect.
+		return true
+	}
+	row, err := f.h.opsStore.GetOperationV2(id)
+	if err != nil || row == nil {
+		return false
+	}
+	v := f.reader.MayRead(row)
+	f.seen[id] = v
+	return v
 }
 
 // --- helpers ---

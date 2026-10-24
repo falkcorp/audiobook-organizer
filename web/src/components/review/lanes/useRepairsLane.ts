@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.14.1
+// version: 1.15.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -323,6 +323,12 @@ export interface RepairsLane {
    * a Retry that would read the same plan.
    */
   rowsNeedRerun: boolean;
+  /**
+   * The server refused the rows with 403: the caller lacks a permission the
+   * fixer requires (plan rows carry other people's data). The panel says so
+   * and offers no Retry, which would be refused the same way.
+   */
+  rowsForbidden: boolean;
   reloadRows: () => void;
 
   selectedRowIds: ReadonlySet<string>;
@@ -391,6 +397,7 @@ export function useRepairsLane(
   const [rowsLoading, setRowsLoading] = useState(false);
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [rowsNeedRerun, setRowsNeedRerun] = useState(false);
+  const [rowsForbidden, setRowsForbidden] = useState(false);
   const [rowsNonce, setRowsNonce] = useState(0);
 
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
@@ -647,6 +654,7 @@ export function useRepairsLane(
         setPage(null);
         setRowsError(errorMessage(err, 'Failed to load the trial rows.'));
         setRowsNeedRerun(isPlanNeedsRerun(err));
+        setRowsForbidden((err as { status?: number } | null)?.status === 403);
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setRowsLoading(false);
@@ -1085,6 +1093,8 @@ export function useRepairsLane(
     rowsLoading: rowsLoading && planOpId !== null,
     rowsError: planOpId !== null ? rowsError : null,
     rowsNeedRerun: planOpId !== null && rowsNeedRerun,
+    // Stale once the next read clears rowsError, so it is read only with one.
+    rowsForbidden: planOpId !== null && rowsError !== null && rowsForbidden,
     reloadRows,
     selectedRowIds,
     toggleRow,

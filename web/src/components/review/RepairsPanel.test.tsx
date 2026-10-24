@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.23.0
+// version: 1.24.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -348,6 +348,30 @@ describe('RepairsPanel', () => {
     renderPanel();
     expect(await screen.findByTestId('repairs-rows-error')).toHaveTextContent('rows exploded');
     expect(screen.queryByTestId('repairs-rows-empty')).not.toBeInTheDocument();
+  });
+
+  it('says the caller lacks permission for a 403 on the rows, with no Retry', async () => {
+    vi.mocked(api.getRepairPlanRows).mockRejectedValue(
+      Object.assign(new Error('permission denied: settings.manage'), { status: 403 })
+    );
+    renderPanel();
+    const alert = await screen.findByTestId('repairs-rows-forbidden');
+    expect(alert).toHaveTextContent(/don't have permission/i);
+    expect(alert).toHaveTextContent('permission denied: settings.manage');
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-rows-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-rows-empty')).not.toBeInTheDocument();
+  });
+
+  it('shows a no-permission state, and no trial controls or row reads, for a fixer the server marks not permitted', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([
+      { ...FIXER, last_plan: undefined, last_apply: undefined, permitted: false },
+    ]);
+    renderPanel();
+    expect(await screen.findByTestId('repairs-fixer-forbidden')).toHaveTextContent(/don't have permission/i);
+    expect(screen.queryByTestId('repairs-no-trial')).not.toBeInTheDocument();
+    expect(screen.queryByText('Run trial')).not.toBeInTheDocument();
+    expect(api.getRepairPlanRows).not.toHaveBeenCalled();
   });
 
   it('says so when a trial found nothing to repair', async () => {

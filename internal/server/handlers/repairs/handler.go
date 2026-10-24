@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-10-22
+// last-edited: 2026-10-24
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -35,6 +35,17 @@
 // requires every permission repairs.RequiredPermissions(fixer) names (a
 // repairs.PermissionScoped fixer can ask for more, e.g. settings.manage).
 // 401/403 as the route middleware answers, nothing enqueued.
+//
+// Reading follows the same per-fixer permission (security fix 2026-10-24):
+// plan rows carry other users' data (the master-list import's target and
+// uploader ids, the Audible read-status fixer's reading state), so GET
+// /repairs/:fixer/plan/:op_id/rows needs every permission
+// repairs.RequiredPermissions(fixer) names, not just the route's
+// library.view, and answers 401/403 before it reads anything. GET /repairs
+// lists every fixer but leaves the last plan/apply pointers (op ids and the
+// counts in their summaries) off an entry the caller may not use, and marks it
+// "permitted": false so the lane can say so. The route-level library.view
+// still lets a caller see that a fixer exists.
 package repairs
 
 import (
@@ -90,13 +101,13 @@ type Handler struct {
 	// ownerEmail returns the configured owner_email, read per request so a
 	// change takes effect without a restart.
 	ownerEmail func() string
-	// permCheck reports whether the caller holds a permission, writing the
-	// 401/403 when not (PermissionCheck).
+	// permCheck reports whether the caller holds a permission (PermissionCheck).
 	permCheck PermissionCheck
 }
 
-// PermissionCheck reports whether the request's caller holds p; when it does
-// not, it has written the 401/403 response and the handler stops.
+// PermissionCheck reports whether the request's caller holds p. It writes
+// nothing: the handler answers a refusal itself (fixerPermitted), and GET
+// /repairs asks it without refusing anything.
 type PermissionCheck func(c *gin.Context, p auth.Permission) bool
 
 // New builds the handler. enqueuer may be nil: plan/apply then answer 503.
@@ -118,26 +129,37 @@ func (h *Handler) WithPermissionCheck(check PermissionCheck) *Handler {
 	return h
 }
 
-// StrictPermissionCheck is servermiddleware.CheckPermission with no
+// StrictPermissionCheck is servermiddleware.HoldsPermission with no
 // first-run bypass: the caller must hold p. It fails closed for a handler the
 // server did not wire.
 func StrictPermissionCheck(c *gin.Context, p auth.Permission) bool {
-	return servermiddleware.CheckPermission(nil, c, p)
+	return servermiddleware.HoldsPermission(nil, c, p)
 }
 
-// fixerPermitted checks every permission f requires
-// (repairs.RequiredPermissions); false means the 401/403 is written.
-func (h *Handler) fixerPermitted(c *gin.Context, f repairs.Fixer) bool {
+// fixerHeld reports whether the caller holds every permission f requires
+// (repairs.RequiredPermissions) and, when not, the first one it lacks. It
+// writes nothing.
+func (h *Handler) fixerHeld(c *gin.Context, f repairs.Fixer) (missing auth.Permission, ok bool) {
 	check := h.permCheck
 	if check == nil {
 		check = StrictPermissionCheck
 	}
 	for _, p := range repairs.RequiredPermissions(f) {
 		if !check(c, p) {
-			return false
+			return p, false
 		}
 	}
-	return true
+	return "", true
+}
+
+// fixerPermitted checks every permission f requires
+// (repairs.RequiredPermissions); false means the 401/403 is written.
+func (h *Handler) fixerPermitted(c *gin.Context, f repairs.Fixer) bool {
+	missing, ok := h.fixerHeld(c, f)
+	if !ok {
+		servermiddleware.RespondPermissionDenied(c, missing)
+	}
+	return ok
 }
 
 // ownerWhyNot is why the request is not the owner ("" when it is): a
@@ -189,6 +211,11 @@ type FixerInfo struct {
 	// PlanOnly: the fixer only previews (repairs.PlanOnly). Its apply routes
 	// answer 409 and the lane shows no Apply control for it.
 	PlanOnly bool `json:"plan_only,omitempty"`
+	// Permitted: the caller holds every permission the fixer requires
+	// (repairs.RequiredPermissions), so may read its plan rows and start its
+	// plan or apply. When false, LastPlan and LastApply are left out: they carry
+	// operation ids that open the fixer's plan rows and counts that describe them.
+	Permitted bool `json:"permitted"`
 }
 
 // StartedResponse answers plan/apply.
@@ -230,9 +257,16 @@ func (h *Handler) ListFixers(c *gin.Context) {
 	fixers := h.fixers.List()
 	out := make([]FixerInfo, 0, len(fixers))
 	for _, f := range fixers {
-		out = append(out, FixerInfo{ID: f.ID(), Title: f.Title(), Description: f.Description(),
-			LastPlan: h.lastRun(lastPlanKey(f.ID())), LastApply: h.lastRun(lastApplyKey(f.ID())),
-			PlanOnly: repairs.IsPlanOnly(f)})
+		_, held := h.fixerHeld(c, f)
+		info := FixerInfo{ID: f.ID(), Title: f.Title(), Description: f.Description(),
+			PlanOnly: repairs.IsPlanOnly(f), Permitted: held}
+		// Only for a caller who may read the fixer's rows: the pointers name the
+		// plan op whose rows ListPlanRows serves, and their summaries count them.
+		if info.Permitted {
+			info.LastPlan = h.lastRun(lastPlanKey(f.ID()))
+			info.LastApply = h.lastRun(lastApplyKey(f.ID()))
+		}
+		out = append(out, info)
 	}
 	httputil.RespondWithOK(c, gin.H{"fixers": out})
 }
@@ -328,9 +362,16 @@ func (h *Handler) StartPlan(c *gin.Context) {
 
 // ListPlanRows implements GET /repairs/:fixer/plan/:op_id/rows
 // ?offset=&limit=&filter=applicable|skipped|skipped:<kind>&class=<row class>.
+// The caller must hold every permission the fixer requires (fixerPermitted,
+// as the plan and apply routes do), checked before anything is read; the plan
+// must be a completed plan of this fixer (loadPlan), so another fixer's op id
+// cannot be read under a fixer the caller may use.
 func (h *Handler) ListPlanRows(c *gin.Context) {
 	f, ok := h.fixer(c)
 	if !ok {
+		return
+	}
+	if !h.fixerPermitted(c, f) {
 		return
 	}
 	offset, err := intQuery(c, "offset", 0)
