@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.23.0
+// version: 1.23.2
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-24
 
@@ -425,7 +425,13 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// pre-check exists so the refusal happens before the side effects
 	// above, not after them. Fail closed: an unreadable file list is not
 	// proof there are no rows.
-	ownedFiles, ownErr := svc.store.GetBookFiles(book.ID)
+	//
+	// Retired rows count: DeleteBook refuses a book holding one as well
+	// (ErrBookOwnsFiles), so a trashed holder whose only rows are retired
+	// versions would otherwise pass here, get its tombstone written, and then
+	// fail the delete every night as a purge failure instead of being kept as
+	// owning files.
+	ownedFiles, ownErr := database.BookFilesIncludingRetired(svc.store, book.ID)
 	if ownErr != nil {
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot read its book_file rows: %v", book.ID, ownErr)}}
 	}
@@ -847,7 +853,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 		return nil, err
 	}
 	if res.Book == nil {
-		return nil, fmt.Errorf("audiobook not found")
+		return nil, ErrAudiobookNotFound
 	}
 	if !res.Restored {
 		return res.Book, nil

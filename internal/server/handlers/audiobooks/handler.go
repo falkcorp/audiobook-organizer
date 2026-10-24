@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.3
+// version: 1.36.4
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -1159,11 +1159,17 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 	id := c.Param("id")
 	updated, err := h.audiobookService.RestoreAudiobook(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, merge.ErrBookIsRetiredShell) {
+		switch {
+		case errors.Is(err, merge.ErrBookIsRetiredShell):
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeRetiredShell)
-			return
+		case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
+			httputil.RespondWithNotFound(c, "audiobook", id)
+		default:
+			// Only a missing book is "not found". A failed read (the shell
+			// check fails closed when retired rows cannot be read) is a server
+			// fault, and answering 404 would tell the owner the book is gone.
+			httputil.InternalError(c, "failed to restore audiobook", err)
 		}
-		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
 
