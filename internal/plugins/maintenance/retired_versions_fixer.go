@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-28
 
@@ -97,25 +97,34 @@ const retiredMinAgeDaysDefault = 14
 //  5. owner_vetoed: the owner rejected this book's retired-versions proposal
 //     (a live reject under op_kind repairs:retired-versions with the book as
 //     the entity), or rejected joining this book and its target
-//     (decisions.PairVetoed, same_work or same_copy, ids resolved through the
-//     retired-version index and the merge survivor).
-//  6. itunes_needs_owner_approval: a file of the book OR of its target sits
+//     (decisions.PairVetoed, same_work or same_copy). Every stored id of a
+//     reject is resolved through the retired-version index and the merge
+//     survivor, and the reject keeps the books each end went through, so it
+//     also holds a book that was merged into, retired onto or absorbed by the
+//     target after the owner rejected it (internal/decisions, Vetoes.PairVetoed).
+//  6. owner_veto_unresolvable: a reject that could touch this pair names an id
+//     that cannot be resolved to one book (a shell whose retired versions name
+//     two holders, a merge chain that loops), or the shell or its target is
+//     such an id. NOT retired: a reject that cannot be ruled out holds the row,
+//     and the reason lists every such id. Only the rows that touch one are
+//     held; the others are planned as usual.
+//  7. itunes_needs_owner_approval: a file of the book OR of its target sits
 //     under the frozen books/itunes/** tree, symlinks resolved. The owner
 //     approves these separately.
-//  7. owner_manual_only: the book OR its target is Doctor Who / Big Finish /
+//  8. owner_manual_only: the book OR its target is Doctor Who / Big Finish /
 //     Torchwood by path, series, title, credits, transcribed fields or a
 //     franchise tag (repairs.GuardOwnerManualBooks, the framework guard's own
 //     check, trashed books included: the guard RunPlan runs passes over a
 //     trashed book, so the fixer asks it itself). The owner applies these by
 //     hand; without this category such a row would be counted would_retire and
 //     then skipped by the framework's guard.
-//  8. age_unknown / too_recent: soft-deleted less than min_age_days ago, or no
+//  9. age_unknown / too_recent: soft-deleted less than min_age_days ago, or no
 //     soft-delete time on the row.
-//  9. has_listening_state / listening_state_unknown: any user has listening
+//  10. has_listening_state / listening_state_unknown: any user has listening
 //     state on the book, or it could not be read (fails closed).
-//  10. would_retire_same_path: at least one row's path equals a live row's
+//  11. would_retire_same_path: at least one row's path equals a live row's
 //     path. Retired anyway; both rows are kept.
-//  11. would_retire: everything else.
+//  12. would_retire: everything else.
 //
 // The plan's rule 5 (a content-hash match between the shell and its target)
 // is deferred to a later PR; so is rule 2 (merge.ResolveMergeSurvivor).
@@ -126,6 +135,7 @@ const (
 	retCatNoTargetMissing  = "no_target_files_missing"
 	retCatNoTargetPresent  = "no_target_files_present"
 	retCatVetoed           = "owner_vetoed"
+	retCatVetoUnresolvable = "owner_veto_unresolvable"
 	retCatOwnerManual      = "owner_manual_only"
 	retCatITunes           = "itunes_needs_owner_approval"
 	retCatAgeUnknown       = "age_unknown"
@@ -467,13 +477,12 @@ func (f *retiredVersionsFixer) loadShared(ctx context.Context) (*retiredShared, 
 	if vetoes == nil || journals == nil {
 		return nil, fmt.Errorf("%s: the owner's rejects or the combine journal cannot be read on this server; refusing to plan without them", retiredVersionsFixerID)
 	}
-	// A reader that loads a snapshot (NewOwnerVetoReader's) does it now, so a
-	// run that cannot read the rejects is refused whole instead of becoming a
-	// plan of error rows.
-	if l, ok := vetoes.(interface{ Load(context.Context) error }); ok {
-		if err := l.Load(context.Background()); err != nil {
-			return nil, fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
-		}
+	// The reader loads its snapshot now, so a run that cannot READ the rejects
+	// (the store or a journal failed) is refused whole instead of becoming a
+	// plan of error rows. An id that cannot be resolved is not such a failure:
+	// the rows it touches are held (owner_veto_unresolvable), the rest planned.
+	if err := vetoes.Load(ctx); err != nil {
+		return nil, fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
 	}
 	probe, err := merge.NewUserStateProbe(users)
 	if err != nil {
@@ -658,34 +667,85 @@ func (r *retiredRun) undoShells() (map[string][]string, error) {
 // reject of the shell's own proposal (not by a pair veto in a family).
 const retVetoShellRejected = "shell_rejected"
 
+// retVetoUnresolvable is the owner_veto_family of a row held because the
+// owner's rejects could not be ruled out: an id they or the row name cannot be
+// resolved to one book.
+const retVetoUnresolvable = "unresolvable"
+
 // vetoed returns why the owner's rejects hold the row of shell a retiring onto
 // b: retVetoShellRejected when a live reject of a's repairs:retired-versions
 // proposal exists (sticky: it holds whatever the target), else the op family in
-// which the owner rejected joining a and b, "" for none. The pair is asked
-// through the owner-veto reader, whose ids are resolved to the books that
-// survive, so a veto naming a retired, purged or merged-away book still holds.
-func (r *retiredRun) vetoed(a, b string) (string, error) {
+// which the owner rejected joining a and b, else retVetoUnresolvable (with
+// every id that could not be resolved) when a reject that could touch the pair
+// cannot be ruled out, "" for none. A definite veto wins over an unresolvable
+// one: the row is held either way, and the definite reason is the one the owner
+// can act on. The pair is asked through the owner-veto reader, whose ids are
+// resolved to the books that survive (and keep the books they went through), so
+// a veto naming a retired, purged, merged-away or absorbed book still holds.
+func (r *retiredRun) vetoed(a, b string) (string, []decisions.UnresolvedID, error) {
 	key, err := decisions.RetiredVersionsSubjectKey(a)
 	if err != nil {
-		return "", fmt.Errorf("fingerprint the proposal for %s: %w", a, err)
+		return "", nil, fmt.Errorf("fingerprint the proposal for %s: %w", a, err)
 	}
 	rejected, err := r.vetoes.SubjectRejected(decisions.OpKindRetiredVersions, key, "")
 	if err != nil {
-		return "", fmt.Errorf("read the owner's rejects for %s: %w", a, err)
+		return "", nil, fmt.Errorf("read the owner's rejects for %s: %w", a, err)
 	}
 	if rejected {
-		return retVetoShellRejected, nil
+		return retVetoShellRejected, nil, nil
 	}
+	var unresolved []decisions.UnresolvedID
+	seen := map[string]bool{}
 	for _, fam := range []string{decisions.FamilySameWork, decisions.FamilySameCopy} {
 		v, err := r.vetoes.PairVetoed(retiredEntityBook, a, b, fam)
+		var ue *decisions.UnresolvableError
+		if errors.As(err, &ue) {
+			for _, u := range ue.IDs {
+				if k := u.EntityType + "\x00" + u.ID; !seen[k] {
+					seen[k] = true
+					unresolved = append(unresolved, u)
+				}
+			}
+			continue
+		}
 		if err != nil {
-			return "", fmt.Errorf("read the owner's rejects for %s and %s: %w", a, b, err)
+			return "", nil, fmt.Errorf("read the owner's rejects for %s and %s: %w", a, b, err)
 		}
 		if v {
-			return fam, nil
+			return fam, nil, nil
 		}
 	}
-	return "", nil
+	if len(unresolved) > 0 {
+		sort.Slice(unresolved, func(i, j int) bool {
+			if unresolved[i].EntityType != unresolved[j].EntityType {
+				return unresolved[i].EntityType < unresolved[j].EntityType
+			}
+			return unresolved[i].ID < unresolved[j].ID
+		})
+		return retVetoUnresolvable, unresolved, nil
+	}
+	return "", nil, nil
+}
+
+// retiredUnresolvedDetail words the ids a reject could not be ruled out for.
+func retiredUnresolvedDetail(ids []decisions.UnresolvedID) string {
+	parts := make([]string, len(ids))
+	for i, u := range ids {
+		parts[i] = fmt.Sprintf("%s %s (%v)", u.EntityType, u.ID, u.Err)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// logUnresolvedVetoIDs reports, once per plan, every stored id of the owner's
+// rejects that could not be resolved (all of them, not the first), so an
+// operator sees the whole set rather than finding them one row at a time.
+func (r *retiredRun) logUnresolvedVetoIDs(rep registry.Reporter) {
+	ids := r.vetoes.Unresolved()
+	if len(ids) == 0 {
+		return
+	}
+	_ = rep.Log(slog.LevelWarn, fmt.Sprintf("%d id(s) named by the owner's rejects cannot be resolved to one book; the rows that touch them are held as %s: %s",
+		len(ids), retCatVetoUnresolvable, retiredUnresolvedDetail(ids)))
 }
 
 // retiredFacts is everything one book's category is decided from.
@@ -732,6 +792,8 @@ type retiredFacts struct {
 	statUnknown  int
 
 	vetoFamily string
+	// vetoUnresolved lists the ids that held the row as retCatVetoUnresolvable.
+	vetoUnresolved []decisions.UnresolvedID
 	// undoJournal lists the combine journals, not undone, that name the shell
 	// as absorbed; a non-empty list is the combine_undo_aware flag.
 	undoJournal []string
@@ -1010,14 +1072,18 @@ func (r *retiredRun) decide(ctx context.Context, fa *retiredFacts) (cat, why str
 	}
 
 	// From here the row has a target.
-	fam, err := r.vetoed(fa.shell.ID, fa.targetID)
+	fam, unresolved, err := r.vetoed(fa.shell.ID, fa.targetID)
 	if err != nil {
 		return "", "", err
 	}
 	if fam != "" {
-		fa.vetoFamily = fam
-		if fam == retVetoShellRejected {
+		fa.vetoFamily, fa.vetoUnresolved = fam, unresolved
+		switch fam {
+		case retVetoShellRejected:
 			return retCatVetoed, "the owner rejected retiring this book (a reject of its retired-versions proposal)", nil
+		case retVetoUnresolvable:
+			return retCatVetoUnresolvable, "a reject of the owner's that could touch this book and its target cannot be ruled out, because " +
+				strconv.Itoa(len(unresolved)) + " id(s) cannot be resolved to one book: " + retiredUnresolvedDetail(unresolved), nil
 		}
 		return retCatVetoed, "the owner rejected joining this book and its target (" + fam + ")", nil
 	}
@@ -1183,6 +1249,13 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		cur.putN("rows_stat_unknown", fa.statUnknown)
 	}
 	cur.put("owner_veto_family", fa.vetoFamily)
+	if len(fa.vetoUnresolved) > 0 {
+		ids := make([]string, len(fa.vetoUnresolved))
+		for i, u := range fa.vetoUnresolved {
+			ids[i] = u.ID
+		}
+		cur["owner_veto_unresolved_ids"] = strings.Join(ids, ",")
+	}
 	cur.put("itunes_side", fa.itunesSide)
 	cur.put("owner_manual_side", fa.ownerManualSide)
 	if len(fa.undoJournal) > 0 {
@@ -1215,6 +1288,9 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Evidence = append(row.Evidence, "an unreversed combine journal names this book as absorbed ("+retiredJoinCapped(fa.undoJournal, 3)+
 			"); undoing that combine would restore it, so a retire is meant to be reversible by that undo (combine_undo_aware)")
 	}
+	if len(fa.vetoUnresolved) > 0 {
+		row.Evidence = append(row.Evidence, "owner rejects held because these ids cannot be resolved to one book: "+retiredUnresolvedDetail(fa.vetoUnresolved))
+	}
 	if fa.itunesSide != "" {
 		row.Evidence = append(row.Evidence, "iTunes check tripped on the "+fa.itunesSide+": "+fa.itunesWhy)
 	}
@@ -1230,7 +1306,7 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Risk = repairs.RiskReview
 		row.Evidence = append(row.Evidence, "shares a path with a live book that is not the target")
 	}
-	if fa.itunesSide != "" || fa.ownerManualSide != "" || (fa.targetID == "" && fa.ambiguous != "") {
+	if fa.itunesSide != "" || fa.ownerManualSide != "" || (fa.targetID == "" && fa.ambiguous != "") || cat == retCatVetoUnresolvable {
 		row.Risk = repairs.RiskReview
 	}
 
@@ -1263,7 +1339,7 @@ func retiredFingerprint(fa *retiredFacts, cat string) string {
 	parts := []string{cat, fa.shell.ID, fa.groupID, fa.groupClass, fa.targetID, fa.targetMethod, fa.ambiguous,
 		retiredDeref(fa.shell.LibraryState), strconv.Itoa(fa.sharedRows), strings.Join(fa.sharedWith, ","),
 		fa.rule4, fa.mergedLive, fa.itunesSide, fa.itunesWhy, fa.ownerManualSide, fa.ownerManualWhy, strconv.Itoa(fa.absentOnDisk), strconv.Itoa(fa.statUnknown),
-		fa.vetoFamily, strings.Join(fa.undoJournal, ",")}
+		fa.vetoFamily, retiredUnresolvedDetail(fa.vetoUnresolved), strings.Join(fa.undoJournal, ",")}
 	if fa.target != nil {
 		parts = append(parts, strconv.Itoa(fa.target.files), strconv.Itoa(fa.target.missing), strconv.FormatBool(fa.target.itunes), fa.target.manualWhy)
 	}
@@ -1298,6 +1374,7 @@ func (f *retiredVersionsFixer) Plan(ctx context.Context, params json.RawMessage,
 	if err != nil {
 		return nil, err
 	}
+	run.logUnresolvedVetoIDs(rep)
 	// Stragglers of earlier runs still hold OS threads. A few are only worth a
 	// warning; at the cap the mount is dead, and another plan would stack more
 	// blocked threads on it, so the plan is refused until they return.
