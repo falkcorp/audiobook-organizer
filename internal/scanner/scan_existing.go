@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-23
 //
 // Resolves, once, the stored row a scanned book already is.
 
@@ -186,7 +186,15 @@ func (e *scanExisting) lookupSegments(book *Book) {
 		}
 		book.SegmentHashes[segFile] = h
 		candidate, lerr := store.GetBookBySegmentFileHash(h)
-		if lerr != nil || candidate == nil {
+		if lerr != nil {
+			// A failed lookup casts no vote, so it can only lower a book's count:
+			// the vote carries on with what it has, but the failure is counted
+			// (into the scan's duplicate-lookup error summary) and logged rather
+			// than read as "no match".
+			warnSampled(&dupLookupErrCount, defaultLog, "duplicate-detection segment hash lookup failed for %s: %v", segFile, lerr)
+			continue
+		}
+		if candidate == nil {
 			continue
 		}
 		bookVotes[candidate.ID]++
