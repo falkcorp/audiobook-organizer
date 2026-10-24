@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -185,11 +185,22 @@ func ImportToLibraryWith(
 	// The row the path index holds for src must be this row. The index keeps
 	// one entry per path; importing on behalf of another row would repoint
 	// this one and leave that one naming the seeding file.
-	if atSrc, lookErr := store.GetBookFileByPath(src); lookErr != nil {
+	//
+	// Unfiltered: the entry may belong to a retired version's row, which still
+	// names its file. The live-only getter answers nil for that, and the
+	// import would copy the retired version's bytes into the library on behalf
+	// of a live row that merely shares the path -- re-importing retired content
+	// as live. The refusal leaves the row pending, which is the signal that two
+	// rows name one file.
+	if atSrc, lookErr := database.BookFileByPathIncludingRetired(store, src); lookErr != nil {
 		return "", fmt.Errorf("ImportToLibrary: look up the book file at %s: %w", src, lookErr)
 	} else if atSrc != nil && atSrc.ID != bookFile.ID {
-		return "", fmt.Errorf("ImportToLibrary: the path index names book file %s (book %s) for %s, not %s (book %s); refusing to import",
-			atSrc.ID, atSrc.BookID, src, bookFile.ID, bookFile.BookID)
+		kind := "book file"
+		if atSrc.Retired {
+			kind = "retired version's book file"
+		}
+		return "", fmt.Errorf("ImportToLibrary: the path index names %s %s (book %s) for %s, not %s (book %s); refusing to import",
+			kind, atSrc.ID, atSrc.BookID, src, bookFile.ID, bookFile.BookID)
 	}
 
 	// Determine destination path inside RootDir, validating with safepath.
