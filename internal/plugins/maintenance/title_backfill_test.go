@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.56.2
+// version: 1.56.3
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-28
 
@@ -89,7 +89,7 @@ func (d fakeDeps) OwnerVetoes() OwnerVetoReader {
 	if d.vetoes != nil {
 		return d.vetoes
 	}
-	return NewOwnerVetoReader(d.store)
+	return NewOwnerVetoReader(d.store, nil)
 }
 
 // CombineJournals (RetiredVersionGuards): the fixture's scanner, else the store.
