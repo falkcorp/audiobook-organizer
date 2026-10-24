@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-10-23
 
@@ -63,8 +63,9 @@ func (p *PebbleStore) lockBook(id string) func() {
 // post-commit aggregate recompute writes the book under lockBook; every
 // book_file writer releases its file stripe before that recompute, so a file
 // stripe is never held while a book stripe is taken and the two sets cannot
-// deadlock against each other. The batch paths (upserts, moves, deletes)
-// write many rows and do not take file stripes.
+// deadlock against each other. The multi-row writers take their rows' stripes
+// through lockBookFiles (the retired-version writers and BatchUpsertBookFiles);
+// the other batch paths (moves, deletes) do not take file stripes.
 func (p *PebbleStore) lockBookFile(fileID string) func() {
 	mu := &p.bookFileLocks[stripeFor(fileID)]
 	mu.Lock()
@@ -72,18 +73,20 @@ func (p *PebbleStore) lockBookFile(fileID string) func() {
 }
 
 // lockBookFiles takes the write stripes of every file ID at once, ascending and
-// de-duplicated, and returns the unlock func. It is for the multi-row retired
-// writers (RetireBookFiles, UnretireBookFiles, RehomeRetiredVersion), which read
-// their rows, stage a batch and commit it, and so must exclude every single-row
-// book_file writer (UpdateBookFile, PatchBookFileFields, ...) for the rows they
-// move: without it a fingerprint or transcript write committed between the
-// read and the commit is silently undone by the batch, which writes the row as
-// it was read.
+// de-duplicated, and returns the unlock func. It is for the multi-row writers
+// that read rows, stage a batch and commit it: the retired-version writers
+// (RetireBookFiles, UnretireBookFiles, RehomeRetiredVersion) and
+// BatchUpsertBookFiles. They must exclude every other book_file writer for the
+// rows they rewrite: without it a fingerprint or transcript write, or a scan's
+// upsert, committed between the read and the commit is silently undone by the
+// batch, which writes the row as it was read.
 //
-// Holding several file stripes is deadlock-free because every other holder takes
-// ONE file stripe and never waits for a second, and this takes its own in a
-// fixed order. Callers take the version stripe (lockBookVersion) BEFORE this and
-// the owner stripes (commitBookFileBatch) AFTER it.
+// LOCK ORDER: version stripe (lockBookVersion), then the file stripes here, then
+// the owner stripes (commitBookFileBatch). Book stripes are taken only after the
+// file stripes are released. Holding several file stripes is deadlock-free
+// because every holder takes its stripes in this same ascending order (the
+// single-row writers take exactly one and never wait for a second). The stripes
+// are not re-entrant: nothing called under them may take a file stripe.
 func (p *PebbleStore) lockBookFiles(ids []string) func() {
 	stripes := make([]int, 0, len(ids))
 	for _, id := range ids {
