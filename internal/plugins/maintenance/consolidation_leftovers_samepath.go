@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
 // last-edited: 2026-10-23
 
@@ -63,6 +63,12 @@ func leftoverPathOwners(books map[string]*database.BookCore, rowsOf map[string][
 // multi-valued row and book-path indexes, never the single-owner
 // GetBookFileByPath (last writer wins). A read that cannot be complete is an
 // error, never "no owner": the re-plan then fails and nothing is applied.
+//
+// It answers "which live books own this path" (database/iface_retired.go), so a
+// retired row is skipped by design. That is safe because nothing here writes a
+// row onto the path: the leftover's own rows are retired into the survivor,
+// which only re-keys rows that already exist. A write that put a row on the
+// path would have to count the retired row as a claim.
 func leftoverFreshPathOwners(store OpsStore, p string) ([]string, error) {
 	pr, ok := store.(leftoverPathRowsReader)
 	if !ok {

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/fix_version_groups.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: a1000004-0000-0000-0000-000000000004
-// last-edited: 2026-10-02
+// last-edited: 2026-10-23
 
 package jobs
 
@@ -354,6 +354,10 @@ type vgAuthorDirPlan struct {
 	// ownedElsewhere holds subdir files another book already has a row for.
 	// They are left alone; taking them would steal that book's file.
 	ownedElsewhere []string
+	// heldRetired holds subdir files a RETIRED version holds, whoever it is keyed
+	// under (the book's own retired version included). A retired row is a claim on
+	// its file: no row is created on it and no live row is repointed onto it.
+	heldRetired []string
 	// left counts this book's rows that match nothing in subdir, or whose
 	// name match could not be verified. They are kept as they are, never
 	// deleted.
@@ -434,11 +438,26 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 			plan.keep++
 			continue
 		}
-		owner, err := store.GetBookFileByPath(fp)
+		// Every row at fp, retired ones included: GetBookFileByPath answers live
+		// rows only, so a file held by a retired version read as free and got a
+		// second row (create) or a live row repointed onto it. A lookup that
+		// cannot be complete is an error, never "no row".
+		at, err := database.BookFileRowsAtPathStrict(store, fp)
 		if err != nil {
-			return nil, fmt.Errorf("look up row for %s: %w", fp, err)
+			return nil, fmt.Errorf("look up rows for %s: %w", fp, err)
 		}
-		if owner != nil && owner.BookID != bookID {
+		if database.RetiredClaimOnPath(at) != nil {
+			plan.heldRetired = append(plan.heldRetired, fp)
+			continue
+		}
+		elsewhere := false
+		for i := range at {
+			if at[i].BookID != bookID {
+				elsewhere = true
+				break
+			}
+		}
+		if elsewhere {
 			plan.ownedElsewhere = append(plan.ownedElsewhere, fp)
 			continue
 		}
@@ -477,12 +496,12 @@ func vgPlanAuthorDirFix(store maintenance.JobStore, bookID, subdir string) (*vgA
 		// subdir's files -- would leave every old row behind under a book
 		// that no longer points at them. A book with no rows at all has
 		// nothing to leave behind, so only its new files are created.
-		return nil, fmt.Errorf("%w: none of book %s's %d row(s) could be verified in %s (%d unverified name match(es), %d unmatched file(s), %d owned by other books)",
-			errVGRefused, bookID, len(rows), subdir, len(plan.unverified), len(plan.create), len(plan.ownedElsewhere))
+		return nil, fmt.Errorf("%w: none of book %s's %d row(s) could be verified in %s (%d unverified name match(es), %d unmatched file(s), %d owned by other books, %d held by retired versions)",
+			errVGRefused, bookID, len(rows), subdir, len(plan.unverified), len(plan.create), len(plan.ownedElsewhere), len(plan.heldRetired))
 	}
 	if plan.keep+len(plan.repoint)+len(plan.create) == 0 {
-		return nil, fmt.Errorf("%w: no file in %s could be tied to book %s (%d owned by other books)",
-			errVGRefused, subdir, bookID, len(plan.ownedElsewhere))
+		return nil, fmt.Errorf("%w: no file in %s could be tied to book %s (%d owned by other books, %d held by retired versions)",
+			errVGRefused, subdir, bookID, len(plan.ownedElsewhere), len(plan.heldRetired))
 	}
 	return plan, nil
 }
@@ -511,9 +530,9 @@ func vgApplyAuthorDirFix(store maintenance.JobStore, plan *vgAuthorDirPlan) erro
 	if updated == nil {
 		return fmt.Errorf("book %s not found", plan.bookID)
 	}
-	if plan.left > 0 || len(plan.ownedElsewhere) > 0 {
-		vgLog.Warn("author-dir fix book=%s kept=%d repointed=%d created=%d left_untouched=%d owned_by_other_books=%d",
-			logger.SanitizeLogValue(plan.bookID), plan.keep, len(plan.repoint), len(plan.create), plan.left, len(plan.ownedElsewhere))
+	if plan.left > 0 || len(plan.ownedElsewhere) > 0 || len(plan.heldRetired) > 0 {
+		vgLog.Warn("author-dir fix book=%s kept=%d repointed=%d created=%d left_untouched=%d owned_by_other_books=%d held_by_retired_versions=%d",
+			logger.SanitizeLogValue(plan.bookID), plan.keep, len(plan.repoint), len(plan.create), plan.left, len(plan.ownedElsewhere), len(plan.heldRetired))
 	}
 	return nil
 }

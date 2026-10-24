@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-23
 
@@ -2695,13 +2695,25 @@ func (ms *Service) planOwnFile(b *database.Book) virtualFilePlan {
 // can't be changed in place -- the primary key embeds it), never duplicated.
 // A new row's id is minted here, so the journal can name it before it exists.
 func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) virtualFilePlan {
-	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
-	if existing != nil && existing.Retired {
-		// A retired version is not a file of the book it is keyed under, and the
-		// move below would refuse it (a retired row is only moved by the retire
-		// operations). The path stays shared with it; this book gets its own row.
-		existing = nil
+	// A path held by a retired version is that version's file: the move below
+	// would refuse the row (a retired row is only moved by the retire operations)
+	// and creating one would put a second row on the file, so the plan attaches
+	// nothing. The retired row keeps the file; the merge goes on without a row for
+	// it. GetBookFileByPath cannot see the retired row (it answers live rows
+	// only), so ask the complete lookup. An answer that cannot be complete
+	// (memdb not serving) is treated the same way rather than as "free".
+	rows, rowsErr := database.BookFileRowsAtPath(ms.db, b.FilePath)
+	if rowsErr != nil {
+		slog.Warn("combine: cannot tell whether a retired version holds the file; no row planned for it",
+			"book", b.ID, "path", logger.SanitizeLogValue(b.FilePath), "err", rowsErr)
+		return virtualFilePlan{}
 	}
+	if held := database.RetiredClaimOnPath(rows); held != nil {
+		slog.Info("combine: the file is held by a retired version; no row planned for it",
+			"book", b.ID, "path", logger.SanitizeLogValue(b.FilePath), "retired_file", held.ID, "holder", held.BookID)
+		return virtualFilePlan{}
+	}
+	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
 	if existing != nil {
 		if existing.BookID == targetBookID {
 			return virtualFilePlan{attached: true}

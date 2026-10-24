@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-18
+// last-edited: 2026-10-23
 
 package maintenance
 
@@ -289,6 +289,10 @@ type jobBookFileReader interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	// BookFilesAtPath: every row at a path, retired ones included, for a job
+	// that decides a file is free (fix-version-groups); GetBookFileByPath
+	// filters a retired row out.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	GetBookFilesNeedingDelugeImportCore() ([]database.BookFileCore, error)
 }
