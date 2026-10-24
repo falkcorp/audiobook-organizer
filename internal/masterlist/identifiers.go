@@ -1,5 +1,5 @@
 // file: internal/masterlist/identifiers.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f55d631-2d6d-4b9e-80f6-2ff098e1419e
 // last-edited: 2026-10-23
 
@@ -116,7 +116,7 @@ func allDigits(s string) bool {
 
 // ValidASIN reports whether s (after cleaning) has the shape of an ASIN: ten
 // upper-case letters or digits. It returns the cleaned form. The shape is all
-// that can be checked; an ASIN carries no checksum. An all-digit value that
+// that can be checked; an ASIN carries no checksum. A value of ISBN-10 shape that
 // passes the ISBN-10 check is an ISBN-10, not an ASIN (see ClassifyASIN).
 func ValidASIN(s string) (string, bool) {
 	c := cleanIdentifier(s)
@@ -132,15 +132,28 @@ func ValidASIN(s string) (string, bool) {
 	return c, true
 }
 
-// ClassifyASIN splits an "ASIN" field value: an all-digit value that passes
-// the ISBN-10 check is an ISBN-10 (isbn10 is returned, asin is empty); any
-// other value of ASIN shape is an ASIN. ok is false when it is neither.
+// isbn10Shape reports whether a cleaned value has the shape of an ISBN-10:
+// nine digits and a tenth that is a digit or the check character X. It says
+// nothing about the check sum (ValidISBN10 does).
+func isbn10Shape(c string) bool {
+	if len(c) != 10 || !allDigits(c[:9]) {
+		return false
+	}
+	return allDigits(c[9:]) || c[9] == 'X'
+}
+
+// ClassifyASIN splits an "ASIN" field value: a value of ISBN-10 shape (nine
+// digits and a digit or X) that passes the ISBN-10 check is an ISBN-10 (isbn10
+// is returned, asin is empty); any other value of ASIN shape is an ASIN. ok is
+// false when it is neither. An ISBN-10 whose check character is X is an
+// ISBN-10 as much as one ending in a digit: reading it as an ASIN would match
+// it against the library's ASINs and never against its ISBNs.
 func ClassifyASIN(s string) (asin, isbn10 string, ok bool) {
 	c, shape := ValidASIN(s)
 	if !shape {
 		return "", "", false
 	}
-	if allDigits(c) {
+	if isbn10Shape(c) {
 		if v, isISBN := ValidISBN10(c); isISBN {
 			return "", v, true
 		}
