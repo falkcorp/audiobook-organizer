@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-24
 
@@ -55,16 +55,20 @@ import (
 // never sees two retires at once; the partition is what keeps the cheaper
 // pre-lock work (the engine's Replan) from racing on one holder.
 //
-// RESUMABILITY. A row already retired is a no-op. Replan answers a book whose
-// rows are retired as already_retired (skipped); a plan taken after an apply
-// therefore reports it done, and a second apply of the same plan applies
-// nothing. A run cut off after the commit point but before steps 4 to 6
-// finished is finished by the next apply: Replan returns the row applicable
-// again under the PLANNED fingerprint with the unfinished steps, and Apply runs
-// only those. A run cut off before the commit point left a plan record and
-// maybe the version; the version id is derived from (op id, shell id), so the
-// resumed run finds it instead of minting a second, and the journal dedupes the
-// plan record and the per-row retire records.
+// RESUMABILITY. A book whose rows are retired (a retired version names it AND
+// holds rows for it) is never retired twice. With nothing left to do it is
+// already_retired (skipped): a plan taken after an apply reports it done, and a
+// second apply of the same plan settles it not_applicable and writes nothing.
+// A run cut off after the commit point but before steps 4 to 6 finished leaves
+// a retire_tail_pending book: APPLICABLE in any plan taken afterwards (a fresh
+// plan finishes it, with no need for the plan the cut-off run started from) and
+// finished by an Apply that writes only the unfinished steps. A re-plan of the
+// cut-off run's own planned row returns it under the PLANNED fingerprint. A run
+// cut off before the commit point left a plan record and maybe an empty
+// version: the next retire of that shell onto that holder adopts the empty
+// version rather than minting another (a version holding no rows is not a
+// finished retire, so it never moves the shell's external ids), and the
+// journal dedupes the plan record and the per-row retire records.
 //
 // WHAT IT DOES NOT DO YET. A shell an unreversed combine journal names as
 // absorbed (combine_undo_aware) is held, not retired: plan section 6.5 requires
@@ -137,20 +141,28 @@ type retiredDetail struct {
 	sharedRows   int
 	itunesRows   int
 
-	// done is a book whose rows are already retired (retCatAlreadyRetired):
-	// holder is where, versionIDs which versions, pending what is unfinished.
-	// resume is set by Replan on such a row when the planned row is to be
-	// finished rather than skipped.
+	// done is a book whose rows are already retired (retCatAlreadyRetired or
+	// retCatTailPending): holder is where, versionIDs which versions hold them,
+	// pending what is unfinished. Apply finishes only the pending tail of such
+	// a row.
 	done       bool
-	resume     bool
 	holder     string
 	versionIDs []string
 	pending    retiredTail
 }
 
 // alreadyRetired answers whether shell is a book a finished (or part-finished)
-// apply emptied: it owns no live row and a retired version names it as the
-// shell. The row is skipped already_retired, with the unfinished steps counted.
+// apply emptied: it owns no live row and a retired version that NAMES it as
+// the shell actually holds rows. A version that holds none (a retire cut off
+// between creating the version and the commit, or whose rows were purged) does
+// not make the shell retired: nothing was moved off it, so it is no holder's
+// audio and its external ids must not follow it anywhere.
+//
+// A retired shell is skipped already_retired once nothing is left to do. If
+// the tail of its retire (external ids, merged-into, chained rows) is
+// unfinished and the holder is a live book, it is retCatTailPending and
+// applicable, so a FRESH plan can finish a retire that was cut off after its
+// commit point (not only a re-plan of the row the cut-off run was planned as).
 func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool, error) {
 	if r.retired == nil {
 		return repairs.Row{}, false, nil
@@ -162,40 +174,132 @@ func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool,
 	if len(vs) == 0 {
 		return repairs.Row{}, false, nil
 	}
-	sort.SliceStable(vs, func(i, j int) bool { return vs[i].CreatedAt.Before(vs[j].CreatedAt) })
-	holder := vs[len(vs)-1].BookID
-	ids := make([]string, len(vs))
+	// Newest first: the holder is where the newest version that holds rows is.
+	sort.SliceStable(vs, func(i, j int) bool { return vs[i].CreatedAt.After(vs[j].CreatedAt) })
+	heldBy := map[string][]database.BookFile{}
+	var holder string
+	var heldIDs []string
+	multi := false
 	for i := range vs {
-		ids[i] = vs[i].ID
+		rows, ok := heldBy[vs[i].BookID]
+		if !ok {
+			if rows, err = r.retired.GetRetiredBookFiles(vs[i].BookID); err != nil {
+				return repairs.Row{}, false, fmt.Errorf("read the retired rows %s holds: %w", vs[i].BookID, err)
+			}
+			heldBy[vs[i].BookID] = rows
+		}
+		n := 0
+		for j := range rows {
+			if rows[j].VersionID == vs[i].ID {
+				n++
+			}
+		}
+		if n == 0 {
+			continue
+		}
+		heldIDs = append(heldIDs, vs[i].ID)
+		if holder == "" {
+			holder = vs[i].BookID
+		} else if vs[i].BookID != holder {
+			multi = true
+		}
 	}
+	if len(heldIDs) == 0 {
+		return repairs.Row{}, false, nil
+	}
+	sort.Strings(heldIDs)
 	tail, err := r.pendingTail(shell.ID)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
-	why := fmt.Sprintf("its file records are already retired onto %s (%d retired version(s)); nothing to write", holder, len(vs))
-	if tail.any() {
-		why += "; unfinished: " + tail.String()
+	holderLive, err := r.isLive(holder)
+	if err != nil {
+		return repairs.Row{}, false, err
+	}
+	finishable := tail.any() && !multi && holderLive
+	class, skipped := retCatTailPending, ""
+	why := fmt.Sprintf("its file records are already retired onto %s (%d retired version(s) hold rows); finishing: %s", holder, len(heldIDs), tail.String())
+	if !finishable {
+		class, skipped = retCatAlreadyRetired, retCatAlreadyRetired
+		why = fmt.Sprintf("its file records are already retired onto %s (%d retired version(s) hold rows); nothing to write", holder, len(heldIDs))
+		switch {
+		case !tail.any():
+		case multi:
+			why = fmt.Sprintf("its file records are retired onto more than one book (%d versions hold rows); unfinished (%s) and left for the owner", len(heldIDs), tail.String())
+		default:
+			why = fmt.Sprintf("its file records are already retired onto %s, which is not a live book; unfinished (%s) until that is settled", holder, tail.String())
+		}
 	}
 	cur := retiredCurrent{"rows": "0", "retired_into": holder, "target_book_id": holder}
-	cur.putN("retired_versions", len(vs))
+	cur.putN("retired_versions", len(heldIDs))
 	cur.put("tail_pending", tail.String())
 	row := repairs.Row{
 		RowID: shell.ID, BookIDs: []string{shell.ID, holder}, Title: shell.Title,
-		Class: retCatAlreadyRetired, Skipped: retCatAlreadyRetired, SkipReason: why, Reason: why,
+		Class: class, Skipped: skipped, SkipReason: skipped, Reason: why,
 		Risk: repairs.RiskLow, Current: cur,
 		Members: []repairs.RowMember{{BookID: shell.ID, Title: shell.Title, Role: "shell"}, {BookID: holder, Role: "target"}},
 	}
+	if skipped != "" {
+		row.SkipReason = why
+	}
+	// The fingerprint of an applicable tail row leaves the tail out: finishing
+	// is idempotent and shrinks it, so a plan made before a cut-off run made
+	// further progress stays applicable. A skipped row keeps it, so a book that
+	// became finishable reads as changed.
+	parts := []string{class, shell.ID, holder}
+	if skipped != "" {
+		parts = append(parts, tail.String())
+	}
 	h := sha256.New()
-	for _, p := range append([]string{retCatAlreadyRetired, shell.ID, holder, tail.String()}, ids...) {
+	for _, p := range append(parts, heldIDs...) {
 		h.Write([]byte(p))
 		h.Write([]byte{0})
 	}
 	row.Fingerprint = hex.EncodeToString(h.Sum(nil))
 	if r.detail {
-		row.Detail = &retiredDetail{minAge: r.minAge, shell: shell, category: retCatAlreadyRetired,
-			done: true, holder: holder, versionIDs: ids, pending: tail}
+		row.Detail = &retiredDetail{minAge: r.minAge, shell: shell, category: class,
+			done: true, holder: holder, versionIDs: heldIDs, pending: tail}
 	}
 	return row, true, nil
+}
+
+// emptyRetiredVersion returns a retired version of shell, on holder, that holds
+// no rows (nil when there is none): what a retire cut off between creating the
+// version and the commit point leaves behind. The oldest is returned so repeated
+// retries converge on one.
+func (r *retiredRun) emptyRetiredVersion(shell, holder string) (*database.BookVersion, error) {
+	if r.retired == nil {
+		return nil, nil
+	}
+	vs, err := r.retired.GetRetiredVersionsFromBook(shell)
+	if err != nil {
+		return nil, fmt.Errorf("read the retired versions of %s: %w", shell, err)
+	}
+	var held []database.BookFile
+	heldRead := false
+	sort.SliceStable(vs, func(i, j int) bool { return vs[i].CreatedAt.Before(vs[j].CreatedAt) })
+	for i := range vs {
+		if vs[i].BookID != holder || vs[i].Status != database.BookVersionStatusRetired {
+			continue
+		}
+		if !heldRead {
+			if held, err = r.retired.GetRetiredBookFiles(holder); err != nil {
+				return nil, fmt.Errorf("read the retired rows %s holds: %w", holder, err)
+			}
+			heldRead = true
+		}
+		n := 0
+		for j := range held {
+			if held[j].VersionID == vs[i].ID {
+				n++
+			}
+		}
+		if n == 0 {
+			v := vs[i]
+			return &v, nil
+		}
+	}
+	return nil, nil
 }
 
 // pendingTail reads what steps 4 to 6 of a retire still have to do for shell.
@@ -397,17 +501,27 @@ func (a *journaledRetireWriter) SetMergedInto(shellID, holderID string) (bool, e
 		return false, nil // never overwrite a link something else wrote
 	}
 	target := holderID
-	err = a.w.JournalStep(shellID, repairs.UndoEntry{ChangeType: undo.ChangeTypeBookMergedInto, Field: "merged_into_book_id", Old: "", New: holderID}, func() error {
+	wrote := false
+	// JournalSteps, not JournalStep: a Modify that finds the link set between
+	// the read above and the write skips (ErrSkipBookWrite), which is not a
+	// write, so its journal row is voided and the caller is told it did not
+	// write.
+	err = a.w.JournalSteps([]repairs.BookStep{{BookID: shellID, Entry: repairs.UndoEntry{
+		ChangeType: undo.ChangeTypeBookMergedInto, Field: "merged_into_book_id", Old: "", New: holderID}}}, func() ([]bool, error) {
+		set := false
 		_, merr := a.w.Modify(shellID, func(cur *database.Book) error {
+			set = false // fn may be retried; only the last attempt counts
 			if retiredDeref(cur.MergedIntoBookID) != "" {
 				return database.ErrSkipBookWrite
 			}
 			cur.MergedIntoBookID = &target
+			set = true
 			return nil
 		})
-		return merr
+		wrote = merr == nil && set
+		return []bool{wrote}, merr
 	})
-	return err == nil, err
+	return wrote && err == nil, err
 }
 
 func (a *journaledRetireWriter) RehomeVersion(versionID, shellID, holderID string) error {
@@ -560,9 +674,11 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 	if ld == nil {
 		return fmt.Errorf("%s: row %s: the re-check returned no decision", retiredVersionsFixerID, fresh.RowID)
 	}
-	if d.resume {
-		// Finishing a run whose rows are already retired: only the tail.
-		if locked.Class != retCatAlreadyRetired || !ld.pending.any() || ld.holder != d.holder {
+	if d.done {
+		// Finishing a book whose rows are already retired: only the tail, and
+		// only onto the holder the row was re-planned with. A fresh plan's tail
+		// row and the re-plan of a cut-off run's planned row both come here.
+		if locked.Class != retCatTailPending || !ld.done || ld.holder != d.holder {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.Reason)
 		}
 		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0)
@@ -586,7 +702,22 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	if holder == "" || len(d.files) == 0 {
 		return fmt.Errorf("%s: row %s has no target or no rows to retire", retiredVersionsFixerID, shell)
 	}
+	// Before the first write: a canceled run has written nothing, which is not
+	// the partial state a cancel after a write is.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: canceled before the first write: %w", repairs.ErrRetryLater, err)
+	}
+	// A version an earlier, failed retire of this shell onto this holder left
+	// with no rows is adopted, not joined by a second empty one. Its id is not
+	// derived from this op, so it is found by what it names.
+	adopted, err := run.emptyRetiredVersion(shell, holder)
+	if err != nil {
+		return err
+	}
 	versionID := retiredVersionID(w.OpID(), shell)
+	if adopted != nil {
+		versionID = adopted.ID
+	}
 	fileIDs := make([]string, len(d.files))
 	rows := make([]retireRow, len(d.files))
 	for i := range d.files {
@@ -615,11 +746,13 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	if d.shell.CreatedAt != nil {
 		v.IngestDate = d.shell.CreatedAt.UTC()
 	}
-	if err := rw.CreateRetiredVersion(holder, v); err != nil {
+	if adopted != nil {
+		// Made by another op, so this op journals no create for it (its own undo
+		// would delete a version it did not make); the rows it retires into it
+		// are journaled as usual.
+		v = adopted
+	} else if err := rw.CreateRetiredVersion(holder, v); err != nil {
 		return retiredApplyErr(err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	// The commit point: one atomic batch. A refusal here wrote no row, so it is
 	// not partial.
