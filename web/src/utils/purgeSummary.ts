@@ -1,7 +1,7 @@
 // file: web/src/utils/purgeSummary.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7c3a9e15-2d84-4b60-a1f7-5e0d8b4c6a29
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 import type { PurgeBreakdown, PurgeResult } from '../services/api';
 
@@ -187,6 +187,16 @@ function afterPreviewNote(n: number): string {
   return `${books(n)} ${plural(n, 'was', 'were')} put in the trash after the preview you confirmed, so ${plural(n, 'it was', 'they were')} left alone. Open the purge again to see ${plural(n, 'it', 'them')}.`;
 }
 
+/**
+ * In a PREVIEW `trashed_after_preview` is the books it could not list: put in
+ * the trash while the preview ran, or with no record of when they were
+ * trashed. (In a finished purge the same count means "after the preview you
+ * confirmed", see afterPreviewNote.)
+ */
+function previewUnlistedNote(n: number): string {
+  return `${books(n)} could not be listed: ${plural(n, 'it was', 'they were')} put in the trash while this preview ran, or ${plural(n, 'has', 'have')} no record of when ${plural(n, 'it was', 'they were')} trashed. ${plural(n, 'It is', 'They are')} left out, and a purge will not touch ${plural(n, 'it', 'them')}.`;
+}
+
 function undecidedNote(failed: number): string {
   return `${books(failed)} could not be decided (see the details below); ${plural(failed, 'it is', 'they are')} not counted in the numbers above.`;
 }
@@ -194,7 +204,8 @@ function undecidedNote(failed: number): string {
 /**
  * Notes of a preview, so the numbers shown add up to the trash total
  * (purgeable + owns files + undo-possible + has-progress + carry-failed +
- * failed + not yet due): the books the preview could not decide are named, not hidden.
+ * failed + not yet due + could not be listed): the books the preview could not
+ * decide are named, not hidden.
  */
 export function previewNotes(r: PurgeResult): string[] {
   const notes: string[] = [];
@@ -206,6 +217,8 @@ export function previewNotes(r: PurgeResult): string[] {
   }
   const failed = r.failed ?? 0;
   if (failed > 0) notes.push(undecidedNote(failed));
+  const unlisted = r.trashed_after_preview ?? 0;
+  if (unlisted > 0) notes.push(previewUnlistedNote(unlisted));
   const notDue = r.not_yet_due ?? 0;
   if (notDue > 0) notes.push(notYetDueNote(notDue));
   return notes;

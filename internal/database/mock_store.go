@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.154.0
+// version: 1.155.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package database
 
@@ -46,6 +46,7 @@ type MockStore struct {
 	GetBooksByIDsFunc         func(ids []string) ([]Book, error)
 	GetBookByFilePathFunc     func(path string) (*Book, error)
 	LiveBookIDsAtPathFunc     func(path string) ([]string, error)
+	BookIDsAtPathFunc         func(path string) ([]string, error)
 	LiveBookPathsUnderDirFunc func(dir string) (map[string]string, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
@@ -1187,6 +1188,16 @@ func (m *MockStore) GetBookByFilePath(path string) (*Book, error) {
 func (m *MockStore) LiveBookIDsAtPath(path string) ([]string, error) {
 	if m.LiveBookIDsAtPathFunc != nil {
 		return m.LiveBookIDsAtPathFunc(path)
+	}
+	return nil, nil
+}
+
+// BookIDsAtPath returns nil, nil when unconfigured: "no book, trashed or not,
+// at this path". A test whose code path decides "is this path free?" must set
+// the Func.
+func (m *MockStore) BookIDsAtPath(path string) ([]string, error) {
+	if m.BookIDsAtPathFunc != nil {
+		return m.BookIDsAtPathFunc(path)
 	}
 	return nil, nil
 }

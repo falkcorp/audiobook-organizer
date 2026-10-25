@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
 // version: 1.2.1
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 

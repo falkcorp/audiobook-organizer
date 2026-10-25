@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -254,9 +254,27 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		return nil, fmt.Errorf("database not initialized")
 	}
 
+	// File removals an earlier pass decided on and never finished (it crashed,
+	// or a restart stopped it) are carried out first, through the same checks a
+	// pass in progress runs. They need no preview, so they run before the
+	// refusals below: a resumed op that is refused for want of its preview
+	// still frees the files its predecessor left (purge_pending_journal.go).
+	var replayed int
+	replayErrs := []string{}
+	if !opts.DryRun {
+		replayed, replayErrs = svc.replayPendingFileRemovals()
+		if replayErrs == nil {
+			replayErrs = []string{}
+		}
+		if replayed > 0 || len(replayErrs) > 0 {
+			singleLog.Info("purge: replayed the file removals an earlier pass left pending: %d removed, %d error line(s)", replayed, len(replayErrs))
+		}
+	}
+
 	if !opts.DryRun && opts.TrashedBefore == nil && !opts.Unattended {
 		return &PurgeResult{
-			Errors:       []string{},
+			Errors:       replayErrs,
+			FilesDeleted: replayed,
 			StoppedEarly: true,
 			StopReason:   ErrPurgePreviewRequired.Error(),
 		}, ErrPurgePreviewRequired
@@ -269,7 +287,8 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	if !opts.DryRun && !opts.Unattended {
 		if preview = svc.previewFor(*opts.TrashedBefore); preview == nil {
 			return &PurgeResult{
-				Errors:        []string{},
+				Errors:        replayErrs,
+				FilesDeleted:  replayed,
 				StoppedEarly:  true,
 				StopReason:    ErrPurgePreviewUnknown.Error(),
 				TrashedBefore: opts.TrashedBefore,
@@ -322,19 +341,32 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		case cutoff != nil && !trashedAtOrBefore(&all[i], *cutoff):
 			notDue++
 		case bound != nil && !trashedAtOrBefore(&all[i], *bound):
-			notShown++
+			// After the bound. With a retention window and a preview, the bound
+			// is the PREVIEW's window cutoff, which is earlier than this
+			// pass's: a book that was already in the trash when the preview
+			// ran and only aged into the window since is one the preview
+			// counted as not yet due, and is again. Only a book trashed after
+			// the preview began (or with no trash time) is "trashed after the
+			// preview".
+			if preview != nil && cutoff != nil && trashedAtOrBefore(&all[i], preview.started) {
+				notDue++
+			} else {
+				notShown++
+			}
 		default:
 			books = append(books, all[i])
 		}
 	}
 
 	result := &PurgeResult{
+		startedAt:           started,
 		Attempted:           len(all),
 		DryRun:              opts.DryRun,
 		TrashedBefore:       bound,
 		TrashedAfterPreview: notShown,
 		NotYetDue:           notDue,
-		Errors:              []string{},
+		FilesDeleted:        replayed,
+		Errors:              replayErrs,
 	}
 	// Users, combine journals and the other undo records are read once per
 	// pass, not once per book.
@@ -353,7 +385,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		env.trashedBefore = bound
 		env.preview = preview
 		if !opts.DryRun && opts.DeleteFiles {
-			env.files = &pendingFiles{}
+			env.files = &pendingFiles{preview: preview}
 		}
 	}
 

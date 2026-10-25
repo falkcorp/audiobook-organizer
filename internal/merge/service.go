@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.62.1
+// version: 1.62.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package merge
 
@@ -2326,8 +2326,8 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 // MarkedForDeletionAt stamp as the store kept it (read back).
 //
 // Clearing FilePath is what makes the soft delete safe: the path now belongs to
-// a file row the survivor owns, and PurgeSoftDeletedUnattended (with delete-files
-// on) os.Remove()s a purged single-file book's FilePath. The journal keeps the
+// a file row the survivor owns, and a purge with delete_files (audiobooks.RunPurge, nightly
+// or manual) os.Remove()s a purged single-file book's FilePath. The journal keeps the
 // original for undo. A separate function from SoftDeleteBook because
 // MergeBooks' losers keep their own files and must keep their FilePath.
 func (ms *Service) softDeleteAbsorbed(bookID string, stamp time.Time) (*time.Time, error) {

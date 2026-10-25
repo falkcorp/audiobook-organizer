@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
-<!-- last-edited: 2026-10-24 -->
+<!-- last-edited: 2026-10-25 -->
 
 # Merging, combining and purging no longer freeze the page, and purging no longer destroys undo
 
@@ -163,6 +163,16 @@ undo above. Books that own files are still never purged.
   retention window; it now gets a fresh one. A trashed book whose time is
   unknown (written before this) is judged by its last change instead of being
   treated as long overdue.
+- "Also delete files" no longer leaves files behind if the server stops in the
+  middle of a purge, and no longer removes a file a book needs because that
+  book was put in the trash a moment earlier. A purge now waits until every
+  book is decided before it removes any file, and it writes down which files it
+  still has to remove before it forgets the books. If the server dies in
+  between, the next purge (or the retry of the interrupted one, even though its
+  check is no longer remembered) removes those files, after the same safety
+  checks. Just before each file goes it asks the database whether any book at
+  all, in the trash or not, still names it, instead of relying on a list read
+  earlier in the pass.
 - The nightly purge used to report success even when it had refused to run (a
   damaged undo record, or the operation journal not ready) or had stopped
   halfway. It now fails visibly with the reason and logs the same full summary

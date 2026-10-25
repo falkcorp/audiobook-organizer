@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.28.0
+// version: 2.29.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 package database
 
@@ -93,8 +93,8 @@ type BookNaturalKeyReader interface {
 	GetBooksByMetadataSourceHash(hash string) ([]Book, error)
 }
 
-// BookPathSetReader answers "which live books sit at this path?" from the
-// multi-valued book_atpath index.
+// BookPathSetReader answers "which books sit at this path?" (live only, or
+// every row) from the multi-valued book_atpath index.
 type BookPathSetReader interface {
 	// LiveBookIDsAtPath returns the id of EVERY live (not soft-deleted) book
 	// whose FilePath is exactly path, in id order. Unlike GetBookByFilePath,
@@ -107,6 +107,14 @@ type BookPathSetReader interface {
 	// It is on Store (via BookLookupReader), not a narrower capability, so
 	// every decorator that embeds Store forwards it.
 	LiveBookIDsAtPath(path string) ([]string, error)
+
+	// BookIDsAtPath is LiveBookIDsAtPath without the live filter: the id of
+	// EVERY book row, soft-deleted ones included, whose FilePath is exactly
+	// path, in id order, with the same fail-closed rule. It answers "does any
+	// book, a trashed one that a restore would bring back included, still name
+	// this path?", which the purge asks per path at the moment it removes a
+	// file, instead of reading the whole trash once beforehand.
+	BookIDsAtPath(path string) ([]string, error)
 }
 
 // BookDirLister lists live books beneath a folder. Its own interface,

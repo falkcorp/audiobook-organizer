@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_files_bound_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4e1a7d-3f26-4b95-a0d8-7e2b5c9f1a43
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -305,8 +305,8 @@ func TestRunPurge_RetentionDoesNotTakeAnUnstampedRowWrittenRecently(t *testing.T
 	svc, store, _ := setupPurgeBoundary(t)
 	trashedLegacy(t, store, "legacy")
 	softDeleted(t, store, "old", "")
-	// "old" was trashed an hour ago, "legacy" was written just now: with a window
-	// of one hour minus a minute... use a day to keep both inside it.
+	// "old" was trashed an hour ago and "legacy" was written just now: a window
+	// of one day keeps both of them inside it.
 	days := 1
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{OlderThanDays: &days, Unattended: true})
 	require.NoError(t, err)
@@ -354,4 +354,36 @@ func TestPurgeUnattended_FileNamedByAKeptTrashedBookStays(t *testing.T) {
 	assert.False(t, bookGone(t, store, "kept"))
 	require.Len(t, res.Errors, 1, "reported on the purged book's line")
 	assert.Contains(t, res.Errors[0], "kept")
+}
+
+// A book that was in the trash when the preview ran and has only aged into the
+// retention window since is one the preview counted as not yet due: the purge
+// leaves it alone and counts it the same way. It was not "put in the trash
+// after the preview", which is what the screen would otherwise say.
+func TestRunPurge_BookThatAgedIntoTheWindowSincePreviewIsStillNotYetDue(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	old := time.Now().Add(-60 * 24 * time.Hour)
+	yes := true
+	_, err := store.CreateBook(&database.Book{ID: "old", Title: "old", MarkedForDeletion: &yes, MarkedForDeletionAt: &old})
+	require.NoError(t, err)
+	// Trashed one day minus 150 ms ago: inside a one-day window when the
+	// preview runs, past its edge by the time the purge starts.
+	edge := time.Now().Add(-24*time.Hour + 150*time.Millisecond)
+	_, err = store.CreateBook(&database.Book{ID: "aging", Title: "aging", MarkedForDeletion: &yes, MarkedForDeletionAt: &edge})
+	require.NoError(t, err)
+
+	days := 1
+	pv := previewOnce(t, svc, &days)
+	require.Equal(t, 1, pv.Purgeable, "%+v", pv)
+	require.Equal(t, 1, pv.NotYetDue, "%+v", pv)
+
+	time.Sleep(300 * time.Millisecond)
+
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{OlderThanDays: &days, TrashedBefore: pv.TrashedBefore})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Purged, "%+v", res)
+	assert.Equal(t, 1, res.NotYetDue, "it was already in the trash at the preview: %+v", res)
+	assert.Zero(t, res.TrashedAfterPreview, "%+v", res)
+	assert.False(t, bookGone(t, store, "aging"))
+	assert.Equal(t, res.Attempted, res.Decided(), "%+v", res)
 }

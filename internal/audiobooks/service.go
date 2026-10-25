@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.57.1
+// version: 1.58.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -59,6 +59,11 @@ type bookReader interface {
 	// LiveBookIDsAtPath backs the purge's "is this path still someone's"
 	// check before it removes a file from disk.
 	LiveBookIDsAtPath(path string) ([]string, error)
+	// BookIDsAtPath is the same lookup without the live filter: every book
+	// row at the path, trashed ones included. The purge asks it, per path, at
+	// the moment it removes a file, so a book trashed a moment ago (restorable,
+	// and a restore wants its audio) still keeps the file.
+	BookIDsAtPath(path string) ([]string, error)
 }
 
 // bookWriter is the write side of the book entity, including the soft-delete

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -93,7 +93,10 @@ type PurgeResult struct {
 	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
 	// TrashedAfterPreview counts the books the bound left out: trashed after
 	// the preview (or restored and trashed again), or with no stamp to show
-	// they were not. Not touched, and not in any kept count.
+	// they were not. In a preview itself: trashed while it ran, or with no
+	// trash time on record. Not touched, and not in any kept count. (A book
+	// that was in the trash when the preview ran and only aged into the
+	// retention window since is NotYetDue, not this.)
 	TrashedAfterPreview int `json:"trashed_after_preview"`
 	// NotYetDue counts the books the retention window (PurgeOptions.
 	// OlderThanDays) left out because they were trashed less than that long ago.
@@ -122,6 +125,10 @@ type PurgeResult struct {
 	// it.
 	fileCands map[string]struct{}
 	purgeable map[string]struct{}
+	// startedAt is when the pass began. A preview's is kept with it
+	// (purgePreviewRecord.started) so the purge bound to it can tell a book
+	// that was already in the trash when the preview ran from one trashed since.
+	startedAt time.Time
 	// DryRun is set on a preview: nothing was deleted or moved. Purged is then
 	// 0 and Purgeable is the number a real run would purge right now, the
 	// books that would carry listening state to a sibling included

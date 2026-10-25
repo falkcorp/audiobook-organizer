@@ -1,11 +1,12 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -34,7 +35,10 @@ func trashedAtOrBefore(b *database.Book, t time.Time) bool {
 // trashedIDsByPath returns, for each of paths, the ids of the books in trash
 // that name it as their FilePath, leaving out the ids except accepts. trash is
 // the whole trash listing, not one a retention window cut: a trashed book the
-// window left out still owns its file.
+// window left out still owns its file. The PREVIEW's settlement uses it
+// (settlePreviewFiles), where one listing the pass already took is the right
+// tool and the answer is a forecast; the real removal asks the store about each
+// path when it is about to remove it (otherBookRowAt).
 func trashedIDsByPath(trash []database.Book, paths map[string]struct{}, except func(id string) bool) map[string][]string {
 	out := map[string][]string{}
 	for i := range trash {
@@ -77,6 +81,12 @@ type pendingFile struct {
 // leaves their file on disk for good. Only after the last book is decided is
 // the answer the same one the preview gave (settlePreviewFiles).
 type pendingFiles struct {
+	// preview is the preview the pass is bound to, or nil. Only a path it
+	// listed is journaled (purge_pending_journal.go): a later pass replays the
+	// journal with no preview in memory, and must not remove a file the
+	// screen the owner approved said would stay.
+	preview *purgePreviewRecord
+
 	mu     sync.Mutex
 	byPath map[string]*pendingFile
 }
@@ -125,8 +135,10 @@ func removePurgedFile(bookID string, v purgeFileVerdict, root string) (removed i
 	}
 	// Single-file book
 	if err := os.Remove(v.remove); err != nil && !os.IsNotExist(err) {
-		errs = append(errs, fmt.Sprintf("%s: failed to delete file (tombstone preserved): %v", bookID, err))
-		// DB record gone, file still exists, tombstone preserved for sweeper
+		// The row is gone and so is its tombstone (purgeFinish): the file is
+		// left on disk, and a purge pass remembers the removal and retries it
+		// (purge_pending_journal.go).
+		errs = append(errs, fmt.Sprintf("%s: book purged, but its file could not be removed: %v", bookID, err))
 	} else if err == nil {
 		removed++
 		removeEmptyParentsUpToRoot(v.remove, root)
@@ -134,84 +146,103 @@ func removePurgedFile(bookID string, v purgeFileVerdict, root string) (removed i
 	return removed, errs
 }
 
-// errTrashedTwin names the trashed books that still have path as their file.
+// errPathLookupFailed marks a "does anything still name this path?" question
+// the store could not answer. It is transient: the answer is "ask again", not
+// "no". A removal that failed this way is retried by the next pass
+// (purge_pending_journal.go), while a definite "something names it" is final.
+var errPathLookupFailed = errors.New("path lookup failed")
+
+// errTrashedTwin names the books that still have path as their file.
 func errTrashedTwin(path string, ids []string) error {
-	return fmt.Errorf("%s is still the path of trashed book(s) %v, which this pass did not purge", path, ids)
+	return fmt.Errorf("%s is still the path of book(s) %v, which this pass did not purge", path, ids)
 }
 
-// otherTrashedRowAt returns a non-nil error when a book still in the trash
-// names path. Fail closed: a trash that cannot be listed cannot vouch for a
-// path. It is the single-book purge's check (DiscardProgressAndPurge), where no
-// pass exists to wait for; the purged book's own row is already gone.
-func (svc *AudiobookService) otherTrashedRowAt(path string) error {
-	trash, err := svc.store.ListSoftDeletedBooks(purgeListLimit, 0, nil)
+// otherBookRowAt returns a non-nil error when any book row, live or trashed,
+// still names path. It asks the store about THIS path, at the moment the caller
+// is about to remove the file, and never works from a listing taken earlier:
+// the answer a trash listing gave a few seconds ago does not cover a live book
+// trashed since, which is restorable and wants its audio. The book_atpath
+// index holds every row, so the read is one index seek (and it replaces a scan
+// of the whole trash, 48k rows on production).
+//
+// The purged books' own rows are already deleted when this runs, so there is
+// no exclusion list: whatever it finds is a book this pass did not purge. A
+// failed lookup is an error too (errPathLookupFailed): fail closed, a path
+// that cannot be vouched for is not a free path.
+func (svc *AudiobookService) otherBookRowAt(path string) error {
+	ids, err := svc.store.BookIDsAtPath(path)
 	if err != nil {
-		return fmt.Errorf("cannot verify %s is not a trashed book's file: listing the trash: %w", path, err)
+		return fmt.Errorf("cannot verify %s is not a book's file: books-at-path lookup: %w: %w", path, errPathLookupFailed, err)
 	}
-	if ids := trashedIDsByPath(trash, map[string]struct{}{path: {}}, nil)[path]; len(ids) > 0 {
+	if len(ids) > 0 {
 		return errTrashedTwin(path, ids)
 	}
 	return nil
 }
 
 // removeDeferredFiles is the second half of a purge pass's file removal, run
-// once every book has been decided. For each path a purged book named it
-// checks, as the pass left the store:
+// once every book has been decided (and again, from the journal, by a later
+// pass for a pass that never got here: replayPendingFileRemovals). For each path
+// a purged book named it checks, as the store is NOW:
 //
 //   - planPurgeFile again (protected path, library root, a book_file row or a
 //     live book naming it, still there);
-//   - no book still in the trash names it: the pass purged some books and kept
-//     others, and a kept one's file is its own;
+//   - no book row at all, live or trashed, names it (otherBookRowAt, asked per
+//     path just before the removal): the pass purged some books and kept
+//     others, and a kept one's file is its own, and a book trashed since the
+//     pass began is restorable;
 //   - when the pass is bound to a preview, that the preview listed the path
 //     (a file the preview said stays is never removed, whatever changed since).
 //
-// It reports how many things it removed and the error lines.
+// It reports how many things it removed and the error lines. A path it decided
+// (removed, already gone, or kept for a reason that will not change) is
+// forgotten from the journal; one that failed for a reason that may pass (a
+// lookup error, a failed os.Remove) stays recorded for the next pass.
 func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *purgePreviewRecord) (removed int, errs []string) {
 	pending := files.sorted()
 	if len(pending) == 0 {
 		return 0, nil
 	}
 	root := config.Snapshot().RootDir
-	paths := make(map[string]struct{}, len(pending))
+	var settled []string
 	for _, f := range pending {
-		paths[f.path] = struct{}{}
-	}
-	trash, listErr := svc.store.ListSoftDeletedBooks(purgeListLimit, 0, nil)
-	var twins map[string][]string
-	if listErr == nil {
-		twins = trashedIDsByPath(trash, paths, nil)
-	}
-	for _, f := range pending {
-		bookID := f.bookIDs[0]
-		v := svc.planPurgeFile(&database.Book{ID: bookID, FilePath: f.path})
-		switch {
-		case v.protected:
-			singleLog.Debug("purge skipping file deletion: protected path %s (book %s)",
-				logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
-			continue
-		case v.keptErr != nil:
-			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", bookID, v.keptErr))
-			continue
-		case v.remove == "":
-			// Already gone, or a directory that is not empty.
-			continue
-		}
-		switch {
-		case listErr != nil:
-			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: cannot verify %s is not a trashed book's file: listing the trash: %v", bookID, f.path, listErr))
-			continue
-		case len(twins[f.path]) > 0:
-			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", bookID, errTrashedTwin(f.path, twins[f.path])))
-			continue
-		case !preview.listsFile(f.path):
-			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path))
-			continue
-		}
-		n, e := removePurgedFile(bookID, v, root)
+		n, e, retry := svc.removeDeferredFile(f, root, preview)
 		removed += n
 		errs = append(errs, e...)
+		if !retry {
+			settled = append(settled, f.bookIDs...)
+		}
+	}
+	if err := svc.forgetPendingFiles(settled); err != nil {
+		errs = append(errs, fmt.Sprintf("the record of %d decided file removal(s) could not be cleared (a later pass will re-decide them, which removes nothing twice): %v", len(settled), err))
 	}
 	return removed, errs
+}
+
+// removeDeferredFile decides and does one pending path. retry is true when the
+// outcome may change on a later pass, so the journal keeps the record.
+func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord) (removed int, errs []string, retry bool) {
+	bookID := f.bookIDs[0]
+	v := svc.planPurgeFile(&database.Book{ID: bookID, FilePath: f.path})
+	switch {
+	case v.protected:
+		singleLog.Debug("purge skipping file deletion: protected path %s (book %s)",
+			logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
+		return 0, nil, false
+	case v.keptErr != nil:
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, v.keptErr)}, errors.Is(v.keptErr, errPathLookupFailed)
+	case v.remove == "":
+		// Already gone, or a directory that is not empty.
+		return 0, nil, false
+	}
+	if err := svc.otherBookRowAt(f.path); err != nil {
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, err)}, errors.Is(err, errPathLookupFailed)
+	}
+	if !preview.listsFile(f.path) {
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path)}, false
+	}
+	n, e := removePurgedFile(bookID, v, root)
+	return n, e, len(e) > 0
 }
 
 // settlePreviewFiles finishes a preview's file account once every book is
@@ -250,7 +281,10 @@ func (r *PurgeResult) settlePreviewFiles(trash []database.Book) {
 // the preview and the click; the purge leaves it alone, because the screen the
 // user approved did not say it would go.
 type purgePreviewRecord struct {
-	bound     time.Time
+	bound time.Time
+	// started is when the preview began: a book trashed at or before it was
+	// in the trash when the owner looked.
+	started   time.Time
 	purgeable map[string]struct{}
 	files     map[string]struct{}
 }
@@ -289,6 +323,7 @@ func (svc *AudiobookService) rememberPreview(r *PurgeResult) {
 	}
 	rec := &purgePreviewRecord{
 		bound:     *r.TrashedBefore,
+		started:   r.startedAt,
 		purgeable: r.purgeable,
 		files:     make(map[string]struct{}, len(r.FilesToDelete)),
 	}

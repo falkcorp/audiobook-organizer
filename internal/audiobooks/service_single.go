@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.1
+// version: 1.28.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -729,8 +729,19 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool, 
 			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, v.keptErr))
 		case v.remove != "" && files != nil:
 			files.add(book.ID, v)
+			// Written down before the tombstone goes (step 4): once the
+			// tombstone is gone nothing else records that this book's file is
+			// still to be removed, and a crash before the pass's removal
+			// would orphan it (purge_pending_journal.go). A file the bound
+			// preview said stays is not removed by this pass, so there is
+			// nothing to remember for it.
+			if files.preview.listsFile(v.remove) {
+				if jErr := svc.journalPendingFile(book.ID, v); jErr != nil {
+					errs = append(errs, fmt.Sprintf("%s: book purged, but its file removal is not recorded, so a crash before this pass finishes would leave %s on disk: %v", book.ID, v.remove, jErr))
+				}
+			}
 		case v.remove != "":
-			if twinErr := svc.otherTrashedRowAt(v.remove); twinErr != nil {
+			if twinErr := svc.otherBookRowAt(v.remove); twinErr != nil {
 				errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, twinErr))
 				break
 			}
@@ -844,14 +855,14 @@ func purgePathInsideRoot(path, root string) error {
 func (svc *AudiobookService) purgePathStillReferenced(path string) error {
 	rows, err := svc.store.BookFilesAtPath(path)
 	if err != nil {
-		return fmt.Errorf("cannot verify %s is unreferenced: book_file lookup: %w", path, err)
+		return fmt.Errorf("cannot verify %s is unreferenced: book_file lookup: %w: %w", path, errPathLookupFailed, err)
 	}
 	if len(rows) > 0 {
 		return fmt.Errorf("%s is still book_file %s of book %s (%d row(s) at this path)", path, rows[0].ID, rows[0].BookID, len(rows))
 	}
 	ids, err := svc.store.LiveBookIDsAtPath(path)
 	if err != nil {
-		return fmt.Errorf("cannot verify %s is unreferenced: live-books-at-path lookup: %w", path, err)
+		return fmt.Errorf("cannot verify %s is unreferenced: live-books-at-path lookup: %w: %w", path, errPathLookupFailed, err)
 	}
 	if len(ids) > 0 {
 		return fmt.Errorf("%s is still the path of live book(s) %v", path, ids)

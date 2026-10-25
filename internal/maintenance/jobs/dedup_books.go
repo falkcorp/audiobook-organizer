@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.10.2
+// version: 3.10.3
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package jobs
 
@@ -108,7 +108,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 		if !ddIsJunkReadByNarrator(book) {
 			continue
 		}
-		// PurgeSoftDeletedUnattended with delete-files os.Remove()s a purged book's
+		// A purge with delete_files (audiobooks.RunPurge) os.Remove()s a purged book's
 		// FilePath (for a directory, the book's own rows' files). Exact-string
 		// comparison cannot prove a junk path unshared -- a live book's
 		// FilePath can be the directory holding it -- so EVERY junk row is
@@ -1177,7 +1177,7 @@ func ddMergeBookFields(dst, src *database.Book) {
 // ddSoftDeleteBook marks bookID for deletion under its per-book lock. With
 // clearPath it also clears FilePath (merge's softDeleteAbsorbed rule): a book
 // whose files went to a keeper must not keep naming the keeper's path, or
-// PurgeSoftDeletedUnattended with delete-files removes the keeper's audio. Phase 1
+// a purge with delete_files (audiobooks.RunPurge) removes the keeper's audio. Phase 1
 // clears it on every junk row it retires.
 //
 // A retired book is also demoted from primary, so no reader counts a deleted
