@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-decisions-appendix.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: e75847e4-760a-4d0d-8527-1eeffece31f9 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -19,3 +19,4 @@ From 2026-10-25 12:53 EDT to 2026-10-26 12:53 EDT (or until you say otherwise), 
 | D8 | 10-25 14:35 | #4149 privacy scan: 7 strings echo real titles/transcripts (blockers), 14 more look invented but match or resemble real works (warnings), incl. a real person's name. Earlier commits also carry real titles and would land on main with a rebase merge. | Fix blockers + warnings and squash into a new PR · Fix blockers only · Fix all, keep history | **Fix all 21 and squash into a new PR that supersedes #4149** | Your rule bans even word-swapped titles; a rebase merge would publish the old commits |
 | D9 | 10-25 14:35 | #4136 re-review: 0 blockers, 4 should-fix (combine during startup warmup warns instead of refusing; regroup hides warnings; undo puts a file on the wrong book when the original owner was purged; untested claim). Merge now or fix first? | Fix all should-fix items first · Merge now, follow up | **Fix first** | It runs on prod without a flag, so standing rule says should-fixes before merge |
 | D10 | 10-25 15:00 | Hash backfill (#4158): the first run may flag ~515k missing files, and each flag write recomputes the book's totals (one recompute per file). | Batch the writes per book · Accept the one-time cost | **Batch per book** | 515k recomputes on prod is hours of load; per-book batching is what mark-missing-files already does. The live apply still waits for a dry-run preview with numbers shown first |
+| D11 | 10-25 15:10 | #4155 review: 2 blockers (an unparseable per-user query still serves the creator's stored list; per-user collections only look at the 10,000 oldest books, also true on main) and 6 should-fix. Fix the 10k cap here or as a follow-up? | Fix everything in #4155, incl. the per-user state lookup (~1 day) · Merge with the cap as a follow-up | **Fix everything in #4155** | The PR makes the capped path the only path for every viewer; per D7 the lookup was already chosen |
