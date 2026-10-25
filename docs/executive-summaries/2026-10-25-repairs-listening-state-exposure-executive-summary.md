@@ -1,9 +1,9 @@
 <!-- file: docs/executive-summaries/2026-10-25-repairs-listening-state-exposure-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0fc47f42-dde9-4526-955a-4bab97c8800e -->
 <!-- last-edited: 2026-10-25 -->
 
-# Other people's listening history is private again
+# Closing the paths that showed other people's listening history
 
 - Pull request: [#4148](https://github.com/falkcorp/audiobook-organizer/pull/4148) (merge commit to be filled in when it merges)
 - Follow-up: [#4151](https://github.com/falkcorp/audiobook-organizer/pull/4151), stacked on #4148
@@ -22,19 +22,26 @@
   production server was an admin account, and admins are allowed to see this
   information anyway. No guest or viewer account existed that could have
   looked.
-- **What is closed now.** Other people's listening history is now visible only
-  to admins (accounts that may manage users), wherever it appears: repair
-  plans, operation results and logs, each book's change history, the undo
-  records of book merges, and the activity log. Editors keep every repair tool
-  they could run before, including Undo; they just no longer see the
-  listening details inside those records.
-- **What the follow-up closes.** #4151 makes the Audible reading-status
-  import an admin-only tool, and hides repair runs and their activity-log
-  lines from people who may not use the tool that made them.
-- **Guard for the future.** Every kind of change record the undo system can
-  write is now labelled either "personal data" or "library data", and an
-  automatic check fails the build if someone adds a new kind without
-  labelling it.
+- **What this change closes.** Repair previews and results now need the
+  permissions of the tool that made them. Listening details inside each
+  book's change history, the operation change records, and the undo records
+  of book merges are now shown only to admins (accounts that may manage
+  users), and the trash-purge entry in the activity log no longer shows each
+  person's progress to anyone else. Editors keep every repair tool they could
+  run before, including Undo; they just no longer see the listening details
+  inside those records.
+- **What is still open.** Four paths still show some listening details to
+  people who are not admins. The follow-up, #4151, closes them: the activity
+  log's copies of the server's own log lines, a repair operation's log lines,
+  the warnings shown after undoing a merge, and the Audible reading-status
+  import's preview (which #4151 makes an admin-only tool). Until #4151
+  ships, the goal that only admins see other people's listening history is
+  not yet met.
+- **Guard for the future.** Every kind of change record the undo system
+  defines is now labelled either "personal data" or "library data", and an
+  automatic check fails the build if someone adds a new kind there without
+  labelling it. Kinds of record defined elsewhere in the code are not yet
+  checked; the follow-up extends the check to them.
 
 ## The repair tools' plan pages
 
@@ -103,13 +110,22 @@ admins, matching what the trash page already did.
 
 ## Still open
 
-- Smart collections that filter on reading status ("finished", "in
+- **Closed by #4151.** The activity log keeps a copy of the server's own
+  log lines, and some of those lines record a person's listening progress
+  from the phone app; anyone who can view the library can read them there. A
+  repair operation's log lines (including which user applied it) are shown
+  the same way. Undoing a merge reports warnings that name a person who
+  listened to the book afterwards. And an editor can preview the Audible
+  reading-status import for any person and read that person's reading
+  status in the preview; #4151 makes that import an admin-only tool.
+- **Owner's decision pending.** Smart collections that filter on reading status ("finished", "in
   progress") are worked out from the reading history of the person who
   created the collection, and every account can see which books are in a
   collection. A viewer can therefore infer that person's reading status. No
   listening data is shown directly; the owner is deciding whether this should
   change.
 
-Verified with automated tests: for each route, a viewer and an editor are
-shown none of the personal data and an admin is shown all of it. Each test
+Verified with automated tests: for each route this change covers, a viewer
+and an editor are shown none of the personal data and an admin is shown all
+of it. Each test
 was also run with its fix taken out, to confirm it then fails.
