@@ -1,18 +1,21 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 package jobs
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"log/slog"
@@ -68,7 +71,84 @@ func scopeToBooks(files []database.BookFileCore, bookIDs []string) []database.Bo
 	return out
 }
 func (j *backfillFileHashesJob) Description() string {
-	return "Compute and store file hashes for book_files missing them"
+	return "Compute and store file hashes for book_files missing them; rows already marked missing are skipped (re-checked by stat) and a file that is not found is marked missing instead of retried every run"
+}
+
+// hashBackfillMissingLogCap bounds how many newly-missing paths one run writes
+// to the operation log. The first run after this change can find hundreds of
+// thousands of absent files; they are all COUNTED (newly_missing) and flagged,
+// but one log row each would bury everything else in the op log.
+const hashBackfillMissingLogCap = 50
+
+// fileAbsent reports whether err means the path is definitively not there:
+// not found (ENOENT) or a path component that is not a directory (ENOTDIR).
+// Anything else -- permission denied, an I/O error, a stale network handle --
+// leaves the file's state unknown and is NOT an answer, so it is never used to
+// mark a row missing.
+func fileAbsent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// hashBackfillCounts is one run's outcome tally. Every un-hashed row lands in
+// exactly one of hashed, skippedKnownMissing, newlyMissing, readErrors or
+// writeErrors (a row changed under the run by another writer lands in none).
+// Atomics: the worker pool updates them concurrently.
+type hashBackfillCounts struct {
+	hashed              atomic.Int64 // hash computed (and, unless dry-run, stored)
+	skippedKnownMissing atomic.Int64 // row already marked missing and still not on disk
+	newlyMissing        atomic.Int64 // hash attempt found the file absent; row marked missing now
+	readErrors          atomic.Int64 // hash failed for a reason other than not-found; retried next run
+	writeErrors         atomic.Int64 // the hash or the missing marker could not be saved
+}
+
+// summary is the one-line result stored on the operation log. In a dry run the
+// same counts are what an apply WOULD do: hashed is would-hash, newly_missing
+// is would-mark-missing, and nothing is written.
+func (c *hashBackfillCounts) summary(dryRun bool) string {
+	prefix := "Backfilled hashes"
+	if dryRun {
+		prefix = "Dry run, nothing written (counts are what an apply would do)"
+	}
+	return fmt.Sprintf("%s: hashed=%d skipped_known_missing=%d newly_missing=%d read_errors=%d write_errors=%d",
+		prefix, c.hashed.Load(), c.skippedKnownMissing.Load(), c.newlyMissing.Load(),
+		c.readErrors.Load(), c.writeErrors.Load())
+}
+
+// markBookFileMissing records, on the row itself, that its file is not on disk,
+// using the same book_file.Missing flag the scanner clears and mark-missing
+// sets, so a later run (and the Broken Files counter) sees one fact in one
+// place. It writes only the flag, under the row's lock, and only if the row is
+// still the one this run read: same path (a repoint since then must not be
+// flagged for the old path's absence) and still un-hashed. The row is never
+// deleted. flipped is true only when this call changed the flag.
+func markBookFileMissing(store maintenance.JobStore, bf database.BookFileCore, dryRun bool) (flipped bool, err error) {
+	if dryRun {
+		return !bf.Missing, nil
+	}
+	_, err = store.ModifyBookFile(bf.BookID, bf.ID, func(row *database.BookFile) error {
+		if row.FilePath != bf.FilePath || row.FileHash != "" || row.Missing {
+			return database.ErrSkipBookFileWrite
+		}
+		row.Missing = true
+		flipped = true
+		return nil
+	})
+	return flipped, err
+}
+
+// clearBookFileMissing is the reappear half: a row that was marked missing and
+// whose file has now been hashed is present, so the flag is cleared (the
+// scanner or mark-missing would do the same on their next pass; doing it here
+// keeps the Broken Files counter from reading a hashed file as broken).
+func clearBookFileMissing(store maintenance.JobStore, bf database.BookFileCore) error {
+	_, err := store.ModifyBookFile(bf.BookID, bf.ID, func(row *database.BookFile) error {
+		if row.FilePath != bf.FilePath || !row.Missing {
+			return database.ErrSkipBookFileWrite
+		}
+		row.Missing = false
+		return nil
+	})
+	return err
 }
 
 // hashBackfillWorkers bounds the parallel hashing pool. Hashing reads whole
@@ -118,7 +198,8 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 	}
 
-	var hashed atomic.Int64
+	var counts hashBackfillCounts
+	var missingLogged atomic.Int64
 	// repMu serializes access to reporter, whose maintenance.ProgressAdapter
 	// increments a plain int (progress.go) and is NOT concurrency-safe. The
 	// guarded calls are microseconds; file hashing dominates, so this does not
@@ -155,13 +236,48 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 				if bf.FileHash != "" {
 					return nil
 				}
+				if bf.Missing {
+					// Known missing: a cheap stat decides whether to hash at all, so
+					// the ~515k rows whose files are gone cost one stat each instead
+					// of an open + failed hash + warning every run. Only a definitive
+					// not-found skips; a successful stat (the file reappeared) or an
+					// inconclusive one falls through to the hash attempt, which either
+					// succeeds or reports the real error.
+					if _, serr := os.Stat(bf.FilePath); serr != nil && fileAbsent(serr) {
+						counts.skippedKnownMissing.Add(1)
+						return nil
+					}
+				}
 				// filehash.BookFileHash directly: scanner.ComputeFileHash is only
 				// a thin wrapper over it, and filehash is the single entry point
 				// for the digest.
 				hash, herr := filehash.BookFileHash(bf.FilePath)
 				if herr != nil {
 					msg := herr.Error()
-					slog.Warn("backfill-file-hashes hash failed for"+bf.FilePath, "details", msg)
+					if fileAbsent(herr) {
+						flipped, merr := markBookFileMissing(store, bf, dryRun)
+						switch {
+						case merr != nil:
+							counts.writeErrors.Add(1)
+							emsg := merr.Error()
+							repMu.Lock()
+							reporter.Log("error", "Failed to mark missing file "+bf.FilePath, &emsg)
+							repMu.Unlock()
+						case flipped:
+							counts.newlyMissing.Add(1)
+							if missingLogged.Add(1) <= hashBackfillMissingLogCap {
+								repMu.Lock()
+								reporter.Log("warn", "File not found, marked missing: "+bf.FilePath, &msg)
+								repMu.Unlock()
+							}
+						case bf.Missing:
+							// Stat was inconclusive but the row was already flagged.
+							counts.skippedKnownMissing.Add(1)
+						}
+						return nil
+					}
+					counts.readErrors.Add(1)
+					slog.Warn("backfill-file-hashes hash failed", "file", bf.FilePath, "details", msg)
 					repMu.Lock()
 					reporter.Log("warn", "Hash computation failed for "+bf.FilePath, &msg)
 					repMu.Unlock()
@@ -169,6 +285,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 				}
 				if !dryRun {
 					if serr := store.SetBookFileHash(bf.ID, hash); serr != nil {
+						counts.writeErrors.Add(1)
 						msg := serr.Error()
 						slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
 						repMu.Lock()
@@ -176,8 +293,17 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 						repMu.Unlock()
 						return nil
 					}
+					if bf.Missing {
+						if cerr := clearBookFileMissing(store, bf); cerr != nil {
+							counts.writeErrors.Add(1)
+							msg := cerr.Error()
+							repMu.Lock()
+							reporter.Log("error", "Hashed reappeared file but could not clear its missing flag: "+bf.FilePath, &msg)
+							repMu.Unlock()
+						}
+					}
 				}
-				hashed.Add(1)
+				counts.hashed.Add(1)
 				return nil
 			})
 		}
@@ -200,7 +326,10 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 
 	// Save a lightweight operation summary for the UI and activity feed.
-	res := fmt.Sprintf("Backfilled hashes for %d files", hashed.Load())
+	res := counts.summary(dryRun)
+	repMu.Lock()
+	reporter.Log("info", res, nil)
+	repMu.Unlock()
 	now := time.Now()
 	opLog := &database.OperationSummaryLog{
 		ID:          opID,
