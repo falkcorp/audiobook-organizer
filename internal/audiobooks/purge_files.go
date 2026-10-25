@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-25
 
@@ -76,6 +76,12 @@ type pendingFile struct {
 	id         fileIdentity
 	idConflict bool
 	bookIDs    []string
+	// fromJournal: the entry was read back from the journal (readPendingFiles),
+	// with the attempts a path that cannot be resolved has used so far and the
+	// time the first record was written.
+	fromJournal bool
+	attempts    int
+	recordedAt  time.Time
 }
 
 // pendingFiles collects the removals a purge pass decided on. Workers add to it
@@ -98,6 +104,22 @@ type pendingFiles struct {
 
 	mu     sync.Mutex
 	byPath map[string]*pendingFile
+}
+
+// markJournaled notes that the entry for path was read from the journal, keeping
+// the largest attempt count and the earliest write time of its records.
+func (p *pendingFiles) markJournaled(path string, attempts int, recordedAt time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f := p.byPath[path]
+	if f == nil {
+		return
+	}
+	f.fromJournal = true
+	f.attempts = max(f.attempts, attempts)
+	if f.recordedAt.IsZero() || (!recordedAt.IsZero() && recordedAt.Before(f.recordedAt)) {
+		f.recordedAt = recordedAt
+	}
 }
 
 func (p *pendingFiles) add(bookID string, v purgeFileVerdict) {
@@ -251,14 +273,17 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 		removed int
 		errs    []string
 		retry   bool
+		// bump: the retry is for a path that cannot be resolved, which counts
+		// against its attempts (maxUnresolvableAttempts).
+		bump bool
 	}
 	out := make([]outcome, len(pending))
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
 	for i, f := range pending {
 		g.Go(func() error {
-			n, e, retry := svc.removeDeferredFile(f, root, preview)
-			out[i] = outcome{removed: n, errs: e, retry: retry}
+			n, e, retry, bump := svc.removeDeferredFile(f, root, preview)
+			out[i] = outcome{removed: n, errs: e, retry: retry, bump: bump}
 			return nil
 		})
 	}
@@ -269,6 +294,10 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 		errs = append(errs, out[i].errs...)
 		if !out[i].retry {
 			settled = append(settled, f.bookIDs...)
+		} else if out[i].bump && f.fromJournal {
+			if err := svc.recordUnresolvableAttempt(f); err != nil {
+				errs = append(errs, fmt.Sprintf("could not count this pass against the pending removal of %s: %v", f.path, err))
+			}
 		}
 	}
 	if err := svc.forgetPendingFiles(settled); err != nil {
@@ -279,19 +308,35 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 
 // removeDeferredFile decides and does one pending path. retry is true when the
 // outcome may change on a later pass, so the journal keeps the record.
-func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord) (removed int, errs []string, retry bool) {
+//
+// A path that cannot be resolved at all (ELOOP, ENAMETOOLONG: errPathUnresolvable)
+// is retried only maxUnresolvableAttempts passes, and then cleared with a line
+// saying so: it will not resolve by trying again, and a record that is never
+// cleared is a line in every purge report for ever. bump says the retry counts
+// against that limit.
+func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord) (removed int, errs []string, retry, bump bool) {
 	bookID := f.bookIDs[0]
 	v := svc.planPurgeFile(&database.Book{ID: bookID, FilePath: f.path})
 	switch {
 	case v.protected:
 		singleLog.Debug("purge skipping file deletion: protected path %s (book %s)",
 			logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
-		return 0, nil, false
+		return 0, nil, false, false
 	case v.keptErr != nil:
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, v.keptErr)}, errors.Is(v.keptErr, errPathLookupFailed)
+		line := fmt.Sprintf("%s: book purged, file kept: %v", bookID, v.keptErr)
+		if !errors.Is(v.keptErr, errPathLookupFailed) {
+			return 0, []string{line}, false, false
+		}
+		if errors.Is(v.keptErr, errPathUnresolvable) {
+			if f.attempts+1 >= maxUnresolvableAttempts {
+				return 0, []string{fmt.Sprintf("%s (gave up after %d passes: the path cannot be resolved, so the file is left where it is and its record is cleared)", line, maxUnresolvableAttempts)}, false, false
+			}
+			return 0, []string{line}, true, true
+		}
+		return 0, []string{line}, true, false
 	case v.remove == "":
 		// Already gone, or a directory that is not empty.
-		return 0, nil, false
+		return 0, nil, false, false
 	}
 	// The path names a file, but is it the file the purge decided to remove?
 	// A different one (replaced, or changed, since: fileIdentity) is nobody's
@@ -300,16 +345,16 @@ func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, pre
 	if f.idConflict || f.isDir != v.isDir || !f.id.matches(v.id, v.isDir) {
 		singleLog.Warn("purge keeping %s: it is not the file the purge decided to remove (replaced or changed since; book %s)",
 			logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %s is not the file this purge decided to remove (it was replaced or changed since)", bookID, f.path)}, false
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %s is not the file this purge decided to remove (it was replaced or changed since)", bookID, f.path)}, false, false
 	}
 	if err := svc.otherBookRowAt(f.path); err != nil {
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, err)}, errors.Is(err, errPathLookupFailed)
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, err)}, errors.Is(err, errPathLookupFailed), false
 	}
 	if !preview.listsFile(f.path) {
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path)}, false
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path)}, false, false
 	}
 	n, e := removePurgedFile(bookID, v, root)
-	return n, e, len(e) > 0
+	return n, e, len(e) > 0, false
 }
 
 // settlePreviewFiles finishes a preview's file account once every book is

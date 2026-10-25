@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
 // last-edited: 2026-10-25
 
@@ -120,6 +120,15 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
     }
   }, [runPhase, queuedId, onClose]);
   const purgeable = preview?.purgeable ?? 0;
+  // Files an earlier delete-files purge left waiting (it died before its
+  // removal). With nothing purgeable the delete-files box is not shown, so
+  // without its own button nothing in the product would ever drain them: the
+  // files would sit on disk, named by no book, until a library scan imported
+  // them as new books. The run is the ordinary purge with delete files on,
+  // bound to this preview; it purges no book here (none is purgeable) and
+  // replays the pending removals.
+  const earlierFiles = preview?.files_pending_from_earlier_pass ?? 0;
+  const earlierOnly = purgeable === 0 && earlierFiles > 0;
   // The purge is bound to this preview: it carries the instant the preview was
   // taken at and takes no book trashed after it. A preview without one cannot
   // be purged from.
@@ -169,6 +178,20 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
               </Typography>
             ))}
             <ErrorDetails result={preview} />
+            {earlierOnly && (
+              <Alert severity="warning" sx={{ mt: 2 }} data-testid="purge-earlier-only">
+                {earlierFiles.toLocaleString()} {earlierFiles === 1 ? 'file' : 'files'} of books an
+                earlier purge removed {earlierFiles === 1 ? 'is' : 'are'} still waiting to be
+                deleted from disk: that purge stopped before it got to{' '}
+                {earlierFiles === 1 ? 'it' : 'them'}. Finishing deletes{' '}
+                {earlierFiles === 1 ? 'it' : 'them'} unless a book names{' '}
+                {earlierFiles === 1 ? 'it' : 'them'} again, or the file is no longer the one that
+                purge decided on. No book is purged.
+                {trashedBefore === null
+                  ? ' The server did not say which books this check covered, so this is off; try again.'
+                  : ''}
+              </Alert>
+            )}
             {purgeable > 0 && (
               <>
                 <FormControlLabel
@@ -284,13 +307,17 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
             onClick={() => {
               if (trashedBefore === null) return;
               closeOnStartRef.current = true;
-              void run.start(trashedBefore, deleteFiles);
+              void run.start(trashedBefore, earlierOnly ? true : deleteFiles);
             }}
             color="error"
             variant="contained"
-            disabled={purgeable === 0 || trashedBefore === null}
+            disabled={(purgeable === 0 && !earlierOnly) || trashedBefore === null}
           >
-            {purgeable === 0 ? 'Nothing to purge' : `Purge ${books(purgeable)}`}
+            {earlierOnly
+              ? `Finish removing ${earlierFiles.toLocaleString()} ${earlierFiles === 1 ? 'file' : 'files'}`
+              : purgeable === 0
+                ? 'Nothing to purge'
+                : `Purge ${books(purgeable)}`}
           </Button>
         )}
         {running && (

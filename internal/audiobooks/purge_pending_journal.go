@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_pending_journal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2d8e60-1c47-4a93-b0f5-9e3a7d1c4826
 // last-edited: 2026-10-25
 
@@ -45,6 +45,10 @@ type pendingFileRecord struct {
 	IsDir      bool         `json:"is_dir,omitempty"`
 	Identity   fileIdentity `json:"identity"`
 	RecordedAt time.Time    `json:"recorded_at"`
+	// Attempts counts the passes that kept the record because its path cannot
+	// be resolved (ELOOP, ENAMETOOLONG); at maxUnresolvableAttempts it is
+	// cleared with an error line.
+	Attempts int `json:"attempts,omitempty"`
 }
 
 // earlierPassLabel marks the error lines of a replayed removal: they are about
@@ -83,6 +87,26 @@ func (svc *AudiobookService) journalPendingFile(bookID string, v purgeFileVerdic
 	}
 	if err := kv.SetRaw(pendingFilePrefix+bookID, raw); err != nil {
 		return fmt.Errorf("record pending file removal: %w", err)
+	}
+	return nil
+}
+
+// recordUnresolvableAttempt rewrites the journal records of f (read from the
+// journal) with one more attempt used, keeping the identity and the time they
+// were first written.
+func (svc *AudiobookService) recordUnresolvableAttempt(f *pendingFile) error {
+	kv, err := svc.pendingFileKV()
+	if err != nil {
+		return err
+	}
+	for _, bookID := range f.bookIDs {
+		raw, err := json.Marshal(pendingFileRecord{BookID: bookID, Path: f.path, IsDir: f.isDir, Identity: f.id, RecordedAt: f.recordedAt, Attempts: f.attempts + 1})
+		if err != nil {
+			return fmt.Errorf("encode pending file removal: %w", err)
+		}
+		if err := kv.SetRaw(pendingFilePrefix+bookID, raw); err != nil {
+			return fmt.Errorf("record pending file removal: %w", err)
+		}
 	}
 	return nil
 }
@@ -130,6 +154,7 @@ func (svc *AudiobookService) readPendingFiles() (files *pendingFiles, corrupt, e
 				continue
 			}
 			files.add(rec.BookID, purgeFileVerdict{remove: rec.Path, isDir: rec.IsDir, id: rec.Identity})
+			files.markJournaled(rec.Path, rec.Attempts, rec.RecordedAt)
 		}
 		if next == "" {
 			break

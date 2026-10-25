@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
 // last-edited: 2026-10-25
 
@@ -130,6 +130,43 @@ describe('PurgeSoftDeletedDialog', () => {
     expect(await screen.findByTestId('purge-preview-headline')).toHaveTextContent(
       'would remove none of the 40 books'
     );
+    expect(screen.getByRole('button', { name: 'Nothing to purge' })).toBeDisabled();
+  });
+
+  it('with nothing purgeable but files an earlier purge left waiting, offers to finish removing them with delete files on', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      ...preview,
+      attempted: 0,
+      purgeable: 0,
+      skipped_owns_files: 0,
+      kept_undo_possible: 0,
+      kept_has_progress: 0,
+      files_pending_from_earlier_pass: 4,
+    });
+    deferRun();
+    setup();
+    expect(await screen.findByTestId('purge-earlier-only')).toHaveTextContent(
+      '4 files of books an earlier purge removed are still waiting to be deleted from disk'
+    );
+    // No delete-files box: nothing is purgeable, so there is nothing to choose.
+    expect(screen.queryByLabelText('Also delete files from disk (if they still exist)')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Nothing to purge' })).toBeNull();
+    const finish = screen.getByRole('button', { name: 'Finish removing 4 files' });
+    expect(finish).toBeEnabled();
+
+    fireEvent.click(finish);
+    await waitFor(() => expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(PREVIEW_AT, true));
+  });
+
+  it('with nothing purgeable and nothing waiting, does not offer to finish anything', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      ...preview,
+      purgeable: 0,
+      files_pending_from_earlier_pass: 0,
+    });
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    expect(screen.queryByTestId('purge-earlier-only')).toBeNull();
     expect(screen.getByRole('button', { name: 'Nothing to purge' })).toBeDisabled();
   });
 

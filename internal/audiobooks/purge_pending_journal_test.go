@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_pending_journal_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e8a4c71-6d09-4b35-9f1a-c7d3b05e8a62
 // last-edited: 2026-10-25
 
@@ -32,11 +32,18 @@ type hookedPathStore struct {
 	beforeLive func(path string)
 	// allRowsErr, when it returns non-nil, fails BookIDsAtPath with that error.
 	allRowsErr func(path string) error
+	// liveErr, when it returns non-nil, fails LiveBookIDsAtPath with that error.
+	liveErr func(path string) error
 }
 
 func (h *hookedPathStore) LiveBookIDsAtPath(path string) ([]string, error) {
 	if h.beforeLive != nil {
 		h.beforeLive(path)
+	}
+	if h.liveErr != nil {
+		if err := h.liveErr(path); err != nil {
+			return nil, err
+		}
 	}
 	return h.PebbleStore.LiveBookIDsAtPath(path)
 }
@@ -364,7 +371,7 @@ func TestRunPurge_ReplayKeepsTheFileOfARecordWithNoIdentity(t *testing.T) {
 	assert.Empty(t, pendingJournal(t, store))
 }
 
-// fileIdentity compares device, inode, size and modification time, and an
+// fileIdentity compares inode, size and modification time, and an
 // unknown identity matches nothing.
 func TestFileIdentity_Matches(t *testing.T) {
 	dir := t.TempDir()

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-25
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -368,6 +367,27 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	if o, blocked := svc.purgeGate(book, env); blocked {
 		return o
 	}
+	// Step 0a: with delete_files, decide what to do about the book's file BEFORE
+	// anything is deleted. The row delete is the point of no return: once the
+	// row and its tombstone are gone, nothing names the file, so a lookup or
+	// stat that fails AFTER the delete leaves the file with no record at all.
+	// Asked first, a failure keeps the whole book in the trash (reported as not
+	// decided) and the next pass decides it again. The journal record of a file
+	// to be removed is written in the same step as the row delete
+	// (purgeDeleteRow), never after it.
+	//
+	// It runs outside the merge lock, as the file-row check and the removal
+	// always have (the lock is global, and a stat can be slow on a network
+	// mount). A book the pass will end up keeping for another reason (progress,
+	// an undo hold) has paid for a stat it did not need; the removal-time
+	// checks (removeDeferredFiles) still run against the store as it is then.
+	var plan *filePlan
+	if deleteFiles {
+		var undecided *purgeOutcome
+		if plan, undecided = svc.decideFile(book, env); undecided != nil {
+			return *undecided
+		}
+	}
 	// Step 0b: a book a user still has listening state on, checked at the
 	// same point (before any side effect). A merge moves a loser's progress
 	// to the book holding the group's flag; progress still here is progress
@@ -382,7 +402,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	// state onto a trashed book under that lock, so a check made outside it
 	// could read "none", lose the race to the revert, and delete the book the
 	// revert had just put a user's progress on.
-	r := svc.purgeIfStateless(book, env)
+	r := svc.purgeIfStateless(book, env, plan)
 	switch {
 	case r.readErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot re-read it under the merge lock: %v", book.ID, r.readErr)}}
@@ -399,7 +419,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	case r.stateErr != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(r.stateErr), r.stateErr)}}
 	case r.hasState:
-		return svc.purgeCarryingState(book, deleteFiles, env)
+		return svc.purgeCarryingState(book, deleteFiles, env, plan)
 	}
 	book = r.fresh
 	if err := r.deleteErr; err != nil {
@@ -409,7 +429,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 		}
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: %v", book.ID, err)}}
 	}
-	n, errs := svc.purgeFinish(book, deleteFiles, env.files)
+	n, errs := svc.purgeFinish(book, deleteFiles, env.files, plan)
 	return purgeOutcome{kind: purgePurged, filesDeleted: n, errs: errs}
 }
 
@@ -461,7 +481,7 @@ type statelessPurge struct {
 // merge.MergeLockAcquisitions). Anything added under this hold that writes a
 // file row, or anything else such a snapshot reads unlogged, must switch it
 // back to merge.LockMergeRMW.
-func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv) (r statelessPurge) {
+func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv, plan *filePlan) (r statelessPurge) {
 	if !env.lockHeld {
 		merge.LockMergeRMWBookRowsOnly()
 		defer merge.UnlockMergeRMW()
@@ -511,7 +531,11 @@ func (svc *AudiobookService) purgeIfStateless(book *database.Book, env purgeEnv)
 		r.notInPreview = true
 		return r
 	}
-	r.deleteErr = svc.purgeDeleteRow(cur)
+	if err := plan.stillFor(cur); err != nil {
+		r.deleteErr = err
+		return r
+	}
+	r.deleteErr = svc.purgeDeleteRow(cur, plan)
 	return r
 }
 
@@ -535,7 +559,7 @@ func stateCheckFailureReason(err error) string {
 // in the same hold of the merge lock. No live sibling keeps the book
 // (purgeKeptHasProgress); a carry that does not complete keeps it too
 // (purgeCarryFailed) with every user's state put back on it.
-func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles bool, env purgeEnv) purgeOutcome {
+func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles bool, env purgeEnv, plan *filePlan) purgeOutcome {
 	sibling, err := svc.liveSiblingFor(book)
 	if err != nil {
 		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: cannot look for a live version to carry it to: %v", book.ID, err)}}
@@ -571,6 +595,11 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 			return fmt.Errorf("%w: %s", errTrashedAfterBound, book.ID)
 		}
 		doomed = cur
+		// The file was decided for the path the listing named. A row whose path
+		// changed since is not what was decided: refused before anything moves.
+		if err := plan.stillFor(cur); err != nil {
+			return err
+		}
 		// The merge lock is held here, so this is the same exact undo-hold
 		// decision purgeIfStateless made: a combine, an operation or an
 		// auto-merge can have journaled this book in the gap since. Refused
@@ -597,7 +626,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		carryThenDelete = merge.CarryStateThenHardDeleteLocked
 	}
 	err = carryThenDelete(merger, sibling, book.ID, precheck, func() error {
-		return svc.purgeDeleteRow(doomed)
+		return svc.purgeDeleteRow(doomed, plan)
 	})
 	switch {
 	case errors.Is(err, ErrNotInTrash):
@@ -627,7 +656,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 	case err != nil:
 		return purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(err), errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
 	}
-	n, errs := svc.purgeFinish(doomed, deleteFiles, env.files)
+	n, errs := svc.purgeFinish(doomed, deleteFiles, env.files, plan)
 	return purgeOutcome{kind: purgeCarried, filesDeleted: n, errs: errs}
 }
 
@@ -659,7 +688,13 @@ var errNotInPreview = errors.New("was not listed as purgeable by the preview thi
 // meanwhile: ErrBookOwnsFiles) left a live book whose external IDs were
 // blocked. A side effect that fails after the delete is logged: the row is
 // gone either way, and nothing here can put it back.
-func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
+//
+// With a plan that is to be journaled (filePlan.journal) the record of the
+// file's removal is written FIRST, before the tombstone and the row go, and
+// removed again if the delete then fails: a crash at any point leaves either the
+// book (and no record that matters: a replay finds a book row at the path and
+// keeps the file) or the record, never a file with neither.
+func (svc *AudiobookService) purgeDeleteRow(book *database.Book, plan *filePlan) error {
 	eidStore := asExternalIDStore(svc.store)
 	var extIDs []database.ExternalIDMapping
 	if eidStore != nil {
@@ -668,8 +703,24 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
 			return fmt.Errorf("cannot read the external IDs to tombstone: %w", err)
 		}
 	}
+	journaled := false
+	if plan != nil && plan.journal {
+		if err := svc.journalPendingFile(book.ID, plan.v); err != nil {
+			return fmt.Errorf("not purged: the removal of its file %s cannot be recorded, so a crash after the delete would leave it on disk: %w", plan.v.remove, err)
+		}
+		journaled = true
+	}
+	// A delete that does not happen takes its journal record back, so a later
+	// pass that deletes files does not remove the file of a book that is
+	// still here (or that a pass without delete_files purges meanwhile).
+	forget := func() {
+		if journaled {
+			_ = svc.forgetPendingFiles([]string{book.ID})
+		}
+	}
 	// Step 1: Create tombstone (snapshot of book for rollback)
 	if err := svc.store.CreateBookTombstone(book); err != nil {
+		forget()
 		return fmt.Errorf("failed to create tombstone: %w", err)
 	}
 
@@ -677,6 +728,7 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
 	// On failure the tombstone exists but the book still exists — the
 	// sweeper will clean up the tombstone — and no side effect has run.
 	if err := svc.store.DeleteBook(book.ID); err != nil {
+		forget()
 		return fmt.Errorf("failed to delete DB record: %w", err)
 	}
 
@@ -702,7 +754,7 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
 // does with every other book that names it. With nil (a single-book purge: no
 // pass) the removal happens here, after checking that no other trashed book
 // names the path.
-func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool, files *pendingFiles) (filesDeleted int, errs []string) {
+func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool, files *pendingFiles, plan *filePlan) (filesDeleted int, errs []string) {
 	// Step 3: Delete file if requested -- only from inside the library root
 	// (RootDir), never from protected/import paths, and never a path
 	// anything live (or still in the trash) references.
@@ -722,25 +774,26 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool, 
 	// anywhere on disk the process could write (a sibling directory of the
 	// root, a download folder no import path covers) had that file removed.
 	if deleteFiles {
-		v := svc.planPurgeFile(book)
+		// The decision made before the row was deleted (decideFile), when the
+		// caller made one for this path; otherwise (a single-book purge that
+		// runs no pass) it is made now.
+		var v purgeFileVerdict
+		if plan.isFor(book) {
+			v = plan.v
+		} else {
+			v = svc.planPurgeFile(book)
+		}
 		switch {
 		case v.protected:
 			slog.Debug("purge skipping file deletion for — protected path", "bookID", book.ID, "filePath", book.FilePath)
 		case v.keptErr != nil:
 			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, v.keptErr))
 		case v.remove != "" && files != nil:
-			files.add(book.ID, v)
-			// Written down before the tombstone goes (step 4): once the
-			// tombstone is gone nothing else records that this book's file is
-			// still to be removed, and a crash before the pass's removal
-			// would orphan it (purge_pending_journal.go). A file the bound
+			// Already journaled, when the preview listed it, by purgeDeleteRow
+			// before the row went (purge_pending_journal.go). A file the bound
 			// preview said stays is not removed by this pass, so there is
 			// nothing to remember for it.
-			if files.preview.listsFile(v.remove) {
-				if jErr := svc.journalPendingFile(book.ID, v); jErr != nil {
-					errs = append(errs, fmt.Sprintf("%s: book purged, but its file removal is not recorded, so a crash before this pass finishes would leave %s on disk: %v", book.ID, v.remove, jErr))
-				}
-			}
+			files.add(book.ID, v)
 		case v.remove != "":
 			if twinErr := svc.otherBookRowAt(v.remove); twinErr != nil {
 				errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, twinErr))
@@ -803,25 +856,28 @@ func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict
 	}
 	info, statErr := os.Stat(book.FilePath)
 	switch {
-	case errors.Is(statErr, fs.ErrNotExist):
-		// ENOENT: the file is already gone, which is fine.
+	case pathIsGone(statErr):
+		// ENOENT, or ENOTDIR (a parent is not a directory, so the path cannot
+		// exist): the file is already gone, which is fine.
 		return purgeFileVerdict{}
 	case statErr != nil:
-		// Any other failure (EIO, EACCES on a parent, ESTALE, a mount that is
-		// not up yet) says nothing about whether the file is there. Reading it
-		// as "gone" would clear the journal record of a file that is still
-		// on disk and leave it with nothing naming it. Fail closed and
-		// transient: the file stays, the line is reported, the record is kept
-		// for the next pass (errPathLookupFailed).
-		return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is gone or removable: stat: %w: %w", book.FilePath, errPathLookupFailed, statErr)}
+		// Any other failure (EIO, EACCES on a parent, ESTALE) says nothing
+		// about whether the file is there. Reading it as "gone" would clear the
+		// journal record of a file that is still on disk and leave it with
+		// nothing naming it. Fail closed and transient: the file stays, the
+		// line is reported, and a book not yet purged stays in the trash, or a
+		// journal record is kept, for the next pass (errPathLookupFailed). (A
+		// mount that is not up reads as ENOENT, not as an error: that is the
+		// owner's to avoid, by not purging with the library unmounted.)
+		return purgeFileVerdict{keptErr: statLookupError(book.FilePath, "stat", statErr)}
 	case info.IsDir():
 		// Remove the directory only if it is already empty.
 		entries, rdErr := os.ReadDir(book.FilePath)
 		switch {
-		case errors.Is(rdErr, fs.ErrNotExist):
+		case pathIsGone(rdErr):
 			return purgeFileVerdict{}
 		case rdErr != nil:
-			return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is an empty directory: read: %w: %w", book.FilePath, errPathLookupFailed, rdErr)}
+			return purgeFileVerdict{keptErr: statLookupError(book.FilePath, "read", rdErr)}
 		case len(entries) == 0:
 			return purgeFileVerdict{remove: book.FilePath, isDir: true, id: identityOf(info)}
 		}

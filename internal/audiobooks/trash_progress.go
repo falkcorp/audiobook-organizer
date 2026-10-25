@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -698,13 +698,13 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		return nil
 	}
 	cleared, err := merge.DiscardUserStateThenHardDeleteLocked(merger, id, precheck, func() error {
-		return svc.purgeDeleteRow(book)
+		return svc.purgeDeleteRow(book, nil)
 	})
 	res.UsersCleared, res.BookmarksCleared = cleared.Users, cleared.Bookmarks
 	if err != nil {
 		return nil, err
 	}
-	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, nil)
+	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, nil, nil)
 	svc.InvalidateListCache()
 	release()
 

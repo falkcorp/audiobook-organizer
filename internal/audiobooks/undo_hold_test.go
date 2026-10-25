@@ -1,7 +1,7 @@
 // file: internal/audiobooks/undo_hold_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 3c9e5a17-8d42-4b60-a1f3-7e0b6d2c9a48
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -278,7 +278,7 @@ func TestPurgeIfStateless_HoldsOnTheRowAsItIsUnderTheLock(t *testing.T) {
 	require.NoError(t, err)
 	holdByCombine(t, store, "shell") // J2 absorbs it again, journaled after the env
 
-	r := svc.purgeIfStateless(listing, env)
+	r := svc.purgeIfStateless(listing, env, nil)
 	require.NoError(t, r.undoErr)
 	assert.True(t, r.keptUndo, "%+v", r)
 	assert.False(t, bookGone(t, store, "shell"))
@@ -297,7 +297,7 @@ func TestPurgeIfStateless_StaleListingStampDoesNotHold(t *testing.T) {
 	env, err := svc.newPurgeEnv()
 	require.NoError(t, err)
 
-	r := svc.purgeIfStateless(listing, env)
+	r := svc.purgeIfStateless(listing, env, nil)
 	require.NoError(t, r.deleteErr)
 	assert.False(t, r.keptUndo)
 	assert.True(t, bookGone(t, store, "shell"))
@@ -318,7 +318,7 @@ func TestPurgeCarryingState_PrecheckHoldsAShellJournaledAfterTheEnv(t *testing.T
 
 	holdByCombine(t, store, "dup")
 
-	out := svc.purgeCarryingState(listing, false, env)
+	out := svc.purgeCarryingState(listing, false, env, nil)
 	assert.Equal(t, purgeKeptUndo, out.kind, "%+v", out)
 	assert.False(t, bookGone(t, store, "dup"))
 	assert.Equal(t, 40, userPct(t, store, u.ID, "dup"), "the state must not have moved")
@@ -341,7 +341,7 @@ func TestPurgeCarryingState_PrecheckHoldsALedgerShell(t *testing.T) {
 	require.NoError(t, err)
 	journalSoftDelete(t, store, "op-retire", "dup", undo.SoftDeleteStamp(*cur.MarkedForDeletionAt))
 
-	out := svc.purgeCarryingState(listing, false, env)
+	out := svc.purgeCarryingState(listing, false, env, nil)
 	assert.Equal(t, purgeKeptUndo, out.kind, "%+v", out)
 	assert.False(t, bookGone(t, store, "dup"))
 	assert.Equal(t, 40, userPct(t, store, u.ID, "dup"))
