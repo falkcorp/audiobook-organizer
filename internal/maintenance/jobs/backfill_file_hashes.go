@@ -1,17 +1,19 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-25
 
 package jobs
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -98,7 +100,7 @@ type hashBackfillCounts struct {
 	skippedKnownMissing atomic.Int64 // row already marked missing and still not on disk
 	newlyMissing        atomic.Int64 // hash attempt found the file absent; row marked missing now
 	readErrors          atomic.Int64 // hash failed for a reason other than not-found; retried next run
-	writeErrors         atomic.Int64 // the hash or the missing marker could not be saved
+	writeErrors         atomic.Int64 // a hash, a cleared marker, or one book's batch of missing markers could not be saved
 }
 
 // summary is the one-line result stored on the operation log. In a dry run the
@@ -114,26 +116,63 @@ func (c *hashBackfillCounts) summary(dryRun bool) string {
 		c.readErrors.Load(), c.writeErrors.Load())
 }
 
-// markBookFileMissing records, on the row itself, that its file is not on disk,
-// using the same book_file.Missing flag the scanner clears and mark-missing
-// sets, so a later run (and the Broken Files counter) sees one fact in one
-// place. It writes only the flag, under the row's lock, and only if the row is
-// still the one this run read: same path (a repoint since then must not be
-// flagged for the old path's absence) and still un-hashed. The row is never
-// deleted. flipped is true only when this call changed the flag.
-func markBookFileMissing(store maintenance.JobStore, bf database.BookFileCore, dryRun bool) (flipped bool, err error) {
-	if dryRun {
-		return !bf.Missing, nil
+// flagMissingRows records, on the rows themselves, that their files are not on
+// disk, using the same book_file.Missing flag the scanner clears and
+// mark-missing sets, so a later run (and the Broken Files counter) sees one fact
+// in one place. It writes only the flag, never deletes a row, and returns how
+// many rows it actually flipped.
+//
+// The writes are grouped per book and go through BookFileBatchModifier, so a
+// book's aggregates are recomputed once per book, not once per file: a book
+// with 800 absent chapters is one recompute, not 800. Each row is still read
+// and rewritten under its own lock, and flagged only if it is still the row
+// this run read: same path (a repoint since then must not be flagged for the
+// old path's absence), still un-hashed, not already flagged. Grouping by book
+// also partitions the work, so two workers never touch rows of one book.
+//
+// A failed book batch is logged and counted in writeErrors; rows already
+// written in it stay written and are counted. Only a cancelled ctx is returned.
+func flagMissingRows(ctx context.Context, mod database.BookFileBatchModifier, reporter maintenance.ProgressReporter, repMu *sync.Mutex, counts *hashBackfillCounts, rows []database.BookFileCore, workers int) error {
+	byBook := map[string][]database.BookFileCore{}
+	for _, r := range rows {
+		byBook[r.BookID] = append(byBook[r.BookID], r)
 	}
-	_, err = store.ModifyBookFile(bf.BookID, bf.ID, func(row *database.BookFile) error {
-		if row.FilePath != bf.FilePath || row.FileHash != "" || row.Missing {
-			return database.ErrSkipBookFileWrite
-		}
-		row.Missing = true
-		flipped = true
-		return nil
-	})
-	return flipped, err
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+	for bookID, group := range byBook {
+		g.Go(func() error {
+			if gctx.Err() != nil {
+				return gctx.Err()
+			}
+			// The workers appended in completion order; write in file-ID order so
+			// a batch is the same on every run.
+			slices.SortFunc(group, func(a, b database.BookFileCore) int { return cmp.Compare(a.ID, b.ID) })
+			expect := make(map[string]database.BookFileCore, len(group))
+			ids := make([]string, len(group))
+			for i, r := range group {
+				expect[r.ID] = r
+				ids[i] = r.ID
+			}
+			changed, err := mod.ModifyBookFiles(gctx, bookID, ids, func(row *database.BookFile) error {
+				want, ok := expect[row.ID]
+				if !ok || row.FilePath != want.FilePath || row.FileHash != "" || row.Missing {
+					return database.ErrSkipBookFileWrite
+				}
+				row.Missing = true
+				return nil
+			})
+			counts.newlyMissing.Add(int64(len(changed)))
+			if err != nil && gctx.Err() == nil {
+				counts.writeErrors.Add(1)
+				msg := err.Error()
+				repMu.Lock()
+				reporter.Log("error", "Failed to mark missing files of book "+bookID, &msg)
+				repMu.Unlock()
+			}
+			return gctx.Err()
+		})
+	}
+	return g.Wait()
 }
 
 // clearBookFileMissing is the reappear half: a row that was marked missing and
@@ -184,7 +223,32 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 		files = scopeToBooks(files, p.BookIDs)
 	}
+	// One fixed order, grouped by book. Two reasons, both load-bearing: the
+	// checkpoint is an INDEX into this slice, so resume needs the same order on
+	// every run rather than whatever order the store happens to answer in; and
+	// flagMissingRows recomputes a book once per chunk it appears in, so a
+	// book's rows must sit next to each other or a chunk boundary-free book
+	// could still be flagged (and recomputed) once per file. The slice is the
+	// store's own fresh copy, so sorting in place costs no extra allocation.
+	slices.SortFunc(files, func(a, b database.BookFileCore) int {
+		if c := cmp.Compare(a.BookID, b.BookID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
 	reporter.SetTotal(len(files))
+
+	// Resolved up front and refused loudly: a store that cannot batch the
+	// marker writes would otherwise fall back to a per-file recompute (the
+	// cost this capability exists to avoid) or silently never record missing
+	// files. A dry run writes nothing and needs no writer.
+	var flagger database.BookFileBatchModifier
+	if !dryRun {
+		var ok bool
+		if flagger, ok = database.AsCapability[database.BookFileBatchModifier](store); !ok {
+			return fmt.Errorf("backfill-file-hashes: store %T does not implement database.BookFileBatchModifier", store)
+		}
+	}
 
 	// Resume support: load checkpoint if present.
 	opID := maintenance.OperationIDFromCtx(ctx)
@@ -200,6 +264,10 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 
 	var counts hashBackfillCounts
 	var missingLogged atomic.Int64
+	// absent collects, per chunk, the rows whose hash attempt found the file
+	// gone and that are not yet flagged; flagMissingRows writes them once the
+	// chunk's workers are done. Guarded by repMu.
+	var absent []database.BookFileCore
 	// repMu serializes access to reporter, whose maintenance.ProgressAdapter
 	// increments a plain int (progress.go) and is NOT concurrency-safe. The
 	// guarded calls are microseconds; file hashing dominates, so this does not
@@ -255,25 +323,17 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 				if herr != nil {
 					msg := herr.Error()
 					if fileAbsent(herr) {
-						flipped, merr := markBookFileMissing(store, bf, dryRun)
-						switch {
-						case merr != nil:
-							counts.writeErrors.Add(1)
-							emsg := merr.Error()
-							repMu.Lock()
-							reporter.Log("error", "Failed to mark missing file "+bf.FilePath, &emsg)
-							repMu.Unlock()
-						case flipped:
-							counts.newlyMissing.Add(1)
-							if missingLogged.Add(1) <= hashBackfillMissingLogCap {
-								repMu.Lock()
-								reporter.Log("warn", "File not found, marked missing: "+bf.FilePath, &msg)
-								repMu.Unlock()
-							}
-						case bf.Missing:
+						if bf.Missing {
 							// Stat was inconclusive but the row was already flagged.
 							counts.skippedKnownMissing.Add(1)
+							return nil
 						}
+						repMu.Lock()
+						absent = append(absent, bf)
+						if missingLogged.Add(1) <= hashBackfillMissingLogCap {
+							reporter.Log("warn", "File not found, marking missing: "+bf.FilePath, &msg)
+						}
+						repMu.Unlock()
 						return nil
 					}
 					counts.readErrors.Add(1)
@@ -312,6 +372,21 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		// fully-completed chunk stands, and resume restarts at that boundary.
 		if gerr := g.Wait(); gerr != nil {
 			return gerr
+		}
+
+		// Flag this chunk's newly absent files, per book. Done before the
+		// checkpoint so the invariant holds for the marker writes too: every
+		// index below the checkpoint is fully processed, flags included. A book
+		// whose rows span a chunk boundary is flagged (and recomputed) once per
+		// chunk it appears in; rows come back grouped by book, so that is at
+		// most one extra recompute per boundary.
+		if len(absent) > 0 {
+			if dryRun {
+				counts.newlyMissing.Add(int64(len(absent)))
+			} else if ferr := flagMissingRows(ctx, flagger, reporter, &repMu, &counts, absent, workers); ferr != nil {
+				return ferr
+			}
+			absent = absent[:0]
 		}
 
 		// Periodic checkpoint so long runs can resume after restart.

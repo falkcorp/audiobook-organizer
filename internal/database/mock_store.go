@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 package database
 
@@ -594,6 +594,7 @@ type MockStore struct {
 	UpsertBookFileFunc                      func(file *BookFile) error
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	ModifyBookFilesFunc                     func(ctx context.Context, bookID string, fileIDs []string, fn func(*BookFile) error) ([]string, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	BatchUpsertBookFilesKeepPathsFunc       func(files []*BookFile) error
 	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
@@ -3549,6 +3550,38 @@ func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) err
 		return &row, nil
 	}
 	return nil, nil
+}
+
+// ModifyBookFiles (BookFileBatchModifier) uses ModifyBookFilesFunc when set;
+// otherwise it applies the mock's ModifyBookFile to each id in turn and reports
+// the ids that were written, so a test that stubs only ModifyBookFile or
+// GetBookFiles/UpdateBookFile still works. It does no aggregate recompute and
+// is not atomic: the once-per-book recompute is a PebbleStore property, tested
+// there.
+func (m *MockStore) ModifyBookFiles(ctx context.Context, bookID string, fileIDs []string, fn func(*BookFile) error) ([]string, error) {
+	if m.ModifyBookFilesFunc != nil {
+		return m.ModifyBookFilesFunc(ctx, bookID, fileIDs, fn)
+	}
+	var changed []string
+	for _, id := range fileIDs {
+		if err := ctx.Err(); err != nil {
+			return changed, err
+		}
+		wrote := false
+		if _, err := m.ModifyBookFile(bookID, id, func(row *BookFile) error {
+			if err := fn(row); err != nil {
+				return err
+			}
+			wrote = true
+			return nil
+		}); err != nil {
+			return changed, fmt.Errorf("book file %s: %w", id, err)
+		}
+		if wrote {
+			changed = append(changed, id)
+		}
+	}
+	return changed, nil
 }
 
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
 // last-edited: 2026-10-25
 
@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -324,4 +325,118 @@ func TestBackfillFileHashes_PebbleStoreRoundTrip(t *testing.T) {
 	assert.Equal(t, hbSum("back bytes"), rows["back.m4b"].FileHash)
 	assert.False(t, rows["back.m4b"].Missing, "reappeared + hashed: marker cleared in the real store")
 	assert.True(t, rows["never.m4b"].Missing)
+}
+
+// The cost the marker writes must not have: N absent files of ONE book are one
+// aggregate recompute for that book, not N. Real store, real recompute counter.
+// The control (below) shows the same N rows through per-row ModifyBookFile
+// would be N recomputes, so a 1 here is not a counter that never counts.
+func TestBackfillFileHashes_ManyMissingFilesOfOneBookRecomputeOnce(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+
+	dir := t.TempDir()
+	const n = 20
+	book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: dir})
+	require.NoError(t, err)
+	other, err := ps.CreateBook(&database.Book{Title: "Other Example Book", FilePath: dir})
+	require.NoError(t, err)
+	for i := range n {
+		require.NoError(t, ps.CreateBookFile(&database.BookFile{
+			BookID: book.ID, FilePath: filepath.Join(dir, fmt.Sprintf("gone%02d.m4b", i)), Duration: 30, FileSize: 1000,
+		}))
+	}
+	require.NoError(t, ps.CreateBookFile(&database.BookFile{BookID: other.ID, FilePath: filepath.Join(dir, "other-gone.m4b")}))
+
+	logs := aggtest.Capture(t)
+	_, c := runHashBackfill(t, ps, false)
+
+	assert.Equal(t, hbCounts{newlyMissing: n + 1}, c)
+	assert.Equal(t, 1, aggtest.CountInvocations(logs(), book.ID), "20 flips of one book: one recompute")
+	assert.Equal(t, 1, aggtest.CountInvocations(logs(), other.ID))
+	files, err := ps.GetBookFiles(book.ID)
+	require.NoError(t, err)
+	require.Len(t, files, n)
+	for _, f := range files {
+		assert.True(t, f.Missing)
+	}
+
+	// Control: the per-row path on the same shape recomputes once per row.
+	third, err := ps.CreateBook(&database.Book{Title: "Third Example Book", FilePath: dir})
+	require.NoError(t, err)
+	for i := range 5 {
+		require.NoError(t, ps.CreateBookFile(&database.BookFile{BookID: third.ID, FilePath: filepath.Join(dir, fmt.Sprintf("third%d.m4b", i))}))
+	}
+	tf, err := ps.GetBookFiles(third.ID)
+	require.NoError(t, err)
+	logs = aggtest.Capture(t)
+	for _, f := range tf {
+		_, err := ps.ModifyBookFile(third.ID, f.ID, func(r *database.BookFile) error { r.Missing = true; return nil })
+		require.NoError(t, err)
+	}
+	assert.Equal(t, len(tf), aggtest.CountInvocations(logs(), third.ID))
+}
+
+// Rows of two books interleaved in the store's answer are still written one
+// batch per book: the job orders by book before chunking, so a book's rows are
+// never split into per-file writes.
+func TestBackfillFileHashes_InterleavedBooksBatchedPerBook(t *testing.T) {
+	dir := t.TempDir()
+	h := newHBRows()
+	for i := range 6 {
+		book := []string{"bookA", "bookB"}[i%2]
+		id := fmt.Sprintf("f%d", i)
+		h.rows[id] = &database.BookFile{ID: id, BookID: book, FilePath: filepath.Join(dir, id+".m4b")}
+	}
+	store := h.store()
+	var mu sync.Mutex
+	batches := map[string][]string{}
+	store.ModifyBookFilesFunc = func(ctx context.Context, bookID string, ids []string, fn func(*database.BookFile) error) ([]string, error) {
+		mu.Lock()
+		batches[bookID] = append(batches[bookID], strings.Join(ids, ","))
+		mu.Unlock()
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for _, id := range ids {
+			row := *h.rows[id]
+			if err := fn(&row); err == nil {
+				*h.rows[id] = row
+			}
+		}
+		return ids, nil
+	}
+	// Answer interleaved: A, B, A, B...
+	snapshot := store.GetAllBookFilesCoreFunc
+	store.GetAllBookFilesCoreFunc = func() ([]database.BookFileCore, error) {
+		rows, err := snapshot()
+		sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID }) // f0(A) f1(B) f2(A) ...
+		return rows, err
+	}
+
+	_, c := runHashBackfill(t, store, false)
+
+	assert.Equal(t, hbCounts{newlyMissing: 6}, c)
+	assert.Equal(t, map[string][]string{"bookA": {"f0,f2,f4"}, "bookB": {"f1,f3,f5"}}, batches,
+		"one batch per book, holding all of that book's absent rows")
+}
+
+// A store that cannot batch the marker writes is refused up front, loudly,
+// rather than recording nothing or recomputing per file. A dry run writes
+// nothing and does not need the capability.
+func TestBackfillFileHashes_StoreWithoutBatchModifierRefusedUnlessDryRun(t *testing.T) {
+	h := newHBRows(database.BookFile{ID: "f1", BookID: "b1", FilePath: filepath.Join(t.TempDir(), "gone.m4b")})
+	// Embedding the interface (not the mock) hides MockStore.ModifyBookFiles.
+	bare := struct{ maintenance.JobStore }{h.store()}
+
+	j, err := maintenance.Get("backfill-file-hashes")
+	require.NoError(t, err)
+	err = j.Run(context.Background(), bare, &noopReporter{}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BookFileBatchModifier")
+	assert.False(t, h.get("f1").Missing)
+
+	rep := &noopReporter{}
+	require.NoError(t, j.Run(context.Background(), bare, rep, true))
+	assert.Equal(t, hbCounts{newlyMissing: 1}, hbSummaryCounts(t, rep))
 }
