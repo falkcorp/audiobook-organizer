@@ -1,7 +1,7 @@
 // file: internal/search/field_routing.go
-// version: 1.1.1
+// version: 1.3.0
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 package search
 
@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
@@ -71,20 +71,15 @@ func IsPerUserField(name string) bool {
 	return ok
 }
 
-// PerUserFieldNames lists the per-user fields, sorted. It reads the same set
-// the translator routes on, so a message that names them cannot drift from it.
-func PerUserFieldNames() []string {
-	out := make([]string, 0, len(perUserFieldSet))
-	for name := range perUserFieldSet {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // QueryUsesPerUserField reports whether the query text references any per-user
 // field. Text that does not parse reports false: it cannot be evaluated, so it
 // reads no one's state.
+//
+// That is the right answer to "would evaluating this read someone's state?" and
+// the WRONG one to "may a stored member list of this collection be served?": a
+// row whose query stopped parsing (a grammar change, a hand-edited row) can still
+// hold the list its creator's state produced. Every gate that decides whether a
+// stored list may be shown or kept must ask QueryMayUsePerUserField instead.
 func QueryUsesPerUserField(query string) bool {
 	ast, err := ParseQuery(query)
 	if err != nil {
@@ -96,6 +91,32 @@ func QueryUsesPerUserField(query string) bool {
 		}
 	}
 	return false
+}
+
+// QueryMayUsePerUserField is the fail-closed form of QueryUsesPerUserField: it
+// also reports true for text that does not parse, because such a query cannot be
+// shown to reference no per-user field. It is the guard for stored member lists
+// (is this collection evaluated per viewer, is its stored list served or kept):
+// an unparseable query then shows nobody any members and has its stored list
+// cleared, instead of serving whatever list it held when it last parsed.
+func QueryMayUsePerUserField(query string) bool {
+	ast, err := ParseQuery(query)
+	if err != nil {
+		return true
+	}
+	for _, name := range FieldNames(ast) {
+		if IsPerUserField(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// The store cannot import this package (it imports the store), so the fail-closed
+// detector is handed to it here: every collection write then drops the stored
+// member list of a per-viewer collection (database.SetCollectionPerViewerClassifier).
+func init() {
+	database.SetCollectionPerViewerClassifier(QueryMayUsePerUserField)
 }
 
 // FieldNames returns every field name referenced by a parsed query, in order
