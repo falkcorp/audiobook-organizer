@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
 // last-edited: 2026-10-25
 
@@ -338,4 +338,23 @@ func TestReader_ReadableChanges(t *testing.T) {
 		ids = append(ids, ch.ID)
 	}
 	require.Equal(t, []string{"1", "3"}, ids)
+}
+
+// A row refused because its op row could not be read leaves the error on the
+// reader (LookupError), so a route can answer 500 rather than blame the
+// caller's permissions. A refusal for permissions leaves none.
+func TestReader_LookupError(t *testing.T) {
+	ops := &opRows{
+		rows: map[string]*database.OperationV2Row{
+			"op-plain-apply": {ID: "op-plain-apply", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"plain"}`},
+		},
+		fail: map[string]bool{"op-unreadable": true},
+	}
+	c, _ := ctxHolding()
+	r := NewRepairs(fixers{"plain": scopedFixer{}}, ops, holdsOnly(auth.PermLibraryView)).For(c)
+	require.False(t, r.MayUndoChange(&database.OperationChange{OperationID: "op-plain-apply", ChangeType: "metadata_update"}))
+	require.NoError(t, r.LookupError(), "a permission refusal is not a lookup error")
+	require.False(t, r.MayUndoChange(&database.OperationChange{OperationID: "op-unreadable", ChangeType: "metadata_update"}))
+	require.False(t, r.MayReadChange(&database.OperationChange{OperationID: "op-unreadable", ChangeType: "metadata_update"}))
+	require.ErrorContains(t, r.LookupError(), "invented store failure")
 }
