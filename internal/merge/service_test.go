@@ -1,7 +1,7 @@
 // file: internal/merge/service_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9b3d7e21-4a6c-4f08-8e15-7c2a9d4b6e30
-// last-edited: 2026-09-13
+// last-edited: 2026-10-25
 
 package merge
 
@@ -24,6 +24,19 @@ func setupTestStore(t *testing.T) database.Store {
 	store, err := database.NewPebbleStore(pebblePath)
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
+	}
+	// NewPebbleStore returns while memdb warmup still runs in the background.
+	// Until it publishes, the complete path lookup is unavailable, and the combine
+	// planner (planVirtualFile) fails closed on that for any store it cannot prove
+	// has no retired version: every wrapper in this package that embeds
+	// database.Store without Unwrap is such a store. A test that combined a rowless
+	// book through one of them passed or failed on whether warmup won a race with
+	// its first statement (it lost one on a loaded CI runner). Wait, so the
+	// published state is the only state a test starts from; the tests that mean to
+	// run without the complete lookup say so with indexDownStore.
+	store.WaitForWarmup()
+	if ready, done, _ := store.WarmupStatus(); !ready || !done {
+		t.Fatalf("memdb warmup did not publish (ready=%v done=%v): a test would silently run the Pebble fallback", ready, done)
 	}
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(store)
