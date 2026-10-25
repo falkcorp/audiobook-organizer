@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-24
 
@@ -533,7 +533,11 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if rec == nil {
 		return nil, ErrAuditUnavailable
 	}
-	owned, err := svc.store.GetBookFiles(id)
+	// Retired rows count as owned: DeleteBook refuses a book holding one
+	// (ErrBookOwnsFiles), and the refusal comes only after every user's
+	// listening state was discarded below, so a holder whose only rows are
+	// retired versions must be refused here.
+	owned, err := database.BookFilesIncludingRetired(svc.store, id)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the book_file rows of %s: %w", id, err)
 	}
@@ -566,7 +570,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// cleared yet: a file row that landed since the check above would
 		// make the delete refuse (DeleteBook: database.ErrBookOwnsFiles)
 		// only AFTER every user's state was discarded.
-		owned, ferr := svc.store.GetBookFiles(id)
+		owned, ferr := database.BookFilesIncludingRetired(svc.store, id)
 		if ferr != nil {
 			return fmt.Errorf("cannot re-read the book_file rows of %s: %w", id, ferr)
 		}
