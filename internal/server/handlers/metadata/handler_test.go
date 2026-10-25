@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -471,6 +473,44 @@ func TestRevertAudiobookMetadata(t *testing.T) {
 		map[string]any{"timestamp": ts}, idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The whole-row revert runs under the merge lock a retire holds (review S1 of
+// #4144): while the store call is in flight another merge-family holder must be
+// kept out, and the lock must be released once the handler returns. A holder
+// that gets in during the call is what fails this; without the lock in the
+// handler it does, immediately.
+func TestRevertAudiobookMetadata_HoldsTheMergeLockAroundTheStoreCall(t *testing.T) {
+	h, d := newHandler(t)
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	var rival atomic.Bool
+	var rivalGotInDuringCall bool
+	d.store.EXPECT().RevertBookToVersion("b1", mock.Anything).RunAndReturn(func(string, time.Time) (*database.Book, error) {
+		go func() {
+			merge.LockMergeRMW()
+			rival.Store(true)
+			merge.UnlockMergeRMW()
+		}()
+		time.Sleep(150 * time.Millisecond)
+		rivalGotInDuringCall = rival.Load()
+		return &database.Book{ID: "b1"}, nil
+	})
+	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
+	w := doReq(h.RevertAudiobookMetadata, http.MethodPost, "/audiobooks/b1/revert-metadata",
+		map[string]any{"timestamp": ts}, idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if rivalGotInDuringCall {
+		t.Fatal("another merge-lock holder ran while RevertBookToVersion was in flight")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !rival.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("the merge lock was never released after the handler returned")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
