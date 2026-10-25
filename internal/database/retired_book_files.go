@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -75,9 +75,31 @@ func (p *PebbleStore) refuseRetiredVersionChange(prev, v *BookVersion) error {
 		return nil
 	}
 	if v.Status == BookVersionStatusRetired && v.BookID == prev.BookID {
+		// Provenance is fixed at creation. UpdateBookVersion keeps the
+		// idx:bv:from: key in step with RetiredFromBookID, so letting it change
+		// (or clear) here deletes the only key HasRetiredVersions probes while
+		// the version, and any rows it holds or later receives, still exist:
+		// the warmup lookups would then read a retired file's path as free.
+		if v.RetiredFromBookID != prev.RetiredFromBookID {
+			return fmt.Errorf("book version %s: retired_from_book_id is set only when the version is created (%q -> %q): %w",
+				v.ID, prev.RetiredFromBookID, v.RetiredFromBookID, ErrRetiredVersionMismatch)
+		}
+		if !sameInstant(v.RetiredAt, prev.RetiredAt) {
+			return fmt.Errorf("book version %s: retired_at is set only when the version is created: %w",
+				v.ID, ErrRetiredVersionMismatch)
+		}
 		return nil
 	}
 	return p.refuseIfRetiredVersionHoldsFiles(prev, "change")
+}
+
+// sameInstant reports whether two optional timestamps name the same instant
+// (nil only equals nil).
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 // refuseRetiredVersionDelete guards DeleteBookVersion.
@@ -437,6 +459,11 @@ func (p *PebbleStore) requireRetiredVersionOf(versionID, holderID string) (*Book
 	}
 	if v.BookID != holderID {
 		return nil, fmt.Errorf("book version %s belongs to book %s, not %s: %w", versionID, v.BookID, holderID, ErrRetiredVersionMismatch)
+	}
+	// Without its provenance the version has no idx:bv:from: key, and a retired
+	// row filed under it would be invisible to HasRetiredVersions.
+	if v.RetiredFromBookID == "" {
+		return nil, fmt.Errorf("book version %s has no retired_from_book_id, so it is not indexed as retired: %w", versionID, ErrRetiredVersionMismatch)
 	}
 	return v, nil
 }
