@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.58.0
+// version: 1.58.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-25
 
@@ -240,6 +240,10 @@ type AudiobookService struct {
 	// audit rows DiscardProgressAndPurge writes. Tests only; nil in
 	// production, where activityService records them.
 	auditOverride activityRecorder
+	// purgeClock replaces time.Now as the moment a purge pass or preview
+	// began, so a test can put the purge a day after its preview without
+	// sleeping. Tests only; nil in production (purgeNow).
+	purgeClock func() time.Time
 	// tagFacets caches ScopedTagFacets answers and tagFacetsFlight collapses
 	// concurrent identical misses, cancelling a build its last waiter left
 	// (service_tag_facets.go). Per service, not package-global, so two

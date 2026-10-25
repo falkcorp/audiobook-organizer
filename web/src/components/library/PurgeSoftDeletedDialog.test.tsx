@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -265,6 +265,22 @@ describe('PurgeSoftDeletedDialog', () => {
     expect(box).toHaveTextContent('1 file stays where it is');
     expect(box).toHaveTextContent('/library/A/one.m4b');
     expect(box).toHaveTextContent('and 10 more');
+  });
+
+  it('with delete files ticked, says how many files an earlier purge left waiting', async () => {
+    api.awaitPurgeResult.mockResolvedValueOnce({
+      ...preview,
+      files_to_delete: [],
+      files_to_delete_count: 0,
+      files_pending_from_earlier_pass: 2,
+    });
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    expect(screen.queryByTestId('purge-files-earlier')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Also delete files from disk (if they still exist)'));
+    expect(await screen.findByTestId('purge-files-earlier')).toHaveTextContent(
+      '2 files of books an earlier purge removed are also waiting to be deleted'
+    );
   });
 
   it('says so when no file would be deleted', async () => {

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-10-25
 
@@ -118,6 +118,18 @@ type PurgeResult struct {
 	FilesToDelete      []string `json:"files_to_delete,omitempty"`
 	FilesToDeleteCount int      `json:"files_to_delete_count"`
 	FilesKept          int      `json:"files_kept"`
+	// FilesPendingFromEarlierPass, on a preview, is how many files an earlier
+	// pass decided to remove and did not get to (it crashed or was stopped: the
+	// journal of pending file removals). A purge with delete_files carries
+	// those out too, through the same checks, on top of FilesToDeleteCount; a
+	// purge without it never does. They are not in FilesToDelete: they belong
+	// to books that are already gone.
+	FilesPendingFromEarlierPass int `json:"files_pending_from_earlier_pass,omitempty"`
+	// FilesReplayed, on a purge with delete_files, is how many of those files it
+	// removed. They are NOT in FilesDeleted, which counts only the books this
+	// pass purged; the lines about the ones it kept or could not remove are in
+	// Errors, labelled "from an earlier pass".
+	FilesReplayed int `json:"files_replayed,omitempty"`
 	// fileCands are the paths a preview's purgeable books would remove, before
 	// settlePreviewFiles decides which stay (two trashed rows can name one path,
 	// and a kept row's file is its own). purgeable is the set of books the

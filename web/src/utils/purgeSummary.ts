@@ -1,5 +1,5 @@
 // file: web/src/utils/purgeSummary.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c3a9e15-2d84-4b60-a1f7-5e0d8b4c6a29
 // last-edited: 2026-10-25
 
@@ -147,6 +147,8 @@ export function outcomeNotes(r: PurgeResult): string[] {
   if (notInPreview > 0) notes.push(notInPreviewNote(notInPreview));
   const notDue = r.not_yet_due ?? 0;
   if (notDue > 0) notes.push(notYetDueNote(notDue));
+  const replayed = r.files_replayed ?? 0;
+  if (replayed > 0) notes.push(replayedFilesNote(replayed));
   return notes;
 }
 
@@ -173,6 +175,15 @@ export function decidedCount(r: PurgeResult): number {
     (r.not_in_preview ?? 0) +
     (r.not_yet_due ?? 0)
   );
+}
+
+/**
+ * Files of books an EARLIER purge removed, which that purge decided to delete
+ * and never got to. A purge with "delete files" finishes the job; these are not
+ * in the "deleted from disk" count of the headline, which is this purge's books.
+ */
+function replayedFilesNote(n: number): string {
+  return `${n.toLocaleString()} ${plural(n, 'file', 'files')} of books an earlier purge removed ${plural(n, 'was', 'were')} also deleted from disk now: that purge stopped before it got to ${plural(n, 'it', 'them')}. ${plural(n, 'It is', 'They are')} not in the count above.`;
 }
 
 function notYetDueNote(n: number): string {
@@ -227,13 +238,15 @@ export function previewNotes(r: PurgeResult): string[] {
 /**
  * What a purge with "delete files" would do to files on disk, from a preview:
  * how many it removes, how many it leaves (outside the library, or still used
- * by another book), and the first `cap` paths. null when the server sent no
- * file list (an older server) so the dialog shows nothing it cannot back.
+ * by another book), the first `cap` paths, and how many files an earlier purge
+ * left waiting (`earlier`: a purge with "delete files" removes those too). null
+ * when the server sent no file list (an older server) so the dialog shows
+ * nothing it cannot back.
  */
 export function previewFiles(
   r: PurgeResult,
   cap = 10
-): { count: number; kept: number; shown: string[]; more: number } | null {
+): { count: number; kept: number; shown: string[]; more: number; earlier: number } | null {
   if (r.files_to_delete_count === undefined) return null;
   const all = r.files_to_delete ?? [];
   return {
@@ -241,6 +254,7 @@ export function previewFiles(
     kept: r.files_kept ?? 0,
     shown: all.slice(0, cap),
     more: Math.max(0, r.files_to_delete_count - Math.min(all.length, cap)),
+    earlier: r.files_pending_from_earlier_pass ?? 0,
   };
 }
 

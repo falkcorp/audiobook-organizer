@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files_bound_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c4e1a7d-3f26-4b95-a0d8-7e2b5c9f1a43
 // last-edited: 2026-10-25
 
@@ -366,10 +366,11 @@ func TestRunPurge_BookThatAgedIntoTheWindowSincePreviewIsStillNotYetDue(t *testi
 	yes := true
 	_, err := store.CreateBook(&database.Book{ID: "old", Title: "old", MarkedForDeletion: &yes, MarkedForDeletionAt: &old})
 	require.NoError(t, err)
-	// Trashed one day minus 150 ms ago: inside a one-day window when the
-	// preview runs, past its edge by the time the purge starts.
-	edge := time.Now().Add(-24*time.Hour + 150*time.Millisecond)
-	_, err = store.CreateBook(&database.Book{ID: "aging", Title: "aging", MarkedForDeletion: &yes, MarkedForDeletionAt: &edge})
+	// Trashed 23 hours ago: inside a one-day window when the preview runs. The
+	// purge's clock is two hours later (the test clock: nothing here waits on
+	// real time), which puts the book past the window's edge.
+	aging := time.Now().Add(-23 * time.Hour)
+	_, err = store.CreateBook(&database.Book{ID: "aging", Title: "aging", MarkedForDeletion: &yes, MarkedForDeletionAt: &aging})
 	require.NoError(t, err)
 
 	days := 1
@@ -377,7 +378,7 @@ func TestRunPurge_BookThatAgedIntoTheWindowSincePreviewIsStillNotYetDue(t *testi
 	require.Equal(t, 1, pv.Purgeable, "%+v", pv)
 	require.Equal(t, 1, pv.NotYetDue, "%+v", pv)
 
-	time.Sleep(300 * time.Millisecond)
+	svc.purgeClock = func() time.Time { return time.Now().Add(2 * time.Hour) }
 
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{OlderThanDays: &days, TrashedBefore: pv.TrashedBefore})
 	require.NoError(t, err)

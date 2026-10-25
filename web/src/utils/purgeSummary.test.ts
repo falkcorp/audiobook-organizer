@@ -1,5 +1,5 @@
 // file: web/src/utils/purgeSummary.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b2e8f13-9c47-4d60-a3e1-8f0d6b4a7c25
 // last-edited: 2026-10-25
 
@@ -265,7 +265,38 @@ describe('previewFiles', () => {
       { ...base, files_to_delete: files, files_to_delete_count: 9, files_kept: 2 },
       3
     );
-    expect(f).toEqual({ count: 9, kept: 2, shown: files.slice(0, 3), more: 6 });
+    expect(f).toEqual({ count: 9, kept: 2, shown: files.slice(0, 3), more: 6, earlier: 0 });
+  });
+});
+
+describe('files an earlier purge left', () => {
+  it('a preview reports how many are waiting, from the pending count', () => {
+    const f = previewFiles({
+      ...base,
+      files_to_delete: [],
+      files_to_delete_count: 0,
+      files_pending_from_earlier_pass: 4,
+    });
+    expect(f?.earlier).toBe(4);
+    expect(previewFiles({ ...base, files_to_delete_count: 0 })?.earlier).toBe(0);
+  });
+  it('a finished purge names the replayed files apart from its own count', () => {
+    const r: PurgeResult = {
+      ...base,
+      attempted: 5,
+      purged: 0,
+      files_deleted: 0,
+      files_replayed: 3,
+    };
+    // The headline counts this purge's books only: it removed none.
+    expect(outcomeHeadline(r)).toBe('Purged none of the 5 books in the trash.');
+    const notes = outcomeNotes(r).join(' ');
+    expect(notes).toMatch(/3 files of books an earlier purge removed were also deleted from disk/);
+    expect(notes).toMatch(/not in the count above/);
+    expect(outcomeNotes({ ...r, files_replayed: 1 }).join(' ')).toMatch(
+      /1 file of books an earlier purge removed was also deleted/
+    );
+    expect(outcomeNotes({ ...r, files_replayed: 0 })).toEqual([]);
   });
 });
 

@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.203.1
+// version: 2.203.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1601,6 +1601,17 @@ export interface PurgeResult {
   files_to_delete_count?: number;
   /** preview only: files a purge keeps (outside the library, protected, or also named by another book, even one that stays in the trash) */
   files_kept?: number;
+  /**
+   * Preview only: files an earlier purge decided to remove and never got to (it
+   * crashed or was stopped). A purge with delete_files removes those too, on top
+   * of `files_to_delete`; a purge without it never does.
+   */
+  files_pending_from_earlier_pass?: number;
+  /**
+   * A purge with delete_files: how many of those earlier files it removed. Not
+   * counted in `files_deleted`, which is this purge's own books.
+   */
+  files_replayed?: number;
   errors: string[];
 }
 

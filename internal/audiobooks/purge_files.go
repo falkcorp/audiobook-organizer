@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-25
 
@@ -9,10 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -64,9 +67,15 @@ func trashedIDsByPath(trash []database.Book, paths map[string]struct{}, except f
 // delete_files. It is held until every book of the pass has been decided, then
 // re-checked (removeDeferredFiles).
 type pendingFile struct {
-	path    string
-	isDir   bool
-	bookIDs []string
+	path  string
+	isDir bool
+	// id is the file's identity when the purge decided to remove it. Books that
+	// name one path were decided at different moments; if what they saw
+	// differs, the file changed in between and idConflict is set: it is not
+	// the file any of them decided on, so it stays.
+	id         fileIdentity
+	idConflict bool
+	bookIDs    []string
 }
 
 // pendingFiles collects the removals a purge pass decided on. Workers add to it
@@ -99,8 +108,10 @@ func (p *pendingFiles) add(bookID string, v purgeFileVerdict) {
 	}
 	f, ok := p.byPath[v.remove]
 	if !ok {
-		f = &pendingFile{path: v.remove, isDir: v.isDir}
+		f = &pendingFile{path: v.remove, isDir: v.isDir, id: v.id}
 		p.byPath[v.remove] = f
+	} else if f.id != v.id || f.isDir != v.isDir {
+		f.idConflict = true
 	}
 	f.bookIDs = append(f.bookIDs, bookID)
 }
@@ -194,22 +205,52 @@ func (svc *AudiobookService) otherBookRowAt(path string) error {
 //   - when the pass is bound to a preview, that the preview listed the path
 //     (a file the preview said stays is never removed, whatever changed since).
 //
-// It reports how many things it removed and the error lines. A path it decided
-// (removed, already gone, or kept for a reason that will not change) is
-// forgotten from the journal; one that failed for a reason that may pass (a
-// lookup error, a failed os.Remove) stays recorded for the next pass.
+// It reports how many things it removed and the error lines, in path order. A
+// path it decided (removed, already gone, or kept for a reason that will not
+// change) is forgotten from the journal; one that failed for a reason that may
+// pass (a lookup error, a failed stat or os.Remove) stays recorded for the next
+// pass.
+//
+// The paths are decided by a bounded worker pool, as the pass's own books are
+// (RunPurge): each path costs several store reads, a stat and a remove, and
+// there is one per purged book that owned a file, up to the size of the trash.
+// It is safe because the paths are distinct (pendingFiles keys them by path),
+// so no two workers read, remove or journal-settle the same file, and every
+// store read it makes is already used from RunPurge's concurrent workers. The
+// one thing workers can share is a parent directory: removeEmptyParentsUpToRoot
+// removes it only when it reads it empty, and of any set of workers removing
+// the files of one directory the last to read it sees every removal, so the
+// directory is never left empty. A worker that reads it before a sibling has
+// removed its file stops, and that sibling's own walk removes it. Each worker
+// writes only its own slot of out; the lines are merged in path order, so the
+// result is the same whatever the scheduling.
 func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *purgePreviewRecord) (removed int, errs []string) {
 	pending := files.sorted()
 	if len(pending) == 0 {
 		return 0, nil
 	}
 	root := config.Snapshot().RootDir
+	type outcome struct {
+		removed int
+		errs    []string
+		retry   bool
+	}
+	out := make([]outcome, len(pending))
+	var g errgroup.Group
+	g.SetLimit(runtime.NumCPU())
+	for i, f := range pending {
+		g.Go(func() error {
+			n, e, retry := svc.removeDeferredFile(f, root, preview)
+			out[i] = outcome{removed: n, errs: e, retry: retry}
+			return nil
+		})
+	}
+	_ = g.Wait() // the workers return nil: their outcomes are in out
 	var settled []string
-	for _, f := range pending {
-		n, e, retry := svc.removeDeferredFile(f, root, preview)
-		removed += n
-		errs = append(errs, e...)
-		if !retry {
+	for i, f := range pending {
+		removed += out[i].removed
+		errs = append(errs, out[i].errs...)
+		if !out[i].retry {
 			settled = append(settled, f.bookIDs...)
 		}
 	}
@@ -234,6 +275,15 @@ func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, pre
 	case v.remove == "":
 		// Already gone, or a directory that is not empty.
 		return 0, nil, false
+	}
+	// The path names a file, but is it the file the purge decided to remove?
+	// A different one (replaced, or changed, since: fileIdentity) is nobody's
+	// decision, so it stays, and the decision is settled: the file it was about
+	// is gone. A record with no identity cannot be vouched for either.
+	if f.idConflict || f.isDir != v.isDir || !f.id.matches(v.id, v.isDir) {
+		singleLog.Warn("purge keeping %s: it is not the file the purge decided to remove (replaced or changed since; book %s)",
+			logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
+		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %s is not the file this purge decided to remove (it was replaced or changed since)", bookID, f.path)}, false
 	}
 	if err := svc.otherBookRowAt(f.path); err != nil {
 		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, err)}, errors.Is(err, errPathLookupFailed)

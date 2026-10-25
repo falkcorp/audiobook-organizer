@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_pending_journal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8a4c71-6d09-4b35-9f1a-c7d3b05e8a62
 // last-edited: 2026-10-25
 
@@ -7,7 +7,10 @@ package audiobooks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -102,7 +105,7 @@ func TestRemoveDeferredFiles_BookTrashedMidLoopStillKeepsItsFile(t *testing.T) {
 	}
 
 	files := &pendingFiles{}
-	files.add("purged", purgeFileVerdict{remove: x})
+	files.add("purged", purgeFileVerdict{remove: x, id: identityAt(t, x)})
 	removed, errs := svc.removeDeferredFiles(files, nil)
 
 	require.True(t, trashedL.Load(), "fixture: L was trashed inside the loop")
@@ -174,11 +177,13 @@ func TestRunPurge_ReplaysRemovalsAnEarlierPassLeftPending(t *testing.T) {
 
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.FilesDeleted, "%+v", res)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
 	assert.False(t, fileExists(free), "nothing names it: the removal the dead pass decided on is done")
 	assert.True(t, fileExists(taken), "a live book names it now: the replay runs the same checks")
+	assert.Zero(t, res.FilesDeleted, "no book of THIS pass owned a file: the replayed removal is counted apart")
 	require.Len(t, res.Errors, 1, "%+v", res)
 	assert.Contains(t, res.Errors[0], "T2")
+	assert.Contains(t, res.Errors[0], earlierPassLabel, "the line is about a book an earlier pass purged")
 	assert.Empty(t, pendingJournal(t, store), "both records are decided, so both are cleared")
 }
 
@@ -199,7 +204,7 @@ func TestRunPurge_RefusedForWantOfItsPreviewStillReplaysThePendingRemovals(t *te
 	require.ErrorIs(t, err, ErrPurgePreviewUnknown)
 	require.NotNil(t, res)
 	assert.True(t, res.StoppedEarly)
-	assert.Equal(t, 1, res.FilesDeleted, "%+v", res)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
 	assert.False(t, fileExists(x))
 	assert.Empty(t, pendingJournal(t, store))
 
@@ -209,7 +214,7 @@ func TestRunPurge_RefusedForWantOfItsPreviewStillReplaysThePendingRemovals(t *te
 	crashAfterRowAndTombstone(t, restarted, store, "T2")
 	res, err = restarted.RunPurge(context.Background(), PurgeOptions{DeleteFiles: true})
 	require.ErrorIs(t, err, ErrPurgePreviewRequired)
-	assert.Equal(t, 1, res.FilesDeleted, "%+v", res)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
 	assert.False(t, fileExists(x))
 }
 
@@ -224,9 +229,282 @@ func TestRunPurge_PreviewDoesNotReplayPendingRemovals(t *testing.T) {
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.Zero(t, res.FilesDeleted)
+	assert.Zero(t, res.FilesReplayed)
 	assert.True(t, fileExists(x))
 	assert.Len(t, pendingJournal(t, store), 1)
+	// What it does show: the file an earlier pass left waiting, which a purge
+	// with delete_files would remove on top of the preview's own list.
+	assert.Equal(t, 1, res.FilesPendingFromEarlierPass, "%+v", res)
+	assert.Contains(t, res.Summary(), "an earlier pass left waiting")
 }
+
+// SR1. A purge run with "also delete files" off never removes a file from disk,
+// whatever an earlier pass left in the journal. The records stay for a pass that
+// does delete files.
+func TestRunPurge_PassWithoutDeleteFilesNeverReplaysThePendingRemovals(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	x := filepath.Join(base, "lib", "Author", "pending.m4b")
+	writeFile(t, x)
+	softDeleted(t, store, "T", x)
+	crashAfterRowAndTombstone(t, svc, store, "T")
+
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: false})
+	require.NoError(t, err)
+	assert.Zero(t, res.FilesReplayed, "%+v", res)
+	assert.Zero(t, res.FilesDeleted, "%+v", res)
+	assert.True(t, fileExists(x), "delete_files is off: nothing is removed from disk")
+	assert.Empty(t, res.Errors, "%+v", res)
+	assert.Len(t, pendingJournal(t, store), 1, "the record waits for a pass that deletes files")
+
+	res, err = svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
+	assert.Zero(t, res.FilesDeleted, "%+v", res)
+	assert.False(t, fileExists(x))
+	assert.Empty(t, pendingJournal(t, store))
+}
+
+// SR2. The journal records the file as the pass saw it. A file that is not that
+// one when the replay comes (replaced by another with the same name, or changed
+// since) stays, and the record is cleared: nobody decided to remove it.
+func TestRunPurge_ReplayKeepsAFileThatIsNotTheOneThePassDecidedOn(t *testing.T) {
+	for name, change := range map[string]func(t *testing.T, path string){
+		"replaced by a file of another size": func(t *testing.T, path string) {
+			require.NoError(t, os.Remove(path))
+			require.NoError(t, os.WriteFile(path, []byte("a different, longer recording"), 0o644))
+		},
+		"touched since": func(t *testing.T, path string) {
+			later := time.Now().Add(time.Hour)
+			require.NoError(t, os.Chtimes(path, later, later))
+		},
+		"replaced by a directory": func(t *testing.T, path string) {
+			require.NoError(t, os.Remove(path))
+			require.NoError(t, os.Mkdir(path, 0o755))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, store, base := setupPurgeBoundary(t)
+			x := filepath.Join(base, "lib", "Author", "samename.m4b")
+			writeFile(t, x)
+			softDeleted(t, store, "T", x)
+			crashAfterRowAndTombstone(t, svc, store, "T")
+			change(t, x)
+
+			res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+			require.NoError(t, err)
+			assert.Zero(t, res.FilesReplayed, "%+v", res)
+			_, statErr := os.Stat(x)
+			assert.NoError(t, statErr, "it is not the file the pass decided on: it stays")
+			require.Len(t, res.Errors, 1, "%+v", res)
+			assert.Contains(t, res.Errors[0], "not the file this purge decided to remove")
+			assert.Contains(t, res.Errors[0], earlierPassLabel)
+			assert.Empty(t, pendingJournal(t, store), "decided for good: the record is cleared")
+		})
+	}
+}
+
+// A journal record with no identity (one a build that predates it wrote, or a
+// damaged one) cannot be vouched for: its file is kept.
+func TestRunPurge_ReplayKeepsTheFileOfARecordWithNoIdentity(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	x := filepath.Join(base, "lib", "Author", "noid.m4b")
+	writeFile(t, x)
+	raw, err := json.Marshal(pendingFileRecord{BookID: "T", Path: x, RecordedAt: time.Now().UTC()})
+	require.NoError(t, err)
+	require.NoError(t, store.SetRaw(pendingFilePrefix+"T", raw))
+
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Zero(t, res.FilesReplayed, "%+v", res)
+	assert.True(t, fileExists(x))
+	assert.Empty(t, pendingJournal(t, store))
+}
+
+// fileIdentity compares device, inode, size and modification time, and an
+// unknown identity matches nothing.
+func TestFileIdentity_Matches(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.m4b")
+	b := filepath.Join(dir, "b.m4b")
+	for _, p := range []string{a, b} {
+		require.NoError(t, os.WriteFile(p, []byte("same bytes"), 0o644))
+	}
+	when := time.Unix(1_700_000_000, 0)
+	require.NoError(t, os.Chtimes(a, when, when))
+	require.NoError(t, os.Chtimes(b, when, when))
+	ia, ib := statIdentity(t, a), statIdentity(t, b)
+
+	assert.True(t, ia.matches(ia, false))
+	if ia.HasInode {
+		assert.False(t, ia.matches(ib, false), "same size and mtime, another file: the inode tells them apart")
+	}
+	later := ia
+	later.MtimeNS++
+	assert.False(t, ia.matches(later, false), "another mtime")
+	longer := ia
+	longer.Size++
+	assert.False(t, ia.matches(longer, false), "another size")
+	assert.False(t, fileIdentity{}.matches(fileIdentity{}, false), "unknown matches nothing")
+	assert.False(t, ia.matches(fileIdentity{}, false))
+
+	d1, d2 := filepath.Join(dir, "d1"), filepath.Join(dir, "d2")
+	require.NoError(t, os.Mkdir(d1, 0o755))
+	require.NoError(t, os.Mkdir(d2, 0o755))
+	id1 := statIdentity(t, d1)
+	grown := id1
+	grown.Size += 4096
+	grown.MtimeNS++
+	assert.True(t, id1.matches(grown, true), "a directory is told by its inode, not by size or mtime")
+	if id1.HasInode {
+		assert.False(t, id1.matches(statIdentity(t, d2), true))
+	}
+}
+
+// SR4. The journal holds only paths the pass's bound preview listed. The pass
+// here dies after purging its books and before its end-of-pass removal, so the
+// journal is all there is; the next pass has no preview. A path the preview said
+// stays was never journaled, so it is still there afterwards, even though by
+// then nothing names it.
+func TestRunPurge_CrashedBoundPassJournalsOnlyThePathsItsPreviewListed(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	listed := filepath.Join(base, "lib", "Author", "listed.m4b")
+	unlisted := filepath.Join(base, "lib", "Author", "unlisted.m4b")
+	writeFile(t, listed)
+	writeFile(t, unlisted)
+	softDeleted(t, store, "A", listed)
+	softDeleted(t, store, "B", unlisted)
+	_, err := store.CreateBook(&database.Book{ID: "L", Title: "L", FilePath: unlisted})
+	require.NoError(t, err)
+
+	pv := previewOnce(t, svc, nil)
+	require.Equal(t, []string{listed}, pv.FilesToDelete, "a live book names the other file, so the preview keeps it")
+	require.Equal(t, 2, pv.Purgeable, "both books are purgeable: only the second one's file stays")
+	rec := svc.previewFor(*pv.TrashedBefore)
+	require.NotNil(t, rec)
+
+	// The live book goes away after the preview: the file is nobody's now.
+	require.NoError(t, store.DeleteBook("L"))
+
+	env, err := svc.newPurgeEnv()
+	require.NoError(t, err)
+	env.trashedBefore = pv.TrashedBefore
+	env.preview = rec
+	env.files = &pendingFiles{preview: rec}
+	for _, id := range []string{"A", "B"} {
+		row, gErr := store.GetBookByID(id)
+		require.NoError(t, gErr)
+		require.NotNil(t, row)
+		out := svc.purgeOne(row, true, env)
+		require.Equal(t, purgePurged, out.kind, "%s: %+v", id, out)
+	}
+	// The pass dies here: removeDeferredFiles never runs.
+
+	pairs := pendingJournal(t, store)
+	require.Len(t, pairs, 1, "only the book whose file the preview listed is journaled")
+	var only pendingFileRecord
+	require.NoError(t, json.Unmarshal(pairs[0].Value, &only))
+	assert.Equal(t, listed, only.Path)
+
+	restarted := NewAudiobookService(store)
+	res, err := restarted.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
+	assert.False(t, fileExists(listed))
+	assert.True(t, fileExists(unlisted), "the preview said it stays: it was never journaled, so no replay removes it")
+}
+
+// SR5. Only ENOENT means "gone". A stat that fails any other way says nothing
+// about the file: it stays, the line is reported, and the record is kept for the
+// next pass. A file that really is gone clears its record quietly.
+func TestRunPurge_StatFailureOtherThanNotFoundKeepsTheRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the stat cannot be made to fail")
+	}
+	svc, store, base := setupPurgeBoundary(t)
+	dir := filepath.Join(base, "lib", "Author")
+	x := filepath.Join(dir, "unreadable.m4b")
+	gone := filepath.Join(dir, "gone.m4b")
+	writeFile(t, x)
+	writeFile(t, gone)
+	softDeleted(t, store, "T", x)
+	softDeleted(t, store, "G", gone)
+	crashAfterRowAndTombstone(t, svc, store, "T", "G")
+	require.NoError(t, os.Remove(gone))
+
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Zero(t, res.FilesReplayed, "%+v", res)
+	require.Len(t, res.Errors, 2, "both stats fail on an unreadable directory, ENOENT included: %+v", res)
+	for _, line := range res.Errors {
+		assert.Contains(t, line, "cannot verify")
+		assert.Contains(t, line, earlierPassLabel)
+	}
+	assert.Len(t, pendingJournal(t, store), 2, "undecided: both records wait for the next pass")
+
+	require.NoError(t, os.Chmod(dir, 0o755))
+	res, err = svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
+	assert.False(t, fileExists(x))
+	assert.Empty(t, res.Errors, "a file that is not there is fine: %+v", res)
+	assert.Empty(t, pendingJournal(t, store))
+}
+
+// SR7. The removal pool decides many paths at once. Every file goes, the empty
+// parents go with them (the one directory the workers share is never left
+// empty), the lines come back in path order, and the race detector sees no
+// shared write.
+func TestRemoveDeferredFiles_ManyPathsInOneDirectoryAreAllRemoved(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	dir := filepath.Join(base, "lib", "Author", "Series")
+	var ids []string
+	files := &pendingFiles{}
+	for i := range 40 {
+		id := fmt.Sprintf("T%02d", i)
+		p := filepath.Join(dir, fmt.Sprintf("part%02d.m4b", i))
+		writeFile(t, p)
+		softDeleted(t, store, id, p)
+		ids = append(ids, id)
+		files.add(id, purgeFileVerdict{remove: p, id: identityAt(t, p)})
+	}
+	// One of them is named by a live book, so it stays and says so.
+	keep := filepath.Join(dir, "part07.m4b")
+	_, err := store.CreateBook(&database.Book{ID: "L", Title: "L", FilePath: keep})
+	require.NoError(t, err)
+	for _, id := range ids {
+		require.NoError(t, store.DeleteBook(id))
+	}
+
+	removed, errs := svc.removeDeferredFiles(files, nil)
+	assert.Equal(t, 39, removed)
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0], "T07")
+	assert.True(t, fileExists(keep))
+	left, rdErr := os.ReadDir(dir)
+	require.NoError(t, rdErr)
+	assert.Len(t, left, 1, "only the kept file is left")
+
+	// And when every file goes, the directory goes too.
+	require.NoError(t, store.DeleteBook("L"))
+	files = &pendingFiles{}
+	files.add("T07", purgeFileVerdict{remove: keep, id: identityAt(t, keep)})
+	removed, errs = svc.removeDeferredFiles(files, nil)
+	assert.Equal(t, 1, removed)
+	assert.Empty(t, errs)
+	assert.NoDirExists(t, dir, "the last removal leaves no empty parent behind")
+}
+
+func statIdentity(t *testing.T, path string) fileIdentity {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	return identityOf(info)
+}
+
+// identityAt is the identity a pass would have recorded for the file at path.
+func identityAt(t *testing.T, path string) fileIdentity { return statIdentity(t, path) }
 
 // A removal that could not be decided (the store failed to answer, or the file
 // could not be removed) stays journaled and is retried by the next pass; one
@@ -254,7 +532,7 @@ func TestRunPurge_UndecidedRemovalStaysJournaledAndIsRetried(t *testing.T) {
 	hooked.allRowsErr = nil
 	res, err = svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.FilesDeleted, "%+v", res)
+	assert.Equal(t, 1, res.FilesReplayed, "%+v", res)
 	assert.False(t, fileExists(x))
 	assert.Empty(t, pendingJournal(t, store))
 }

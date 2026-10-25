@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -216,6 +216,16 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
                         </li>
                       )}
                     </Box>
+                    {files.earlier > 0 && (
+                      <Typography variant="body2" sx={{ mt: 1 }} data-testid="purge-files-earlier">
+                        {files.earlier.toLocaleString()} {files.earlier === 1 ? 'file' : 'files'} of
+                        books an earlier purge removed {files.earlier === 1 ? 'is' : 'are'} also
+                        waiting to be deleted: that purge stopped before it got to{' '}
+                        {files.earlier === 1 ? 'it' : 'them'}.{' '}
+                        {files.earlier === 1 ? 'It is' : 'They are'} deleted too, unless a book
+                        names {files.earlier === 1 ? 'it' : 'them'} again.
+                      </Typography>
+                    )}
                   </Box>
                 )}
               </>

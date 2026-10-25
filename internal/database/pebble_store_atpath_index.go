@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 // The book_atpath: multi-valued path index.
 //
@@ -13,9 +13,13 @@
 // book) pair instead, so every book at a path is findable.
 //
 // Invariant (completeness): for every book:<id> row with FilePath == P, the key
-// book_atpath:P\x00<id> exists. Extras are allowed: a key whose row is gone,
-// has moved, or is soft-deleted is dropped by the reader's point-verify. A
-// MISSING key can report a taken path as free; an extra costs one point read.
+// book_atpath:P\x00<id> exists, whether the row is live or soft-deleted. Extras
+// are allowed: a key whose row is gone or has moved is dropped by the readers'
+// point-verify (and one whose row is soft-deleted is dropped by
+// LiveBookIDsAtPath only). A MISSING key can report a taken path as free, to
+// BOTH readers: LiveBookIDsAtPath for a live row, BookIDsAtPath (which keeps
+// trashed rows, and which a purge asks before it removes a file) for any row.
+// An extra costs one point read.
 //
 // Maintained by CreateBook (Set), UpdateBook (Delete the old pair only when the
 // path changed; Set the new pair UNCONDITIONALLY, so any write self-heals and a
@@ -464,10 +468,15 @@ type BookAtPathIndexReport struct {
 	UndecodableRows int `json:"undecodable_rows"`
 
 	// MissingLive is the bug class: a live book with no key at its path, which
-	// LiveBookIDsAtPath would report as free once the sentinel is set.
+	// LiveBookIDsAtPath and BookIDsAtPath would report as free once the
+	// sentinel is set.
 	MissingLive int `json:"missing_live"`
-	// MissingTrashed is a soft-deleted book with no key. A defect, but it
-	// cannot produce a false "free" (the reader excludes trashed books).
+	// MissingTrashed is a soft-deleted book with no key. LiveBookIDsAtPath
+	// excludes trashed books, but BookIDsAtPath does not: the purge asks it
+	// whether any row, trashed ones included, still names a file before it
+	// removes the file, so a trashed book with no key reads as "free" there and
+	// loses its audio while it is still restorable. It is the same bug class
+	// as MissingLive and fails the verify op.
 	MissingTrashed int `json:"missing_trashed"`
 	// ExtraRowGone / ExtraRowMoved are keys with no matching row. Benign.
 	ExtraRowGone  int `json:"extra_row_gone"`

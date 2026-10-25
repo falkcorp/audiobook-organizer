@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-25
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -765,6 +766,10 @@ type purgeFileVerdict struct {
 	// remove is the file, or empty directory (isDir), the purge removes.
 	remove string
 	isDir  bool
+	// id is what planPurgeFile saw of it: the removal, which can come much
+	// later (the end of the pass, or a later pass from the journal), goes
+	// ahead only for the same file (fileIdentity).
+	id fileIdentity
 	// protected: the path is a protected (import or iTunes) path and stays.
 	// Not reported as an error, as before.
 	protected bool
@@ -798,17 +803,31 @@ func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict
 	}
 	info, statErr := os.Stat(book.FilePath)
 	switch {
-	case statErr != nil:
-		// os.IsNotExist: the file is already gone, which is fine.
+	case errors.Is(statErr, fs.ErrNotExist):
+		// ENOENT: the file is already gone, which is fine.
 		return purgeFileVerdict{}
+	case statErr != nil:
+		// Any other failure (EIO, EACCES on a parent, ESTALE, a mount that is
+		// not up yet) says nothing about whether the file is there. Reading it
+		// as "gone" would clear the journal record of a file that is still
+		// on disk and leave it with nothing naming it. Fail closed and
+		// transient: the file stays, the line is reported, the record is kept
+		// for the next pass (errPathLookupFailed).
+		return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is gone or removable: stat: %w: %w", book.FilePath, errPathLookupFailed, statErr)}
 	case info.IsDir():
 		// Remove the directory only if it is already empty.
-		if entries, rdErr := os.ReadDir(book.FilePath); rdErr == nil && len(entries) == 0 {
-			return purgeFileVerdict{remove: book.FilePath, isDir: true}
+		entries, rdErr := os.ReadDir(book.FilePath)
+		switch {
+		case errors.Is(rdErr, fs.ErrNotExist):
+			return purgeFileVerdict{}
+		case rdErr != nil:
+			return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is an empty directory: read: %w: %w", book.FilePath, errPathLookupFailed, rdErr)}
+		case len(entries) == 0:
+			return purgeFileVerdict{remove: book.FilePath, isDir: true, id: identityOf(info)}
 		}
 		return purgeFileVerdict{}
 	}
-	return purgeFileVerdict{remove: book.FilePath}
+	return purgeFileVerdict{remove: book.FilePath, id: identityOf(info)}
 }
 
 // purgePathInsideRoot returns nil only when path is strictly inside the

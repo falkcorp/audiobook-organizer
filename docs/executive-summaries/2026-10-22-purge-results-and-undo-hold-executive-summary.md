@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -172,7 +172,14 @@ undo above. Books that own files are still never purged.
   check is no longer remembered) removes those files, after the same safety
   checks. Just before each file goes it asks the database whether any book at
   all, in the trash or not, still names it, instead of relying on a list read
-  earlier in the pass.
+  earlier in the pass. Those leftover files are removed only by a purge that has
+  "Also delete files" on, and only if the file at that spot is still the very
+  file the purge decided on (same size, same last-changed time, same place on
+  the disk). A different file that has since landed under the same name is left
+  alone. A disk or network-share hiccup while checking a file no longer counts as
+  "the file is gone": the file stays and the check is retried on the next purge.
+  The preview says how many leftover files are waiting, and the result counts the
+  ones it removed separately from the books it purged.
 - The nightly purge used to report success even when it had refused to run (a
   damaged undo record, or the operation journal not ready) or had stopped
   halfway. It now fails visibly with the reason and logs the same full summary

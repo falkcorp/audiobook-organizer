@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-25
 
@@ -256,16 +256,18 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 
 	// File removals an earlier pass decided on and never finished (it crashed,
 	// or a restart stopped it) are carried out first, through the same checks a
-	// pass in progress runs. They need no preview, so they run before the
-	// refusals below: a resumed op that is refused for want of its preview
-	// still frees the files its predecessor left (purge_pending_journal.go).
+	// pass in progress runs, but only by a pass that deletes files: with
+	// "also delete files" off nothing is removed from disk, whatever an
+	// earlier pass left. A resumed op keeps its saved delete_files, so a
+	// crashed pass's resume still replays. They need no preview, so they run
+	// before the refusals below: a resumed op that is refused for want of its
+	// preview still frees the files its predecessor left
+	// (purge_pending_journal.go). Their count and error lines are the result's
+	// own fields, apart from this pass's (FilesReplayed; Errors, last).
 	var replayed int
-	replayErrs := []string{}
-	if !opts.DryRun {
+	var replayErrs []string
+	if !opts.DryRun && opts.DeleteFiles {
 		replayed, replayErrs = svc.replayPendingFileRemovals()
-		if replayErrs == nil {
-			replayErrs = []string{}
-		}
 		if replayed > 0 || len(replayErrs) > 0 {
 			singleLog.Info("purge: replayed the file removals an earlier pass left pending: %d removed, %d error line(s)", replayed, len(replayErrs))
 		}
@@ -273,10 +275,10 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 
 	if !opts.DryRun && opts.TrashedBefore == nil && !opts.Unattended {
 		return &PurgeResult{
-			Errors:       replayErrs,
-			FilesDeleted: replayed,
-			StoppedEarly: true,
-			StopReason:   ErrPurgePreviewRequired.Error(),
+			Errors:        append([]string{}, replayErrs...),
+			FilesReplayed: replayed,
+			StoppedEarly:  true,
+			StopReason:    ErrPurgePreviewRequired.Error(),
 		}, ErrPurgePreviewRequired
 	}
 
@@ -287,8 +289,8 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	if !opts.DryRun && !opts.Unattended {
 		if preview = svc.previewFor(*opts.TrashedBefore); preview == nil {
 			return &PurgeResult{
-				Errors:        replayErrs,
-				FilesDeleted:  replayed,
+				Errors:        append([]string{}, replayErrs...),
+				FilesReplayed: replayed,
 				StoppedEarly:  true,
 				StopReason:    ErrPurgePreviewUnknown.Error(),
 				TrashedBefore: opts.TrashedBefore,
@@ -296,7 +298,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		}
 	}
 
-	started := time.Now()
+	started := svc.purgeNow()
 	var cutoff *time.Time
 	if opts.OlderThanDays != nil && *opts.OlderThanDays > 0 {
 		ts := started.AddDate(0, 0, -*opts.OlderThanDays)
@@ -347,8 +349,11 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 			// ran and only aged into the window since is one the preview
 			// counted as not yet due, and is again. Only a book trashed after
 			// the preview began (or with no trash time) is "trashed after the
-			// preview".
-			if preview != nil && cutoff != nil && trashedAtOrBefore(&all[i], preview.started) {
+			// preview". This holds whatever window THIS purge was sent with:
+			// the interval between the preview's bound and its start is empty
+			// when the preview had no window, and a preview with one counted
+			// every book in it as not yet due.
+			if preview != nil && trashedAtOrBefore(&all[i], preview.started) {
 				notDue++
 			} else {
 				notShown++
@@ -365,8 +370,18 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		TrashedBefore:       bound,
 		TrashedAfterPreview: notShown,
 		NotYetDue:           notDue,
-		FilesDeleted:        replayed,
-		Errors:              replayErrs,
+		FilesReplayed:       replayed,
+		Errors:              []string{},
+	}
+	if opts.DryRun {
+		// What a purge with delete_files would also do: the removals an earlier
+		// pass left pending. Counted from the journal, which a preview never
+		// changes.
+		n, cErr := svc.countPendingFileRemovals()
+		if cErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("could not count the file removals an earlier pass left pending: %v", cErr))
+		}
+		result.FilesPendingFromEarlierPass = n
 	}
 	// Users, combine journals and the other undo records are read once per
 	// pass, not once per book.
@@ -380,6 +395,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 			// as from the failed operation.
 			result.StoppedEarly = true
 			result.StopReason = fmt.Sprintf("purge refused: %v", err)
+			result.Errors = append(result.Errors, replayErrs...)
 			return result, fmt.Errorf("purge refused: %w", err)
 		}
 		env.trashedBefore = bound
@@ -473,6 +489,9 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		result.FilesDeleted += n
 		result.Errors = append(result.Errors, errs...)
 	}
+	// The earlier pass's lines come after this pass's own: Capped cuts the tail
+	// of Errors, and a pile of old lines must not push this pass's out.
+	result.Errors = append(result.Errors, replayErrs...)
 	if opts.DryRun && len(result.fileCands) > 0 {
 		result.settlePreviewFiles(all)
 	}
@@ -487,6 +506,14 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		svc.rememberPreview(result)
 	}
 	return result, nil
+}
+
+// purgeNow is the moment a pass begins: time.Now, or the test clock.
+func (svc *AudiobookService) purgeNow() time.Time {
+	if svc.purgeClock != nil {
+		return svc.purgeClock()
+	}
+	return time.Now()
 }
 
 // Summary is the one-line account of a pass, for the log and the activity
@@ -510,6 +537,14 @@ func (r *PurgeResult) summary() string {
 	}
 	if r.NotInPreview > 0 {
 		after += fmt.Sprintf("; %d would be purged now but the preview had not listed them (not touched)", r.NotInPreview)
+	}
+	// Files an earlier pass decided to remove and left behind: not this pass's
+	// books, so apart from FilesDeleted.
+	if r.FilesPendingFromEarlierPass > 0 {
+		after += fmt.Sprintf("; %d file(s) an earlier pass left waiting would also be removed by a purge with delete_files", r.FilesPendingFromEarlierPass)
+	}
+	if r.FilesReplayed > 0 {
+		after += fmt.Sprintf("; %d file(s) an earlier pass had decided to remove were removed too (not in the files deleted count)", r.FilesReplayed)
 	}
 	if r.DryRun {
 		return fmt.Sprintf("Purge preview of %d soft-deleted books: %d purgeable now (%d of them would carry listening state to a sibling), %d kept: still own book_file rows, %d kept: an undo (combine, operation or auto-merge) can still run, %d kept: listening state with no listed sibling, %d could not be decided (carry_failed=%d, failed=%d); with delete_files it would remove %d file(s) and leave %d in place%s",
