@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.2
+// version: 1.32.3
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-25
 
@@ -839,9 +839,12 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		reasons = append(reasons, fmt.Sprintf("survivor %s has since been deleted or merged away", j.SurvivorID))
 	}
 
-	checkFileL := func(fm CombineFileMove, lenient bool) {
+	// listOwner is the absorbed book whose Files list fm is in, "" for the
+	// survivor's lists (fileAlreadyUndone needs it for a row whose outside owner
+	// was purged).
+	checkFileL := func(fm CombineFileMove, lenient bool, listOwner string) {
 		f, err := ms.db.GetBookFileByID(j.SurvivorID, fm.FileID)
-		if err == nil && f == nil && lenient && ms.fileAlreadyUndone(j, fm) {
+		if err == nil && f == nil && lenient && ms.fileAlreadyUndone(j, fm, listOwner) {
 			return
 		}
 		switch {
@@ -853,7 +856,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			reasons = append(reasons, fmt.Sprintf("file %s moved on disk since the combine (%s -> %s)", fm.FileID, fm.FilePath, f.FilePath))
 		}
 	}
-	checkFile := func(fm CombineFileMove) { checkFileL(fm, retry) }
+	checkFile := func(fm CombineFileMove) { checkFileL(fm, retry, "") }
 	for _, fm := range j.SurvivorFiles {
 		checkFile(fm)
 	}
@@ -932,7 +935,7 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 			}
 		}
 		for _, fm := range a.Files {
-			checkFileL(fm, lenient)
+			checkFileL(fm, lenient, a.BookID)
 		}
 		for _, x := range a.ExternalIDs {
 			owner, err := ms.db.GetBookByExternalID(x.Source, x.ExternalID)
@@ -971,8 +974,11 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 // accepted when it is gone altogether: a step-journaled combine names a row
 // before creating it, so a combine stopped in between leaves a record of a
 // row that never came to exist (and an undo from before created rows were
-// repointed deleted them). Only consulted on a retry or a replay.
-func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool {
+// repointed deleted them). When the recorded owner is an outside book that has
+// been purged, a completed undo put the row on the absorbed book whose list
+// records it (listOwner, "" for a survivor list), so that is accepted too. Only
+// consulted on a retry or a replay.
+func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove, listOwner string) bool {
 	if fm.FromBookID == j.SurvivorID {
 		// Not on the survivor (the caller checked): only a created row that
 		// was never written can be missing from its own owner.
@@ -983,7 +989,19 @@ func (ms *Service) fileAlreadyUndone(j *CombineJournal, fm CombineFileMove) bool
 		return false
 	}
 	if f == nil {
-		return fm.Created
+		if fm.Created {
+			return true
+		}
+		if listOwner == "" || listOwner == fm.FromBookID {
+			return false
+		}
+		// Not on its recorded owner. If that book is gone, the undo's moveBack
+		// gave the row to listOwner instead.
+		if owner, err := ms.db.GetBookByID(fm.FromBookID); err != nil || owner != nil {
+			return false
+		}
+		g, err := ms.db.GetBookFileByID(listOwner, fm.FileID)
+		return err == nil && g != nil && g.FilePath == fm.FilePath
 	}
 	return f.FilePath == fm.FilePath
 }

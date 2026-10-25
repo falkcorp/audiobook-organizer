@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_cold_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6f1b7c2e-3d54-4a8e-9b0c-2e7d5a4f1c83
 // last-edited: 2026-10-25
 
@@ -66,11 +66,11 @@ func requireRefusedBeforeJournaling(t *testing.T, ms *Service, store database.St
 func TestCombineBooks_ColdLookupSurvivorsHeldPathRefusesBeforeJournaling(t *testing.T) {
 	store := setupTestStore(t)
 	path := "/tmp/pvc-two-live.mp3"
-	h1, row1 := seedHolder(t, store, "Holder one", path)
-	h2, row2 := seedHolder(t, store, "Holder two", path)
-	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: path})
+	h1, row1 := seedHolder(t, store, "Knightfall", path)
+	h2, row2 := seedHolder(t, store, "No Man's Land", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "The Long Halloween", Format: "mp3", FilePath: path})
 	require.NoError(t, err)
-	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Absorbed", Format: "mp3", FilePath: "/tmp/pvc-two-live-abs.mp3"})
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Hush", Format: "mp3", FilePath: "/tmp/pvc-two-live-abs.mp3"})
 	require.NoError(t, err)
 	goCold(t, store)
 
@@ -97,10 +97,10 @@ func TestCombineBooks_ColdLookupSurvivorsHeldPathRefusesBeforeJournaling(t *test
 func TestCombineBooks_ColdLookupAbsorbedPathHeldBySingleBookRefusesBeforeJournaling(t *testing.T) {
 	store := setupTestStore(t)
 	path := "/tmp/pvc-absorbed-single.mp3"
-	holder, row := seedHolder(t, store, "Holder", path)
-	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/pvc-absorbed-single-s.mp3"})
+	holder, row := seedHolder(t, store, "Dark Victory", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "The Long Halloween", Format: "mp3", FilePath: "/tmp/pvc-absorbed-single-s.mp3"})
 	require.NoError(t, err)
-	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Absorbed", Format: "mp3", FilePath: path})
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Hush", Format: "mp3", FilePath: path})
 	require.NoError(t, err)
 	goCold(t, store)
 
@@ -165,8 +165,8 @@ func TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow(t *testing.T) {
 func TestPlanVirtualFileAfterJournal_OtherErrorsStayErrors(t *testing.T) {
 	store := setupTestStore(t)
 	path := "/tmp/pvc-after-journal-err.mp3"
-	holder, _ := seedHolder(t, store, "Holder", path)
-	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: path})
+	holder, _ := seedHolder(t, store, "Dark Victory", path)
+	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Zero Year", FilePath: path})
 	require.NoError(t, err)
 
 	boom := errors.New("injected holder read error")

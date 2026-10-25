@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.20.2
+// version: 1.20.3
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-10-25
 
@@ -117,9 +117,10 @@ func (w *applyWrites) classify(err error) error {
 // combine runs CombineBooks with a nil override. CombineBooks is opaque: it writes an
 // undo journal and then moves files and soft-deletes books, and an error after that
 // leaves a partial merge, so any failure is taken as having written (w.may). The one
-// exception is merge.ErrITunesProtected: GuardITunesProtected is CombineBooks' only
+// exceptions are merge.ErrITunesProtected (GuardITunesProtected is CombineBooks' only
 // iTunes refusal and runs before the journal or any other write, so it changes
-// nothing. The other typed refusals (BookNotFoundError, SoftDeletedInputError) are
+// nothing) and a refusal for want of the complete file-holder list while memdb warms
+// up (refusedForWarmup). The other typed refusals (BookNotFoundError, SoftDeletedInputError) are
 // NOT exempted: the same BookNotFoundError is also returned by CombineBooks' soft-delete
 // step, after files have moved. Its untyped store-read errors before the journal are
 // held conservatively for the same reason: they cannot be told apart from a later one.
@@ -127,10 +128,24 @@ func (w *applyWrites) combine(c bookCombiner, ids []string, primaryID string) (*
 	before := w.may
 	w.may = true
 	res, err := c.CombineBooks(ids, primaryID, nil) // nil override = survivor metadata untouched
-	if errors.Is(err, merge.ErrITunesProtected) {
+	if errors.Is(err, merge.ErrITunesProtected) || refusedForWarmup(err) {
 		w.may = before
 	}
 	return res, err
+}
+
+// refusedForWarmup reports whether err is CombineBooks refusing because the complete
+// list of the rows holding a file is not available yet (memdb is warming up: "retry
+// later"). Everything CombineBooks does before its undo journal is a read, and every
+// error after the journal comes back as a *merge.CombineIncompleteError, so a lookup
+// refusal that is not one changed nothing and the item may go back to the queue
+// instead of being held as interrupted.
+func refusedForWarmup(err error) bool {
+	if !errors.Is(err, database.ErrOwnershipLookupIncomplete) {
+		return false
+	}
+	_, afterJournal := errors.AsType[*merge.CombineIncompleteError](err)
+	return !afterJournal
 }
 
 // reportCombineWarnings puts what a committed combine reported as left undone (a
