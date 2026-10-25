@@ -1,7 +1,7 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.7.0
+# version: 1.8.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
-# last-edited: 2026-10-23
+# last-edited: 2026-10-25
 #
 # /// script
 # requires-python = ">=3.11"
@@ -61,20 +61,44 @@
 #                       path job is refused.
 #   WHISPER_EXTRACT_TIMEOUT  per-clip ffmpeg timeout, seconds (default 120)
 #   WHISPER_EXTRACT_WORKERS  parallel ffmpeg extractions (default 4)
+#   WHISPER_TRANSCRIBE_MIN_TIMEOUT_S  floor of the per-clip inference time limit,
+#                       seconds (default 60)
+#   WHISPER_TRANSCRIBE_TIMEOUT_FACTOR  per-clip limit = max(floor, factor x the
+#                       clip's audio seconds) (default 4, so 360 s for a 90 s clip)
+#   WHISPER_CHILD_READY_TIMEOUT_S  how long a freshly started inference child may
+#                       take to load the model before it counts as failed
+#                       (default 300). Model load is NOT part of the clip's limit.
+#   WHISPER_BACKEND_FACTORY  "module:callable" returning a transcribe(path)->str
+#                       function for the inference child to use INSTEAD of
+#                       mlx_whisper. A test seam: lets the contract tests run a
+#                       real child process (and kill it) without Apple silicon.
+#
+# INFERENCE RUNS IN A KILLABLE CHILD PROCESS. mlx_whisper can enter an endless
+# decode loop on a particular clip (its seek keeps rewinding and never reaches
+# the end), and an in-process call cannot be interrupted: the old design held
+# the process-wide lock forever and every later request parked behind it. The
+# model now lives in a child process; the parent puts a per-clip deadline on
+# each call, and on expiry SIGKILLs the child and returns the per-file error
+# "transcribe_timeout: ...". The next request starts a fresh child.
 
+import atexit
 import concurrent.futures
 import contextlib
 import errno
 import hashlib
+import importlib
 import json
 import logging
 import os
 import posixpath
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import wave
 from typing import Annotated, Any, List
 
@@ -152,22 +176,215 @@ def _require_ffmpeg() -> str:
     raise SystemExit(1)
 
 
-app = FastAPI()
+# ── Killable inference child ─────────────────────────────────────────────────
+
+TRANSCRIBE_MIN_TIMEOUT_S = float(os.environ.get("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", "60"))
+TRANSCRIBE_TIMEOUT_FACTOR = float(os.environ.get("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", "4"))
+CHILD_READY_TIMEOUT_S = float(os.environ.get("WHISPER_CHILD_READY_TIMEOUT_S", "300"))
+CHILD_FLAG = "--inference-child"
+BACKEND_FACTORY_ENV = "WHISPER_BACKEND_FACTORY"
+
+# Bytes per second of the 16 kHz mono 16-bit PCM this worker extracts; only used
+# to estimate the length of an upload whose header cannot be read.
+_PCM_BYTES_PER_S = 32000
 
 
-def _transcribe_file(path: str) -> str:
-    """Transcribe a WAV at `path` with MLX Whisper and return the text.
+def _audio_seconds(path: str) -> float:
+    """Length of the clip in seconds, from the WAV header (frames / rate), not
+    from the length the caller asked for: the clip can be shorter than asked
+    (a file shorter than the clip length). Falls back to a size estimate for a
+    file that is not a parseable WAV."""
+    try:
+        with wave.open(path, "rb") as w:
+            rate = w.getframerate()
+            if rate > 0:
+                return w.getnframes() / rate
+    except (wave.Error, EOFError, OSError):
+        pass
+    try:
+        return os.path.getsize(path) / _PCM_BYTES_PER_S
+    except OSError:
+        return 0.0
 
-    mlx_whisper is imported HERE rather than at module scope on purpose: it is
-    an Apple-Silicon-only dependency, and importing it at the top would make
-    this module unimportable on Linux -- taking the contract tests down with
-    it. The tests replace this function wholesale, so they exercise the real
-    HTTP surface (multipart parsing, result keying, per-file error isolation)
-    on any platform, and only the inference call itself is Mac-gated.
+
+def _clip_timeout(path: str) -> float:
+    """The per-clip inference time limit: max(floor, factor x audio seconds)."""
+    return max(TRANSCRIBE_MIN_TIMEOUT_S, TRANSCRIBE_TIMEOUT_FACTOR * _audio_seconds(path))
+
+
+class InferenceChild:
+    """One long-lived child process that holds the model, with a deadline per call.
+
+    Protocol: JSON lines. The parent writes {"path": ...} to the child's request
+    pipe; the child answers {"text": ...} or {"error": ...} on its response pipe,
+    and writes {"ready": true} once after the model is loaded. The pipes are
+    dedicated file descriptors, NOT stdin/stdout: mlx and its download progress
+    write to stdout/stderr, and mixing that into the protocol would corrupt it.
+
+    Callers serialise on _inference_lock; this class is not re-entrant. The
+    busy fields are the one thing read from OTHER threads (/health), under a
+    tiny separate mutex that is never held across a call.
     """
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen | None = None
+        self._req_w: int | None = None
+        self._resp_r: int | None = None
+        self._buf = b""
+        self._busy_mu = threading.Lock()
+        self._busy_since: float | None = None
+        self._busy_limit: float | None = None
+        atexit.register(self.shutdown)
+
+    # -- liveness, for /health ------------------------------------------------
+
+    def busy(self) -> tuple[float, float | None]:
+        """(seconds the current clip has been running, its limit). (0.0, None)
+        when idle. Never blocks on inference."""
+        with self._busy_mu:
+            if self._busy_since is None:
+                return 0.0, None
+            return time.monotonic() - self._busy_since, self._busy_limit
+
+    def _set_busy(self, limit: float | None) -> None:
+        with self._busy_mu:
+            self._busy_since = None if limit is None else time.monotonic()
+            self._busy_limit = limit
+
+    # -- child lifecycle ------------------------------------------------------
+
+    def _spawn(self) -> None:
+        req_r, req_w = os.pipe()
+        resp_r, resp_w = os.pipe()
+        env = dict(os.environ)
+        env["WHISPER_MLX_MODEL"] = MODEL_REPO
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), CHILD_FLAG, str(req_r), str(resp_w)],
+                pass_fds=(req_r, resp_w),
+                stdin=subprocess.DEVNULL,
+                env=env,
+                # Own session/process group so a kill takes the child's own
+                # subprocesses (mlx_whisper shells out to ffmpeg) with it.
+                start_new_session=True,
+            )
+        except BaseException:
+            for fd in (req_r, req_w, resp_r, resp_w):
+                os.close(fd)
+            raise
+        # The child's ends are the child's now.
+        os.close(req_r)
+        os.close(resp_w)
+        self._proc, self._req_w, self._resp_r, self._buf = proc, req_w, resp_r, b""
+
+    def _kill(self) -> None:
+        """SIGKILL the child's whole group, reap it, drop the pipes. SIGKILL, not
+        SIGTERM: a Metal kernel in flight can sit through a polite signal."""
+        proc = self._proc
+        if proc is not None:
+            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=30)
+        for fd in (self._req_w, self._resp_r):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+        self._proc = self._req_w = self._resp_r = None
+        self._buf = b""
+
+    def shutdown(self) -> None:
+        self._kill()
+
+    def _readline(self, deadline: float) -> bytes | None:
+        """One protocol line, or None when `deadline` (monotonic) passes first.
+        Raises EOFError when the child closed its end (it died)."""
+        while b"\n" not in self._buf:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ready, _, _ = select.select([self._resp_r], [], [], remaining)
+            if not ready:
+                return None
+            chunk = os.read(self._resp_r, 65536)
+            if not chunk:
+                raise EOFError
+            self._buf += chunk
+        line, _, self._buf = self._buf.partition(b"\n")
+        return line
+
+    def _ensure_child(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        self._kill()
+        self._spawn()
+        # Model load happens HERE, before the clip's clock starts: at a high
+        # machine load it can eat most of a 60 s floor, and a clip must not time
+        # out because the model was slow to load.
+        try:
+            line = self._readline(time.monotonic() + CHILD_READY_TIMEOUT_S)
+        except EOFError:
+            code = self._proc.poll() if self._proc else None
+            self._kill()
+            raise RuntimeError(f"inference process exited while starting (exit code {code})")
+        if line is None:
+            self._kill()
+            raise RuntimeError(f"inference process not ready after {CHILD_READY_TIMEOUT_S:.0f}s")
+        if not json.loads(line).get("ready"):
+            self._kill()
+            raise RuntimeError("inference process sent an unexpected startup message")
+
+    def run(self, path: str, timeout_s: float) -> str:
+        """Transcribe `path`. Raises PathJobError(transcribe_timeout) when it does
+        not answer in `timeout_s` (the child is killed; the next call starts a
+        fresh one) and RuntimeError when the child dies or reports an error."""
+        self._ensure_child()
+        self._set_busy(timeout_s)
+        try:
+            try:
+                os.write(self._req_w, json.dumps({"path": path}).encode() + b"\n")
+                line = self._readline(time.monotonic() + timeout_s)
+            except (EOFError, BrokenPipeError):
+                code = self._proc.poll() if self._proc else None
+                self._kill()
+                # A dead child is a worker fault, NOT a statement about the clip.
+                raise RuntimeError(f"inference process died (exit code {code})")
+            if line is None:
+                self._kill()
+                log.error(f"inference exceeded {timeout_s:.0f}s on {os.path.basename(path)}; child killed")
+                raise PathJobError(
+                    ERR_TRANSCRIBE_TIMEOUT,
+                    f"no result within {timeout_s:.0f}s; the decode process was killed and restarted",
+                )
+            msg = json.loads(line)
+            if msg.get("error"):
+                raise RuntimeError(str(msg["error"]))
+            return (msg.get("text") or "").strip()
+        finally:
+            self._set_busy(None)
+
+
+_inference = InferenceChild()
+
+
+def _mlx_backend():
+    """The real backend: mlx_whisper, loaded in the child only."""
     import mlx_whisper
 
-    with _inference_lock:
+    # Best-effort preload so the model is in memory before the first clip's
+    # clock starts. ModelHolder is an mlx_whisper internal, so any failure here
+    # just means the first clip pays the load inside its own limit.
+    try:
+        import mlx.core as mx
+        from mlx_whisper.transcribe import ModelHolder
+
+        ModelHolder.get_model(MODEL_REPO, mx.float16)
+    except Exception as e:  # pragma: no cover - Apple-silicon only
+        print(f"model preload skipped: {e}", file=sys.stderr, flush=True)
+
+    def transcribe(path: str) -> str:
         result = mlx_whisper.transcribe(
             path,
             path_or_hf_repo=MODEL_REPO,
@@ -178,7 +395,76 @@ def _transcribe_file(path: str) -> str:
             # loop on those, emitting the same phrase repeatedly.
             condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
         )
-    return (result.get("text") or "").strip()
+        return (result.get("text") or "").strip()
+
+    return transcribe
+
+
+def _load_backend():
+    spec = os.environ.get(BACKEND_FACTORY_ENV, "")
+    if not spec:
+        return _mlx_backend()
+    module, _, attr = spec.partition(":")
+    return getattr(importlib.import_module(module), attr)()
+
+
+def _child_main(req_fd: int, resp_fd: int) -> None:
+    """The inference child: load the model, say ready, then answer one request
+    line at a time until the parent closes the pipe or goes away."""
+    # Anything the model code prints to stdout must not reach the protocol.
+    os.dup2(2, 1)
+    parent = os.getppid()
+
+    def orphan_watch() -> None:
+        # A child stuck in a decode loop never reads the pipe, so EOF alone would
+        # leave it spinning forever if the parent was killed.
+        while True:
+            time.sleep(2)
+            if os.getppid() != parent:
+                os._exit(0)
+
+    threading.Thread(target=orphan_watch, daemon=True).start()
+    req = os.fdopen(req_fd, "rb")
+    resp = os.fdopen(resp_fd, "wb")
+
+    def send(obj: dict) -> None:
+        resp.write(json.dumps(obj).encode() + b"\n")
+        resp.flush()
+
+    try:
+        transcribe = _load_backend()
+    except Exception as e:
+        print(f"inference child could not load its backend: {e}", file=sys.stderr, flush=True)
+        raise SystemExit(3)
+    send({"ready": True})
+    for raw in req:
+        try:
+            path = json.loads(raw)["path"]
+            send({"text": transcribe(path)})
+        except Exception as e:
+            send({"error": f"{type(e).__name__}: {e}"})
+
+
+app = FastAPI()
+
+
+def _transcribe_file(path: str) -> str:
+    """Transcribe a WAV at `path` and return the text, under a per-clip deadline.
+
+    The inference itself runs in the killable child (see InferenceChild). A clip
+    that does not finish inside _clip_timeout(path) raises
+    PathJobError("transcribe_timeout", ...) after the child has been killed.
+
+    mlx_whisper is imported only in the CHILD, never here, on purpose: it is an
+    Apple-Silicon-only dependency, and importing it in this module would make it
+    unimportable on Linux -- taking the contract tests down with it. The tests
+    replace this function wholesale (or point the child at a fake backend with
+    WHISPER_BACKEND_FACTORY), so they exercise the real HTTP surface on any
+    platform and only the inference call itself is Mac-gated.
+    """
+    limit = _clip_timeout(path)
+    with _inference_lock:
+        return _inference.run(path, limit)
 
 
 def _do_transcribe(data: bytes, filename: str) -> dict:
@@ -207,15 +493,20 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
                 os.unlink(tmp_path)
 
 
+# Plain `def`, not `async def`, for both upload handlers: _do_transcribe blocks
+# for as long as inference runs (it waits on _inference_lock and then on the
+# child), and a blocking call inside an async handler freezes the event loop --
+# /health and every other endpoint with it. As plain defs FastAPI runs them in
+# its threadpool, and the file is read with the sync file object.
 @app.post("/transcribe")
-async def transcribe(file: Annotated[UploadFile, File()]):
+def transcribe(file: Annotated[UploadFile, File()]):
     """Single-file endpoint, used by the Go client's per-file fallback path."""
-    data = await file.read()
+    data = file.file.read()
     return _do_transcribe(data, file.filename)
 
 
 @app.post("/transcribe-batch")
-async def transcribe_batch(files: Annotated[List[UploadFile], File()]):
+def transcribe_batch(files: Annotated[List[UploadFile], File()]):
     """Multi-file endpoint. Returns {"results": {"<filename>": {...}}}.
 
     The key is each part's filename VERBATIM -- the Go client sends the book ID
@@ -224,7 +515,7 @@ async def transcribe_batch(files: Annotated[List[UploadFile], File()]):
     """
     results = {}
     for f in files:
-        data = await f.read()
+        data = f.file.read()
         results[f.filename] = _do_transcribe(data, f.filename)
     return {"results": results}
 
@@ -255,6 +546,11 @@ EXTRACT_WORKERS = max(1, int(os.environ.get("WHISPER_EXTRACT_WORKERS", "4")))
 #   whisper_error   inference raised
 #   container_rejected  ffmpeg refused the container (not on FORMAT_WHITELIST): a
 #                   policy of this worker, not a verdict about the file; non-durable
+#   transcribe_timeout  inference did not finish inside the per-clip limit (see
+#                   InferenceChild) and its child process was killed. A verdict
+#                   about the CLIP, not the worker: mlx_whisper loops forever on
+#                   some clips. The Go side counts strikes per file and makes the
+#                   result permanent at 2.
 #   worker_misconfigured  this worker cannot do the job at all (ffmpeg not on
 #                   PATH): a fault of the worker, never a verdict about a book;
 #                   the Go side defers the book and writes nothing
@@ -266,6 +562,7 @@ ERR_BAD_REQUEST = "bad_request"
 ERR_WHISPER = "whisper_error"
 ERR_WORKER_MISCONFIGURED = "worker_misconfigured"
 ERR_CONTAINER_REJECTED = "container_rejected"
+ERR_TRANSCRIBE_TIMEOUT = "transcribe_timeout"
 
 # Demuxers ffmpeg may use on a library file. An allow-list, not a deny-list: the
 # share is writable by anyone who can drop a file in it, and a planted .m3u8 /
@@ -680,6 +977,7 @@ def health():
     pointer is non-nil. Reporting the model and backend makes a misconfigured
     worker visible to a health check rather than only to a log line.
     """
+    busy_seconds, busy_limit = _inference.busy()
     return {
         "status": "ok",
         "model": MODEL_REPO,
@@ -693,11 +991,26 @@ def health():
         # preflight proves ffmpeg was present when we booted, not that it
         # still is.
         "ffmpeg": shutil.which("ffmpeg"),
+        # Inference liveness, read WITHOUT touching _inference_lock (a wedged
+        # job holds it). busy_seconds is how long the current clip has been
+        # running (0 when idle); busy_limit_seconds is that clip's own limit. A
+        # busy_seconds past its limit means the deadline did not fire, and the Go
+        # client then refuses this endpoint. The two clip_timeout_* fields let
+        # the client size its HTTP timeout to the worst case of a batch.
+        "busy_seconds": round(busy_seconds, 1),
+        "busy_limit_seconds": busy_limit,
+        "clip_timeout_floor_s": TRANSCRIBE_MIN_TIMEOUT_S,
+        "clip_timeout_factor": TRANSCRIBE_TIMEOUT_FACTOR,
         **_path_health(),
     }
 
 
 if __name__ == "__main__":
+    if CHILD_FLAG in sys.argv:
+        # Re-entry as the inference child (see InferenceChild._spawn).
+        _child_main(int(sys.argv[-2]), int(sys.argv[-1]))
+        raise SystemExit(0)
+
     import uvicorn
 
     # Enforced here, not at import: a worker that cannot decode audio must not

@@ -1,7 +1,7 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.7.0
+# version: 1.8.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
-# last-edited: 2026-10-23
+# last-edited: 2026-10-25
 #
 # Contract tests for scripts/whisper_mlx_server.py.
 #
@@ -21,10 +21,13 @@
 #     pytest scripts/tests/test_whisper_mlx_server.py -v
 
 import importlib.util
+import os
 import pathlib
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import unittest
 
 # ci.yml's Repo Guards job runs `python3 -m unittest discover -s scripts`, and
@@ -817,3 +820,269 @@ def test_real_ffmpeg_extracts_a_valid_16k_mono_clip(srv, tmp_path, monkeypatch):
     assert (seen["rate"], seen["ch"]) == (16000, 1) and 1.9 < seen["secs"] < 2.1
     assert results["broken"]["error"].startswith("ffmpeg_error:")
     assert results["absent"]["error"].startswith("not_found:")
+
+
+# ── Killable inference child: per-clip deadline ──────────────────────────────
+#
+# These run a REAL child process (scripts/tests/fake_whisper_backend.py stands
+# in for mlx_whisper), so the kill, the respawn and the pipe protocol are
+# exercised for real on any platform. The 2026-10-23 incident: one clip sent
+# mlx_whisper into an endless decode loop while the worker held its inference
+# lock, so every later request parked behind it and all four workers wedged.
+
+
+@pytest.fixture
+def childsrv(tmp_path, monkeypatch):
+    """The server with the REAL _transcribe_file driving a fake-backend child,
+    a 1.5 s per-clip floor and a mapped share. Extraction is faked: the clip is
+    the source file's bytes, so a file's content steers the fake backend."""
+    import tempfile
+
+    mod = _load_module()
+    here = str(pathlib.Path(__file__).resolve().parent)
+    monkeypatch.setenv("PYTHONPATH", here + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "fake_whisper_backend:factory")
+    monkeypatch.setenv("WHISPER_PATH_REQUIRE_MOUNT", "0")
+    monkeypatch.setattr(mod, "TRANSCRIBE_MIN_TIMEOUT_S", 1.5)
+    monkeypatch.setattr(mod, "TRANSCRIBE_TIMEOUT_FACTOR", 0.0)
+    share = tmp_path / "share"
+    (share / "b").mkdir(parents=True)
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Plimmet={share}")
+    made = []
+
+    def fake_extract(src, seconds):
+        d = tempfile.mkdtemp(prefix="test-clip-")
+        made.append(d)
+        wav = pathlib.Path(d) / "clip.wav"
+        wav.write_bytes(pathlib.Path(src).read_bytes())
+        return d, str(wav)
+
+    monkeypatch.setattr(mod, "_extract_clip", fake_extract)
+
+    def put(name, content):
+        (share / "b" / name).write_bytes(content)
+        return {"path": f"/lib/Plimmet/b/{name}", "seconds": 90}
+
+    yield mod, TestClient(mod.app), put, made
+    mod._inference.shutdown()
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A killed-but-unreaped child is a zombie; InferenceChild reaps it.
+    return True
+
+
+def test_hung_clip_times_out_and_child_is_killed_and_restarted(childsrv):
+    mod, client, put, _ = childsrv
+    jobs = {
+        "good-1": put("one.m4b", b"abcd"),
+        "poison": put("two.m4b", b"xxHANGHANGxx"),
+        "good-2": put("three.m4b", b"abcdefgh"),
+    }
+    t0 = time.monotonic()
+    first = client.post("/transcribe-path-batch", json={"jobs": {"good-1": jobs["good-1"]}})
+    assert first.json()["results"]["good-1"] == {"text": "heard-4", "error": None}
+    old_pid = mod._inference._proc.pid
+    assert _alive(old_pid)
+
+    res = client.post("/transcribe-path-batch", json={"jobs": jobs}).json()["results"]
+    # Bounded: one 1.5 s limit plus a child start, never the hang.
+    assert time.monotonic() - t0 < 30
+    assert res["poison"]["text"] == ""
+    assert res["poison"]["error"].startswith("transcribe_timeout:")
+    # The batch kept going: the clip AFTER the poison one was served by a fresh child.
+    assert res["good-1"]["error"] is None
+    assert res["good-2"] == {"text": "heard-8", "error": None}
+    assert not _alive(old_pid), "the hung child must be killed, not left spinning"
+    assert mod._inference._proc.pid != old_pid
+
+
+def test_health_answers_with_busy_seconds_while_a_clip_hangs(childsrv):
+    mod, client, put, _ = childsrv
+    monkey_job = put("hang.m4b", b"HANGHANG")
+    box = {}
+
+    def go():
+        box["res"] = TestClient(mod.app).post("/transcribe-path", json=monkey_job).json()
+
+    idle = client.get("/health").json()
+    assert idle["busy_seconds"] == 0 and idle["busy_limit_seconds"] is None
+    assert idle["clip_timeout_floor_s"] == 1.5 and idle["clip_timeout_factor"] == 0.0
+
+    th = threading.Thread(target=go)
+    th.start()
+    seen = None
+    deadline = time.monotonic() + 20
+    while th.is_alive() and time.monotonic() < deadline:
+        h = client.get("/health").json()
+        if h["busy_limit_seconds"] is not None and h["busy_seconds"] > 0:
+            seen = h
+            break
+        time.sleep(0.05)
+    th.join(30)
+    assert seen is not None, "/health must report the running clip while inference is stuck"
+    assert seen["busy_limit_seconds"] == 1.5
+    assert box["res"]["error"].startswith("transcribe_timeout:")
+    after = client.get("/health").json()
+    assert after["busy_seconds"] == 0 and after["busy_limit_seconds"] is None
+
+
+def test_a_hung_upload_does_not_freeze_the_event_loop(childsrv):
+    """/transcribe and /transcribe-batch used to be async def calling a blocking
+    inference: one hung upload froze the loop and with it /health.
+
+    Both requests go through ONE event loop (httpx's ASGI transport inside one
+    asyncio.run): starlette's TestClient gives every request its own loop and
+    so cannot show a frozen one."""
+    import asyncio
+
+    import httpx
+
+    mod, _, _, _ = childsrv
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mod.app), base_url="http://worker"
+        ) as c:
+            upload = asyncio.create_task(
+                c.post("/transcribe", files={"file": ("p.wav", b"HANGHANG", "audio/wav")})
+            )
+            # Tick every 50 ms while the upload runs and record the worst gap
+            # between ticks. A loop frozen by a blocking handler cannot tick
+            # until the handler returns, so one gap is as long as the hang.
+            worst, last = 0.0, time.monotonic()
+            while not upload.done():
+                await asyncio.sleep(0.05)
+                now = time.monotonic()
+                worst, last = max(worst, now - last), now
+            health = await c.get("/health")
+            return health.status_code, worst, upload.result().json()
+
+    status, lag, upload = asyncio.run(scenario())
+    assert status == 200
+    assert lag < 1.0, f"the event loop was stalled for {lag:.1f}s by the upload"
+    assert upload["text"] == "" and upload["error"].startswith("transcribe_timeout:")
+
+
+def test_upload_batch_isolates_a_timeout_per_file(childsrv):
+    _, client, _, _ = childsrv
+    r = client.post(
+        "/transcribe-batch",
+        files=[
+            ("files", ("a", b"1234", "audio/wav")),
+            ("files", ("b", b"HANGHANG", "audio/wav")),
+            ("files", ("c", b"123456", "audio/wav")),
+        ],
+    ).json()["results"]
+    assert r["a"] == {"text": "heard-4", "error": None}
+    assert r["b"]["error"].startswith("transcribe_timeout:")
+    assert r["c"] == {"text": "heard-6", "error": None}
+
+
+def test_a_crashed_child_is_a_whisper_error_not_a_timeout(childsrv):
+    """A child that dies is a worker fault, not a statement about the clip: it
+    must not be reported as transcribe_timeout (which the Go side strikes)."""
+    _, client, put, _ = childsrv
+    res = client.post(
+        "/transcribe-path-batch",
+        json={"jobs": {"dies": put("d.m4b", b"DIEDIE"), "next": put("n.m4b", b"abc")}},
+    ).json()["results"]
+    assert res["dies"]["error"].startswith("whisper_error:")
+    assert "died" in res["dies"]["error"]
+    assert res["next"] == {"text": "heard-3", "error": None}
+
+
+def test_a_backend_exception_is_a_per_file_whisper_error(childsrv):
+    _, client, put, _ = childsrv
+    res = client.post(
+        "/transcribe-path-batch",
+        json={"jobs": {"boom": put("b.m4b", b"BOOMBOOM"), "ok": put("o.m4b", b"ab")}},
+    ).json()["results"]
+    assert res["boom"]["error"].startswith("whisper_error:")
+    assert "fake backend exploded" in res["boom"]["error"]
+    assert res["ok"] == {"text": "heard-2", "error": None}
+
+
+def test_clip_tmpdirs_are_removed_on_timeout_and_error_paths(childsrv):
+    _, client, put, made = childsrv
+    client.post(
+        "/transcribe-path-batch",
+        json={
+            "jobs": {
+                "t": put("t.m4b", b"HANGHANG"),
+                "e": put("e.m4b", b"BOOMBOOM"),
+                "d": put("d.m4b", b"DIEDIE"),
+                "k": put("k.m4b", b"fine"),
+            }
+        },
+    )
+    assert len(made) == 4
+    assert not any(pathlib.Path(d).exists() for d in made)
+
+
+def _write_wav(path, seconds, rate=16000):
+    import wave as _wave
+
+    with _wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(seconds * rate))
+
+
+def test_clip_timeout_is_four_times_the_audio_with_a_floor(srv, tmp_path):
+    mod, _ = srv
+    ninety, five = tmp_path / "90.wav", tmp_path / "5.wav"
+    _write_wav(ninety, 90)
+    _write_wav(five, 5)
+    assert mod._audio_seconds(str(ninety)) == pytest.approx(90)
+    assert mod._clip_timeout(str(ninety)) == pytest.approx(360)  # 4 x 90
+    assert mod._clip_timeout(str(five)) == 60  # 4 x 5 = 20, floored to 60
+
+
+def test_clip_timeout_uses_the_header_not_the_requested_length(srv, tmp_path, monkeypatch):
+    """A 20 s file that was asked for 90 s runs for 20 s of audio."""
+    mod, _ = srv
+    short = tmp_path / "20.wav"
+    _write_wav(short, 20)
+    monkeypatch.setattr(mod, "TRANSCRIBE_MIN_TIMEOUT_S", 10.0)
+    assert mod._clip_timeout(str(short)) == pytest.approx(80)
+
+
+def test_clip_timeout_knobs_come_from_the_environment(monkeypatch):
+    monkeypatch.setenv("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", "7")
+    monkeypatch.setenv("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", "2.5")
+    mod = _load_module()
+    assert mod.TRANSCRIBE_MIN_TIMEOUT_S == 7 and mod.TRANSCRIBE_TIMEOUT_FACTOR == 2.5
+
+
+def test_upload_handlers_are_sync_so_inference_cannot_freeze_the_loop(srv):
+    import inspect
+
+    mod, _ = srv
+    assert not inspect.iscoroutinefunction(mod.transcribe)
+    assert not inspect.iscoroutinefunction(mod.transcribe_batch)
+
+
+def test_timeout_settings_do_not_change_the_decode_fingerprint(srv):
+    """The limit says nothing about the text produced, so it must not be in
+    DECODE_SETTINGS: that would make every journalled transcript unreachable."""
+    mod, _ = srv
+    assert set(mod.DECODE_SETTINGS) == {"backend", "model", "language", "condition_on_previous_text"}
+
+
+def test_health_busy_fields_are_present_and_idle_by_default(srv):
+    _, client = srv
+    body = client.get("/health").json()
+    assert body["busy_seconds"] == 0
+    assert body["busy_limit_seconds"] is None
+    assert body["clip_timeout_floor_s"] == 60 and body["clip_timeout_factor"] == 4
+
+
+def test_timeout_error_code_is_stable(srv):
+    mod, _ = srv
+    assert mod.ERR_TRANSCRIBE_TIMEOUT == "transcribe_timeout"
