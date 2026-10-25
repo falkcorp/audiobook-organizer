@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.20.0
+// version: 1.22.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-10-25
 
@@ -488,6 +488,27 @@ func (h *Handler) GetOperationChanges(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"changes": r.ReadableChanges(changes)})
 }
 
+// mayUndoChanges is the per-row undo check shared by the preflight and the
+// revert: every journal row must be one the caller may undo
+// (opaccess.Reader.MayUndoChange), which needs no op row and so still refuses
+// the rows of a discarded Repairs op. False means the response is written: 500
+// when a row was refused because its op row could not be read (a store
+// failure, not the caller's permissions), 403 otherwise.
+func (h *Handler) mayUndoChanges(c *gin.Context, r *opaccess.Reader, changes []*database.OperationChange) bool {
+	for _, ch := range changes {
+		if r.MayUndoChange(ch) {
+			continue
+		}
+		if err := r.LookupError(); err != nil {
+			httputil.InternalError(c, "failed to check operation changes", err)
+			return false
+		}
+		httputil.RespondWithForbidden(c, "permission denied: this operation's changes belong to a Repairs fixer you may not use")
+		return false
+	}
+	return true
+}
+
 // UndoPreflightHandler checks for conflicts before executing an undo.
 // Implements GET /operations/:id/undo/preflight. The report is built from
 // every row of the operation's journal, so it is refused (403) when the caller
@@ -511,17 +532,7 @@ func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 		httputil.InternalError(c, "failed to get operation changes", err)
 		return
 	}
-	for _, ch := range changes {
-		if r.MayUndoChange(ch) {
-			continue
-		}
-		// A row refused because its op row could not be read is a store
-		// failure, not the caller's permissions: 500, still without the report.
-		if err := r.LookupError(); err != nil {
-			httputil.InternalError(c, "failed to check operation changes", err)
-			return
-		}
-		httputil.RespondWithForbidden(c, "permission denied: this operation's changes belong to a Repairs fixer you may not use")
+	if !h.mayUndoChanges(c, r, changes) {
 		return
 	}
 	report, err := h.preflightUndo(changes)
@@ -540,12 +551,35 @@ func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 //     record-only author_delete rows) were left un-reverted.
 //   - 409: the operation has no restorable row at all (a purge op's ledger is
 //     a record only); nothing was changed.
+//   - 403: the operation (or one of its journal rows) belongs to a Repairs
+//     fixer the caller may not use; nothing was changed.
 //   - 500: a restore failed, or the store failed. When restores were
 //     attempted the message carries the counts, never the per-row errors
 //     (those hold file paths).
 func (h *Handler) RevertOperation(c *gin.Context) {
 	id := c.Param("id")
+	// The same gate as the preflight: the revert rewrites what the op wrote and
+	// answers with a per-row report, so a caller who may not use the op's
+	// fixer neither reverts it nor reads it.
+	r := h.repairsAccess.For(c)
+	if !h.mayReadOp(c, r, id) {
+		return
+	}
+	changes, err := h.store.GetOperationChanges(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to get operation changes", err)
+		return
+	}
+	if !h.mayUndoChanges(c, r, changes) {
+		return
+	}
 	result, err := h.revert(id)
+	// The report's merge warnings name users and what they were listening to;
+	// only a caller who may manage users reads them (the operation has already
+	// run: this is what the response says about it).
+	if !r.MayReadUserData() {
+		result = result.WithoutUserData()
+	}
 	var notRestorable *audiobooks.NotRestorableError
 	switch {
 	case errors.As(err, &notRestorable):

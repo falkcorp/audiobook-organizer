@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-25
 
@@ -448,6 +448,46 @@ func (r *RevertResult) Summary() string {
 		fmt.Fprintf(&b, "; %d cannot be undone automatically (%s)", r.NotRestorable, formatTypeCounts(r.NotRestorableTypes))
 	}
 	return b.String()
+}
+
+// userNotesWithheld is the line WithoutUserData leaves where it dropped notes,
+// so a list that had entries does not read as one that never did (and Summary
+// does not end in an empty list).
+const userNotesWithheld = "%d note(s) that name a user withheld (users.manage shows them)"
+
+// WithoutUserData is r as a caller who may not manage users may read it. The
+// merge undo's warnings (Kept, and the combine notes Summary lists) carry a
+// user's id and what they were listening to ("user <id> progress on ...");
+// every free-text list is stripped of the notes that name a user
+// (undo.NamesUser), each list that lost some ends with a count so it is not
+// silently shorter, and Summary, built from the same lists, follows. The counts
+// and types stay. r is not modified.
+func (r *RevertResult) WithoutUserData() *RevertResult {
+	if r == nil {
+		return nil
+	}
+	strip := func(in []string) []string {
+		var out []string
+		dropped := 0
+		for _, n := range in {
+			if undo.NamesUser(n) {
+				dropped++
+				continue
+			}
+			out = append(out, n)
+		}
+		if dropped > 0 {
+			out = append(out, fmt.Sprintf(userNotesWithheld, dropped))
+		}
+		return out
+	}
+	out := *r
+	out.Kept = strip(r.Kept)
+	out.combineKept = strip(r.combineKept)
+	out.SupersededDetail = strip(r.SupersededDetail)
+	out.HandOffFailed = strip(r.HandOffFailed)
+	out.SettleSkipped = strip(r.SettleSkipped)
+	return &out
 }
 
 // NotRestorableError is returned by RevertOperation when no row of the

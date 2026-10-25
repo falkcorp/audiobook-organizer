@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-25
 
@@ -39,13 +39,13 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/gin-gonic/gin"
 )
 
@@ -365,7 +365,7 @@ func warningsWithoutUsers(ws []string) []string {
 
 // withoutUser is s, or "" when s mentions a user (see warningsWithoutUsers).
 func withoutUser(s string) string {
-	if strings.Contains(strings.ToLower(s), "user") {
+	if undo.NamesUser(s) {
 		return ""
 	}
 	return s

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-25
 
@@ -308,6 +308,16 @@ func (r *Reader) unstampedOpVerdict(id string) opScope {
 // a whole response on one refused row checks this first, so a store failure
 // answers 500 rather than a 403 that blames the caller's permissions.
 func (r *Reader) LookupError() error { return r.lookupErr }
+
+// MayReadUserData is mayReadUserData for a route outside this package that
+// serves free text a user's own data can sit in (the revert report's merge
+// warnings). An unwired check holds nothing.
+func (r *Reader) MayReadUserData() bool {
+	if r == nil || r.a == nil || r.a.holds == nil {
+		return false
+	}
+	return r.mayReadUserData()
+}
 
 // mayReadUserData reports, once per request, whether the caller may read
 // other users' own data: users.manage, the permission that already shows an
