@@ -16,5 +16,8 @@ re-home refuses the shell the version was retired out of. The maintenance
 repairs that claim, move or repoint file rows now see retired rows (a retired
 row is refused by name, never moved or repointed), and the iTunes PID audits
 count retired rows apart from live duplicates so a retired row that keeps its
-PID is neither a duplicate nor an orphan. Nothing retires a row yet, so running
-behavior does not change.
+PID is neither a duplicate nor an orphan. Nothing retires a row yet, so no
+retired row exists for these readers to see on production; the changes that do
+run there are the stripe locks the retire primitives and the version updates
+now take, and the repairs and iTunes audits reading through the new
+retired-inclusive readers.
