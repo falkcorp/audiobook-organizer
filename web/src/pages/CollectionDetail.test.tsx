@@ -1,7 +1,7 @@
 // file: web/src/pages/CollectionDetail.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a9e1afd-e004-4591-8fe6-2cf5dcb3eef4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -355,32 +355,25 @@ describe('dynamic collection', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
-  it('names the creator in the per-user note, only for per-user queries', async () => {
+  it('says per-user queries use the viewer state, never the creator, and only for per-user queries', async () => {
     m.getCollection.mockResolvedValue({ ...dynamicCol, query: 'read_status:finished' });
     renderPage('c2');
-    const note = await screen.findByText(/reading state of the person who created this collection/);
-    expect(note.textContent).toContain('Creator: u-owner');
+    const note = await screen.findByText(/reading state of whoever is viewing the collection/);
+    expect(note.textContent).not.toContain('Creator');
     fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'author:smith' } });
-    expect(screen.queryByText(/reading state of the person who created/)).toBeNull();
+    expect(screen.queryByText(/reading state of whoever is viewing/)).toBeNull();
   });
 
-  it('shows the owner-missing warning and offers adoption, sent with the query', async () => {
-    m.getCollection.mockResolvedValue({
-      ...dynamicCol,
-      query: 'read_status:finished',
-      evaluation_blocked: 'COLLECTION_OWNER_MISSING_PER_USER_QUERY',
-      evaluation_blocked_message: 'the collection owner no longer exists',
-    });
+  it('has no ownership or blocked-evaluation UI and never sends adopt_owner', async () => {
+    m.getCollection.mockResolvedValue({ ...dynamicCol, query: 'read_status:finished' });
     m.updateCollection.mockResolvedValue(dynamicCol);
     renderPage('c2');
-    expect(await screen.findByText('the collection owner no longer exists')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/Take ownership when saving/));
+    await screen.findByLabelText('Query');
+    expect(screen.queryByLabelText(/Take ownership/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'read_status:unstarted' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(m.updateCollection).toHaveBeenCalled());
-    expect(m.updateCollection).toHaveBeenCalledWith('c2', {
-      query: 'read_status:finished',
-      adopt_owner: true,
-    });
+    expect(m.updateCollection).toHaveBeenCalledWith('c2', { query: 'read_status:unstarted' });
   });
 });
 

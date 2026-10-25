@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package server
 
@@ -567,7 +567,13 @@ func (s *Server) wireABSRoutes() {
 		Chapters:    asChapterStore(s.Ops()),
 		Playlists:   asPlaylistStore(s.Ops()),
 		Collections: asCollectionStore(s.Ops()),
-		Progress:    asProgressStore(s.Ops()),
+		// A dynamic collection with a per-user rule is evaluated for the signed-in
+		// user on every read; the stored list is never served for it. It is the same
+		// handler the native routes use, resolved on first use.
+		CollectionViewerMembers: func(cols []database.Collection, viewerID string) map[string][]string {
+			return s.collectionHandler().ViewerMemberSets(cols, viewerID)
+		},
+		Progress: asProgressStore(s.Ops()),
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so
 		// the CRUD routes always register on the supported backend.
 		Bookmarks: bookmarkStore,

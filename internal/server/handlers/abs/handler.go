@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -346,6 +346,10 @@ type Options struct {
 	// unavailable rather than 500-ing. Unlike playlists these are server-wide —
 	// see collections.go.
 	Collections CollectionStore
+	// CollectionViewerMembers evaluates dynamic collections that use a per-user
+	// rule for the signed-in user. Nil means they show no books (fail closed),
+	// never the creator's stored list; see collections.go.
+	CollectionViewerMembers CollectionViewerMembers
 
 	// SearchResults is the shared search result cache. When set, /search book
 	// hits come from it and the /search document cache is invalidated by the
@@ -402,8 +406,10 @@ type Handler struct {
 	bookmarks   BookmarkStore
 	playlists   PlaylistStore
 	collections CollectionStore
-	coverRoot   string
-	libraryName string
+	// collectionViewerMembers: see Options.CollectionViewerMembers.
+	collectionViewerMembers CollectionViewerMembers
+	coverRoot               string
+	libraryName             string
 
 	// aliasUses records alias item-id uses; aliasUseSeen remembers the ones
 	// already recorded by this process (userID + "\x00" + alias). See
@@ -588,26 +594,27 @@ func New(o Options) (*Handler, error) {
 		throttle = absauth.NewThrottle()
 	}
 	h := &Handler{
-		cfg:           o.Config,
-		store:         o.Store,
-		resolver:      o.Resolver,
-		userData:      o.UserData,
-		throttle:      throttle,
-		throttleKeyFn: o.ThrottleKey,
-		library:       o.Library,
-		identity:      o.Identity,
-		chapters:      o.Chapters,
-		playlists:     o.Playlists,
-		collections:   o.Collections,
-		bookSearch:    o.SearchResults,
-		progress:      o.Progress,
-		bookmarks:     o.Bookmarks,
-		aliasUses:     o.AliasUses,
-		coverRoot:     o.CoverRoot,
-		libraryName:   name,
-		itemsCount:    map[string]itemsCountEntry{},
-		now:           time.Now,
-		newID:         func() string { return ulid.Make().String() },
+		cfg:                     o.Config,
+		store:                   o.Store,
+		resolver:                o.Resolver,
+		userData:                o.UserData,
+		throttle:                throttle,
+		throttleKeyFn:           o.ThrottleKey,
+		library:                 o.Library,
+		identity:                o.Identity,
+		chapters:                o.Chapters,
+		playlists:               o.Playlists,
+		collections:             o.Collections,
+		collectionViewerMembers: o.CollectionViewerMembers,
+		bookSearch:              o.SearchResults,
+		progress:                o.Progress,
+		bookmarks:               o.Bookmarks,
+		aliasUses:               o.AliasUses,
+		coverRoot:               o.CoverRoot,
+		libraryName:             name,
+		itemsCount:              map[string]itemsCountEntry{},
+		now:                     time.Now,
+		newID:                   func() string { return ulid.Make().String() },
 	}
 	h.sessions = newSessionRegistry(h.nowFn)
 	// The resolver judges bearer requests on the handler's clock, so a session

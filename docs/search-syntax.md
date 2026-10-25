@@ -1,7 +1,7 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-25 -->
 
 # Search syntax
 
@@ -97,29 +97,27 @@ therefore keeps sliding: it means the last 30 days as of each evaluation. All
 rows in one evaluation share the same "now". A dynamic collection is evaluated
 when someone opens it, and the Audiobookshelf surface serves its stored members, so
 a scheduled task refreshes every dynamic collection with a relative date in its query
-hourly; its members are at most an hour behind the clock.
+hourly; its members are at most an hour behind the clock. A collection that also uses
+a per-user field (such as `last_played:>-30d`) is evaluated for each viewer on every
+read instead, so it is always current and nothing is stored.
 
 ### Per-user fields and dynamic collections
 
 `last_played`, `read_status` and `progress_pct` describe one listener. A smart
-playlist evaluates them as the playlist's user. A dynamic collection is shared
-by the whole server, so it evaluates them as the collection's owner (the user
-who created it; if that user is gone, the first active admin). A user with no
-listening history for a book counts as "unstarted" for that book. With authentication
-off there is one local user, which owns every collection and is the evaluator.
+playlist evaluates them as the playlist's user. A dynamic collection is shared by the
+whole server but is still evaluated for whoever is looking: "unfinished" means
+unfinished for you. Two users see different members of the same collection, the user
+who created it never decides what anyone else sees, and nobody can work out another
+user's listening from a collection's members. That includes administrators: they get
+their own state too (reading another user's listening state needs the `users.manage`
+permission and its own tooling). A user with no listening history for a book counts as
+"unstarted" for that book. With authentication off there is one local user and it is
+the viewer. Anything that evaluates a collection with no viewer, such as a background
+job, matches nothing for these fields; it is never answered with the creator's state.
 
-Because a dynamic collection answers with its owner's state for everybody, only
-that owner (or, for a collection that fell back to the first active admin, that
-admin) can write `last_played`, `read_status` or `progress_pct` into its query.
-Anyone else gets a 403, `COLLECTION_PER_USER_QUERY_OWNER_ONLY`. Queries without
-those fields can be edited by anyone allowed to manage collections.
-
-If a collection's owner has been removed and its query uses those fields, it is
-not worked out as the first administrator (that would show the administrator's
-listening to everyone). It keeps the books it already had and says so, until the
-first administrator saves its query again with `adopt_owner` set to true to take it
-over or the per-user terms are removed. Saving it again without the flag does not
-take it over.
+Because the answer is always the viewer's own, anyone allowed to manage collections may
+write these fields into a query, and their members are not stored. A query without them
+is unchanged: it is the same for everyone and is stored.
 
 A query that cannot be parsed or translated, such as a malformed date on a per-user
 field (for example `last_played:>30d`, which needs a sign), is refused with a 400 when

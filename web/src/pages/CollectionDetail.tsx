@@ -1,7 +1,7 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 import { useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
@@ -9,14 +9,12 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
-  FormControlLabel,
   IconButton,
   Link,
   Paper,
@@ -125,7 +123,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
   const [query, setQuery] = useState(seed.query ?? '');
   const [sort, setSort] = useState<SortChoice>(decodeSort(seed.sort_json));
   const [limit, setLimit] = useState(seed.limit ? String(seed.limit) : '');
-  const [adopt, setAdopt] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [queryServerError, setQueryServerError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -203,11 +200,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
       patch.sort_json = applySortChoice(seed.sort_json, sort);
     }
     if (limitNum !== (seed.limit ?? 0)) patch.limit = limitNum;
-    // adopt_owner only ever rides with a query that is being saved.
-    if (adopt) {
-      if (patch.query === undefined) patch.query = query.trim();
-      patch.adopt_owner = true;
-    }
   }
   const dirty = Object.keys(patch).length > 0;
   const queryDirty = isDynamic && query.trim() !== (seed.query ?? '');
@@ -237,7 +229,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
     }
   };
 
-  const blocked = collection.evaluation_blocked;
   const titleOf = (bid: string, book: Book | undefined) =>
     book?.title ?? (lookupDone ? bid : 'Loading...');
 
@@ -264,12 +255,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
       {!canManage && (
         <Alert severity="info" sx={{ mb: 2 }}>
           You can view this collection but not change it ({MANAGE_TOOLTIP}).
-        </Alert>
-      )}
-      {blocked && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {collection.evaluation_blocked_message ??
-            'This collection was not re-evaluated; the stored members are shown.'}
         </Alert>
       )}
       {error && (
@@ -316,7 +301,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
                 setQueryServerError(null);
               }}
               disabled={!canManage}
-              creatorId={collection.created_by_user_id}
               serverError={queryServerError}
             />
             <SortPicker value={sort} onChange={setSort} disabled={!canManage} />
@@ -331,12 +315,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
               helperText={limitInvalid ? 'A whole number, 0 or more' : 'Blank means no limit'}
               slotProps={{ htmlInput: { min: 0 } }}
             />
-            {blocked && canManage && (
-              <FormControlLabel
-                control={<Checkbox checked={adopt} onChange={(e) => setAdopt(e.target.checked)} />}
-                label="Take ownership when saving (first active admin only)"
-              />
-            )}
           </>
         )}
         <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>

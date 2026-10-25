@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_refresh.go
-// version: 1.1.1
+// version: 2.0.0
 // guid: 5e2a9c74-1b83-4f06-a7d1-8c4e0b3f6a92
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package handlers
 
@@ -27,11 +27,12 @@ import (
 const RelativeRefreshConcurrency = 4
 
 // RelativeRefreshResult is what one RefreshRelativeDynamic run did. The counts
-// partition the collections it considered: Refreshed + Unchanged + Blocked +
+// partition the collections it considered: Refreshed + Unchanged +
 // Conflicts + Failed == Considered, except when IndexUnavailable is set, where
 // nothing was evaluated and every count but Considered is zero.
 type RelativeRefreshResult struct {
-	// Considered is the dynamic collections whose query has a relative date term.
+	// Considered is the dynamic collections whose query has a relative date term
+	// and no per-user field (a per-viewer collection stores nothing to refresh).
 	Considered int
 	// IndexUnavailable is true when the search index was closed or rebuilding at
 	// the start, so no collection was evaluated. That is a normal state around a
@@ -42,10 +43,6 @@ type RelativeRefreshResult struct {
 	Refreshed int
 	// Unchanged is how many evaluated to the members they already had.
 	Unchanged int
-	// Blocked is how many were skipped because evaluate refuses them: a per-user
-	// query whose owner no longer exists (ErrCollectionOwnerMissingPerUserQuery).
-	// Their stored members are left as they were.
-	Blocked int
 	// Conflicts is how many were skipped because another writer changed the row
 	// between the list and the write (Version compare-and-swap); the next run
 	// picks them up.
@@ -61,11 +58,16 @@ type RelativeRefreshResult struct {
 // without a relative term are left alone: their answer changes only when the
 // library does, and writers that change it already re-materialize.
 //
+// A collection whose query uses a per-user field (last_played:>-30d is one) is
+// not refreshed at all: its members are evaluated for each viewer on every read
+// and never stored, and this job has no viewer. Evaluating it here would either
+// store one user's answer for everyone or, with no viewer, store an empty list, so
+// it is not considered. (If one were evaluated with no viewer it would match
+// nothing: see playlist.EvaluateSmartPlaylist.)
+//
 // Each collection goes through evaluate, the same path materialize and the native
-// read use, so the owner rules apply exactly as they do there: a per-user query is
-// evaluated as its owner, a query with no per-user field as no one, and an orphaned
-// per-user query is refused (counted as Blocked, members untouched) rather than
-// evaluated as the first admin.
+// read use, with NO viewer: the stored answer a collection without a per-user
+// field has is the same for everyone.
 //
 // A write goes through UpdateCollection, which compares Version, so a collection
 // edited between the list and the write is skipped (Conflicts) and never
@@ -93,7 +95,7 @@ func (h *CollectionHandler) RefreshRelativeDynamic(ctx context.Context, dryRun b
 
 	var due []database.Collection
 	for i := range cols {
-		if cols[i].Type == database.CollectionTypeDynamic && search.QueryHasRelativeDate(cols[i].Query) {
+		if isRelativeRefreshCandidate(&cols[i]) {
 			due = append(due, cols[i])
 		}
 	}
@@ -129,8 +131,6 @@ func (h *CollectionHandler) RefreshRelativeDynamic(ctx context.Context, dryRun b
 				res.Refreshed++
 			case refreshUnchanged:
 				res.Unchanged++
-			case refreshBlocked:
-				res.Blocked++
 			case refreshConflict:
 				res.Conflicts++
 			default:
@@ -158,16 +158,15 @@ const (
 	refreshFailed refreshOutcome = iota
 	refreshChanged
 	refreshUnchanged
-	refreshBlocked
 	refreshConflict
 )
 
 // refreshOne evaluates and, unless dryRun, stores one collection.
 func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (refreshOutcome, error) {
-	ids, err := h.evaluate(col)
+	// No viewer: a background job has none, and a candidate has no per-user field
+	// for one to matter (see isRelativeRefreshCandidate).
+	ids, err := h.evaluate(col, "")
 	switch {
-	case errors.Is(err, ErrCollectionOwnerMissingPerUserQuery):
-		return refreshBlocked, err
 	case errors.Is(err, playlist.ErrSearchIndexUnavailable):
 		// The run reports this once, not once per collection.
 		return refreshFailed, err
@@ -194,6 +193,16 @@ func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (r
 	return refreshChanged, nil
 }
 
+// isRelativeRefreshCandidate reports whether the scheduled refresh has anything
+// to store for col: a dynamic collection with a relative date term and no
+// per-user field. A per-viewer collection (collectionIsPerViewer) is excluded:
+// it stores no member list, so there is nothing to keep current.
+func isRelativeRefreshCandidate(col *database.Collection) bool {
+	return col.Type == database.CollectionTypeDynamic &&
+		search.QueryHasRelativeDate(col.Query) &&
+		!collectionIsPerViewer(col)
+}
+
 // indexAvailable reports whether the search index is open and not rebuilding, the
 // same condition playlist.EvaluateSmartPlaylist requires before it answers.
 func (h *CollectionHandler) indexAvailable() bool {
@@ -216,7 +225,7 @@ func (h *CollectionHandler) RelativeRefreshPending() (bool, error) {
 		return false, err
 	}
 	for i := range cols {
-		if cols[i].Type == database.CollectionTypeDynamic && search.QueryHasRelativeDate(cols[i].Query) {
+		if isRelativeRefreshCandidate(&cols[i]) {
 			return true, nil
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //
@@ -74,7 +74,10 @@ type playlistEvalStore interface {
 // store is required for per-user filter lookups + sort enrichment.
 // idx is the Bleve index; nil yields ErrSearchIndexUnavailable.
 // userID is the user the playlist evaluates for — per-user filters
-// read that user's state rows.
+// read that user's state rows. An EMPTY userID means "no viewer" (a
+// background or system evaluation): a query with any per-user filter then
+// matches nothing — see applyPerUserFilters — and a query with none is
+// unaffected.
 func EvaluateSmartPlaylist(
 	store playlistEvalStore,
 	idx *search.BleveIndex,
@@ -131,7 +134,8 @@ func EvaluateSmartPlaylist(
 }
 
 // applyPerUserFilters walks the candidate book IDs and drops any
-// whose per-user state doesn't satisfy every filter. Filters for
+// whose per-user state doesn't satisfy every filter (all of them, when
+// userID is empty: no viewer matches nothing). Filters for
 // fields the user never wrote are treated as "no match" (the user
 // hasn't engaged with the book, so e.g. `read_status:finished`
 // doesn't match an unstarted book). Matching itself delegates to
@@ -146,6 +150,17 @@ func applyPerUserFilters(
 ) []string {
 	if len(filters) == 0 {
 		return ids
+	}
+	// NO VIEWER, NO STATE, NO MATCH. An empty userID reads no state row at all
+	// (GetUserBookState("", id) answers nil), and a nil state is evaluated as
+	// the zero value, which satisfies read_status:unstarted, progress_pct:<50
+	// and every negated filter: left to fall through, a no-viewer evaluation
+	// would match nearly the whole library instead of nothing. A system caller
+	// must also never be answered with some other user's state (dynamic
+	// collections used to fall back to their creator, which is the leak this
+	// guard exists to keep closed), so the result is empty by construction.
+	if userID == "" {
+		return []string{}
 	}
 	kept := make([]string, 0, len(ids))
 	for _, id := range ids {

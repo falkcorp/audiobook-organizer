@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_collection_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e8b2d5a7-1f43-4c96-9a08-b7d3c6e4f215
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package playlist
 
@@ -15,11 +15,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
-// A dynamic collection is evaluated as ITS OWNER (D75): the per-user query
-// fields read the state rows of the user id the evaluator is given, so the
-// collection handler passes the owner and every reader sees one answer. These
-// tests pin the evaluator half of that: for the same query and the same index,
-// the members follow the user id and nothing else.
+// A dynamic collection is evaluated for the VIEWER (owner decision 2026-10-25,
+// superseding D75's owner evaluation): the per-user query fields read the
+// state rows of the user id the evaluator is given, and the collection handler
+// passes the requesting user. These tests pin the evaluator half of that: for
+// the same query and the same index, the members follow the user id and
+// nothing else, and an empty user id (no viewer) matches nothing.
 
 // collectionFixture seeds four synthetic books into a real store and a complete
 // Bleve index, and per-user state for alice and bob. Activity dates are
@@ -110,8 +111,8 @@ func TestEvaluateCollection_MembersFollowTheEvaluatingUser(t *testing.T) {
 }
 
 // A user with no state rows at all has nothing finished and everything
-// unstarted: the owner-evaluation fallback (an admin who never listened) must
-// not error or silently match everything.
+// unstarted: a viewer who never listened must not error or silently match
+// everything that is not theirs.
 func TestEvaluateCollection_UserWithNoStateRows(t *testing.T) {
 	store, idx, _ := collectionFixture(t)
 	if got := evalAs(t, store, idx, "read_status:finished", "carol"); len(got) != 0 {
@@ -119,5 +120,43 @@ func TestEvaluateCollection_UserWithNoStateRows(t *testing.T) {
 	}
 	if got := evalAs(t, store, idx, "read_status:unstarted", "carol"); !slices.Equal(got, []string{"b1", "b2", "b3", "b4"}) {
 		t.Errorf("unstarted for a user with no rows: got %v, want all four", got)
+	}
+}
+
+// NO VIEWER MATCHES NOTHING for a per-user rule. Before the guard an empty
+// user id read no state row, the nil state was evaluated as the zero value, and
+// read_status:unstarted, progress_pct:<50 and every negated filter matched the
+// whole library: a system evaluation answered "everything" instead of "nothing".
+func TestEvaluateCollection_NoViewerMatchesNothingForPerUserRules(t *testing.T) {
+	store, idx, _ := collectionFixture(t)
+	queries := []string{
+		"read_status:finished",
+		"read_status:unstarted",
+		"-read_status:finished",
+		"progress_pct:<50",
+		"last_played:>-30d",
+		"-last_played:*",
+		"read_status:finished OR read_status:unstarted",
+		"Synthetic read_status:unstarted",
+	}
+	for _, q := range queries {
+		t.Run(q, func(t *testing.T) {
+			got := evalAs(t, store, idx, q, "")
+			if len(got) != 0 {
+				t.Errorf("no viewer, %q: got %v, want none", q, got)
+			}
+			if got == nil {
+				t.Errorf("no viewer, %q: got nil, want an empty non-nil slice", q)
+			}
+		})
+	}
+}
+
+// A rule that reads no user state keeps its behaviour with no viewer: the guard
+// is about per-user predicates only.
+func TestEvaluateCollection_NoViewerStillEvaluatesRulesWithoutUserState(t *testing.T) {
+	store, idx, _ := collectionFixture(t)
+	if got := evalAs(t, store, idx, "Synthetic", ""); !slices.Equal(got, []string{"b1", "b2", "b3", "b4"}) {
+		t.Errorf("no viewer, text query: got %v, want all four", got)
 	}
 }

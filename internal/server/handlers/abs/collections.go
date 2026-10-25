@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package abs
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -64,6 +65,24 @@ import (
 // "admins, plus anyone granted the collections permission" without an
 // admin-OR-permission special case.
 
+// 🔴 A DYNAMIC COLLECTION WITH A PER-USER RULE IS EVALUATED FOR THE VIEWER (owner
+// decision 2026-10-25). A query that uses read_status, progress_pct or last_played
+// answers "for whom?", and the answer is the signed-in user: two readers of the same
+// collection see different books, and nobody can learn another user's listening
+// state from its members. Such a collection stores no member list (the stored
+// MaterializedBookIDs is empty by construction and is never served here even if a
+// pre-change row still holds one), so this surface asks the injected
+// CollectionViewerMembers for the caller's own members. With none injected, or no
+// resolvable viewer, or an evaluation that cannot run (index closed), the
+// collection shows no books: it fails closed, never to the creator's list.
+// Collections without a per-user rule keep serving their stored list, as before.
+
+// CollectionViewerMembers evaluates the per-viewer dynamic collections in cols for
+// viewerID: collection id to ordered book ids. A collection absent from the map is
+// not per-viewer; one present with an empty list shows nothing. Implemented by the
+// native collection handler so the two surfaces share one definition.
+type CollectionViewerMembers func(cols []database.Collection, viewerID string) map[string][]string
+
 // CollectionStore is the narrow slice of the store this surface needs.
 //
 // Optional, exactly like PlaylistStore: with a nil store the list route keeps
@@ -109,7 +128,7 @@ func (h *Handler) LibraryCollections(c *gin.Context) {
 	// One batched expansion for the whole page rather than one per collection —
 	// membership is user-controlled and can reach library scale, which is the
 	// loop shape CLAUDE.md's concurrency section exists to prevent.
-	byCollection := h.collectionsPageBooks(c.Request.Context(), cols)
+	byCollection := h.collectionsPageBooks(c, cols)
 
 	results := make([]any, 0, len(cols))
 	for i := range cols {
@@ -132,7 +151,7 @@ func (h *Handler) CollectionDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
+	books := h.collectionsPageBooks(c, []database.Collection{*col})
 	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
 }
 
@@ -203,7 +222,7 @@ func (h *Handler) CreateCollection(c *gin.Context) {
 		return
 	}
 
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*created})
+	books := h.collectionsPageBooks(c, []database.Collection{*created})
 	respondJSON(c, http.StatusOK, h.collectionDTO(created, books[created.ID]))
 }
 
@@ -284,7 +303,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 		return
 	}
 
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
+	books := h.collectionsPageBooks(c, []database.Collection{*col})
 	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
 }
 
@@ -351,7 +370,7 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
+	books := h.collectionsPageBooks(c, []database.Collection{*updated})
 	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
 }
 
@@ -379,7 +398,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		// The sync id does not resolve. The collection cannot contain it, so the
 		// requested end state already holds; report the collection unchanged
 		// rather than an error the user cannot act on.
-		books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
+		books := h.collectionsPageBooks(c, []database.Collection{*col})
 		respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
 		return
 	}
@@ -396,7 +415,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
+	books := h.collectionsPageBooks(c, []database.Collection{*updated})
 	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
 }
 
@@ -466,7 +485,7 @@ func (h *Handler) batchEditCollection(c *gin.Context, apply func(current, ids []
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
+	books := h.collectionsPageBooks(c, []database.Collection{*updated})
 	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
 }
 
@@ -547,18 +566,33 @@ func (h *Handler) lookupCollection(c *gin.Context) (*database.Collection, bool) 
 	return col, true
 }
 
-// collectionBookIDs returns the ids whose books this collection currently shows.
+// collectionBookIDs returns the ids whose books this collection currently shows
+// to the caller. viewerSets is ViewerMembers' answer for the page.
 //
 // A dynamic collection's membership is its LAST EVALUATION, not its query —
 // exactly as playlistDTO treats smart playlists. Evaluating the query here would
 // make a read path depend on the Bleve index being open, and an unevaluated
 // dynamic collection would then fail the whole library tab instead of rendering
-// as empty.
-func collectionBookIDs(col *database.Collection) []string {
-	if col.Type == database.CollectionTypeDynamic {
-		return col.MaterializedBookIDs
+// as empty. The exception is a per-viewer collection (a per-user rule): it has no
+// stored list to serve, and the caller's own members come from viewerSets, empty
+// when there are none.
+func collectionBookIDs(col *database.Collection, viewerSets map[string][]string) []string {
+	if col.Type != database.CollectionTypeDynamic {
+		return col.BookIDs
 	}
-	return col.BookIDs
+	if search.QueryUsesPerUserField(col.Query) {
+		return viewerSets[col.ID]
+	}
+	return col.MaterializedBookIDs
+}
+
+// callerID is the signed-in user's id, or "" when there is none. It is the viewer
+// a per-viewer collection is evaluated for: an empty one matches nothing.
+func callerID(c *gin.Context) string {
+	if u, found := servermiddleware.CurrentUser(c); found && u != nil {
+		return u.ID
+	}
+	return ""
 }
 
 // collectionsPageBooks expands every collection on the page in ONE batched load.
@@ -574,12 +608,19 @@ func collectionBookIDs(col *database.Collection) []string {
 // "No Series Found". A book that fails to resolve is dropped rather than emitted
 // as a partial object.
 func (h *Handler) collectionsPageBooks(
-	ctx context.Context,
+	c *gin.Context,
 	cols []database.Collection,
 ) map[string][]any {
+	ctx := c.Request.Context()
 	out := make(map[string][]any, len(cols))
 	if len(cols) == 0 {
 		return out
+	}
+	// The caller's own members for every per-viewer collection on the page, in one
+	// bounded pass. Nil (nothing injected) leaves them empty: fail closed.
+	var viewerSets map[string][]string
+	if h.collectionViewerMembers != nil {
+		viewerSets = h.collectionViewerMembers(cols, callerID(c))
 	}
 
 	var ids []string
@@ -588,7 +629,7 @@ func (h *Handler) collectionsPageBooks(
 	for i := range cols {
 		// Merge losers are shown as their survivor (canonicalMembers), so a
 		// member merged away stays visible and removable instead of vanishing.
-		members[i] = h.canonicalMembers(collectionBookIDs(&cols[i]))
+		members[i] = h.canonicalMembers(collectionBookIDs(&cols[i], viewerSets))
 		for _, id := range members[i] {
 			if _, dup := seen[id]; dup {
 				continue

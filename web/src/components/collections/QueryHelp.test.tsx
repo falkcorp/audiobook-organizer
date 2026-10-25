@@ -1,7 +1,7 @@
 // file: web/src/components/collections/QueryHelp.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: d07cc1a4-a7f6-4e0f-986a-580430c3a670
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -27,9 +27,9 @@ import {
 // vitest runs with cwd = web/, so the Go sources are one level up.
 const repoFile = (rel: string) => readFileSync(resolve(process.cwd(), '..', rel), 'utf8');
 
-function Harness({ initial = '', creatorId }: { initial?: string; creatorId?: string }) {
+function Harness({ initial = '' }: { initial?: string }) {
   const [v, setV] = useState(initial);
-  return <QueryHelp value={v} onChange={setV} creatorId={creatorId} />;
+  return <QueryHelp value={v} onChange={setV} />;
 }
 
 const box = () => screen.getByLabelText('Query') as HTMLInputElement;
@@ -126,24 +126,24 @@ describe('per-user note', () => {
   it.each(['read_status:finished', 'progress_pct:>50', 'last_played:>-30d'])(
     'shows for %s',
     (q) => {
-      render(<Harness initial={q} creatorId="u-owner" />);
+      render(<Harness initial={q} />);
       const note = screen.getByText(new RegExp(PER_USER_NOTE.slice(0, 40)));
       expect(note.textContent).toContain(PER_USER_NOTE);
-      expect(note.textContent).toContain('Creator: u-owner');
+      expect(note.textContent).not.toContain('Creator');
       expect(note.closest('[role="status"]')).not.toBeNull();
     }
   );
 
   it('does not show for a book-only query', () => {
     render(<Harness initial="author:smith year:>=2015" />);
-    expect(screen.queryByText(/reading state of the person who created/)).toBeNull();
+    expect(screen.queryByText(/reading state of whoever is viewing/)).toBeNull();
   });
 
   it('appears once a per-user field is typed', () => {
     render(<Harness />);
-    expect(screen.queryByText(/reading state of the person/)).toBeNull();
+    expect(screen.queryByText(/reading state of whoever is viewing/)).toBeNull();
     fireEvent.change(box(), { target: { value: 'read_status:finished' } });
-    expect(screen.getByText(/reading state of the person/)).toBeInTheDocument();
+    expect(screen.getByText(/reading state of whoever is viewing/)).toBeInTheDocument();
     expect(usesPerUserField('-last_played:>-30d')).toBe(true);
     expect(usesPerUserField('author:smith')).toBe(false);
   });
