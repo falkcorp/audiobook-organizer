@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle_scoped_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cc0f61e4-02a1-4f7d-b22f-ec410f2ddc4a
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -262,14 +262,26 @@ func TestRevertOperation_FoldedScopedRecordIsDeletedAfterTheStore(t *testing.T) 
 	require.NoError(t, err, "%+v", res)
 	assert.Equal(t, 1, fx.primaries(t))
 	scopedKey := settleOwedKeyPrefix + fx.scopedRecord()
+	opKey := settleOwedKeyPrefix + fx.op
 	require.Contains(t, faulty.owedWrites, "delete:"+scopedKey)
 	assert.Empty(t, rs.settlePendingGroups(fx.scopedRecord()))
-	// Every write of the operation's own record precedes the scoped delete.
+	// The settle succeeds here, so storeSettleOwed has nothing to keep and
+	// deletes the operation's record ("delete:<op>"); a failed settle would
+	// write "set:<op>". Either way the store is the operation record's last
+	// write, and it must precede the scoped delete: deleting the folded
+	// records first loses what they owed if the run dies before the store.
+	lastOpWrite, scopedDelete := -1, -1
 	for i, w := range faulty.owedWrites {
-		if w == "delete:"+scopedKey {
-			assert.NotContains(t, faulty.owedWrites[i+1:], "set:"+settleOwedKeyPrefix+fx.op)
+		switch w {
+		case "set:" + opKey, "delete:" + opKey:
+			lastOpWrite = i
+		case "delete:" + scopedKey:
+			scopedDelete = i
 		}
 	}
+	require.GreaterOrEqual(t, lastOpWrite, 0, "the run stored the operation's record: %v", faulty.owedWrites)
+	assert.Less(t, lastOpWrite, scopedDelete,
+		"the operation's record is stored before the folded scoped record is deleted: %v", faulty.owedWrites)
 }
 
 // A failed or undecodable read of the operation's record must not let a write
