@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-25
 
@@ -104,6 +104,9 @@ func (r *BatchResponse) addError(id, msg string) {
 type BatchUpdateRequest struct {
 	IDs     []string       `json:"ids"`
 	Updates map[string]any `json:"updates"`
+	// Caller is what the HTTP caller may do to books' place in the library,
+	// set by the handler (see TrashGrants); never read from the body.
+	Caller *TrashGrants `json:"-"`
 }
 
 // Legacy alias for backward compat in tests
@@ -145,7 +148,10 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 				}
 				pre = *b
 				applyUpdates(b, req.Updates)
-				return nil
+				// Judged on the row as locked, after the payload: a
+				// library_state edit that takes a trashed book out of the
+				// trash is a restore whatever the request looked like.
+				return req.Caller.checkRow(&pre, b, req.Updates)
 			})
 		}
 		if err != nil {
@@ -194,6 +200,9 @@ type BatchOperationItem struct {
 // BatchOperationsRequest allows different operations per item.
 type BatchOperationsRequest struct {
 	Operations []BatchOperationItem `json:"operations"`
+	// Caller is what the HTTP caller may do to books' place in the library,
+	// set by the handler (see TrashGrants); never read from the body.
+	Caller *TrashGrants `json:"-"`
 }
 
 func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchResponse {
@@ -217,8 +226,9 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 					if len(op.Updates) == 0 {
 						return database.ErrSkipBookWrite
 					}
+					before := *b
 					applyUpdates(b, op.Updates)
-					return nil
+					return req.Caller.checkRow(&before, b, op.Updates)
 				})
 			}
 			if err != nil {

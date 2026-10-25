@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_batch_hard_delete_permission_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e8602b33-8ac7-4a49-ab67-bc5184d0e660
 // last-edited: 2026-10-25
 
@@ -15,7 +15,14 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 )
+
+// batchHandler is the two bulk entry points of the handler.
+type batchHandler interface {
+	BatchOperations(*gin.Context)
+	BatchUpdateAudiobooks(*gin.Context)
+}
 
 // batchCase is one request shape and the permissions it must ask for, in order.
 type batchCase struct {
@@ -108,10 +115,7 @@ func batchCases() []batchCase {
 
 // call runs the case's body on the route it belongs to and reports which route
 // that was.
-func (tc batchCase) call(t *testing.T, h interface {
-	BatchOperations(*gin.Context)
-	BatchUpdateAudiobooks(*gin.Context)
-}) *httptest.ResponseRecorder {
+func (tc batchCase) call(t *testing.T, h batchHandler) *httptest.ResponseRecorder {
 	t.Helper()
 	if tc.ops != nil {
 		c, w := newCtx("POST", "/audiobooks/batch-operations", tc.ops, nil)
@@ -219,6 +223,83 @@ func TestBatchOperations_TrashAndRestoreNeedBothPermissions(t *testing.T) {
 			h.BatchOperations(c)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("want 403, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// The request's shape only decides what the handler asks for up front. What the
+// caller may do to books' place in the library is handed to the service on the
+// request (batch.TrashGrants), so it can judge each row after loading it: a
+// library_state edit on a book in the trash is a restore though the payload
+// looks like any metadata edit. The grants come from the non-refusing holds
+// probe; an unwired handler is strict and grants nothing without a user.
+func TestBatchRoutes_PassTheCallersTrashGrantsToTheService(t *testing.T) {
+	update := map[string]any{"ids": []string{"b1"}, "updates": map[string]any{"library_state": "organized"}}
+	ops := opsBody(map[string]any{"id": "b1", "action": "update", "updates": map[string]any{"library_state": "organized"}})
+	type route struct {
+		name string
+		run  func(t *testing.T, h batchHandler, d testDeps) **batch.TrashGrants
+	}
+	routes := []route{
+		{"batch", func(t *testing.T, h batchHandler, d testDeps) **batch.TrashGrants {
+			var got *batch.TrashGrants
+			d.batchSvc.EXPECT().UpdateAudiobooks(mock.Anything).
+				Run(func(r *batch.BatchUpdateRequest) { got = r.Caller }).Return(&batch.BatchResponse{}).Once()
+			c, w := newCtx("POST", "/audiobooks/batch", update, nil)
+			h.BatchUpdateAudiobooks(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+			return &got
+		}},
+		{"batch-operations", func(t *testing.T, h batchHandler, d testDeps) **batch.TrashGrants {
+			var got *batch.TrashGrants
+			d.batchSvc.EXPECT().ExecuteOperations(mock.Anything).
+				Run(func(r *batch.BatchOperationsRequest) { got = r.Caller }).Return(&batch.BatchResponse{}).Once()
+			c, w := newCtx("POST", "/audiobooks/batch-operations", ops, nil)
+			h.BatchOperations(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+			return &got
+		}},
+	}
+	holdsOnly := func(held ...auth.Permission) audiobookshandler.PermissionHolds {
+		return func(_ *gin.Context, p auth.Permission) bool {
+			for _, h := range held {
+				if h == p {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	for _, rt := range routes {
+		for _, tc := range []struct {
+			name string
+			held []auth.Permission
+			want batch.TrashGrants
+		}{
+			{"neither", nil, batch.TrashGrants{}},
+			{"delete only", []auth.Permission{auth.PermLibraryDelete}, batch.TrashGrants{Trash: true}},
+			{"organize only", []auth.Permission{auth.PermLibraryOrganize}, batch.TrashGrants{Restore: true}},
+			{"both", []auth.Permission{auth.PermLibraryDelete, auth.PermLibraryOrganize}, batch.TrashGrants{Trash: true, Restore: true}},
+		} {
+			t.Run(rt.name+": "+tc.name, func(t *testing.T) {
+				h, d := newHandler(t)
+				h.SetPermissionHolds(holdsOnly(tc.held...))
+				got := rt.run(t, h, d)
+				if *got == nil || **got != tc.want {
+					t.Fatalf("service got caller %+v, want %+v", *got, tc.want)
+				}
+			})
+		}
+		t.Run(rt.name+": an unwired handler grants nothing", func(t *testing.T) {
+			h, d := newHandler(t)
+			got := rt.run(t, h, d)
+			if *got == nil || **got != (batch.TrashGrants{}) {
+				t.Fatalf("service got caller %+v, want no grants", *got)
 			}
 		})
 	}

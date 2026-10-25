@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-25
 
@@ -319,6 +319,10 @@ func (h *Handler) BatchUpdateAudiobooks(c *gin.Context) {
 	if !h.permittedForTrashEffects(c, req.TrashEffects()) {
 		return
 	}
+	// The request's shape only decides what to ask for up front; a row's edit
+	// can still change its place in the library (library_state on a book in the
+	// trash), so the service judges each row against what the caller holds.
+	req.Caller = h.trashGrants(c)
 	// Fail-safe cap (internal/applycap). This is the endpoint the web UI's
 	// bulk edit actually calls (web/src/services/api.ts), so of every gate in
 	// this PR it is the one a "filter matched everything" click reaches first.
@@ -352,6 +356,7 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 	if !h.permittedForTrashEffects(c, req.TrashEffects()) {
 		return
 	}
+	req.Caller = h.trashGrants(c) // judged per row by the service, see BatchUpdateAudiobooks
 	// Fail-safe cap (internal/applycap). The old fixed 10,000 ceiling sat
 	// ABOVE the cap and the operation list includes hard_delete; the cap is
 	// the operator-facing number now, and the code says which one refused.
