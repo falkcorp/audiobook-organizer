@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.60.0
+// version: 2.61.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-25
 
@@ -76,6 +76,15 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.opRegistry != nil {
 		activityOpts = append(activityOpts, handlers.WithActivityOpDefs(s.opRegistry))
 	}
+	// The same Repairs access check the operations routes use (one instance per
+	// server): the activity of a Repairs operation is its fixer's data too.
+	// Both records an operation has (operations_v2 row, v3 run) are read, so a
+	// missing half cannot make a Repairs operation look like an unknown one.
+	var activityRuns handlers.ActivityRunReader
+	if runs, ok := database.AsCapability[handlers.ActivityRunReader](s.storeForWiring()); ok {
+		activityRuns = runs
+	}
+	activityOpts = append(activityOpts, handlers.WithActivityRepairsAccess(s.repairsOpAccess(), s.storeForWiring(), activityRuns))
 	activityH := handlers.NewActivityHandler(s.activityService, s.storeForWiring(), activityOpts...)
 	// Typed-nil guard, as for mcFileIOPool below: s.opRegistry is a concrete
 	// pointer and a nil one boxed into the interface would pass the handler's
@@ -217,7 +226,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 	// enforcePerms mirrors s.perm(): when auth is disabled there is no permission
 	// set on the request context, so enforcing would 403 every trigger.
-	repairsOps := s.repairsOpAccess()
+	repairsOps := s.repairsOpAccess() // the one shared instance (see repairsOpAccess)
 	opsV2H := handlers.NewOperationsV2Handler(opsV2, opReg, opEventHub,
 		config.AppConfig.EnableAuth,
 		handlers.WithAIScanCancellation(v2Pipeline, v2ScanStore),
@@ -369,7 +378,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.filterReviewedAuthorGroups,
 		// Lazy: the startup runner is stored in Start, after wiring.
 		s.startupDegradedSource,
-	)
+	).WithRepairsOpAccess(s.repairsOpAccess())
 	s.systemHandler = systemH
 
 	// Dedup domain handler (candidate / cluster / series listing, merge /

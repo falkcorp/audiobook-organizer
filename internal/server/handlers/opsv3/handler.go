@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/handler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b12d50f5-488d-4f11-bf35-03e56a5ca698
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 // Package opsv3 serves /api/v3/ops/*: the operations v3 run model over HTTP.
 //
@@ -39,6 +39,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -188,6 +189,12 @@ type Deps struct {
 	Authz    Authz
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// RepairsAccess decides who may read a Repairs run (repairs.plan,
+	// repairs.apply): the runs, counts, timeline and events leave out the ones the
+	// caller may not read, and a read by id answers 403. nil refuses every
+	// repairs run. The server passes the same instance the generic operations
+	// handlers use (Server.repairsOpAccess).
+	RepairsAccess *opaccess.Repairs
 	// Closing is closed when the server starts shutting down, so open event
 	// streams end at once instead of holding the HTTP shutdown for its whole
 	// timeout. nil never closes.

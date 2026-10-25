@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -661,6 +661,16 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 	if !h.defPermissionsHeld(c, body.DefID) {
 		return
 	}
+	if opaccess.IsRepairsOp(body.DefID) {
+		raw, merr := json.Marshal(body.Params)
+		if merr != nil {
+			httputil.RespondWithBadRequest(c, "params must be JSON")
+			return
+		}
+		if !h.repairsStartAllowed(c, body.DefID, raw) {
+			return
+		}
+	}
 
 	opID, err := h.registry.EnqueueOp(c.Request.Context(), body.DefID, body.Params)
 	if err != nil {
@@ -669,6 +679,19 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"op_id": opID})
+}
+
+// repairsStartAllowed is the fixer check a start of a Repairs definition
+// (repairs.plan, repairs.apply) adds to defPermissionsHeld: the caller must hold
+// every permission of the fixer the params name, as the Repairs routes require
+// (opaccess.Reader.CheckStart). It writes the refusal and returns false when not.
+// Trigger and retry both ask it, with the params the run will carry.
+func (h *OperationsV2Handler) repairsStartAllowed(c *gin.Context, defID string, params []byte) bool {
+	if ref := h.repairsAccess.For(c).CheckStart(defID, params); ref != nil {
+		ref.Respond(c)
+		return false
+	}
+	return true
 }
 
 // defPermissionsHeld enforces the def's declared Permissions for the caller,
@@ -788,6 +811,11 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 		return
 	}
 	if !h.defPermissionsHeld(c, row.DefID) {
+		return
+	}
+	// A retry starts a run with the old run's params, so a Repairs run is
+	// retried only by a caller who may start its fixer.
+	if !h.repairsStartAllowed(c, row.DefID, []byte(row.Params)) {
 		return
 	}
 

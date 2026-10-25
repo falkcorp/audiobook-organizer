@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.3.0
+// version: 1.7.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package opsv3
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -40,9 +41,18 @@ func (h *Handler) ListRuns(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, err := rd.ListRunsV3(database.RunQuery{
-		DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit,
-	})
+	q := database.RunQuery{DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit}
+	// A Repairs run the caller may not read is left out by the store, inside the
+	// one pass that counts and pages: total is the number of runs the caller may
+	// read for the filter (the number /counts reports for it), the page is full
+	// while readable runs remain, and next_cursor never points past the last one.
+	// A def filter that names no Repairs definition has nothing to hide, so it
+	// keeps the store's key-only count; otherwise every record is judged once.
+	if q.DefID == "" || opaccess.IsRepairsOp(q.DefID) {
+		reader := h.d.RepairsAccess.For(c)
+		q.Keep = reader.MayReadRun
+	}
+	page, err := rd.ListRunsV3(q)
 	if err != nil {
 		storeErr(c, "list runs", err)
 		return
@@ -65,6 +75,9 @@ func (h *Handler) GetRun(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
+		return
+	}
+	if !h.mayReadRun(c, rec) {
 		return
 	}
 	c.JSON(http.StatusOK, toView(*rec, h.zombieSet()))
@@ -144,6 +157,13 @@ func (h *Handler) StartRun(c *gin.Context) {
 	params, perr := normalizeParams(body.Params)
 	if perr != "" {
 		httputil.RespondWithValidationError(c, "params", perr)
+		return
+	}
+	// A Repairs definition carries no permission of its own beyond the generic
+	// one, so the fixer its params name decides who may start it, as on the
+	// Repairs routes (users.manage for the Audible read-status fixer).
+	if ref := h.d.RepairsAccess.For(c).CheckStart(defID, params); ref != nil {
+		ref.Respond(c)
 		return
 	}
 	if len(def.ParamsSchema) > 0 {
@@ -294,6 +314,11 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
 		return
 	}
+	// A Repairs run the caller may not read is refused before anything of it (its
+	// state in the 409s below) is said, except to the user who started it.
+	if !h.startedBy(c, rec) && !h.mayReadRun(c, rec) {
+		return
+	}
 	if !h.mayCancel(c, rec) {
 		httputil.RespondWithForbidden(c, "cancelling this run needs being the user who started it, or scan.trigger and the definition's permission")
 		return
@@ -320,10 +345,16 @@ func (h *Handler) CancelRun(c *gin.Context) {
 	accepted(c, gin.H{"run_id": rec.ID})
 }
 
+// startedBy reports whether the caller is the user who started rec.
+func (h *Handler) startedBy(c *gin.Context, rec *database.RunRecord) bool {
+	u, ok := auth.UserFromContext(c.Request.Context())
+	return ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID
+}
+
 // mayCancel: the run's starter, or scan.trigger plus the definition's
 // permissions.
 func (h *Handler) mayCancel(c *gin.Context, rec *database.RunRecord) bool {
-	if u, ok := auth.UserFromContext(c.Request.Context()); ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID {
+	if h.startedBy(c, rec) {
 		return true
 	}
 	var def DefInfo
@@ -367,6 +398,9 @@ func (h *Handler) ApproveRun(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
+		return
+	}
+	if !h.mayReadRun(c, rec) {
 		return
 	}
 	approver := auth.Permission(auth.PermSettingsManage)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.9
+// version: 1.23.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -46,6 +46,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -106,6 +107,23 @@ type Handler struct {
 	// server stores its startup runner in Start, after the handlers are
 	// wired. Nil, or a provider yielding nil, means no step is degraded.
 	getDegraded func() DegradedSource
+
+	// repairsAccess decides which Repairs operations (repairs.plan,
+	// repairs.apply) the caller may see in GET /dashboard's recent_operations.
+	// Unset (nil) hides every Repairs operation: see WithRepairsOpAccess.
+	repairsAccess *opaccess.Repairs
+}
+
+// WithRepairsOpAccess installs the check that keeps a Repairs operation out of
+// GET /dashboard's recent_operations for callers who do not hold the
+// permissions of the operation's fixer, as every other generic operations read
+// does (opaccess). A setter rather than a New parameter because New already
+// has twelve and many test call sites; omitting it fails closed (every Repairs
+// operation is left out), and TestDashboard_RecentOperationsLeaveOutRepairsRuns
+// pins the server's wiring.
+func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
+	h.repairsAccess = a
+	return h
 }
 
 // DegradedSource reports the fixed tokens of startup steps that failed but
@@ -871,6 +889,14 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "backup deleted successfully"})
 }
 
+// recentOperationsShown is how many operations GET /dashboard lists, and
+// RecentOperationsWindow how many of the newest it reads to find them, so a run
+// of Repairs operations the caller may not read does not shorten the list.
+const (
+	recentOperationsShown  = 5
+	RecentOperationsWindow = 50
+)
+
 // GetDashboard returns dashboard statistics. The store handles caching
 // internally (PebbleDB: stats:library key with 10-min TTL; SQLite: SQL
 // aggregation directly). Implements GET /dashboard.
@@ -893,12 +919,37 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 	// 2026-08-16 to 2026-08-21 with nothing to say they were stale.
 	//
 	// Repointed rather than removed even though no frontend code reads
-	// `recent_operations` from this endpoint (grepped 2026-09-07) — it is a public
+	// `recent_operations` from this endpoint (grepped 2026-09-07 and again
+	// 2026-10-25: the Dashboard page reads /system/status) — it is a public
 	// response field, and serving correct data costs one call.
+	//
+	// This route needs only library.view, so what it serves is limited to what
+	// that role may know of an operation:
+	//
+	//   - A Repairs operation the caller may not read is left out, judged by the
+	//     same check every other operations read uses. Its result is the plan's
+	//     params (for the Audible read-status fixer a user's whole listening
+	//     state), its error text names the target user, and its actor is the
+	//     admin who ran it. A window of RecentOperationsWindow rows is read so
+	//     that hidden rows do not leave a guest with a short list; the first
+	//     recentOperationsShown readable ones are returned.
+	//   - result_data is not served at all, for any operation: it is a
+	//     per-operation payload (a plan, a row-by-row apply report) and the panel
+	//     this field once fed shows a name, a status and a time. The operation's
+	//     own result route serves it to the callers who may read it.
 	recentOps := []database.Operation{}
-	if rows, err := store.ListOperationsV2Since(time.Time{}, 5); err == nil {
+	if rows, err := store.ListOperationsV2Since(time.Time{}, RecentOperationsWindow); err == nil {
+		reader := h.repairsAccess.For(c)
 		for i := range rows {
-			recentOps = append(recentOps, *rows[i].AsLegacyOperation(rows[i].DefID))
+			if len(recentOps) == recentOperationsShown {
+				break
+			}
+			if !reader.MayRead(&rows[i]) {
+				continue
+			}
+			op := rows[i].AsLegacyOperation(rows[i].DefID)
+			op.ResultData = nil
+			recentOps = append(recentOps, *op)
 		}
 	}
 

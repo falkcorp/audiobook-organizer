@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.34.1
+// version: 1.34.2
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -1862,8 +1862,8 @@ func (s *PebbleActivityStore) stageDayDigest(batch *GatedBatch, startOfDay time.
 	digest := ActivityEntry{
 		ID:        s.counter.Add(1),
 		Timestamp: startOfDay,
-		Tier:      "digest",
-		Type:      "daily_digest",
+		Tier:      DigestTier,
+		Type:      DailyDigestType,
 		Level:     "info",
 		Source:    "compaction",
 		Summary:   fmt.Sprintf("Daily digest for %s (%d entries)", dateKey, dd.OriginalCount),

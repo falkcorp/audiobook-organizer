@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -719,7 +719,7 @@ func TestDeleteBackup_RequiresFilename(t *testing.T) {
 func TestGetDashboard_OK(t *testing.T) {
 	h, d := newTestHandler(t)
 	d.store.EXPECT().GetDashboardStats().Return(&database.DashboardStats{TotalBooks: 3}, nil)
-	d.store.EXPECT().ListOperationsV2Since(mock.Anything, 5).Return(nil, nil)
+	d.store.EXPECT().ListOperationsV2Since(mock.Anything, system.RecentOperationsWindow).Return(nil, nil)
 
 	w := run(http.MethodGet, "/dashboard", "/dashboard", nil, func(r *gin.Engine) {
 		r.GET("/dashboard", h.GetDashboard)

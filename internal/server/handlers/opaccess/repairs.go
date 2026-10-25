@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-25
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
@@ -30,8 +31,9 @@ import (
 // listening state, the operation's change journal (every user's state and
 // positions before and after). The generic routes (GET /operations/:id/result,
 // /changes, /undo/preflight, /operations/v2/:id and its logs, the system log
-// reader's operation_id branch, /operations/timeline, /operations/events, and
-// the per-book journal reads GET /audiobooks/:id/changes and
+// reader's operation_id branch, /operations/timeline, /operations/events,
+// /api/v3/ops runs, counts, timeline and events, the activity log's reads by
+// operation, and the per-book journal reads GET /audiobooks/:id/changes and
 // /audiobooks/:id/changelog) are library.view reads, and guests hold the
 // viewer role. So for these two definitions the caller must hold every
 // permission of the op's fixer (repairs.RequiredPermissions, the same set the
@@ -91,24 +93,40 @@ func IsRepairsOp(defID string) bool {
 	return defID == repairs.PlanOpID || defID == repairs.ApplyOpID
 }
 
-// repairsOpFixerID is the fixer a repairs op row belongs to: params.fixer_id,
-// else result.fixer_id; "" when neither states one.
-func repairsOpFixerID(row *database.OperationV2Row) string {
+// fixerIDOf is the fixer a repairs op belongs to: params.fixer_id, else
+// result.fixer_id; "" when neither states one. The one reader of that rule, so
+// an operations_v2 row and an operations v3 run record cannot disagree.
+func fixerIDOf(params string, result *string) string {
 	var v struct {
 		FixerID string `json:"fixer_id"`
 	}
-	if row.Params != "" {
-		if json.Unmarshal([]byte(row.Params), &v) == nil && v.FixerID != "" {
+	if params != "" {
+		if json.Unmarshal([]byte(params), &v) == nil && v.FixerID != "" {
 			return v.FixerID
 		}
 	}
-	if row.ResultData != nil {
+	if result != nil {
 		v.FixerID = ""
-		if json.Unmarshal([]byte(*row.ResultData), &v) == nil && v.FixerID != "" {
+		if json.Unmarshal([]byte(*result), &v) == nil && v.FixerID != "" {
 			return v.FixerID
 		}
 	}
 	return ""
+}
+
+// RowFixerID is the fixer a repairs op row belongs to; "" when it states none.
+func RowFixerID(row *database.OperationV2Row) string {
+	return fixerIDOf(row.Params, row.ResultData)
+}
+
+// RunFixerID is RowFixerID for an operations v3 run record.
+func RunFixerID(rec *database.RunRecord) string {
+	var result *string
+	if len(rec.Result) > 0 {
+		r := string(rec.Result)
+		result = &r
+	}
+	return fixerIDOf(string(rec.Params), result)
 }
 
 // Reader answers, for one request, whether the caller may read the data of
@@ -138,14 +156,30 @@ func (r *Reader) MayRead(row *database.OperationV2Row) bool {
 	if row == nil || !IsRepairsOp(row.DefID) {
 		return true
 	}
-	if !r.wired() {
+	return r.MayReadFixer(row.DefID, RowFixerID(row))
+}
+
+// MayReadRun is MayRead for an operations v3 run record.
+func (r *Reader) MayReadRun(rec *database.RunRecord) bool {
+	if rec == nil || !IsRepairsOp(rec.DefID) {
+		return true
+	}
+	return r.MayReadFixer(rec.DefID, RunFixerID(rec))
+}
+
+// MayReadFixer is the verdict for an operation of definition defID that belongs
+// to fixerID ("" when it states none): always true for an operation that is not
+// a Repairs one, and false for a Repairs one with no fixer, when the check is
+// unwired, or whose fixer's permissions the caller does not all hold. A fixer
+// this build does not register needs every permission (fixerPermitted).
+func (r *Reader) MayReadFixer(defID, fixerID string) bool {
+	if !IsRepairsOp(defID) {
+		return true
+	}
+	if !r.wired() || fixerID == "" {
 		return false
 	}
-	id := repairsOpFixerID(row)
-	if id == "" {
-		return false
-	}
-	return r.fixerPermitted(id)
+	return r.fixerPermitted(fixerID)
 }
 
 // MayReadChange reports whether the caller may read one change-journal row.
@@ -336,4 +370,63 @@ func (r *Reader) Require(row *database.OperationV2Row) bool {
 	}
 	httputil.RespondWithForbidden(r.c, "permission denied: this operation belongs to a Repairs fixer you may not use")
 	return false
+}
+
+// StartRefusal is why a generic start route will not queue a run of a Repairs
+// definition. It is what the Repairs routes answer for the same request, so the
+// two ways in cannot disagree: a 404 for a fixer this build does not register, a
+// 400 for params that name none, and the 401/403 of the first permission the
+// fixer requires that the caller lacks.
+type StartRefusal struct {
+	Status  int             // 400 or 404, or 403 for an unwired check; 0 when Missing is set
+	Message string          // for Status
+	Missing auth.Permission // set when the caller lacks this permission
+}
+
+// Respond writes the refusal.
+func (f *StartRefusal) Respond(c *gin.Context) {
+	switch {
+	case f.Missing != "":
+		servermiddleware.RespondPermissionDenied(c, f.Missing)
+	case f.Status == 404:
+		httputil.RespondWithNotFound(c, "repair fixer", f.Message)
+	case f.Status == 400:
+		httputil.RespondWithBadRequest(c, f.Message)
+	default:
+		httputil.RespondWithForbidden(c, f.Message)
+	}
+}
+
+// CheckStart decides whether the caller may queue a run of definition defID with
+// params (the JSON the run would carry): nil for a definition that is not a
+// Repairs one, and for a Repairs one when the caller holds every permission its
+// fixer requires (repairs.RequiredPermissions, as the Repairs routes' own check
+// does). The generic start routes (POST /operations/v2, a retry, POST
+// /api/v3/ops/runs) ask only the definition's own permissions, which for these
+// two definitions is a bare settings.manage, so without this a role that holds
+// settings.manage but not the fixer's users.manage could start the Audible
+// read-status fixer from them. Params that name no fixer are refused too: such a
+// run could never be read by anyone (MayReadFixer), and cannot do anything.
+// An unwired check refuses every Repairs start (fail closed).
+func (r *Reader) CheckStart(defID string, params []byte) *StartRefusal {
+	if !IsRepairsOp(defID) {
+		return nil
+	}
+	if !r.wired() {
+		return &StartRefusal{Status: 403, Message: "permission denied: this operation belongs to a Repairs fixer you may not use"}
+	}
+	id := fixerIDOf(string(params), nil)
+	if id == "" {
+		return &StartRefusal{Status: 400, Message: "params.fixer_id is required to start a Repairs operation"}
+	}
+	f, ok := r.a.fixers.Get(id)
+	if !ok {
+		return &StartRefusal{Status: 404, Message: id}
+	}
+	for _, p := range repairs.RequiredPermissions(f) {
+		if !r.a.holds(r.c, p) {
+			return &StartRefusal{Missing: p}
+		}
+	}
+	return nil
 }

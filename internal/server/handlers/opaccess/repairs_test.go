@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
 // last-edited: 2026-10-25
 
@@ -357,4 +357,41 @@ func TestReader_LookupError(t *testing.T) {
 	require.False(t, r.MayUndoChange(&database.OperationChange{OperationID: "op-unreadable", ChangeType: "metadata_update"}))
 	require.False(t, r.MayReadChange(&database.OperationChange{OperationID: "op-unreadable", ChangeType: "metadata_update"}))
 	require.ErrorContains(t, r.LookupError(), "invented store failure")
+}
+
+// The v3 run record states its fixer the way a v2 row does (params, else
+// result), and the two surfaces give one verdict.
+func TestReader_MayReadRunAgreesWithRows(t *testing.T) {
+	reg := fixers{"scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
+	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	admin := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage}
+	for name, tc := range map[string]struct {
+		rec  *database.RunRecord
+		held []auth.Permission
+		want bool
+	}{
+		"nil":                       {nil, edit, true},
+		"non-repairs":               {&database.RunRecord{DefID: "library.scan"}, nil, true},
+		"params, editor":            {&database.RunRecord{DefID: repairs.PlanOpID, Params: []byte(`{"fixer_id":"scoped"}`)}, edit, false},
+		"params, admin":             {&database.RunRecord{DefID: repairs.PlanOpID, Params: []byte(`{"fixer_id":"scoped"}`)}, admin, true},
+		"result only, admin":        {&database.RunRecord{DefID: repairs.ApplyOpID, Result: []byte(`{"fixer_id":"scoped"}`)}, admin, true},
+		"no fixer, admin":           {&database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`{}`)}, admin, false},
+		"unparseable params, admin": {&database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`nope`)}, admin, false},
+	} {
+		c, _ := ctxHolding()
+		require.Equal(t, tc.want, NewRepairs(reg, noOps, holdsOnly(tc.held...)).For(c).MayReadRun(tc.rec), name)
+	}
+}
+
+// The fixer-level verdict the event broker carries on a message: a fixer id of
+// a non-repairs def is never asked about, and an empty fixer of a repairs def is
+// refused.
+func TestReader_MayReadFixer(t *testing.T) {
+	a := NewRepairs(fixers{"plain": scopedFixer{}}, noOps, holdsOnly(auth.PermLibraryEditMetadata))
+	c, _ := ctxHolding()
+	r := a.For(c)
+	require.True(t, r.MayReadFixer("library.scan", ""))
+	require.False(t, r.MayReadFixer(repairs.ApplyOpID, ""))
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.False(t, r.MayReadFixer(repairs.PlanOpID, "gone"))
 }

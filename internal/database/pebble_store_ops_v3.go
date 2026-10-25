@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: e48755db-c26d-42a2-a232-49daf9732335
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
@@ -1291,23 +1291,25 @@ func (p *PebbleStore) runsFromIndex(prefix []byte, cursor string, limit int, kee
 // ListRunsV3 is the census listing. With State it walks opv3:ix:state:, with
 // DefID opv3:ix:def:, with neither every opv3:ix:state: key; with both it
 // walks the def's index and keeps the runs in that state. Total is the exact
-// number of matching runs, never the page length.
+// number of matching runs, never the page length. q.Keep, when set, further
+// narrows the matches and Total counts only what it accepts (see RunQuery).
 func (p *PebbleStore) ListRunsV3(q RunQuery) (RunPage, error) {
 	switch {
 	case q.DefID != "":
 		// A def id containing ':' would also match the keys of a longer id
 		// that extends it, so the def is checked on the record as well then.
-		var keep func(*RunRecord) bool
+		keep := q.Keep
 		if q.State != "" || strings.Contains(q.DefID, ":") {
 			keep = func(r *RunRecord) bool {
-				return r.DefID == q.DefID && (q.State == "" || r.State == q.State)
+				return r.DefID == q.DefID && (q.State == "" || r.State == q.State) &&
+					(q.Keep == nil || q.Keep(r))
 			}
 		}
 		return p.runsFromIndex([]byte(opv3IxDefPrefix+q.DefID+":"), q.Cursor, q.Limit, keep)
 	case q.State != "":
-		return p.runsFromIndex([]byte(opv3IxStatePrefix+string(q.State)+":"), q.Cursor, q.Limit, nil)
+		return p.runsFromIndex([]byte(opv3IxStatePrefix+string(q.State)+":"), q.Cursor, q.Limit, q.Keep)
 	default:
-		return p.runsFromIndex([]byte(opv3IxStatePrefix), q.Cursor, q.Limit, nil)
+		return p.runsFromIndex([]byte(opv3IxStatePrefix), q.Cursor, q.Limit, q.Keep)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
 // last-edited: 2026-10-25
 
@@ -81,20 +81,26 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // caller must hold the op's fixer's permissions, as the Repairs routes require
 // (see opaccess.Repairs). It asks permHolds, so auth disabled and a first run
 // hold everything, as everywhere else.
+//
+// There is one instance per server (every route family asks the same one), so a
+// route family cannot be left on a stale or differently built check.
 func (s *Server) repairsOpAccess() *opaccess.Repairs {
-	// A nil *repairs.Registry must not become a non-nil interface: the check
-	// then refuses every repairs op rather than calling Get on nil.
-	var fixers opaccess.FixerLookup
-	if s.repairFixers != nil {
-		fixers = s.repairFixers
-	}
-	// The op lookup scopes a journal row journaled before Source stamping by
-	// its op row. Same typed-nil care: no store leaves the check unwired.
-	var ops opaccess.OpLookup
-	if s.store != nil {
-		ops = s.Ops()
-	}
-	return opaccess.NewRepairs(fixers, ops, s.permHolds())
+	s.repairsOpAccessOnce.Do(func() {
+		// A nil *repairs.Registry must not become a non-nil interface: the check
+		// then refuses every repairs op rather than calling Get on nil.
+		var fixers opaccess.FixerLookup
+		if s.repairFixers != nil {
+			fixers = s.repairFixers
+		}
+		// The op lookup scopes a journal row journaled before Source stamping by
+		// its op row. Same typed-nil care: no store leaves the check unwired.
+		var ops opaccess.OpLookup
+		if s.store != nil {
+			ops = s.Ops()
+		}
+		s.repairsOpAccessCheck = opaccess.NewRepairs(fixers, ops, s.permHolds())
+	})
+	return s.repairsOpAccessCheck
 }
 
 // othersUserDataAccess reports whether the request's caller may read other

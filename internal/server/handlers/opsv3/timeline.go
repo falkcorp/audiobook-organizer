@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/timeline.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a9a8ff32-bf89-4265-a016-59ee9e75d04e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 package opsv3
 
@@ -50,9 +50,14 @@ func (h *Handler) Timeline(c *gin.Context) {
 		httputil.InternalError(c, "timeline", err)
 		return
 	}
+	// Repairs runs the caller may not read are not in their timeline.
+	reader := h.d.RepairsAccess.For(c)
 	inWindow := make([]database.RunRecord, 0, len(recs))
 	pastTo := false
 	for _, r := range recs {
+		if !reader.MayReadRun(&r) {
+			continue
+		}
 		if r.CompletedAt != nil && r.CompletedAt.After(to) {
 			pastTo = true
 			continue

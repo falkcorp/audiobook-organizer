@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.5.1
+// version: 1.7.0
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
-// last-edited: 2026-09-26
+// last-edited: 2026-10-25
 
 // Contract tests for the activity index limit pushdown.
 //
@@ -520,7 +520,7 @@ func TestIndexPushdownPrunedRowDoesNotConsumeAPageSlot(t *testing.T) {
 // Since or Until (or push the bounds into the index scan). This comment is the
 // only place that dependency is written down.
 func TestActivityFilterFieldCountIsPinned(t *testing.T) {
-	const classified = 18
+	const classified = 19
 	got := reflect.TypeFor[ActivityFilter]().NumField()
 	require.Equal(t, classified, got,
 		"ActivityFilter gained or lost a field. pactIndexPushdownEligible is an ALLOW-LIST "+
@@ -543,6 +543,7 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 		"Since", "Until", // in pactPushdownDecidable ONLY because both paths ignore them
 		"Tags", "TagAliases", "Search", "Source", // refused: not in the index key
 		"ExcludeSources", "ExcludeTiers", "ExcludeTags", "ExcludeTagAliases", // refused: not in the index key
+		"ExcludeEntry", // refused: a caller-supplied predicate over every row, not the index key
 	}, names, "ActivityFilter's fields changed; re-read pactIndexPushdownEligible")
 
 	// The gate's ALLOW-LIST is pinned too, symmetric with the field list above.

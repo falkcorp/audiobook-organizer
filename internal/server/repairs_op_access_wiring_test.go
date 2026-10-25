@@ -1,5 +1,5 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
 // last-edited: 2026-10-25
 
