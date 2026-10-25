@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle_scoped_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: cc0f61e4-02a1-4f7d-b22f-ec410f2ddc4a
 // last-edited: 2026-10-25
 
@@ -7,6 +7,8 @@ package audiobooks
 
 import (
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
@@ -119,6 +122,7 @@ type settleFaultStore struct {
 	mu               sync.Mutex
 	dieOnGetBook     bool
 	failGetRaw       map[string]bool
+	failSetRawPrefix string   // SetRaw of a key with this prefix fails (and is not noted)
 	owedWrites       []string // "set:<key>" / "delete:<key>"
 	failedReadsOfKey int
 }
@@ -151,6 +155,9 @@ func (s *settleFaultStore) GetRaw(key string) ([]byte, error) {
 }
 
 func (s *settleFaultStore) SetRaw(key string, value []byte) error {
+	if s.failSetRawPrefix != "" && strings.HasPrefix(key, s.failSetRawPrefix) {
+		return errors.New("synthetic raw write error")
+	}
 	s.mu.Lock()
 	s.owedWrites = append(s.owedWrites, "set:"+key)
 	s.mu.Unlock()
@@ -304,21 +311,12 @@ func TestRevertOperation_UnreadableOwedRecordsAreNeverOverwrittenOrDeleted(t *te
 		assert.NotContains(t, faulty.owedWrites, "set:"+opKey, "no write over a record that could not be read")
 		assert.NotContains(t, faulty.owedWrites, "delete:"+opKey)
 		assert.NotContains(t, faulty.owedWrites, "delete:"+scopedKey, "and nothing folded into it is deleted")
+		assert.Empty(t, quarantinedSettleOwed(t, fx.st), "a read that failed may pass: nothing is set aside")
 		got := rs.settlePendingGroups(fx.scopedRecord())
 		assert.True(t, got[fx.group], "the scoped record is still there")
 		rec, err := readSettleOwed(fx.st, fx.op)
 		require.NoError(t, err)
 		assert.Contains(t, rec.Groups, "vg-other-owed", "the operation's own owed group survives")
-	})
-	t.Run("operation record undecodable", func(t *testing.T) {
-		fx := newSettleScopeFx(t, "op-n1-decode")
-		rs := NewRevertService(fx.st)
-		require.NoError(t, fx.st.SetRaw(settleOwedKeyPrefix+fx.op, []byte("{not json")))
-		_, err := rs.RevertOperation(fx.op)
-		require.NoError(t, err)
-		raw, err := fx.st.GetRaw(settleOwedKeyPrefix + fx.op)
-		require.NoError(t, err)
-		assert.Equal(t, "{not json", string(raw), "left as it was")
 	})
 	t.Run("scoped record undecodable", func(t *testing.T) {
 		fx := newSettleScopeFx(t, "op-n1-scoped")
@@ -333,5 +331,98 @@ func TestRevertOperation_UnreadableOwedRecordsAreNeverOverwrittenOrDeleted(t *te
 		assert.Equal(t, "{not json", string(raw), "an undecodable scoped record is not deleted")
 		assert.Empty(t, rs.settlePendingGroups(fx.scopedRecord()), "the decodable one is folded and cleared")
 		assert.Equal(t, 1, fx.primaries(t))
+	})
+}
+
+// quarantinedSettleOwed returns the undecodable owed records set aside, by key.
+func quarantinedSettleOwed(t *testing.T, s *database.PebbleStore) map[string]string {
+	t.Helper()
+	rows, err := s.ScanPrefix(settleOwedQuarantinePrefix)
+	require.NoError(t, err)
+	out := map[string]string{}
+	for _, r := range rows {
+		out[r.Key] = string(r.Value)
+	}
+	return out
+}
+
+// An owed record that does not decode never will. Left in place it would stay
+// unreadable for every later revert of the operation, which could then never
+// record its intent: a crash mid-run would lose the evidence the next run needs
+// and a version group could keep two primaries silently. The run that finds it
+// writes nothing to it, sets the bytes aside under a quarantine key and logs it
+// at Warn, so the next run starts with none.
+func TestRevertOperation_UndecodableOwedRecordIsSetAsideNotKeptForever(t *testing.T) {
+	const bad = "{not json"
+	t.Run("operation record", func(t *testing.T) {
+		fx := newSettleScopeFx(t, "op-nit1-whole")
+		opKey := settleOwedKeyPrefix + fx.op
+		require.NoError(t, fx.st.SetRaw(opKey, []byte(bad)))
+		rec := logtest.CaptureRecords(t)
+
+		faulty := &settleFaultStore{PebbleStore: fx.st}
+		res, err := NewRevertService(faulty).RevertOperation(fx.op)
+		require.NoError(t, err, "%+v", res)
+
+		assert.NotContains(t, faulty.owedWrites, "set:"+opKey, "this run writes nothing to the record it could not read")
+		raw, err := fx.st.GetRaw(opKey)
+		require.NoError(t, err)
+		assert.Empty(t, raw, "the undecodable record is gone from its key")
+		set := quarantinedSettleOwed(t, fx.st)
+		require.Len(t, set, 1)
+		for key, got := range set {
+			assert.Equal(t, bad, got, "the bytes are kept as they were")
+			assert.True(t, strings.HasSuffix(key, ":"+fx.op), "the key names the record: %s", key)
+		}
+		warned := false
+		for _, r := range rec.Records() {
+			if r.Level == slog.LevelWarn && strings.Contains(r.Message, "set aside") {
+				warned = true
+			}
+		}
+		assert.True(t, warned, "logged at Warn")
+
+		// The next run starts fresh: it reads the record, and can record intent.
+		rs := NewRevertService(fx.st)
+		assert.False(t, rs.loadSettleView(fx.op, nil).unreadable)
+		rs.markSettlePending(fx.op, fx.group)
+		assert.True(t, rs.settlePendingGroups(fx.op)[fx.group], "an intent is recorded again")
+		assert.Len(t, quarantinedSettleOwed(t, fx.st), 1, "and the set-aside copy is not touched")
+	})
+	t.Run("scoped run's own record", func(t *testing.T) {
+		fx := newSettleScopeFx(t, "op-nit1-scoped")
+		scoped := settleOwedKeyPrefix + fx.scopedRecord()
+		require.NoError(t, fx.st.SetRaw(scoped, []byte(bad)))
+		_, err := NewRevertService(fx.st).RevertOperationForBooks(fx.op, []string{fx.shell.ID})
+		require.NoError(t, err)
+		raw, err := fx.st.GetRaw(scoped)
+		require.NoError(t, err)
+		assert.Empty(t, raw)
+		set := quarantinedSettleOwed(t, fx.st)
+		require.Len(t, set, 1)
+		for key, got := range set {
+			assert.Equal(t, bad, got)
+			// Outside the scoped records' prefix, so a whole-operation run
+			// never folds it in as one of them.
+			assert.False(t, strings.HasPrefix(key, settleOwedKeyPrefix+fx.op+scopedRecordMarker), key)
+		}
+		// A whole-operation run neither folds nor trips over the set-aside copy.
+		rs := NewRevertService(fx.st)
+		view := rs.loadSettleView(fx.op, nil)
+		assert.False(t, view.unreadable)
+		assert.Empty(t, view.folded)
+	})
+	t.Run("a copy that cannot be stored leaves the record in place", func(t *testing.T) {
+		fx := newSettleScopeFx(t, "op-nit1-copy-fails")
+		opKey := settleOwedKeyPrefix + fx.op
+		require.NoError(t, fx.st.SetRaw(opKey, []byte(bad)))
+		faulty := &settleFaultStore{PebbleStore: fx.st, failSetRawPrefix: settleOwedQuarantinePrefix}
+		_, err := NewRevertService(faulty).RevertOperation(fx.op)
+		require.NoError(t, err)
+		raw, err := fx.st.GetRaw(opKey)
+		require.NoError(t, err)
+		assert.Equal(t, bad, string(raw), "never deleted before its copy is stored")
+		assert.NotContains(t, faulty.owedWrites, "delete:"+opKey)
+		assert.Empty(t, quarantinedSettleOwed(t, fx.st))
 	})
 }

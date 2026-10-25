@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -134,7 +134,7 @@ var keyFamilies = []KeyFamily{
 	{"metadata_state:", "per-field metadata state", "internal/database/pebble_store_metadata.go"},
 	{"path_history:", "book path change history", "internal/database/pebble_store_scancache.go"},
 	{"rejected_candidate:", "rejected batch metadata candidates", "internal/server/metadata_batch_candidates.go"},
-	{"revert_settle_owed:", "operation reverts owed a settle pass", "internal/audiobooks/revert_settle.go"},
+	{"revert_settle_owed:", "operation reverts owed a settle pass (revert_settle_owed:#corrupt:<time>:<record> holds an undecodable record set aside)", "internal/audiobooks/revert_settle.go"},
 	{"scan_fail:", "scan quarantine records by path hash", "internal/database/pebble_store_quarantine.go"},
 	{"split_book_candidate:", "split-book dedup candidates", "internal/dedup/split_book_storage.go"},
 	{"tombstone:", "deleted-book tombstones", "internal/database/pebble_store.go"},

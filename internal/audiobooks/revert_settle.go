@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
@@ -110,7 +111,10 @@ type settleView struct {
 	folded []string
 	// unreadable: the run's own record could not be read or decoded. Its
 	// content is unknown, so the run writes nothing to it and deletes
-	// nothing folded into it: a write would drop the groups it owes.
+	// nothing folded into it: a write would drop the groups it owes. A
+	// record that did not decode is set aside (quarantineSettleOwed) so the
+	// next run starts from an empty one; a read error leaves it for the
+	// next run to read again.
 	unreadable bool
 }
 
@@ -124,9 +128,16 @@ func (rs *RevertService) loadSettleView(operationID string, scope *revertScope) 
 	}
 	own, err := readSettleOwed(kv, v.record)
 	if err != nil {
-		revertLog.Warn("revert: the owed group settles of operation %s are unreadable and left as they are: %s",
+		revertLog.Warn("revert: the owed group settles of operation %s are unreadable and left as they are for this run: %s",
 			logger.SanitizeLogValue(v.record), logger.SanitizeLogValue(err.Error()))
 		v.unreadable = true
+		var bad *undecodableOwedError
+		if errors.As(err, &bad) {
+			// A record that does not decode never will. Left in place it
+			// would stay unreadable for every later revert of the
+			// operation, which could then never record its intent.
+			quarantineSettleOwed(kv, v.record, bad.raw)
+		}
 	}
 	v.owed = own
 	if scope == nil {
@@ -844,7 +855,55 @@ func readSettleOwed(kv rawKV, record string) (settleOwedRecord, error) {
 	if err != nil {
 		return empty, fmt.Errorf("read: %w", err)
 	}
-	return decodeSettleOwed(raw)
+	rec, err := decodeSettleOwed(raw)
+	if err != nil {
+		return empty, &undecodableOwedError{raw: raw, err: err}
+	}
+	return rec, nil
+}
+
+// undecodableOwedError is readSettleOwed's error for bytes that were read but
+// do not decode, as opposed to a read that failed: the first is permanent and
+// carries the bytes so the caller can set them aside, the second may pass.
+type undecodableOwedError struct {
+	raw []byte
+	err error
+}
+
+func (e *undecodableOwedError) Error() string { return e.err.Error() }
+func (e *undecodableOwedError) Unwrap() error { return e.err }
+
+// settleOwedQuarantinePrefix keys the undecodable owed records
+// quarantineSettleOwed sets aside: revert_settle_owed:#corrupt:<time>:<record>.
+// It sits inside the revert_settle_owed: key family, and cannot match the
+// scoped records' scan prefix (revert_settle_owed:<op>#scope:) because an
+// operation id is never empty.
+const settleOwedQuarantinePrefix = settleOwedKeyPrefix + "#corrupt:"
+
+// quarantineSettleOwed moves an undecodable owed record's bytes to a key of
+// their own and then deletes the record, so the next revert of the operation
+// reads none and starts fresh instead of finding the same bad bytes for good.
+// The copy is written first and the record deleted only once it is stored: a
+// failure of either leaves the record where it was (logged), and the next run
+// tries again. Called only with the operation's lock held, so no run is
+// writing the record meanwhile.
+func quarantineSettleOwed(kv rawKV, record string, raw []byte) {
+	if kv == nil {
+		return
+	}
+	key := settleOwedQuarantinePrefix + time.Now().UTC().Format("20060102T150405.000000000Z") + ":" + record
+	if err := kv.SetRaw(key, raw); err != nil {
+		revertLog.Warn("revert: could not set the undecodable owed group settles of operation %s aside, they stay in place: %s",
+			logger.SanitizeLogValue(record), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	if err := kv.DeleteRaw(settleOwedKeyPrefix + record); err != nil {
+		revertLog.Warn("revert: set the undecodable owed group settles of operation %s aside as %s but could not clear the record: %s",
+			logger.SanitizeLogValue(record), logger.SanitizeLogValue(key), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	revertLog.Warn("revert: the undecodable owed group settles of operation %s were set aside as %s; the next revert of it starts with none",
+		logger.SanitizeLogValue(record), logger.SanitizeLogValue(key))
 }
 
 // decodeSettleOwed decodes one owed record's stored bytes; none is an empty
