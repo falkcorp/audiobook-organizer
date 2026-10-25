@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -106,6 +106,11 @@ var approvableActions = map[string]bool{
 // like a failed re-run (REVIEW_APPLY_PARTIAL; see applyUnderClaim). A handler asserts
 // cleanliness only where it can show it, and the default for a forgotten path is the
 // safe one.
+//
+// An apply that succeeded but left something undone (a merge that retired a book
+// without attaching one of its files) is not an error: it adds a line with
+// database.AddApplyNotice(ctx, ...), and the approve response carries the lines in
+// its "note" (bulk approve in "notes"), after the item is recorded as applied.
 type ApplyFunc func(ctx context.Context, item database.ReviewItem) error
 
 // Handler hosts the review-queue HTTP endpoints.
@@ -801,7 +806,8 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 			panic(r)
 		}
 	}()
-	applyErr := fn(ctx, *claim.Item)
+	fnCtx, notices := database.WithApplyNotices(ctx)
+	applyErr := fn(fnCtx, *claim.Item)
 	if applyErr != nil {
 		settled = true
 		reason := applyErr
@@ -882,12 +888,13 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 		reviewLog.Error("review apply of %s (%s) succeeded but could not be recorded: %v", id, chosen, err)
 		return nil, chosen, "", &appliedUnrecordedError{err: err}
 	}
-	note := ""
+	var noteParts []string
 	if claim.TookOver {
-		note = "this finished an apply that a server restart had interrupted; the apply was run again " +
-			"and skipped any work already done"
+		noteParts = append(noteParts, "this finished an apply that a server restart had interrupted; the apply was run again "+
+			"and skipped any work already done")
 	}
-	return updated, chosen, note, nil
+	noteParts = append(noteParts, notices.Lines()...)
+	return updated, chosen, strings.Join(noteParts, "; "), nil
 }
 
 // holdClaim ends a claim whose apply failed and may have written something: the item
@@ -1142,11 +1149,22 @@ type bulkResult struct {
 	// apply while this server keeps running; after a restart, approving it again
 	// re-runs the apply, which the apply handlers tolerate (appliedUnrecordedError).
 	AppliedUnrecorded []bulkFail `json:"applied_unrecorded,omitempty"`
+	// Notes lists items that were applied but whose apply reported something it
+	// left undone (a combine that retired a book without attaching one of its
+	// files, for example). The item is applied; the note is what a reviewer should
+	// check. The same text is the "note" of a single approve.
+	Notes []bulkNote `json:"notes,omitempty"`
 	// ApplyDisabled is true on an approve while the global apply switch is off:
 	// approvals were recorded but nothing was applied, so an empty `applied` is not
 	// a result. Enable review_apply_enabled and approve the ids again.
 	ApplyDisabled bool `json:"apply_disabled,omitempty"`
 	Processed     int  `json:"processed"`
+}
+
+// bulkNote is what an applied item's apply asked the reviewer to check.
+type bulkNote struct {
+	ID   string `json:"id"`
+	Note string `json:"note"`
 }
 
 // bulkFail is one item a bulk action could not complete, with the cause a
@@ -1230,7 +1248,7 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 		case "approve":
 			// "" = use this item's OWN recommendation. See bulkRequest's comment for
 			// why there is no batch-wide action.
-			updated, chosen, _, err := h.approveOne(c.Request.Context(), id, "", req.IfUpdatedAt[id], applyOn)
+			updated, chosen, note, err := h.approveOne(c.Request.Context(), id, "", req.IfUpdatedAt[id], applyOn)
 			// A per-item refusal (no decidable action, unimplemented action) SKIPS that
 			// item and the batch continues. Aborting the whole batch on one
 			// insufficient-evidence hold would make bulk approve useless on a queue
@@ -1253,6 +1271,9 @@ func (h *Handler) BulkReviewAction(c *gin.Context) {
 			}
 			if updated.Status == database.ReviewStatusApplied {
 				result.Applied = append(result.Applied, id)
+				if note != "" {
+					result.Notes = append(result.Notes, bulkNote{ID: id, Note: note})
+				}
 			} else {
 				result.Approved = append(result.Approved, id)
 			}
