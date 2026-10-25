@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-14
+// last-edited: 2026-10-25
 
 package reconcile
 
@@ -309,6 +309,13 @@ func RunReconcileScan(ctx context.Context, store Store, saveResult SaveResultFun
 	return nil
 }
 
+// cpuPoolLimit is the size of the bounded worker pools that run per-item,
+// CPU- or syscall-bound library work (stat, hash, shard) across all cores. Every
+// such pool in this package takes its errgroup limit from here so the limit has
+// one definition, and the tests that bound "work started after cancel" by the
+// pool size read the same value.
+func cpuPoolLimit() int { return max(runtime.NumCPU(), 1) }
+
 // hashFilesConcurrent computes a segment hash for every file across a bounded
 // worker pool (runtime.NumCPU()) and returns a hash→path index. This replaces a
 // former single-core loop that hashed potentially thousands of on-disk files
@@ -326,7 +333,7 @@ func hashFilesConcurrent(ctx context.Context, files []string, report func(done i
 	hashes := make([]string, len(files))
 	var done atomic.Int64
 	var g errgroup.Group
-	g.SetLimit(max(runtime.NumCPU(), 1))
+	g.SetLimit(cpuPoolLimit())
 	for i, fp := range files {
 		g.Go(func() error {
 			if ctx.Err() != nil {
@@ -438,7 +445,7 @@ func BuildReconcilePreviewCtx(ctx context.Context, store Store, log logger.Logge
 	brokenFlag := make([]bool, len(books))
 	var statDone atomic.Int64
 	var g errgroup.Group
-	g.SetLimit(max(runtime.NumCPU(), 1))
+	g.SetLimit(cpuPoolLimit())
 	for i := range books {
 		if books[i].FilePath == "" {
 			continue
@@ -1242,7 +1249,7 @@ func FindBrokenSegmentBooks(store VersionGroupStore, dryRun bool) (*BrokenSegmen
 	entries := make([]*BrokenSegmentEntry, len(allBooks))
 	var booksChecked, brokenBooks, markedForReview int64
 	var g errgroup.Group
-	g.SetLimit(max(runtime.NumCPU(), 1))
+	g.SetLimit(cpuPoolLimit())
 	for i := range allBooks {
 		book := allBooks[i]
 		// Only check directory-based books in import paths (not in library)
@@ -1918,7 +1925,7 @@ func AssignOrphanVGs(store Store, rootDir string) (*AssignVGResult, error) {
 	}
 
 	var g errgroup.Group
-	g.SetLimit(max(runtime.NumCPU(), 1))
+	g.SetLimit(cpuPoolLimit())
 	for i := range candidates {
 		c := &candidates[i]
 		g.Go(func() error {

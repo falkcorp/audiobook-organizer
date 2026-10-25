@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile_scan_ctx_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3f7a1d92-6c48-4e05-b1a9-8d2e5c70f634
 // last-edited: 2026-10-25
 
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -108,6 +107,15 @@ func (r *phaseRecorder) cancelOnBeat(phase string, n int, cancel context.CancelF
 	return r
 }
 
+// startPhase attributes subsequent beats to phase for a test that drives a pool
+// directly, without the progress messages that open a phase inside a scan.
+func (r *phaseRecorder) startPhase(phase string) *phaseRecorder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.phase = phase
+	return r
+}
+
 func (r *phaseRecorder) hooks() ScanHooks { return ScanHooks{Heartbeat: r.beat} }
 
 // beat records a heartbeat and, on the configured one, cancels the scan.
@@ -156,7 +164,9 @@ func (r *phaseRecorder) Info(msg string, args ...any) {
 }
 
 // beatsAfterCancelIn reports how many beats of phase began after the cancel had
-// returned.
+// returned. That includes up to limit-1 workers whose ctx check preceded the
+// cancel and whose beat landed after it, so a correct pool does not read zero:
+// compare the result against the pool limit, not against zero.
 func (r *phaseRecorder) beatsAfterCancelIn(phase string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -346,7 +356,7 @@ func TestBuildReconcilePreviewCtx_CancelDuringStatPassFailsTheScan(t *testing.T)
 	// 3000 after the cancel. The count is of beats after the cancel, not the
 	// total: the total also holds every beat that ran before the canceling
 	// goroutine was scheduled, which depends on runner speed.
-	poolLimit := max(runtime.NumCPU(), 1)
+	poolLimit := cpuPoolLimit()
 	if got := rec.beatsAfterCancelIn(phaseStat); got >= poolLimit {
 		t.Errorf("stat pool kept starting stats after cancel: %d began after it (pool limit %d, %d books, %d ran in total)",
 			got, poolLimit, books, rec.beatsIn(phaseStat))
@@ -413,7 +423,7 @@ func TestBuildReconcilePreviewCtx_CancelAfterHashingReportsNoHashingResults(t *t
 // over any plausible worker count, so the bound below cannot be met by the
 // workers already in flight when the cancel lands.
 func hashPoolFiles() []string {
-	files := make([]string, max(200, 50*runtime.NumCPU()))
+	files := make([]string, max(200, 50*cpuPoolLimit()))
 	for i := range files {
 		files[i] = fmt.Sprintf("/nonexistent/synthetic/file-%04d.m4b", i) // hash errors are skipped
 	}
@@ -421,15 +431,24 @@ func hashPoolFiles() []string {
 }
 
 // Once canceled, the hash pool must stop starting hashes. Cancel on the first
-// beat of a few hundred files and fewer than half may have started.
+// beat of a few hundred files; only workers already past their ctx check when
+// the cancel returned (fewer than the pool limit, the canceling worker holding
+// one slot) may still start. The count is of beats that began after the cancel,
+// not the total: the total also holds every hash that started before the
+// canceling goroutine was scheduled, which depends on runner speed.
 func TestHashFilesConcurrent_CancelStopsStartingHashes(t *testing.T) {
 	files := hashPoolFiles()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var beats atomic.Int64
-	hashFilesConcurrent(ctx, files, nil, countingHooks(&beats, 1, cancel))
-	if got := beats.Load(); got == 0 || got > int64(len(files)/2) {
-		t.Errorf("%d of %d files started after the cancel on the first beat; want at least 1 and under half", got, len(files))
+	rec := newPhaseRecorder().startPhase(phaseHash).cancelOnBeat(phaseHash, 1, cancel)
+	hashFilesConcurrent(ctx, files, nil, rec.hooks())
+	if got := rec.beatsIn(phaseHash); got == 0 {
+		t.Fatal("the hash pool never started a hash, so the cancel was never exercised")
+	}
+	poolLimit := cpuPoolLimit()
+	if got := rec.beatsAfterCancelIn(phaseHash); got >= poolLimit {
+		t.Errorf("hash pool kept starting hashes after cancel: %d began after it (pool limit %d, %d files, %d started in total)",
+			got, poolLimit, len(files), rec.beatsIn(phaseHash))
 	}
 }
 
