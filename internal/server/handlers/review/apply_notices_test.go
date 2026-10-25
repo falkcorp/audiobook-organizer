@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/apply_notices_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: cf6332c7-7866-4c55-aded-862c8ab7215d
 // last-edited: 2026-10-25
 
@@ -38,7 +38,7 @@ func TestApprove_ApplyNoticesReachTheResponseNote(t *testing.T) {
 	a := seedAction(t, s, "regroup.multidisc", "m1", itunesservice.ActionCombine)
 	h := reviewhandler.New(s, func() bool { return true }, nil)
 	h.RegisterApplyHandler(itunesservice.ActionCombine, func(ctx context.Context, _ database.ReviewItem) error {
-		database.AddApplyNotice(ctx, "combine of /lib/folder: path held by 2 live book(s): not reattached")
+		database.AddApplyNotice(ctx, "combine of /lib/Gotham: path held by 2 live book(s): not reattached")
 		database.AddApplyNotice(ctx, "second line")
 		return nil
 	})
@@ -47,7 +47,7 @@ func TestApprove_ApplyNoticesReachTheResponseNote(t *testing.T) {
 	if got, _ := s.GetReviewItem(a.ID); got.Status != database.ReviewStatusApplied {
 		t.Fatalf("the item is %q, want applied: the combine committed", got.Status)
 	}
-	want := "combine of /lib/folder: path held by 2 live book(s): not reattached; second line"
+	want := "combine of /lib/Gotham: path held by 2 live book(s): not reattached; second line"
 	if data["note"] != want {
 		t.Fatalf("note = %q, want %q", data["note"], want)
 	}

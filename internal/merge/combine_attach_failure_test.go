@@ -1,5 +1,5 @@
 // file: internal/merge/combine_attach_failure_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d540b8fe-78f6-4317-af34-77988b64e1b4
 // last-edited: 2026-10-25
 
@@ -24,11 +24,11 @@ import (
 func TestCombineBooks_FailedReattachOfATrashedHoldersRowIsReportedAndLeavesNoNotice(t *testing.T) {
 	real := setupTestStore(t)
 	path := "/tmp/caf-trashed-holder.mp3"
-	trashed, trashedRow := seedHolder(t, real, "Trashed holder", path)
+	trashed, trashedRow := seedHolder(t, real, "The Killing Joke", path)
 	require.NoError(t, SoftDeleteBook(real, trashed.ID))
-	survivor, err := real.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/caf-trashed-holder-s.mp3"})
+	survivor, err := real.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "The Long Halloween", Format: "mp3", FilePath: "/tmp/caf-trashed-holder-s.mp3"})
 	require.NoError(t, err)
-	absorbed, err := real.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Rowless absorbed", Format: "mp3", FilePath: path})
+	absorbed, err := real.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Hush", Format: "mp3", FilePath: path})
 	require.NoError(t, err)
 
 	ms := NewService(&b3FaultStore{Store: real, failMoveBookFilesToBookFor: map[string]bool{trashed.ID: true}})
@@ -56,9 +56,9 @@ func TestCombineBooks_FailedReattachOfATrashedHoldersRowIsReportedAndLeavesNoNot
 // the failing create is the absorbed book's.
 func TestCombineBooks_FailedCreateOfAnAbsorbedBooksRowIsReported(t *testing.T) {
 	real := setupTestStore(t)
-	survivor, _ := seedHolder(t, real, "Survivor with a row", "/tmp/caf-create-s.mp3")
+	survivor, _ := seedHolder(t, real, "Year One", "/tmp/caf-create-s.mp3")
 	path := "/tmp/caf-create-abs.mp3"
-	absorbed, err := real.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Rowless absorbed", Format: "mp3", FilePath: path})
+	absorbed, err := real.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Hush", Format: "mp3", FilePath: path})
 	require.NoError(t, err)
 
 	ms := NewService(&b3FaultStore{Store: real, failCreateBookFile: true})
