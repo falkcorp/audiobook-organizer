@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_realstore_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6a2f9e14-3c7b-4d8a-9e10-b8f2a5c6d7e1
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package merge
 
@@ -353,7 +353,9 @@ func TestB3_EnsureOwnFile_NoFilePath_ReturnsZero(t *testing.T) {
 	ms := NewService(store)
 
 	b := &database.Book{ID: ulid.Make().String(), Title: "No path"}
-	assert.Equal(t, 0, ms.applyVirtualFile(mustPlanOwnFile(t, ms, b), b.ID))
+	n, aerr := ms.applyVirtualFile(mustPlanOwnFile(t, ms, b), b.ID)
+	require.NoError(t, aerr)
+	assert.Equal(t, 0, n)
 }
 
 func TestB3_EnsureOwnFile_AlreadyMaterialized_ReturnsZero(t *testing.T) {
@@ -367,7 +369,9 @@ func TestB3_EnsureOwnFile_AlreadyMaterialized_ReturnsZero(t *testing.T) {
 		ID: ulid.Make().String(), BookID: b.ID, FilePath: b.FilePath, Format: "mp3",
 	}))
 
-	assert.Equal(t, 0, ms.applyVirtualFile(mustPlanOwnFile(t, ms, b), b.ID), "book already has a BookFile row; nothing to materialize")
+	n, aerr := ms.applyVirtualFile(mustPlanOwnFile(t, ms, b), b.ID)
+	require.NoError(t, aerr)
+	assert.Equal(t, 0, n, "book already has a BookFile row; nothing to materialize")
 }
 
 // TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook exercises the
@@ -389,7 +393,8 @@ func TestB3_AttachVirtualFile_ReattachExistingOwnedByOtherBook(t *testing.T) {
 	strayFile := &database.BookFile{ID: ulid.Make().String(), BookID: strayOwner.ID, FilePath: target.FilePath, Format: "mp3"}
 	require.NoError(t, store.CreateBookFile(strayFile))
 
-	n := ms.applyVirtualFile(mustPlanVirtualFile(t, ms, target, target.ID), target.ID)
+	n, aerr := ms.applyVirtualFile(mustPlanVirtualFile(t, ms, target, target.ID), target.ID)
+	require.NoError(t, aerr)
 	assert.Equal(t, 1, n)
 
 	files, err := store.GetBookFiles(target.ID)
@@ -414,7 +419,8 @@ func TestB3_AttachVirtualFile_SetsDurationFromBook(t *testing.T) {
 	_, err := store.CreateBook(b)
 	require.NoError(t, err)
 
-	n := ms.applyVirtualFile(mustPlanVirtualFile(t, ms, b, b.ID), b.ID)
+	n, aerr := ms.applyVirtualFile(mustPlanVirtualFile(t, ms, b, b.ID), b.ID)
+	require.NoError(t, aerr)
 	assert.Equal(t, 1, n)
 
 	files, err := store.GetBookFiles(b.ID)

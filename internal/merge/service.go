@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.63.5
+// version: 1.63.6
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-25
 
@@ -2025,14 +2025,12 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 
 	// Materialize the survivor's own single-file (virtual-segment) audio as a
 	// BookFile so the combined book owns ALL its files explicitly.
-	ownN, err := ms.attachJournaledFile(journal, &journal.SurvivorFiles, ownPlan, survivor.ID)
+	ownN, ownWarnings, err := ms.attachJournaledFile(journal, &journal.SurvivorFiles, ownPlan, survivor.ID)
 	if err != nil {
 		return nil, fmt.Errorf("combine refused: %w", err)
 	}
 	res.FilesMoved += ownN
-	if ownPlan.warning != "" {
-		res.Warnings = append(res.Warnings, ownPlan.warning)
-	}
+	res.Warnings = append(res.Warnings, ownWarnings...)
 
 	// Move every absorbed book's files onto the survivor in ONE batch, before the
 	// per-book loop below.
@@ -2104,22 +2102,23 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			FollowFileMove(ms.db, id, survivor.ID, ids)
 			res.FilesMoved += len(ids)
 		} else if a.FilePath != "" {
-			plan, err := ms.planVirtualFile(books[id], survivor.ID, arriving)
+			plan, err := ms.planVirtualFileAfterJournal(books[id], survivor.ID, arriving)
 			if err != nil {
 				return nil, fmt.Errorf("combine %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 			}
-			n, err := ms.attachJournaledFile(journal, &a.Files, plan, survivor.ID)
+			n, warnings, err := ms.attachJournaledFile(journal, &a.Files, plan, survivor.ID)
 			if err != nil {
 				return nil, fmt.Errorf("combine %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 			}
 			res.FilesMoved += n
-			if plan.warning != "" {
-				// The absorbed book is retired below with its FilePath cleared
-				// and no row under the survivor for that file (the other books
-				// holding the path keep theirs). The caller is told, as the
-				// journal is.
-				res.Warnings = append(res.Warnings, plan.warning)
-			}
+			// A warning here means the absorbed book is retired below with its
+			// FilePath cleared and no row under the survivor for that file (a
+			// path other books hold keeps their rows; a failed write leaves
+			// nothing). It goes into CombineResult.Warnings as well as the
+			// journal: the HTTP combine shows it as a toast, and the regroup
+			// apply (ApplyMultidisc, ApplyDuplicateOf) puts it in the review
+			// item's note.
+			res.Warnings = append(res.Warnings, warnings...)
 		}
 
 		// Reassign external IDs to the survivor.
@@ -2774,9 +2773,12 @@ func (ms *Service) planOwnFile(b *database.Book, arriving map[string]bool) (virt
 // as "nothing to attach": an empty plan makes attachJournaledFile report 0
 // files with no error, so the combine would soft-delete the absorbed book while
 // its file got no row under the survivor and the combine would still report
-// success. The combine stops on the error with its journal left pending, like
-// any other failed step. An empty plan that is chosen, not forced, carries a
-// warning saying why (see resolvePathHolder), and the combine reports it.
+// success. Called before the journal exists, the error refuses the combine with
+// nothing written, and that includes a row of another book that cannot be taken
+// yet because the complete holder list is not available (rowTakeUnconfirmedError:
+// memdb is still warming up, so the refusal is "retry later"). An empty plan
+// that is chosen, not forced, carries a warning saying why (see
+// resolvePathHolder), and the combine reports it.
 func (ms *Service) planVirtualFile(b *database.Book, targetBookID string, arriving map[string]bool) (virtualFilePlan, error) {
 	if arriving[b.FilePath] {
 		return virtualFilePlan{}, nil
@@ -2834,6 +2836,43 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string, arrivi
 	}, nil
 }
 
+// planVirtualFileAfterJournal is planVirtualFile for a plan made once the combine
+// has written its journal and moved the absorbed books' rows, so the combine can
+// no longer be refused. The one answer that is not final, the complete holder list
+// being unavailable (rowTakeUnconfirmedError), cannot refuse there: the pre-journal
+// check passed, so it means the list was lost while the combine ran (memdb lost its
+// book_files table at runtime), and the plan becomes an empty one with a warning,
+// as for a path held by several books. Every other error is returned.
+func (ms *Service) planVirtualFileAfterJournal(b *database.Book, targetBookID string, arriving map[string]bool) (virtualFilePlan, error) {
+	plan, err := ms.planVirtualFile(b, targetBookID, arriving)
+	if unconfirmed, ok := errors.AsType[*rowTakeUnconfirmedError](err); ok {
+		warning := fmt.Sprintf("%s (book %s, %s): not reattached", unconfirmed.reason(), b.ID, b.FilePath)
+		mlog.Warn("combine: %s path=%s", warning, logger.SanitizeLogValue(b.FilePath))
+		return virtualFilePlan{warning: warning}, nil
+	}
+	return plan, err
+}
+
+// rowTakeUnconfirmedError is resolvePathHolder's answer when the path is held by
+// another book's row (named by the single-owner fallback) and the complete holder
+// list that decides whether it may be taken cannot be read yet, because memdb is
+// not serving. It wraps the lookup's own error, so errors.Is matches
+// database.ErrOwnershipLookupIncomplete ("retry later").
+type rowTakeUnconfirmedError struct {
+	holderBookID string
+	cause        error
+}
+
+func (e *rowTakeUnconfirmedError) reason() string {
+	return fmt.Sprintf("the complete list of the rows holding the path is not available yet (memdb is not serving), so the row of book %s was not taken", e.holderBookID)
+}
+
+func (e *rowTakeUnconfirmedError) Error() string {
+	return e.reason() + "; retry in a minute: " + e.cause.Error()
+}
+
+func (e *rowTakeUnconfirmedError) Unwrap() error { return e.cause }
+
 // pathHolder is what resolvePathHolder learned about a path.
 type pathHolder struct {
 	// retired is the retired row that holds the path, if one does (nothing may be
@@ -2862,8 +2901,16 @@ type pathHolder struct {
 // The single-owner fallback is not enough to TAKE a row from another book, though:
 // it names one row per path and cannot show a second holder, a trashed copy, or a
 // keyless row. So when the pick is another book's row it is made again on the
-// complete lookup (BookFileRowsAtPathStrict), and while that cannot be answered
-// the result is a warning and no row, not a guess.
+// complete lookup (BookFileRowsAtPathStrict). While that cannot be answered the
+// answer is a rowTakeUnconfirmedError, not a guess and not a combine that goes on
+// without the row: the condition is transient (memdb warms up within a couple of
+// minutes), so a combine that commits through it would leave a lasting result,
+// a retired absorbed book whose audio is not on the survivor, that a retry a
+// minute later would not have. The combine's pre-journal checks therefore refuse
+// on it with nothing written (planVirtualFile and the absorbed-path check), and
+// only the plan made after the journal turns it into a warning
+// (planVirtualFileAfterJournal). A path held by several books, or by a book that
+// is gone, is not transient and stays a warning.
 func (ms *Service) resolvePathHolder(path, targetBookID string) (pathHolder, error) {
 	rows, err := ms.pathRowsForWrite(path)
 	if err != nil {
@@ -2881,8 +2928,7 @@ func (ms *Service) resolvePathHolder(path, targetBookID string) (pathHolder, err
 	}
 	complete, err := database.BookFileRowsAtPathStrict(ms.db, path)
 	if errors.Is(err, database.ErrOwnershipLookupIncomplete) {
-		return pathHolder{pick: pathPick{warning: fmt.Sprintf(
-			"the complete list of the rows holding the path is not available yet (memdb is not serving), so the row of book %s was not taken", pick.row.BookID)}}, nil
+		return pathHolder{}, &rowTakeUnconfirmedError{holderBookID: pick.row.BookID, cause: err}
 	}
 	if err != nil {
 		return pathHolder{}, fmt.Errorf("cannot tell who holds %s: %w", path, err)
@@ -2996,65 +3042,98 @@ func pickRowAtPath(rows []database.BookFile, targetBookID string, bookOf func(id
 }
 
 // applyVirtualFile performs a plan. It returns the number of files attached
-// (0/1): 0 when the write failed, in which case nothing was written.
-func (ms *Service) applyVirtualFile(p virtualFilePlan, targetBookID string) int {
+// (0/1). A failed write returns 0 and the error; nothing was written then.
+func (ms *Service) applyVirtualFile(p virtualFilePlan, targetBookID string) (int, error) {
 	switch {
 	case p.existing != nil:
 		oldOwnerID := p.existing.BookID
 		if err := ms.db.MoveBookFilesToBook([]string{p.existing.ID}, oldOwnerID, targetBookID); err != nil {
-			slog.Warn("combine reattach existing file", "path", p.existing.FilePath, "err", err)
-			return 0
+			return 0, fmt.Errorf("move row %s at %s from book %s: %w", p.existing.ID, p.existing.FilePath, oldOwnerID, err)
 		}
 		// Same file-move shape as the main CombineBooks loop: the row's
 		// owning book id just changed, so its sync_file ino must follow.
 		FollowFileMove(ms.db, oldOwnerID, targetBookID, []string{p.existing.ID})
-		return 1
+		return 1, nil
 	case p.create != nil:
 		if err := ms.db.CreateBookFile(p.create); err != nil {
-			slog.Warn("combine create file", "path", p.create.FilePath, "err", err)
-			return 0
+			return 0, fmt.Errorf("create row %s at %s: %w", p.create.ID, p.create.FilePath, err)
 		}
-		return 1
+		return 1, nil
 	case p.attached:
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
 // attachJournaledFile attaches a planned virtual file to targetBookID with the
 // journal ahead of the write: the record is appended to *list and the journal
 // persisted BEFORE the row is created or moved, so a crash in between leaves
 // a journal that names it (undo skips a recorded row that never came to
-// exist). A write that fails takes the record back out. An error means the
+// exist). A write that fails takes the record back out, and so the notice that
+// described the move, since the row never moved.
+//
+// The returned warnings are the ones the combine reports on its result: the
+// plan's own (an empty plan that was chosen) and, when the write failed, a
+// warning that the file has no row under targetBookID (nothing was written for
+// it). Both are on the journal as well. A failed write is not an error: the
+// combine goes on, as for a chosen empty plan, and says so. An error means the
 // journal could not be persisted and nothing was written.
-func (ms *Service) attachJournaledFile(journal *CombineJournal, list *[]CombineFileMove, p virtualFilePlan, targetBookID string) (int, error) {
-	for _, w := range []string{p.warning, p.notice} {
-		if w != "" {
-			journal.Warnings = append(journal.Warnings, w)
-		}
+func (ms *Service) attachJournaledFile(journal *CombineJournal, list *[]CombineFileMove, p virtualFilePlan, targetBookID string) (int, []string, error) {
+	var warnings []string
+	if p.warning != "" {
+		journal.Warnings = append(journal.Warnings, p.warning)
+		warnings = append(warnings, p.warning)
+	}
+	if p.notice != "" {
+		journal.Warnings = append(journal.Warnings, p.notice)
 	}
 	if p.fm.FileID == "" {
 		if p.warning != "" {
 			if err := ms.putCombineJournal(journal); err != nil {
-				return 0, fmt.Errorf("journal warning %q: %w", p.warning, err)
+				return 0, nil, fmt.Errorf("journal warning %q: %w", p.warning, err)
 			}
 		}
-		return ms.applyVirtualFile(p, targetBookID), nil
+		n, err := ms.applyVirtualFile(p, targetBookID)
+		if err != nil {
+			// Not reachable today (an empty plan writes nothing), but a plan
+			// that writes without naming a row must not fail unreported.
+			warning := ms.journalFailedAttach(journal, p, targetBookID, err)
+			return 0, append(warnings, warning), nil
+		}
+		return n, warnings, nil
 	}
 	*list = append(*list, p.fm)
 	if err := ms.putCombineJournal(journal); err != nil {
 		*list = (*list)[:len(*list)-1]
-		return 0, fmt.Errorf("journal file row %s before writing it: %w", p.fm.FileID, err)
+		return 0, nil, fmt.Errorf("journal file row %s before writing it: %w", p.fm.FileID, err)
 	}
-	n := ms.applyVirtualFile(p, targetBookID)
-	if n == 0 {
+	n, err := ms.applyVirtualFile(p, targetBookID)
+	if err != nil {
 		*list = (*list)[:len(*list)-1]
-		if err := ms.putCombineJournal(journal); err != nil {
-			mlog.Error("combine: file row %s was not written but stays in journal %s: %s",
-				p.fm.FileID, journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+		if p.notice != "" && len(journal.Warnings) > 0 && journal.Warnings[len(journal.Warnings)-1] == p.notice {
+			journal.Warnings = journal.Warnings[:len(journal.Warnings)-1]
 		}
+		warning := ms.journalFailedAttach(journal, p, targetBookID, err)
+		return 0, append(warnings, warning), nil
 	}
-	return n, nil
+	return n, warnings, nil
+}
+
+// journalFailedAttach records on the journal (and the log) that the write of a
+// planned file row failed, and returns the warning for the combine's result. The
+// journal is persisted without the record of the move that did not happen; a
+// failure to persist it is logged, since the warning itself still reaches the
+// result.
+func (ms *Service) journalFailedAttach(journal *CombineJournal, p virtualFilePlan, targetBookID string, cause error) string {
+	warning := fmt.Sprintf("the file row for %s was not written (nothing changed for it): %v; book %s has no row for it",
+		p.fm.FilePath, cause, targetBookID)
+	mlog.Warn("combine: %s journal=%s", logger.SanitizeLogValue(warning), journal.ID)
+	journal.Warnings = append(journal.Warnings, warning)
+	if err := ms.putCombineJournal(journal); err != nil {
+		mlog.Error("combine: file row %s was not written and journal %s could not record it: %s",
+			p.fm.FileID, journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+	}
+	return warning
 }
 
 // SoftDeleteBook marks a book as deleted using the MarkedForDeletion flag.
