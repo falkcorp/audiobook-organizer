@@ -28,21 +28,44 @@ read, refuses the delete. The batch path reads the rows through the
   blocks a hash for a book that gained a file before the lock.
 - Trash purge (`purgeNow`, the nightly purge, discard-progress-and-purge): the
   state-carrying purge now makes the same under-lock check, as the discard path
-  already did.
+  already did. Purge's first check (before anything is touched) and both
+  discard-progress-and-purge checks (early and under the lock) use the shared
+  helper too, so a trashed book that holds only retired rows is refused before any
+  tombstone, progress carry or erase, with or without listening state. A book is
+  counted once in the nightly purge report: skipped when refused before the carry,
+  an error when something failed after the state moved.
 - A refusal after the state moved (a non-merge writer such as the scanner added
   a file after the lock check) is reported as its own outcome:
-  `merge.StateMovedBookKeptError` / `STATE_MOVED_BOOK_KEPT` (HTTP 409), saying the
-  state moved to the sibling and the book was kept. It is no longer reported as
-  `OWNS_FILES` "nothing deleted". A refusal by the precheck is a
+  `merge.StateMovedBookKeptError` / `STATE_MOVED_BOOK_KEPT`, saying the state
+  moved to the sibling and the book was kept. It is HTTP 409 only when the cause
+  is owned files and 500 for any other failure after the carry (a tombstone write
+  during a purge, for example); the purge reports every failure after the carry
+  this way. It is no longer reported as `OWNS_FILES` "nothing deleted". A refusal
+  by the precheck is a
   `merge.PrecheckRefusedError`; callers keep matching
   `merge.ErrCarryPrecheckRefused`, and `merge.PrecheckCause` returns the cause.
 
-`POST /api/v1/audiobooks/batch-operations` now also requires `library.delete`
-when any operation is a hard delete (`action: "delete"`, `hard_delete: true`),
-as `DELETE /api/v1/audiobooks/:id` does. The check is made by the handler on the
-request it has bound and is about to run (not by a second parse of the body), so
-a body with trailing bytes or a duplicate `hard_delete` key cannot slip past it.
-The route previously needed only
-`library.edit_metadata`, so a role with edit but not delete could permanently
-delete books through the batch route. Update, soft delete and restore are
-unchanged.
+Both bulk routes now ask for the permissions the single-book routes ask for, on
+top of the `library.edit_metadata` they are mounted on. What a request does to
+books' place in the library is read from the request the handler has bound and is
+about to run (not by a second parse of the body), so a body with trailing bytes
+or a duplicate key cannot slip past:
+
+- Hard delete (`POST /api/v1/audiobooks/batch-operations`, `action: "delete"`,
+  `hard_delete: true`) needs `library.delete`, as `DELETE /api/v1/audiobooks/:id`
+  does.
+- Soft delete needs `library.delete` too: the `delete` action without
+  `hard_delete`, and an update setting `marked_for_deletion` to true or
+  `library_state` to `deleted`, on `/audiobooks/batch-operations` and on
+  `POST /api/v1/audiobooks/batch`.
+- Restore needs `library.organize`, as the single-book restore does: the
+  `restore` action, and an update setting `marked_for_deletion` to false, on both
+  routes.
+- A list that trashes and restores needs both. Plain metadata edits still need
+  only `library.edit_metadata`.
+
+The routes previously needed only `library.edit_metadata`, so a role with edit but
+not delete could trash, restore or permanently delete books through them. The
+library page now disables "Delete Selected" without `library.delete` and
+"Restore Selected" without `library.organize` (with the reason as a tooltip), and
+shows the server's permission message when a bulk action is refused.

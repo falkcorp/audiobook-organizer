@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.107.0
+// version: 1.108.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-21
+// last-edited: 2026-10-25
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -75,6 +75,7 @@ import type {
 } from './libraryTypes';
 import { evictOldestOpLogKey, MAX_OPERATION_LOG_KEYS } from './libraryOperationLogs';
 import { describeDeleteBookError, isHasProgressRefusal } from '../utils/deleteBookError';
+import { describePermissionDenied } from '../utils/permissionError';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -1470,7 +1471,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to batch delete audiobooks:', error);
-      toast('Failed to delete selected audiobooks.', 'error');
+      toast(
+        describePermissionDenied(error, 'move books to the trash') ??
+          'Failed to delete selected audiobooks.',
+        'error'
+      );
     } finally {
       setBatchDeleteInProgress(false);
       setBatchDeleteDialogOpen(false);
@@ -1491,7 +1496,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to restore selected audiobooks:', error);
-      toast('Failed to restore selected audiobooks.', 'error');
+      toast(
+        describePermissionDenied(error, 'restore books from the trash') ??
+          'Failed to restore selected audiobooks.',
+        'error'
+      );
     } finally {
       setBatchRestoreInProgress(false);
     }
@@ -1700,7 +1709,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       setBatchEditOpen(false);
     } catch (error) {
       console.error('Failed to batch update audiobooks:', error);
-      toast('Failed to update audiobooks. Please try again.', 'error');
+      toast(
+        describePermissionDenied(error, 'make this change to the selected audiobooks') ??
+          'Failed to update audiobooks. Please try again.',
+        'error'
+      );
     }
   };
 

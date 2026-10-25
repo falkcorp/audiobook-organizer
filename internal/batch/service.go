@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-25
 
@@ -19,9 +19,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
-// batchBookStore is the three-method slice of the book store that batch
-// operations need. Was database.BookStore (51 methods) — the other 48 were
-// carried by every caller purely to satisfy the parameter.
+// batchBookStore is the slice of the book store that batch operations need:
+// the book read, modify and delete methods and the narrow capabilities
+// embedded below, each with the reason it is here. Was database.BookStore
+// (51 methods), most of which every caller carried purely to satisfy the
+// parameter.
 type batchBookStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	// ModifyBook is the write path for every batch edit of a book: it sets

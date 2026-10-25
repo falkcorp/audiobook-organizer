@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-25
 
@@ -52,8 +52,14 @@ type purgeOutcome struct {
 	errs         []string
 	// stateMovedTo names the copy the book's users' listening state was
 	// carried to when the book was nevertheless kept (a delete that failed
-	// after a completed carry). "" when nothing was moved.
-	stateMovedTo string
+	// after a completed carry), and stateMovedErr is that failure. "" and nil
+	// when nothing was moved.
+	stateMovedTo  string
+	stateMovedErr error
+	// detail is the reason for a refusal that is counted by its kind alone and
+	// so adds no Errors line (purgeOwnsFiles under the merge lock); "Purge now"
+	// shows it.
+	detail string
 }
 
 // add folds one book's outcome into r. The caller serializes calls.
@@ -400,6 +406,15 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 	}
 	out := svc.purgeOne(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, probe)
 	detail := strings.Join(out.errs, "; ")
+	if out.stateMovedTo != "" {
+		// A delete that failed AFTER the carry: not "nothing was deleted", the
+		// state is on another copy (merge.ErrStateMovedBookKept). The cause
+		// already says where the state went; it wraps database.ErrBookOwnsFiles
+		// when the failure was a file row, so the handler answers 409 for that
+		// and 500 for any other cause.
+		return nil, &merge.StateMovedBookKeptError{BookID: book.ID, MovedTo: out.stateMovedTo,
+			Err: fmt.Errorf("purge %s: %w", book.ID, out.stateMovedErr)}
+	}
 	switch out.kind {
 	case purgePurged, purgeCarried:
 		svc.InvalidateListCache()
@@ -414,15 +429,11 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 		}
 		return res, nil
 	case purgeOwnsFiles:
+		if out.detail != "" {
+			detail = out.detail
+		}
 		if detail == "" {
 			detail = "the purge never deletes a book that owns file rows"
-		}
-		if out.stateMovedTo != "" {
-			// A file row landed after the check under the merge lock and the
-			// delete refused it AFTER the carry: not "nothing was deleted",
-			// the state is on another copy (merge.ErrStateMovedBookKept).
-			return nil, &merge.StateMovedBookKeptError{BookID: book.ID, MovedTo: out.stateMovedTo,
-				Err: fmt.Errorf("purge %s: %s: %w", book.ID, detail, database.ErrBookOwnsFiles)}
 		}
 		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, database.ErrBookOwnsFiles, detail)
 	case purgeKeptHasProgress:
@@ -532,12 +543,12 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if rec == nil {
 		return nil, ErrAuditUnavailable
 	}
-	owned, err := svc.store.GetBookFiles(id)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read the book_file rows of %s: %w", id, err)
-	}
-	if len(owned) > 0 {
-		return nil, fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
+	// The ownership check DeleteBook makes, retired rows included (GetBookFiles
+	// skips them, so a book holding only retired rows would pass a check made
+	// with it and have every user's progress discarded before the delete
+	// refused).
+	if oerr := database.CheckBookOwnsNoFiles(svc.store, id, "discard progress and purge"); oerr != nil {
+		return nil, fmt.Errorf("%w; the book stays in the trash", oerr)
 	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
 	if !ok {
@@ -565,12 +576,8 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// cleared yet: a file row that landed since the check above would
 		// make the delete refuse (DeleteBook: database.ErrBookOwnsFiles)
 		// only AFTER every user's state was discarded.
-		owned, ferr := svc.store.GetBookFiles(id)
-		if ferr != nil {
-			return fmt.Errorf("cannot re-read the book_file rows of %s: %w", id, ferr)
-		}
-		if len(owned) > 0 {
-			return fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
+		if oerr := database.CheckBookOwnsNoFiles(svc.store, id, "discard progress and purge"); oerr != nil {
+			return fmt.Errorf("%w; the book stays in the trash", oerr)
 		}
 		book = cur
 		return nil

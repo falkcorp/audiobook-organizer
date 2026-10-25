@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_merge_lock_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e44858b2-5180-4f51-9842-e61721722f2f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -98,7 +98,7 @@ func TestPurge_StateCheckAndDeleteHoldTheMergeLock(t *testing.T) {
 }
 
 // restoredMeanwhileStore restores the doomed book from the trash during the
-// purge's file-row pre-check (step 0, before the merge lock), as a restore or
+// purge's file-row pre-check (step 0, before the merge lock; database.CheckBookOwnsNoFiles reads GetBookFilesIncludingRetired), as a restore or
 // a merge revert running at that moment would.
 //
 // With onSiblingLookup set it restores the book later instead: when the carry
@@ -121,11 +121,11 @@ func (s *restoredMeanwhileStore) restore() {
 	})
 }
 
-func (s *restoredMeanwhileStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+func (s *restoredMeanwhileStore) GetBookFilesIncludingRetired(bookID string) ([]database.BookFile, error) {
 	if bookID == s.doomed && !s.onSiblingLookup {
 		s.restore()
 	}
-	return s.PebbleStore.GetBookFiles(bookID)
+	return s.PebbleStore.GetBookFilesIncludingRetired(bookID)
 }
 
 func (s *restoredMeanwhileStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
