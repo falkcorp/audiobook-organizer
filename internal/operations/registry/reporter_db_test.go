@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-25
 
 package registry_test
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/gob"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sync/atomic"
@@ -391,5 +392,65 @@ func TestReporter_TouchProgressFnCalledOnUpdate(t *testing.T) {
 	got := touchCount.Load()
 	if got != 3 {
 		t.Errorf("expected touchFn called 3 times, got %d", got)
+	}
+}
+
+// opaqueErr mimics *transcribe.TransportError: an error whose only field is an
+// unexported wrapped error, which encoding/json renders as {}.
+type opaqueErr struct {
+	endpoints []string
+	err       error
+}
+
+func (e *opaqueErr) Error() string { return fmt.Sprintf("tried %v: %v", e.endpoints, e.err) }
+
+// TestReporterDB_ErrorAttrsLogTheirText pins the op-log sink's rendering of
+// errors. The op log is the only place an operator sees why a batch deferred,
+// and it used to read `"Err":{}`: the sink json-marshalled the error value.
+// This goes through the real Logger() -> fanout handler -> Log path, not just
+// the encoder.
+func TestReporterDB_ErrorAttrsLogTheirText(t *testing.T) {
+	ctx := t.Context()
+	rep, store, opID := newTestReporter(t, ctx)
+
+	wrapped := fmt.Errorf("Post \"http://127.0.0.1:1/x\": %w", context.DeadlineExceeded)
+	rep.Logger().Warn("batch failed",
+		"err", &opaqueErr{endpoints: []string{"http://worker-a"}, err: wrapped},
+		"cause", wrapped,
+		slog.Group("nested", slog.Any("inner", wrapped)),
+		"plain", "text", "n", 7)
+	for range 99 {
+		_ = rep.Log(slog.LevelDebug, "filler")
+	}
+
+	var attrs string
+	deadline := time.Now().Add(2 * time.Second)
+	for attrs == "" && time.Now().Before(deadline) {
+		for _, l := range store.logsFor(opID) {
+			if l.Message == "batch failed" {
+				attrs = l.Attrs
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if attrs == "" {
+		t.Fatal("'batch failed' op log entry not found")
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(attrs), &m); err != nil {
+		t.Fatalf("attrs JSON invalid: %v (%s)", err, attrs)
+	}
+	if got, _ := m["err"].(string); got != `tried [http://worker-a]: Post "http://127.0.0.1:1/x": context deadline exceeded` {
+		t.Errorf("err attr = %#v, want the error text", m["err"])
+	}
+	if got, _ := m["cause"].(string); got == "" {
+		t.Errorf("cause attr = %#v, want the error text", m["cause"])
+	}
+	nested, _ := m["nested"].(map[string]any)
+	if got, _ := nested["inner"].(string); got == "" {
+		t.Errorf("nested.inner = %#v, want the error text", m["nested"])
+	}
+	if m["plain"] != "text" || m["n"] != float64(7) {
+		t.Errorf("non-error attrs changed: %s", attrs)
 	}
 }

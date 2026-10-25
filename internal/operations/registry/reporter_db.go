@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-16
+// last-edited: 2026-10-25
 
 package registry
 
@@ -874,7 +874,7 @@ func (r *dbReporter) recordActivity(entry logEntry) {
 func attrsToMap(attrs []slog.Attr) map[string]any {
 	m := make(map[string]any, len(attrs))
 	for _, a := range attrs {
-		m[a.Key] = a.Value.Any()
+		m[a.Key] = attrValueForJSON(a.Value)
 	}
 	return m
 }
@@ -885,13 +885,46 @@ func attrsToJSON(attrs []slog.Attr) string {
 	}
 	m := make(map[string]any, len(attrs))
 	for _, a := range attrs {
-		m[a.Key] = a.Value.Any()
+		m[a.Key] = attrValueForJSON(a.Value)
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return "{}"
 	}
 	return string(b)
+}
+
+// attrValueForJSON is the JSON form of one slog value. It exists because
+// encoding/json cannot see an error's text: it marshals the error's concrete
+// struct, and one whose fields are unexported (fmt.Errorf's wrapError, a
+// *TransportError wrapping one) comes out as {}. That is how a stuck-worker
+// outage reached the op log as `"Err":{}` with no way to tell what had failed.
+// slog's own JSON handler renders an error with Error(); this sink did not.
+//
+// LogValuers are resolved first (as slog's handlers do), groups become nested
+// objects, and an error that is not itself a json.Marshaler is its Error()
+// text. Every other value keeps its previous form (Value.Any()).
+func attrValueForJSON(v slog.Value) any {
+	v = v.Resolve()
+	switch v.Kind() {
+	case slog.KindGroup:
+		g := v.Group()
+		m := make(map[string]any, len(g))
+		for _, a := range g {
+			m[a.Key] = attrValueForJSON(a.Value)
+		}
+		return m
+	case slog.KindAny:
+		x := v.Any()
+		if _, marshals := x.(json.Marshaler); !marshals {
+			if err, ok := x.(error); ok {
+				return err.Error()
+			}
+		}
+		return x
+	default:
+		return v.Any()
+	}
 }
 
 // processedItems converts one run attempt's UpdateProgress(current, total)
