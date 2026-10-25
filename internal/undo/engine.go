@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -574,7 +574,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		ChangeTypeITunesPathClear:
 		// A journaled step whose write never happened, or one already put
 		// back, is already restored.
-		return verdictOf(checkFsRegroupRow(store, c, stamps))
+		return verdictOf(checkFsRegroupRow(store, c, stamps, plan))
 	}
 	return rowVerdict{}
 }
@@ -649,7 +649,7 @@ type externalIDOwnerReader interface {
 // the books it reads must exist, and the field it restores must still hold the
 // value the operation wrote (ReasonChangedSince otherwise), as the revert's
 // compare-and-set requires.
-func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamps SoftDeleteStamps) error {
+func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamps SoftDeleteStamps, plan *RevertPlan) error {
 	book, refusal := CheckRestoreBook(store, c.BookID)
 	if refusal != nil {
 		return refusal
@@ -702,7 +702,12 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 			return CheckRepointCurrent(f, c)
 		})
 	case ChangeTypeBookMergedInto:
-		return CheckMergedIntoCurrent(book, c)
+		if err := CheckMergedIntoCurrent(book, c); err != nil {
+			return err
+		}
+		// The revert clears the link on c.BookID: not while that book is the
+		// shell of a retire this operation did not do (plan.CheckNotRetiredShellReceiver).
+		return plan.CheckNotRetiredShellReceiver(store, c.BookID, "clear the merged-into link of")
 	case ChangeTypeBookSoftDelete:
 		if err := CheckSoftDeleteCurrent(book, c, stamps); err != nil {
 			return err
@@ -740,8 +745,13 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 			if err != nil {
 				return refuse(ReasonBookLookupFailed, "look up external id %s/%s: %v", source, id, err)
 			}
-			return CheckExternalIDOwnerCurrent(owner, c)
+			if err := CheckExternalIDOwnerCurrent(owner, c); err != nil {
+				return err
+			}
 		}
+		// The revert hands the id back to c.OldValue: not while that book is
+		// the shell of a retire this operation did not do.
+		return plan.CheckNotRetiredShellReceiver(store, c.OldValue, "give an external id back to")
 	}
 	return nil
 }

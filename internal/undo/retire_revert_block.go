@@ -1,11 +1,12 @@
 // file: internal/undo/retire_revert_block.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b1d8e47-2c93-4fa6-9d0e-a3c7f6128b54
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package undo
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -86,4 +87,49 @@ func RetireRevertBlock(operationID string, changes []*database.OperationChange) 
 		return nil
 	}
 	return &RetireRevertBlockedError{OperationID: operationID, Types: types}
+}
+
+// retireRowShell returns the shell a non-voided book_file_retire row took its
+// file from: the book_id of its OldValue, a JSON {"book_id","version_id"} (what
+// maintenance.journaledRetireWriter.RetireRows writes, and what PR 5's
+// RetirePlace decodes). A row that is not one, or whose OldValue does not parse
+// or names no book, answers false: it exempts nothing.
+func retireRowShell(c *database.OperationChange) (string, bool) {
+	if c == nil || c.Voided || c.ChangeType != "book_file_retire" {
+		return "", false
+	}
+	var old struct {
+		BookID string `json:"book_id"`
+	}
+	if err := json.Unmarshal([]byte(c.OldValue), &old); err != nil || old.BookID == "" {
+		return "", false
+	}
+	return old.BookID, true
+}
+
+// CheckNotRetiredShellReceiver refuses (a *ReferentError, ReasonBookIsRetiredShell
+// or ReasonBookLookupFailed) handing an external id or a merged-into link back
+// to book id while id is the shell of a retired version that still holds rows.
+//
+// Why: an external_id_reassign or book_merged_into row moved the id or the link
+// OFF the shell, onto the holder, because the shell's audio went retired under
+// the holder. Putting them back on a shell whose rows stay retired leaves a
+// shell that looks live (it owns the id, the link is gone) and owns no file,
+// which is the state the retire exists to prevent: the next iTunes import
+// resolves the PID to the trashed shell, and a purge of it deletes the only
+// record of where the audio went. The operation that did the retire may undo
+// the ids and links only together with its book_file_retire rows (the shell is
+// then no shell), so a shell the plan's operation retired is exempt. Any OTHER
+// operation that moved ids or links off a shell, such as the tail a fresh plan
+// finishes for a cut-off retire (it journals no retire row), is refused.
+//
+// A nil plan has no exemption. The exemption is read from every row of the
+// operation (RevertPlan.NoteHandOffs), so the revert and the preflight agree.
+// Callers run it under the merge lock a retire holds, and only for a row that
+// would write, so a row already restored is still counted restored.
+func (p *RevertPlan) CheckNotRetiredShellReceiver(store any, id, action string) error {
+	if p != nil && p.retires[id] {
+		return nil
+	}
+	return CheckNotRetiredShell(store, id, action)
 }

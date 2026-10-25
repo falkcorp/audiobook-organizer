@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.92.0
+// version: 1.93.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -964,9 +964,9 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		// refused one wrote nothing).
 		return nil
 	case undo.ChangeTypeExternalIDReassign:
-		return rs.revertExternalIDReassign(c)
+		return rs.revertExternalIDReassign(c, plan)
 	case undo.ChangeTypeBookMergedInto:
-		return rs.revertBookMergedInto(c)
+		return rs.revertBookMergedInto(c, plan)
 	case undo.ChangeTypeUserStateFollow:
 		return rs.revertUserStateFollow(c)
 	case undo.ChangeTypeTitleRelinkCredits:
@@ -2051,12 +2051,20 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 }
 
 // revertBookMergedInto puts a retired book's merged_into_book_id back
-// (OldValue "" is unset) while it still names the book the operation set.
-func (rs *RevertService) revertBookMergedInto(c *database.OperationChange) error {
+// (OldValue "" is unset) while it still names the book the operation set, and
+// while the book is not the shell of a retire this operation did not do
+// (RevertPlan.CheckNotRetiredShellReceiver; a nil plan has no exemption).
+func (rs *RevertService) revertBookMergedInto(c *database.OperationChange, plan *undo.RevertPlan) error {
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckMergedIntoCurrent(book, c); err != nil {
+			return err
+		}
+		// Under the merge lock every retire holds, and the book's write stripe
+		// (the retired-row reads are lock-free); before the write, and after
+		// the currency check so a link already put back still counts restored.
+		if err := plan.CheckNotRetiredShellReceiver(rs.db, c.BookID, "clear the merged-into link of"); err != nil {
 			return err
 		}
 		if c.OldValue == "" {
@@ -2408,8 +2416,11 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 
 // revertExternalIDReassign moves one external id back from the book it was
 // moved onto (NewValue) to the book it came from (OldValue), while the id
-// still names NewValue.
-func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) error {
+// still names NewValue, and while that book is not the shell of a retire this
+// operation did not do (RevertPlan.CheckNotRetiredShellReceiver; a nil plan has
+// no exemption): handing the id back to a shell whose rows stay retired under
+// another book would leave a live-looking book that owns no file.
+func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange, plan *undo.RevertPlan) error {
 	source, extID, ok := undo.ExternalIDFromField(c.FieldName)
 	if !ok {
 		return fmt.Errorf("no external id in field %q", c.FieldName)
@@ -2424,6 +2435,9 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) e
 		return fmt.Errorf("look up external id %s/%s: %w", source, extID, err)
 	}
 	if err := undo.CheckExternalIDOwnerCurrent(owner, c); err != nil {
+		return err
+	}
+	if err := plan.CheckNotRetiredShellReceiver(rs.db, c.OldValue, "give an external id back to"); err != nil {
 		return err
 	}
 	if err := rs.db.ReassignExternalID(source, extID, c.OldValue); err != nil {
