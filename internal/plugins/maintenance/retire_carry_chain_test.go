@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_chain_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: f3db16f2-7f5a-4c3e-a348-dea96c5942d4
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -285,7 +285,7 @@ func TestRetireCarry_OlderRetireFirstInASurvivorChain(t *testing.T) {
 			c.carry("opD", "S2", "S3")
 			require.Equal(t, tc.after, c.members())
 
-			rep, err := undo.PreflightUndoConflicts(c.f.s, "opR")
+			rep, err := preflightUndoConflicts(c.f.s, "opR")
 			require.NoError(t, err)
 			require.Empty(t, rep.CheckFailed, "the revert restores this row exactly, so the preflight must not refuse it: %+v", rep)
 			require.Zero(t, rep.NotRestorable, "%+v", rep)
@@ -295,7 +295,7 @@ func TestRetireCarry_OlderRetireFirstInASurvivorChain(t *testing.T) {
 			require.Zero(t, rr.ChangedSince, "%+v", rr)
 			require.Zero(t, rr.RestoredByIndex, "the books beside X order it: %+v", rr)
 
-			rep, err = undo.PreflightUndoConflicts(c.f.s, "opD")
+			rep, err = preflightUndoConflicts(c.f.s, "opD")
 			require.NoError(t, err)
 			require.Empty(t, rep.CheckFailed, "%+v", rep)
 			rr = c.revert("opD")

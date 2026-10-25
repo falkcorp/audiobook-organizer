@@ -1,9 +1,9 @@
 // file: internal/undo/engine.go
-// version: 1.51.0
+// version: 1.51.1
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-25
 //
-// Undo preflight. PreflightUndoConflicts predicts what POST
+// Undo preflight. PreflightUndoConflictsFromChanges predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
 // row of an operation, so the UI can show it before the user confirms. The
 // revert lives in internal/audiobooks/revert.go; the classifier both share is
@@ -17,7 +17,6 @@ package undo
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 
@@ -109,27 +108,18 @@ func (r *UndoConflictReport) addReferentConflict(c *database.OperationChange, er
 	}
 }
 
-// PreflightUndoConflicts scans the operation's changes and reports
-// which ones can be safely undone vs which have conflicts. It predicts what
-// POST /operations/:id/revert (audiobooks.RevertService) will do, so it
-// classifies rows with NotRestorableLabel, the classifier that endpoint uses,
-// and walks them in the revert's order (PlanRevert): a retired book's rows
-// that the revert will refuse because a row that moved or repointed its file
-// is refused are reported refused (ReasonDependentNotReverted).
-func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoConflictReport, error) {
-	changes, err := store.GetOperationChanges(operationID)
-	if err != nil {
-		return nil, fmt.Errorf("load changes: %w", err)
-	}
-	return PreflightUndoConflictsFromChanges(store, changes)
-}
-
-// PreflightUndoConflictsFromChanges is PreflightUndoConflicts over an
-// operation's journal rows the caller has already read
-// (store.GetOperationChanges), so a caller that checked every row first (the
-// GET /operations/:id/undo/preflight handler's access check) does not scan
-// and decode the journal a second time. changes must be the operation's whole
-// journal: the report predicts the revert, which walks every row.
+// PreflightUndoConflictsFromChanges scans an operation's journal rows
+// (store.GetOperationChanges, read by the caller: the GET
+// /operations/:id/undo/preflight handler checks every row for access first and
+// so does not decode the journal a second time) and reports which ones can be
+// safely undone vs which have conflicts. It predicts what POST
+// /operations/:id/revert (audiobooks.RevertService) will do, so it classifies
+// rows with NotRestorableLabel, the classifier that endpoint uses, and walks
+// them in the revert's order (PlanRevert): a retired book's rows that the
+// revert will refuse because a row that moved or repointed its file is refused
+// are reported refused (ReasonDependentNotReverted). changes must be the
+// operation's whole journal: the report predicts the revert, which walks every
+// row.
 func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*database.OperationChange) (*UndoConflictReport, error) {
 	report := &UndoConflictReport{TotalChanges: len(changes)}
 

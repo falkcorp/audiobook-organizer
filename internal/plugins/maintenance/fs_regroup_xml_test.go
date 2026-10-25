@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.5.2
+// version: 2.5.3
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-09-25
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -787,7 +787,7 @@ func TestFsRegroupRevert_RefusesFieldsChangedSince(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := undo.PreflightUndoConflicts(s, "op-drift")
+	report, err := preflightUndoConflicts(s, "op-drift")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -995,7 +995,7 @@ func TestFsRegroupRevert_RefusesTitleEditedSince(t *testing.T) {
 	if _, err := s.UpdateBook(sb.ID, sb); err != nil {
 		t.Fatal(err)
 	}
-	report, err := undo.PreflightUndoConflicts(s, "op-title")
+	report, err := preflightUndoConflicts(s, "op-title")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -1258,7 +1258,7 @@ func TestFsRegroupRevert_TitleRevertStates(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			report, err := undo.PreflightUndoConflicts(s, "op-states")
+			report, err := preflightUndoConflicts(s, "op-states")
 			if err != nil {
 				t.Fatalf("preflight: %v", err)
 			}

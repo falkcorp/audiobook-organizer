@@ -1,7 +1,7 @@
 // file: internal/undo/author_delete_preflight_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7c2e94-5d31-4f8a-9e26-c3a1d8f47b05
-// last-edited: 2026-10-14
+// last-edited: 2026-10-25
 
 package undo
 
@@ -52,12 +52,12 @@ func TestPreflightAuthorDelete_ReadsTheNameHolderAsTheRestoreDoes(t *testing.T) 
 		rows:     []*database.OperationChange{row},
 		survivor: &database.Author{ID: 77, Name: "Synthetic Survivor"},
 	}
-	rep, err := PreflightUndoConflicts(store, "op-legacy-name")
+	rep, err := preflightUndoConflicts(store, "op-legacy-name")
 	require.NoError(t, err)
 	require.Equal(t, 1, rep.Safe, "no live author holds the entry, so the restore writes it: safe")
 
 	store.rawHolder = 77
-	rep, err = PreflightUndoConflicts(store, "op-legacy-name")
+	rep, err = preflightUndoConflicts(store, "op-legacy-name")
 	require.NoError(t, err)
 	require.Zero(t, rep.Safe, "a live third author holding the entry is still refused")
 }

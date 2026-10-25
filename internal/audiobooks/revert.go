@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.90.0
+// version: 1.90.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -479,7 +479,7 @@ func (e *NotRestorableError) Error() string {
 //     reverted".
 //
 // Rows are classified by undo.NotRestorableLabel, the same classifier
-// undo.PreflightUndoConflicts uses for the confirmation the UI shows first.
+// undo.PreflightUndoConflictsFromChanges uses for the confirmation the UI shows first.
 func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, error) {
 	// One revert of an operation at a time: the owed-settle record is read,
 	// rewritten and cleared across the whole run.
@@ -589,7 +589,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	}
 
 	// The order and the retired-book gate are undo.PlanRevert's, shared with
-	// the preflight (undo.PreflightUndoConflicts) so it predicts the same
+	// the preflight (undo.PreflightUndoConflictsFromChanges) so it predicts the same
 	// refusals: newest first, except that every row of a retired book waits
 	// for, and is refused without, the rows that moved or repointed its file
 	// elsewhere.

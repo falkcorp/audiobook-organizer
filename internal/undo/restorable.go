@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.39.0
+// version: 1.39.1
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-21
+// last-edited: 2026-10-25
 
 package undo
 
@@ -22,7 +22,7 @@ import (
 //
 //   - audiobooks.RevertService.RevertOperation, which does the reversal and
 //     marks only restored rows reverted;
-//   - PreflightUndoConflicts, whose report the UI turns into the "Undo N
+//   - PreflightUndoConflictsFromChanges, whose report the UI turns into the "Undo N
 //     change(s)?" confirmation before it calls that endpoint.
 //
 // When they disagreed, the preflight counted 1,742 author_delete rows as safe

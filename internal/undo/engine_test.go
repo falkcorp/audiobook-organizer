@@ -1,7 +1,7 @@
 // file: internal/undo/engine_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3f8b0e2d-4c5e-4f9g-b2d6-8e0f3g5c9d4b
-// last-edited: 2026-09-26
+// last-edited: 2026-10-25
 
 package undo
 
@@ -49,7 +49,7 @@ func TestPreflightUndoConflicts_ReportsContentChanged(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	writeTestFile(t, newPath, "modified-content")
 
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestPreflightUndoConflicts_ReportsSafeChanges(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestPreflightUndoConflicts_RecordOnlyRowsAreNotSafe(t *testing.T) {
 		}
 	}
 
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}

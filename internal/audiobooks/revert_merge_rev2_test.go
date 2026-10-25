@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_rev2_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5d0c7a52-8e7b-4f1e-9c36-2a4b6f1d8e90
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -438,7 +438,7 @@ func TestRevert_SiblingMove_SurvivorAndLoserPurged_ProgressStaysOnHolder(t *test
 	progressBefore := progressOf(t, f.S, u.ID, ls)
 	require.Contains(t, progressBefore, "/60")
 
-	pf, err := undo.PreflightUndoConflicts(f.S, res.SiblingOperationID)
+	pf, err := preflightUndoConflicts(f.S, res.SiblingOperationID)
 	require.NoError(t, err)
 	require.Equal(t, 0, pf.Safe, "%+v", pf)
 	require.Len(t, pf.ContentChanged, 1, "the kept progress is reported before the revert: %+v", pf)

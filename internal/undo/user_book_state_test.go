@@ -1,7 +1,7 @@
 // file: internal/undo/user_book_state_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 35f35ebb-9e54-4962-96ea-2558ca9f3a67
-// last-edited: 2026-10-05
+// last-edited: 2026-10-25
 
 package undo
 
@@ -96,7 +96,7 @@ func TestPreflightUndoConflicts_UserBookStateRows(t *testing.T) {
 	// b2: a device listened after the import.
 	require.NoError(t, store.SetUserPositionAt("u1", "b2", "abs", 10, ts.Add(time.Hour)))
 
-	report, err := PreflightUndoConflicts(store, "op-1")
+	report, err := preflightUndoConflicts(store, "op-1")
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Safe, "%+v", report)
 	require.Len(t, report.CheckFailed, 1, "%+v", report)

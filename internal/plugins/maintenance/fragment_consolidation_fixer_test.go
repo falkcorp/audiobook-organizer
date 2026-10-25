@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.31.4
+// version: 1.31.5
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -453,7 +453,7 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 	for i := range changes {
 		require.True(t, undo.IsRestorable(changes[i]), "%s %s", changes[i].ChangeType, changes[i].FieldName)
 	}
-	report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	report, err := preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
 	require.Empty(t, report.BookMissing)
@@ -1437,7 +1437,7 @@ func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) 
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", b.FilePath, ""))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(time.Now())))
 
-	report, err := undo.PreflightUndoConflicts(f.s, "op-cut")
+	report, err := preflightUndoConflicts(f.s, "op-cut")
 	require.NoError(t, err)
 	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
 	require.Equal(t, 4, report.AlreadyRestored, "the preflight counts them (L-b)")
@@ -1531,7 +1531,7 @@ func TestFragmentFixer_ResumedRetireReusesTheJournaledStamp(t *testing.T) {
 	require.NotNil(t, b.MarkedForDeletionAt)
 	require.True(t, b.MarkedForDeletionAt.Equal(stamp), "the journaled stamp is written")
 
-	report, err := undo.PreflightUndoConflicts(f.s, "op-resume")
+	report, err := preflightUndoConflicts(f.s, "op-resume")
 	require.NoError(t, err)
 	require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
 }
@@ -1559,7 +1559,7 @@ func TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			report, err := undo.PreflightUndoConflicts(f.s, "op-two")
+			report, err := preflightUndoConflicts(f.s, "op-two")
 			require.NoError(t, err)
 			require.Empty(t, report.CheckFailed, "%+v", report.CheckFailed)
 			rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-two")
@@ -1586,7 +1586,7 @@ func TestFragmentFixer_PreflightPredictsDependentRefusals(t *testing.T) {
 	row.FilePath = f.path("lib/Eldest/elsewhere.mp3")
 	require.NoError(t, f.s.UpdateBookFile(row.ID, row))
 
-	report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	report, err := preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	dependent := map[string]bool{}
 	for _, it := range report.CheckFailed {
@@ -1689,7 +1689,7 @@ func TestFragmentFixer_CutOffRetireRevertLeavesTheGroupAlone(t *testing.T) {
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", fb.FilePath, ""))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(time.Now())))
 
-	report, err := undo.PreflightUndoConflicts(f.s, "op-cut-vg")
+	report, err := preflightUndoConflicts(f.s, "op-cut-vg")
 	require.NoError(t, err)
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut-vg")
 	require.NoError(t, err)
@@ -1870,7 +1870,7 @@ func TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone(t *testing.T)
 	}
 	require.NoError(t, f.s.MarkOperationChangesReverted("op-cut-retry", done))
 
-	report, err := undo.PreflightUndoConflicts(f.s, "op-cut-retry")
+	report, err := preflightUndoConflicts(f.s, "op-cut-retry")
 	require.NoError(t, err)
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-cut-retry")
 	require.NoError(t, err)

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_regressions_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2d9b7f41-6e05-4c38-a1f2-8b3c5e9d0a74
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -545,7 +545,7 @@ func TestRevert_CombineStoppedPartWay_EveryCrashPoint(t *testing.T) {
 		// still be there after the revert, on the book whose audio it is.
 		mid := snapCrash(t, store, f)
 
-		pf, err := undo.PreflightUndoConflicts(store, opID)
+		pf, err := preflightUndoConflicts(store, opID)
 		require.NoError(t, err)
 		require.Equal(t, 1, pf.Safe, "%+v", pf)
 
@@ -623,7 +623,7 @@ func TestRevert_SiblingMove_SurvivorPurgedSince(t *testing.T) {
 	progressBefore := progress()
 	require.Contains(t, progressBefore[ls], "/30", "the sibling's own progress went with it")
 
-	pf, err := undo.PreflightUndoConflicts(f.S, res.SiblingOperationID)
+	pf, err := preflightUndoConflicts(f.S, res.SiblingOperationID)
 	require.NoError(t, err)
 	require.Equal(t, 1, pf.Safe, "the preflight does not refuse over the purged survivor: %+v", pf)
 	require.Empty(t, pf.BookMissing)

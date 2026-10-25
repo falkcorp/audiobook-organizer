@@ -1,7 +1,7 @@
 // file: internal/undo/restorable_preflight_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e41b8d2a-6c07-4f95-a3e8-1d9c5b7f2a60
-// last-edited: 2026-09-13
+// last-edited: 2026-10-25
 
 package undo
 
@@ -55,7 +55,7 @@ func TestPreflightUndoConflicts_SeriesIDRows(t *testing.T) {
 		}
 	}
 
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestPreflightUndoConflicts_SeriesLookupErrorFailsClosed(t *testing.T) {
 		}
 	}
 
-	report, err := PreflightUndoConflicts(seriesErrStore{store}, "op1")
+	report, err := preflightUndoConflicts(seriesErrStore{store}, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestPreflightUndoConflicts_BookRows(t *testing.T) {
 		}
 	}
 
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestPreflightUndoConflicts_BookRows(t *testing.T) {
 		}
 	}
 
-	report, err = PreflightUndoConflicts(bookErrStore{store}, "op1")
+	report, err = preflightUndoConflicts(bookErrStore{store}, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestPreflightUndoConflicts_FsRegroupRows(t *testing.T) {
 			t.Fatalf("create change %s: %v", r.ID, err)
 		}
 	}
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}

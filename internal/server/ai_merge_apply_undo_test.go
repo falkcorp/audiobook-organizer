@@ -1,7 +1,7 @@
 // file: internal/server/ai_merge_apply_undo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9c4a7e21-3b58-4f06-8d1e-6a2f0b7c5e93
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 package server
 
@@ -49,7 +49,7 @@ func TestAIAuthorMergeApplyOp_UndoRestoresTheMergedAuthor(t *testing.T) {
 			for _, r := range rows {
 				require.Empty(t, undo.NotRestorableLabel(r), "%s", r.ChangeType)
 			}
-			report, err := undo.PreflightUndoConflicts(w.st, opID)
+			report, err := preflightUndoConflicts(w.st, opID)
 			require.NoError(t, err)
 			require.Zero(t, report.NotRestorable)
 			require.Equal(t, 4, report.TotalChanges)

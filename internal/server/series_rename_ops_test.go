@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 package server
 
@@ -171,7 +171,7 @@ func TestSeriesRenameOp_UndoWhenAlreadyOldCountsRestored(t *testing.T) {
 
 	// The preflight the Activity Log shows first counts the row Safe, not as a
 	// renamed-since conflict.
-	report, err := undo.PreflightUndoConflicts(st, "op-already")
+	report, err := preflightUndoConflicts(st, "op-already")
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Safe)
 	require.Empty(t, report.SeriesRenamedSince)
@@ -284,7 +284,7 @@ func TestSeriesRenameOp_ConcurrentRenameJournalsReplacedName(t *testing.T) {
 	require.Equal(t, "Foo Bar", live[0].OldValue)
 	require.Equal(t, "New", live[0].NewValue)
 
-	report, err := undo.PreflightUndoConflicts(st, "op-race")
+	report, err := preflightUndoConflicts(st, "op-race")
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Safe)
 	require.Empty(t, report.SeriesRenamedSince)

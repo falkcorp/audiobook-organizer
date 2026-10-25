@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -263,7 +263,7 @@ func TestSeriesPhantomRepair_NullApplyUndoIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, seriesIDOf(t, s, fx.live777[0]), "precondition: the apply cleared it")
 
-	report, err := undo.PreflightUndoConflicts(s, "op-345")
+	report, err := preflightUndoConflicts(s, "op-345")
 	require.NoError(t, err)
 	require.Equal(t, 0, report.Safe, "no phantom id may be offered for restore")
 	// The trashed holder's row is refused for its dangling series id too, so it

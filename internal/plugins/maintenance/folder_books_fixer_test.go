@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -238,7 +238,7 @@ func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 
 	// The preflight agrees with the revert: every journaled row is restorable
 	// except the record-only book_file_create rows.
-	pre, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	pre, err := preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	require.Equal(t, map[string]int{undo.ChangeTypeBookFileCreate: 2}, pre.NotRestorableTypes)
 	require.Equal(t, pre.TotalChanges-pre.NotRestorable, pre.Safe, "%+v", pre)
