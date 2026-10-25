@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_batch_modify.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3d9e15-c4a2-4f68-91d0-5a8e2c6f1b47
 // last-edited: 2026-10-25
 
@@ -59,7 +59,7 @@ func (s *PebbleStore) ModifyBookFiles(ctx context.Context, bookID string, fileID
 			errs = append(errs, err)
 			break
 		}
-		applied, needRecompute, err := s.modifyBookFileNoNotify(bookID, id, fn)
+		_, applied, needRecompute, err := s.modifyBookFileNoNotify("ModifyBookFiles", bookID, id, fn)
 		if applied {
 			changed = append(changed, id)
 			recompute = recompute || needRecompute
@@ -78,38 +78,46 @@ func (s *PebbleStore) ModifyBookFiles(ctx context.Context, bookID string, fileID
 	return changed, errors.Join(errs...)
 }
 
-// modifyBookFileNoNotify is ModifyBookFile's read-modify-write for one row
-// without the trailing aggregate recompute: it reports whether the row was
-// written and whether a recompute is needed, and leaves the recompute to the
-// caller, which coalesces it per book.
-func (s *PebbleStore) modifyBookFileNoNotify(bookID, fileID string, fn func(*BookFile) error) (applied, recompute bool, err error) {
+// modifyBookFileNoNotify is the one read-modify-write behind ModifyBookFile and
+// ModifyBookFiles, so the two cannot drift. Under the row's lockBookFile stripe
+// it reads the stored row, hands a copy to fn, and writes fn's result through
+// updateBookFileLocked (shared merge rule, secondary-index rewrite on a path or
+// PID change). It does NOT recompute the book's aggregates: it reports whether
+// one is needed and leaves it to the caller, which must run it after this
+// returns (the stripe is released by then) and may coalesce it per book.
+//
+// op names the public method in error text ("ModifyBookFile"). row is the
+// written row; the stored row when fn returned ErrSkipBookFileWrite; nil when
+// no such row exists (a nil error) or on error. applied is true for a write
+// that landed, including one whose fsync failed (ErrBookFileDurabilityUnknown,
+// returned as err): that row is visible, so its book's aggregates must follow
+// it (bookFileApplied's contract) and recompute reflects that.
+func (s *PebbleStore) modifyBookFileNoNotify(op, bookID, fileID string, fn func(*BookFile) error) (row *BookFile, applied, recompute bool, err error) {
 	unlock := s.lockBookFile(fileID)
 	defer unlock()
 
 	stored, err := s.getBookFileByID(bookID, fileID)
 	if err != nil {
-		return false, false, fmt.Errorf("ModifyBookFiles: read %s: %w", fileID, err)
+		return nil, false, false, fmt.Errorf("%s: read %s: %w", op, fileID, err)
 	}
 	if stored == nil {
-		return false, false, nil
+		return nil, false, false, nil
 	}
-	row := *stored
-	if err := fn(&row); err != nil {
+	next := *stored
+	if err := fn(&next); err != nil {
 		if errors.Is(err, ErrSkipBookFileWrite) {
-			return false, false, nil
+			return stored, false, false, nil
 		}
-		return false, false, err
+		return nil, false, false, err
 	}
-	if row.ID != stored.ID || row.BookID != stored.BookID {
-		return false, false, fmt.Errorf("ModifyBookFiles: callback changed the identity of %s (id %q→%q, book %q→%q)",
-			fileID, stored.ID, row.ID, stored.BookID, row.BookID)
+	if next.ID != stored.ID || next.BookID != stored.BookID {
+		return nil, false, false, fmt.Errorf("%s: callback changed the identity of %s (id %q→%q, book %q→%q)",
+			op, fileID, stored.ID, next.ID, stored.BookID, next.BookID)
 	}
-	n, err := s.updateBookFileLocked(fileID, &row, true, true)
-	// bookFileApplied: a write whose fsync failed (ErrBookFileDurabilityUnknown)
-	// was still applied, so the book's aggregates must follow it.
+	n, err := s.updateBookFileLocked(fileID, &next, true, true)
 	applied = bookFileApplied(err)
 	if err != nil {
-		err = fmt.Errorf("ModifyBookFiles: write %s: %w", fileID, err)
+		return nil, applied, n && applied, fmt.Errorf("%s: write %s: %w", op, fileID, err)
 	}
-	return applied, n && applied, err
+	return &next, applied, n && applied, nil
 }
