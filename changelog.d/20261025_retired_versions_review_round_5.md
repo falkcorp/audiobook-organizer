@@ -8,13 +8,14 @@ more live holders, or a holder whose book no longer exists, it plans nothing:
 the absorbed book is still retired, but the combine's result and its undo journal
 both say "path held by N live book(s) (M row(s))" and the other books keep their
 rows. Taking another book's row now needs the complete holder list: while the
-index is still warming up after a restart the combine plans nothing for that file
-and warns, instead of picking whichever single row the fallback index names. A
-holder that cannot be read refuses the combine before it writes anything, rather
-than failing after its journal. Taking a trashed book's row is noted on the
+index is still warming up after a restart the combine refuses before it writes
+anything ("retry later"), instead of picking whichever single row the fallback
+index names. A holder that cannot be read refuses the combine before it writes
+anything too, rather than failing after its journal. Taking a trashed book's row is noted on the
 journal. Undoing a combine no longer refuses outright when a row it took from
-another book has since lost that book: the row stays on the survivor and the undo
-warns, as it already did for a row the combine created. A combine whose rowless
+another book has since lost that book: the undo warns and gives the row to the
+absorbed book whose file it is (the survivor keeps it only when it is the
+survivor's own file), as it already did for a row the combine created. A combine whose rowless
 primary book has the same file path as a row of a book it absorbs no longer stops
 after writing its journal with "file not found". Two merge tests that combined a
 book before the in-memory index finished warming up failed on a loaded runner; the
