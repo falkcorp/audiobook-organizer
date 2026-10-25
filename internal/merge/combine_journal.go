@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.0
+// version: 1.32.1
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package merge
 
@@ -858,8 +858,11 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		checkFile(fm)
 	}
 	// A reattached row came from a book OUTSIDE the combine (planVirtualFile
-	// moved it off its previous owner). Undo moves it back there, so that
-	// owner has to still exist.
+	// moved it off its previous owner). Undo moves it back there. When that
+	// book has since been purged the row has nowhere to go, and the undo leaves
+	// it on the survivor with a warning (applyUndo's moveBack), the way it
+	// treats a created row with no book to return to; only a book that cannot
+	// be read refuses, because then it is not known where the row belongs.
 	inCombine := map[string]bool{j.SurvivorID: true}
 	for _, a := range j.Absorbed {
 		inCombine[a.BookID] = true
@@ -868,8 +871,8 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 		if fm.Created || inCombine[fm.FromBookID] {
 			return
 		}
-		if b, err := ms.db.GetBookByID(fm.FromBookID); err != nil || b == nil {
-			reasons = append(reasons, fmt.Sprintf("file %s came from book %s, which no longer exists", fm.FileID, fm.FromBookID))
+		if _, err := ms.db.GetBookByID(fm.FromBookID); err != nil {
+			reasons = append(reasons, fmt.Sprintf("load book %s that file %s came from: %v", fm.FromBookID, fm.FileID, err))
 		}
 	}
 	for _, fm := range j.SurvivorFiles {
@@ -2269,6 +2272,22 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 					"file row %s (created by the combine for book %s) has no book to go back to; left on survivor %s",
 					fm.FileID, fm.FromBookID, j.SurvivorID))
 				continue
+			}
+			if !fm.Created && fm.FromBookID != j.SurvivorID && !absorbedIDs[fm.FromBookID] {
+				// A row reattached from a book outside the combine. If that
+				// book has been purged since, the row has no book to go back
+				// to: it stays on the survivor, which holds the audio, and the
+				// undo says so, rather than refusing the whole undo for it.
+				owner, err := ms.db.GetBookByID(fm.FromBookID)
+				if err != nil {
+					return fmt.Errorf("load book %s that file %s came from: %w", fm.FromBookID, fm.FileID, err)
+				}
+				if owner == nil {
+					res.Warnings = append(res.Warnings, fmt.Sprintf(
+						"file row %s (%s) came from book %s, which no longer exists; left on survivor %s",
+						fm.FileID, fm.FilePath, fm.FromBookID, j.SurvivorID))
+					continue
+				}
 			}
 			if cur.DiscNumber != fm.DiscBefore || cur.TrackNumber != fm.TrackBefore {
 				cur.DiscNumber, cur.TrackNumber = fm.DiscBefore, fm.TrackBefore
