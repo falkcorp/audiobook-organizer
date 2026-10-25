@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 77c1b0a8-cdba-4f18-8dc7-b8dce6613846
-// last-edited: 2026-10-09
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -197,7 +197,7 @@ func TestStaleITunesPath(t *testing.T) {
 		}
 
 		// The preflight and the revert agree: every row is safe and restored.
-		report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+		report, err := preflightUndoConflicts(f.s, "op-apply")
 		require.NoError(t, err)
 		require.Equal(t, 3, report.Safe, "%+v", report)
 		rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
@@ -221,7 +221,7 @@ func TestStaleITunesPath(t *testing.T) {
 		out := f.fixerApply(t, staleITPFixerID, "op-plan", "op-apply", []string{id})
 		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 		f.updateRow(t, id, f.rowIDs["a"], func(r *database.BookFile) { r.ITunesPath = stalePathB })
-		report, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+		report, err := preflightUndoConflicts(f.s, "op-apply")
 		require.NoError(t, err)
 		require.Zero(t, report.Safe, "%+v", report)
 		rr, _ := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")

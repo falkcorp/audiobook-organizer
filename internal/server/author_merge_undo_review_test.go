@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 package server
 
@@ -20,7 +20,6 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/entities"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // runUndoWorldMerge merges w.from into w.keep under opID through the
@@ -78,7 +77,7 @@ func TestAuthorMergeOp_UndoOfACollidingNameMergeRestoresEverything(t *testing.T)
 
 	runUndoWorldMerge(t, w, "op-undo-collide")
 
-	pre, err := undo.PreflightUndoConflicts(w.st, "op-undo-collide")
+	pre, err := preflightUndoConflicts(w.st, "op-undo-collide")
 	require.NoError(t, err)
 	require.Equal(t, pre.TotalChanges, pre.Safe, "every row predicted restorable: %+v", pre)
 
@@ -107,7 +106,7 @@ func TestAuthorMergeOp_UndoOfAMergeWhoseNameAThirdAuthorHoldsRestoresEverything(
 
 	runUndoWorldMerge(t, w, "op-undo-third")
 
-	pre, err := undo.PreflightUndoConflicts(w.st, "op-undo-third")
+	pre, err := preflightUndoConflicts(w.st, "op-undo-third")
 	require.NoError(t, err)
 	require.Equal(t, pre.TotalChanges, pre.Safe, "every row predicted restorable: %+v", pre)
 
@@ -128,7 +127,7 @@ func TestAuthorMergeOp_UndoAfterTheKeepAuthorTookTheNameRestoresWithoutTheEntry(
 	runUndoWorldMerge(t, w, "op-undo-keep-took")
 	require.NoError(t, w.st.UpdateAuthorName(w.keep.ID, w.from.Name))
 
-	pre, err := undo.PreflightUndoConflicts(w.st, "op-undo-keep-took")
+	pre, err := preflightUndoConflicts(w.st, "op-undo-keep-took")
 	require.NoError(t, err)
 	require.Equal(t, pre.TotalChanges, pre.Safe, "every row predicted restorable: %+v", pre)
 
@@ -150,7 +149,7 @@ func TestAuthorMergeOp_PreflightRefusesTheCreditsOfAnAuthorItCannotRestore(t *te
 	_, err := w.st.CreateAuthor(w.from.Name)
 	require.NoError(t, err)
 
-	pre, err := undo.PreflightUndoConflicts(w.st, "op-undo-squat")
+	pre, err := preflightUndoConflicts(w.st, "op-undo-squat")
 	require.NoError(t, err)
 	require.Zero(t, pre.Safe, "nothing of this merge can be restored: %+v", pre)
 
@@ -467,7 +466,7 @@ func TestUndo_AnAuthorWhoseNameFailsTheCreationGateComesBack(t *testing.T) {
 			w.from.Name = junk
 			runUndoWorldMerge(t, w, "op-gate-merge")
 
-			pre, err := undo.PreflightUndoConflicts(w.st, "op-gate-merge")
+			pre, err := preflightUndoConflicts(w.st, "op-gate-merge")
 			require.NoError(t, err)
 			require.Equal(t, pre.TotalChanges, pre.Safe, "the preflight calls every row safe")
 			res, err := revertOp(t, w.st, "op-gate-merge")
@@ -493,7 +492,7 @@ func TestUndo_AnAuthorWhoseNameFailsTheCreationGateComesBack(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		pre, err := undo.PreflightUndoConflicts(w.st, "op-gate-recl")
+		pre, err := preflightUndoConflicts(w.st, "op-gate-recl")
 		require.NoError(t, err)
 		require.Equal(t, pre.TotalChanges, pre.Safe)
 		res, err := revertOp(t, w.st, "op-gate-recl")
@@ -561,7 +560,7 @@ func TestReclassify_UndoOfAnAuthorWhoseNameACaseVariantHoldsLeavesTheVariantTheE
 	})
 	require.NoError(t, err)
 
-	pre, err := undo.PreflightUndoConflicts(w.st, "op-recl-variant")
+	pre, err := preflightUndoConflicts(w.st, "op-recl-variant")
 	require.NoError(t, err)
 	require.Equal(t, pre.TotalChanges, pre.Safe)
 	res, err := revertOp(t, w.st, "op-recl-variant")

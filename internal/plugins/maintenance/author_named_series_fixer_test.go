@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_named_series_fixer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: aa736089-b4ed-43cf-b00e-426629a38cb7
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -19,7 +19,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // ansEnqueueDeps records the operations the fixer enqueues.
@@ -470,7 +469,7 @@ func TestSeriesUndo_PositionIsNotWrittenIntoAnotherSeries(t *testing.T) {
 				require.NoError(t, err)
 				assert.ElementsMatch(t, []string{"series_id", "series_sequence"}, u.ChangedSince)
 			case "op-revert":
-				rep, err := undo.PreflightUndoConflicts(l.st, opID)
+				rep, err := preflightUndoConflicts(l.st, opID)
 				require.NoError(t, err)
 				assert.Len(t, rep.CheckFailed, 2, "the preflight refuses the position with its link: %+v", rep)
 				_, err = audiobooks.NewRevertService(l.st).RevertOperation(opID)

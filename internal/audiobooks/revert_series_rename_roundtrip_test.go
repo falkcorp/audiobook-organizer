@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_series_rename_roundtrip_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9f41c6ab-2d78-4e03-b5c9-6e1a7d84f3b2
-// last-edited: 2026-10-13
+// last-edited: 2026-10-25
 
 package audiobooks_test
 
@@ -97,7 +97,7 @@ func TestSeriesRename_PreflightMatchesRevert(t *testing.T) {
 			store, id := mergeRenamed(t)
 			tc.mutate(t, store, id)
 
-			report, err := undo.PreflightUndoConflicts(store, "op1")
+			report, err := preflightUndoConflicts(store, "op1")
 			if err != nil {
 				t.Fatalf("preflight: %v", err)
 			}
@@ -146,7 +146,7 @@ func TestHardDeletedBook_PreflightMatchesRevert(t *testing.T) {
 		t.Fatalf("book still readable after DeleteBook: %+v", b)
 	}
 
-	report, err := undo.PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}

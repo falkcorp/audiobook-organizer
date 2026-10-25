@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_undo_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d1a47c63-8e29-4f50-b6a3-90e5c2f1d784
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 package server
 
@@ -129,7 +129,7 @@ func TestAuthorMergeOp_UndoRestoresTheAuthorItsCreditsAndPrimary(t *testing.T) {
 	for _, r := range rows {
 		require.Empty(t, undo.NotRestorableLabel(r), "%s", r.ChangeType)
 	}
-	report, err := undo.PreflightUndoConflicts(w.st, "op-undo-merge")
+	report, err := preflightUndoConflicts(w.st, "op-undo-merge")
 	require.NoError(t, err)
 	require.Zero(t, report.NotRestorable)
 
@@ -169,7 +169,7 @@ func TestAIScanApplyOp_UndoRestoresTheMergedAuthor(t *testing.T) {
 
 	// The preflight counts the same rows the revert will restore: the note that
 	// ties the result to the operation restores nothing and is in neither.
-	report, err := undo.PreflightUndoConflicts(w.st, "op-undo-ai")
+	report, err := preflightUndoConflicts(w.st, "op-undo-ai")
 	require.NoError(t, err)
 	require.Equal(t, 4, report.TotalChanges)
 	require.Zero(t, report.NotRestorable)

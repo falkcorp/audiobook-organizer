@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -110,7 +110,7 @@ func (w *mergeUndoWorld) requireUndone(t *testing.T, opID string) {
 	for _, r := range rows {
 		require.Empty(t, undo.NotRestorableLabel(r), "%s row is not one the revert can reverse", r.ChangeType)
 	}
-	report, err := undo.PreflightUndoConflicts(w.st, opID)
+	report, err := preflightUndoConflicts(w.st, opID)
 	require.NoError(t, err)
 	require.Zero(t, report.NotRestorable)
 	require.Equal(t, len(rows), report.TotalChanges)
@@ -218,7 +218,7 @@ func TestAuthorConjunctionRepair_UndoRenamesTheSoloRowBack(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, undo.ChangeTypeAuthorRename, rows[0].ChangeType)
-	report, err := undo.PreflightUndoConflicts(st, "op-undo-conj-rename")
+	report, err := preflightUndoConflicts(st, "op-undo-conj-rename")
 	require.NoError(t, err)
 	require.Zero(t, report.NotRestorable)
 	require.Equal(t, 1, report.TotalChanges)
@@ -340,7 +340,7 @@ func TestAuthorIDRepair_UndoRestoresAGhostBooksCredit(t *testing.T) {
 	res := runRepair(t, New(&fakeDeps{store: s}), `{"dry_run":false,"skip_dangling":true}`)
 	require.Equal(t, 1, res.DuplicateOutcomes[authorIDMergeMerged])
 
-	report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+	report, err := preflightUndoConflicts(s, "op-id-repair")
 	require.NoError(t, err)
 	require.Empty(t, report.CheckFailed, "the ghost row is restorable")
 	for range 2 {
@@ -393,7 +393,7 @@ func TestAuthorIDRepair_UndoRestoresTheDenormalizedAuthorExactly(t *testing.T) {
 			require.NotNil(t, moved.Author)
 			require.Equal(t, real.ID, moved.Author.ID, "the repair names the successor")
 
-			report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+			report, err := preflightUndoConflicts(s, "op-id-repair")
 			require.NoError(t, err)
 			require.Empty(t, report.CheckFailed)
 			rv, err := audiobooks.NewRevertService(s).RevertOperation("op-id-repair")
@@ -489,7 +489,7 @@ func TestAuthorIDRepair_PreflightFollowsANewerMergeOfTheSameBook(t *testing.T) {
 	}
 	require.True(t, movedPrimary, "fixture: the merge must move b1's primary a second time")
 
-	report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+	report, err := preflightUndoConflicts(s, "op-id-repair")
 	require.NoError(t, err)
 	require.Empty(t, report.CheckFailed, "the repoint row is restorable once the newer merge row is")
 	require.Equal(t, report.TotalChanges, report.Safe, "%+v", report)
@@ -521,7 +521,7 @@ func TestAuthorConjunctionRepair_UndoRefusesANameAnotherAuthorTookSince(t *testi
 	require.NoError(t, err)
 	require.Equal(t, other.ID, holder, "fixture: another author holds the old name")
 
-	report, err := undo.PreflightUndoConflicts(st, "op-rr5")
+	report, err := preflightUndoConflicts(st, "op-rr5")
 	require.NoError(t, err)
 	require.Len(t, report.CheckFailed, 1, "%+v", report)
 	require.Equal(t, undo.ChangeTypeAuthorRename, report.CheckFailed[0].ChangeType)
@@ -551,7 +551,7 @@ func TestAuthorConjunctionRepair_UndoRefusesAnAuthorRenamedSince(t *testing.T) {
 	require.NoError(t, p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-rr6"}))
 	require.NoError(t, st.UpdateAuthorName(solo.ID, "Synthetic Hand Edit"))
 
-	report, err := undo.PreflightUndoConflicts(st, "op-rr6")
+	report, err := preflightUndoConflicts(st, "op-rr6")
 	require.NoError(t, err)
 	require.Len(t, report.CheckFailed, 1, "%+v", report)
 	_, err = audiobooks.NewRevertService(st).RevertOperation("op-rr6")
@@ -578,7 +578,7 @@ func TestAuthorIDRepair_UndoRefusesAPrimaryChangedSince(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	report, err := undo.PreflightUndoConflicts(s, "op-id-repair")
+	report, err := preflightUndoConflicts(s, "op-id-repair")
 	require.NoError(t, err)
 	require.Len(t, report.CheckFailed, 1, "%+v", report)
 	_, err = audiobooks.NewRevertService(s).RevertOperation("op-id-repair")

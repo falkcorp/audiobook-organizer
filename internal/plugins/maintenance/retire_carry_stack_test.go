@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_stack_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5b2d7e91-3c46-4a08-9f15-e6a0d83c7b24
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -489,13 +489,13 @@ func TestRetireCarry_PreflightPredictsTheRevert(t *testing.T) {
 	plA := f.rcPlaylist(t, "Road trip", child)
 	parent := f.rcRetire(t, child)
 
-	rep, err := undo.PreflightUndoConflicts(f.s, "op-apply")
+	rep, err := preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	require.Empty(t, rep.CheckFailed, "%+v", rep)
 
 	_, err = f.s.RemoveBookFromCollection(colA, parent)
 	require.NoError(t, err)
-	rep, err = undo.PreflightUndoConflicts(f.s, "op-apply")
+	rep, err = preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	require.Len(t, rep.CheckFailed, 1, "the collection row is refused: the survivor is no longer there: %+v", rep)
 
@@ -504,7 +504,7 @@ func TestRetireCarry_PreflightPredictsTheRevert(t *testing.T) {
 	pl.BookIDs = []string{"other-9"}
 	require.NoError(t, f.s.UpdateUserPlaylist(pl))
 	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: rcFloat(1)})
-	rep, err = undo.PreflightUndoConflicts(f.s, "op-apply")
+	rep, err = preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	require.Len(t, rep.CheckFailed, 3, "collection, playlist and rating: %+v", rep)
 

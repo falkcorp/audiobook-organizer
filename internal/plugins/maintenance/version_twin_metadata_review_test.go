@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3c9e5b71-2a84-4f06-b1d3-8e7a6c40f259
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -17,7 +17,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // The regression tests for the first review of #3797. Each is one of the
@@ -42,7 +41,7 @@ func (l *vtLib) vtFresh(group string) repairs.Row {
 // then finds it.
 func vtPreflightSafe(t *testing.T, l *vtLib) {
 	t.Helper()
-	rep, err := undo.PreflightUndoConflicts(l.st, vtTestOpID)
+	rep, err := preflightUndoConflicts(l.st, vtTestOpID)
 	require.NoError(t, err)
 	require.Equal(t, 1, rep.Safe, "preflight %+v", rep)
 	require.Zero(t, rep.NotRestorable, "preflight %+v", rep)

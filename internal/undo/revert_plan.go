@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package undo
 
@@ -16,7 +16,7 @@ import (
 
 // RevertPlan is the order an operation revert (audiobooks.RevertService)
 // processes its rows in, and the gate that holds back the rows of a retired
-// book. PreflightUndoConflicts walks the same plan, so its prediction of which
+// book. PreflightUndoConflictsFromChanges walks the same plan, so its prediction of which
 // rows are refused matches the revert's.
 //
 // Rows are processed newest first, except that every row of a retired book

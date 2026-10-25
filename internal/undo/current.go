@@ -1,7 +1,7 @@
 // file: internal/undo/current.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2e7b4c19-8d3a-4f60-9b15-c6a0e8d2f473
-// last-edited: 2026-10-13
+// last-edited: 2026-10-25
 
 package undo
 
@@ -13,7 +13,7 @@ import (
 )
 
 // The compare-and-set checks the revert (audiobooks.RevertService) and the
-// preflight (PreflightUndoConflicts) share for the change types a Repairs
+// preflight (PreflightUndoConflictsFromChanges) share for the change types a Repairs
 // apply journals BEFORE it writes (repairs/writer_files.go, JOURNAL FIRST).
 // Each answers, for the current state:
 //
