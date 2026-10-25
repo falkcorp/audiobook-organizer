@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.63.3
+// version: 1.63.4
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-25
 
@@ -1961,7 +1961,20 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	// the survivor's own attach, because those change which rows hold the path
 	// (an absorbed path equal to the survivor's must find the survivor's row, not
 	// plan a second one).
-	ownPlan, err := ms.planOwnFile(survivor)
+	//
+	// arriving names the books whose rows the bulk move below brings onto the
+	// survivor. A row of one of them at the survivor's own path (the survivor is
+	// rowless, its FilePath is the path of a row an absorbed book owns) is not the
+	// survivor's to move ahead of the bulk move: the move would take it, and the
+	// bulk move would then not find it under its source and stop the combine
+	// after its journal, every time.
+	arriving := make(map[string]bool, len(movedFiles))
+	for id, ids := range movedFiles {
+		if len(ids) > 0 {
+			arriving[id] = true
+		}
+	}
+	ownPlan, err := ms.planOwnFile(survivor, arriving)
 	if err != nil {
 		return nil, fmt.Errorf("combine refused: %w", err)
 	}
@@ -2085,7 +2098,7 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 			FollowFileMove(ms.db, id, survivor.ID, ids)
 			res.FilesMoved += len(ids)
 		} else if a.FilePath != "" {
-			plan, err := ms.planVirtualFile(books[id], survivor.ID)
+			plan, err := ms.planVirtualFile(books[id], survivor.ID, arriving)
 			if err != nil {
 				return nil, fmt.Errorf("combine %s (journal %s left %s): %w", id, journal.ID, CombineJournalPending, err)
 			}
@@ -2704,12 +2717,17 @@ type virtualFilePlan struct {
 	// attached is true when the target ends up owning a row for the path
 	// (already, or once applied).
 	attached bool
+	// warning is set when the plan is empty on purpose and the combine goes on
+	// without a row for the file: attachJournaledFile records it on the journal.
+	warning string
 }
 
 // planOwnFile plans materializing a single-file book's FilePath as a BookFile
 // when it has no BookFile rows yet (the virtual-segment model). An error means
-// the path could not be checked and nothing may be planned from it.
-func (ms *Service) planOwnFile(b *database.Book) (virtualFilePlan, error) {
+// the path could not be checked and nothing may be planned from it. arriving is
+// planVirtualFile's: the books whose rows the same combine is about to move
+// onto b.
+func (ms *Service) planOwnFile(b *database.Book, arriving map[string]bool) (virtualFilePlan, error) {
 	if b.FilePath == "" {
 		return virtualFilePlan{}, nil
 	}
@@ -2722,7 +2740,7 @@ func (ms *Service) planOwnFile(b *database.Book) (virtualFilePlan, error) {
 	if len(files) > 0 {
 		return virtualFilePlan{}, nil // already materialized
 	}
-	return ms.planVirtualFile(b, b.ID)
+	return ms.planVirtualFile(b, b.ID, arriving)
 }
 
 // planVirtualFile plans a BookFile at book.FilePath owned by targetBookID.
@@ -2730,13 +2748,18 @@ func (ms *Service) planOwnFile(b *database.Book) (virtualFilePlan, error) {
 // can't be changed in place -- the primary key embeds it), never duplicated.
 // A new row's id is minted here, so the journal can name it before it exists.
 //
+// arriving is the set of books whose rows the same combine moves onto the
+// target in its bulk move (nil outside a combine). A row of one of them at the
+// path is not planned at all: the bulk move brings it, and moving it here first
+// would leave the bulk move looking for it under its old owner.
+//
 // An error means the path could not be checked, and it is returned, never read
 // as "nothing to attach": an empty plan makes attachJournaledFile report 0
 // files with no error, so the combine would soft-delete the absorbed book while
 // its file got no row under the survivor and the combine would still report
 // success. The combine stops on the error with its journal left pending, like
 // any other failed step.
-func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtualFilePlan, error) {
+func (ms *Service) planVirtualFile(b *database.Book, targetBookID string, arriving map[string]bool) (virtualFilePlan, error) {
 	// A path held by a retired version is that version's file: the move below
 	// would refuse the row (a retired row is only moved by the retire operations)
 	// and creating one would put a second row on the file, so the plan attaches
@@ -2745,9 +2768,10 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtu
 	// only), so the claim comes from the complete lookup. That lookup refuses
 	// while memdb is not serving, so it is required only once a retired version
 	// exists (BookFileRowsAtPathForWrite): with none, no retired row can hold the
-	// path and the single-owner lookup below is the whole answer, which keeps a
-	// combine of a rowless book working through the warmup after a restart. When
-	// the complete lookup is needed and cannot be answered, that is an error.
+	// path and the rows are the ordinary path lookup's (complete when memdb
+	// serves, the single-owner index's one row otherwise), which keeps a combine
+	// of a rowless book working through the warmup after a restart. When the
+	// complete lookup is needed and cannot be answered, that is an error.
 	rows, rowsErr := ms.pathRowsForWrite(b.FilePath)
 	if rowsErr != nil {
 		return virtualFilePlan{}, rowsErr
@@ -2757,11 +2781,20 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtu
 			b.ID, logger.SanitizeLogValue(b.FilePath), held.ID, held.BookID)
 		return virtualFilePlan{}, nil
 	}
-	// The rows are already in hand: with no retired version they are the
-	// ordinary path lookup's answer, and with one they are the complete one, so
-	// a second GetBookFileByPath would only be a read whose error could be lost.
-	existing := liveRowAtPath(rows, targetBookID)
-	if existing != nil {
+	// The rows are already in hand, so a second GetBookFileByPath would only be a
+	// read whose error could be lost.
+	pick, err := pickRowAtPath(rows, targetBookID, arriving, ms.db.GetBookByID)
+	if err != nil {
+		return virtualFilePlan{}, fmt.Errorf("cannot tell who holds %s: %w", b.FilePath, err)
+	}
+	switch {
+	case pick.arrives:
+		return virtualFilePlan{}, nil
+	case pick.warning != "":
+		mlog.Warn("combine: %s book=%s path=%s", pick.warning, b.ID, logger.SanitizeLogValue(b.FilePath))
+		return virtualFilePlan{warning: fmt.Sprintf("%s (book %s, %s): not reattached", pick.warning, b.ID, b.FilePath)}, nil
+	}
+	if existing := pick.row; existing != nil {
 		if existing.BookID == targetBookID {
 			return virtualFilePlan{attached: true}, nil
 		}
@@ -2806,26 +2839,85 @@ func (ms *Service) pathRowsForWrite(path string) ([]database.BookFile, error) {
 	return rows, nil
 }
 
-// liveRowAtPath picks the live row of rows (one path's lookup answer) that
-// planVirtualFile reattaches: the target's own row if it has one, else the
-// smallest (BookID, ID) so the choice is deterministic. Retired rows are never
-// picked (the caller has already stopped on a retired claim). nil when no live
-// row holds the path.
-func liveRowAtPath(rows []database.BookFile, targetBookID string) *database.BookFile {
-	var best *database.BookFile
+// pathPick is pickRowAtPath's answer. At most one of row, arrives and warning is
+// set; all zero means no live row holds the path.
+type pathPick struct {
+	// row is the row to reattach: the target's own (attached already) or one to
+	// move onto the target.
+	row *database.BookFile
+	// arrives is true when a row at the path belongs to a book the combine moves
+	// onto the target anyway, so nothing is planned.
+	arrives bool
+	// warning is why nothing is planned although live rows hold the path.
+	warning string
+}
+
+// pickRowAtPath picks the row of rows (one path's lookup answer) that
+// planVirtualFile reattaches, in this order:
+//
+//  1. the target's own row;
+//  2. a row of a book in arriving (the combine's bulk move brings it);
+//  3. a row of a trashed (soft-deleted) book, the smallest (BookID, ID) if several:
+//     a trashed copy of the file is the one nobody is using;
+//  4. the row of the single other live book holding the path (#1549: moved, not
+//     duplicated, and undo moves it back);
+//  5. otherwise, with two or more live holders (or one whose book is gone, which
+//     undo could not move the row back to), none: taking one would leave a live
+//     bystander without a file row, and which one is arbitrary. The warning says so.
+//
+// Retired rows are never picked (the caller has already stopped on a retired
+// claim). bookOf is consulted only for the rows that reach step 3, once per book;
+// an error from it is returned, never read as "not trashed".
+func pickRowAtPath(rows []database.BookFile, targetBookID string, arriving map[string]bool, bookOf func(id string) (*database.Book, error)) (pathPick, error) {
+	var others []*database.BookFile
+	arrives := false
 	for i := range rows {
 		r := &rows[i]
-		if r.Retired {
-			continue
-		}
-		if r.BookID == targetBookID {
-			return r
-		}
-		if best == nil || r.BookID < best.BookID || (r.BookID == best.BookID && r.ID < best.ID) {
-			best = r
+		switch {
+		case r.Retired:
+		case r.BookID == targetBookID:
+			return pathPick{row: r}, nil
+		case arriving[r.BookID]:
+			arrives = true
+		default:
+			others = append(others, r)
 		}
 	}
-	return best
+	if arrives {
+		return pathPick{arrives: true}, nil
+	}
+	slices.SortFunc(others, func(x, y *database.BookFile) int {
+		if c := strings.Compare(x.BookID, y.BookID); c != 0 {
+			return c
+		}
+		return strings.Compare(x.ID, y.ID)
+	})
+	books := make(map[string]*database.Book, len(others))
+	var trashed, held []*database.BookFile
+	for _, r := range others {
+		bk, seen := books[r.BookID]
+		if !seen {
+			var err error
+			if bk, err = bookOf(r.BookID); err != nil {
+				return pathPick{}, fmt.Errorf("load book %s that holds file %s: %w", r.BookID, r.ID, err)
+			}
+			books[r.BookID] = bk
+		}
+		if bk != nil && bk.IsSoftDeleted() {
+			trashed = append(trashed, r)
+		} else {
+			held = append(held, r)
+		}
+	}
+	switch {
+	case len(trashed) > 0:
+		return pathPick{row: trashed[0]}, nil
+	case len(held) == 1 && books[held[0].BookID] != nil:
+		return pathPick{row: held[0]}, nil
+	case len(held) > 0:
+		return pathPick{warning: fmt.Sprintf("path held by %d rows of live or missing books", len(held))}, nil
+	}
+	return pathPick{}, nil
 }
 
 // applyVirtualFile performs a plan. It returns the number of files attached
@@ -2861,6 +2953,12 @@ func (ms *Service) applyVirtualFile(p virtualFilePlan, targetBookID string) int 
 // exist). A write that fails takes the record back out. An error means the
 // journal could not be persisted and nothing was written.
 func (ms *Service) attachJournaledFile(journal *CombineJournal, list *[]CombineFileMove, p virtualFilePlan, targetBookID string) (int, error) {
+	if p.warning != "" {
+		journal.Warnings = append(journal.Warnings, p.warning)
+		if err := ms.putCombineJournal(journal); err != nil {
+			return 0, fmt.Errorf("journal warning %q: %w", p.warning, err)
+		}
+	}
 	if p.fm.FileID == "" {
 		return ms.applyVirtualFile(p, targetBookID), nil
 	}
