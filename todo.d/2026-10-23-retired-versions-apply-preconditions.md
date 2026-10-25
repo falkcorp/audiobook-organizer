@@ -15,8 +15,10 @@
       snapshot, so a combine journaled mid-run is not seen (combine undo now
       refuses a retired shell, which covers it); (6) the store-level
       `RevertBookToVersion` shell check runs under the book write stripe but
-      retire takes only owner stripes and the merge lock, so a revert racing a
-      retire can still slip through; (7) a generic whole-row `UpdateBook` from a
+      retire takes only owner stripes and the merge lock; the metadata revert
+      handler and `UnmergeAuto` now take the merge lock around that call, so a
+      revert through them cannot race a retire, but any other caller of
+      `RevertBookToVersion` that does not hold the merge lock still can; (7) a generic whole-row `UpdateBook` from a
       stale read can still overwrite the merged-into link; (8) the batch hard delete (`internal/batch/service.go` `hardDelete`) has no
       owned-files pre-check at all, live or retired, so a book that owns rows
       has its listening state carried to another version
@@ -28,7 +30,12 @@
       `internal/repairs/writer_files.go:29` still says a whole apply is undone
       from the Operations page, which is not true until PR 5 (#4146); (10) decorator
       stores that do not implement `Unwrap() database.Store` cannot be read for
-      retired rows and now fail closed.
+      retired rows and now fail closed; (11) PR 5's revert of a
+      `book_version_create` row must refuse to delete a version that still holds
+      rows (reverting the create after the rows' own retire rows are reverted is
+      the only order that leaves it empty; a create reverted while rows remain,
+      e.g. after a partial revert or a row journaled by another op, would
+      delete the version out from under them).
 
 - [ ] **TODO-RETIRED-APPLY-PR8-HOOK** wire the decisions ledger into the retire
       Apply once PR 8 (#4143) and PR 7 are stacked: after a row's

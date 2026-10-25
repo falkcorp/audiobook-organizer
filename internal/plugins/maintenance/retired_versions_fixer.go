@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -234,6 +234,9 @@ type retiredVersionsReader interface {
 	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	// GetOperationChanges reads a retire op's journal for its plan records (the
+	// external ids a retire planned to move, retirePlanRecord).
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 }
 
 // retiredVersionsFixer moves every soft-deleted book's file rows onto the
@@ -413,6 +416,9 @@ type retiredRun struct {
 	groups  sync.Map // version group id -> *onceVal[[]database.Book]
 	targets sync.Map // target book id -> *onceVal[*retiredTarget]
 	undo    sync.Map // "journals" -> *onceVal[map[string][]string]
+	// plans is the session's (or plan's) cache of retire plan records by op id;
+	// see retiredShared.plans.
+	plans *sync.Map
 	// sessionUndo is the unreversed-combine index an apply run read once
 	// (retiredSession); nil outside one, where undo above reads it lazily.
 	sessionUndo *retiredUndo
@@ -437,6 +443,9 @@ type retiredShared struct {
 	probe   *merge.UserStateProbe
 	vetoes  OwnerVetoReader
 	journal CombineJournalScanner
+	// plans caches the plan records of each retire op a row reads, by op id
+	// (retiredRun.opPlanRecords): read lazily, at most once per op per session.
+	plans sync.Map
 }
 
 // loadShared reads the run-invariant state. Without the series names the
@@ -501,7 +510,7 @@ func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time
 	}
 	run := &retiredRun{f: f, store: ops, paths: paths, probe: sh.probe, vetoes: sh.vetoes, journals: sh.journal,
 		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: sh.series,
-		minAge: minAge, now: now(),
+		minAge: minAge, now: now(), plans: &sh.plans,
 		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}
 	if sess != nil {
 		run.sessionUndo = &sess.undo
