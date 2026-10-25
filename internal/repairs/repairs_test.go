@@ -1,7 +1,7 @@
 // file: internal/repairs/repairs_test.go
-// version: 1.17.4
+// version: 1.17.5
 // guid: e4b7c2a9-1d63-4f58-9a0e-8c3f6d2b7a41
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package repairs
 
@@ -1179,7 +1179,9 @@ func TestWriter_HasNoDeletePrimitive(t *testing.T) {
 		"RepointBookFile", "MoveBookFiles", "SetTrackNumber", "Recompute",
 		"WithCredits", "ModifyCredits", "SetPrimaryAuthor", "RecordChange", "Beat", "LockWaiting",
 		"WithFieldStates", "LockFields", "JournalStep", "JournalSteps", "JournalsInBatches", "WithTags", "AddBookTag", "OpID",
-		"WithUserState", "SetUserState", "SetUserStateChecked", "ClearBookFileITunesPath", "ClearBookITunesPath", "SupersedeChanges"}, names)
+		"WithUserState", "SetUserState", "SetUserStateChecked", "ClearBookFileITunesPath", "ClearBookITunesPath", "SupersedeChanges",
+		// Retire a version row (a soft retire: the row is kept, never deleted).
+		"RetireVersion", "RehomeRetiredVersion"}, names)
 }
 
 func TestWriter_HistoryFailureWritesIncompleteMarker(t *testing.T) {
