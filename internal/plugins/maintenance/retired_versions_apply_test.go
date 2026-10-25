@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -597,10 +597,12 @@ func TestRetiredApply_EmptyVersionIsNotAFinishedRetire(t *testing.T) {
 	require.Empty(t, onHolder)
 }
 
-// A retire of a shell that already has an empty retired version onto the same
-// holder adopts it instead of leaving a second empty version, and journals no
-// create (another op made it).
-func TestRetiredApply_AdoptsAnEmptyVersionLeftByAFailedRetire(t *testing.T) {
+// A retire does not adopt an empty retired version ANOTHER op left (S3 of the
+// review of #4144): the adopting op journals no book_version_create for it, so
+// reverting the op that made it would delete a version holding this op's retired
+// rows. The new op mints its own version, with its own create row, and the
+// leftover stays empty.
+func TestRetiredApply_DoesNotAdoptAnotherOpsEmptyVersion(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.enableApply()
 	rf.live("primary", "g1", rf.file("g1/primary.mp3"))
@@ -613,17 +615,52 @@ func TestRetiredApply_AdoptsAnEmptyVersionLeftByAFailedRetire(t *testing.T) {
 
 	res := rf.planAll()
 	require.Equal(t, retCatWouldRetire, rf.retiredPlanRow(res, "adopt").Class)
-	out := rf.applyRows(rf.f, res, []string{rf.ids["adopt"]}, false, "op-adopt")
+	out := rf.applyRows(rf.f, res, []string{rf.ids["adopt"]}, false, "op-other")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+
+	minted := retiredVersionID("op-other", rf.ids["adopt"])
+	vs, err := rf.st.GetRetiredVersionsFromBook(rf.ids["adopt"])
+	require.NoError(t, err)
+	ids := map[string]bool{}
+	for _, v := range vs {
+		ids[v.ID] = true
+	}
+	require.Equal(t, map[string]bool{"rv-left-over": true, minted: true}, ids, "the op minted its own version")
+	held, err := rf.st.GetRetiredBookFiles(rf.ids["primary"])
+	require.NoError(t, err)
+	require.Len(t, held, 1)
+	require.Equal(t, minted, held[0].VersionID, "the rows went into the op's own version, not the leftover")
+	j := rf.journalByType("op-other")
+	require.Equal(t, 1, j[retChangeBookVersionCreate], "the op journals the create of the version it put rows into: %v", j)
+	require.Equal(t, 1, j[retChangeBookFileRetire], "%v", j)
+}
+
+// A resume of the SAME op that cut a retire off before its commit point adopts
+// the empty version its own journal created: no second version, and no second
+// create row (the op's journal already holds the first).
+func TestRetiredApply_ResumeOfTheSameOpAdoptsItsEmptyVersion(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.live("primary", "g1", rf.file("g1/primary.mp3"))
+	rf.trashed("adopt", "g1", 30, rf.file("g1/adopt-1.mp3"))
+	retiredAt := rf.now.Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	_, err := rf.st.CreateBookVersion(&database.BookVersion{ID: "rv-same-op", BookID: rf.ids["primary"],
+		Status: database.BookVersionStatusRetired, Source: retiredVersionSource,
+		RetiredFromBookID: rf.ids["adopt"], RetireOpID: "op-resume", RetiredAt: &retiredAt})
+	require.NoError(t, err)
+
+	res := rf.planAll()
+	out := rf.applyRows(rf.f, res, []string{rf.ids["adopt"]}, false, "op-resume")
 	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
 	vs, err := rf.st.GetRetiredVersionsFromBook(rf.ids["adopt"])
 	require.NoError(t, err)
 	require.Len(t, vs, 1, "the empty version was adopted, not joined by a second")
-	require.Equal(t, "rv-left-over", vs[0].ID)
+	require.Equal(t, "rv-same-op", vs[0].ID)
 	held, err := rf.st.GetRetiredBookFiles(rf.ids["primary"])
 	require.NoError(t, err)
 	require.Len(t, held, 1)
-	require.Equal(t, "rv-left-over", held[0].VersionID)
-	j := rf.journalByType("op-adopt")
+	require.Equal(t, "rv-same-op", held[0].VersionID)
+	j := rf.journalByType("op-resume")
 	require.Zero(t, j[retChangeBookVersionCreate], "%v", j)
 	require.Equal(t, 1, j[retChangeBookFileRetire], "%v", j)
 }

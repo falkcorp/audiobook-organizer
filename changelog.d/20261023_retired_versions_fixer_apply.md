@@ -41,3 +41,10 @@ retired versions (no live row) counts as owning files: the purge keeps it,
 "Discard progress and purge" refuses it before any listening state is discarded,
 and a live hard delete refuses it before the hash block or the progress carry. Restoring
 a book that does not exist returns 404.
+
+Undoing an operation now refuses an external-id or merged-into row that would
+put a link back onto a retire shell, unless the same operation retired that
+shell, and the metadata revert and `UnmergeAuto` take the merge lock around the
+store revert. A retire's finish moves only the external ids its journaled plan
+record named, and a retire adopts an empty retired version only when its own
+operation created it.

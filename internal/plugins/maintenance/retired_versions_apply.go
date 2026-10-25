@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -65,10 +65,23 @@ import (
 // finished by an Apply that writes only the unfinished steps. A re-plan of the
 // cut-off run's own planned row returns it under the PLANNED fingerprint. A run
 // cut off before the commit point left a plan record and maybe an empty
-// version: the next retire of that shell onto that holder adopts the empty
-// version rather than minting another (a version holding no rows is not a
-// finished retire, so it never moves the shell's external ids), and the
-// journal dedupes the plan record and the per-row retire records.
+// version: a RESUME of that same op adopts the empty version (it is the one the
+// op's own journal created) rather than minting another, a version holding no
+// rows is not a finished retire so it never moves the shell's external ids, and
+// the journal dedupes the plan record and the per-row retire records. A later,
+// DIFFERENT op never adopts it: that op journals no create for it, so reverting
+// the op that made it would delete a version the later op put rows into
+// (emptyRetiredVersion); the later op mints its own and the empty one stays.
+//
+// THE TAIL MOVES ONLY WHAT THE RETIRE PLANNED. The plan record
+// (retirePlanRecord) names the external ids the retire was going to move, read
+// under the merge lock before its first write. The tail (retire_tail_pending,
+// and the tail of an ordinary retire) moves those ids and no others: an id that
+// attached to the shell afterwards (an importer or backfill writing a PID onto a
+// trashed row) was never judged by the classifier's guards, and a finish that
+// skipped them could hand another work's id to the holder. It stays on the
+// shell and the row reports it. A retired version whose plan record cannot be
+// found moves no id, fail closed, and the row says so.
 //
 // WHAT IT DOES NOT DO YET. A shell an unreversed combine journal names as
 // absorbed (combine_undo_aware) is held, not retired: plan section 6.5 requires
@@ -101,12 +114,31 @@ const retiredVersionSource = "retired_book"
 // merged-into still empty, and retired rows the shell holds for other versions
 // (the chain case).
 type retiredTail struct {
+	// externalIDs counts the shell's live external ids that the retire's plan
+	// record names (planned and still on the shell); only these are moved.
 	externalIDs int
 	mergedInto  bool
 	chainRows   int
+	// unplanned counts live external ids on the shell that the plan record does
+	// not name: they are left where they are. noRecord counts the shell's
+	// retired versions that hold rows and have no plan record to read, so no
+	// external id of the shell is moved on their account.
+	unplanned, noRecord int
 }
 
 func (t retiredTail) any() bool { return t.externalIDs > 0 || t.mergedInto || t.chainRows > 0 }
+
+// note says what the tail leaves alone, or "".
+func (t retiredTail) note() string {
+	var parts []string
+	if t.unplanned > 0 {
+		parts = append(parts, strconv.Itoa(t.unplanned)+" external id(s) not in the retire's plan record are left on the shell")
+	}
+	if t.noRecord > 0 {
+		parts = append(parts, strconv.Itoa(t.noRecord)+" retired version(s) have no plan record, so no external id is moved on their account")
+	}
+	return strings.Join(parts, "; ")
+}
 
 func (t retiredTail) String() string {
 	var parts []string
@@ -149,6 +181,9 @@ type retiredDetail struct {
 	holder     string
 	versionIDs []string
 	pending    retiredTail
+	// planned is, for a done row, the external ids (plannedKey) the retire's
+	// plan records name: the only ones its tail moves.
+	planned map[string]bool
 }
 
 // alreadyRetired answers whether shell is a book a finished (or part-finished)
@@ -179,6 +214,7 @@ func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool,
 	heldBy := map[string][]database.BookFile{}
 	var holder string
 	var heldIDs []string
+	var heldVersions []database.BookVersion
 	multi := false
 	for i := range vs {
 		rows, ok := heldBy[vs[i].BookID]
@@ -198,6 +234,7 @@ func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool,
 			continue
 		}
 		heldIDs = append(heldIDs, vs[i].ID)
+		heldVersions = append(heldVersions, vs[i])
 		if holder == "" {
 			holder = vs[i].BookID
 		} else if vs[i].BookID != holder {
@@ -208,10 +245,15 @@ func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool,
 		return repairs.Row{}, false, nil
 	}
 	sort.Strings(heldIDs)
-	tail, err := r.pendingTail(shell.ID)
+	planned, noRecord, err := r.plannedExternalIDs(shell.ID, heldVersions)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
+	tail, err := r.pendingTail(shell.ID, planned)
+	if err != nil {
+		return repairs.Row{}, false, err
+	}
+	tail.noRecord = noRecord
 	holderLive, err := r.isLive(holder)
 	if err != nil {
 		return repairs.Row{}, false, err
@@ -229,6 +271,9 @@ func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool,
 		default:
 			why = fmt.Sprintf("its file records are already retired onto %s, which is not a live book; unfinished (%s) until that is settled", holder, tail.String())
 		}
+	}
+	if n := tail.note(); n != "" {
+		why += "; " + n
 	}
 	cur := retiredCurrent{"rows": "0", "retired_into": holder, "target_book_id": holder}
 	cur.putN("retired_versions", len(heldIDs))
@@ -258,16 +303,24 @@ func (r *retiredRun) alreadyRetired(shell database.BookCore) (repairs.Row, bool,
 	row.Fingerprint = hex.EncodeToString(h.Sum(nil))
 	if r.detail {
 		row.Detail = &retiredDetail{minAge: r.minAge, shell: shell, category: class,
-			done: true, holder: holder, versionIDs: heldIDs, pending: tail}
+			done: true, holder: holder, versionIDs: heldIDs, pending: tail, planned: planned}
 	}
 	return row, true, nil
 }
 
 // emptyRetiredVersion returns a retired version of shell, on holder, that holds
-// no rows (nil when there is none): what a retire cut off between creating the
-// version and the commit point leaves behind. The oldest is returned so repeated
-// retries converge on one.
-func (r *retiredRun) emptyRetiredVersion(shell, holder string) (*database.BookVersion, error) {
+// no rows and that op opID itself made (nil when there is none): what a retire
+// cut off between creating the version and the commit point leaves behind, found
+// again by a resume of the SAME op. The oldest is returned so repeated retries
+// converge on one.
+//
+// A version another op made is never returned, even when it is empty: the op
+// that adopts it journals no book_version_create for it, so reverting the op that
+// MADE it would delete a version holding the adopter's retired rows (review S3 of
+// #4144), and an empty version is also what a later restore or unretire leaves,
+// which is not a cut-off retire's. A later op mints its own version instead and
+// the empty one stays, empty.
+func (r *retiredRun) emptyRetiredVersion(shell, holder, opID string) (*database.BookVersion, error) {
 	if r.retired == nil {
 		return nil, nil
 	}
@@ -279,7 +332,7 @@ func (r *retiredRun) emptyRetiredVersion(shell, holder string) (*database.BookVe
 	heldRead := false
 	sort.SliceStable(vs, func(i, j int) bool { return vs[i].CreatedAt.Before(vs[j].CreatedAt) })
 	for i := range vs {
-		if vs[i].BookID != holder || vs[i].Status != database.BookVersionStatusRetired {
+		if vs[i].BookID != holder || vs[i].Status != database.BookVersionStatusRetired || vs[i].RetireOpID != opID {
 			continue
 		}
 		if !heldRead {
@@ -303,15 +356,21 @@ func (r *retiredRun) emptyRetiredVersion(shell, holder string) (*database.BookVe
 }
 
 // pendingTail reads what steps 4 to 6 of a retire still have to do for shell.
-func (r *retiredRun) pendingTail(shellID string) (retiredTail, error) {
+// Of the shell's live external ids only the planned ones count as pending
+// (plannedKey); the rest are counted as unplanned and left alone.
+func (r *retiredRun) pendingTail(shellID string, planned map[string]bool) (retiredTail, error) {
 	var t retiredTail
 	exts, err := r.store.GetExternalIDsForBook(shellID)
 	if err != nil {
 		return t, fmt.Errorf("read the external ids of %s: %w", shellID, err)
 	}
 	for _, e := range exts {
-		if !e.Tombstoned {
+		switch {
+		case e.Tombstoned:
+		case planned[plannedKey(e.Source, e.ExternalID)]:
 			t.externalIDs++
+		default:
+			t.unplanned++
 		}
 	}
 	b, err := r.book(shellID)
@@ -541,15 +600,86 @@ func retiredVersionID(opID, shellID string) string {
 
 // retirePlanRecord is the decision journaled before the first write.
 type retirePlanRecord struct {
-	Fixer       string   `json:"fixer"`
-	RowID       string   `json:"row_id"`
-	ShellID     string   `json:"shell_id"`
-	TargetID    string   `json:"target_id"`
-	Method      string   `json:"method"`
-	Category    string   `json:"category"`
-	VersionID   string   `json:"version_id"`
-	FileIDs     []string `json:"file_ids"`
-	Fingerprint string   `json:"fingerprint"`
+	Fixer     string   `json:"fixer"`
+	RowID     string   `json:"row_id"`
+	ShellID   string   `json:"shell_id"`
+	TargetID  string   `json:"target_id"`
+	Method    string   `json:"method"`
+	Category  string   `json:"category"`
+	VersionID string   `json:"version_id"`
+	FileIDs   []string `json:"file_ids"`
+	// ExternalIDs are the shell's live external ids, read under the merge lock
+	// before the first write: the ones the retire moves to the holder, and the
+	// only ones its tail ever moves (S2 of the review of #4144).
+	ExternalIDs []plannedExternalID `json:"external_ids"`
+	Fingerprint string              `json:"fingerprint"`
+}
+
+// plannedExternalID is one external id a retire planned to move.
+type plannedExternalID struct {
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+}
+
+func plannedKey(source, externalID string) string { return source + "\x00" + externalID }
+
+// plannedExternalIDs returns the external ids (plannedKey) the plan records of
+// the retired versions that hold rows for shell name, and how many of those
+// versions have no record to read. A record is found through the version's
+// RetireOpID and VersionID; a missing one (a purged journal, a version made
+// outside this fixer) contributes nothing, so its ids are never moved.
+func (r *retiredRun) plannedExternalIDs(shell string, held []database.BookVersion) (map[string]bool, int, error) {
+	planned := map[string]bool{}
+	missing := 0
+	for i := range held {
+		recs, err := r.opPlanRecords(held[i].RetireOpID)
+		if err != nil {
+			return nil, 0, err
+		}
+		found := false
+		for _, rec := range recs[shell] {
+			if rec.VersionID != held[i].ID {
+				continue
+			}
+			found = true
+			for _, e := range rec.ExternalIDs {
+				planned[plannedKey(e.Source, e.ExternalID)] = true
+			}
+		}
+		if !found {
+			missing++
+		}
+	}
+	return planned, missing, nil
+}
+
+// opPlanRecords reads the plan records this fixer journaled in op opID, by shell,
+// once per apply session or plan (retiredShared.plans): a tail row would
+// otherwise read the whole journal of its retire op, under the merge lock, once
+// per shell. An op's plan records do not change once its run has ended, and a
+// resume of it runs before the next plan, so the cache is not stale.
+func (r *retiredRun) opPlanRecords(opID string) (map[string][]retirePlanRecord, error) {
+	if opID == "" {
+		return nil, nil
+	}
+	return cachedOnce(r.plans, opID, func() (map[string][]retirePlanRecord, error) {
+		changes, err := r.store.GetOperationChanges(opID)
+		if err != nil {
+			return nil, fmt.Errorf("read the journal of operation %s: %w", opID, err)
+		}
+		out := map[string][]retirePlanRecord{}
+		for _, c := range changes {
+			if c == nil || c.Voided || c.ChangeType != undo.ChangeTypeRepairPlanRecord || !strings.HasPrefix(c.FieldName, "row:") {
+				continue
+			}
+			var rec retirePlanRecord
+			if json.Unmarshal([]byte(c.NewValue), &rec) != nil || rec.Fixer != retiredVersionsFixerID || rec.ShellID == "" {
+				continue
+			}
+			out[rec.ShellID] = append(out[rec.ShellID], rec)
+		}
+		return out, nil
+	})
 }
 
 // retiredProvenance is the version's MetadataJSON: what the shell was, so a
@@ -685,7 +815,7 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		if locked.Class != retCatTailPending || !ld.done || ld.holder != d.holder {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.Reason)
 		}
-		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0)
+		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0, ld.planned)
 	}
 	if locked.Fingerprint != fresh.Fingerprint || !locked.Applicable() {
 		why := locked.Reason
@@ -711,10 +841,9 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: canceled before the first write: %w", repairs.ErrRetryLater, err)
 	}
-	// A version an earlier, failed retire of this shell onto this holder left
-	// with no rows is adopted, not joined by a second empty one. Its id is not
-	// derived from this op, so it is found by what it names.
-	adopted, err := run.emptyRetiredVersion(shell, holder)
+	// A version an earlier, cut-off run of THIS op left with no rows is adopted,
+	// not joined by a second empty one; one another op left is not (S3).
+	adopted, err := run.emptyRetiredVersion(shell, holder, w.OpID())
 	if err != nil {
 		return err
 	}
@@ -729,8 +858,30 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 		rows[i] = retireRow{ID: d.files[i].ID, PrevVersionID: d.files[i].VersionID}
 	}
 	sort.Strings(fileIDs)
+	// The external ids this retire will move, read now, under the merge lock and
+	// before the first write: the plan record names them and the tail moves
+	// only them.
+	exts, err := run.store.GetExternalIDsForBook(shell)
+	if err != nil {
+		return fmt.Errorf("read the external ids of %s: %w", shell, err)
+	}
+	planned := map[string]bool{}
+	plannedIDs := []plannedExternalID{}
+	for _, e := range exts {
+		if !e.Tombstoned && !planned[plannedKey(e.Source, e.ExternalID)] {
+			planned[plannedKey(e.Source, e.ExternalID)] = true
+			plannedIDs = append(plannedIDs, plannedExternalID{Source: e.Source, ExternalID: e.ExternalID})
+		}
+	}
+	sort.Slice(plannedIDs, func(i, j int) bool {
+		if plannedIDs[i].Source != plannedIDs[j].Source {
+			return plannedIDs[i].Source < plannedIDs[j].Source
+		}
+		return plannedIDs[i].ExternalID < plannedIDs[j].ExternalID
+	})
 	rec, err := json.Marshal(retirePlanRecord{Fixer: retiredVersionsFixerID, RowID: shell, ShellID: shell, TargetID: holder,
-		Method: d.targetMethod, Category: d.category, VersionID: versionID, FileIDs: fileIDs, Fingerprint: locked.Fingerprint})
+		Method: d.targetMethod, Category: d.category, VersionID: versionID, FileIDs: fileIDs, ExternalIDs: plannedIDs,
+		Fingerprint: locked.Fingerprint})
 	if err != nil {
 		return fmt.Errorf("encode the plan record of %s: %w", shell, err)
 	}
@@ -751,9 +902,9 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 		v.IngestDate = d.shell.CreatedAt.UTC()
 	}
 	if adopted != nil {
-		// Made by another op, so this op journals no create for it (its own undo
-		// would delete a version it did not make); the rows it retires into it
-		// are journaled as usual.
+		// Made by an earlier run of this same op, whose journal already holds its
+		// create (see emptyRetiredVersion); the rows retired into it are
+		// journaled as usual.
 		v = adopted
 	} else if err := rw.CreateRetiredVersion(holder, v); err != nil {
 		return retiredApplyErr(err)
@@ -774,16 +925,18 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	// a decisions.RetiredVersionsEvent keyed by
 	// decisions.RetiredVersionsSubjectKey(shell). Not wired in this PR because
 	// PR 8 is not in this branch's base; wire it when the two are stacked.
-	return f.finishRetire(ctx, rw, run, shell, holder, steps)
+	return f.finishRetire(ctx, rw, run, shell, holder, steps, planned)
 }
 
 // finishRetire is steps 4 to 6: the shell's external ids, its merged-into link
 // and the chain. Every one is idempotent (an id already moved is no longer on
 // the shell; merged-into is set only while empty; re-homed rows are no longer
-// held by the shell), so it is also what a resume runs. steps counts the writes
+// held by the shell), so it is also what a resume runs. planned is the set of
+// external ids (plannedKey) the retire's plan record names: only those move.
+// steps counts the writes
 // already made by this call's row, so a failure after the commit point is a
 // partial apply.
-func (f *retiredVersionsFixer) finishRetire(ctx context.Context, rw retireWriter, run *retiredRun, shell, holder string, steps int) error {
+func (f *retiredVersionsFixer) finishRetire(ctx context.Context, rw retireWriter, run *retiredRun, shell, holder string, steps int, planned map[string]bool) error {
 	partial := func(err error) error {
 		err = retiredApplyErr(err)
 		if steps == 0 {
@@ -804,6 +957,11 @@ func (f *retiredVersionsFixer) finishRetire(ctx context.Context, rw retireWriter
 		if e.Tombstoned {
 			// A tombstoned mapping records an id taken off this book: it stays
 			// on the shell rather than land on the holder (as every retire does).
+			continue
+		}
+		if !planned[plannedKey(e.Source, e.ExternalID)] {
+			// Attached after the retire's plan record (or no record names it):
+			// no guard ever judged it, so it stays on the shell.
 			continue
 		}
 		if err := ctx.Err(); err != nil {
