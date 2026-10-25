@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint_test.go
-// version: 1.6.1
+// version: 1.8.0
 // guid: b6d0f39c-4a17-4e82-95c1-70fe2a8b31d4
-// last-edited: 2026-10-19
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -20,6 +20,8 @@ import (
 // repointFakeStore records every written row so a test can assert BOTH what was
 // written and — just as importantly — that nothing else was.
 type repointFakeStore struct {
+	noRetiredRows // the op reads database.AllBookFilesCoreIncludingRetired; see retired_reader_fake_test.go
+
 	mu      sync.Mutex // UpdateBookFiles is called from RunItems' worker pool
 	cores   []database.BookFileCore
 	books   []database.BookCore            // owning books, for the book-path fallback derivation
@@ -30,6 +32,12 @@ type repointFakeStore struct {
 
 func (f *repointFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.cores, nil
+}
+
+// GetAllBookFilesCoreIncludingRetired: this fake holds no retired rows, so the
+// including-retired read is the plain read.
+func (f *repointFakeStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return f.GetAllBookFilesCore()
 }
 func (f *repointFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
 	if offset >= len(f.books) {
