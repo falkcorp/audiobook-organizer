@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.4
+// version: 1.45.5
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -64,6 +64,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
@@ -897,7 +898,26 @@ func (h *Handler) revertAudiobookMetadataImpl(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid timestamp format, use RFC3339Nano")
 		return
 	}
-	book, err := store.RevertBookToVersion(id, ts)
+	// Under the merge lock every retire holds. The store refuses a retired
+	// shell under the book's write stripe, but a retire commits under the
+	// shell's OWNER stripe and the merge lock, not that stripe, so without the
+	// lock a retire could land between the store's check and its commit and the
+	// whole-row revert would revive the shell (un-trash it, clear its merged-into
+	// link) next to the audio it just lost. With it the check is exact.
+	//
+	// Lock order: merge lock, then the book's write stripe (RevertBookToVersion
+	// takes it; the retired-row reads of its shell check are lock-free and no
+	// owner stripe is taken here). A retire takes the merge lock, then its
+	// version, file and owner stripes. revertMetadataUpdate (the operation
+	// revert) also takes the merge lock before any stripe. Nothing here takes a
+	// stripe and then the merge lock, and nothing under the lock calls a
+	// merge-family path (the lock is not reentrant): the cache invalidation
+	// below runs after the lock is released.
+	book, err := func() (*database.Book, error) {
+		merge.LockMergeRMW()
+		defer merge.UnlockMergeRMW()
+		return store.RevertBookToVersion(id, ts)
+	}()
 	if err != nil {
 		if errors.Is(err, database.ErrBookIsRetiredShell) {
 			// A whole-row revert would un-trash the shell and clear its
