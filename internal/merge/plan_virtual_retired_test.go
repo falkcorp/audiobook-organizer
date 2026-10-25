@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_retired_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5d0b8e63-91a4-4c27-b6f3-7e2a1c9d4058
 // last-edited: 2026-10-25
 
@@ -72,7 +72,9 @@ func TestPlanVirtualFile_FileHeldByRetiredVersionPlansNothing(t *testing.T) {
 			assert.Nil(t, plan.existing, "the retired row must not be moved")
 			assert.False(t, plan.attached)
 			assert.Empty(t, plan.fm.FileID)
-			assert.Zero(t, ms.applyVirtualFile(plan, target.ID))
+			n, aerr := ms.applyVirtualFile(plan, target.ID)
+			require.NoError(t, aerr)
+			assert.Zero(t, n)
 
 			at, err := store.(*database.PebbleStore).BookFilesAtPath(target.FilePath)
 			require.NoError(t, err)
@@ -165,8 +167,8 @@ func TestPlanVirtualFile_CompleteLookupUnavailableOnOpaqueStoreErrors(t *testing
 // a path is free: no retired row can hold the path, so a single-owner lookup that
 // finds nothing is a whole answer and the row is created, warmup or not. It does
 // not show who ELSE holds a path it names a row of, so taking that row off its
-// book needs the complete lookup, and without it nothing is taken (a warning
-// instead): see TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow.
+// book needs the complete lookup, and without it nothing is taken (an error that
+// refuses the combine before its journal, a warning after it): see TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow.
 func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsCreatesButTakesNothing(t *testing.T) {
 	store := setupTestStore(t)
 	ms := NewService(indexDownStore{Store: store})
@@ -188,10 +190,14 @@ func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsCreatesBu
 		stray := &database.BookFile{ID: ulid.Make().String(), BookID: owner.ID, FilePath: target.FilePath, Format: "mp3"}
 		require.NoError(t, store.CreateBookFile(stray))
 		plan, err := ms.planVirtualFile(target, target.ID, nil)
-		require.NoError(t, err)
+		require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete, "before the journal, a row that cannot be taken yet refuses the combine")
 		assert.Nil(t, plan.existing, "another book's row is not taken on the single-owner answer alone")
 		assert.Nil(t, plan.create, "and no second row is put on its file")
-		assert.Contains(t, plan.warning, "not available yet")
+		late, err := ms.planVirtualFileAfterJournal(target, target.ID, nil)
+		require.NoError(t, err, "after the journal it is a warning")
+		assert.Nil(t, late.existing)
+		assert.Nil(t, late.create)
+		assert.Contains(t, late.warning, "not available yet")
 	})
 }
 

@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 0c6e2f94-7b1d-4a58-9e3c-5d8a1f27b640
 // last-edited: 2026-10-25
 
@@ -426,8 +426,9 @@ func TestCombine_RefusedWhenJournalCannotBeWritten(t *testing.T) {
 // book whose FilePath is already a file row owned by a book OUTSIDE the
 // combine gets that row reattached (moved) to the survivor. Undo must move it
 // back to that outside owner, once. When the owner has been purged since, the
-// row has nowhere to go: the undo still succeeds, leaves the row on the survivor,
-// and warns (see TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedStaysOnSurvivor).
+// row has nowhere to go: the undo still succeeds and warns, and the row goes to
+// the absorbed book whose file it is (see
+// TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedGoesToTheAbsorbedBook).
 func TestCombineUndo_ReattachedRowGoesBackToItsOutsideOwner(t *testing.T) {
 	store := setupTestStore(t)
 	survivor, virt, outside := ulid.Make().String(), ulid.Make().String(), ulid.Make().String()
@@ -458,12 +459,14 @@ func TestCombineUndo_ReattachedRowGoesBackToItsOutsideOwner(t *testing.T) {
 }
 
 // The outside owner of a reattached row is purged before the undo. The row has no
-// book to go back to, so the undo leaves it on the survivor (which holds the
-// audio) and says so, the same rule a created row with no book to return to
-// already followed. It used to refuse the WHOLE undo for it: the absorbed books
-// and every other file of the combine then could not be put back either, and
-// nothing the user could do would clear the refusal.
-func TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedStaysOnSurvivor(t *testing.T) {
+// book to go back to. It was planned from an ABSORBED book's FilePath, so it is
+// that book's file and goes to it, the way a created row for its audio does: the
+// book comes back naming the file (its FilePath is restored) and owning the row,
+// and the survivor does not keep audio it never had. The undo still succeeds and
+// says so. It used to refuse the WHOLE undo for it, and in the next version left
+// the row on the survivor, whose duration and track list then included the
+// absorbed book's audio.
+func TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedGoesToTheAbsorbedBook(t *testing.T) {
 	store := setupTestStore(t)
 	survivor, virt, outside := ulid.Make().String(), ulid.Make().String(), ulid.Make().String()
 	shared := "/tmp/undo/purged-shared-" + outside + ".mp3"
@@ -481,6 +484,7 @@ func TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedStaysOnSurvivor(t *testing.
 	ms := NewService(store)
 	res, err := ms.CombineBooks([]string{survivor, virt}, survivor, nil)
 	require.NoError(t, err)
+	require.Contains(t, viewFiles(t, store, survivor), rowID, "the outside owner's row was reattached to the survivor")
 	require.NoError(t, store.DeleteBook(outside))
 
 	undone, err := ms.UndoCombine(res.JournalID)
@@ -488,12 +492,53 @@ func TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedStaysOnSurvivor(t *testing.
 	require.Len(t, undone.Warnings, 1)
 	assert.Contains(t, undone.Warnings[0], rowID)
 	assert.Contains(t, undone.Warnings[0], outside)
+	assert.Contains(t, undone.Warnings[0], virt, "the warning says where the row went")
 
-	assert.Contains(t, viewFiles(t, store, survivor), rowID, "the row stays on the survivor, which holds the audio")
-	assert.False(t, viewBook(t, store, virt).SoftDel, "the rest of the combine is undone: the absorbed book is back")
+	assert.NotContains(t, viewFiles(t, store, survivor), rowID, "the survivor does not keep the absorbed book's audio")
+	onVirt, ok := viewFiles(t, store, virt)[rowID]
+	require.True(t, ok, "the row is back on the absorbed book whose file it is")
+	assert.Equal(t, shared, onVirt.Path)
+	restored := viewBook(t, store, virt)
+	assert.False(t, restored.SoftDel, "the rest of the combine is undone: the absorbed book is back")
+	assert.Equal(t, shared, restored.FilePath, "naming the file whose row it owns again")
 	j, err := ms.GetCombineJournal(res.JournalID)
 	require.NoError(t, err)
 	assert.Equal(t, CombineJournalUndone, j.Status)
+}
+
+// The same purged owner, but the row was taken for the SURVIVOR's own file (a
+// rowless survivor whose FilePath another book held a row at). The survivor's
+// FilePath names that file, so the row stays on the survivor, with a warning.
+func TestCombineUndo_SurvivorsReattachedRowWhoseOwnerWasPurgedStaysOnSurvivor(t *testing.T) {
+	store := setupTestStore(t)
+	survivor, absorbed, outside := ulid.Make().String(), ulid.Make().String(), ulid.Make().String()
+	shared := "/tmp/undo/surv-purged-shared-" + outside + ".mp3"
+	for _, b := range []*database.Book{
+		{ID: survivor, Title: "S", Format: "mp3", FilePath: shared},
+		{ID: absorbed, Title: "A", Format: "mp3", FilePath: "/tmp/undo/spa-" + absorbed + ".mp3"},
+		{ID: outside, Title: "O", Format: "mp3", FilePath: "/tmp/undo/spo-" + outside},
+	} {
+		_, err := store.CreateBook(b)
+		require.NoError(t, err)
+	}
+	rowID := ulid.Make().String()
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: rowID, BookID: outside, FilePath: shared, Format: "mp3"}))
+
+	ms := NewService(store)
+	res, err := ms.CombineBooks([]string{survivor, absorbed}, survivor, nil)
+	require.NoError(t, err)
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	require.Len(t, j.SurvivorFiles, 1, "fixture: the row is journaled under the survivor's own list")
+	require.Equal(t, rowID, j.SurvivorFiles[0].FileID)
+	require.NoError(t, store.DeleteBook(outside))
+
+	undone, err := ms.UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	require.Len(t, undone.Warnings, 1)
+	assert.Contains(t, undone.Warnings[0], rowID)
+	assert.Contains(t, undone.Warnings[0], "left on survivor")
+	assert.Contains(t, viewFiles(t, store, survivor), rowID, "the survivor's own file keeps its row")
 }
 
 // The reattached row of a TRASHED holder: the combine notes the pick on its
