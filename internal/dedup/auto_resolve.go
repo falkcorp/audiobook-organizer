@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-10-28
 
@@ -519,7 +519,21 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 			errs = append(errs, fmt.Sprintf("%s %s: no pre-merge snapshot recorded", role, id))
 			return
 		}
-		b, err := de.bookStore.RevertBookToVersion(id, time.Unix(0, ts))
+		// Under the merge lock every retire holds, around this one call only:
+		// the store refuses a retired shell under the book's write stripe, but a
+		// retire commits under the shell's owner stripe and the merge lock, so
+		// without the lock it could land between that check and the commit and
+		// the whole-row revert would revive the shell. Lock order: merge lock,
+		// then the book's write stripe (the retired-row reads are lock-free, no
+		// owner stripe is taken). The lock is not reentrant, so it is NOT held
+		// across the rest of UnmergeAuto: the sibling undo
+		// (UndoSiblingMoveForLoser), ClearGroupRedirect and the primary
+		// hand-off all take it themselves.
+		b, err := func() (*database.Book, error) {
+			merge.LockMergeRMW()
+			defer merge.UnlockMergeRMW()
+			return de.bookStore.RevertBookToVersion(id, time.Unix(0, ts))
+		}()
 		if err != nil {
 			revertFailed = true
 			errs = append(errs, fmt.Sprintf("%s %s: %v", role, id, err))
