@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-bulk-delete-progress-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 2d6f9b84-7a13-4c5e-b0d8-e4a1c37f5962 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -61,6 +61,14 @@ one check, so they cannot disagree about what counts as "still has files".
   "Delete Selected" and "Restore Selected" for people who lack the permission and
   says which one is missing, and shows the server's message if a bulk action is
   refused.
+- Closing a loophole in the same rule: a bulk edit that only changes a book's
+  "library state" to a normal value (for example "organized") on a book that is in
+  the trash quietly takes it out of the trash. Each book is now checked after it
+  is loaded: taking a trashed book out of the trash needs the "organize"
+  permission and putting a book in the trash needs "delete", whatever the request
+  looks like. A book the person may not change is reported as not changed, naming
+  the missing permission, and the other books in the request are handled
+  normally.
 - Deleting a single book now does the same last-moment check. Before, it
   looked at the files once, then took the protected step without looking again,
   so a file attached in that gap could still end with the progress moved and the
@@ -73,7 +81,9 @@ Anyone who used the bulk hard delete on books that still had files and had
 listening progress on them. The bulk delete is an API operation; the website
 does not offer it today, so the exposure was to direct API use. The missing
 permission checks on bulk trash and restore could be used by any account that
-could edit metadata, from the website's bulk edit or directly.
+could edit metadata, and it was reachable only by calling the API directly: the
+website's bulk edit sends only metadata fields, and its bulk delete and restore
+buttons use the one-book routes, which were already protected.
 
 ## What the owner needs to do
 

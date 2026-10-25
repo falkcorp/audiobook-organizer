@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-14
+// last-edited: 2026-10-25
 
 package server
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	repairshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/repairs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
@@ -36,6 +37,24 @@ func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 	// a verified Cloudflare Access sign-in as owner_email, the admin role and
 	// a same-origin request.
 	protected.POST("/repairs/:fixer/owner-apply", s.perm(auth.PermLibraryEditMetadata), h.OwnerApply)
+}
+
+// permHolds is permCheck's question without the refusal: whether the caller
+// holds p, same semantics (auth disabled and first run hold every permission),
+// writing no response.
+func (s *Server) permHolds() audiobookshandler.PermissionHolds {
+	if !config.AppConfig.EnableAuth {
+		return func(*gin.Context, auth.Permission) bool { return true }
+	}
+	store := s.storeForWiring()
+	return func(c *gin.Context, p auth.Permission) bool {
+		if store != nil {
+			if n, err := store.CountUsers(); err == nil && n == 0 {
+				return true
+			}
+		}
+		return auth.Can(c.Request.Context(), p)
+	}
 }
 
 // permCheck is s.perm as a check a handler runs inline, for a permission it

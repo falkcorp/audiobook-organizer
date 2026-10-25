@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.37.1
+// version: 1.38.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-25
 
@@ -158,6 +158,11 @@ type Handler struct {
 	// (StrictPermissionCheck); the server installs its own with
 	// SetPermissionCheck.
 	permCheck PermissionCheck
+	// permHolds answers, without writing a response, whether the caller holds a
+	// permission (BatchOperations and BatchUpdateAudiobooks hand what the caller
+	// may do to books' place in the library to the service, which judges each
+	// row). nil means the strict answer (StrictPermissionHolds).
+	permHolds PermissionHolds
 }
 
 // SetSearchResultCached tells the handler which search requests are served

@@ -1,5 +1,5 @@
 // file: internal/server/batch_hard_delete_permission_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e0a974ef-0780-48c3-921a-e32b2e124b6c
 // last-edited: 2026-10-25
 
@@ -265,4 +265,140 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 			require.False(t, trashed(id), "%s: restored", tc.name)
 		}
 	})
+}
+
+// TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore: a bulk edit that
+// sets library_state to a live value on a book in the trash takes it out of the
+// trash without looking like a restore (no marked_for_deletion, no restore
+// action), so the request's shape cannot decide the permission. The service
+// judges each row after loading it against what the caller holds: without
+// library.organize the row fails ("not changed", 200 with failed=1, nothing
+// written); with it the edit goes through; a book that is not in the trash is a
+// plain metadata edit for either role. Both trash representations are tried
+// (labelled "deleted" only, and flagged with a label kept), on both routes, and
+// one body with trailing bytes. Not parallel: it swaps the process-wide config.
+func TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore(t *testing.T) {
+	srv, _, _ := repairsPermServer(t, true, true)
+	ps, ok := srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok, "test store is a PebbleStore")
+
+	for id, perms := range map[string][]auth.Permission{
+		"state-metadata-only": {auth.PermLibraryView, auth.PermLibraryEditMetadata},
+		"state-organize":      {auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermLibraryOrganize},
+	} {
+		_, err := ps.CreateRole(&database.Role{ID: id, Name: id, Permissions: perms})
+		require.NoError(t, err)
+	}
+	session := func(name, role string) string {
+		u, err := ps.CreateUser(name, name+"@example.test", "bcrypt", "hash", []string{role}, "active")
+		require.NoError(t, err)
+		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour)
+		require.NoError(t, err)
+		return s.ID
+	}
+	meta := session("state-meta", "state-metadata-only")
+	organizer := session("state-org", "state-organize")
+
+	deleted := "deleted"
+	newBook := func(title string, label, flagged bool) string {
+		b := &database.Book{Title: title, FilePath: "/library/" + title + ".m4b"}
+		if label {
+			b.LibraryState = &deleted
+		}
+		if flagged {
+			yes := true
+			b.MarkedForDeletion = &yes
+		}
+		b, err := ps.CreateBook(b)
+		require.NoError(t, err)
+		return b.ID
+	}
+	state := func(id string) (inTrash bool, label string) {
+		b, err := ps.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b)
+		if b.LibraryState != nil {
+			label = *b.LibraryState
+		}
+		return database.IsInTrash(b), label
+	}
+
+	routes := []struct{ name, path, body string }{
+		{"batch-operations", batchOpsPath, `{"operations":[{"id":"%s","action":"update","updates":{"library_state":"organized"}}]}`},
+		{"batch", batchPath, `{"ids":["%s"],"updates":{"library_state":"organized"}}`},
+		{"batch trailing bytes", batchPath, `{"ids":["%s"],"updates":{"library_state":"organized"}}x`},
+	}
+	for _, rt := range routes {
+		for _, kind := range []struct {
+			name           string
+			label, flagged bool
+		}{{"labelled only", true, false}, {"flagged and labelled", true, true}} {
+			t.Run("refused row without library.organize: "+rt.name+", "+kind.name, func(t *testing.T) {
+				id := newBook("Synthetic State "+rt.name+kind.name, kind.label, kind.flagged)
+				w := postRepairs(srv, meta, rt.path, strings.ReplaceAll(rt.body, "%s", id))
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				require.Contains(t, w.Body.String(), "library.organize")
+				require.Contains(t, w.Body.String(), `"failed":1`)
+				inTrash, label := state(id)
+				require.True(t, inTrash, "the book must stay in the trash")
+				require.Equal(t, "deleted", label)
+			})
+			t.Run("allowed with library.organize: "+rt.name+", "+kind.name, func(t *testing.T) {
+				id := newBook("Synthetic Organizer "+rt.name+kind.name, kind.label, kind.flagged)
+				w := postRepairs(srv, organizer, rt.path, strings.ReplaceAll(rt.body, "%s", id))
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				require.Contains(t, w.Body.String(), `"success":1`)
+				_, label := state(id)
+				require.Equal(t, "organized", label)
+			})
+		}
+		t.Run("a book that is not in the trash is a plain edit: "+rt.name, func(t *testing.T) {
+			id := newBook("Synthetic Live "+rt.name, false, false)
+			w := postRepairs(srv, meta, rt.path, strings.ReplaceAll(rt.body, "%s", id))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), `"success":1`)
+			_, label := state(id)
+			require.Equal(t, "organized", label)
+		})
+	}
+}
+
+// TestBatchRoutes_TrashAndRestoreThroughTheWiredHolds: the grants the service
+// judges each row by come from the permission probe wireHandlers installs
+// (SetPermissionHolds with the server's permHolds), which holds every
+// permission with auth disabled and on a first run. An unwired handler is
+// strict and grants nothing without a user, so dropping the SetPermissionHolds
+// line makes both subtests fail on the row-level refusal. Not parallel: it
+// swaps the process-wide config.
+func TestBatchRoutes_TrashAndRestoreThroughTheWiredHolds(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		enableAuth, users bool
+	}{
+		{"auth disabled", false, false},
+		{"first run, no users yet", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _, _ := repairsPermServer(t, tc.enableAuth, tc.users)
+			ps, ok := srv.storeForWiring().(*database.PebbleStore)
+			require.True(t, ok, "test store is a PebbleStore")
+			deleted := "deleted"
+			b, err := ps.CreateBook(&database.Book{Title: "Synthetic Wired Holds", FilePath: "/library/wired-holds.m4b", LibraryState: &deleted})
+			require.NoError(t, err)
+
+			w := postRepairs(srv, "", batchPath, `{"ids":["`+b.ID+`"],"updates":{"library_state":"organized"}}`)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), `"success":1`)
+			got, err := ps.GetBookByID(b.ID)
+			require.NoError(t, err)
+			require.False(t, database.IsInTrash(got), "taken out of the trash")
+
+			w = postRepairs(srv, "", batchOpsPath, `{"operations":[{"id":"`+b.ID+`","action":"update","updates":{"library_state":"deleted"}}]}`)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), `"success":1`)
+			got, err = ps.GetBookByID(b.ID)
+			require.NoError(t, err)
+			require.True(t, database.IsInTrash(got), "moved to the trash")
+		})
+	}
 }
