@@ -1,7 +1,7 @@
 // file: internal/undo/master_list_elsewhere_preflight_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f4b7a62-93d1-4c58-b2e6-5a8d1c70e394
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package undo
 
@@ -62,7 +62,7 @@ func TestPreflightUndoConflicts_MasterListElsewhereRows(t *testing.T) {
 		}
 	}
 
-	report, err := PreflightUndoConflicts(store, "op1")
+	report, err := preflightUndoConflicts(store, "op1")
 	if err != nil {
 		t.Fatalf("preflight: %v", err)
 	}

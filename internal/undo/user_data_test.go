@@ -1,5 +1,5 @@
 // file: internal/undo/user_data_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9c2d71-6a4e-4b8f-9e15-0d7a2c6b4e83
 // last-edited: 2026-10-25
 
@@ -34,6 +34,7 @@ func TestIsUserDataChangeType(t *testing.T) {
 		"user_state_follow",
 		"user_content_follow",
 		"repair_owner_apply",
+		"master_list_elsewhere_create",
 	}, got)
 
 	for _, ct := range got {
