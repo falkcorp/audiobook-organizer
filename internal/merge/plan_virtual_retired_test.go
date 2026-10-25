@@ -1,11 +1,12 @@
 // file: internal/merge/plan_virtual_retired_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0b8e63-91a4-4c27-b6f3-7e2a1c9d4058
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package merge
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -188,6 +189,81 @@ func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsPlansNorm
 		require.NotNil(t, plan.existing)
 		assert.Equal(t, stray.ID, plan.existing.ID)
 	})
+}
+
+// readErrStore fails the reads it is told to, and answers the rest from the
+// real store. It opts into Unwrap like the production decorators.
+type readErrStore struct {
+	database.Store
+	getBookFilesErr      error
+	getBookFileByPathErr error
+}
+
+func (s readErrStore) Unwrap() database.Store { return s.Store }
+
+func (s readErrStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	if s.getBookFilesErr != nil {
+		return nil, s.getBookFilesErr
+	}
+	return s.Store.GetBookFiles(id)
+}
+
+func (s readErrStore) GetBookFileByPath(p string) (*database.BookFile, error) {
+	if s.getBookFileByPathErr != nil {
+		return nil, s.getBookFileByPathErr
+	}
+	return s.Store.GetBookFileByPath(p)
+}
+
+// A failed GetBookFiles is not "this book has no rows": planOwnFile used to
+// discard the error and plan a create for a book that already had rows, putting
+// a second live row on its file. It is an error now, and nothing is planned.
+func TestPlanOwnFile_RowsReadErrorErrorsInsteadOfPlanningACreate(t *testing.T) {
+	store := setupTestStore(t)
+	b, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Has rows", FilePath: "/tmp/pvr-rowserr.mp3"})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: b.ID, FilePath: b.FilePath, Format: "mp3"}))
+
+	boom := errors.New("injected pebble read error")
+	ms := NewService(readErrStore{Store: store, getBookFilesErr: boom})
+	plan, err := ms.planOwnFile(b)
+	require.ErrorIs(t, err, boom)
+	assert.Nil(t, plan.create, "an unreadable row list must not plan a second live row")
+	assert.Nil(t, plan.existing)
+	assert.False(t, plan.attached)
+}
+
+// planVirtualFile finds the live row to reattach in the rows the lookup already
+// returned, so a failing GetBookFileByPath cannot make a held path look free (the
+// old second read discarded its error and planned a create over the live row).
+func TestPlanVirtualFile_ReattachesTheLiveRowFromTheLookupNotASecondRead(t *testing.T) {
+	store := setupTestStore(t)
+	owner, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Stray owner", FilePath: "/tmp/pvr-reread-owner.mp3"})
+	require.NoError(t, err)
+	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: "/tmp/pvr-reread.mp3"})
+	require.NoError(t, err)
+	stray := &database.BookFile{ID: ulid.Make().String(), BookID: owner.ID, FilePath: target.FilePath, Format: "mp3"}
+	require.NoError(t, store.CreateBookFile(stray))
+
+	ms := NewService(readErrStore{Store: store, getBookFileByPathErr: errors.New("injected path read error")})
+	plan, err := ms.planVirtualFile(target, target.ID)
+	require.NoError(t, err)
+	assert.Nil(t, plan.create, "the path is held by a live row; no second row may be planned")
+	require.NotNil(t, plan.existing)
+	assert.Equal(t, stray.ID, plan.existing.ID)
+}
+
+func TestLiveRowAtPath(t *testing.T) {
+	rows := []database.BookFile{
+		{ID: "r1", BookID: "b9"},
+		{ID: "r0", BookID: "b5", Retired: true},
+		{ID: "r3", BookID: "b5"},
+		{ID: "r2", BookID: "b5"},
+	}
+	assert.Equal(t, "r1", liveRowAtPath(rows, "b9").ID, "the target's own row wins")
+	assert.Equal(t, "r2", liveRowAtPath(rows, "bX").ID, "otherwise the smallest live (BookID, ID); a retired row is never picked")
+	assert.Nil(t, liveRowAtPath([]database.BookFile{{ID: "r0", BookID: "b5", Retired: true}}, "b5"))
+	assert.Nil(t, liveRowAtPath(nil, "b5"))
 }
 
 // seedWarmupCombine builds a survivor and an absorbed book that are both
