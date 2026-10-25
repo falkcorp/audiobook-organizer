@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 051a1636-d299-45a5-80d2-9b72255cffcf
-// last-edited: 2026-10-05
+// last-edited: 2026-10-25
 
 package merge
 
@@ -107,8 +107,18 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 // ErrStateCarryIncomplete (put back, del not run); del's own error is
 // returned wrapped (after a carry the state is on carriedTo by then).
 //
+// precheck, when non-nil, is a condition the caller must see hold before
+// anything is written (e.g. "the book owns no book_file rows": del, a hard
+// delete, refuses such a book, but only after a carry has already moved the
+// state off it). It runs under the same hold of the merge lock as the carry
+// and del, before the carry moves anything, so what it read cannot change to
+// a merge's detriment between it and the carry. A carry's precheck refusal
+// returns wrapped in ErrCarryPrecheckRefused with nothing moved; with no
+// state to carry it runs just before del and its error is returned as is.
+// Either way errors.Is reaches the precheck's own error.
+//
 // The caller must hold neither the merge lock nor a version-group lock.
-func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader, book *database.Book, del func() error) (carriedTo string, err error) {
+func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader, book *database.Book, precheck, del func() error) (carriedTo string, err error) {
 	if book == nil || book.ID == "" {
 		return "", fmt.Errorf("%w: no book", ErrUserStateCheckFailed)
 	}
@@ -121,7 +131,15 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 		return "", fmt.Errorf("%w: %s: %w", ErrUserStateCheckFailed, book.ID, err)
 	}
 	if !has {
-		return "", HardDeleteWithoutUserState(db, book.ID, del)
+		if precheck == nil {
+			return "", HardDeleteWithoutUserState(db, book.ID, del)
+		}
+		return "", HardDeleteWithoutUserState(db, book.ID, func() error {
+			if err := precheck(); err != nil {
+				return err
+			}
+			return del()
+		})
 	}
 	target, err := ListedLiveSibling(books, book)
 	if err != nil {
@@ -130,7 +148,19 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 	if target == "" {
 		return "", fmt.Errorf("%w (%s)", ErrBookHasListeningState, book.ID)
 	}
-	if err := CarryStateThenHardDelete(db, target, book.ID, CarryTargetPrecheck(books, target), del); err != nil {
+	targetCheck := CarryTargetPrecheck(books, target)
+	carryCheck := targetCheck
+	if precheck != nil {
+		// The caller's condition first: a book it refuses must not even have
+		// its target re-read, and its refusal is the one reported.
+		carryCheck = func() error {
+			if err := precheck(); err != nil {
+				return err
+			}
+			return targetCheck()
+		}
+	}
+	if err := CarryStateThenHardDelete(db, target, book.ID, carryCheck, del); err != nil {
 		if errors.Is(err, ErrCarryPrecheckRefused) || errors.Is(err, ErrStateCarryIncomplete) {
 			return "", err
 		}

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -1473,7 +1473,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 		return svc.store.DeleteBook(id)
 	}
-	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, del)
+	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, nil, del)
 	if err != nil {
 		if err.Error() == "book not found" {
 			return nil, fmt.Errorf("audiobook not found")
