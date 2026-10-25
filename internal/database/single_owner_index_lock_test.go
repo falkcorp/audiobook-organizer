@@ -1,7 +1,7 @@
 // file: internal/database/single_owner_index_lock_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b4e07d19-6a3c-4825-9f71-3d8c05e2a916
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -78,17 +78,23 @@ func installSingleOwnerHooks(t *testing.T, afterVerify func(contended <-chan str
 func TestSingleOwnerIndexWriters_AreHeldOutOfARetiresVerifyCommitWindow(t *testing.T) {
 	const hash = "hash-single-owner-window"
 	const path = "/lib/ret/window/live.mp3"
+	// The retire holds x's file stripe from before its verify until after its commit
+	// (lockBookFiles(setKeys(retiring))), and a writer that takes a file stripe
+	// (CreateBookFile and ClaimBookFilePathKey lock the row they write) would wait on
+	// it instead of reaching the index mutex when its id hashes to the same stripe,
+	// and the test then failed with "never reached" about 1 run in 256. So every live
+	// row's id avoids x's stripe as well as the holder's and the shell's.
 	writers := []struct {
 		name  string
-		setup func(t *testing.T, fx *retiredFixture, other *Book) func() error
+		setup func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error
 		// check runs after both the retire and the writer finished.
 		check func(t *testing.T, fx *retiredFixture, other *Book)
 	}{
 		{
 			name: "CreateBookFile takes the hash key",
-			setup: func(t *testing.T, fx *retiredFixture, other *Book) func() error {
+			setup: func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error {
 				return func() error {
-					return fx.ps.CreateBookFile(&BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID), BookID: other.ID, FilePath: path, FileHash: hash, Format: "mp3"})
+					return fx.ps.CreateBookFile(&BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID, x.ID), BookID: other.ID, FilePath: path, FileHash: hash, Format: "mp3"})
 				}
 			},
 			check: func(t *testing.T, fx *retiredFixture, other *Book) {
@@ -103,8 +109,8 @@ func TestSingleOwnerIndexWriters_AreHeldOutOfARetiresVerifyCommitWindow(t *testi
 		},
 		{
 			name: "ClaimBookFilePathKey sets the path key",
-			setup: func(t *testing.T, fx *retiredFixture, other *Book) func() error {
-				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID), BookID: other.ID, FilePath: path, Format: "mp3"}
+			setup: func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error {
+				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID, x.ID), BookID: other.ID, FilePath: path, Format: "mp3"}
 				require.NoError(t, fx.ps.CreateBookFile(live))
 				return func() error {
 					_, err := fx.ps.ClaimBookFilePathKey(other.ID, live.ID, path)
@@ -114,24 +120,24 @@ func TestSingleOwnerIndexWriters_AreHeldOutOfARetiresVerifyCommitWindow(t *testi
 		},
 		{
 			name: "DeleteBookFile drops the row's index keys",
-			setup: func(t *testing.T, fx *retiredFixture, other *Book) func() error {
-				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-one", Format: "mp3"}
+			setup: func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error {
+				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID, x.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-one", Format: "mp3"}
 				require.NoError(t, fx.ps.CreateBookFile(live))
 				return func() error { return fx.ps.DeleteBookFile(live.ID) }
 			},
 		},
 		{
 			name: "DeleteBookFilesForBook drops the rows' index keys",
-			setup: func(t *testing.T, fx *retiredFixture, other *Book) func() error {
-				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-book", Format: "mp3"}
+			setup: func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error {
+				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID, x.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-book", Format: "mp3"}
 				require.NoError(t, fx.ps.CreateBookFile(live))
 				return func() error { return fx.ps.DeleteBookFilesForBook(other.ID) }
 			},
 		},
 		{
 			name: "DeleteBookFilesByIDs drops the rows' index keys",
-			setup: func(t *testing.T, fx *retiredFixture, other *Book) func() error {
-				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-ids", Format: "mp3"}
+			setup: func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error {
+				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID, x.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-ids", Format: "mp3"}
 				require.NoError(t, fx.ps.CreateBookFile(live))
 				return func() error { return fx.ps.DeleteBookFilesByIDs([]string{live.ID}) }
 			},
@@ -144,7 +150,7 @@ func TestSingleOwnerIndexWriters_AreHeldOutOfARetiresVerifyCommitWindow(t *testi
 			other, err := fx.ps.CreateBook(&Book{ID: otherID, Title: "Other", FilePath: "/lib/ret/window/other"})
 			require.NoError(t, err)
 			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/window/x.mp3", FileHash: hash, Format: "mp3"})
-			run := w.setup(t, fx, other)
+			run := w.setup(t, fx, other, x)
 
 			done := make(chan error, 1)
 			var reachedMutex, finishedInsideWindow atomic.Bool
