@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.1
+// version: 1.32.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-25
 
@@ -859,10 +859,11 @@ func (ms *Service) undoPreconditions(j *CombineJournal) []string {
 	}
 	// A reattached row came from a book OUTSIDE the combine (planVirtualFile
 	// moved it off its previous owner). Undo moves it back there. When that
-	// book has since been purged the row has nowhere to go, and the undo leaves
-	// it on the survivor with a warning (applyUndo's moveBack), the way it
-	// treats a created row with no book to return to; only a book that cannot
-	// be read refuses, because then it is not known where the row belongs.
+	// book has since been purged the row has nowhere to go, and the undo does
+	// not refuse: it gives the row to the absorbed book whose file it is, or
+	// leaves it on the survivor when it is the survivor's own file, with a
+	// warning (applyUndo's moveBack). Only a book that cannot be read refuses,
+	// because then it is not known where the row belongs.
 	inCombine := map[string]bool{j.SurvivorID: true}
 	for _, a := range j.Absorbed {
 		inCombine[a.BookID] = true
@@ -2233,7 +2234,10 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 	for _, a := range j.Absorbed {
 		absorbedIDs[a.BookID] = true
 	}
-	moveBack := func(moves []CombineFileMove) error {
+	// listOwner is the absorbed book whose Files list moves came from, or "" for
+	// the survivor's own list (SurvivorFiles). It decides where a row goes when
+	// the outside book it was taken from has been purged (see below).
+	moveBack := func(moves []CombineFileMove, listOwner string) error {
 		// Decided row by row, never by the journal's status: only a row on
 		// the survivor now is one the merge moved (or created) and has not
 		// been moved back. Its numbers are restored while it is still there,
@@ -2276,17 +2280,29 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 			if !fm.Created && fm.FromBookID != j.SurvivorID && !absorbedIDs[fm.FromBookID] {
 				// A row reattached from a book outside the combine. If that
 				// book has been purged since, the row has no book to go back
-				// to: it stays on the survivor, which holds the audio, and the
-				// undo says so, rather than refusing the whole undo for it.
+				// to, and the undo says so rather than refusing the whole undo
+				// for it. Where it goes depends on whose audio it is. In an
+				// absorbed book's list it is that book's own file (the combine
+				// planned it from the book's FilePath, which step 1 restored),
+				// so it goes to that book, as a created row does; leaving it on
+				// the survivor would give the survivor audio it never had. In
+				// the survivor's list the survivor's FilePath names the file,
+				// so it stays.
 				owner, err := ms.db.GetBookByID(fm.FromBookID)
 				if err != nil {
 					return fmt.Errorf("load book %s that file %s came from: %w", fm.FromBookID, fm.FileID, err)
 				}
 				if owner == nil {
+					if listOwner == "" {
+						res.Warnings = append(res.Warnings, fmt.Sprintf(
+							"file row %s (%s) came from book %s, which no longer exists; left on survivor %s",
+							fm.FileID, fm.FilePath, fm.FromBookID, j.SurvivorID))
+						continue
+					}
 					res.Warnings = append(res.Warnings, fmt.Sprintf(
-						"file row %s (%s) came from book %s, which no longer exists; left on survivor %s",
-						fm.FileID, fm.FilePath, fm.FromBookID, j.SurvivorID))
-					continue
+						"file row %s (%s) came from book %s, which no longer exists; returned to absorbed book %s, whose file it is",
+						fm.FileID, fm.FilePath, fm.FromBookID, listOwner))
+					fm.FromBookID = listOwner
 				}
 			}
 			if cur.DiscNumber != fm.DiscBefore || cur.TrackNumber != fm.TrackBefore {
@@ -2311,11 +2327,11 @@ func (ms *Service) applyUndo(j *CombineJournal) (*CombineUndoResult, error) {
 		return nil
 	}
 	for _, a := range j.Absorbed {
-		if err := moveBack(a.Files); err != nil {
+		if err := moveBack(a.Files, a.BookID); err != nil {
 			return res, err
 		}
 	}
-	if err := moveBack(j.SurvivorFiles); err != nil {
+	if err := moveBack(j.SurvivorFiles, ""); err != nil {
 		return res, err
 	}
 	// The survivor's own rows never moved. Their numbers are restored only

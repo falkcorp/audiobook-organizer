@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_holders_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2dc80dae-a233-411b-ba47-721acf3d06b6
 // last-edited: 2026-10-25
 
@@ -247,6 +247,50 @@ func TestCombineBooks_PathHeldByTwoLiveBooksIsJournaledAndLeavesThemTheirRows(t 
 	for _, f := range viewFiles(t, store, survivor.ID) {
 		assert.NotEqual(t, path, f.Path, "the survivor must not get a second row on the held file")
 	}
+}
+
+// The same refusal for a rowless ABSORBED book: its file is held by two live books,
+// so the combine retires it with its FilePath cleared and no row under the survivor,
+// and says so on its result and its journal. This is the absorbed-loop append to
+// res.Warnings (the survivor's own file is the other append): with it deleted the
+// caller is not told, and the book silently loses its audio in the combined book.
+// Undo restores the book's FilePath.
+func TestCombineBooks_RowlessAbsorbedBookAtAPathHeldByTwoLiveBooksIsReported(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvh-absorbed-two-live.mp3"
+	h1, row1 := seedHolder(t, store, "Holder one", path)
+	h2, row2 := seedHolder(t, store, "Holder two", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/pvh-absorbed-two-live-s.mp3"})
+	require.NoError(t, err)
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Rowless absorbed", Format: "mp3", FilePath: path})
+	require.NoError(t, err)
+
+	ms := NewService(store)
+	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	require.NoError(t, err)
+
+	require.Len(t, res.Warnings, 1, "the caller is told about the absorbed book's file")
+	assert.Contains(t, res.Warnings[0], "path held by 2 live book(s) (2 row(s))")
+	assert.Contains(t, res.Warnings[0], absorbed.ID, "it names the absorbed book")
+	assert.Contains(t, res.Warnings[0], path, "and its path")
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	assert.Contains(t, j.Warnings, res.Warnings[0], "the persisted journal carries it too")
+
+	gone := viewBook(t, store, absorbed.ID)
+	assert.True(t, gone.SoftDel, "the absorbed book is retired")
+	assert.Empty(t, gone.FilePath, "with its FilePath cleared")
+	assert.Contains(t, viewFiles(t, store, h1.ID), row1, "the first holder keeps its row")
+	assert.Contains(t, viewFiles(t, store, h2.ID), row2, "the second holder keeps its row")
+	for _, f := range viewFiles(t, store, survivor.ID) {
+		assert.NotEqual(t, path, f.Path, "the survivor gets no row on the held file")
+	}
+
+	_, err = ms.UndoCombine(res.JournalID)
+	require.NoError(t, err)
+	back := viewBook(t, store, absorbed.ID)
+	assert.False(t, back.SoftDel)
+	assert.Equal(t, path, back.FilePath, "undo restores the absorbed book's FilePath")
 }
 
 // A rowless primary whose FilePath is the path of a row an ABSORBED book owns.

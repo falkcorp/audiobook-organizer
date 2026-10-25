@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_cold_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f1b7c2e-3d54-4a8e-9b0c-2e7d5a4f1c83
 // last-edited: 2026-10-25
 
@@ -30,12 +30,40 @@ func goCold(t *testing.T, store database.Store) {
 	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete, "fixture: the complete lookup must be unavailable")
 }
 
-// The single-owner fallback names one row of a path with two live holders. The
-// planner used to take that row off its book for the survivor, which left a live
-// book without its file and, worse, chose the victim by key order. While the
-// complete lookup is unavailable it now plans nothing and says why, and the
-// combine reports the warning on its result and on its journal.
-func TestCombineBooks_ColdLookupTwoLiveHoldersTakesNoRow(t *testing.T) {
+// warmUp undoes goCold: memdb serves again, as it does a couple of minutes after
+// a restart.
+func warmUp(t *testing.T, store database.Store) {
+	t.Helper()
+	ps, ok := store.(*database.PebbleStore)
+	require.True(t, ok, "warmUp needs the real Pebble store, got %T", store)
+	ps.UseMemDB = true
+	_, err := database.BookFileRowsAtPathStrict(store, "/tmp/pvc-probe.mp3")
+	require.NoError(t, err, "fixture: the complete lookup must be available again")
+}
+
+// requireRefusedBeforeJournaling asserts what a combine that refused for want of
+// the complete holder list leaves behind: an error that says "retry later" and is
+// not a CombineIncompleteError (nothing was written, so there is nothing to
+// revert), no journal, no retired book and no file row moved or created.
+func requireRefusedBeforeJournaling(t *testing.T, ms *Service, store database.Store, err error, absorbedID, survivorID string) {
+	t.Helper()
+	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete, "the refusal must say the lookup is incomplete, so the caller retries")
+	var incomplete *CombineIncompleteError
+	assert.False(t, errors.As(err, &incomplete), "a refusal before the journal must not ask the user to revert: %v", err)
+	journals, jerr := ms.ListCombineJournals(0)
+	require.NoError(t, jerr)
+	assert.Empty(t, journals, "a refusal must leave no combine journal behind")
+	assert.False(t, viewBook(t, store, absorbedID).SoftDel, "the absorbed book must not be retired")
+	assert.Empty(t, viewFiles(t, store, survivorID), "nothing was attached to the survivor")
+}
+
+// The single-owner fallback names one row of a path with two live holders, and a
+// rowless survivor's own file is that path. The planner used to take that row off
+// its book for the survivor, which left a live book without its file and, worse,
+// chose the victim by key order. While the complete lookup is unavailable the
+// combine refuses before it writes anything (a retry a minute later has the list),
+// and with the list the path held by two live books is reported, not guessed.
+func TestCombineBooks_ColdLookupSurvivorsHeldPathRefusesBeforeJournaling(t *testing.T) {
 	store := setupTestStore(t)
 	path := "/tmp/pvc-two-live.mp3"
 	h1, row1 := seedHolder(t, store, "Holder one", path)
@@ -47,24 +75,62 @@ func TestCombineBooks_ColdLookupTwoLiveHoldersTakesNoRow(t *testing.T) {
 	goCold(t, store)
 
 	ms := NewService(store)
-	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
-	require.NoError(t, err)
-
-	require.Len(t, res.Warnings, 1)
-	assert.Contains(t, res.Warnings[0], "not available yet", "the warning says the complete lookup was the reason")
-	j, err := ms.GetCombineJournal(res.JournalID)
-	require.NoError(t, err)
-	assert.Equal(t, res.Warnings, j.Warnings, "the journal carries the same warning")
-
+	_, err = ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	requireRefusedBeforeJournaling(t, ms, store, err, absorbed.ID, survivor.ID)
 	assert.Contains(t, viewFiles(t, store, h1.ID), row1, "the first holder keeps its row")
 	assert.Contains(t, viewFiles(t, store, h2.ID), row2, "the second holder keeps its row")
-	for _, f := range viewFiles(t, store, survivor.ID) {
-		assert.NotEqual(t, path, f.Path, "the survivor must not take or duplicate a row on the held file")
-	}
+
+	warmUp(t, store)
+	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	require.NoError(t, err, "the same combine goes through once the list is available")
+	require.Len(t, res.Warnings, 1)
+	assert.Contains(t, res.Warnings[0], "path held by 2 live book(s)")
+	assert.Contains(t, viewFiles(t, store, h1.ID), row1)
+	assert.Contains(t, viewFiles(t, store, h2.ID), row2)
+}
+
+// The ordinary #1549 case during warmup: a rowless absorbed book's file is held by
+// one outside book. The combine used to warn and go on, retiring the absorbed book
+// with its FilePath cleared and no row on the survivor, a lasting result of a
+// transient condition. It now refuses before anything is written, and the same
+// combine a minute later moves the holder's row onto the survivor with no warning.
+func TestCombineBooks_ColdLookupAbsorbedPathHeldBySingleBookRefusesBeforeJournaling(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvc-absorbed-single.mp3"
+	holder, row := seedHolder(t, store, "Holder", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/pvc-absorbed-single-s.mp3"})
+	require.NoError(t, err)
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Absorbed", Format: "mp3", FilePath: path})
+	require.NoError(t, err)
+	goCold(t, store)
+
+	ms := NewService(store)
+	_, err = ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	// The survivor's own file is free, so its row would be created; the refusal
+	// must still leave no trace of it.
+	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
+	var incomplete *CombineIncompleteError
+	assert.False(t, errors.As(err, &incomplete), "nothing was written, so there is nothing to revert: %v", err)
+	journals, jerr := ms.ListCombineJournals(0)
+	require.NoError(t, jerr)
+	assert.Empty(t, journals)
+	assert.False(t, viewBook(t, store, absorbed.ID).SoftDel)
+	assert.Equal(t, path, viewBook(t, store, absorbed.ID).FilePath, "the absorbed book keeps its FilePath")
+	assert.Empty(t, viewFiles(t, store, survivor.ID), "the survivor's own row was not created either")
+	assert.Contains(t, viewFiles(t, store, holder.ID), row, "the holder keeps its row")
+
+	warmUp(t, store)
+	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, res.Warnings, "with the complete list the single holder's row is taken (#1549) and nothing is left to warn about")
+	moved, ok := viewFiles(t, store, survivor.ID)[row]
+	require.True(t, ok, "the holder's row is now on the survivor")
+	assert.Equal(t, path, moved.Path)
 }
 
 // planVirtualFile on its own, cold: a row held by another live book is not taken
-// from the single-owner answer, and the plan carries the warning.
+// from the single-owner answer. Before the journal exists that is an error (the
+// combine refuses); the plan made after the journal turns it into a warning.
 func TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow(t *testing.T) {
 	store := setupTestStore(t)
 	path := "/tmp/pvc-plan.mp3"
@@ -78,12 +144,34 @@ func TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow(t *testing.T) {
 	assert.Equal(t, row, hot.existing.ID)
 
 	goCold(t, store)
-	cold, err := NewService(store).planVirtualFile(target, target.ID, nil)
+	before, err := NewService(store).planVirtualFile(target, target.ID, nil)
+	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete, "before the journal the unanswerable pick refuses")
+	_, isUnconfirmed := errors.AsType[*rowTakeUnconfirmedError](err)
+	assert.True(t, isUnconfirmed)
+	assert.Nil(t, before.existing)
+	assert.Nil(t, before.create)
+
+	after, err := NewService(store).planVirtualFileAfterJournal(target, target.ID, nil)
+	require.NoError(t, err, "after the journal the combine cannot refuse; it plans nothing and says why")
+	assert.Nil(t, after.existing)
+	assert.Nil(t, after.create, "and no second row on a file somebody holds")
+	assert.False(t, after.attached)
+	assert.Contains(t, after.warning, "not available yet")
+	assert.Contains(t, after.warning, "not reattached")
+}
+
+// The after-journal plan converts only the one transient answer. A holder that
+// cannot be read is still an error there, as it is before the journal.
+func TestPlanVirtualFileAfterJournal_OtherErrorsStayErrors(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvc-after-journal-err.mp3"
+	holder, _ := seedHolder(t, store, "Holder", path)
+	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: path})
 	require.NoError(t, err)
-	assert.Nil(t, cold.existing)
-	assert.Nil(t, cold.create, "and no second row on a file somebody holds")
-	assert.False(t, cold.attached)
-	assert.Contains(t, cold.warning, "not available yet")
+
+	boom := errors.New("injected holder read error")
+	_, err = NewService(bookReadErrStore{Store: store, failID: holder.ID, err: boom}).planVirtualFileAfterJournal(target, target.ID, nil)
+	require.ErrorIs(t, err, boom)
 }
 
 // A path nobody holds still gets its row cold: the fallback is trusted for the
@@ -116,6 +204,14 @@ func TestCombineBooks_ColdLookupRowlessPrimaryAtAnAbsorbedRowPathWithABystander(
 	absorbed, absRow := seedHolder(t, store, "Absorbed with the row", path)
 	bystander, byRow := seedHolder(t, store, "Bystander", path)
 	goCold(t, store)
+	// The fixture only bites if the single-owner key names the bystander's row (the
+	// last row written at a path wins), because that is the row a lookup-driven
+	// plan would take. Pin it, so a change in index order cannot turn this into a
+	// test that passes on the old code.
+	named, err := store.GetBookFileByPath(path)
+	require.NoError(t, err)
+	require.NotNil(t, named)
+	require.Equal(t, byRow, named.ID, "fixture: the single-owner key must name the bystander's row")
 
 	ms := NewService(store)
 	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
