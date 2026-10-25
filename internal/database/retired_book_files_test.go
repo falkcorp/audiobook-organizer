@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
 // last-edited: 2026-10-24
 
@@ -864,10 +864,12 @@ func TestRestoreRetiredVersionHolder_RefusesAMissingHolderAndTheShell(t *testing
 	require.Equal(t, newHolder.ID, v.BookID, "a refused restore writes nothing")
 }
 
-// The destination is checked once the version stripe is held, not before the
-// wait for it: a holder purged while the restore waits for the stripe is
-// refused, and the version stays where it was.
-func TestRestoreRetiredVersionHolder_ChecksTheHolderUnderTheVersionStripe(t *testing.T) {
+// The holder is purged after the restore's own early check passed and before
+// its batch commits: the commit-time owner check (newOwners, under the owner
+// stripe DeleteBook takes) refuses it, and the version stays where it was. This
+// fails if the destination is ever dropped from commitBookFileBatch's newOwners,
+// because the early read has already passed by the time the hook runs.
+func TestRestoreRetiredVersionHolder_RefusesAHolderPurgedBeforeTheCommit(t *testing.T) {
 	fx := newRetiredFixture(t)
 	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/s/01.mp3"})
 	require.NoError(t, fx.retire(t, x))
@@ -875,25 +877,86 @@ func TestRestoreRetiredVersionHolder_ChecksTheHolderUnderTheVersionStripe(t *tes
 	require.NoError(t, err)
 	require.NoError(t, fx.ps.RehomeRetiredVersion(fx.version.ID, newHolder.ID))
 
-	unlock := fx.ps.lockBookVersion(fx.version.ID)
-	done := make(chan error, 1)
-	go func() { done <- fx.ps.RestoreRetiredVersionHolder(fx.version.ID, fx.holder.ID) }()
-	select {
-	case err := <-done:
-		unlock()
-		t.Fatalf("the restore did not wait for the version stripe: %v", err)
-	case <-time.After(200 * time.Millisecond):
+	purged := false
+	bookFileBeforeCommitHook = func() {
+		if purged {
+			return
+		}
+		purged = true
+		require.NoError(t, fx.ps.DeleteBook(fx.holder.ID), "the holder is purged between the early check and the commit")
 	}
-	require.NoError(t, fx.ps.DeleteBook(fx.holder.ID), "the holder is purged while the restore waits")
-	unlock()
+	t.Cleanup(func() { bookFileBeforeCommitHook = nil })
 
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, ErrBookFileOwnerMissing)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the restore never returned")
-	}
+	err = fx.ps.RestoreRetiredVersionHolder(fx.version.ID, fx.holder.ID)
+	bookFileBeforeCommitHook = nil
+	require.True(t, purged, "the hook ran, so the early check had passed")
+	require.ErrorIs(t, err, ErrBookFileOwnerMissing)
 	v, err := fx.ps.GetBookVersion(fx.version.ID)
 	require.NoError(t, err)
 	require.Equal(t, newHolder.ID, v.BookID, "a refused restore writes nothing")
+}
+
+// The guard of DeleteBookVersionIf sees the version as it stands, and an error
+// from it deletes nothing and comes back as it is. A missing version reaches it
+// as nil; with no guard, a missing version is still a no-op.
+func TestDeleteBookVersionIf_GuardVerdicts(t *testing.T) {
+	fx := newRetiredFixture(t)
+	refusal := errors.New("synthetic refusal")
+	var seen *BookVersion
+	err := fx.ps.DeleteBookVersionIf(fx.version.ID, func(cur *BookVersion) error {
+		seen = cur
+		return refusal
+	})
+	require.ErrorIs(t, err, refusal)
+	require.NotNil(t, seen)
+	require.Equal(t, fx.version.ID, seen.ID)
+	still, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	require.NotNil(t, still, "a refusing guard deletes nothing")
+
+	missing := "no-such-version"
+	called := false
+	require.NoError(t, fx.ps.DeleteBookVersionIf(missing, func(cur *BookVersion) error {
+		called = true
+		require.Nil(t, cur)
+		return nil
+	}))
+	require.True(t, called, "the guard is asked even when the version is gone")
+	require.NoError(t, fx.ps.DeleteBookVersionIf(missing, nil))
+
+	require.NoError(t, fx.ps.DeleteBookVersionIf(fx.version.ID, func(*BookVersion) error { return nil }))
+	gone, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	require.Nil(t, gone)
+}
+
+// The guard runs under the version stripe, so an edit cannot land between the
+// check and the delete. The edit is started from inside the guard; it must not
+// finish until the delete has, and then find the version gone rather than be
+// applied and silently deleted. The wait is a negative check: a loaded machine
+// can make it miss a regression, never fail a correct build.
+func TestDeleteBookVersionIf_GuardHoldsTheVersionStripe(t *testing.T) {
+	fx := newRetiredFixture(t)
+	edit := make(chan error, 1)
+	err := fx.ps.DeleteBookVersionIf(fx.version.ID, func(cur *BookVersion) error {
+		edited := *cur
+		edited.Format = "m4b"
+		go func() { edit <- fx.ps.UpdateBookVersion(&edited) }()
+		select {
+		case err := <-edit:
+			t.Errorf("the edit finished while the guard held the stripe: %v", err)
+		case <-time.After(200 * time.Millisecond):
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	select {
+	case err := <-edit:
+		require.Error(t, err, "the edit finds the version deleted")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the edit never returned")
+	}
+	gone, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	require.Nil(t, gone)
 }

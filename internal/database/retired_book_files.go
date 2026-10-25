@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-24
 
@@ -760,11 +760,17 @@ func (p *PebbleStore) RestoreRetiredVersionHolder(versionID, previousHolderID st
 	if versionID == "" || previousHolderID == "" {
 		return errors.New("RestoreRetiredVersionHolder: version and previous holder are required")
 	}
-	// The destination is checked under the version stripe (moveRetiredVersion
-	// runs it after taking the stripe), next to the move itself. A purge does
-	// not take that stripe, so the check does not exclude one: that is the
-	// caller's merge lock (the revert holds it, as does every purge), and
-	// this narrows the window to the read and the commit.
+	// The guard against a missing destination is the commit-time owner check:
+	// rehomeRetiredVersionAttempt commits through commitBookFileBatch with the
+	// destination in newOwners, which takes the destination's owner stripe and
+	// runs requireBookRowsExist under it before the batch is applied. DeleteBook
+	// holds the same stripe across its row count and its commit, so a holder
+	// deleted at any point before the commit makes the batch return a
+	// *staleStageError that unwraps to ErrBookFileOwnerMissing (and
+	// moveRetiredVersion does not retry it). That holds without the caller's
+	// merge lock. The read below only gives an earlier, clearer refusal for the
+	// common case of a destination that is already gone; it is not what keeps a
+	// version off a missing book.
 	return p.moveRetiredVersion(versionID, previousHolderID, func() error {
 		b, err := p.GetBookByID(previousHolderID)
 		if err != nil {
@@ -778,9 +784,10 @@ func (p *PebbleStore) RestoreRetiredVersionHolder(versionID, previousHolderID st
 }
 
 // moveRetiredVersion is the locked, retried body both rehome entry points
-// share. checkDest, when set, is the destination check, run once the version
-// stripe is held; nil means the caller has already decided the destination is
-// acceptable.
+// share. checkDest, when set, is an early destination check, run once the
+// version stripe is held, that gives a clearer refusal than the commit's own
+// owner check (which is the real guard: see RestoreRetiredVersionHolder); nil
+// means the caller has already decided the destination is acceptable.
 func (p *PebbleStore) moveRetiredVersion(versionID, newHolderID string, checkDest func() error) error {
 	// The version stripe excludes RetireBookFiles, UnretireBookFiles and
 	// UpdateBookVersion for this version, so neither its holder nor the set of

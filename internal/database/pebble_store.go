@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.0
+// version: 1.234.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package database
 
@@ -5419,11 +5419,22 @@ func maintainTrashedAt(prev, v *BookVersion, now time.Time) {
 }
 
 func (p *PebbleStore) DeleteBookVersion(id string) error {
+	return p.DeleteBookVersionIf(id, nil)
+}
+
+// DeleteBookVersionIf is DeleteBookVersion with guard run on the version, under
+// the version stripe, before anything is deleted (GuardedBookVersionDeleter).
+func (p *PebbleStore) DeleteBookVersionIf(id string, guard func(cur *BookVersion) error) error {
 	unlockVersion := p.lockBookVersion(id)
 	defer unlockVersion()
 	v, err := p.GetBookVersion(id)
 	if err != nil {
 		return err
+	}
+	if guard != nil {
+		if err := guard(v); err != nil {
+			return err
+		}
 	}
 	if v == nil {
 		return nil

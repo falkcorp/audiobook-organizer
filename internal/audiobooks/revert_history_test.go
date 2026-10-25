@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
-// last-edited: 2026-10-07
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -304,7 +304,7 @@ func TestRevertSettle_NeverWritesAnITunesMember(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ob.IsPrimaryVersion)
 	require.False(t, *ob.IsPrimaryVersion, "the crown wrote nothing")
-	require.False(t, rs.hasSettleOwed("op-itunes"), "not recorded for retry")
+	require.False(t, settleOwedIn(rs, "op-itunes"), "not recorded for retry")
 }
 
 // B1: an ambiguous "crowned:<id>" note (2026-10-02..06) may name a member
@@ -380,7 +380,7 @@ func TestRevertSettle_RefusedCrownLeavesNoSecondPrimary(t *testing.T) {
 	require.Len(t, result.SettleSkipped, 1, "%+v", result)
 	require.Contains(t, result.SettleSkipped[0], "iTunes copy "+x.ID)
 	require.True(t, result.Partial())
-	require.False(t, rs.hasSettleOwed("op-refused-crown"), "not recorded for retry")
+	require.False(t, settleOwedIn(rs, "op-refused-crown"), "not recorded for retry")
 	want := map[string]*bool{o.ID: new(bool), c.ID: &yes, x.ID: nil}
 	for id, w := range want {
 		b, err := s.GetBookByID(id)
@@ -436,7 +436,7 @@ func TestRevertSettle_GuardReadErrorIsRetriedNotSkipped(t *testing.T) {
 	require.Empty(t, result.SettleSkipped)
 	require.Len(t, result.HandOffFailed, 1)
 	require.Contains(t, result.HandOffFailed[0], "external ids unreadable")
-	require.True(t, rs.hasSettleOwed("op-readerr"), "owed a retry")
+	require.True(t, settleOwedIn(rs, "op-readerr"), "owed a retry")
 }
 
 // extFailStore fails every external-id read (the iTunes guard's).

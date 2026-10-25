@@ -1,5 +1,5 @@
 // file: internal/database/iface_retired.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
 // last-edited: 2026-10-24
 
@@ -90,9 +90,24 @@ type RetiredVersionHolderRestorer interface {
 	RestoreRetiredVersionHolder(versionID, previousHolderID string) error
 }
 
+// GuardedBookVersionDeleter is DeleteBookVersion with a compare-and-set. It is
+// its own capability, not a Store method, so the Store interface and its mocks
+// are not widened by it.
+type GuardedBookVersionDeleter interface {
+	// DeleteBookVersionIf deletes version id like DeleteBookVersion, but first
+	// runs guard on the version as it stands (nil when it does not exist),
+	// under the version's write stripe: UpdateBookVersion and the retired-row
+	// writers hold the same stripe across read and commit, so no edit can land
+	// between the guard and the delete. A guard error aborts with nothing
+	// written and is returned as it is. With a nil guard, a missing version is
+	// a no-op, as for DeleteBookVersion.
+	DeleteBookVersionIf(id string, guard func(cur *BookVersion) error) error
+}
+
 var (
 	_ RetiredBookFileReader = (*PebbleStore)(nil)
 	_ RetiredBookFileWriter = (*PebbleStore)(nil)
 
 	_ RetiredVersionHolderRestorer = (*PebbleStore)(nil)
+	_ GuardedBookVersionDeleter    = (*PebbleStore)(nil)
 )
