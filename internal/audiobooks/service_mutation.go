@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-25
 
@@ -1445,11 +1445,24 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// hard delete would orphan every one of them; it refuses too
 	// (database.ErrBookOwnsFiles), but only after the hash block below had
 	// already been written. Fail closed on a read error.
-	if owned, ownErr := svc.store.GetBookFiles(id); ownErr != nil {
-		return nil, fmt.Errorf("hard delete %s: cannot read its book_file rows: %w", id, ownErr)
-	} else if len(owned) > 0 {
-		return nil, fmt.Errorf("hard delete %s: %w (%d row(s)); soft-delete it instead, or move its files to another book first",
-			id, database.ErrBookOwnsFiles, len(owned))
+	//
+	// The same check runs again under the merge lock the carry and the delete
+	// run in (the precheck passed to merge.HardDeleteKeepingUserState below):
+	// a file a merge moved onto the book after this read is caught before the
+	// carry moves any listening state, not after it.
+	refuseIfOwnsFiles := func() error {
+		owned, ownErr := svc.store.GetBookFiles(id)
+		if ownErr != nil {
+			return fmt.Errorf("hard delete %s: cannot read its book_file rows: %w", id, ownErr)
+		}
+		if len(owned) > 0 {
+			return fmt.Errorf("hard delete %s: %w (%d row(s)); soft-delete it instead, or move its files to another book first",
+				id, database.ErrBookOwnsFiles, len(owned))
+		}
+		return nil
+	}
+	if err := refuseIfOwnsFiles(); err != nil {
+		return nil, err
 	}
 
 	// A live book users have listening state on is deleted only after that
@@ -1473,10 +1486,26 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 		return svc.store.DeleteBook(id)
 	}
-	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, nil, del)
+	var refused error
+	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, func() error {
+		refused = refuseIfOwnsFiles()
+		return refused
+	}, del)
 	if err != nil {
 		if err.Error() == "book not found" {
 			return nil, fmt.Errorf("audiobook not found")
+		}
+		if refused != nil && errors.Is(refused, database.ErrBookOwnsFiles) && carriedTo == "" {
+			// Refused under the merge lock with nothing moved and no hash
+			// blocked: the same words as the up-front check, not wrapped in
+			// the merge package's carry-refusal text.
+			return nil, refused
+		}
+		if errors.Is(err, database.ErrBookOwnsFiles) && carriedTo != "" {
+			// A file row landed after the check under the merge lock, from a
+			// writer that does not take it, and DeleteBook refused: the state
+			// has already moved.
+			return nil, fmt.Errorf("hard delete %s: its listening state was moved to %s, but the book was not deleted: %w", id, carriedTo, err)
 		}
 		if errors.Is(err, merge.ErrBookHasListeningState) {
 			return nil, fmt.Errorf("hard delete %s: %w. Soft-delete it first (its version group's primary flag then passes on), then purge it from the trash: the purge moves the progress to the copy Audiobookshelf lists, or offers Discard progress and purge", id, ErrBookHasProgress)

@@ -1,6 +1,6 @@
 ### Fixed
 
-#### Bulk hard delete no longer moves listening progress off a book it then refuses to delete
+#### Hard delete (bulk and single) no longer moves listening progress off a book it then refuses to delete
 
 `POST /api/v1/audiobooks/batch-operations` with `hard_delete` carried a book's
 users' listening state (progress, finished status, positions, bookmarks) to the
@@ -16,3 +16,10 @@ proceeds. The check is repeated under the merge lock the carry and delete run in
 (`merge.HardDeleteKeepingUserState` takes a `precheck` for this), so a file
 moved onto the book by a merge between the first check and the carry is caught
 too. A fail-closed read error refuses the delete.
+
+The single-book hard delete (`DELETE /api/v1/audiobooks/:id` with a hard delete,
+`AudiobookService.DeleteAudiobook`) checked the book's files before the lock but
+not under it, so a file moved onto the book in between could still be followed by
+a carry and a refusal. It now passes the same owned-files `precheck`, so the
+check is repeated under the merge lock before the carry, and a refusal there
+moves nothing and blocks no hash.

@@ -1,9 +1,9 @@
 <!-- file: docs/executive-summaries/2026-10-25-bulk-delete-progress-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2d6f9b84-7a13-4c5e-b0d8-e4a1c37f5962 -->
 <!-- last-edited: 2026-10-25 -->
 
-# Bulk delete no longer takes your listening progress with it
+# Deleting books no longer takes your listening progress with it
 
 ## Executive Summary
 
@@ -18,7 +18,9 @@ belonged to it had been moved off it onto the other copy listed in
 Audiobookshelf, so the book itself no longer showed it.
 
 This change makes the bulk delete look at the files **first**. A book that still
-has files is skipped before anything about its progress is touched.
+has files is skipped before anything about its progress is touched. The delete
+of one book at a time had the same weak spot in a much smaller form (see below)
+and gets the same treatment.
 
 ## What changed
 
@@ -34,6 +36,11 @@ has files is skipped before anything about its progress is touched.
 - The check is made again at the last moment, inside the same protected step
   that moves the progress, so a file attached to a book a moment after the first
   look is also caught before any progress moves.
+- Deleting a single book now does the same last-moment check. Before, it
+  looked at the files once, then took the protected step without looking again,
+  so a file attached in that gap could still end with the progress moved and the
+  book kept. Now the delete stops before moving anything and nothing is changed,
+  including the "block this file from being re-imported" mark.
 
 ## Who was affected
 
@@ -51,8 +58,7 @@ that copy, and is gone only if that copy was later removed.
 ## Not covered
 
 - A file attached to a book by something other than a merge in the instant after
-  the last check could still slip through; that window is now very small and the
-  store's own refusal is the final guard. If it happens, the result for that book
-  says the progress was moved and names where.
-- The single-book delete has the same narrow last-moment window (it checks
-  before, not inside, the protected step). It was not part of this change.
+  the last check (the folder scanner or an import, which do not use the protected
+  step) could still slip through. That window is very small and the store's own refusal
+  is the final guard. If it happens, the message for that book says the progress
+  was moved and names where.
