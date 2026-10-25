@@ -1,12 +1,13 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package database
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"testing"
@@ -467,6 +468,82 @@ func TestRetiredVersion_GuardsAndIndex(t *testing.T) {
 	from, err = fx.ps.GetRetiredVersionsFromBook(fx.shell.ID)
 	require.NoError(t, err)
 	require.Empty(t, from)
+}
+
+// A retired version's provenance is fixed at creation. UpdateBookVersion keeps
+// the idx:bv:from: key in step with RetiredFromBookID, so a change here would
+// delete the only key HasRetiredVersions probes while the version still exists.
+func TestRetiredVersion_UpdateRefusesProvenanceChange(t *testing.T) {
+	for _, holdsRows := range []bool{true, false} {
+		t.Run(map[bool]string{true: "holds rows", false: "no rows"}[holdsRows], func(t *testing.T) {
+			fx := newRetiredFixture(t)
+			if holdsRows {
+				x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/prov/01.mp3"})
+				require.NoError(t, fx.retire(t, x))
+			}
+			fromKey := string(retiredVersionFromKey(fx.shell.ID, fx.version.ID))
+			requireFromKey := func(t *testing.T) {
+				t.Helper()
+				require.Equal(t, fx.version.ID, indexOwner(t, fx.ps, fromKey), "the from-key must survive a refused update")
+				has, err := fx.ps.HasRetiredVersions()
+				require.NoError(t, err)
+				require.True(t, has)
+			}
+
+			clear := *fx.version
+			clear.RetiredFromBookID = ""
+			require.ErrorIs(t, fx.ps.UpdateBookVersion(&clear), ErrRetiredVersionMismatch)
+			requireFromKey(t)
+
+			moved := *fx.version
+			moved.RetiredFromBookID = fx.holder.ID
+			require.ErrorIs(t, fx.ps.UpdateBookVersion(&moved), ErrRetiredVersionMismatch)
+			requireFromKey(t)
+
+			restamped := *fx.version
+			restamped.RetiredAt = new(fx.version.RetiredAt.Add(time.Hour))
+			require.ErrorIs(t, fx.ps.UpdateBookVersion(&restamped), ErrRetiredVersionMismatch)
+			cleared := *fx.version
+			cleared.RetiredAt = nil
+			require.ErrorIs(t, fx.ps.UpdateBookVersion(&cleared), ErrRetiredVersionMismatch)
+			stored, err := fx.ps.GetBookVersion(fx.version.ID)
+			require.NoError(t, err)
+			require.True(t, fx.version.RetiredAt.Equal(*stored.RetiredAt), "a refused update must not change retired_at")
+
+			// An update that leaves provenance alone still goes through.
+			ok := *stored
+			ok.MetadataJSON = `{"note":"kept"}`
+			require.NoError(t, fx.ps.UpdateBookVersion(&ok))
+			requireFromKey(t)
+		})
+	}
+}
+
+// RetireBookFiles refuses a version with no retired_from_book_id: it has no
+// idx:bv:from: key, so rows filed under it would be invisible to
+// HasRetiredVersions. CreateBookVersion cannot make such a version, and
+// UpdateBookVersion no longer can either, so the row is written raw here, as a
+// legacy or damaged one would be.
+func TestRetireBookFiles_RefusesVersionWithoutProvenance(t *testing.T) {
+	fx := newRetiredFixture(t)
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/noprov/01.mp3"})
+
+	stored, err := fx.ps.GetBookVersion(fx.version.ID)
+	require.NoError(t, err)
+	stored.RetiredFromBookID = ""
+	data, err := json.Marshal(stored)
+	require.NoError(t, err)
+	require.NoError(t, fx.ps.db.Set([]byte("bv:"+stored.ID), data, pebble.Sync))
+	require.NoError(t, fx.ps.db.Delete(retiredVersionFromKey(fx.shell.ID, stored.ID), pebble.Sync))
+
+	require.ErrorIs(t, fx.retire(t, x), ErrRetiredVersionMismatch)
+	got, err := fx.ps.GetBookFileByID(fx.shell.ID, x.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the row must still be under the shell")
+	require.False(t, got.Retired, "a refused retire must leave the row live")
+	has, err := fx.ps.HasRetiredVersions()
+	require.NoError(t, err)
+	require.False(t, has, "nothing was retired, so the probe's answer is still true")
 }
 
 func TestGenericPrimitivesRefuseRetiredRows(t *testing.T) {
