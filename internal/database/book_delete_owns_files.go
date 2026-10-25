@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-10-25
 
@@ -350,8 +350,11 @@ func (p *PebbleStore) commitBookFileBatchVerified(batch *GatedBatch, lockIDs, ne
 // the WAL fsync follows the release (the WAL is sequential, so the fsync makes
 // this record and every one before it durable). It is for the batches that write
 // or delete a single-owner index key outside commitBookFileBatchVerified: the
-// book_file deletes and the AcoustID-segment wipes. An error means what a failed
-// Commit(pebble.Sync) meant; the batch is not closed here (Commit finishes it).
+// book_file deletes and the AcoustID-segment wipes. A returned error is one of
+// two things, told apart by bookFileApplied: a refusal or a failed commit, which
+// applied nothing, or a wrapped ErrBookFileDurabilityUnknown, which means the batch
+// WAS applied and only its fsync failed. The batch is not closed here (Commit
+// finishes it).
 func (p *PebbleStore) commitSingleOwnerIndexBatch(batch *GatedBatch) error {
 	unlock := p.lockSingleOwnerIndex()
 	err := batch.Commit(pebble.NoSync)
