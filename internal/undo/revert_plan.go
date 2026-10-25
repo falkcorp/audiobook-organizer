@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-28
 
@@ -81,6 +81,11 @@ type RevertPlan struct {
 	// run newest-first, so a retire row of the same version reads the holder
 	// the newer rehomes put it back on, not the one the store shows now.
 	heldAfter map[string]string
+	// retires: the shells this operation holds a (non-voided) book_file_retire
+	// row for, from every row of the operation (NoteHandOffs). A revert of the
+	// whole retire un-retires those shells' rows, so it may hand the shell's
+	// external ids and merged-into link back (CheckNotRetiredShellReceiver).
+	retires map[string]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -96,7 +101,8 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
 		refusedAuthor: map[int]bool{}, primaries: map[string]*int{},
-		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{}}
+		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{},
+		retires: map[string]bool{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -282,9 +288,15 @@ func newerMainRows(rows []*database.OperationChange) map[string]*database.Operat
 
 // NoteHandOffs takes every row of the operation, reverted or not, and notes
 // the books it has a ChangeTypeBookPrimaryHandoff row for (and the field-lock
-// and series_id rows the paired checks read).
+// and series_id rows the paired checks read, and the shells it holds a
+// book_file_retire row for, see CheckNotRetiredShellReceiver). It reads every
+// row, not Order: a retire row the engine cannot restore, or one already
+// reverted, is not in Order but still says the operation retired that shell.
 func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 	for _, c := range all {
+		if shell, ok := retireRowShell(c); ok {
+			p.retires[shell] = true
+		}
 		switch c.ChangeType {
 		case ChangeTypeBookPrimaryHandoff:
 			p.handedOff[c.BookID] = true
