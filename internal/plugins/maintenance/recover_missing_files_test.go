@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files_test.go
-// version: 1.7.1
+// version: 1.9.0
 // guid: c1f6a2d8-7b40-4e93-9a5c-6d81e0f4b72a
-// last-edited: 2026-10-19
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -28,6 +28,8 @@ var errFakeUpdate = errors.New("fake update failure")
 // writeFile helper for the on-disk fixtures (os.Stat / filepath.WalkDir are the whole
 // mechanism — an in-memory fixture cannot observe this op).
 type recoverFakeStore struct {
+	noRetiredRows // the op reads database.AllBookFilesCoreIncludingRetired; see retired_reader_fake_test.go
+
 	mu      sync.Mutex // UpdateBookFiles is called from RunItems' worker pool
 	cores   []database.BookFileCore
 	full    map[string][]database.BookFile
@@ -42,6 +44,12 @@ type recoverFakeStore struct {
 
 func (f *recoverFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return f.cores, nil
+}
+
+// GetAllBookFilesCoreIncludingRetired: this fake holds no retired rows, so the
+// including-retired read is the plain read.
+func (f *recoverFakeStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return f.GetAllBookFilesCore()
 }
 func (f *recoverFakeStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	return f.full[bookID], nil
