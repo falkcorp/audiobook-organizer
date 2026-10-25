@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
 // version: 1.10.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package reconcile
 
@@ -82,6 +82,30 @@ func (f *fakeReconcileStore) GetBookFiles(bookID string) ([]database.BookFile, e
 	f.lock()
 	defer f.unlock()
 	return f.files[bookID], nil
+}
+
+// BookFilesAtPath and GetBookFileByPath serve the duplicate cleanup's check that
+// no book_file row names a file it is about to remove (database.BookFilePathLookup).
+func (f *fakeReconcileStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	f.lock()
+	defer f.unlock()
+	var out []database.BookFile
+	for _, rows := range f.files {
+		for _, r := range rows {
+			if r.FilePath == path {
+				out = append(out, r)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeReconcileStore) GetBookFileByPath(path string) (*database.BookFile, error) {
+	rows, _ := f.BookFilesAtPath(path)
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
 }
 
 func (f *fakeReconcileStore) GetBookByID(id string) (*database.Book, error) {
