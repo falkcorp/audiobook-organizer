@@ -1,0 +1,181 @@
+// file: internal/merge/plan_virtual_cold_test.go
+// version: 1.0.0
+// guid: 6f1b7c2e-3d54-4a8e-9b0c-2e7d5a4f1c83
+// last-edited: 2026-10-25
+
+package merge
+
+import (
+	"errors"
+	"testing"
+
+	ulid "github.com/oklog/ulid/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
+
+// goCold makes the store behave as it does while memdb is warming up after a
+// restart: memdb is not serving, so the complete path lookup (BookFilesAtPath) is
+// unavailable and the path lookup falls back to the single-owner index, which
+// names ONE row per path. Real Pebble, not a stub, so the planner meets exactly
+// what production meets. Call it after seeding.
+func goCold(t *testing.T, store database.Store) {
+	t.Helper()
+	ps, ok := store.(*database.PebbleStore)
+	require.True(t, ok, "goCold needs the real Pebble store, got %T", store)
+	ps.UseMemDB = false
+	_, err := database.BookFileRowsAtPathStrict(store, "/tmp/pvc-probe.mp3")
+	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete, "fixture: the complete lookup must be unavailable")
+}
+
+// The single-owner fallback names one row of a path with two live holders. The
+// planner used to take that row off its book for the survivor, which left a live
+// book without its file and, worse, chose the victim by key order. While the
+// complete lookup is unavailable it now plans nothing and says why, and the
+// combine reports the warning on its result and on its journal.
+func TestCombineBooks_ColdLookupTwoLiveHoldersTakesNoRow(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvc-two-live.mp3"
+	h1, row1 := seedHolder(t, store, "Holder one", path)
+	h2, row2 := seedHolder(t, store, "Holder two", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: path})
+	require.NoError(t, err)
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Absorbed", Format: "mp3", FilePath: "/tmp/pvc-two-live-abs.mp3"})
+	require.NoError(t, err)
+	goCold(t, store)
+
+	ms := NewService(store)
+	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	require.NoError(t, err)
+
+	require.Len(t, res.Warnings, 1)
+	assert.Contains(t, res.Warnings[0], "not available yet", "the warning says the complete lookup was the reason")
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	assert.Equal(t, res.Warnings, j.Warnings, "the journal carries the same warning")
+
+	assert.Contains(t, viewFiles(t, store, h1.ID), row1, "the first holder keeps its row")
+	assert.Contains(t, viewFiles(t, store, h2.ID), row2, "the second holder keeps its row")
+	for _, f := range viewFiles(t, store, survivor.ID) {
+		assert.NotEqual(t, path, f.Path, "the survivor must not take or duplicate a row on the held file")
+	}
+}
+
+// planVirtualFile on its own, cold: a row held by another live book is not taken
+// from the single-owner answer, and the plan carries the warning.
+func TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvc-plan.mp3"
+	_, row := seedHolder(t, store, "Holder", path)
+	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: path})
+	require.NoError(t, err)
+
+	hot, err := NewService(store).planVirtualFile(target, target.ID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, hot.existing, "fixture: with the complete lookup the single holder's row is taken (#1549)")
+	assert.Equal(t, row, hot.existing.ID)
+
+	goCold(t, store)
+	cold, err := NewService(store).planVirtualFile(target, target.ID, nil)
+	require.NoError(t, err)
+	assert.Nil(t, cold.existing)
+	assert.Nil(t, cold.create, "and no second row on a file somebody holds")
+	assert.False(t, cold.attached)
+	assert.Contains(t, cold.warning, "not available yet")
+}
+
+// A path nobody holds still gets its row cold: the fallback is trusted for the
+// answer "no row", which keeps a combine of rowless books working through the
+// warmup after a restart.
+func TestPlanVirtualFile_ColdLookupStillCreatesARowForAFreePath(t *testing.T) {
+	store := setupTestStore(t)
+	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: "/tmp/pvc-free.mp3"})
+	require.NoError(t, err)
+	goCold(t, store)
+
+	plan, err := NewService(store).planVirtualFile(target, target.ID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, plan.create)
+	assert.Empty(t, plan.warning)
+}
+
+// The rowless survivor's FilePath is the path of a row an ABSORBED book owns, and a
+// bystander created later also holds a row there (so the single-owner index names
+// the bystander, not the absorbed book). Which row the bulk move brings is known
+// from the absorbed book's own rows, never from a lookup: the combine gives the
+// survivor exactly the absorbed book's row, leaves the bystander its row, and
+// warns about nothing. Decided from the lookup, the cold store named the
+// bystander's row and the combine took it or refused.
+func TestCombineBooks_ColdLookupRowlessPrimaryAtAnAbsorbedRowPathWithABystander(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvc-arriving.mp3"
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Legacy record", Format: "mp3", FilePath: path})
+	require.NoError(t, err)
+	absorbed, absRow := seedHolder(t, store, "Absorbed with the row", path)
+	bystander, byRow := seedHolder(t, store, "Bystander", path)
+	goCold(t, store)
+
+	ms := NewService(store)
+	res, err := ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	var incomplete *CombineIncompleteError
+	require.False(t, errors.As(err, &incomplete), "the combine must not stop after its journal: %v", err)
+	require.NoError(t, err)
+	assert.Empty(t, res.Warnings, "the survivor's file arrives with the bulk move; nothing is left unattached")
+
+	files, err := store.GetBookFiles(survivor.ID)
+	require.NoError(t, err)
+	require.Len(t, files, 1, "the survivor owns exactly the absorbed book's row")
+	assert.Equal(t, absRow, files[0].ID)
+	assert.Contains(t, viewFiles(t, store, bystander.ID), byRow, "the bystander keeps its row")
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	assert.Empty(t, j.SurvivorFiles)
+	assert.Empty(t, j.Warnings)
+}
+
+// bookReadErrStore fails GetBookByID for one book and answers the rest from the
+// real store. It opts into Unwrap like the production decorators.
+type bookReadErrStore struct {
+	database.Store
+	failID string
+	err    error
+}
+
+func (s bookReadErrStore) Unwrap() database.Store { return s.Store }
+
+func (s bookReadErrStore) GetBookByID(id string) (*database.Book, error) {
+	if id == s.failID {
+		return nil, s.err
+	}
+	return s.Store.GetBookByID(id)
+}
+
+// The holder of an absorbed rowless book's path cannot be read. The pick runs in
+// the combine's pre-journal check, so the combine refuses before anything is
+// written: no journal, no soft-delete. It used to fail inside the attach, after
+// the journal and the bulk move, as a CombineIncompleteError telling the user to
+// revert a combine that had already changed things.
+func TestCombineBooks_UnreadableHolderOfAnAbsorbedPathRefusesBeforeJournaling(t *testing.T) {
+	store := setupTestStore(t)
+	path := "/tmp/pvc-unreadable-holder.mp3"
+	holder, _ := seedHolder(t, store, "Holder", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/pvc-unreadable-s.mp3"})
+	require.NoError(t, err)
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Absorbed", Format: "mp3", FilePath: path})
+	require.NoError(t, err)
+
+	boom := errors.New("injected holder read error")
+	ms := NewService(bookReadErrStore{Store: store, failID: holder.ID, err: boom})
+	_, err = ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	require.ErrorIs(t, err, boom)
+	var incomplete *CombineIncompleteError
+	assert.False(t, errors.As(err, &incomplete), "a refusal before the journal must not ask the user to revert: %v", err)
+
+	journals, jerr := ms.ListCombineJournals(0)
+	require.NoError(t, jerr)
+	assert.Empty(t, journals, "a refusal must leave no combine journal behind")
+	assert.False(t, viewBook(t, store, absorbed.ID).SoftDel, "the absorbed book must not be soft-deleted")
+	assert.Empty(t, viewFiles(t, store, survivor.ID), "nothing was attached to the survivor")
+}

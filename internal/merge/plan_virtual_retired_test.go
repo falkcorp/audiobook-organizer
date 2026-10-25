@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_retired_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5d0b8e63-91a4-4c27-b6f3-7e2a1c9d4058
 // last-edited: 2026-10-25
 
@@ -161,10 +161,13 @@ func TestPlanVirtualFile_CompleteLookupUnavailableOnOpaqueStoreErrors(t *testing
 	assert.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
 }
 
-// While no retired version exists the complete lookup is not needed: no retired
-// row can hold the path, so the single-owner lookup is the whole answer and the
-// plan is the one made before retired rows existed, warmup or not.
-func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsPlansNormally(t *testing.T) {
+// While no retired version exists the complete lookup is not needed to tell that
+// a path is free: no retired row can hold the path, so a single-owner lookup that
+// finds nothing is a whole answer and the row is created, warmup or not. It does
+// not show who ELSE holds a path it names a row of, so taking that row off its
+// book needs the complete lookup, and without it nothing is taken (a warning
+// instead): see TestPlanVirtualFile_ColdLookupDoesNotTakeAnotherBooksRow.
+func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsCreatesButTakesNothing(t *testing.T) {
 	store := setupTestStore(t)
 	ms := NewService(indexDownStore{Store: store})
 
@@ -186,8 +189,9 @@ func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsPlansNorm
 		require.NoError(t, store.CreateBookFile(stray))
 		plan, err := ms.planVirtualFile(target, target.ID, nil)
 		require.NoError(t, err)
-		require.NotNil(t, plan.existing)
-		assert.Equal(t, stray.ID, plan.existing.ID)
+		assert.Nil(t, plan.existing, "another book's row is not taken on the single-owner answer alone")
+		assert.Nil(t, plan.create, "and no second row is put on its file")
+		assert.Contains(t, plan.warning, "not available yet")
 	})
 }
 
@@ -222,7 +226,10 @@ func TestPlanOwnFile_RowsReadErrorErrorsInsteadOfPlanningACreate(t *testing.T) {
 	store := setupTestStore(t)
 	b, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Has rows", FilePath: "/tmp/pvr-rowserr.mp3"})
 	require.NoError(t, err)
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: b.ID, FilePath: b.FilePath, Format: "mp3"}))
+	// The row is at another path than b.FilePath on purpose: the buggy planner
+	// looked for a row at b.FilePath, found none, and planned a create, so a row
+	// AT b.FilePath would have been found (and the test pass on the old code).
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: ulid.Make().String(), BookID: b.ID, FilePath: "/tmp/pvr-rowserr-row.mp3", Format: "mp3"}))
 
 	boom := errors.New("injected pebble read error")
 	ms := NewService(readErrStore{Store: store, getBookFilesErr: boom})
