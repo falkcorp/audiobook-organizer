@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/journal_user_data_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 41be6667-4e23-4fde-9bef-f3782b221fbe
 // last-edited: 2026-10-25
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates"
+	duplicatesmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/duplicates/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
@@ -71,9 +72,69 @@ func TestJournalLists_StripOtherUsersData(t *testing.T) {
 	w := doReq(t, duplicates.New(f.S, nil, nil, nil, func() duplicates.MergeService { return ms }, nil, nil).ListCombineJournals,
 		http.MethodGet, "/merge/combine-journal", nil)
 	require.Contains(t, w.Body.String(), "invented library warning", "a warning naming no user stays")
+}
 
-	stored, err := ms.ListCombineJournals(0)
-	require.NoError(t, err)
-	require.Len(t, stored, 1)
-	require.Len(t, stored[0].Absorbed[0].Progress, 1, "the store's journal keeps its progress")
+// The strip covers every user-naming field of both journals -- each absorbed
+// book's and each state follow's progress, the warnings and the last error --
+// keeps what names no user, and works on a copy: the journals the merge
+// service handed over still hold everything after the response is written.
+func TestJournalLists_StripWorksOnACopy(t *testing.T) {
+	const listener = "invented-copy-listener"
+	progress := []merge.CombineUserProgress{{UserID: listener}}
+	combine := []merge.CombineJournal{{
+		ID: "01JCJCOPY", SurvivorID: "book-invented-s",
+		Absorbed:  []merge.CombineAbsorbed{{BookID: "book-invented-a", Progress: progress}},
+		Warnings:  []string{"user " + listener + " progress on survivor book-invented-s changed after the merge; left as is", "invented combine library warning"},
+		LastError: "put back progress of user " + listener + ": invented",
+	}}
+	sibling := []merge.SiblingMoveJournal{{
+		ID: "01JSJCOPY", SurvivorID: "book-invented-s",
+		StateFollows: []merge.StateFollow{{LoserID: "book-invented-l", HolderID: "book-invented-h", Progress: progress}},
+		Warnings:     []string{"user " + listener + " progress on survivor book-invented-h was put back; left as is", "invented sibling library warning"},
+		LastError:    "invented sibling error naming user " + listener,
+	}}
+	ms := duplicatesmocks.NewMockMergeService(t)
+	ms.EXPECT().ListCombineJournals(50).Return(combine, nil)
+	ms.EXPECT().ListSiblingMoveJournals(50).Return(sibling, nil)
+	h := duplicates.New(nil, nil, nil, nil, func() duplicates.MergeService { return ms }, nil, nil)
+
+	var cEnv struct {
+		Data struct {
+			Journals []merge.CombineJournal `json:"journals"`
+		} `json:"data"`
+	}
+	w := doReq(t, h.ListCombineJournals, http.MethodGet, "/merge/combine-journal", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), listener)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &cEnv))
+	require.Len(t, cEnv.Data.Journals, 1)
+	got := cEnv.Data.Journals[0]
+	require.Equal(t, "book-invented-a", got.Absorbed[0].BookID)
+	require.Empty(t, got.Absorbed[0].Progress)
+	require.Equal(t, []string{"invented combine library warning"}, got.Warnings)
+	require.Empty(t, got.LastError)
+
+	var sEnv struct {
+		Data struct {
+			Journals []merge.SiblingMoveJournal `json:"journals"`
+		} `json:"data"`
+	}
+	w = doReq(t, h.ListSiblingMoveJournals, http.MethodGet, "/merge/sibling-journal", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), listener)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &sEnv))
+	require.Len(t, sEnv.Data.Journals, 1)
+	gotS := sEnv.Data.Journals[0]
+	require.Equal(t, "book-invented-l", gotS.StateFollows[0].LoserID)
+	require.Empty(t, gotS.StateFollows[0].Progress)
+	require.Equal(t, []string{"invented sibling library warning"}, gotS.Warnings)
+	require.Empty(t, gotS.LastError)
+
+	// The service's journals are untouched.
+	require.Len(t, combine[0].Absorbed[0].Progress, 1)
+	require.Len(t, combine[0].Warnings, 2)
+	require.Contains(t, combine[0].LastError, listener)
+	require.Len(t, sibling[0].StateFollows[0].Progress, 1)
+	require.Len(t, sibling[0].Warnings, 2)
+	require.Contains(t, sibling[0].LastError, listener)
 }

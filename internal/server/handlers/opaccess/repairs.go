@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-25
 
@@ -10,6 +10,7 @@ package opaccess
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 
@@ -54,8 +55,12 @@ import (
 // identity) are other users' data, which only a caller who may manage users
 // reads (owner decision, 2026-10-24), on top of the fixer's permissions.
 //
-// Every repairs op, and every journal row that is Repairs data, is refused for
-// a nil *Repairs: a handler the server did not wire cannot leak.
+// Unwired (a nil *Repairs, or one missing its fixer registry, op lookup or
+// permission check), every repairs op is refused, and so is every journal row
+// that carries user data or a Source. An unstamped library row still reads:
+// with no op lookup there is no way to tell a pre-2026-10-03 Repairs row from
+// any other op's history, and refusing them all would hide most of every
+// book's history from admins too.
 type Repairs struct {
 	fixers FixerLookup
 	ops    OpLookup
@@ -118,6 +123,8 @@ type Reader struct {
 	opVerdict map[string]opScope
 	// userData caches mayReadUserData: nil until asked.
 	userData *bool
+	// lookupErr is the first op-row read that failed (unstampedOpVerdict).
+	lookupErr error
 }
 
 // For binds the check to one request.
@@ -249,6 +256,9 @@ func (r *Reader) unstampedOpVerdict(id string) opScope {
 	switch {
 	case err != nil:
 		v = opUnreadable
+		if r.lookupErr == nil {
+			r.lookupErr = fmt.Errorf("read operation %s: %w", id, err)
+		}
 	case row != nil && IsRepairsOp(row.DefID):
 		v = opRepairsRefused
 		if r.MayRead(row) {
@@ -258,6 +268,12 @@ func (r *Reader) unstampedOpVerdict(id string) opScope {
 	r.opVerdict[id] = v
 	return v
 }
+
+// LookupError is the first op-row read that failed while checking rows with
+// no Source, or nil. Such a row is refused (fail closed); a route that refuses
+// a whole response on one refused row checks this first, so a store failure
+// answers 500 rather than a 403 that blames the caller's permissions.
+func (r *Reader) LookupError() error { return r.lookupErr }
 
 // mayReadUserData reports, once per request, whether the caller may read
 // other users' own data: users.manage, the permission that already shows an

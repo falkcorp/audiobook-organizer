@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-10-25
 
@@ -497,7 +497,9 @@ func (h *Handler) GetOperationChanges(c *gin.Context) {
 // (opaccess.Reader.MayReadChange) does not refuse the report: it carries each
 // row's id, book, change type and refusal reason, never a row's values, so an
 // editor keeps Undo on the fixers he may run. The rows read here are the ones
-// the report is built from (one journal scan per request).
+// the report is built from (one journal scan per request). When a row is
+// refused because its op row could not be read, the answer is 500, still
+// without the report.
 func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 	id := c.Param("id")
 	r := h.repairsAccess.For(c)
@@ -510,10 +512,17 @@ func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 		return
 	}
 	for _, ch := range changes {
-		if !r.MayUndoChange(ch) {
-			httputil.RespondWithForbidden(c, "permission denied: this operation's changes belong to a Repairs fixer you may not use")
+		if r.MayUndoChange(ch) {
+			continue
+		}
+		// A row refused because its op row could not be read is a store
+		// failure, not the caller's permissions: 500, still without the report.
+		if err := r.LookupError(); err != nil {
+			httputil.InternalError(c, "failed to check operation changes", err)
 			return
 		}
+		httputil.RespondWithForbidden(c, "permission denied: this operation's changes belong to a Repairs fixer you may not use")
+		return
 	}
 	report, err := h.preflightUndo(changes)
 	if err != nil {
