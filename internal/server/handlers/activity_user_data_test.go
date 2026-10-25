@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_user_data_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8a4c71-9d35-4b60-a1f4-6c0b7d9e2a58
 // last-edited: 2026-10-25
 
@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -188,4 +190,43 @@ func TestActivity_UserDataLeavesTheCountAndRedactsDigests(t *testing.T) {
 
 	w = userDataDo(r, http.MethodGet, "/activity", adminUsers, "")
 	assert.Contains(t, w.Body.String(), "01INVENTEDUSER0000000000A", "the admin's digest keeps every item")
+}
+
+// Lines the scanner batches (activity.LogBatch) reach the log as one folded
+// entry whose items are the lines. A batch of lines that name a user is tagged
+// when it is flushed, so a caller without users.manage is not served it while
+// the batch of ordinary lines is. Driven through the real writer and a real
+// store so the tag and the read predicate are the production ones.
+func TestActivity_BatchedLinesThatNameAUserNeedUsersManage(t *testing.T) {
+	db, err := pebble.Open("batched.pebble", &pebble.Options{FS: vfs.NewMem()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	store := database.NewPebbleActivityStore(database.NewGatedDB(db))
+
+	w := activity.NewWriter(store, 64)
+	activity.LogBatch(w, "op-b", "tag-scan", "scanner", activity.BatchItem{Name: "BATCHED-USER-ITEM progress user=01INVENTEDUSER0000000000A", Count: 1})
+	activity.LogBatch(w, "op-b", "tag-scan", "scanner", activity.BatchItem{Name: "BATCHED-PLAIN-ITEM book-a.m4b", Count: 1})
+	activity.FlushOperation(w, "op-b")
+	w.Flush()
+
+	h := NewActivityHandler(store, nil,
+		WithActivityOthersUserData(func(c *gin.Context) bool { return auth.Can(c.Request.Context(), auth.PermUsersManage) }))
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.WithPermissions(c.Request.Context(), strings.Split(c.GetHeader("X-Perms"), ",")))
+		c.Next()
+	})
+	r.GET("/activity", h.ListActivity)
+
+	for _, perms := range []string{viewerPerms, editorPerms} {
+		w := userDataDo(r, http.MethodGet, "/activity?tier=batch", perms, "")
+		require.Equal(t, http.StatusOK, w.Code, "%s: %s", perms, w.Body.String())
+		assert.NotContains(t, w.Body.String(), "BATCHED-USER-ITEM", "%s is served a batch of lines that name a user", perms)
+		assert.NotContains(t, w.Body.String(), "01INVENTEDUSER0000000000A", perms)
+		assert.Contains(t, w.Body.String(), "BATCHED-PLAIN-ITEM", "%s: the batch of ordinary lines still folds and shows", perms)
+	}
+	body := userDataDo(r, http.MethodGet, "/activity?tier=batch", adminUsers, "").Body.String()
+	assert.Contains(t, body, "BATCHED-USER-ITEM", "the users.manage caller reads it")
+	assert.Contains(t, body, "BATCHED-PLAIN-ITEM")
 }

@@ -1,5 +1,5 @@
 // file: internal/activity/writer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
 // last-edited: 2026-10-25
 
@@ -238,22 +238,27 @@ func (w *Writer) sendEntry(line string) {
 		}
 	}
 	// A line that names a user stays out of what a caller who may not manage
-	// users reads (NamesOthersUserData), so the row says so itself.
-	if NamesUserText(entry.Summary) {
-		entry.Tags = append(entry.Tags, TagUserData)
-	} else {
+	// users reads (NamesOthersUserData), so the row says so itself. The tag is
+	// decided before the batching branch: a batched line is one item of a
+	// flushed entry, and the batch carries the flag in its key.
+	userData := NamesUserText(entry.Summary)
+	if !userData {
 		for _, a := range parsed.Attrs {
 			if NamesUserText(a.Key + "=") {
-				entry.Tags = append(entry.Tags, TagUserData)
+				userData = true
 				break
 			}
 		}
+	}
+	if userData {
+		entry.Tags = append(entry.Tags, TagUserData)
 	}
 	if isBatchable(entry) {
 		w.batcher.Submit(BatchKey{
 			Type:        entry.Type,
 			Source:      entry.Source,
 			OperationID: entry.OperationID,
+			UserData:    userData,
 		}, BatchItem{Name: entry.Summary})
 		return
 	}

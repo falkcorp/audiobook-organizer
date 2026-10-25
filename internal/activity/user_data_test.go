@@ -1,5 +1,5 @@
 // file: internal/activity/user_data_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
 // last-edited: 2026-10-25
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,4 +104,38 @@ func TestWriter_TagsLinesThatNameAUser(t *testing.T) {
 		tagged++
 	}
 	assert.Equal(t, 2, tagged)
+}
+
+// A line that names a user and is batched (LogBatch, the path the scanner's
+// per-file lines take) keeps the tag: it batches under its own key, apart from
+// the lines that name nobody, and the flushed entry is tagged. Before this the
+// batch dropped the flag and the lines came back untagged to every viewer.
+func TestLogBatch_UserDataLinesBatchApartAndStayTagged(t *testing.T) {
+	w := newTestWriter(16)
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "progress patch: user=01INVENTEDUSER0000000000A", Count: 1})
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "book-a.m4b", Count: 1})
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "book-b.m4b", Count: 1, Detail: "email=a@example.invalid"})
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "book-c.m4b", Count: 1})
+
+	w.batcher.mu.Lock()
+	assert.Len(t, w.batcher.pending, 2, "one batch for the user lines, one for the rest")
+	w.batcher.mu.Unlock()
+
+	FlushOperation(w, "op-b")
+	entries := drainAll(w.ch, 5, 100*time.Millisecond)
+	require.Len(t, entries, 2)
+	var tagged, plain *database.ActivityEntry
+	for i := range entries {
+		if NamesOthersUserData(entries[i]) {
+			tagged = &entries[i]
+		} else {
+			plain = &entries[i]
+		}
+	}
+	require.NotNil(t, tagged, "the batch of user lines is tagged %s", TagUserData)
+	require.NotNil(t, plain, "an untagged line still batches, and stays visible")
+	assert.Contains(t, tagged.Tags, TagUserData)
+	assert.EqualValues(t, 2, tagged.Details["original_count"])
+	assert.NotContains(t, plain.Tags, TagUserData)
+	assert.EqualValues(t, 2, plain.Details["original_count"], "the two plain lines coalesced")
 }
