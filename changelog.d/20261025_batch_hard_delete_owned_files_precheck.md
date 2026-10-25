@@ -63,6 +63,18 @@ or a duplicate key cannot slip past:
   routes.
 - A list that trashes and restores needs both. Plain metadata edits still need
   only `library.edit_metadata`.
+- The request's shape is not the whole story: `library_state` set to `organized`
+  (or any live value) on a book that is in the trash takes it out of the trash
+  and looks like any metadata edit. So the handler also hands the service what
+  the caller holds (`batch.TrashGrants`, never read from the body) and the service
+  judges each row after loading it, under the row's write lock, with
+  `database.IsInTrash`: a book that leaves the trash, or has its `library_state`
+  set to a live value while it is in the trash, needs `library.organize`; a book
+  that enters the trash needs `library.delete`. A row the caller may not change
+  fails with a message naming the permission, nothing is written for it, and the
+  rest of the request proceeds. `marked_for_deletion` and `library_state` are the
+  only payload fields that touch the trash. In-process callers (the queued
+  metadata apply) pass no grants and are not judged.
 
 The routes previously needed only `library.edit_metadata`, so a role with edit but
 not delete could trash, restore or permanently delete books through them. The

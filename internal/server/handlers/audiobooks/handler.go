@@ -166,6 +166,11 @@ type Handler struct {
 	// (StrictPermissionCheck); the server installs its own with
 	// SetPermissionCheck.
 	permCheck PermissionCheck
+	// permHolds answers, without writing a response, whether the caller holds a
+	// permission (BatchOperations and BatchUpdateAudiobooks hand what the caller
+	// may do to books' place in the library to the service, which judges each
+	// row). nil means the strict answer (StrictPermissionHolds).
+	permHolds PermissionHolds
 }
 
 // WithRepairsOpAccess installs the check that keeps a Repairs fixer's
