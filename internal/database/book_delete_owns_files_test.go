@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: ea8c9be0-11d7-4035-b1ea-a50f919e06cd
 // last-edited: 2026-10-25
 
@@ -623,6 +623,12 @@ func TestMultiRowDeletes_SyncFailureStillClearsMemdb(t *testing.T) {
 			defer cleanup()
 			ps := store.(*PebbleStore)
 			ps.WaitForWarmup()
+			// Without a published memdb GetAllBookFilesCore falls back to a Pebble
+			// scan, which has no stale rows to clear: the final assertion would
+			// pass whatever the delete did to memdb.
+			if !ps.IsMemReady() {
+				t.Fatal("memdb must be published or the memdb assertions below silently read Pebble")
+			}
 			b, err := store.CreateBook(&Book{Title: "b", FilePath: "/lib/mrsync/" + name})
 			if err != nil {
 				t.Fatal(err)
