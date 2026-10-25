@@ -1,5 +1,5 @@
 // file: internal/database/single_owner_index_lock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4e07d19-6a3c-4825-9f71-3d8c05e2a916
 // last-edited: 2026-10-24
 
@@ -7,9 +7,9 @@ package database
 
 import (
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"slices"
 	"sort"
 	"strings"
@@ -217,10 +217,18 @@ var singleOwnerIndexStagers = map[string]string{
 func stagersOfSingleOwnerKeys(t *testing.T) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	// go/build applies the default build constraints and leaves out _test.go
+	// files, so the files read are the ones the compiler builds into the package
+	// (parser.ParseDir, deprecated since Go 1.25, ignored build tags).
+	bp, err := build.ImportDir(".", 0)
 	require.NoError(t, err)
-	pkg := pkgs["database"]
-	require.NotNil(t, pkg)
+	var files []*ast.File
+	for _, name := range bp.GoFiles {
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, err, "parse %s", name)
+		files = append(files, f)
+	}
+	require.NotEmpty(t, files)
 	helpers := map[string]bool{
 		"writeBookFileSecondaryIndexes": true, "writeBookFileSecondaryIndexesFor": true,
 		"deleteBookFileSecondaryIndexes": true, "deleteSingleOwnerIndexIfOwned": true,
@@ -228,7 +236,7 @@ func stagersOfSingleOwnerKeys(t *testing.T) []string {
 	}
 	families := []string{"book_file_path:", "book_file_pid:", "book_file_hash:", "book_file_orig_hash:", "book_file_acoustid:"}
 	var out []string
-	for _, f := range pkg.Files {
+	for _, f := range files {
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
