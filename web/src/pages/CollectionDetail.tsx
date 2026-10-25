@@ -1,5 +1,5 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
 // last-edited: 2026-10-25
 
@@ -50,6 +50,7 @@ import {
   queryError,
   sameSortChoice,
   type SortChoice,
+  usesPerUserField,
 } from '../components/collections/queryHelpData';
 
 const PAGE_SIZE = 50;
@@ -168,6 +169,11 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
   const booksError = lookupDone ? lookup.error : null;
 
   const isDynamic = collection.type === 'dynamic';
+  // A query on a per-user field is evaluated for whoever is looking and stores no
+  // member list, so there is nothing to materialize (the server clears any list).
+  // The SAVED query decides, like Preview, not the text in the box.
+  const perViewer = isDynamic && usesPerUserField(collection.query ?? '');
+  const membersUnavailable = isDynamic && collection.members_unavailable === true;
   const limitNum = limit.trim() === '' ? 0 : Number(limit);
   const limitInvalid = !Number.isInteger(limitNum) || limitNum < 0;
   const queryInvalid = isDynamic && (query.trim() === '' || queryError(query) !== null);
@@ -339,17 +345,19 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
             <Button disabled={saving || loading} onClick={() => void run(refresh)}>
               {queryDirty ? 'Preview saved query' : 'Preview'}
             </Button>
-            <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
-              <span>
-                <Button
-                  variant="outlined"
-                  disabled={!canManage || saving}
-                  onClick={() => void run(materialize, 'Members refreshed and stored.')}
-                >
-                  Materialize
-                </Button>
-              </span>
-            </Tooltip>
+            {!perViewer && (
+              <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
+                <span>
+                  <Button
+                    variant="outlined"
+                    disabled={!canManage || saving}
+                    onClick={() => void run(materialize, 'Members refreshed and stored.')}
+                  >
+                    Materialize
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </>
         ) : (
           <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
@@ -368,7 +376,14 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
           </Tooltip>
         )}
       </Box>
-      {isDynamic && (
+      {isDynamic && perViewer && (
+        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
+          These members are worked out for each person who views the collection, from their own
+          listening state, on every view. They are never stored, so there is nothing to materialize;
+          Preview re-runs the saved query for you.
+        </Typography>
+      )}
+      {isDynamic && !perViewer && (
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
           Preview re-runs the saved query for anyone who can view the collection. It also refreshes
           the stored members that the Audiobookshelf app serves, but only as a best effort: if the
@@ -377,10 +392,16 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
           failed save or a conflict.
         </Typography>
       )}
+      {membersUnavailable && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          {collection.members_unavailable_message ??
+            "This collection's members could not be worked out right now."}
+        </Alert>
+      )}
 
       {booksError ? (
         <Alert severity="error">{booksError}</Alert>
-      ) : members.length === 0 ? (
+      ) : members.length === 0 && membersUnavailable ? null : members.length === 0 ? (
         <Typography sx={{ color: 'text.secondary' }}>
           {isDynamic ? 'No books match this query.' : 'No books in this collection yet.'}
         </Typography>

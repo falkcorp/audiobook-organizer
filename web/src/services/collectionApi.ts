@@ -1,5 +1,5 @@
 // file: web/src/services/collectionApi.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 36e44f0d-8a86-4830-8fd9-c0a4fbabc018
 // last-edited: 2026-10-25
 
@@ -36,6 +36,15 @@ export interface Collection {
    * attribution only and never decides membership.
    */
   materialized_book_ids?: string[];
+  /**
+   * True when the members for this viewer could not be worked out (the search
+   * index is not ready, the query no longer parses, or the viewer's state could
+   * not be read). materialized_book_ids is then empty, and that emptiness means
+   * "unknown", not "nothing matches". Sent only for such a collection.
+   */
+  members_unavailable?: boolean;
+  /** Why, in words for the viewer; present with members_unavailable. */
+  members_unavailable_message?: string;
   created_at: string;
   updated_at: string;
   created_by_user_id?: string;
