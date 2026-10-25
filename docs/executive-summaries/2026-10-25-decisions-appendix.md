@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-decisions-appendix.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: e75847e4-760a-4d0d-8527-1eeffece31f9 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -23,3 +23,6 @@ From 2026-10-25 12:53 EDT to 2026-10-26 12:53 EDT (or until you say otherwise), 
 | D12 | 10-25 16:10 | #4140 review: the purge already replays file records at boot when a run resumes, so an unmounted library can still be read as "files gone". Add a mount check? | Mount-readiness check before any replay or file decision, then also add the boot replay · Keep the dialog-only approach | **Mount check + boot replay** (replaces D4) | The boot path exists anyway; the check is what keeps records safe |
 | D13 | 10-25 16:10 | #4140: 0 blockers, 4 should-fix (new button unreachable on an empty trash; stale decision at removal; single-book paths leave files with no record). Merge now or fix first? | Fix first · Merge, follow up | **Fix first** | Runs on prod without a flag |
 | D14 | 10-25 16:50 | #4149 superseded by squashed #4159. The old #4149 commits (and the #4145 head) still hold real titles on GitHub. | Delete the old branches and add both PR heads to the GitHub Support purge request · Leave them | **Delete + purge request** (branch delete needs you: the classifier blocks remote branch deletes) | Public repo; closed-PR refs stay reachable until GitHub purges them |
+| D15 | 10-25 18:05 | Whisper: one audiobook intro loops forever and had all four Mac workers stuck since 10-24 01:06. Restart now and clean up? | Restart the 4 workers, stop the orphaned looping processes, delete 1,260 leaked clip folders (7.4 GB) · Wait for the code fix | **Restart + clean up now** (done 18:00) | Workers were useless while stuck; no live run starts until the code fix ships |
+| D16 | 10-25 18:05 | Whisper code fix scope | Per-clip time limit in a killable child + timeout as a per-file result, permanent after 2 strikes; split timed-out batches; health shows busy time; log real errors · Just add a timeout | **Full fix (A–E), 2 strikes then permanent skip** | A plain timeout leaves the loop retried forever; 2 strikes stops the poison file without a manual prod write |
+| D17 | 10-25 18:05 | #4159 re-scan: 1 wrapped "Harbor Lights" left, 3 weak lookalikes | Fix all 4 in a new squashed PR · Fix the blocker only · Amend + force-push | **Fix all 4, new squashed PR** | Force-push is banned; a fix-up commit would land the bad commit on main |
