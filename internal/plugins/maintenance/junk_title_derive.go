@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.1.1
+// version: 2.2.4
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -65,43 +66,127 @@ func stripAudioExt(name string) string {
 	return name
 }
 
+// authorRecognisers tells titleFromFilename which trailing " - <segment>"
+// is a person's credit. A recogniser that is nil recognises nobody.
+type authorRecognisers struct {
+	// own recognises the book's own credited people: the stored author, a
+	// linked author or a narrator. Their names go behind a "read by" credit;
+	// without one they go only when independent says so.
+	own func(string) bool
+	// independent recognises a name the book's own file name is not the only
+	// evidence for: an author with books other than this one, or a narrator who
+	// narrates another book (the narrator field is NOT out of a title
+	// segment's reach: the AI filename parse and the artist-tag fallback fill
+	// it from the very file name and tags the stem came from, so only a name
+	// the library holds elsewhere counts).
+	// Without a credit the stem is a bare "<Title> - <Segment>" and the scanner
+	// reads such a stem as a title and an author, so a stored author with no
+	// other book is that very segment read back, and stripping it is circular:
+	// it cuts a subtitle off the title and nothing checks what is left. A nil
+	// independent recognises nobody.
+	independent func(string) bool
+	// library recognises any author of the library. It is honoured only behind
+	// a " - read by " credit, for the one segment that stands where the
+	// convention puts the author, and never for a name that is also a real
+	// title (the caller's recogniser must say so): the library holds author
+	// rows that are really titles, and stripping one of those deletes title
+	// text (🔴 above).
+	library func(string) bool
+}
+
+// filenameHead is a file name's stem without its extension and without a
+// trailing " - read by <narrator>" credit, and whether it had one. A stem that
+// is only an author credit ("read by X") has no title: "".
+func filenameHead(filename string) (head string, credited bool) {
+	stem := strings.TrimSpace(stripAudioExt(filename))
+	if stem == "" || readByLeadRe.MatchString(stem) {
+		return "", false
+	}
+	// The index comes from the stem itself: lower-casing a copy first can
+	// change its byte length (U+0130, U+212A) and misalign the cut.
+	if locs := readBySepRe.FindAllStringIndex(stem, -1); len(locs) > 0 {
+		return strings.TrimSpace(stem[:locs[len(locs)-1][0]]), true
+	}
+	return stem, false
+}
+
 // titleFromFilename recovers the title from a file named by the
 // "<Title> - <Author> - read by <narrator>" convention.
 //
-// 🔑 The author name is REQUIRED to strip safely, and that is the whole point.
-// Naively dropping the last " - " segment after the credit would corrupt any
-// title that legitimately contains one:
+// 🔑 Only a segment that is provably an author is stripped, and that is the
+// whole point. Naively dropping the last " - " segment after the credit would
+// corrupt any title that legitimately contains one:
 //
-//	"Dark Gallifrey - The War Master Part 2 - read by narrator.mp3"
-//	  naive → "Dark Gallifrey - The War Master"   ✗ eats real title text
-//	  ours  → "Dark Gallifrey - The War Master Part 2"  ✓ (no author match, so
+//	"Plover Mathis - Ostler Rune Part 2 - read by narrator.mp3"
+//	  naive → "Plover Mathis - Ostler Rune"   ✗ eats real title text
+//	  ours  → "Plover Mathis - Ostler Rune Part 2"  ✓ (no author match, so
 //	                                                       only the credit goes)
 //
 // When author is known and present, both it and the credit are removed:
 //
-//	"Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b"
-//	  → "Nocturne - 3 - Umbra Mortem"
+//	"Yondermere - 3 - Skellick Dunt - Tamsin Verrow - read by narrator.m4b"
+//	  → "Yondermere - 3 - Skellick Dunt"
 //
-// A filename carrying no credit at all is used whole.
-func titleFromFilename(filename, author string) string {
-	stem := strings.TrimSpace(stripAudioExt(filename))
-	if stem == "" {
+// A filename carrying no credit at all is used whole, but for a trailing
+// placeholder author and a name with evidence of its own. rec (the zero value
+// recognises nobody) names the people beyond the stored author that a trailing
+// segment may be. A trailing " - <segment>" goes when it is
+//
+//   - a placeholder author ("Unknown Author", "Unknown"): never title text, so
+//     with or without a credit ("Marble Gate - Unknown Author.mp3" is "Marble
+//     Gate": the stored author was junk, so no author match was possible);
+//   - the stored author, unless that author is junk (a chapter label or an
+//     essay name the parser put in the author field is title text in the file
+//     name, and stripping it left a plausible-looking fragment), or one of the
+//     book's own people (rec.own): behind a "read by" credit, or, with no
+//     credit in the stem, only when rec.independent vouches for the name. The
+//     stored author is often parsed from this very file name, so with no
+//     credit and no evidence of its own the strip is circular;
+//   - behind a "read by" credit, and for the first author segment only, a name
+//     of the library (rec.library): the convention is one author before the
+//     credit, so a second name-shaped segment is title text.
+//
+// A segment that opens with a position word ("Volume II", "Part 3") is title
+// text even when a scan stored it as the author (a reviewer accepted such a
+// title).
+func titleFromFilename(filename, author string, rec authorRecognisers) string {
+	head, credited := filenameHead(filename)
+	if head == "" {
 		return ""
 	}
-
-	lower := strings.ToLower(stem)
-	idx := strings.LastIndex(lower, " - read by ")
-	if idx < 0 {
-		return stem // no credit suffix — the whole stem is the title
+	a := strings.TrimSpace(author)
+	if junkStoredAuthor(a) {
+		a = ""
 	}
-	head := strings.TrimSpace(stem[:idx])
-
-	// Remove a trailing " - <Author>" only when it really is the author.
-	if a := strings.TrimSpace(author); a != "" {
-		suffix := " - " + strings.ToLower(a)
-		if strings.HasSuffix(strings.ToLower(head), suffix) {
-			head = strings.TrimSpace(head[:len(head)-len(suffix)])
+	authorStripped := false
+	// vouched: the stem itself credits the author (a " - read by " suffix), or
+	// the name has evidence beyond the stem.
+	vouched := func(seg string) bool {
+		return credited || (rec.independent != nil && rec.independent(seg))
+	}
+	// A trailing author segment, and the placeholder one an organizer pass
+	// may have written before it ("Title - Author - Unknown Author").
+	for range 3 {
+		i := strings.LastIndex(head, " - ")
+		if i < 0 {
+			break
 		}
+		seg := strings.TrimSpace(head[i+3:])
+		if seg == "" || positionLeadRe.MatchString(seg) {
+			break
+		}
+		switch {
+		case authorname.IsPlaceholderAuthor(seg):
+		case a != "" && strings.EqualFold(seg, a) && vouched(seg):
+			authorStripped = true
+		case rec.own != nil && rec.own(seg) && vouched(seg):
+			authorStripped = true
+		case credited && !authorStripped && rec.library != nil && rec.library(seg):
+			authorStripped = true
+		default:
+			return head
+		}
+		head = strings.TrimSpace(head[:i])
 	}
 	return head
 }
@@ -133,23 +218,26 @@ func majorityDirOf(paths []string) string {
 	return best
 }
 
-// DeriveJunkTitleReplacement works out the real title for a book whose stored
+// deriveJunkTitleReplacement works out the real title for a book whose stored
 // title is junk, and reports which evidence it used.
 //
 // Candidates are tried in order of trustworthiness for the shape observed:
 //
 //  1. Multi-file book → the deepest folder segment. These are the ID3-residue
 //     cases, and the organizer already named the folder correctly:
-//     ".../Big Finish Productions/Dark Gallifrey/Dark Gallifrey - The War Master Part 2"
+//     ".../Big Finish Productions/Plover Mathis/Plover Mathis - Ostler Rune Part 2"
 //  2. The filename, parsed for the "read by" convention. This is the only
 //     evidence for the single-file cases, whose folder was named from the same
 //     bad title and is therefore useless.
 //  3. Walking up the directory, first segment that is not itself junk — a last
-//     resort for ".../Kaiju Task/read by narrator/..." shapes.
+//     resort for ".../Brindlewick/read by narrator/..." shapes.
 //
 // Returns ok=false when nothing trustworthy is found; the caller must then leave
 // the book alone rather than invent a title.
-func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) (title, method string, ok bool) {
+//
+// rec recognises the names beyond the stored author that titleFromFilename
+// strips from a filename's tail (the zero value recognises none).
+func deriveJunkTitleReplacement(storedTitle, author string, filePaths []string, rec authorRecognisers) (title, method string, ok bool) {
 	stored := strings.TrimSpace(storedTitle)
 
 	// corroborated: some path element already matches the stored title, which
@@ -183,7 +271,7 @@ func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) 
 
 	// 2. The filename and its "read by" convention.
 	if len(filePaths) > 0 {
-		if t, m, good := accept(titleFromFilename(filepath.Base(filePaths[0]), author), "filename"); good {
+		if t, m, good := accept(titleFromFilename(filepath.Base(filePaths[0]), author, rec), "filename"); good {
 			return t, m, true
 		}
 	}
@@ -195,7 +283,7 @@ func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) 
 	//    the author, and happily returns a library root. It produced "lib" from
 	//    "/lib/A/intro.mp3" and "Author" from "/lib/Author/Some Book/Some Book.m4b"
 	//    before this bound existed. The real shape needing rescue is only ever one
-	//    level up — ".../Kaiju Task/read by narrator/<file>" — so one level is all
+	//    level up — ".../Brindlewick/read by narrator/<file>" — so one level is all
 	//    it gets.
 	//    The hop is also only taken to ESCAPE A POISONED FOLDER. If the folder was
 	//    rejected for any other reason — too short, corroborating the stored title —
