@@ -847,7 +847,7 @@ def childsrv(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "TRANSCRIBE_TIMEOUT_FACTOR", 0.0)
     share = tmp_path / "share"
     (share / "b").mkdir(parents=True)
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Plimmet={share}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
     made = []
 
     def fake_extract(src, seconds):
@@ -861,7 +861,7 @@ def childsrv(tmp_path, monkeypatch):
 
     def put(name, content):
         (share / "b" / name).write_bytes(content)
-        return {"path": f"/lib/Plimmet/b/{name}", "seconds": 90}
+        return {"path": f"/lib/Gotham/b/{name}", "seconds": 90}
 
     yield mod, TestClient(mod.app), put, made
     mod._inference.shutdown()
