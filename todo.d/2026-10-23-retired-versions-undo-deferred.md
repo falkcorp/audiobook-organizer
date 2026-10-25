@@ -33,3 +33,16 @@
       is lost yet; whichever change wires a prune must exempt those two types
       for an op that also has retire rows, or an old retire op is read as
       partly reversed.
+      (8) Left from the second re-review of PR 5, none reachable until PR 7
+      writes a retire. (a) "Owed beats pending" in `mergeSettleOwedGroup`: when
+      a group is owed by a failed settle, a dead scoped run's already-restored
+      rows are not evidence, so the later-pick check can drop the settle and
+      leave two primaries with only an Info log. This matches the in-record
+      rule `markSettlePending` already has and keeps a user's pick; it is an
+      owner decision whether to change it. (b) `applyUndo` reverses the
+      `merge:combine-retire:<cj>:<shell>:<op>` link keys in key order, which
+      is chronological only for ULID op ids; it fails closed, so add a comment
+      or sort by the ops' `CreatedAt`. (c) The "given back by a revert outside
+      the undo" subtest in `combine_retire_undo_test.go` passes on the older
+      code too (its fake carries no reverted ids); it documents the case and
+      cannot catch a regression.

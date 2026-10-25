@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.5
+// version: 1.97.6
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -575,9 +575,6 @@ func (rs *RevertService) revertOperation(operationID string, scope *revertScope)
 // the combine undo's retire reversal, which has read them once to plan the
 // reversal and must not decode a whole retire op again under the merge lock.
 func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, changes []*database.OperationChange) (*RevertResult, error) {
-	// The owed-settle record this run reads and writes: the operation's own, or
-	// a scoped run's (see revertScope.recordID).
-	record := operationID
 	if scope != nil {
 		if err := scope.requireShellsOf(operationID, changes); err != nil {
 			return nil, err
@@ -585,25 +582,26 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 		if changes = scope.filter(changes); len(changes) == 0 {
 			return nil, fmt.Errorf("operation %s has no rows for the named books", operationID)
 		}
-		record = scope.recordID(operationID)
-	} else {
-		// A scoped run that died after restoring rows and before settling
-		// left its intent under its own record: this whole-operation run is
-		// the only one that will look for it (absorbScopedSettleRecords).
-		rs.absorbScopedSettleRecords(operationID)
 	}
+	// The owed-settle state this run reads and writes: the operation's own
+	// record, or a scoped run's (revertScope.recordID). It is read once and
+	// nothing is written to it before the settle, so an early return below
+	// moves no intent: a whole-operation run reads the scoped records a dead
+	// scoped run left and folds them in memory, a scoped run reads the
+	// operation record's pending groups (loadSettleView).
+	view := rs.loadSettleView(operationID, scope)
 
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	retryOwed := func() (*RevertResult, error) {
 		if msgs := rs.settleGroups(operationID, settleInput{
-			crowned: handOffEvidenceOf(changes), priorPending: rs.settlePendingGroups(record), recordID: record,
+			crowned: handOffEvidenceOf(changes), view: view,
 		}, result); len(msgs) > 0 {
 			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), joinRevertErrors(msgs))
 		}
 		return result, nil
 	}
 	if len(changes) == 0 {
-		if rs.hasSettleOwed(record) {
+		if view.hasOwed() {
 			// The rows are gone (purged) but a group settle is owed.
 			return retryOwed()
 		}
@@ -673,14 +671,14 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 		return nil, &NotRestorableError{OperationID: operationID, Total: result.Total, Types: result.NotRestorableTypes}
 	}
 	if len(restorable) == 0 {
-		if rs.hasSettleOwed(record) {
+		if view.hasOwed() {
 			// Every row is reverted but a group settle failed last time:
 			// retry it (settleGroups).
 			return retryOwed()
 		}
 		// A pending intent alone is stale here (rows are marked only after
 		// their settle ran): drop it, nothing is owed.
-		rs.clearSettleOwed(record)
+		view.clear()
 		if len(ledger) > 0 {
 			// Every other row is reverted: the whole run is undone, so its
 			// plan record goes with it.
@@ -734,7 +732,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 	// leaves exactly the groups it changed. The next run counts a row it
 	// finds already restored as evidence only when the book's group is in
 	// that earlier run's pending set (priorPending).
-	priorPending := rs.settlePendingGroups(record)
+	priorPending := view.priorPending
 	pendingNow := map[string]bool{}
 	plan.NoteHandOffs(changes)
 	for _, c := range plan.Order {
@@ -851,7 +849,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 				touched = append(touched, t)
 				if gid != "" && !pendingNow[gid] {
 					pendingNow[gid] = true
-					rs.markSettlePending(record, gid)
+					rs.markPending(view, gid)
 				}
 			case gid != "" && priorPending[gid]:
 				touched = append(touched, t)
@@ -900,7 +898,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 	// already restored by the next run, with the groups already settled.
 	errMsgs = append(errMsgs, rs.settleGroups(operationID, settleInput{
 		plan: plan, touched: touched, refusedDemote: refusedDemote, crowned: handOffEvidenceOf(changes),
-		priorPending: priorPending, recordID: record,
+		view: view,
 	}, result)...)
 
 	// Mark only the rows that were actually restored, and the superseded

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
 // last-edited: 2026-10-24
 
@@ -26,10 +26,10 @@ import (
 // surface is missing: revertServiceStore is not widened for it (the
 // interface-width ratchet).
 
-// retireVersionAccess is the version read and delete a revert needs.
+// retireVersionAccess is the version read a revert needs. The delete of a
+// retire's version is database.GuardedBookVersionDeleter's.
 type retireVersionAccess interface {
 	GetBookVersion(id string) (*database.BookVersion, error)
-	DeleteBookVersion(id string) error
 }
 
 // lockMerge takes the merge lock (merge.LockMergeRMW) and returns its release,
@@ -129,25 +129,28 @@ func (rs *RevertService) revertBookFileRetire(c *database.OperationChange) error
 // revertBookVersionCreate deletes the retired version a retire created. The
 // store refuses while a retired row still names it (the rows revert first, the
 // plan orders them newest first), which is the dependent-not-reverted refusal.
+// The compare-and-set (undo.CheckVersionCreateCurrent) runs inside the store's
+// delete, under the version stripe, so an edit of the version cannot land
+// between the check and the delete and be lost.
 func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) error {
 	id, ok := undo.BookVersionIDFromField(c.FieldName)
 	if !ok {
 		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable,
 			Detail: fmt.Sprintf("no book_version id in %q", c.FieldName)}
 	}
-	vs, ok := database.AsCapability[retireVersionAccess](rs.db)
+	deleter, ok := database.AsCapability[database.GuardedBookVersionDeleter](rs.db)
 	if !ok {
 		return retireStoreMissing("delete book versions")
 	}
 	defer rs.lockMerge()()
-	cur, err := vs.GetBookVersion(id)
-	if err != nil {
-		return fmt.Errorf("read book version %s: %w", id, err)
-	}
-	if err := undo.CheckVersionCreateCurrent(cur, c); err != nil {
-		return err
-	}
-	if err := vs.DeleteBookVersion(id); err != nil {
+	var verdict error
+	if err := deleter.DeleteBookVersionIf(id, func(cur *database.BookVersion) error {
+		verdict = undo.CheckVersionCreateCurrent(cur, c)
+		return verdict
+	}); err != nil {
+		if verdict != nil {
+			return verdict
+		}
 		if errors.Is(err, database.ErrRetiredVersionHasFiles) {
 			return &undo.ReferentError{Reason: undo.ReasonDependentNotReverted,
 				Detail: fmt.Sprintf("book version %s still holds retired book_file rows; they are un-retired first", id)}

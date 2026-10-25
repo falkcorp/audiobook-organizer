@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-24
 
@@ -74,17 +74,158 @@ type settleInput struct {
 	// crowned: per retired book, what the operation's hand-off notes
 	// recorded (handOffEvidenceOf).
 	crowned map[string]handOffEvidence
+	// view is the owed-settle state this run started from (loadSettleView):
+	// the record it writes, what it owes, and the groups an EARLIER run's
+	// intent left pending. Nil reads the operation's own, now.
+	view *settleView
+}
+
+// settleView is the owed-settle state one revert run works from, read ONCE at
+// its start and never changed on disk before that run's settle.
+//
+// A whole-operation run reads the operation's record and every
+// revert_settle_owed:<op>#scope: record a scoped run left, and folds them in
+// memory (owed). It rewrites only the operation's record, and deletes the
+// scoped ones (folded) only after that rewrite succeeded: a run that dies, or
+// returns early, anywhere before its settle has moved no intent, so every
+// record is still where the run that owns it will look. A scoped run reads its
+// own record and, read-only, the operation record's pending groups, so the
+// intent a dead whole-operation run left for the scoped run's books is
+// evidence too. A scoped run never writes the operation's record.
+type settleView struct {
+	kv rawKV
+	// record is the key this run writes: the operation's own, or a scoped
+	// run's (revertScope.recordID).
+	record string
+	// owed is what the settle pass reads: the run's own record, with the
+	// scoped records folded in on a whole-operation run.
+	owed settleOwedRecord
 	// priorPending: the groups an EARLIER run's intent left pending when
 	// this run started. Only those Pending groups are settled from the
 	// record; this run's own intent is not evidence (a retire cut off
 	// before it wrote has rows, and its group must be left alone).
 	priorPending map[string]bool
-	// recordID names the owed record this run reads and writes; empty means
-	// the operation's own. A scoped run (RevertOperationForBooks, the combine
-	// undo's retire reversal) keeps a record of its own (revertScope.recordID),
-	// so it neither reads nor rewrites, and cannot clear, the intent a dead
-	// earlier run of the whole operation left for other books' groups.
-	recordID string
+	// folded are the scoped records' keys whose groups are in owed; deleted
+	// only once the operation's record holds them (settleGroups).
+	folded []string
+	// unreadable: the run's own record could not be read or decoded. Its
+	// content is unknown, so the run writes nothing to it and deletes
+	// nothing folded into it: a write would drop the groups it owes.
+	unreadable bool
+}
+
+// loadSettleView reads, and writes nothing, the owed-settle state of a run of
+// operationID (scope nil: the whole operation).
+func (rs *RevertService) loadSettleView(operationID string, scope *revertScope) *settleView {
+	kv, _ := rs.db.(rawKV)
+	v := &settleView{kv: kv, record: operationID, priorPending: map[string]bool{}}
+	if scope != nil {
+		v.record = scope.recordID(operationID)
+	}
+	own, err := readSettleOwed(kv, v.record)
+	if err != nil {
+		revertLog.Warn("revert: the owed group settles of operation %s are unreadable and left as they are: %s",
+			logger.SanitizeLogValue(v.record), logger.SanitizeLogValue(err.Error()))
+		v.unreadable = true
+	}
+	v.owed = own
+	if scope == nil {
+		rs.foldScopedSettleRecords(v, operationID)
+	}
+	for gid, og := range v.owed.Groups {
+		if og.Pending {
+			v.priorPending[gid] = true
+		}
+	}
+	if scope != nil {
+		// Read-only: a whole-operation run that died leaves its intent in the
+		// operation's record, where only a whole-operation run would look.
+		for gid := range rs.settlePendingGroups(operationID) {
+			v.priorPending[gid] = true
+		}
+	}
+	return v
+}
+
+// foldScopedSettleRecords folds into v.owed, in memory, the owed-settle records
+// of the operation's scoped runs (RevertOperationForBooks, the combine undo's
+// retire reversal). Each keeps a record of its own so it cannot clear the whole
+// operation's, but a scoped run that dies after restoring rows and before
+// settling leaves its intent there, and a whole-operation run that did not look
+// would not count the rows that run restored as evidence: a version group could
+// stay with no primary or two, silently. A record that cannot be decoded, or a
+// scan that fails, is logged and left where it is (never folded, never
+// deleted). The caller holds the operation's lock, which every scoped run holds
+// too, so no scoped run is writing a record while this reads it.
+func (rs *RevertService) foldScopedSettleRecords(v *settleView, operationID string) {
+	scanner, _ := rs.db.(interface {
+		ScanPrefix(prefix string) ([]database.KVPair, error)
+	})
+	if v.kv == nil || scanner == nil {
+		return
+	}
+	rows, err := scanner.ScanPrefix(settleOwedKeyPrefix + operationID + scopedRecordMarker)
+	if err != nil {
+		revertLog.Warn("revert: scan the scoped owed group settles of operation %s: %s",
+			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	for _, row := range rows {
+		scoped, err := decodeSettleOwed(row.Value)
+		if err != nil {
+			revertLog.Warn("revert: the scoped owed group settles %s are undecodable and left as they are: %s",
+				logger.SanitizeLogValue(row.Key), logger.SanitizeLogValue(err.Error()))
+			continue
+		}
+		for gid, g := range scoped.Groups {
+			if cur, ok := v.owed.Groups[gid]; ok {
+				g = mergeSettleOwedGroup(cur, g)
+			}
+			v.owed.Groups[gid] = g
+		}
+		v.folded = append(v.folded, row.Key)
+	}
+}
+
+// hasOwed reports whether the run owes groups to a failed settle (a pending
+// intent alone does not count).
+func (v *settleView) hasOwed() bool {
+	for _, og := range v.owed.Groups {
+		if !og.Pending {
+			return true
+		}
+	}
+	return false
+}
+
+// markPending records group gid as pending in the run's own record.
+func (rs *RevertService) markPending(v *settleView, gid string) {
+	if v.unreadable {
+		return
+	}
+	rs.markSettlePending(v.record, gid)
+}
+
+// deleteFolded deletes the scoped records folded into the run's owed set. Call
+// it only after the run's own record holds what they owed.
+func (v *settleView) deleteFolded() {
+	for _, key := range v.folded {
+		if err := v.kv.DeleteRaw(key); err != nil {
+			revertLog.Warn("revert: clear the scoped owed group settles %s: %s",
+				logger.SanitizeLogValue(key), logger.SanitizeLogValue(err.Error()))
+		}
+	}
+	v.folded = nil
+}
+
+// clear drops a pending-only record as stale: the run's own, and the scoped
+// ones folded into it.
+func (v *settleView) clear() {
+	if v.unreadable {
+		return
+	}
+	deleteSettleOwed(v.kv, v.record)
+	v.deleteFolded()
 }
 
 // opLocks serialises reverts of one operation in this process, so two
@@ -253,7 +394,13 @@ func (rs *RevertService) bookGroup(id string) string {
 func (rs *RevertService) settlePendingGroups(operationID string) map[string]bool {
 	kv, _ := rs.db.(rawKV)
 	out := map[string]bool{}
-	for gid, og := range rs.loadSettleOwed(kv, operationID).Groups {
+	rec, err := readSettleOwed(kv, operationID)
+	if err != nil {
+		revertLog.Warn("revert: read the pending group settles of operation %s: %s",
+			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
+		return out
+	}
+	for gid, og := range rec.Groups {
 		if og.Pending {
 			out[gid] = true
 		}
@@ -271,7 +418,13 @@ func (rs *RevertService) markSettlePending(operationID, gid string) {
 	if kv == nil {
 		return
 	}
-	rec := rs.loadSettleOwed(kv, operationID)
+	rec, err := readSettleOwed(kv, operationID)
+	if err != nil {
+		// Unknown content: a write would drop the groups the record owes.
+		revertLog.Warn("revert: the owed group settles of operation %s are unreadable, the pending settle of group %s is not recorded: %s",
+			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(gid), logger.SanitizeLogValue(err.Error()))
+		return
+	}
 	if _, ok := rec.Groups[gid]; ok {
 		return
 	}
@@ -311,12 +464,6 @@ func settleNote(c *database.OperationChange) (settleTouch, bool) {
 		return settleTouch{bookID: c.BookID, changeType: c.ChangeType, oldValue: c.OldValue}, true
 	}
 	return settleTouch{}, false
-}
-
-// clearSettleOwed deletes the operation's record.
-func (rs *RevertService) clearSettleOwed(operationID string) {
-	kv, _ := rs.db.(rawKV)
-	deleteSettleOwed(kv, operationID)
 }
 
 // settleGroups is the settle pass of RevertOperation: every version group
@@ -383,15 +530,13 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 		}
 	}
 
-	kv, _ := rs.db.(rawKV)
-	record := in.recordID
-	if record == "" {
-		record = operationID
+	view := in.view
+	if view == nil {
+		view = rs.loadSettleView(operationID, nil)
 	}
-	owed := rs.loadSettleOwed(kv, record)
-	for gid, og := range owed.Groups {
+	for gid, og := range view.owed.Groups {
 		if og.Pending {
-			if !in.priorPending[gid] {
+			if !view.priorPending[gid] {
 				continue // this run's own intent: not evidence
 			}
 			// Listed by an earlier run's intent: that run's rows are
@@ -440,11 +585,22 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 		result.HandOffFailed = append(result.HandOffFailed, msg)
 		errMsgs = append(errMsgs, msg)
 	}
-	if err := rs.storeSettleOwed(kv, record, left); err != nil {
+	// The run's own record is rewritten from what it just read, and only
+	// then are the scoped records folded into it deleted: nothing moved
+	// before this point, so a crash anywhere above leaves every record where
+	// its own retry finds it. A record the run could not read is left alone.
+	var storeErr error
+	if view.unreadable {
+		storeErr = errors.New("the owed record is unreadable")
+	} else {
+		storeErr = rs.storeSettleOwed(view.kv, view.record, left)
+	}
+	if storeErr != nil {
 		for i := range result.HandOffFailed {
-			result.HandOffFailed[i] += "; the retry could not be recorded (" + err.Error() + "), run version-group-primary-repair"
+			result.HandOffFailed[i] += "; the retry could not be recorded (" + storeErr.Error() + "), run version-group-primary-repair"
 		}
 	} else {
+		view.deleteFolded()
 		for i := range result.HandOffFailed {
 			result.HandOffFailed[i] += "; left to retry on the next revert of this operation"
 		}
@@ -676,38 +832,35 @@ func (rs *RevertService) yieldOriginal(opID, id string) error {
 	return err
 }
 
-// loadSettleOwed reads the operation's owed record; none (or no raw store,
-// or an unreadable one, which is logged) is an empty record.
-func (rs *RevertService) loadSettleOwed(kv rawKV, operationID string) settleOwedRecord {
-	rec := settleOwedRecord{Groups: map[string]settleOwedGroup{}}
+// readSettleOwed reads one owed record: none (or no raw store) is an empty
+// record. A failed read, or bytes that do not decode, is an error and never an
+// empty record, so a caller cannot write over groups it failed to read.
+func readSettleOwed(kv rawKV, record string) (settleOwedRecord, error) {
+	empty := settleOwedRecord{Groups: map[string]settleOwedGroup{}}
 	if kv == nil {
-		return rec
+		return empty, nil
 	}
-	raw, err := kv.GetRaw(settleOwedKeyPrefix + operationID)
+	raw, err := kv.GetRaw(settleOwedKeyPrefix + record)
 	if err != nil {
-		revertLog.Warn("revert: read the owed group settles of operation %s: %s",
-			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
-		return rec
+		return empty, fmt.Errorf("read: %w", err)
 	}
-	return decodeSettleOwed(raw, operationID)
+	return decodeSettleOwed(raw)
 }
 
-// decodeSettleOwed decodes one owed record's stored bytes; none, or bytes that
-// do not decode (logged), is an empty record.
-func decodeSettleOwed(raw []byte, record string) settleOwedRecord {
+// decodeSettleOwed decodes one owed record's stored bytes; none is an empty
+// record, and bytes that do not decode are an error.
+func decodeSettleOwed(raw []byte) (settleOwedRecord, error) {
 	rec := settleOwedRecord{Groups: map[string]settleOwedGroup{}}
 	if len(raw) == 0 {
-		return rec
+		return rec, nil
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		revertLog.Warn("revert: decode the owed group settles of operation %s: %s",
-			logger.SanitizeLogValue(record), logger.SanitizeLogValue(err.Error()))
-		return settleOwedRecord{Groups: map[string]settleOwedGroup{}}
+		return settleOwedRecord{Groups: map[string]settleOwedGroup{}}, fmt.Errorf("decode: %w", err)
 	}
 	if rec.Groups == nil {
 		rec.Groups = map[string]settleOwedGroup{}
 	}
-	return rec
+	return rec, nil
 }
 
 // storeSettleOwed writes the record, or deletes it when nothing is owed.
@@ -741,93 +894,12 @@ func deleteSettleOwed(kv rawKV, operationID string) {
 	}
 }
 
-// hasSettleOwed reports whether the operation has groups owed a settle by
-// a failed one (a pending intent alone does not count: see
-// settlePendingGroups).
-func (rs *RevertService) hasSettleOwed(operationID string) bool {
-	kv, _ := rs.db.(rawKV)
-	for _, og := range rs.loadSettleOwed(kv, operationID).Groups {
-		if !og.Pending {
-			return true
-		}
-	}
-	return false
-}
-
 // scopedRecordMarker joins an operation id and a scope's shell ids in the id of
 // a scoped run's owed record (revertScope.recordID).
 const scopedRecordMarker = "#scope:"
 
-// absorbScopedSettleRecords folds the owed-settle records of the operation's
-// scoped runs into the operation's own, then deletes them. A scoped run
-// (RevertOperationForBooks, the combine undo's retire reversal) keeps a record
-// of its own so it cannot clear the whole operation's, but a scoped run that
-// dies after restoring rows and before settling leaves its intent there, where
-// the only run that would ever look is a retry of the SAME scope. A whole-
-// operation revert reads the operation's own record, so without this its
-// priorPending would lack those groups, it would not count the rows the dead
-// run restored as evidence, and a version group could stay with no primary or
-// two, silently. After this, the whole run settles them like its own.
-//
-// The merged record is written BEFORE the scoped ones are deleted, so a crash
-// between the two re-runs the merge, which is idempotent. A failed read or write
-// is logged and leaves the scoped records where they are (never deleted
-// unmerged). The caller holds the operation's lock, which every scoped run
-// holds too, so no scoped run is writing a record while this reads it.
-func (rs *RevertService) absorbScopedSettleRecords(operationID string) {
-	kv, _ := rs.db.(rawKV)
-	scanner, _ := rs.db.(interface {
-		ScanPrefix(prefix string) ([]database.KVPair, error)
-	})
-	if kv == nil || scanner == nil {
-		return
-	}
-	rows, err := scanner.ScanPrefix(settleOwedKeyPrefix + operationID + scopedRecordMarker)
-	if err != nil {
-		revertLog.Warn("revert: scan the scoped owed group settles of operation %s: %s",
-			logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
-		return
-	}
-	if len(rows) == 0 {
-		return
-	}
-	rec := rs.loadSettleOwed(kv, operationID)
-	for _, row := range rows {
-		scoped := decodeSettleOwed(row.Value, strings.TrimPrefix(row.Key, settleOwedKeyPrefix))
-		for gid, g := range scoped.Groups {
-			if cur, ok := rec.Groups[gid]; ok {
-				g = mergeSettleOwedGroup(cur, g)
-			}
-			rec.Groups[gid] = g
-		}
-	}
-	rec.Pending = false
-	for _, g := range rec.Groups {
-		if g.Pending {
-			rec.Pending = true
-		}
-	}
-	if len(rec.Groups) > 0 {
-		raw, err := json.Marshal(rec)
-		if err == nil {
-			err = kv.SetRaw(settleOwedKeyPrefix+operationID, raw)
-		}
-		if err != nil {
-			revertLog.Warn("revert: fold the scoped owed group settles into operation %s: %s; left in place",
-				logger.SanitizeLogValue(operationID), logger.SanitizeLogValue(err.Error()))
-			return
-		}
-	}
-	for _, row := range rows {
-		if err := kv.DeleteRaw(row.Key); err != nil {
-			revertLog.Warn("revert: clear the scoped owed group settles %s: %s",
-				logger.SanitizeLogValue(row.Key), logger.SanitizeLogValue(err.Error()))
-		}
-	}
-}
-
 // mergeSettleOwedGroup combines the two records of one group (the operation's
-// and a scoped run's), the conservative way. A group owed by a failed settle
+// and a scoped run's; see foldScopedSettleRecords), the conservative way. A group owed by a failed settle
 // beats a pending intent: it carries the originals and the snapshot of the
 // members explicit true, so the later-pick check still protects a user's pick
 // made since. Two owed entries union their originals and keep only the members
