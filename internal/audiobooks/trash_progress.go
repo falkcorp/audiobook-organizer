@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-23
+// last-edited: 2026-10-24
 
 package audiobooks
 
@@ -437,8 +437,8 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 // not soft-deleted. Nothing was changed.
 var ErrNotInTrash = errors.New("audiobook is not in the trash")
 
-// ErrAudiobookNotFound is returned by DiscardProgressAndPurge for an id with
-// no book row.
+// ErrAudiobookNotFound is returned by DiscardProgressAndPurge and
+// RestoreAudiobook for an id with no book row.
 var ErrAudiobookNotFound = errors.New("audiobook not found")
 
 // ErrAuditUnavailable is returned by DiscardProgressAndPurge when there is
