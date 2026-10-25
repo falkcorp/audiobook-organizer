@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.37.1
+// version: 1.38.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-24
 
@@ -71,6 +71,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 )
 
@@ -1161,6 +1162,11 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 			// Refused on purpose (the book exists; its files are kept as a
 			// retired version), so it is a conflict, not a 404.
 			httputil.RespondWithConflict(c, err.Error())
+		case errors.Is(err, versionprimary.ErrMembershipChanged):
+			// A concurrent group change outlasted the lock's retries: transient,
+			// nothing was written, and the same request succeeds when it settles.
+			// Same answer as the split handler's (handlers/versions.go).
+			httputil.RespondWithConflict(c, "the audiobook's version group kept changing while it was being restored; nothing was restored, retry: "+err.Error())
 		case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
 			httputil.RespondWithNotFound(c, "audiobook", id)
 		default:

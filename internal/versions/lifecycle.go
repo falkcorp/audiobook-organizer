@@ -1,12 +1,17 @@
 // file: internal/versions/lifecycle.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-24
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
 // Lifecycle states:
-//   active → alt → trash → inactive_purged → (hard delete)
+//   active → alt → trash → purging → inactive_purged → (hard delete)
+//
+// purging is the claim PurgeVersion takes before it removes the first file. A
+// purge that finishes passes through it in one call; one that fails part way
+// leaves the version there, where it cannot be restored (some files are gone)
+// and where the nightly cleanup and purge-now retry it.
 //
 // Delete puts a version in trash (14-day TTL, counted from TrashedAt --
 // when it entered the trash, not when it was created). Auto-promote selects
@@ -31,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -42,6 +48,12 @@ import (
 const TrashTTLDays = 14
 
 var lifecycleLog = logger.New("versions.lifecycle")
+
+// ErrVersionNotInTrash is returned by PurgeVersion when the version left the
+// trash after the caller read it (it was restored): the claim was refused and
+// nothing was deleted. It is not a failure of the purge, the user's restore
+// won; the nightly cleanup skips such a version, and purge-now answers 409.
+var ErrVersionNotInTrash = errors.New("version is no longer in the trash")
 
 // ErrRetiredVersion is returned by the lifecycle steps that refuse a retired
 // version: MarkTrashed, MarkRestored and PurgeVersion. Callers branch on it
@@ -64,6 +76,15 @@ func refuseRetired(v *database.BookVersion, action string) error {
 	return nil
 }
 
+// refusePurging refuses a lifecycle step on a version whose purge has started.
+func refusePurging(v *database.BookVersion, action string) error {
+	if v != nil && v.Status == database.BookVersionStatusPurging {
+		return fmt.Errorf("%s version %s: %w (an earlier purge removed some of its files; "+
+			"the nightly cleanup or Purge now finishes it)", action, v.ID, database.ErrVersionPurging)
+	}
+	return nil
+}
+
 // MarkTrashed moves v into the trash in memory and stamps TrashedAt with now.
 // A version already in the trash keeps its stamp, so a repeated trash request
 // neither restarts nor shortens its window. The caller persists v; the store
@@ -71,9 +92,13 @@ func refuseRetired(v *database.BookVersion, action string) error {
 // this just makes the stamp visible on the caller's copy too.
 //
 // It refuses a retired version (ErrRetiredVersion) and leaves v untouched: a
-// retired version in the trash would reach PurgeVersion 14 days later.
+// retired version in the trash would reach PurgeVersion 14 days later. It
+// refuses a purging version (database.ErrVersionPurging) too.
 func MarkTrashed(v *database.BookVersion, now time.Time) error {
 	if err := refuseRetired(v, "trash"); err != nil {
+		return err
+	}
+	if err := refusePurging(v, "trash"); err != nil {
 		return err
 	}
 	if v.Status == database.BookVersionStatusTrash && v.TrashedAt != nil {
@@ -87,9 +112,16 @@ func MarkTrashed(v *database.BookVersion, now time.Time) error {
 
 // MarkRestored moves a trashed v back to alt in memory and clears TrashedAt.
 // The caller persists v. It refuses a retired version (ErrRetiredVersion),
-// which is not in the trash and must not become an alt.
+// which is not in the trash and must not become an alt, and a purging version
+// (database.ErrVersionPurging): its purge has started, so some of its files may
+// already be gone and an alt made of it would name them. The store refuses the
+// same write (database.refusePurgeTransition), which is what closes the race
+// with a purge that is claimed after the caller read the version.
 func MarkRestored(v *database.BookVersion) error {
 	if err := refuseRetired(v, "restore"); err != nil {
+		return err
+	}
+	if err := refusePurging(v, "restore"); err != nil {
 		return err
 	}
 	v.Status = database.BookVersionStatusAlt
@@ -148,18 +180,43 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 // the book purge asks (audiobooks purgePathStillReferenced): a book can name a
 // file with no row at all. The version's own book is not another owner.
 //
-// A file that cannot be removed leaves the version in the trash. Marking it
-// purged would orphan the file, because nothing looks at a purged version's
-// disk again; left in the trash it is retried on the next run, and a file the
-// first attempt already removed is simply gone then (a missing file counts as
-// removed).
+// The version is claimed before the first file is removed: it is written as
+// purging (database.BookVersionStatusPurging), under the version's stripe, and
+// the write is refused with ErrVersionNotInTrash when the stored version is no
+// longer trash or purging, so a restore that landed after the caller read the
+// version wins and nothing is deleted. From then on a restore is refused
+// (database.ErrVersionPurging).
+//
+// A file that cannot be removed leaves the version purging. Marking it purged
+// would orphan the file, because nothing looks at a purged version's disk
+// again; left purging it is retried by the next cleanup run (and by purge-now),
+// and a file the first attempt already removed is simply gone then (a missing
+// file counts as removed). It is purging, not trash, because some of its files
+// are already gone and a restore would hand back an alt that names them.
+//
+// A version whose book no longer exists has nothing on disk to remove: the
+// slot is found through the book's FilePath and the rows through its id, and
+// DeleteBook refuses while rows exist. It is marked inactive_purged and the
+// call succeeds, so one such version cannot fail the nightly cleanup forever.
+// A book that cannot be READ is a different thing: that is an error, the
+// version is untouched, and the next run retries it.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	if err := refuseRetired(ver, "purge"); err != nil {
 		return err
 	}
 	book, err := store.GetBookByID(ver.BookID)
-	if err != nil || book == nil {
-		return fmt.Errorf("book %s not found", ver.BookID)
+	if err != nil {
+		return fmt.Errorf("purge version %s: read book %s: %w", ver.ID, ver.BookID, err)
+	}
+	if book == nil {
+		lifecycleLog.Warn("purge version %s: its book %s no longer exists, so there is nothing on disk to remove; marking the version purged",
+			ver.ID, ver.BookID)
+		// Claim first: the same check that a restore since the caller read the
+		// version wins, so a restored version is not marked purged.
+		if err := claimPurge(store, ver); err != nil {
+			return err
+		}
+		return markPurged(store, ver)
 	}
 
 	// Remove files from .versions/{vid}/ or book root.
@@ -223,6 +280,12 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 		}
 		doomed = append(doomed, p)
 	}
+
+	// Claim the version before the first removal. Everything above only reads,
+	// so a lookup failure leaves the version as it was.
+	if err := claimPurge(store, ver); err != nil {
+		return err
+	}
 	var removeErrs []error
 	for _, p := range doomed {
 		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -235,10 +298,31 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 		_ = PruneEmptyVersionsDir(bookDir)
 	}
 	if len(removeErrs) > 0 {
-		return fmt.Errorf("purge version %s: %d of %d file(s) could not be removed; the version stays in the trash and is retried: %w",
+		return fmt.Errorf("purge version %s: %d of %d file(s) could not be removed; the version stays purging (it cannot be restored) and is retried: %w",
 			ver.ID, len(removeErrs), len(doomed), errors.Join(removeErrs...))
 	}
+	return markPurged(store, ver)
+}
 
+// claimPurge writes ver as purging. The store refuses the write when the
+// stored version is no longer trash or purging (restored since the caller read
+// it): that is ErrVersionNotInTrash, the purge does not go ahead, and ver is
+// put back as it was read.
+func claimPurge(store versionPurger, ver *database.BookVersion) error {
+	was := ver.Status
+	ver.Status = database.BookVersionStatusPurging
+	if err := store.UpdateBookVersion(ver); err != nil {
+		ver.Status = was
+		if errors.Is(err, database.ErrVersionPurgeClaimLost) {
+			return fmt.Errorf("purge version %s: %w (%v)", ver.ID, ErrVersionNotInTrash, err)
+		}
+		return fmt.Errorf("purge version %s: claim it: %w", ver.ID, err)
+	}
+	return nil
+}
+
+// markPurged records the end of a purge.
+func markPurged(store versionPurger, ver *database.BookVersion) error {
 	now := time.Now()
 	ver.Status = database.BookVersionStatusInactivePurged
 	ver.PurgedDate = &now
@@ -326,30 +410,38 @@ func CleanupTrashedVersions(store TrashedVersionCleaner) (purged, failed int, er
 // full window from the first run that sees it. A version lacking TrashedAt is
 // never purged.
 //
+// A version in database.BookVersionStatusPurging (a purge that failed part way)
+// is retried here at once, with no window: its window had run out when the
+// purge was claimed, or the user asked for it with purge-now.
+//
 // The trash is small and the loop is sequential on purpose: each purge deletes
-// files. The re-read below narrows, but does not close, the race with a
-// restore that lands mid-run: UpdateBookVersion has no compare-and-swap, so a
-// restore between the re-read and the stamp write is re-trashed, and one
-// between the re-read and PurgeVersion still loses its files. Closing it needs
-// an atomic claim of the row before any file is deleted.
+// files. The re-read below narrows the race with a restore that lands mid-run,
+// and PurgeVersion's claim closes it: the claim is written under the version's
+// stripe and refused when the stored version is no longer trash, so a restore
+// between the re-read and the claim wins (the version is skipped, not failed)
+// and a restore after the claim is refused. The one write this does not cover
+// is the legacy stamp below, which a restore in the same instant can still
+// turn back into a trash row with a fresh window (harmless: it is purged 14
+// days later, not at once).
 //
 // failed counts the versions this run could not act on: a purge that failed,
 // a re-read that failed, a stamp that could not be written. err is nil when
-// failed is 0; otherwise it names the count and wraps the first failure, so a
-// caller can use errors.Is on it. When the trash cannot be listed at all, err
-// is that failure and failed is 0 (no version was attempted).
+// failed is 0; otherwise it names the count and the id of EVERY failed
+// version, and wraps every failure (errors.Is sees each), so one stuck version
+// cannot hide a new failure behind it. When the trash cannot be listed at all,
+// err is that failure and failed is 0 (no version was attempted).
 func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purged, failed int, err error) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
 		lifecycleLog.Warn("trash cleanup: list trashed versions failed: %v", err)
 		return 0, 0, fmt.Errorf("trash cleanup: list trashed versions: %w", err)
 	}
-	var firstErr error
-	fail := func(e error) {
+	var failures []error
+	var failedIDs []string
+	fail := func(id string, e error) {
 		failed++
-		if firstErr == nil {
-			firstErr = e
-		}
+		failures = append(failures, e)
+		failedIDs = append(failedIDs, id)
 	}
 
 	ttl := time.Duration(TrashTTLDays) * 24 * time.Hour
@@ -361,13 +453,24 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 		v, err := store.GetBookVersion(id)
 		if err != nil {
 			lifecycleLog.Warn("trash cleanup: re-read version %s failed, skipping it this run: %v", id, err)
-			fail(fmt.Errorf("re-read version %s: %w", id, err))
+			fail(id, fmt.Errorf("re-read version %s: %w", id, err))
 			continue
 		}
-		// Only a trashed version is ever purged here. A retired version is not
-		// trashed (MarkTrashed refuses it) and would not be listed; PurgeVersion
-		// refuses it as well, so a stale or hand-edited row cannot reach the disk.
-		if v == nil || v.Status != database.BookVersionStatusTrash {
+		// Only a trashed (or purging) version is ever purged here. A retired
+		// version is not trashed (MarkTrashed refuses it) and would not be
+		// listed; PurgeVersion refuses it as well, so a stale or hand-edited row
+		// cannot reach the disk.
+		if v == nil || (v.Status != database.BookVersionStatusTrash && v.Status != database.BookVersionStatusPurging) {
+			continue
+		}
+		if v.Status == database.BookVersionStatusPurging {
+			// An unfinished purge: no window, no stamp. Retry it.
+			if err := PurgeVersion(store, v); err != nil {
+				lifecycleLog.Warn("trash cleanup: retrying the purge of version %s failed: %v", v.ID, err)
+				fail(id, err)
+				continue
+			}
+			purged++
 			continue
 		}
 		if v.TrashedAt == nil {
@@ -375,7 +478,7 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			v.TrashedAt = &stamp
 			if err := store.UpdateBookVersion(v); err != nil {
 				lifecycleLog.Warn("trash cleanup: version %s has no trashed-at time and stamping it failed; not purging it: %v", id, err)
-				fail(fmt.Errorf("stamp version %s: %w", id, err))
+				fail(id, fmt.Errorf("stamp version %s: %w", id, err))
 				continue
 			}
 			stamped++
@@ -387,8 +490,12 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			continue
 		}
 		if err := PurgeVersion(store, v); err != nil {
+			if errors.Is(err, ErrVersionNotInTrash) {
+				lifecycleLog.Info("trash cleanup: version %s was restored while this run was under way; not purging it", v.ID)
+				continue
+			}
 			lifecycleLog.Warn("trash cleanup: purging version %s failed: %v", v.ID, err)
-			fail(err)
+			fail(id, err)
 			continue
 		}
 		purged++
@@ -397,10 +504,10 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 		lifecycleLog.Info("trash cleanup: stamped %d trashed version(s) that had no trashed-at time; none of them were purged", stamped)
 	}
 	if failed > 0 {
-		lifecycleLog.Warn("trash cleanup: purged %d, failed %d of %d trashed version(s); the failed ones stay in the trash and are retried next run",
-			purged, failed, len(trashed))
-		return purged, failed, fmt.Errorf("trash cleanup: %d of %d trashed version(s) could not be handled (%d purged); first failure: %w",
-			failed, len(trashed), purged, firstErr)
+		lifecycleLog.Warn("trash cleanup: purged %d, failed %d of %d trashed version(s) (%s); the failed ones stay in the trash and are retried next run",
+			purged, failed, len(trashed), strings.Join(failedIDs, ", "))
+		return purged, failed, fmt.Errorf("trash cleanup: %d of %d trashed version(s) could not be handled (%d purged); failed versions %s: %w",
+			failed, len(trashed), purged, strings.Join(failedIDs, ", "), errors.Join(failures...))
 	}
 	return purged, 0, nil
 }

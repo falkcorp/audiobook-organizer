@@ -1,5 +1,5 @@
 // file: internal/versions/unit_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
 // last-edited: 2026-10-24
 
@@ -284,6 +284,7 @@ func TestIsPurgedOrBlocked(t *testing.T) {
 	assert.True(t, isPurgedOrBlocked(database.BookVersionStatusInactivePurged))
 	assert.True(t, isPurgedOrBlocked(database.BookVersionStatusBlockedForRedownload))
 	assert.True(t, isPurgedOrBlocked(database.BookVersionStatusTrash))
+	assert.True(t, isPurgedOrBlocked(database.BookVersionStatusPurging))
 	assert.False(t, isPurgedOrBlocked(database.BookVersionStatusActive))
 	assert.False(t, isPurgedOrBlocked(database.BookVersionStatusAlt))
 	assert.False(t, isPurgedOrBlocked(database.BookVersionStatusPending))

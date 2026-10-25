@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-24
 
@@ -41,6 +41,7 @@ import (
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -440,6 +441,24 @@ func TestRestoreAudiobook_RetiredShellIsConflict(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "retired version") {
 		t.Errorf("the 409 should carry the reason, got %s", w.Body.String())
+	}
+}
+
+// A restore that loses the version-group lock race (versionprimary.LockBookGroups
+// gives up after five tries) is transient: 409 with "retry", not the 500 of an
+// unclassified failure. Controls: the 500 test above keeps every other error a
+// 500, so the 409 is specific to ErrMembershipChanged.
+func TestRestoreAudiobook_MembershipChangedIsAConflictToRetry(t *testing.T) {
+	h, d := newHandler(t)
+	changed := fmt.Errorf("lock version groups of [s1]: %w", versionprimary.ErrMembershipChanged)
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "s1").Return(nil, changed)
+	c, w := newCtx("POST", "/audiobooks/s1/restore", nil, p("id", "s1"))
+	h.RestoreAudiobook(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "retry") {
+		t.Errorf("the 409 should say to retry, got %s", w.Body.String())
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-24
 
@@ -58,6 +58,8 @@ type versionPurger interface {
 type TrashedVersionCleaner interface {
 	versionPurger
 
+	// ListTrashedBookVersions lists the trash AND the purges that were claimed
+	// and did not finish (status purging), so the cleanup retries those too.
 	ListTrashedBookVersions() ([]database.BookVersion, error)
 	// GetBookVersion re-reads each listed row before it is stamped or
 	// purged, narrowing the window in which a mid-run restore is undone.

@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_retired_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6d2a9c41-3b7e-4f08-a5d1-7e9b04c8f326
 // last-edited: 2026-10-24
 
@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,10 +236,11 @@ func TestHandlePurgeVersion_PathIndexUnavailableIsA503(t *testing.T) {
 	}
 }
 
-// A file that cannot be removed is a real failure: 500, and the version stays in
-// the trash so the next attempt retries it (an own row naming a directory that
-// still has content; os.Remove refuses it as root or not).
-func TestHandlePurgeVersion_UnremovableFileIsA500AndKeepsTheVersion(t *testing.T) {
+// A file that cannot be removed is a real failure: 500, and the version is left
+// purging so the next attempt retries it and it cannot be restored half-deleted
+// (an own row naming a directory that still has content; os.Remove refuses it as
+// root or not).
+func TestHandlePurgeVersion_UnremovableFileIsA500AndLeavesTheVersionPurging(t *testing.T) {
 	srv, store := setupVersionLifecycleServer(t)
 	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: filepath.Join(t.TempDir(), "book.m4b")}); err != nil {
 		t.Fatal(err)
@@ -266,7 +268,113 @@ func TestHandlePurgeVersion_UnremovableFileIsA500AndKeepsTheVersion(t *testing.T
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("purge-now with an unremovable file: expected 500, got %d: %s", w.Code, w.Body.String())
 	}
-	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusTrash || got.PurgedDate != nil {
-		t.Errorf("status=%s PurgedDate=%v, want the version left in the trash", got.Status, got.PurgedDate)
+	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusPurging || got.PurgedDate != nil {
+		t.Errorf("status=%s PurgedDate=%v, want the version left purging", got.Status, got.PurgedDate)
+	}
+
+	// Restore of the half-purged version is refused with a 409 that says why,
+	// and the version stays purging (the user is not handed an alt whose files
+	// are partly gone).
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("restore of a purging version: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "purge") {
+		t.Errorf("the 409 should say the version is being purged: %s", w.Body.String())
+	}
+	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusPurging {
+		t.Errorf("status = %s after the refused restore, want purging", got.Status)
+	}
+
+	// Trashing it again is refused the same way.
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+ver.ID, nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("trash of a purging version: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Purge-now retries it: with the obstacle gone it finishes (200).
+	if err := os.Remove(filepath.Join(stuck, "inner.m4b")); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/purge-now", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("purge-now retry of a purging version: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusInactivePurged {
+		t.Errorf("status = %s after the retry, want inactive_purged", got.Status)
+	}
+}
+
+// A restore request that read the version as trash and writes after a purge
+// claimed it is refused by the store and answered 409, not 500: the race the
+// claim closes, driven through the handler by a store that claims the purge
+// between the handler's read and its write.
+type claimAfterReadStore struct {
+	database.Store
+	t *testing.T
+}
+
+func (s claimAfterReadStore) GetBookVersion(id string) (*database.BookVersion, error) {
+	v, err := s.Store.GetBookVersion(id)
+	if err != nil || v == nil || v.Status != database.BookVersionStatusTrash {
+		return v, err
+	}
+	claimed := *v
+	claimed.Status = database.BookVersionStatusPurging
+	if err := s.Store.UpdateBookVersion(&claimed); err != nil {
+		s.t.Fatal(err)
+	}
+	return v, nil
+}
+
+func TestHandleRestoreVersion_PurgeClaimedAfterTheReadIsA409(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	trashedAt := time.Now()
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported", TrashedAt: &trashedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.store = claimAfterReadStore{Store: store, t: t}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("restore racing a purge claim: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if got, _ := store.GetBookVersion(ver.ID); got.Status != database.BookVersionStatusPurging {
+		t.Errorf("status = %s, want the purge claim to stand", got.Status)
+	}
+}
+
+// The retired and purging refusals do not catch a plain alt: it keeps the 400
+// (control for the two 409s above), and purge-now of an alt is still refused.
+func TestHandlePurgeVersion_AltIsStillRefused(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	alt, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+alt.ID+"/purge-now", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("purge-now of an alt: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }

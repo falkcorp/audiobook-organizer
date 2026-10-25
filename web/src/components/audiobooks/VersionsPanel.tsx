@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/VersionsPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e3f4a2b-6c7d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-24
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -34,6 +34,8 @@ const STATUS_COLORS: Record<string, 'success' | 'primary' | 'warning' | 'error' 
   active: 'success',
   alt: 'primary',
   trash: 'warning',
+  // A purge that failed part way: not restorable, retried by the nightly cleanup.
+  purging: 'warning',
   inactive_purged: 'error',
   blocked_for_redownload: 'error',
   pending: 'default',
