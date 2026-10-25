@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.63.1
+// version: 1.63.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package merge
 
@@ -2693,7 +2693,13 @@ func (ms *Service) planOwnFile(b *database.Book) (virtualFilePlan, error) {
 	if b.FilePath == "" {
 		return virtualFilePlan{}, nil
 	}
-	if files, _ := ms.db.GetBookFiles(b.ID); len(files) > 0 {
+	files, err := ms.db.GetBookFiles(b.ID)
+	if err != nil {
+		// A read error is not "no rows": planning a row for a book that already
+		// has them would put a second live row on its file.
+		return virtualFilePlan{}, fmt.Errorf("cannot tell whether book %s already has file rows: %w", b.ID, err)
+	}
+	if len(files) > 0 {
 		return virtualFilePlan{}, nil // already materialized
 	}
 	return ms.planVirtualFile(b, b.ID)
@@ -2731,7 +2737,10 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtu
 			b.ID, logger.SanitizeLogValue(b.FilePath), held.ID, held.BookID)
 		return virtualFilePlan{}, nil
 	}
-	existing, _ := ms.db.GetBookFileByPath(b.FilePath)
+	// The rows are already in hand: with no retired version they are the
+	// ordinary path lookup's answer, and with one they are the complete one, so
+	// a second GetBookFileByPath would only be a read whose error could be lost.
+	existing := liveRowAtPath(rows, targetBookID)
 	if existing != nil {
 		if existing.BookID == targetBookID {
 			return virtualFilePlan{attached: true}, nil
@@ -2763,6 +2772,28 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtu
 		create:   bf,
 		attached: true,
 	}, nil
+}
+
+// liveRowAtPath picks the live row of rows (one path's lookup answer) that
+// planVirtualFile reattaches: the target's own row if it has one, else the
+// smallest (BookID, ID) so the choice is deterministic. Retired rows are never
+// picked (the caller has already stopped on a retired claim). nil when no live
+// row holds the path.
+func liveRowAtPath(rows []database.BookFile, targetBookID string) *database.BookFile {
+	var best *database.BookFile
+	for i := range rows {
+		r := &rows[i]
+		if r.Retired {
+			continue
+		}
+		if r.BookID == targetBookID {
+			return r
+		}
+		if best == nil || r.BookID < best.BookID || (r.BookID == best.BookID && r.ID < best.ID) {
+			best = r
+		}
+	}
+	return best
 }
 
 // applyVirtualFile performs a plan. It returns the number of files attached
