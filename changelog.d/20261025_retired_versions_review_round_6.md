@@ -1,0 +1,31 @@
+### Fixed
+
+#### Retired-version readers: the sixth re-review findings
+
+A combine that needs the complete list of the rows holding a file, to decide
+whether it may take another book's row, now refuses before it writes anything
+while the in-memory index is still warming up after a restart. It used to warn
+and go on, which retired the absorbed book without its audio on the survivor, a
+lasting result of a condition that clears within a couple of minutes (the
+ordinary single-holder case included). The refusal is an error that says to retry
+later, and the same combine goes through once the index serves. A combine that
+loses the list while it runs still finishes with a warning, as before. A file held
+by several books, or by a book that no longer exists, is still a warning.
+
+The regroup apply (multi-disc collapse and duplicate-of merge) now reports what
+its combine left undone: a file that could not be attached to the survivor is put
+in the approve response's `note` (bulk approve: `notes`, one entry per item) and
+logged, instead of only reaching the undo journal. A review-apply function adds
+such lines with `database.AddApplyNotice`; the item is still recorded as applied,
+because the combine committed.
+
+A file row that fails to write during a combine (a failed move of another book's
+row, a failed create) is now a warning on the combine's result and its undo
+journal, not a log line only, and the journal no longer keeps the "took the row
+from trashed book" note for a row that never moved.
+
+Undoing a combine whose reattached row came from a book that has since been
+purged now gives the row to the absorbed book whose file it is, with a warning,
+instead of leaving it on the survivor, whose duration and track list then
+included audio it never had. A row taken for the survivor's own file stays on the
+survivor.

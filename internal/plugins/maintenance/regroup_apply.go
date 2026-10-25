@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.20.1
+// version: 1.20.2
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -133,6 +133,21 @@ func (w *applyWrites) combine(c bookCombiner, ids []string, primaryID string) (*
 	return res, err
 }
 
+// reportCombineWarnings puts what a committed combine reported as left undone (a
+// file it could not attach to the survivor: CombineResult.Warnings) where the
+// reviewer sees it. The combine has already merged, so the item is applied and the
+// apply returns nil; the lines go to the log and, through database.AddApplyNotice,
+// to the note of the approve response (bulk approve: notes). Before this the regroup
+// apply logged only the counts, so a held-path warning reached nobody.
+func reportCombineWarnings(ctx context.Context, item database.ReviewItem, what string, res *merge.CombineResult) {
+	for _, w := range res.Warnings {
+		regroupLog.Warn("regroup apply: the combine committed but left a file unattached: item=%s %s survivor=%s undo_journal=%s warning=%s",
+			logger.SanitizeLogValue(item.ID), logger.SanitizeLogValue(what), logger.SanitizeLogValue(res.PrimaryID),
+			logger.SanitizeLogValue(res.JournalID), logger.SanitizeLogValue(w))
+		database.AddApplyNotice(ctx, fmt.Sprintf("%s: %s (undo journal %s)", what, w, res.JournalID))
+	}
+}
+
 // bookCombiner is the slim slice of merge.Service the multidisc apply path needs.
 // Narrowing to an interface keeps the apply function unit-testable without a full
 // merge service while the real wiring passes *merge.Service.
@@ -247,6 +262,7 @@ func ApplyMultidisc(store multidiscApplier, combiner bookCombiner) func(context.
 		slog.Info("regroup multidisc apply: collapsed folder",
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
 			"undo_operation", res.OperationID, "files_moved", res.FilesMoved, "books_soft_deleted", res.BooksDeleted)
+		reportCombineWarnings(ctx, item, fmt.Sprintf("combine of %q", p.Folder), res)
 
 		// Stamp the merged book's files with the per-file disc/track order the classifier
 		// derived. Best-effort: the combine (the actual merge) already committed, so a
@@ -789,6 +805,7 @@ func ApplyDuplicateOf(store multidiscApplier, combiner bookCombiner, cands candi
 			"item", item.ID, "folder", p.Folder, "survivor", res.PrimaryID, "undo_journal", res.JournalID,
 			"undo_operation", res.OperationID, "debris_merged", len(present), "files_moved", res.FilesMoved,
 			"books_soft_deleted", res.BooksDeleted)
+		reportCombineWarnings(ctx, item, fmt.Sprintf("merge of %q into %s", p.Folder, target), res)
 		return nil
 	}
 }
