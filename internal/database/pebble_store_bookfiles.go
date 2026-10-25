@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.48.1
+// version: 1.48.2
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -1670,8 +1670,14 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	for i := range files {
 		cascade = append(cascade, &files[i])
 	}
-	if err := s.commitWithWindowCascade(batch, cascade...); err != nil {
-		return err
+	//
+	// A WAL fsync failure after the apply is ErrBookFileDurabilityUnknown: the rows
+	// are gone, so the derived state below must still run (bookFileApplied) or
+	// memdb would keep serving deleted rows until a restart, and a retry would
+	// find nothing in Pebble to clean it up. The error is returned after it.
+	durErr := s.commitWithWindowCascade(batch, cascade...)
+	if !bookFileApplied(durErr) {
+		return durErr
 	}
 	// Derived state, mirroring DeleteBookFilesByIDs' pass 3 exactly. Until
 	// 2026-08-14 this method skipped the memdb delete and the quick-query
@@ -1699,7 +1705,7 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	// claimed the book "likely has Duration=0 after deletion, which is correct" —
 	// the opposite of what the code does, and believable enough to plan against.
 	s.notifyBookFileChange(bookID)
-	return nil
+	return durErr
 }
 
 // DeleteBookFilesByIDs removes many BookFile rows (and their secondary indexes)
@@ -1868,8 +1874,13 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 		}
 	}
 	// Fingerprint-window cascade, same batch; see DeleteBookFile.
-	if err := s.commitWithWindowCascade(batch, resolved...); err != nil {
-		return err
+	//
+	// A WAL fsync failure after the apply is ErrBookFileDurabilityUnknown: the rows
+	// are gone, so pass 3 must still run (bookFileApplied), then the error is
+	// returned. Same rule as DeleteBookFile.
+	durErr := s.commitWithWindowCascade(batch, resolved...)
+	if !bookFileApplied(durErr) {
+		return durErr
 	}
 
 	// ── Pass 3: derived state. Everything below is best-effort by design. ──
@@ -1883,7 +1894,7 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 	// ONE recompute per affected book, not one per row. This is the actual fix —
 	// everything above is just what makes it safe to do.
 	s.notifyBookFileChanges(affectedBooks)
-	return nil
+	return durErr
 }
 
 // UpsertBookFile creates or updates a BookFile. Lookup order:
