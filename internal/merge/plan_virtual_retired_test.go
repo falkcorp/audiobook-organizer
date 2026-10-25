@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_retired_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d0b8e63-91a4-4c27-b6f3-7e2a1c9d4058
 // last-edited: 2026-10-25
 
@@ -302,10 +302,34 @@ func TestCombineBooks_WarmupWithNoRetiredVersionsStillAttachesTheFile(t *testing
 	assert.Equal(t, 2, res.FilesMoved)
 }
 
+// requireRefusedBeforeJournal asserts that a combine refused for want of a path
+// lookup answer did so cleanly: the lookup error, not a CombineIncompleteError
+// (which tells the user to revert a combine that wrote nothing), no journal of any
+// status, and neither book touched.
+func requireRefusedBeforeJournal(t *testing.T, store database.Store, ms *Service, err error, survivor, absorbed *database.Book) {
+	t.Helper()
+	require.Error(t, err, "a combine whose file lookup cannot be answered must not report success")
+	assert.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
+	var incomplete *CombineIncompleteError
+	assert.False(t, errors.As(err, &incomplete), "a refusal before the journal must not ask the user to revert: %v", err)
+
+	journals, jerr := ms.ListCombineJournals(0)
+	require.NoError(t, jerr)
+	assert.Empty(t, journals, "a refusal must leave no combine journal behind, Pending or otherwise")
+
+	assert.False(t, viewBook(t, store, absorbed.ID).SoftDel, "the absorbed book must not be soft-deleted")
+	files, ferr := store.GetBookFiles(survivor.ID)
+	require.NoError(t, ferr)
+	for _, f := range files {
+		assert.NotEqual(t, absorbed.FilePath, f.FilePath)
+	}
+}
+
 // With a retired version in the store the complete lookup is required, and when
-// it cannot be answered the combine stops with its journal pending instead of
-// soft-deleting the absorbed book and reporting success.
-func TestCombineBooks_WarmupWithRetiredVersionsStopsInsteadOfDroppingTheFile(t *testing.T) {
+// it cannot be answered the combine refuses before it journals anything instead of
+// soft-deleting the absorbed book and reporting success. Here the survivor is
+// rowless, so planning ITS own file is what cannot be answered.
+func TestCombineBooks_WarmupWithRetiredVersionsRefusesOnTheSurvivorLookupBeforeJournaling(t *testing.T) {
 	store := setupTestStore(t)
 	survivor, absorbed := seedWarmupCombine(t, store)
 	bystander, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Bystander", FilePath: "/tmp/pvr-combine-by.mp3"})
@@ -314,13 +338,32 @@ func TestCombineBooks_WarmupWithRetiredVersionsStopsInsteadOfDroppingTheFile(t *
 
 	ms := NewService(indexDownStore{Store: store})
 	_, err = ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
-	require.Error(t, err, "a combine whose file lookup cannot be answered must not report success")
-	assert.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
+	requireRefusedBeforeJournal(t, store, ms, err, survivor, absorbed)
+}
 
-	assert.False(t, viewBook(t, store, absorbed.ID).SoftDel, "the absorbed book must not be soft-deleted")
-	files, err := store.GetBookFiles(survivor.ID)
+// The same refusal when the survivor already has a real row, so its own plan needs
+// no lookup and the ABSORBED book's path lookup is the one that cannot be answered.
+// This is the absorbed-loop branch the test above never reaches (the survivor
+// refused first), and it used to fire only after the journal and the undo pointer
+// were written, leaving a Pending journal over an untouched library.
+func TestCombineBooks_WarmupWithRetiredVersionsRefusesOnTheAbsorbedLookupBeforeJournaling(t *testing.T) {
+	store := setupTestStore(t)
+	survivor, absorbed := seedWarmupCombine(t, store)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{
+		ID: ulid.Make().String(), BookID: survivor.ID, FilePath: survivor.FilePath, Format: "mp3",
+	}))
+	bystander, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Bystander", FilePath: "/tmp/pvr-combine-by2.mp3"})
 	require.NoError(t, err)
-	for _, f := range files {
-		assert.NotEqual(t, absorbed.FilePath, f.FilePath)
-	}
+	retireRowOnto(t, store, bystander.ID, "/tmp/pvr-combine-elsewhere2.mp3")
+
+	ms := NewService(indexDownStore{Store: store})
+	// The survivor really is the one with rows, so only the absorbed lookup can refuse.
+	plan, perr := ms.planOwnFile(survivor)
+	require.NoError(t, perr)
+	require.False(t, plan.attached)
+	require.Nil(t, plan.create)
+
+	_, err = ms.CombineBooks([]string{survivor.ID, absorbed.ID}, survivor.ID, nil)
+	requireRefusedBeforeJournal(t, store, ms, err, survivor, absorbed)
+	assert.Contains(t, err.Error(), absorbed.ID, "the refusal must name the absorbed book whose path could not be checked")
 }
