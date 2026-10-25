@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -124,6 +124,10 @@ field (for example `last_played:>30d`, which needs a sign), is refused with a 40
 the collection is created or its query is changed, with the same message the library
 search gives, instead of being stored as a collection that matches nothing. A closed
 search index does not stop a good query from being saved.
+
+A stored collection whose query has since stopped parsing is treated as per-viewer:
+it shows no members to anyone, with a message saying its query can no longer be
+evaluated, and never the list it may have held. Fix its query to bring it back.
 
 One known limit: an `OR` between a per-user term and an indexed term
 (`title:Alpha OR read_status:finished`) is evaluated as an `AND`, because the per-user

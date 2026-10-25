@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-collections-per-viewer-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b8e2d71-3c4a-4f06-9a17-d2e6c0b94f83 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -23,6 +23,10 @@ Pull request: https://github.com/falkcorp/audiobook-organizer/pull/4155 (merge c
 - When the system has to work out such a collection with nobody in particular
   watching, the answer is "nothing". It never quietly falls back to the creator.
 - Collections that do not mention listening are unchanged.
+- If a collection's members cannot be worked out for someone (the search index is
+  still starting, the saved search no longer makes sense, or their listening history
+  could not be read), the page now says so instead of showing an empty list that looks
+  like "nothing matches".
 
 ## What was wrong
 
@@ -46,6 +50,16 @@ asked (a library has tens of collections, not thousands). Existing stored copies
 are cleared once when the server starts. If no person is identified, the answer
 is empty. Owner-takeover and "blocked collection" machinery, which only existed
 to protect the old design, was removed.
+
+## What this does not undo
+
+Clearing the stored copies at startup removes them from the live database, but not
+from every place a copy of the database already exists. Older database files that have
+not been compacted yet, ZFS snapshots of the data directory, and backups can still
+hold a creator's old stored list until they are compacted or expire. Those are
+administrator-only places (they need access to the server itself, not the website or
+the phone app), so this is a note for whoever manages the server's snapshots and
+backups, not a user-facing exposure. Purging snapshots early is the owner's call.
 
 ## What users will notice
 
