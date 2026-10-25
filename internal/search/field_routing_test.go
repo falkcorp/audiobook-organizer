@@ -1,7 +1,7 @@
 // file: internal/search/field_routing_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package search
 
@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // duration: used to go to Bleve under its own name, which is not indexed
@@ -99,19 +101,42 @@ func TestQueryUsesPerUserField(t *testing.T) {
 	}
 }
 
-func TestPerUserFieldNames_MatchesTheRoutingSet(t *testing.T) {
-	names := PerUserFieldNames()
-	if got, want := strings.Join(names, ","), "last_played,progress_pct,read_status"; got != want {
-		t.Fatalf("PerUserFieldNames() = %s, want %s", got, want)
-	}
-	for _, n := range names {
+func TestIsPerUserField_MatchesTheRoutingSet(t *testing.T) {
+	for _, n := range []string{"last_played", "progress_pct", "read_status"} {
 		if !IsPerUserField(n) {
-			t.Errorf("IsPerUserField(%q) = false for a listed name", n)
+			t.Errorf("IsPerUserField(%q) = false for a per-user field", n)
 		}
 	}
 	for _, n := range []string{"title", "date_added", "duration", ""} {
 		if IsPerUserField(n) {
 			t.Errorf("IsPerUserField(%q) = true, want false", n)
+		}
+	}
+}
+
+// QueryMayUsePerUserField is the fail-closed twin of QueryUsesPerUserField: it
+// agrees with it on every query that parses, and answers true for text that does
+// not parse, because that text cannot be shown to reference no per-user field.
+func TestQueryMayUsePerUserField_FailsClosedOnUnparseableText(t *testing.T) {
+	unparseable := []string{
+		`read_status:finished "unterminated`,
+		`title:"unterminated`,
+		`read_status:(finished`,
+	}
+	for _, q := range unparseable {
+		if _, err := ParseQuery(q); err == nil {
+			t.Fatalf("fixture %q parses; the test needs text that does not", q)
+		}
+		if QueryUsesPerUserField(q) {
+			t.Errorf("QueryUsesPerUserField(%q) = true; it is the evaluation question and says false for text that does not parse", q)
+		}
+		if !QueryMayUsePerUserField(q) {
+			t.Errorf("QueryMayUsePerUserField(%q) = false, want true (fail closed)", q)
+		}
+	}
+	for _, q := range []string{"read_status:finished", "-progress_pct:>10", "author:x (last_played:>-7d | title:y)", "author:smith", "title:foo bar"} {
+		if got, want := QueryMayUsePerUserField(q), QueryUsesPerUserField(q); got != want {
+			t.Errorf("%q: QueryMayUsePerUserField = %v, QueryUsesPerUserField = %v; they must agree on text that parses", q, got, want)
 		}
 	}
 }
@@ -158,5 +183,14 @@ func TestQueryUsesPerUserField_AgreesWithTranslatorRouting(t *testing.T) {
 	// Not vacuous: most of the list really is routed to the per-user pass.
 	if routed < 15 {
 		t.Errorf("only %d of the probe queries were routed per-user; the probe list no longer exercises the gate", routed)
+	}
+}
+
+// The store drops a per-viewer collection's stored member list only because this
+// package registers its detector with it at init. An unregistered store keeps the
+// list, which is a silent fail-open, so the registration is itself tested.
+func TestInit_RegistersThePerViewerClassifierWithTheStore(t *testing.T) {
+	if !database.CollectionPerViewerClassifierSet() {
+		t.Fatal("importing internal/search did not install the store's per-viewer classifier")
 	}
 }

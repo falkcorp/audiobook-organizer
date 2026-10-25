@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
 // last-edited: 2026-10-25
 //
@@ -15,8 +15,11 @@
 // The evaluator prefers the Bleve index when available: it yields
 // full text/relevance support and handles ranges natively. Per-user
 // fields (read_status, progress_pct, last_played) are split off by
-// the translator into a PerUserFilter slice and applied here with
-// Store lookups since Bleve only holds library-global state.
+// the translator into a PerUserFilter slice and applied here against the
+// evaluating user's own state rows (Bleve only holds library-global state):
+// read in one prefix scan per viewer (ViewerStates), never one lookup per
+// candidate book, and never through a result window that could truncate the
+// answer. See matchViewerStates.
 //
 // When the Bleve index is nil (e.g. during early startup) the
 // evaluator returns an error — iTunes sync and the HTTP GET path
@@ -34,6 +37,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/search/query"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
@@ -45,17 +51,16 @@ type PlaylistSort struct {
 	Direction string `json:"direction"` // "asc" | "desc"
 }
 
-// defaultEvalPageSize is the Bleve result window when a smart
-// playlist has no Limit set. Large enough to cover the library
-// while still keeping memory bounded.
-const defaultEvalPageSize = 10000
-
 // ErrSearchIndexUnavailable indicates the Bleve index is not open.
 // Callers can retry once the server has finished its startup phase.
 var ErrSearchIndexUnavailable = errors.New("search index not yet available")
 
-// playlistEvalStore is the two methods its own doc comment already named, measured by emptying the interface and reading the
-// compiler's enumeration. It was 43 methods of database.* embeds.
+// bookLookup, userStateReader and playlistEvalStore are the two methods the
+// evaluator calls on a store (it was 43 methods of database.* embeds), measured
+// by emptying the interface and reading the compiler's enumeration. The per-user
+// bulk read (database.UserBookStateLister) is deliberately NOT part of it: it is a
+// capability resolved with database.AsCapability, so neither database.Store nor
+// every test double has to grow it.
 type bookLookup interface {
 	GetBookByID(id string) (*database.Book, error)
 }
@@ -69,6 +74,61 @@ type playlistEvalStore interface {
 	userStateReader
 }
 
+// ViewerStates is one user's per-book state, loaded ONCE and shared read-only by
+// every evaluation made for that viewer (a collections page evaluates every
+// per-viewer collection for the same person). Build it with LoadViewerStates.
+//
+// With a store that can list a user's rows (the Pebble store) it holds the whole
+// set in memory: the evaluator then answers a per-user filter from this map and
+// never reads a row per candidate book. A store that cannot is read by point
+// reads instead (rows is nil), which is the same answer, slower.
+type ViewerStates struct {
+	userID string
+	rows   map[string]*database.UserBookState // book id -> row; nil when the store cannot list
+	reader userStateReader                    // point reads, used only when rows is nil
+}
+
+// UserID is the user the states belong to. "" means no viewer.
+func (v *ViewerStates) UserID() string {
+	if v == nil {
+		return ""
+	}
+	return v.userID
+}
+
+// LoadViewerStates reads userID's state for the evaluator. An empty userID is
+// "no viewer": nothing is read, and any query with a per-user filter then
+// matches nothing (see evaluate). An error means the rows could not be read or
+// one did not decode; the caller must fail the evaluation rather than treat the
+// user as having no state, which would match every book under a negated or
+// `unstarted` filter.
+func LoadViewerStates(store playlistEvalStore, userID string) (*ViewerStates, error) {
+	if userID == "" {
+		return &ViewerStates{}, nil
+	}
+	if lister, ok := database.AsCapability[database.UserBookStateLister](store); ok {
+		rows, err := lister.ListUserBookStates(userID)
+		if err != nil {
+			return nil, fmt.Errorf("read user state: %w", err)
+		}
+		return &ViewerStates{userID: userID, rows: rows}, nil
+	}
+	return &ViewerStates{userID: userID, reader: store}, nil
+}
+
+// lookup returns the viewer's row for a book, nil when there is none.
+func (v *ViewerStates) lookup(bookID string) (*database.UserBookState, error) {
+	if v.rows != nil {
+		return v.rows[bookID], nil
+	}
+	return v.reader.GetUserBookState(v.userID, bookID)
+}
+
+// evalWindowOverride, when positive, replaces the initial result window of an
+// uncapped search. Tests set it tiny to prove the follow-up pass returns every
+// hit; production leaves it zero, so the window is the index's document count.
+var evalWindowOverride int
+
 // EvaluateSmartPlaylist parses the playlist query, runs it against
 // the Bleve index, applies any per-user post-filters, sorts, caps
 // to Limit, and returns the ordered list of matching book IDs.
@@ -78,8 +138,11 @@ type playlistEvalStore interface {
 // userID is the user the playlist evaluates for — per-user filters
 // read that user's state rows. An EMPTY userID means "no viewer" (a
 // background or system evaluation): a query with any per-user filter then
-// matches nothing — see applyPerUserFilters — and a query with none is
-// unaffected.
+// matches nothing — see evaluate — and a query with none is unaffected.
+//
+// The result is COMPLETE: no result window truncates it (until 2026-10-25 the
+// search was capped at the first 10,000 documents by id, so on a 122k library a
+// per-user collection silently covered only the oldest tenth of it).
 func EvaluateSmartPlaylist(
 	store playlistEvalStore,
 	idx *search.BleveIndex,
@@ -87,6 +150,32 @@ func EvaluateSmartPlaylist(
 	sortJSON string,
 	limit int,
 	userID string,
+) ([]string, error) {
+	return evaluate(store, idx, query, sortJSON, limit, userID, nil)
+}
+
+// EvaluateSmartPlaylistFor is EvaluateSmartPlaylist for a viewer whose state was
+// already loaded, so a caller evaluating many queries for one viewer reads the
+// state once. A nil viewer is no viewer.
+func EvaluateSmartPlaylistFor(
+	store playlistEvalStore,
+	idx *search.BleveIndex,
+	query string,
+	sortJSON string,
+	limit int,
+	viewer *ViewerStates,
+) ([]string, error) {
+	return evaluate(store, idx, query, sortJSON, limit, viewer.UserID(), viewer)
+}
+
+func evaluate(
+	store playlistEvalStore,
+	idx *search.BleveIndex,
+	query string,
+	sortJSON string,
+	limit int,
+	userID string,
+	viewer *ViewerStates,
 ) ([]string, error) {
 	// A rebuilding index (created empty, not yet drained) would yield a
 	// partial membership that callers persist and push; refuse instead.
@@ -110,19 +199,31 @@ func EvaluateSmartPlaylist(
 		return nil, fmt.Errorf("translate query: %w", err)
 	}
 
-	// Pull a wide window so we can sort+limit in-memory. If a Limit
-	// is set we still fetch defaultEvalPageSize worth to give the
-	// post-filter + sort pass freedom to reshuffle.
-	hits, _, err := idx.SearchNative(bleveQ, 0, defaultEvalPageSize)
+	var ids []string
+	switch {
+	case len(perUserFilters) == 0:
+		ids, err = searchAllIDs(idx, bleveQ, 0)
+	case userID == "":
+		// NO VIEWER, NO STATE, NO MATCH. With no user there is no state row to
+		// read, and a nil state is evaluated as the zero value, which satisfies
+		// read_status:unstarted, progress_pct:<50 and every negated filter: left
+		// to fall through, a no-viewer evaluation would match nearly the whole
+		// library instead of nothing. A system caller must also never be
+		// answered with some other user's state (dynamic collections used to fall
+		// back to their creator, which is the leak this guard exists to keep
+		// closed), so the result is empty by construction and nothing is searched.
+		return []string{}, nil
+	default:
+		if viewer == nil || viewer.userID != userID {
+			if viewer, err = LoadViewerStates(store, userID); err != nil {
+				return nil, err
+			}
+		}
+		ids, err = matchViewerStates(idx, bleveQ, perUserFilters, viewer, now)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("bleve search: %w", err)
+		return nil, err
 	}
-	ids := make([]string, 0, len(hits))
-	for _, h := range hits {
-		ids = append(ids, h.BookID)
-	}
-
-	ids = applyPerUserFilters(store, ids, perUserFilters, userID, now)
 
 	ids, err = sortBookIDs(store, ids, sortJSON)
 	if err != nil {
@@ -135,65 +236,135 @@ func EvaluateSmartPlaylist(
 	return ids, nil
 }
 
-// applyPerUserFilters walks the candidate book IDs and drops any
-// whose per-user state doesn't satisfy every filter (all of them, when
-// userID is empty: no viewer matches nothing). Filters for
-// fields the user never wrote are treated as "no match" (the user
-// hasn't engaged with the book, so e.g. `read_status:finished`
-// doesn't match an unstarted book). Matching itself delegates to
-// search.MatchPerUserFilters — the single exported source of truth
-// shared with searchWithBleve (INIT-4 T2).
-func applyPerUserFilters(
-	store userStateReader,
+// searchAllIDs returns the id of EVERY document matching q, with no result window
+// to truncate it and no highlighting (the hits are used for their ids alone; the
+// highlighted form loaded each hit's stored document for nothing).
+//
+// The first pass asks for `window` hits, or the index's document count when
+// window is 0, which no query can exceed. The search reports the total it matched,
+// so if documents were indexed between the count and the search (total above the
+// hits returned) it asks again for the full total: a short answer is never
+// returned as if it were complete. Order is the index's (score, then id); every
+// caller sorts afterwards, so only the set matters.
+func searchAllIDs(idx *search.BleveIndex, q query.Query, window int) ([]string, error) {
+	if window <= 0 {
+		window = evalWindowOverride
+	}
+	if window <= 0 {
+		n, err := idx.DocCount()
+		if err != nil {
+			return nil, fmt.Errorf("bleve doc count: %w", err)
+		}
+		window = int(n)
+	}
+	if window < 1 {
+		window = 1 // a size of 0 means "the default page" to the search layer
+	}
+	for {
+		hits, total, err := idx.SearchNativeIDs(q, 0, window)
+		if err != nil {
+			return nil, fmt.Errorf("bleve search: %w", err)
+		}
+		if uint64(len(hits)) >= total {
+			ids := make([]string, len(hits))
+			for i, h := range hits {
+				ids[i] = h.BookID
+			}
+			return ids, nil
+		}
+		window = int(total)
+	}
+}
+
+// matchViewerStates answers a query with per-user filters for one viewer: the
+// books that satisfy the indexed part AND every per-user filter, judged against
+// the viewer's own state. The translator drops per-user terms out of an OR, so
+// they always apply as AND post-filters; this keeps exactly those semantics.
+//
+// Two strategies, chosen by whether a book the viewer has NO row for can match:
+//
+//   - It cannot (finished, in_progress, last_played:>-30d, progress_pct:>0 ...):
+//     the matching books are among the viewer's own rows, which number in the
+//     hundreds or low thousands, not the library. Those rows' ids are intersected
+//     with the indexed part inside Bleve (a document-id query), so the search
+//     returns at most that many hits. Per-user-only queries are the whole
+//     answer: the ids that are still in the index.
+//   - It can (unstarted, negated filters, progress_pct:<50): the answer is
+//     library-scale by definition, so the indexed part is searched uncapped for
+//     ids alone and each id is judged against the in-memory rows.
+//
+// A store that cannot list a viewer's rows takes the second strategy with a point
+// read per candidate; a read error fails the evaluation (see judgeByPointReads).
+func matchViewerStates(
+	idx *search.BleveIndex,
+	bleveQ query.Query,
+	filters []search.PerUserFilter,
+	viewer *ViewerStates,
+	now time.Time,
+) ([]string, error) {
+	if viewer.rows != nil && !search.MatchPerUserFilters(nil, filters, now) {
+		candidates := make([]string, 0, len(viewer.rows))
+		for id, row := range viewer.rows {
+			if search.MatchPerUserFilters(row, filters, now) {
+				candidates = append(candidates, id)
+			}
+		}
+		if len(candidates) == 0 {
+			return []string{}, nil
+		}
+		q := query.Query(bleve.NewDocIDQuery(candidates))
+		if _, all := bleveQ.(*query.MatchAllQuery); !all {
+			q = bleve.NewConjunctionQuery(bleveQ, q)
+		}
+		// The window is the candidate count: no hit can exceed it.
+		return searchAllIDs(idx, q, len(candidates))
+	}
+
+	ids, err := searchAllIDs(idx, bleveQ, 0)
+	if err != nil {
+		return nil, err
+	}
+	if viewer.rows != nil {
+		kept := ids[:0]
+		for _, id := range ids {
+			if search.MatchPerUserFilters(viewer.rows[id], filters, now) {
+				kept = append(kept, id)
+			}
+		}
+		return kept, nil
+	}
+	return judgeByPointReads(viewer, ids, filters, now, evalWorkers())
+}
+
+// judgeByPointReads keeps the candidates whose state satisfies every filter,
+// reading one state row per candidate (the path for a store that cannot list a
+// user's rows; the Pebble store never takes it). The reads are spread over
+// `workers` goroutines in contiguous chunks and each writes only its own slots,
+// so the result keeps the candidates' order with no lock.
+//
+// A read error FAILS the evaluation. It used to be dropped, which evaluated the
+// book as having no state, and under a negated or `unstarted` filter that makes
+// it match: a store error turned into extra members.
+func judgeByPointReads(
+	viewer *ViewerStates,
 	ids []string,
 	filters []search.PerUserFilter,
-	userID string,
 	now time.Time,
-) []string {
-	if len(filters) == 0 {
-		return ids
-	}
-	// NO VIEWER, NO STATE, NO MATCH. An empty userID reads no state row at all
-	// (GetUserBookState("", id) answers nil), and a nil state is evaluated as
-	// the zero value, which satisfies read_status:unstarted, progress_pct:<50
-	// and every negated filter: left to fall through, a no-viewer evaluation
-	// would match nearly the whole library instead of nothing. A system caller
-	// must also never be answered with some other user's state (dynamic
-	// collections used to fall back to their creator, which is the leak this
-	// guard exists to keep closed), so the result is empty by construction.
-	if userID == "" {
-		return []string{}
-	}
-	// One point read per candidate. A negated or `unstarted` filter leaves almost
-	// the whole library as candidates, and collections now run this on every
-	// read for the requesting viewer, so the reads are spread over a bounded
-	// worker pool in contiguous chunks. Each worker writes only its own slots of
-	// matched, so the result keeps the candidates' order with no lock.
+	workers int,
+) ([]string, error) {
 	matched := make([]bool, len(ids))
-	check := func(lo, hi int) {
+	err := parallelRanges(len(ids), workers, perUserFilterChunk, func(lo, hi int) error {
 		for i := lo; i < hi; i++ {
-			state, _ := store.GetUserBookState(userID, ids[i])
+			state, err := viewer.lookup(ids[i])
+			if err != nil {
+				return fmt.Errorf("read user state for book %s: %w", ids[i], err)
+			}
 			matched[i] = search.MatchPerUserFilters(state, filters, now)
 		}
-	}
-	workers := runtime.NumCPU()
-	if workers > len(ids)/perUserFilterChunk {
-		workers = len(ids) / perUserFilterChunk
-	}
-	if workers < 2 {
-		check(0, len(ids))
-	} else {
-		chunk := (len(ids) + workers - 1) / workers
-		var wg sync.WaitGroup
-		for lo := 0; lo < len(ids); lo += chunk {
-			hi := min(lo+chunk, len(ids))
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				check(lo, hi)
-			}()
-		}
-		wg.Wait()
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	kept := make([]string, 0, len(ids))
 	for i, id := range ids {
@@ -201,12 +372,46 @@ func applyPerUserFilters(
 			kept = append(kept, id)
 		}
 	}
-	return kept
+	return kept, nil
 }
 
-// perUserFilterChunk is the fewest candidates worth giving a worker of their
-// own in applyPerUserFilters; below two chunks the filter runs inline.
+// perUserFilterChunk is the fewest items worth giving a worker of their own in
+// parallelRanges; below two chunks the work runs inline.
 const perUserFilterChunk = 256
+
+// evalWorkers is the worker count for the evaluator's per-item passes.
+func evalWorkers() int { return runtime.NumCPU() }
+
+// parallelRanges runs fn over [0, n) split into contiguous ranges, one goroutine
+// per range, and returns the first error in range order (so the answer does not
+// depend on scheduling). It runs inline when there are fewer than two chunks of
+// work or fewer than two workers. fn must write only to its own range.
+func parallelRanges(n, workers, minChunk int, fn func(lo, hi int) error) error {
+	if workers > n/minChunk {
+		workers = n / minChunk
+	}
+	if workers < 2 {
+		return fn(0, n)
+	}
+	chunk := (n + workers - 1) / workers
+	errs := make([]error, (n+chunk-1)/chunk)
+	var wg sync.WaitGroup
+	for part, lo := 0, 0; lo < n; part, lo = part+1, lo+chunk {
+		hi := min(lo+chunk, n)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[part] = fn(lo, hi)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // sortBookIDs reorders ids per the playlist's SortJSON directives.
 // When SortJSON is empty or invalid, ids are sorted by ID string for
@@ -241,11 +446,18 @@ func sortBookIDs(store bookLookup, ids []string, sortJSON string) ([]string, err
 		id   string
 		book *database.Book
 	}
-	rows := make([]loaded, 0, len(ids))
-	for _, id := range ids {
-		b, _ := store.GetBookByID(id)
-		rows = append(rows, loaded{id: id, book: b})
-	}
+	// One book read (a full row decode) per id, and an uncapped evaluation can
+	// hand this a library's worth of ids, so the reads are spread over the same
+	// bounded chunked pool as the state pass, each worker writing only its own
+	// slots. A book that cannot be read is nil and sorts as "missing", as before.
+	rows := make([]loaded, len(ids))
+	_ = parallelRanges(len(ids), evalWorkers(), perUserFilterChunk, func(lo, hi int) error {
+		for i := lo; i < hi; i++ {
+			b, _ := store.GetBookByID(ids[i])
+			rows[i] = loaded{id: ids[i], book: b}
+		}
+		return nil
+	})
 
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, d := range directives {
