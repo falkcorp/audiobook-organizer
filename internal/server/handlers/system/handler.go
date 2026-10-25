@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-25
 
@@ -48,6 +48,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/gin-gonic/gin"
 )
 
@@ -273,7 +274,9 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 
 // GetSystemStatus implements GET /system/status.
 func (h *Handler) GetSystemStatus(c *gin.Context) {
-	status, err := h.systemSvc.CollectSystemStatus()
+	// The recent-operations panel is judged per caller: a Repairs operation the
+	// caller may not read is left out and no operation's result_data is served.
+	status, err := h.systemSvc.CollectSystemStatus(h.repairsAccess.For(c).MayRead)
 	if err != nil {
 		httputil.InternalError(c, "failed to get system status", err)
 		return
@@ -889,13 +892,9 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "backup deleted successfully"})
 }
 
-// recentOperationsShown is how many operations GET /dashboard lists, and
-// RecentOperationsWindow how many of the newest it reads to find them, so a run
-// of Repairs operations the caller may not read does not shorten the list.
-const (
-	recentOperationsShown  = 5
-	RecentOperationsWindow = 50
-)
+// RecentOperationsWindow is how many of the newest operations GET /dashboard
+// reads to find the ones it lists (sysinfo.RecentOperations).
+const RecentOperationsWindow = sysinfo.RecentOperationsWindow
 
 // GetDashboard returns dashboard statistics. The store handles caching
 // internally (PebbleDB: stats:library key with 10-min TTL; SQLite: SQL
@@ -913,45 +912,13 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 		return
 	}
 
-	// Same freeze as the dashboard panel in sysinfo.CollectSystemStatus: this read
-	// the v1 `operation:` keyspace, nothing has minted a v1 row since that minter
-	// was retired on 2026-08-23, and production was serving five rows dated
-	// 2026-08-16 to 2026-08-21 with nothing to say they were stale.
-	//
-	// Repointed rather than removed even though no frontend code reads
-	// `recent_operations` from this endpoint (grepped 2026-09-07 and again
-	// 2026-10-25: the Dashboard page reads /system/status) — it is a public
-	// response field, and serving correct data costs one call.
-	//
-	// This route needs only library.view, so what it serves is limited to what
-	// that role may know of an operation:
-	//
-	//   - A Repairs operation the caller may not read is left out, judged by the
-	//     same check every other operations read uses. Its result is the plan's
-	//     params (for the Audible read-status fixer a user's whole listening
-	//     state), its error text names the target user, and its actor is the
-	//     admin who ran it. A window of RecentOperationsWindow rows is read so
-	//     that hidden rows do not leave a guest with a short list; the first
-	//     recentOperationsShown readable ones are returned.
-	//   - result_data is not served at all, for any operation: it is a
-	//     per-operation payload (a plan, a row-by-row apply report) and the panel
-	//     this field once fed shows a name, a status and a time. The operation's
-	//     own result route serves it to the callers who may read it.
-	recentOps := []database.Operation{}
-	if rows, err := store.ListOperationsV2Since(time.Time{}, RecentOperationsWindow); err == nil {
-		reader := h.repairsAccess.For(c)
-		for i := range rows {
-			if len(recentOps) == recentOperationsShown {
-				break
-			}
-			if !reader.MayRead(&rows[i]) {
-				continue
-			}
-			op := rows[i].AsLegacyOperation(rows[i].DefID)
-			op.ResultData = nil
-			recentOps = append(recentOps, *op)
-		}
-	}
+	// Same panel as GET /system/status (sysinfo.RecentOperations): a Repairs
+	// operation the caller may not read is left out, and result_data is not
+	// served. Repointed from the frozen v1 keyspace rather than removed even
+	// though no frontend code reads `recent_operations` from this endpoint
+	// (grepped 2026-10-25: the Dashboard page reads /system/status): it is a
+	// public response field, and serving correct data costs one call.
+	recentOps := sysinfo.RecentOperations(store, time.Now(), h.repairsAccess.For(c).MayRead)
 
 	// Try to read broken file count from underlying store (PebbleStore)
 	brokenFileCount := 0

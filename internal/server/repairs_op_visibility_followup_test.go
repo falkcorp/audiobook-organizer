@@ -1,5 +1,5 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
 // last-edited: 2026-10-25
 
@@ -749,6 +749,67 @@ func TestDashboard_RecentOperationsLeaveOutRepairsRuns(t *testing.T) {
 		// still filled from the ones behind them.
 		require.NotEmpty(t, d.Data.Recent, "%s: hidden runs emptied the list", who)
 		require.Contains(t, ids(d), f.plainScan, who)
+	}
+}
+
+// TestSystemStatus_RecentOperationsLeaveOutRepairsRuns: GET /system/status (the
+// Dashboard page's source, settings.manage) lists the newest operations without
+// the Repairs runs the caller may not read and without any operation's
+// result_data. A custom role with settings.manage but not users.manage passes
+// the route's gate and must still not see the Audible read-status runs (the plan
+// result carries a user's listening state, owner decision 2026-10-24); the admin
+// sees them, which is the oracle that the server wires the check in. The list is
+// still filled from the older operations behind the hidden ones.
+// Not parallel: it swaps the process-wide config.
+func TestSystemStatus_RecentOperationsLeaveOutRepairsRuns(t *testing.T) {
+	const ars = "maintenance.audible-read-status"
+	f := newRepairsOpAccessFixture(t)
+	mgr := opsManagerToken(t, f)
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+
+	now := time.Now().UTC()
+	hidden := []string{}
+	for i := range 6 {
+		id := "op-ars-plan-newer-" + strconv.Itoa(i)
+		hidden = append(hidden, id)
+		res := `{"params":{"target_user_id":"` + secondaryUserID + `"}}`
+		require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+			ID: id, DefID: repairs.PlanOpID, Plugin: "test", Status: "completed",
+			Params: `{"fixer_id":"` + ars + `"}`, ResultData: &res,
+			QueuedAt: now.Add(time.Duration(2+i) * time.Minute), CompletedAt: &now,
+		}))
+	}
+
+	type status struct {
+		Data struct {
+			Operations struct {
+				Recent []map[string]any `json:"recent"`
+			} `json:"operations"`
+		} `json:"data"`
+	}
+	for who, token := range map[string]string{"ops manager": mgr, "admin": f.admin} {
+		w := getAs(f.srv, token, "/api/v1/system/status")
+		require.Equal(t, http.StatusOK, w.Code, "%s: %s", who, w.Body.String())
+		body := w.Body.String()
+		recent := decodeAs[status](t, w).Data.Operations.Recent
+		ids := []string{}
+		for _, op := range recent {
+			id, _ := op["id"].(string)
+			ids = append(ids, id)
+		}
+		require.NotContains(t, body, "result_data", "%s: the status serves an operation's result", who)
+		require.LessOrEqual(t, len(recent), 5, who)
+		if who == "admin" {
+			require.Contains(t, ids, hidden[len(hidden)-1], "the admin reads the Audible read-status runs")
+			continue
+		}
+		for _, id := range hidden {
+			require.NotContains(t, body, id, "%s: the status names a run of a fixer the caller may not use", who)
+		}
+		require.NotContains(t, body, secondaryUserID, who)
+		require.NotEmpty(t, recent, "%s: hidden runs emptied the list", who)
+		require.Contains(t, ids, f.plainScan, who)
 	}
 }
 

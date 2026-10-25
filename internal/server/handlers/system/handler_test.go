@@ -154,7 +154,7 @@ func TestHealthCheck_PartialError(t *testing.T) {
 
 func TestGetSystemStatus_OK(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.sysSvc.EXPECT().CollectSystemStatus().Return(&sysinfo.SystemStatus{}, nil)
+	d.sysSvc.EXPECT().CollectSystemStatus(mock.Anything).Return(&sysinfo.SystemStatus{}, nil)
 	d.plugins.EXPECT().HealthCheckAll().Return(map[string]error{
 		"acoustid": nil,
 		"itunes":   errors.New("offline"),
@@ -168,7 +168,7 @@ func TestGetSystemStatus_OK(t *testing.T) {
 
 func TestGetSystemStatus_Error(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.sysSvc.EXPECT().CollectSystemStatus().Return(nil, errors.New("boom"))
+	d.sysSvc.EXPECT().CollectSystemStatus(mock.Anything).Return(nil, errors.New("boom"))
 
 	w := run(http.MethodGet, "/system/status", "/system/status", nil, func(r *gin.Engine) {
 		r.GET("/system/status", h.GetSystemStatus)
