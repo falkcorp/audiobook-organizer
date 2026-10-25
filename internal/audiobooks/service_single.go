@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -575,6 +575,15 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		if cur == nil || !cur.IsSoftDeleted() {
 			return fmt.Errorf("%w: %s was restored meanwhile", ErrNotInTrash, book.ID)
 		}
+		// And the ownership check again, here where nothing has moved yet
+		// (mirroring DiscardProgressAndPurge): the one before this ran
+		// outside the merge lock, so a file a merge moved onto the book since
+		// would make the delete refuse (database.ErrBookOwnsFiles) only AFTER
+		// the carry had moved every user's state. It asks the question
+		// DeleteBook asks, retired rows included.
+		if oerr := database.CheckBookOwnsNoFiles(svc.store, book.ID, "purge"); oerr != nil {
+			return oerr
+		}
 		doomed = cur
 		return targetCheck()
 	}
@@ -586,6 +595,10 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		return purgeOutcome{kind: purgeNotInTrash}
 	case errors.Is(err, merge.ErrCarryTargetUnreadable):
 		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: %v", book.ID, err)}}
+	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, database.ErrBookOwnsFiles):
+		// A file row landed after the check outside the lock: refused under it
+		// before anything moved, so the state is where it was.
+		return purgeOutcome{kind: purgeOwnsFiles, errs: []string{fmt.Sprintf("%s: not purged, nothing moved: %v", book.ID, merge.PrecheckCause(err))}}
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, merge.ErrBookHasListeningState):
 		// Nothing moved; with no listed version to carry to, the book stays
 		// in the trash flagged "has progress", as when there was none.
@@ -599,7 +612,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 	case errors.Is(err, database.ErrBookOwnsFiles):
 		// The state is on the sibling now; the row stays because a file row
 		// landed between the pre-check and the delete.
-		return purgeOutcome{kind: purgeOwnsFiles, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
+		return purgeOutcome{kind: purgeOwnsFiles, stateMovedTo: sibling, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
 	case err != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
 	}

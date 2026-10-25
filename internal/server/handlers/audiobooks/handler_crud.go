@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-25
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -215,12 +215,17 @@ func (r bookWithWarnings) MarshalJSON() ([]byte, error) {
 // to branch on instead of the message text.
 const (
 	// CodeOwnsFiles: 409, the book still owns book_file rows
-	// (database.ErrBookOwnsFiles); nothing was deleted.
+	// (database.ErrBookOwnsFiles); nothing was deleted or moved (a delete that
+	// moved the state first is CodeStateMovedBookKept).
 	CodeOwnsFiles = "OWNS_FILES"
 	// CodeCarryFailed: 500, moving the listening state to the version
 	// Audiobookshelf lists did not complete; the book was kept with its
 	// state.
 	CodeCarryFailed = "CARRY_FAILED"
+	// CodeStateMovedBookKept: the listening state WAS moved to another copy
+	// and the delete then failed (merge.ErrStateMovedBookKept), so the book
+	// was kept without it. Unlike OWNS_FILES, something changed.
+	CodeStateMovedBookKept = "STATE_MOVED_BOOK_KEPT"
 )
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.
@@ -238,6 +243,18 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 	if err != nil {
 		if strings.Contains(err.Error(), "already soft deleted") {
 			httputil.RespondWithConflict(c, err.Error())
+			return
+		}
+		// The state moved and the delete then failed (a file row added by a
+		// writer that does not take the merge lock, say): not "nothing was
+		// deleted", so it is told apart from OWNS_FILES and tested first. 409
+		// when the failure was the file rows, 500 for any other store failure.
+		if errors.Is(err, merge.ErrStateMovedBookKept) {
+			status := http.StatusInternalServerError
+			if errors.Is(err, database.ErrBookOwnsFiles) {
+				status = http.StatusConflict
+			}
+			httputil.RespondWithError(c, status, err.Error(), CodeStateMovedBookKept)
 			return
 		}
 		// A hard delete refused because the book still owns file rows is a
