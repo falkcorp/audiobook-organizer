@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.36.2
+// version: 1.37.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-20
 
@@ -151,6 +151,13 @@ type Handler struct {
 	// publishEvent wraps *Server.publishEvent (the shared plugin event bus), used
 	// by deleteAudiobook.
 	publishEvent func(ctx context.Context, event plugin.Event)
+
+	// permCheck is the check for a permission the handler learns it needs only
+	// after reading the request body (BatchOperations: library.delete when an
+	// operation is a hard delete). nil means the strict check
+	// (StrictPermissionCheck); the server installs its own with
+	// SetPermissionCheck.
+	permCheck PermissionCheck
 }
 
 // SetSearchResultCached tells the handler which search requests are served
