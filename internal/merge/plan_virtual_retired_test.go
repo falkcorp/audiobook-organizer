@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_retired_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5d0b8e63-91a4-4c27-b6f3-7e2a1c9d4058
 // last-edited: 2026-10-25
 
@@ -86,7 +86,7 @@ func TestPlanVirtualFile_FileHeldByRetiredVersionPlansNothing(t *testing.T) {
 // mustPlanVirtualFile plans and requires that the path lookup succeeded.
 func mustPlanVirtualFile(t *testing.T, ms *Service, b *database.Book, targetBookID string) virtualFilePlan {
 	t.Helper()
-	p, err := ms.planVirtualFile(b, targetBookID)
+	p, err := ms.planVirtualFile(b, targetBookID, nil)
 	require.NoError(t, err)
 	return p
 }
@@ -94,7 +94,7 @@ func mustPlanVirtualFile(t *testing.T, ms *Service, b *database.Book, targetBook
 // mustPlanOwnFile plans and requires that the path lookup succeeded.
 func mustPlanOwnFile(t *testing.T, ms *Service, b *database.Book) virtualFilePlan {
 	t.Helper()
-	p, err := ms.planOwnFile(b)
+	p, err := ms.planOwnFile(b, nil)
 	require.NoError(t, err)
 	return p
 }
@@ -135,7 +135,7 @@ func TestPlanVirtualFile_CompleteLookupUnavailableWithRetiredVersionsErrors(t *t
 	retiredID := retireRowOnto(t, store, other.ID, target.FilePath)
 
 	ms := NewService(indexDownStore{Store: store})
-	plan, err := ms.planVirtualFile(target, target.ID)
+	plan, err := ms.planVirtualFile(target, target.ID, nil)
 	require.Error(t, err, "a lookup that cannot be answered is an error, never an empty plan")
 	assert.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
 	assert.Nil(t, plan.create, "an unanswerable lookup must not read as a free path")
@@ -156,7 +156,7 @@ func TestPlanVirtualFile_CompleteLookupUnavailableOnOpaqueStoreErrors(t *testing
 	require.NoError(t, err)
 
 	ms := NewService(opaqueIndexDownStore{Store: store})
-	_, err = ms.planVirtualFile(target, target.ID)
+	_, err = ms.planVirtualFile(target, target.ID, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete)
 }
@@ -171,7 +171,7 @@ func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsPlansNorm
 	t.Run("new-row", func(t *testing.T) {
 		b, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Rowless", FilePath: "/tmp/pvr-warm-new.mp3"})
 		require.NoError(t, err)
-		plan, err := ms.planVirtualFile(b, b.ID)
+		plan, err := ms.planVirtualFile(b, b.ID, nil)
 		require.NoError(t, err)
 		require.NotNil(t, plan.create)
 		assert.True(t, plan.attached)
@@ -184,7 +184,7 @@ func TestPlanVirtualFile_CompleteLookupUnavailableWithNoRetiredVersionsPlansNorm
 		require.NoError(t, err)
 		stray := &database.BookFile{ID: ulid.Make().String(), BookID: owner.ID, FilePath: target.FilePath, Format: "mp3"}
 		require.NoError(t, store.CreateBookFile(stray))
-		plan, err := ms.planVirtualFile(target, target.ID)
+		plan, err := ms.planVirtualFile(target, target.ID, nil)
 		require.NoError(t, err)
 		require.NotNil(t, plan.existing)
 		assert.Equal(t, stray.ID, plan.existing.ID)
@@ -226,7 +226,7 @@ func TestPlanOwnFile_RowsReadErrorErrorsInsteadOfPlanningACreate(t *testing.T) {
 
 	boom := errors.New("injected pebble read error")
 	ms := NewService(readErrStore{Store: store, getBookFilesErr: boom})
-	plan, err := ms.planOwnFile(b)
+	plan, err := ms.planOwnFile(b, nil)
 	require.ErrorIs(t, err, boom)
 	assert.Nil(t, plan.create, "an unreadable row list must not plan a second live row")
 	assert.Nil(t, plan.existing)
@@ -246,24 +246,11 @@ func TestPlanVirtualFile_ReattachesTheLiveRowFromTheLookupNotASecondRead(t *test
 	require.NoError(t, store.CreateBookFile(stray))
 
 	ms := NewService(readErrStore{Store: store, getBookFileByPathErr: errors.New("injected path read error")})
-	plan, err := ms.planVirtualFile(target, target.ID)
+	plan, err := ms.planVirtualFile(target, target.ID, nil)
 	require.NoError(t, err)
 	assert.Nil(t, plan.create, "the path is held by a live row; no second row may be planned")
 	require.NotNil(t, plan.existing)
 	assert.Equal(t, stray.ID, plan.existing.ID)
-}
-
-func TestLiveRowAtPath(t *testing.T) {
-	rows := []database.BookFile{
-		{ID: "r1", BookID: "b9"},
-		{ID: "r0", BookID: "b5", Retired: true},
-		{ID: "r3", BookID: "b5"},
-		{ID: "r2", BookID: "b5"},
-	}
-	assert.Equal(t, "r1", liveRowAtPath(rows, "b9").ID, "the target's own row wins")
-	assert.Equal(t, "r2", liveRowAtPath(rows, "bX").ID, "otherwise the smallest live (BookID, ID); a retired row is never picked")
-	assert.Nil(t, liveRowAtPath([]database.BookFile{{ID: "r0", BookID: "b5", Retired: true}}, "b5"))
-	assert.Nil(t, liveRowAtPath(nil, "b5"))
 }
 
 // seedWarmupCombine builds a survivor and an absorbed book that are both
@@ -358,7 +345,7 @@ func TestCombineBooks_WarmupWithRetiredVersionsRefusesOnTheAbsorbedLookupBeforeJ
 
 	ms := NewService(indexDownStore{Store: store})
 	// The survivor really is the one with rows, so only the absorbed lookup can refuse.
-	plan, perr := ms.planOwnFile(survivor)
+	plan, perr := ms.planOwnFile(survivor, nil)
 	require.NoError(t, perr)
 	require.False(t, plan.attached)
 	require.Nil(t, plan.create)
