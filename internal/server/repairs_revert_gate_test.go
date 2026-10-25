@@ -52,7 +52,7 @@ func TestRevertOperation_RepairsFixerOpsNeedTheFixersPermissions(t *testing.T) {
 
 	// What the Audible read-status apply wrote: one reader's listening state on
 	// one book, journaled with the state before (none) and after.
-	reader, err := store.CreateUser("reader", "reader@plimmet.example.invalid", "bcrypt", "hash", nil, "active")
+	reader, err := store.CreateUser("selina_kyle", "selina.kyle@example.invalid", "bcrypt", "hash", nil, "active")
 	require.NoError(t, err)
 	seed := func(opID, bookID, fixer string, keepRow bool) {
 		if keepRow {

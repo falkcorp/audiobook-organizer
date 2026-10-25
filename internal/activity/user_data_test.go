@@ -51,9 +51,9 @@ func TestNamesOthersUserData(t *testing.T) {
 		"abs-cache source":            {sys("abs-cache", "refreshed 12 libraries"), true},
 		"merge source":                {sys("merge", "survivor reconciled"), true},
 		"merge undo warning":          {sys("revert", "revert of change c1 restored in part: user 01INVENTEDUSER0000000000A progress on b2 was written after the follow"), true},
-		"owner guard":                 {sys("http", "owner action allowed: route=/x http_method=POST user=01INVENTEDUSER0000000000A access_email=a@example.invalid method=cookie"), true},
-		"openid rejection":            {sys("abs", "openid browser hop rejected an assertion: reason=x status=403 email=a@example.invalid"), true},
-		"config update":               {sys("config", "config update refused: method=cookie access_email=a@example.invalid"), true},
+		"owner guard":                 {sys("http", "owner action allowed: route=/x http_method=POST user=01INVENTEDUSER0000000000A access_email=bruce.wayne@example.invalid method=cookie"), true},
+		"openid rejection":            {sys("abs", "openid browser hop rejected an assertion: reason=x status=403 email=bruce.wayne@example.invalid"), true},
+		"config update":               {sys("config", "config update refused: method=cookie access_email=bruce.wayne@example.invalid"), true},
 		"owner apply line":            {database.ActivityEntry{Type: "repairs.apply", Summary: "repairs.apply maintenance.audible-read-status: owner apply by user 01INVENTEDUSER0000000000A (cookie): 3 of 3 owner row(s) written"}, true},
 		"tagged by the writer":        {sys("scheduler", "something with no recognisable shape", TagUserData), true},
 		"source tag on a digest item": {sys("", "plain words", "source:abs"), true},
@@ -113,9 +113,9 @@ func TestWriter_TagsLinesThatNameAUser(t *testing.T) {
 func TestLogBatch_UserDataLinesBatchApartAndStayTagged(t *testing.T) {
 	w := newTestWriter(16)
 	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "progress patch: user=01INVENTEDUSER0000000000A", Count: 1})
-	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "book-a.m4b", Count: 1})
-	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "book-b.m4b", Count: 1, Detail: "email=a@example.invalid"})
-	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "book-c.m4b", Count: 1})
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "/lib/Gotham/year-one.m4b", Count: 1})
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "/lib/Gotham/hush.m4b", Count: 1, Detail: "email=bruce.wayne@example.invalid"})
+	LogBatch(w, "op-b", "tag-scan", "scanner", BatchItem{Name: "/lib/Gotham/knightfall.m4b", Count: 1})
 
 	w.batcher.mu.Lock()
 	assert.Len(t, w.batcher.pending, 2, "one batch for the user lines, one for the rest")

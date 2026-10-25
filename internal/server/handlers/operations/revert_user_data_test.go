@@ -28,7 +28,7 @@ import (
 // without users.manage, in the body and in the failure message alike.
 func TestRevertOperation_MergeWarningsThatNameAUserNeedUsersManage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	const namesUser = "change c1: user 01INVENTEDUSER0000000000A progress on Gorsel-Quoxx kept at 91%"
+	const namesUser = "change c1: user 01INVENTEDUSER0000000000A progress on The-Long-Halloween kept at 91%"
 	const plain = "change c2: a credit added since was left as it is"
 	result := func() *audiobooks.RevertResult {
 		return &audiobooks.RevertResult{
@@ -66,7 +66,7 @@ func TestRevertOperation_MergeWarningsThatNameAUserNeedUsersManage(t *testing.T)
 			continue
 		}
 		assert.NotContains(t, body, "01INVENTEDUSER0000000000A", "%s is served a note that names a user", name)
-		assert.NotContains(t, body, "Gorsel-Quoxx", name)
+		assert.NotContains(t, body, "The-Long-Halloween", name)
 		assert.Contains(t, body, "1 note(s) that name a user withheld", "%s: the list says it is shorter", name)
 	}
 }

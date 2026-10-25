@@ -15,7 +15,7 @@ import (
 // and from Summary (built from the combine notes), says so where it dropped
 // some, leaves the counts and the input alone, and is nil-safe.
 func TestRevertResult_WithoutUserData(t *testing.T) {
-	const userNote = "user 01INVENTEDUSER0000000000A progress on a Plimmet title kept at 40%"
+	const userNote = "user 01INVENTEDUSER0000000000A progress on The Long Halloween kept at 40%"
 	in := &RevertResult{
 		OperationID: "op-1", Total: 3, Restored: 3,
 		CombinesUndoneInPart: 1, combineKept: []string{userNote},

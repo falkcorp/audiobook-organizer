@@ -764,7 +764,7 @@ func opsManagerToken(t *testing.T, f *repairsOpAccessFixture) string {
 		Permissions: []auth.Permission{auth.PermLibraryView, auth.PermScanTrigger, auth.PermLibraryEditMetadata, auth.PermSettingsManage},
 	})
 	require.NoError(t, err)
-	u, err := store.CreateUser("opsmgr", "opsmgr@x.test", "bcrypt", "hash", []string{"role-ops-manager"}, "active")
+	u, err := store.CreateUser("opsmgr", "opsmgr@example.invalid", "bcrypt", "hash", []string{"role-ops-manager"}, "active")
 	require.NoError(t, err)
 	sess, err := store.CreateSession(u.ID, "192.0.2.11", "test", time.Hour)
 	require.NoError(t, err)

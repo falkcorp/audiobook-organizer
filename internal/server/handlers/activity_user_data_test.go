@@ -35,7 +35,7 @@ import (
 const (
 	absLine      = "USERDATA-ABS-LINE progress patch: user=01INVENTEDUSER0000000000A currentTime=3600.5"
 	taggedLine   = "USERDATA-TAGGED-LINE something with no recognisable shape"
-	guardLine    = "USERDATA-GUARD-LINE owner action allowed: user=01INVENTEDUSER0000000000A access_email=a@example.invalid"
+	guardLine    = "USERDATA-GUARD-LINE owner action allowed: user=01INVENTEDUSER0000000000A access_email=bruce.wayne@example.invalid"
 	mergeLine    = "USERDATA-MERGE-LINE survivor reconciled"
 	ownerApply   = "USERDATA-OWNER-APPLY-LINE repairs.apply plain.fixer: owner apply by user 01INVENTEDUSER0000000000A (cookie): 1 of 1 owner row(s) written"
 	plainLine    = "PLAIN-SCHEDULER-LINE Next sync in 28m"
@@ -205,7 +205,7 @@ func TestActivity_BatchedLinesThatNameAUserNeedUsersManage(t *testing.T) {
 
 	w := activity.NewWriter(store, 64)
 	activity.LogBatch(w, "op-b", "tag-scan", "scanner", activity.BatchItem{Name: "BATCHED-USER-ITEM progress user=01INVENTEDUSER0000000000A", Count: 1})
-	activity.LogBatch(w, "op-b", "tag-scan", "scanner", activity.BatchItem{Name: "BATCHED-PLAIN-ITEM book-a.m4b", Count: 1})
+	activity.LogBatch(w, "op-b", "tag-scan", "scanner", activity.BatchItem{Name: "BATCHED-PLAIN-ITEM /lib/Gotham/year-one.m4b", Count: 1})
 	activity.FlushOperation(w, "op-b")
 	w.Flush()
 
