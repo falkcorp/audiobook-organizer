@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-25
 
@@ -59,7 +59,7 @@ var ErrRetireIndexIncomplete = errors.New("cannot prove the book_file index key 
 // retiredVersionFromKey is idx:bv:from:<shell book id>:<version id>. The value
 // is the version id.
 func retiredVersionFromKey(shellID, versionID string) []byte {
-	return []byte("idx:bv:from:" + shellID + ":" + versionID)
+	return []byte(retiredVersionFromPrefix + shellID + ":" + versionID)
 }
 
 // refuseRetiredVersionChange guards UpdateBookVersion. A version only becomes
@@ -184,7 +184,7 @@ func (p *PebbleStore) GetRetiredVersionsFromBook(shellID string) ([]BookVersion,
 	if shellID == "" {
 		return nil, nil
 	}
-	prefix := []byte("idx:bv:from:" + shellID + ":")
+	prefix := []byte(retiredVersionFromPrefix + shellID + ":")
 	var out []BookVersion
 	if err := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(key, _ []byte) error {
 		versionID := strings.TrimPrefix(string(key), string(prefix))

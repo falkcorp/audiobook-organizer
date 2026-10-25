@@ -1,7 +1,7 @@
 // file: internal/database/retired_version_probe.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8e51c4-7a0d-4f62-9c15-e2d74a6b0f83
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -10,7 +10,8 @@ import (
 )
 
 // retiredVersionFromPrefix is the prefix of every idx:bv:from:<shell>:<version>
-// key. A retired book_file row exists only while its retired version does (a
+// key, and the one place that literal is spelled (retiredVersionFromKey and
+// GetRetiredVersionsFromBook build theirs from it). A retired book_file row exists only while its retired version does (a
 // row is never born retired, and a retired version that still holds rows can
 // be neither deleted nor moved nor leave the status), and CreateBookVersion
 // refuses a retired version without RetiredFromBookID, so "no key under this
