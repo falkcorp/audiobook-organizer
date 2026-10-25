@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-25
 
@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -69,8 +71,20 @@ import (
 // viewer's own, so a leftover list is never served. A per-viewer answer is not
 // cached at all: it changes on every position heartbeat, a per-user cache would
 // need invalidation hooked into every state write plus a users x collections
-// refresh loop, and a library has tens of collections, so one search plus a state
-// read per hit at read time is cheap.
+// refresh loop, and a library has tens of collections, so evaluating at read time
+// is cheap: the viewer's own state rows come from ONE prefix scan per request (not
+// a read per candidate book) and the search is ids only, with no result window
+// (see playlist.matchViewerStates). The store itself drops a per-viewer row's
+// stored list on every write (database.UpdateCollection), so no writer can put one
+// back.
+//
+// FAIL CLOSED, AND SAY SO. A query that does not parse counts as per-viewer
+// (search.QueryMayUsePerUserField), so a row whose query stopped parsing can never
+// serve the list its creator's state once produced. A per-viewer collection whose
+// members cannot be worked out for the caller (index closed or rebuilding, a query
+// that no longer parses, an unreadable state row) answers with no members AND
+// members_unavailable=true in the native response (and a log line), so "could not
+// evaluate" is never indistinguishable from "nothing matches".
 //
 // NO VIEWER, NO MATCH. An evaluation with no viewer (a background job, an
 // unresolved caller) matches nothing for a per-user rule; it never falls back to
@@ -161,6 +175,10 @@ type CollectionHandler struct {
 	indexFn func() *search.BleveIndex
 	// log receives scheduled-refresh warnings.
 	log collectionWarner
+	// warnMu guards warnedAt, when each kind of per-viewer evaluation failure
+	// was last logged (see noteEvalFailure).
+	warnMu   sync.Mutex
+	warnedAt map[string]time.Time
 }
 
 // collectionLog is the logger the handler's scheduled refresh writes to.
@@ -273,14 +291,17 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 	// create it because the index happens to be closed would lose the user's work
 	// for a reason that has nothing to do with what they typed.
 	var viewerIDs []string
+	var viewerErr error
 	perViewer := collectionIsPerViewer(col)
 	if col.Type == database.CollectionTypeDynamic {
-		if ids, err := h.evaluate(col, CallingUserID(c)); err == nil {
-			if perViewer {
-				viewerIDs = ids
-			} else {
-				col.MaterializedBookIDs = ids
-			}
+		ids, err := h.evaluate(col, CallingUserID(c))
+		switch {
+		case err != nil:
+			viewerErr = err
+		case perViewer:
+			viewerIDs = ids
+		default:
+			col.MaterializedBookIDs = ids
 		}
 	}
 
@@ -294,7 +315,8 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 		return
 	}
 	if perViewer {
-		created = withViewerMembers(created, viewerIDs)
+		httputil.RespondWithCreated(c, h.viewerView(created, viewerIDs, viewerErr))
+		return
 	}
 	httputil.RespondWithCreated(c, created)
 }
@@ -323,16 +345,24 @@ func (h *CollectionHandler) ListCollections(c *gin.Context) {
 	// replace it, so a card's count is the viewer's, not anyone else's.
 	// The slice is cloned first: it is the store's, and rewriting a member list on
 	// it would write the viewer's answer into the store's own view of the row.
+	// A row whose members could not be worked out for the caller says so
+	// (members_unavailable) instead of passing for a collection with no matches.
 	cols = slices.Clone(cols)
-	sets := h.ViewerMemberSets(cols, CallingUserID(c))
+	viewer := h.ViewerMembers(cols, CallingUserID(c))
+	items := make([]collectionView, len(cols))
 	for i := range cols {
+		items[i].Collection = cols[i]
 		if collectionIsPerViewer(&cols[i]) {
-			cols[i].MaterializedBookIDs = sets[cols[i].ID]
+			items[i].MaterializedBookIDs = viewer.Sets[cols[i].ID]
+			if err, bad := viewer.Unavailable[cols[i].ID]; bad {
+				items[i].MembersUnavailable = true
+				items[i].MembersUnavailableMessage = membersUnavailableMessage(&cols[i], err)
+			}
 		}
 	}
 	// total is the count BEFORE paging, so the client can tell whether another
 	// page exists. Returning len(cols) would say page 0 is always everything.
-	httputil.RespondWithList(c, cols, total, p.Limit, p.Offset)
+	httputil.RespondWithList(c, items, total, p.Limit, p.Offset)
 }
 
 // GetCollection — GET /api/v1/collections/:id
@@ -359,11 +389,13 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 		// The viewer's own members, in the response only: nothing is persisted
 		// (a stored list would be one viewer's answer served to all). An
 		// evaluation that cannot run (index closed or rebuilding) serves no
-		// members rather than the stored list, which is never trusted here.
+		// members rather than the stored list, which is never trusted here, and
+		// says so: members_unavailable is set so the client can tell "could not
+		// evaluate" from "nothing matches".
 		if err != nil {
 			ids = nil
 		}
-		httputil.RespondWithOK(c, withViewerMembers(col, ids))
+		httputil.RespondWithOK(c, h.viewerView(col, ids, err))
 		return
 	}
 	if err != nil {
@@ -496,16 +528,24 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	// the caller's own members ride in the response only.
 	perViewer := collectionIsPerViewer(col)
 	var viewerIDs []string
+	var viewerErr error
 	if col.Type == database.CollectionTypeDynamic {
 		if perViewer {
 			col.MaterializedBookIDs = nil
 		}
-		if req.Query != nil || req.SortJSON != nil || req.Limit != nil {
+		// A per-viewer collection is evaluated for the caller on EVERY update,
+		// not only when the query, sort or limit changed: its members ride in the
+		// response (nothing is stored), and a rename or description-only PUT
+		// that answered with none made the detail page, which keeps the PUT's
+		// answer as its state, show an empty collection until a reload.
+		if perViewer || req.Query != nil || req.SortJSON != nil || req.Limit != nil {
 			ids, err := h.evaluate(col, CallingUserID(c))
 			switch {
 			case err != nil:
 				// The edit is saved; the members stay as they were (stored) or
-				// empty (per-viewer) until the next evaluation.
+				// empty and flagged unavailable (per-viewer) until the next
+				// evaluation.
+				viewerErr = err
 			case perViewer:
 				viewerIDs = ids
 			default:
@@ -523,7 +563,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		return
 	}
 	if perViewer {
-		httputil.RespondWithOK(c, withViewerMembers(col, viewerIDs))
+		httputil.RespondWithOK(c, h.viewerView(col, viewerIDs, viewerErr))
 		return
 	}
 	httputil.RespondWithOK(c, col)
@@ -572,7 +612,7 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 	if collectionIsPerViewer(col) {
 		// Nothing to store: a per-viewer collection's members are the caller's
 		// own and are evaluated on every read. This answers what THIS caller sees.
-		httputil.RespondWithOK(c, withViewerMembers(col, ids))
+		httputil.RespondWithOK(c, h.viewerView(col, ids, nil))
 		return
 	}
 	// Same no-op guard as the read path, for the same reason: this endpoint is what
@@ -617,21 +657,110 @@ func validateCollectionQuery(query string) error {
 
 // collectionIsPerViewer reports whether who is looking decides col's members: a
 // dynamic collection whose query uses a per-user field (read_status,
-// progress_pct, last_played). Its members are evaluated for the viewer on every
-// read and never stored.
+// progress_pct, last_played), or whose query does not parse. Its members are
+// evaluated for the viewer on every read and never stored.
+//
+// An unparseable query counts as per-viewer on purpose (search.QueryMayUsePerUserField):
+// a row whose query stopped parsing can still hold a list that its creator's state
+// produced, and "I cannot tell whether it reads per-user state" must never mean
+// "serve the stored list". It cannot be evaluated either, so it shows no members.
 func collectionIsPerViewer(col *database.Collection) bool {
-	return col.Type == database.CollectionTypeDynamic && search.QueryUsesPerUserField(col.Query)
+	return col.Type == database.CollectionTypeDynamic && search.QueryMayUsePerUserField(col.Query)
 }
 
-// withViewerMembers returns a copy of col whose dynamic member list is ids, for a
-// response. It is a copy on purpose: col is the stored row's value, and a viewer's
-// members must never be written back onto it. No ids is an empty list, never the
-// stored one.
-func withViewerMembers(col *database.Collection, ids []string) *database.Collection {
-	out := *col
-	out.MaterializedBookIDs = ids
-	return &out
+// collectionView is a collection as the native API answers for a per-viewer
+// collection: the stored row plus the caller's own members, and a flag for the
+// answer that could not be worked out. It is a response type only; the stored
+// row (database.Collection) carries no flag, and a viewer's members are never
+// written onto it.
+type collectionView struct {
+	database.Collection
+	// MembersUnavailable is true when this collection's members could not be
+	// evaluated for the caller (search index closed or rebuilding, a query that
+	// no longer parses, an unreadable state row). materialized_book_ids is then
+	// empty, and that emptiness means "unknown", not "nothing matches".
+	MembersUnavailable        bool   `json:"members_unavailable,omitempty"`
+	MembersUnavailableMessage string `json:"members_unavailable_message,omitempty"`
 }
+
+// viewerView returns a copy of col whose member list is ids, for a response. It is
+// a copy on purpose: col is the stored row's value, and a viewer's members must
+// never be written back onto it. No ids is an empty list, never the stored one.
+// A non-nil evalErr (the evaluation could not run) sets the unavailable flag and
+// logs it.
+func (h *CollectionHandler) viewerView(col *database.Collection, ids []string, evalErr error) *collectionView {
+	out := &collectionView{Collection: *col}
+	out.MaterializedBookIDs = ids
+	if evalErr != nil {
+		out.MaterializedBookIDs = nil
+		out.MembersUnavailable = true
+		out.MembersUnavailableMessage = membersUnavailableMessage(col, evalErr)
+		h.noteEvalFailure(col, evalErr)
+	}
+	return out
+}
+
+// evalFailureKind sorts an evaluation failure for the log throttle and the
+// client message.
+func evalFailureKind(col *database.Collection, err error) string {
+	switch {
+	case errors.Is(err, playlist.ErrSearchIndexUnavailable):
+		return "search-index-unavailable"
+	case validateCollectionQuery(col.Query) != nil:
+		return "query-invalid"
+	default:
+		return "evaluation-failed"
+	}
+}
+
+// membersUnavailableMessage is the text of members_unavailable_message. It names
+// the cause without the internal error text, which can carry store details.
+func membersUnavailableMessage(col *database.Collection, err error) string {
+	switch evalFailureKind(col, err) {
+	case "search-index-unavailable":
+		return "The search index is not ready, so this collection's members could not be worked out for you yet. Try again shortly."
+	case "query-invalid":
+		return "This collection's query can no longer be evaluated, so it shows no members. Edit the query to fix it."
+	default:
+		return "This collection's members could not be worked out for you right now. See the server log."
+	}
+}
+
+// evalWarnEvery is the least time between two log lines of the same kind. A list
+// or a poll evaluates every per-viewer collection on every request, so an index
+// that is rebuilding for ten minutes would otherwise log once per collection per
+// request.
+const evalWarnEvery = time.Minute
+
+// noteEvalFailure logs a per-viewer evaluation failure, once per kind per
+// evalWarnEvery, so the failure is visible in the log without flooding it.
+func (h *CollectionHandler) noteEvalFailure(col *database.Collection, err error) {
+	kind := evalFailureKind(col, err)
+	h.warnMu.Lock()
+	if h.warnedAt == nil {
+		h.warnedAt = make(map[string]time.Time)
+	}
+	last, seen := h.warnedAt[kind]
+	now := time.Now()
+	if seen && now.Sub(last) < evalWarnEvery {
+		h.warnMu.Unlock()
+		return
+	}
+	h.warnedAt[kind] = now
+	h.warnMu.Unlock()
+	h.log.Warn("collections: members of %s (%s) could not be evaluated for the viewer (%s, shown as no members): %s",
+		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), kind, logger.SanitizeLogValue(err.Error()))
+}
+
+// collectionEvalSlots bounds how many collection evaluations run at once in the
+// whole process, across requests. Each one is an id-only search over the whole
+// index plus a pass over the viewer's state (and book reads when it sorts), and
+// any library.view user can trigger them from the list routes, so without a
+// shared bound N clients opening the Collections tab at once start N x
+// ViewerMemberSetsConcurrency searches and N x NumCPU workers. It is acquired per
+// evaluation inside evaluate, so every entry point (read, list, create, update,
+// materialize, the ABS surface) is covered, and never held across a request.
+var collectionEvalSlots = make(chan struct{}, max(2, runtime.NumCPU()))
 
 // evaluate runs a dynamic collection's query for viewerID.
 //
@@ -640,14 +769,25 @@ func withViewerMembers(col *database.Collection, ids []string) *database.Collect
 // private copy would drift — a query that worked in a smart playlist and failed
 // in a dynamic collection would be indistinguishable from a bad query.
 //
-// viewerID reaches the evaluator only for a query with a per-user field, and an
-// empty one (no viewer: a background job, an unresolved caller) matches nothing
-// for such a query; it is never replaced by the collection's creator or an admin.
-// A query with no per-user field is evaluated with no user at all.
+// viewerID reaches the evaluator only for a query that may use a per-user field,
+// and an empty one (no viewer: a background job, an unresolved caller) matches
+// nothing for such a query; it is never replaced by the collection's creator or an
+// admin. A query with no per-user field is evaluated with no user at all.
 func (h *CollectionHandler) evaluate(col *database.Collection, viewerID string) ([]string, error) {
+	return h.evaluateWith(col, viewerID, nil)
+}
+
+// evaluateWith is evaluate with the viewer's state already loaded (nil loads it).
+func (h *CollectionHandler) evaluateWith(col *database.Collection, viewerID string, states *playlist.ViewerStates) ([]string, error) {
 	userID := ""
-	if search.QueryUsesPerUserField(col.Query) {
+	if search.QueryMayUsePerUserField(col.Query) {
 		userID = viewerID
+	}
+	collectionEvalSlots <- struct{}{}
+	defer func() { <-collectionEvalSlots }()
+	if states != nil && states.UserID() == userID {
+		return playlist.EvaluateSmartPlaylistFor(
+			h.evalStore, h.indexFn(), col.Query, col.SortJSON, col.Limit, states)
 	}
 	return playlist.EvaluateSmartPlaylist(
 		h.evalStore, h.indexFn(),
@@ -658,21 +798,35 @@ func (h *CollectionHandler) evaluate(col *database.Collection, viewerID string) 
 
 // ViewerMemberSetsConcurrency is how many per-viewer collections are evaluated at
 // once for one request. A library has tens of dynamic collections at most, so the
-// pool rarely fills; it is bounded because each evaluation is a search plus one
-// state read per hit.
+// pool rarely fills; it is bounded because each evaluation is a search plus a pass
+// over the viewer's state. The process-wide bound is collectionEvalSlots.
 const ViewerMemberSetsConcurrency = 4
 
-// ViewerMemberSets evaluates every per-viewer collection in cols for viewerID and
-// returns collection id to ordered member ids. A collection that is not per-viewer
-// is absent from the map (its members are the stored list). A per-viewer one whose
-// evaluation fails (index closed or rebuilding, a query that no longer parses) or
-// that has no viewer is present with an empty list: the answer is "none", never
-// the stored list and never another user's.
+// ViewerCollections is the answer for the per-viewer collections on one page.
+type ViewerCollections struct {
+	// Sets is collection id to ordered member ids. A collection that is not
+	// per-viewer is absent (its members are the stored list); a per-viewer one
+	// that could not be evaluated, or has no viewer, is present with an empty list.
+	Sets map[string][]string
+	// Unavailable holds the collections in Sets whose evaluation FAILED, with the
+	// error: their empty list means "unknown", not "nothing matches". No viewer is
+	// not a failure and is not here.
+	Unavailable map[string]error
+}
+
+// ViewerMembers evaluates every per-viewer collection in cols for viewerID.
+//
+// The viewer's own state is read ONCE (a single prefix scan, see
+// playlist.LoadViewerStates) and shared by every collection on the page, instead
+// of a point read per candidate book per collection. If that read fails every
+// per-viewer collection is unavailable: a state that could not be read is never
+// evaluated as an empty one.
 //
 // PARTITIONING: each collection is evaluated by exactly one worker and written to
-// its own slot, so workers share no mutable state.
-func (h *CollectionHandler) ViewerMemberSets(cols []database.Collection, viewerID string) map[string][]string {
-	out := make(map[string][]string)
+// its own slot; the shared viewer state is read-only. Failures are logged (see
+// noteEvalFailure), once per kind per minute.
+func (h *CollectionHandler) ViewerMembers(cols []database.Collection, viewerID string) ViewerCollections {
+	out := ViewerCollections{Sets: make(map[string][]string), Unavailable: make(map[string]error)}
 	var idx []int
 	for i := range cols {
 		if collectionIsPerViewer(&cols[i]) {
@@ -683,24 +837,43 @@ func (h *CollectionHandler) ViewerMemberSets(cols []database.Collection, viewerI
 		return out
 	}
 	results := make([][]string, len(idx))
-	var g errgroup.Group
-	g.SetLimit(ViewerMemberSetsConcurrency)
-	for n, i := range idx {
-		g.Go(func() error {
-			if ids, err := h.evaluate(&cols[i], viewerID); err == nil {
-				results[n] = ids
-			}
-			return nil // an evaluation that fails is "no members", it never aborts the rest
-		})
+	errs := make([]error, len(idx))
+
+	states, statesErr := playlist.LoadViewerStates(h.evalStore, viewerID)
+	if statesErr != nil {
+		for n := range idx {
+			errs[n] = statesErr
+		}
+	} else {
+		var g errgroup.Group
+		g.SetLimit(ViewerMemberSetsConcurrency)
+		for n, i := range idx {
+			g.Go(func() error {
+				results[n], errs[n] = h.evaluateWith(&cols[i], viewerID, states)
+				return nil // a failed evaluation is "unavailable", it never aborts the rest
+			})
+		}
+		_ = g.Wait()
 	}
-	_ = g.Wait()
 	for n, i := range idx {
+		if errs[n] != nil {
+			results[n] = nil
+			out.Unavailable[cols[i].ID] = errs[n]
+			h.noteEvalFailure(&cols[i], errs[n])
+		}
 		if results[n] == nil {
 			results[n] = []string{}
 		}
-		out[cols[i].ID] = results[n]
+		out.Sets[cols[i].ID] = results[n]
 	}
 	return out
+}
+
+// ViewerMemberSets is ViewerMembers' member lists alone, for a surface (the ABS
+// one) that has nowhere to put the unavailable flag: such a collection shows no
+// books there, and the failure is logged.
+func (h *CollectionHandler) ViewerMemberSets(cols []database.Collection, viewerID string) map[string][]string {
+	return h.ViewerMembers(cols, viewerID).Sets
 }
 
 // load resolves :id, writing the error response itself.

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
 // last-edited: 2026-10-25
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -76,6 +77,17 @@ import (
 // resolvable viewer, or an evaluation that cannot run (index closed), the
 // collection shows no books: it fails closed, never to the creator's list.
 // Collections without a per-user rule keep serving their stored list, as before.
+//
+// "Per-user rule" includes a query that does not parse (search.QueryMayUsePerUserField):
+// "cannot tell" is never "serve the stored list".
+//
+// lastUpdate of such a collection is the time of the request, not UpdatedAt: its
+// members change on every position heartbeat and whenever the library gains a
+// matching book, none of which touches the row, so a stored timestamp would tell a
+// client that caches by lastUpdate that a stale list is current. A client therefore
+// refetches it each time, which is the price of a list that depends on who is
+// asking and on state that moves; it is also what a viewer who just finished a book
+// needs to see the collection change.
 
 // CollectionViewerMembers evaluates the per-viewer dynamic collections in cols for
 // viewerID: collection id to ordered book ids. A collection absent from the map is
@@ -580,10 +592,16 @@ func collectionBookIDs(col *database.Collection, viewerSets map[string][]string)
 	if col.Type != database.CollectionTypeDynamic {
 		return col.BookIDs
 	}
-	if search.QueryUsesPerUserField(col.Query) {
+	if search.QueryMayUsePerUserField(col.Query) {
 		return viewerSets[col.ID]
 	}
 	return col.MaterializedBookIDs
+}
+
+// collectionIsPerViewer reports whether who is asking decides col's members (see
+// collectionBookIDs).
+func collectionIsPerViewer(col *database.Collection) bool {
+	return col.Type == database.CollectionTypeDynamic && search.QueryMayUsePerUserField(col.Query)
 }
 
 // callerID is the signed-in user's id, or "" when there is none. It is the viewer
@@ -879,6 +897,14 @@ func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
 		description = col.Description
 	}
 
+	// A per-viewer collection's members move with the viewer's state and the
+	// library, neither of which touches the row, so its lastUpdate is now: see
+	// the file header.
+	lastUpdate := col.UpdatedAt
+	if collectionIsPerViewer(col) {
+		lastUpdate = time.Now()
+	}
+
 	return gin.H{
 		"id":        col.ID,
 		"libraryId": h.libraryID(),
@@ -890,7 +916,7 @@ func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
 		"coverFullPath": nil,
 		"books":         books,
 		"numBooks":      len(books),
-		"lastUpdate":    msEpoch(col.UpdatedAt),
+		"lastUpdate":    msEpoch(lastUpdate),
 		"createdAt":     msEpoch(col.CreatedAt),
 	}
 }
