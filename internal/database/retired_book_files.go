@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-25
 
@@ -65,7 +65,9 @@ func retiredVersionFromKey(shellID, versionID string) []byte {
 // refuseRetiredVersionChange guards UpdateBookVersion. A version only becomes
 // retired through CreateBookVersion; one that is retired and still holds rows
 // may not change status or book. (A retired version with no rows left, after
-// UnretireBookFiles, may be changed or deleted freely.)
+// UnretireBookFiles, may change status or book, or be deleted. While it stays
+// retired on the same book its provenance, RetiredFromBookID and RetiredAt, is
+// fixed whether or not it holds rows.)
 func (p *PebbleStore) refuseRetiredVersionChange(prev, v *BookVersion) error {
 	if v.Status == BookVersionStatusRetired && prev.Status != BookVersionStatusRetired {
 		return fmt.Errorf("book version %s: status %q is set only when the version is created: %w",
