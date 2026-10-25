@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -359,7 +359,10 @@ func (p *PebbleStore) commitSingleOwnerIndexBatch(batch *GatedBatch) error {
 	if err != nil {
 		return err
 	}
-	return p.db.SyncWAL()
+	// The batch is applied from here: a failed fsync is ErrBookFileDurabilityUnknown,
+	// not "nothing committed", so a caller that keeps memdb in step (bookFileApplied)
+	// still does.
+	return p.syncBookFileWAL()
 }
 
 // bookFileWALSyncHook, when non-nil, runs after a book_file writer released

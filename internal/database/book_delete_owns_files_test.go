@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: ea8c9be0-11d7-4035-b1ea-a50f919e06cd
-// last-edited: 2026-09-19
+// last-edited: 2026-10-25
 
 package database
 
@@ -604,5 +604,64 @@ func TestBatchUpsert_ChurnRefusesOnlyRowsThatVanishedRepeatedly(t *testing.T) {
 	}
 	if r, _ := store.GetBookFileByPath(once); r == nil || r.Title != "once" {
 		t.Fatalf("the row that vanished only once was not committed: %+v", r)
+	}
+}
+
+// The multi-row deletes apply their batch NoSync and fsync after releasing the
+// index mutex. When only that fsync fails the rows ARE gone, so the caller is
+// told ErrBookFileDurabilityUnknown and memdb must still drop them: returning
+// before the derived-state pass left memdb serving deleted rows until a restart,
+// and a retry found nothing in Pebble to clean up.
+func TestMultiRowDeletes_SyncFailureStillClearsMemdb(t *testing.T) {
+	deletes := map[string]func(ps *PebbleStore, bookID string, ids []string) error{
+		"DeleteBookFilesForBook": func(ps *PebbleStore, bookID string, _ []string) error { return ps.DeleteBookFilesForBook(bookID) },
+		"DeleteBookFilesByIDs":   func(ps *PebbleStore, _ string, ids []string) error { return ps.DeleteBookFilesByIDs(ids) },
+	}
+	for name, del := range deletes {
+		t.Run(name, func(t *testing.T) {
+			store, cleanup := setupTestDB(t)
+			defer cleanup()
+			ps := store.(*PebbleStore)
+			ps.WaitForWarmup()
+			b, err := store.CreateBook(&Book{Title: "b", FilePath: "/lib/mrsync/" + name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := []*BookFile{{BookID: b.ID, FilePath: "/lib/mrsync/" + name + "/1.mp3"}, {BookID: b.ID, FilePath: "/lib/mrsync/" + name + "/2.mp3"}}
+			if err := store.BatchUpsertBookFiles(rows); err != nil {
+				t.Fatal(err)
+			}
+			ids := []string{rows[0].ID, rows[1].ID}
+			memdbRows := func() int {
+				core, err := store.GetAllBookFilesCore()
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := 0
+				for _, c := range core {
+					if c.BookID == b.ID {
+						n++
+					}
+				}
+				return n
+			}
+			if got := memdbRows(); got != 2 {
+				t.Fatalf("setup: memdb holds %d rows, want 2", got)
+			}
+
+			bookFileWALSyncHook = func() error { return errors.New("injected fsync failure") }
+			t.Cleanup(func() { bookFileWALSyncHook = nil })
+			err = del(ps, b.ID, ids)
+			bookFileWALSyncHook = nil
+			if !errors.Is(err, ErrBookFileDurabilityUnknown) {
+				t.Fatalf("err = %v, want ErrBookFileDurabilityUnknown", err)
+			}
+			if left, _ := store.GetBookFiles(b.ID); len(left) != 0 {
+				t.Fatalf("Pebble still holds %d rows; the batch was applied", len(left))
+			}
+			if got := memdbRows(); got != 0 {
+				t.Fatalf("memdb still serves %d deleted rows after an applied delete whose fsync failed", got)
+			}
+		})
 	}
 }
