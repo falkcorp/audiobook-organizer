@@ -1,7 +1,7 @@
 // file: internal/arch/filtered_getter_callers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c2f9d04-1b8e-4a73-85d6-e0a47b31c9f2
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package arch
 
@@ -65,7 +65,6 @@ var reviewedFilteredGetterCallers = map[string]string{
 	"pkg/ops/opstest/store.go|worldStore.GetBookFileByPath|GetBookFileByPath":                                       "Test fake delegating to its own in-memory store.",
 
 	// --- Deliberately live after the retired check.
-	"internal/merge/service.go|Service.planVirtualFile|GetBookFileByPath": "Runs AFTER the complete lookup (BookFileRowsAtPathForWrite + RetiredClaimOnPath) has ruled out a retired claim on the path, to find the LIVE row to move; a retired row would be refused by the move anyway.",
 
 	// --- Known soft-fail.
 	"internal/deluge/discovery.go|IsContentFingerprintTracked|GetBookFileByAcoustID":      "KNOWN SOFT-FAIL: nil reads as \"content not tracked\", so a torrent whose content a retired version holds is offered for import by discovery (the import itself is refused by the scanner's retired-content check). Open item; replace with a complete fingerprint lookup.",
