@@ -1,7 +1,7 @@
 // file: web/src/contexts/AuthContext.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b3c4d5e-6f70-4819-a2b3-c4d5e6f70819
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 import {
   createContext,
@@ -174,4 +174,15 @@ export function useAuth(): AuthContextValue {
     throw new Error('useAuth must be used within AuthProvider');
   }
   return ctx;
+}
+
+/**
+ * Like useAuth, but null instead of throwing when there is no AuthProvider.
+ * For advisory UI (hiding a control the server would refuse) in components that
+ * also render outside the provider, where "no auth information" must leave the
+ * control as it was and the server's own check stays the authority.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext);
 }
