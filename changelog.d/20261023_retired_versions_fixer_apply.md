@@ -48,3 +48,10 @@ shell, and the metadata revert and `UnmergeAuto` take the merge lock around the
 store revert. A retire's finish moves only the external ids its journaled plan
 record named, and a retire adopts an empty retired version only when its own
 operation created it.
+
+The duplicate version-group cleanup now checks, under the merge lock and before
+it removes a duplicate's file, that no `book_file` row of any book (retired
+rows included) names that path. A named file stays on disk while the
+duplicate's book row is still removed (new `files_kept_referenced` count); a
+lookup that cannot be answered keeps the duplicate and its file, before any
+listening state is carried (new `path_check_errors` count).
