@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package opsv3
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -41,34 +42,23 @@ func (h *Handler) ListRuns(c *gin.Context) {
 		return
 	}
 	q := database.RunQuery{DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit}
-	hidden, err := h.hiddenFor(c, rd, q.DefID)
-	if err != nil {
-		storeErr(c, "list runs", err)
-		return
+	// A Repairs run the caller may not read is left out by the store, inside the
+	// one pass that counts and pages: total is the number of runs the caller may
+	// read for the filter (the number /counts reports for it), the page is full
+	// while readable runs remain, and next_cursor never points past the last one.
+	// A def filter that names no Repairs definition has nothing to hide, so it
+	// keeps the store's key-only count; otherwise every record is judged once.
+	if q.DefID == "" || opaccess.IsRepairsOp(q.DefID) {
+		reader := h.d.RepairsAccess.For(c)
+		q.Keep = reader.MayReadRun
 	}
 	page, err := rd.ListRunsV3(q)
 	if err != nil {
 		storeErr(c, "list runs", err)
 		return
 	}
-	// A Repairs run the caller may not read is left out, judged on each record
-	// returned (first page and every refill page), and total gives up the hidden
-	// runs the snapshot counted for the filter, so it stays the number of rows the
-	// listing holds. A page the filter shortened is refilled from the next pages
-	// (each consumed whole, so next_cursor never skips a row).
-	reader := h.d.RepairsAccess.For(c)
-	recs := readableRuns(reader, page.Runs)
-	total := page.Total - hidden.matching(q.DefID, q.State)
-	for len(recs) < limit && page.Next != "" {
-		q.Cursor, q.Limit = page.Next, limit-len(recs)
-		if page, err = rd.ListRunsV3(q); err != nil {
-			storeErr(c, "list runs", err)
-			return
-		}
-		recs = append(recs, readableRuns(reader, page.Runs)...)
-	}
 	c.JSON(http.StatusOK, gin.H{
-		"items": h.views(recs), "next_cursor": page.Next, "total": total,
+		"items": h.views(page.Runs), "next_cursor": page.Next, "total": page.Total,
 	})
 }
 
@@ -167,6 +157,13 @@ func (h *Handler) StartRun(c *gin.Context) {
 	params, perr := normalizeParams(body.Params)
 	if perr != "" {
 		httputil.RespondWithValidationError(c, "params", perr)
+		return
+	}
+	// A Repairs definition carries no permission of its own beyond the generic
+	// one, so the fixer its params name decides who may start it, as on the
+	// Repairs routes (users.manage for the Audible read-status fixer).
+	if ref := h.d.RepairsAccess.For(c).CheckStart(defID, params); ref != nil {
+		ref.Respond(c)
 		return
 	}
 	if len(def.ParamsSchema) > 0 {

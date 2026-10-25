@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
 // version: 1.0.0
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // The operations v3 routes (/api/v3/ops) and the activity log as the server
 // wires them, driven through the real router: a Repairs run (repairs.plan,
@@ -26,6 +26,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -122,6 +123,71 @@ func TestOpsV3_RunListLeavesOutWhatTheCallerMayNotRead(t *testing.T) {
 	p := decodeAs[v3Page](t, getAs(f.srv, f.viewer, "/api/v3/ops/runs?def_id="+repairs.ApplyOpID))
 	require.Empty(t, p.Items)
 	require.Zero(t, p.Total)
+}
+
+// TestOpsV3_RunListTotalStaysExactWhenHiddenRunsInterleave: with readable and
+// hidden repairs runs alternating in the index, a def_id + state listing (the
+// shape that makes the store judge every record) returns a total that is the
+// readable count on every page of every page size, each page is full until the
+// last, no page is empty, and the walk meets each readable run once and no hidden
+// one. The same listing for a viewer, who may read none of them, is empty with
+// total 0 and no cursor.
+// Not parallel: it swaps the process-wide config.
+func TestOpsV3_RunListTotalStaysExactWhenHiddenRunsInterleave(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+	now := time.Now().UTC()
+	var readable, hidden []string
+	for i := range 9 {
+		id, fixer := "op-inter-"+strconv.Itoa(i), f.defaultFixerID // the editor may read this fixer's runs
+		if i%2 == 1 {
+			fixer = scopedFixerID // settings.manage: not the editor
+			hidden = append(hidden, id)
+		} else {
+			readable = append(readable, id)
+		}
+		res := `{"fixer_id":"` + fixer + `"}`
+		require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+			ID: id, DefID: repairs.ApplyOpID, Plugin: "test", Status: "completed",
+			Params: `{"fixer_id":"` + fixer + `"}`, ResultData: &res,
+			QueuedAt: now.Add(time.Duration(i) * time.Second), CompletedAt: &now,
+		}))
+	}
+	// The fixture's own default-fixer apply run is readable to the editor too.
+	readable = append(readable, f.defaultApply)
+
+	base := "/api/v3/ops/runs?def_id=" + repairs.ApplyOpID + "&state=succeeded"
+	for _, size := range []int{1, 2, 3, 100} {
+		var walked []string
+		cursor := ""
+		for range 20 {
+			path := base + "&limit=" + strconv.Itoa(size)
+			if cursor != "" {
+				path += "&cursor=" + url.QueryEscape(cursor)
+			}
+			p := decodeAs[v3Page](t, getAs(f.srv, f.editor, path))
+			require.Equal(t, len(readable), p.Total, "limit %d: total is not the readable count", size)
+			require.NotEmpty(t, p.Items, "limit %d: an empty page (a hidden run took a slot)", size)
+			if p.NextCursor != "" {
+				require.Len(t, p.Items, size, "limit %d: a non-final page is short", size)
+			}
+			walked = append(walked, p.ids()...)
+			if p.NextCursor == "" {
+				break
+			}
+			cursor = p.NextCursor
+		}
+		require.ElementsMatch(t, readable, walked, "limit %d: walk", size)
+		for _, id := range hidden {
+			require.NotContains(t, walked, id, "limit %d", size)
+		}
+	}
+
+	p := decodeAs[v3Page](t, getAs(f.srv, f.viewer, base+"&limit=1"))
+	require.Empty(t, p.Items)
+	require.Zero(t, p.Total)
+	require.Empty(t, p.NextCursor)
 }
 
 // TestOpsV3_CountsCoverOnlyWhatTheCallerMayRead: the census a caller gets
@@ -524,4 +590,279 @@ func TestWireHandlers_ActivityRepairsAccessIsInstalled(t *testing.T) {
 	require.Contains(t, w.Body.String(), f.summaries[f.scopedPlan][0])
 	w = getAs(f.srv, f.viewer, "/api/v1/activity?limit=200")
 	require.NotContains(t, w.Body.String(), f.summaries[f.scopedPlan][1])
+}
+
+// TestActivity_CompactedDigestLeavesOutWhatTheCallerMayNotRead: the activity
+// rows of a repairs op survive in a nightly daily digest after compaction
+// deletes them, as items carrying the op id, type and summary. The digest is
+// built here by the real CompactByDay over rows written the way the reporter and
+// the slog bridge write them, not hand-shaped, and a caller's tier=digest read
+// carries the items of the ops they may read and none of the others. The digest
+// row itself stays for every caller, and so does the total.
+// Not parallel: it swaps the process-wide config.
+func TestActivity_CompactedDigestLeavesOutWhatTheCallerMayNotRead(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	day := time.Now().UTC().AddDate(0, 0, -3).Truncate(time.Hour)
+	summaries := map[string][]string{}
+	for i, id := range append(slices.Clone(f.allRepairsOps), f.plainScan) {
+		def := repairs.ApplyOpID
+		switch id {
+		case f.scopedPlan:
+			def = repairs.PlanOpID
+		case f.plainScan:
+			def = "library.scan"
+		}
+		r, s := recordActivityFor(t, f, day.Add(time.Duration(i)*time.Minute), id, def)
+		summaries[id] = []string{r, s}
+	}
+	svc := f.srv.activityService
+	res, err := svc.CompactByDay(context.Background(), time.Now().UTC().Add(-time.Hour))
+	require.NoError(t, err)
+	require.Positive(t, res.DaysCompacted, "nothing was compacted")
+
+	type digestPage struct {
+		Entries []struct {
+			Type    string `json:"type"`
+			Details struct {
+				OriginalCount int            `json:"original_count"`
+				Counts        map[string]int `json:"counts"`
+				Items         []struct {
+					OperationID string `json:"operation_id"`
+					Summary     string `json:"summary"`
+				} `json:"items"`
+			} `json:"details"`
+		} `json:"entries"`
+		Total int `json:"total"`
+	}
+	read := func(who string) (digestPage, string) {
+		w := getAs(f.srv, f.token(who), "/api/v1/activity?tier=digest&limit=50")
+		return decodeAs[struct {
+			Data digestPage `json:"data"`
+		}](t, w).Data, w.Body.String()
+	}
+
+	adminPage, _ := read("admin")
+	require.Equal(t, 1, adminPage.Total, "one day was compacted into one digest")
+	for _, who := range allRoles {
+		page, body := read(who)
+		require.Equal(t, adminPage.Total, page.Total, "%s: the digest row went missing or the total moved", who)
+		require.Len(t, page.Entries, 1, who)
+		require.Equal(t, "daily_digest", page.Entries[0].Type, who)
+		require.Equal(t, 2*(len(f.allRepairsOps)+1), page.Entries[0].Details.OriginalCount, "%s: the digest does not describe the day (two rows per op)", who)
+
+		var itemOps []string
+		for _, it := range page.Entries[0].Details.Items {
+			itemOps = append(itemOps, it.OperationID)
+		}
+		for _, id := range append(slices.Clone(f.allRepairsOps), f.plainScan) {
+			if slices.Contains(f.readable(who), id) {
+				require.Contains(t, itemOps, id, "%s: the digest lost an item of an op the caller may read", who)
+				for _, sm := range summaries[id] {
+					require.Contains(t, body, sm, "%s %s", who, id)
+				}
+				continue
+			}
+			require.NotContains(t, body, id, "%s: the digest names an op the caller may not read", who)
+			for _, sm := range summaries[id] {
+				require.NotContains(t, body, sm, "%s %s", who, id)
+			}
+		}
+		if who == "viewer" {
+			require.NotContains(t, body, secondaryUserID, "viewer: the digest carries a user id of a repairs run")
+		}
+	}
+}
+
+// TestDashboard_RecentOperationsLeaveOutRepairsRuns: GET /dashboard, which needs
+// only library.view, lists the newest operations without the repairs runs the
+// caller may not read (their result, error text and actor named the target user),
+// still fills its list from older operations when the newest ones are hidden, and
+// serves no operation's result_data to anyone. It also pins that the server wires
+// the check into the system handler: without it every repairs run is left out, so
+// an admin seeing one is the oracle.
+// Not parallel: it swaps the process-wide config.
+func TestDashboard_RecentOperationsLeaveOutRepairsRuns(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+
+	// A failed settings.manage-fixer run, the newest operation of all, whose
+	// error text and actor name the target user; and five more behind it, so the
+	// five newest operations are all repairs runs a viewer may not read.
+	const failedID = "op-repairs-apply-failed"
+	now := time.Now().UTC()
+	errText := "apply failed for target_user_id=" + secondaryUserID
+	actor := secondaryUserID
+	hidden := []string{failedID}
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: failedID, DefID: repairs.ApplyOpID, Plugin: "test", Status: "failed",
+		Params: `{"fixer_id":"` + scopedFixerID + `"}`, ErrorMessage: &errText, ActorUserID: &actor,
+		QueuedAt: now.Add(10 * time.Minute),
+	}))
+	for i := range 5 {
+		id := "op-repairs-plan-newer-" + strconv.Itoa(i)
+		hidden = append(hidden, id)
+		res := `{"params":{"target_user_id":"` + secondaryUserID + `"}}`
+		require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+			ID: id, DefID: repairs.PlanOpID, Plugin: "test", Status: "completed",
+			Params: `{"fixer_id":"` + scopedFixerID + `"}`, ResultData: &res,
+			QueuedAt: now.Add(time.Duration(2+i) * time.Minute), CompletedAt: &now,
+		}))
+	}
+
+	type dash struct {
+		Data struct {
+			Recent []map[string]any `json:"recent_operations"`
+		} `json:"data"`
+	}
+	ids := func(d dash) []string {
+		out := []string{}
+		for _, op := range d.Data.Recent {
+			id, _ := op["id"].(string)
+			out = append(out, id)
+		}
+		return out
+	}
+
+	for _, who := range allRoles {
+		w := getAs(f.srv, f.token(who), "/api/v1/dashboard")
+		d := decodeAs[dash](t, w)
+		body := w.Body.String()
+		require.NotContains(t, body, "result_data", "%s: the dashboard serves an operation's result", who)
+		require.NotContains(t, body, `{\"scanned\":3}`, who)
+		require.LessOrEqual(t, len(d.Data.Recent), 5, who)
+
+		mayRead := slices.Contains(f.readable(who), f.scopedPlan) // settings.manage fixer: admin only
+		for _, id := range hidden {
+			if mayRead {
+				require.Contains(t, ids(d), failedID, "%s: the run a settings.manage caller may read is missing", who)
+				break
+			}
+			require.NotContains(t, body, id, "%s: the dashboard names a repairs run the caller may not read", who)
+		}
+		if mayRead {
+			continue
+		}
+		require.NotContains(t, body, secondaryUserID, "%s: the dashboard carries the target user of a repairs run", who)
+		require.NotContains(t, body, "target_user_id", who)
+		// The five newest operations are hidden from this caller; the list is
+		// still filled from the ones behind them.
+		require.NotEmpty(t, d.Data.Recent, "%s: hidden runs emptied the list", who)
+		require.Contains(t, ids(d), f.plainScan, who)
+	}
+}
+
+// opsManagerToken is a session for a custom role that holds everything the
+// generic start routes ask for (library.view, scan.trigger, settings.manage) and
+// library.edit_metadata, but not users.manage.
+func opsManagerToken(t *testing.T, f *repairsOpAccessFixture) string {
+	t.Helper()
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+	_, err := store.CreateRole(&database.Role{
+		ID: "role-ops-manager", Name: "ops-manager",
+		Permissions: []auth.Permission{auth.PermLibraryView, auth.PermScanTrigger, auth.PermLibraryEditMetadata, auth.PermSettingsManage},
+	})
+	require.NoError(t, err)
+	u, err := store.CreateUser("opsmgr", "opsmgr@x.test", "bcrypt", "hash", []string{"role-ops-manager"}, "active")
+	require.NoError(t, err)
+	sess, err := store.CreateSession(u.ID, "192.0.2.11", "test", time.Hour)
+	require.NoError(t, err)
+	return sess.ID
+}
+
+func postJSONAs(srv *Server, token, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	return w
+}
+
+// TestGenericStartRoutes_ApplyTheFixersPermissions: POST /operations/v2, a retry
+// through /operations/v2/:id/retry, POST /api/v3/ops/runs and POST
+// /api/v3/ops/defs/:id/runs start a Repairs run only for a caller who holds the
+// permissions of the fixer the params name, as the Repairs routes require. A
+// custom role with settings.manage but not users.manage is refused 403 naming
+// users.manage for the Audible read-status fixer (owner decision 2026-10-24) on
+// every one, for plan and apply alike, and nothing is queued; the same role
+// starts a fixer that needs only settings.manage; an admin starts both; params
+// naming no fixer are a 400 and a fixer this build does not register a 404, for
+// everyone. Not parallel: it swaps the process-wide config.
+func TestGenericStartRoutes_ApplyTheFixersPermissions(t *testing.T) {
+	const ars = "maintenance.audible-read-status"
+	f := newRepairsOpAccessFixture(t)
+	mgr := opsManagerToken(t, f)
+
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+	queued := func() int {
+		rows, err := store.ListOperationsV2Since(time.Time{}, 500)
+		require.NoError(t, err)
+		return len(rows)
+	}
+
+	denied := func(w *httptest.ResponseRecorder, what string) {
+		t.Helper()
+		require.Equal(t, http.StatusForbidden, w.Code, what+": "+w.Body.String())
+		require.Contains(t, w.Body.String(), "permission denied: users.manage", what)
+	}
+
+	v2 := func(token, def, params string) *httptest.ResponseRecorder {
+		return postJSONAs(f.srv, token, "/api/v1/operations/v2", `{"def_id":"`+def+`","params":`+params+`}`)
+	}
+	v3 := func(token, def, params string) *httptest.ResponseRecorder {
+		return postJSONAs(f.srv, token, "/api/v3/ops/runs", `{"def":"`+def+`","params":`+params+`}`)
+	}
+	v3Nested := func(token, def, params string) *httptest.ResponseRecorder {
+		return postJSONAs(f.srv, token, "/api/v3/ops/defs/"+def+"/runs", `{"params":`+params+`}`)
+	}
+	routes := map[string]func(token, def, params string) *httptest.ResponseRecorder{
+		"POST /operations/v2": v2, "POST /api/v3/ops/runs": v3, "POST /api/v3/ops/defs/:id/runs": v3Nested,
+	}
+
+	before := queued()
+	for name, start := range routes {
+		for _, def := range []string{repairs.PlanOpID, repairs.ApplyOpID} {
+			denied(start(mgr, def, `{"fixer_id":"`+ars+`"}`), name+" "+def+" by the custom role")
+		}
+	}
+	// A retry of an Audible read-status run: the route's own gate is
+	// settings.manage, which the custom role holds.
+	res := `{"fixer_id":"` + ars + `"}`
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: "op-ars-failed", DefID: repairs.ApplyOpID, Plugin: "test", Status: "failed",
+		Params: res, QueuedAt: time.Now().UTC(),
+	}))
+	denied(postJSONAs(f.srv, mgr, "/api/v1/operations/v2/op-ars-failed/retry", `{}`), "retry by the custom role")
+	require.Equal(t, before+1, queued(), "a refused start queued a run (only the seeded failed run is new)")
+
+	// No fixer and an unknown fixer are refused to everyone, an admin included.
+	for name, start := range routes {
+		w := start(f.admin, repairs.PlanOpID, `{}`)
+		require.Equal(t, http.StatusBadRequest, w.Code, name+": "+w.Body.String())
+		w = start(f.admin, repairs.PlanOpID, `{"fixer_id":"fixer.removed-since"}`)
+		require.Equal(t, http.StatusNotFound, w.Code, name+": "+w.Body.String())
+	}
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: "op-nofixer-failed", DefID: repairs.ApplyOpID, Plugin: "test", Status: "failed",
+		Params: `{}`, QueuedAt: time.Now().UTC(),
+	}))
+	w := postJSONAs(f.srv, f.admin, "/api/v1/operations/v2/op-nofixer-failed/retry", `{}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	// The custom role and the admin start a settings.manage-only fixer; the
+	// admin starts the Audible read-status fixer. Same shape, so a 403 above is
+	// the fixer check and nothing else.
+	for name, start := range routes {
+		w := start(mgr, repairs.PlanOpID, `{"fixer_id":"`+scopedFixerID+`"}`)
+		require.Equal(t, http.StatusAccepted, w.Code, name+" custom role, settings.manage fixer: "+w.Body.String())
+	}
+	for name, start := range routes {
+		w := start(f.admin, repairs.PlanOpID, `{"fixer_id":"`+ars+`"}`)
+		require.Equal(t, http.StatusAccepted, w.Code, name+" admin, Audible read-status: "+w.Body.String())
+	}
 }

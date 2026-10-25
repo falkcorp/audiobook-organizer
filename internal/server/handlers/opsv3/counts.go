@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/counts.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4029c887-479b-45cc-8f37-fc9839c4d0c9
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package opsv3
 
@@ -46,8 +46,8 @@ func (h *Handler) Counts(c *gin.Context) {
 	// The census holds every run; the caller's holds the runs they may read, so
 	// each group gives up the hidden Repairs runs and a group that reaches zero is
 	// left out. This keeps the invariant that a group's count is the length of its
-	// href's list (ListRuns takes the same runs off its total).
-	hidden, err := h.hiddenFor(c, rd, "")
+	// href's list (ListRuns counts only the runs the caller may read).
+	hidden, err := h.hiddenFor(c, rd)
 	if err != nil {
 		httputil.InternalError(c, "counts", err)
 		return

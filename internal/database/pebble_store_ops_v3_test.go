@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 package database
 
@@ -594,6 +594,88 @@ func TestListRunsTotalIsExact(t *testing.T) {
 	q, err := p.ListQueuedRunsV3(0)
 	if err != nil || len(q) != 25 {
 		t.Fatalf("ListQueuedRunsV3 = %d runs, %v; want 25", len(q), err)
+	}
+}
+
+// ── TestListRunsKeepIsOnePass ───────────────────────────────────────────────
+
+// TestListRunsKeepIsOnePass: RunQuery.Keep narrows a listing inside the store's
+// own pass, so Total counts only the runs it accepts, every page is full while
+// accepted runs remain (no short or empty page for a run Keep refused, and no
+// page after the last accepted one), and one call judges each record under the
+// index once however small the limit is. Covered for each index the listing can
+// walk: every state, one state, one def, and a def with a state.
+func TestListRunsKeepIsOnePass(t *testing.T) {
+	p := newTimelineStore(t)
+	for range 7 {
+		insertV3(t, p, "test.show", "")
+	}
+	for range 6 {
+		insertV3(t, p, "test.hide", "")
+	}
+	for range 3 {
+		id := insertV3(t, p, "test.hide", "")
+		transition(t, p, id, state.EvDispatch, nil)
+	}
+	for range 4 {
+		id := insertV3(t, p, "test.show", "")
+		transition(t, p, id, state.EvDispatch, nil)
+	}
+	cases := []struct {
+		name      string
+		q         RunQuery
+		total     int64
+		pages     []int
+		candidate int // records Keep is asked about: those the def and state already accept
+	}{
+		{"every state", RunQuery{Limit: 4}, 11, []int{4, 4, 3}, 20},
+		{"one state", RunQuery{State: state.V3Queued, Limit: 3}, 7, []int{3, 3, 1}, 13},
+		{"one def", RunQuery{DefID: "test.show", Limit: 5}, 11, []int{5, 5, 1}, 11},
+		{"a def Keep refuses whole", RunQuery{DefID: "test.hide", Limit: 2}, 0, []int{0}, 9},
+		{"def and state", RunQuery{DefID: "test.show", State: state.V3Running, Limit: 3}, 4, []int{3, 1}, 4},
+		{"limit one", RunQuery{Limit: 1}, 11, []int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, 20},
+	}
+	for _, c := range cases {
+		calls := 0
+		c.q.Keep = func(r *RunRecord) bool {
+			calls++
+			return r.DefID != "test.hide"
+		}
+		var sizes []int
+		seen := map[string]bool{}
+		for {
+			calls = 0
+			page, err := p.ListRunsV3(c.q)
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if page.Total != c.total {
+				t.Errorf("%s: Total = %d, want %d", c.name, page.Total, c.total)
+			}
+			if calls != c.candidate {
+				t.Errorf("%s: one call judged %d records, want %d (one pass)", c.name, calls, c.candidate)
+			}
+			sizes = append(sizes, len(page.Runs))
+			for _, r := range page.Runs {
+				if r.DefID == "test.hide" {
+					t.Errorf("%s: a run Keep refused was returned: %s", c.name, r.ID)
+				}
+				if seen[r.ID] {
+					t.Errorf("%s: run %s on two pages", c.name, r.ID)
+				}
+				seen[r.ID] = true
+			}
+			if page.Next == "" {
+				break
+			}
+			c.q.Cursor = page.Next
+		}
+		if fmt.Sprint(sizes) != fmt.Sprint(c.pages) {
+			t.Errorf("%s: page sizes %v, want %v", c.name, sizes, c.pages)
+		}
+		if int64(len(seen)) != c.total {
+			t.Errorf("%s: the walk met %d runs, Total says %d", c.name, len(seen), c.total)
+		}
 	}
 }
 

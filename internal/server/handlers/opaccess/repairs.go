@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Package opaccess holds the read-access checks the generic operations routes
 // apply to operations whose data is scoped to something narrower than
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // Repairs decides who may read the data of a Repairs operation
@@ -182,4 +183,63 @@ func (r *Reader) Require(row *database.OperationV2Row) bool {
 	}
 	httputil.RespondWithForbidden(r.c, "permission denied: this operation belongs to a Repairs fixer you may not use")
 	return false
+}
+
+// StartRefusal is why a generic start route will not queue a run of a Repairs
+// definition. It is what the Repairs routes answer for the same request, so the
+// two ways in cannot disagree: a 404 for a fixer this build does not register, a
+// 400 for params that name none, and the 401/403 of the first permission the
+// fixer requires that the caller lacks.
+type StartRefusal struct {
+	Status  int             // 400 or 404, or 403 for an unwired check; 0 when Missing is set
+	Message string          // for Status
+	Missing auth.Permission // set when the caller lacks this permission
+}
+
+// Respond writes the refusal.
+func (f *StartRefusal) Respond(c *gin.Context) {
+	switch {
+	case f.Missing != "":
+		servermiddleware.RespondPermissionDenied(c, f.Missing)
+	case f.Status == 404:
+		httputil.RespondWithNotFound(c, "repair fixer", f.Message)
+	case f.Status == 400:
+		httputil.RespondWithBadRequest(c, f.Message)
+	default:
+		httputil.RespondWithForbidden(c, f.Message)
+	}
+}
+
+// CheckStart decides whether the caller may queue a run of definition defID with
+// params (the JSON the run would carry): nil for a definition that is not a
+// Repairs one, and for a Repairs one when the caller holds every permission its
+// fixer requires (repairs.RequiredPermissions, as the Repairs routes' own check
+// does). The generic start routes (POST /operations/v2, a retry, POST
+// /api/v3/ops/runs) ask only the definition's own permissions, which for these
+// two definitions is a bare settings.manage, so without this a role that holds
+// settings.manage but not the fixer's users.manage could start the Audible
+// read-status fixer from them. Params that name no fixer are refused too: such a
+// run could never be read by anyone (MayReadFixer), and cannot do anything.
+// An unwired check refuses every Repairs start (fail closed).
+func (r *Reader) CheckStart(defID string, params []byte) *StartRefusal {
+	if !IsRepairsOp(defID) {
+		return nil
+	}
+	if r.a == nil || r.a.fixers == nil || r.a.holds == nil {
+		return &StartRefusal{Status: 403, Message: "permission denied: this operation belongs to a Repairs fixer you may not use"}
+	}
+	id := fixerIDOf(string(params), nil)
+	if id == "" {
+		return &StartRefusal{Status: 400, Message: "params.fixer_id is required to start a Repairs operation"}
+	}
+	f, ok := r.a.fixers.Get(id)
+	if !ok {
+		return &StartRefusal{Status: 404, Message: id}
+	}
+	for _, p := range repairs.RequiredPermissions(f) {
+		if !r.a.holds(r.c, p) {
+			return &StartRefusal{Missing: p}
+		}
+	}
+	return nil
 }
