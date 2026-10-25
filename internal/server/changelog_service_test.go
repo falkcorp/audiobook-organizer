@@ -1,7 +1,7 @@
 // file: internal/server/changelog_service_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3dcbb4a3-7fa5-425f-8247-5f96f81f2f22
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package server
 
@@ -17,6 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// readEveryChange is the changelog predicate of a caller that may read every
+// journal row (GetBookChangelog refuses them all for a nil predicate).
+func readEveryChange(*database.OperationChange) bool { return true }
+
 func TestChangelogService_GetBookChangelog_Empty(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -24,7 +28,7 @@ func TestChangelogService_GetBookChangelog_Empty(t *testing.T) {
 	svc := server.changelogService
 	require.NotNil(t, svc)
 
-	entries, err := svc.GetBookChangelog("nonexistent-book-id", nil)
+	entries, err := svc.GetBookChangelog("nonexistent-book-id", readEveryChange)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
@@ -57,7 +61,7 @@ func TestChangelogService_WithPathHistory(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	entries, err := server.changelogService.GetBookChangelog(book.ID, nil)
+	entries, err := server.changelogService.GetBookChangelog(book.ID, readEveryChange)
 	require.NoError(t, err)
 	// CreateBook records an implicit import entry, so the manual rename
 	// is one of several entries. Find the specific one we recorded.

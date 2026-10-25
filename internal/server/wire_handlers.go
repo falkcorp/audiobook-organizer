@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.59.0
+// version: 2.60.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package server
 
@@ -70,7 +70,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	cacheH := handlers.NewCacheHandler(s.metricsStore, s.storeForWiring())
 	// Typed-nil guard as for compactEnqueuer below: a nil *Registry boxed into
 	// the interface would pass the handler's nil check and then panic.
-	var activityOpts []handlers.ActivityHandlerOption
+	// The trash purge's activity row carries every user's progress summary;
+	// only a caller who may manage users reads it.
+	activityOpts := []handlers.ActivityHandlerOption{handlers.WithActivityOthersUserData(s.othersUserDataAccess())}
 	if s.opRegistry != nil {
 		activityOpts = append(activityOpts, handlers.WithActivityOpDefs(s.opRegistry))
 	}
@@ -271,8 +273,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		func() (int, error) {
 			return s.Ops().RepairOpsV2MissingCompletedAt()
 		},
-		func(id string) (*undo.UndoConflictReport, error) {
-			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
+			return undo.PreflightUndoConflictsFromChanges(s.storeForWiring(), changes)
 		},
 		// revertOperation also drops the series caches when a series_rename
 		// row was restored (series_rename_ops.go).
@@ -466,7 +468,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			}
 			return computeSeriesPrunePreview(store)
 		},
-	)
+	).WithOthersUserDataAccess(s.othersUserDataAccess())
 
 	// iTunes handlers. Guard the service/importer wiring: s.itunesSvc is set
 	// from the service registry and may be nil (iTunes disabled / not

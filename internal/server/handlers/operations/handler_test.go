@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (stale-op clear, pause-state
@@ -62,7 +62,7 @@ func newTestHandler(t *testing.T) (*operations.Handler, *operationsmocks.MockOpe
 			return []database.Operation{{ID: "stale-1", Status: "running"}}, nil
 		},
 		func() (int, error) { return 0, nil },
-		func(id string) (*undo.UndoConflictReport, error) {
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
 			return &undo.UndoConflictReport{TotalChanges: 1}, nil
 		},
 		func(id string) (*audiobooks.RevertResult, error) {
@@ -305,14 +305,28 @@ func TestGetOperationChanges_Success(t *testing.T) {
 
 // --- UndoPreflightHandler ---
 
+// The preflight is built from the rows the handler read for its access check:
+// the journal is read once, and the injected preflight gets those rows.
 func TestUndoPreflightHandler_UsesInjectedFunc(t *testing.T) {
-	h, store, _, _, _, _ := newTestHandler(t)
+	gin.SetMode(gin.TestMode)
+	store := operationsmocks.NewMockOperationsStore(t)
 	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
-	store.EXPECT().GetOperationChanges("op-1").Return([]*database.OperationChange{{ID: "c1", ChangeType: "metadata_update"}}, nil)
+	rows := []*database.OperationChange{{ID: "c1", ChangeType: "metadata_update"}}
+	store.EXPECT().GetOperationChanges("op-1").Return(rows, nil).Once()
+	var got []*database.OperationChange
+	h := operations.New(store, nil, nil, nil, nil, nil, nil,
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
+			got = changes
+			return &undo.UndoConflictReport{TotalChanges: len(changes)}, nil
+		},
+		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
+	)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, rows, got, "the preflight is built from the rows the handler read")
+	assert.Contains(t, w.Body.String(), `"total_changes":1`)
 }
 
 func TestUndoPreflightHandler_Error(t *testing.T) {
@@ -321,7 +335,9 @@ func TestUndoPreflightHandler_Error(t *testing.T) {
 	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
 	store.EXPECT().GetOperationChanges("op-1").Return(nil, nil)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
-		func(id string) (*undo.UndoConflictReport, error) { return nil, errors.New("boom") },
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
+			return nil, errors.New("boom")
+		},
 		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
@@ -344,7 +360,7 @@ func TestRevertOperation_Error(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
-		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
 		func(id string) (*audiobooks.RevertResult, error) { return nil, errors.New("revert failed") },
 	)
 	w := run(http.MethodPost, "/operations/:id/revert", "/operations/op-1/revert", nil, func(r *gin.Engine) {
@@ -358,7 +374,7 @@ func newRevertHandler(t *testing.T, result *audiobooks.RevertResult, err error) 
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	return operations.New(operationsmocks.NewMockOperationsStore(t), nil, nil, nil, nil, nil, nil,
-		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
 		func(id string) (*audiobooks.RevertResult, error) { return result, err },
 	)
 }
@@ -437,7 +453,7 @@ func newClearStaleHandler(t *testing.T, v2Count int, v2Err error) *operations.Ha
 	store := operationsmocks.NewMockOperationsStore(t)
 	return operations.New(store, nil, nil, nil, nil, nil,
 		func() (int, error) { return v2Count, v2Err },
-		func(id string) (*undo.UndoConflictReport, error) { return nil, nil },
+		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
 		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 }

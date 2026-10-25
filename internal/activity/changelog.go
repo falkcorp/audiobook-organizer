@@ -1,7 +1,7 @@
 // file: internal/activity/changelog.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package activity
 
@@ -56,10 +56,13 @@ const MaxChangelogEntries = 50
 // mayRead decides which operation_changes rows the caller may see; a row it
 // refuses is left out before the entries are sorted and capped, so a caller
 // still gets up to MaxChangelogEntries of what it may read. The HTTP handler
-// passes opaccess.Reader.MayReadChange, which keeps a Repairs fixer's rows
-// (one user's listening state, for the Audible read-status fixer) to callers
-// holding the fixer's permissions. nil keeps every row, for a caller with no
-// request to answer.
+// passes opaccess.Reader.MayReadChange, which keeps a Repairs fixer's rows to
+// callers holding the fixer's permissions and rows carrying other users' data
+// (listening state and positions) to callers who may manage users. nil
+// refuses every operation_changes row: the journal holds other users' data,
+// so a caller that names no check gets none of it (the path and metadata
+// history are still returned). A caller that may read everything passes a
+// function that returns true.
 func (svc *ChangelogService) GetBookChangelog(bookID string, mayRead func(*database.OperationChange) bool) ([]ChangeLogEntry, error) {
 	if svc.db == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -138,7 +141,7 @@ func (svc *ChangelogService) GetBookChangelog(bookID string, mayRead func(*datab
 			if oc.Voided {
 				continue // a refused write that never happened
 			}
-			if mayRead != nil && !mayRead(oc) {
+			if mayRead == nil || !mayRead(oc) {
 				continue
 			}
 			if undo.IsLedgerOnly(oc) {

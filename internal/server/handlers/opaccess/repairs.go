@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Package opaccess holds the read-access checks the generic operations routes
 // apply to operations whose data is scoped to something narrower than
@@ -43,15 +43,22 @@ import (
 //     (both ops carry fixer_id) and, when they do not state it, from its
 //     stored result. A repairs op whose fixer cannot be resolved is refused
 //     (fail closed).
-//   - MayReadChange takes one change-journal row and needs no operation row,
-//     because the journal outlives it: registry.Discard deletes the op row and
-//     keeps its opchange rows. The row names its fixer itself
-//     (OperationChange.Source, stamped by repairs.Writer).
+//   - MayReadChange takes one change-journal row. The row names its fixer
+//     itself (OperationChange.Source, stamped by repairs.Writer since
+//     2026-10-03); a row journaled before then names none, and its op row,
+//     while it exists, names the fixer instead. The journal outlives the op
+//     row: registry.Discard deletes the op row and keeps its opchange rows.
+//
+// Journal rows that carry one user's own data (undo.IsUserDataChangeType:
+// listening state and positions, private playlist membership, an account's
+// identity) are other users' data, which only a caller who may manage users
+// reads (owner decision, 2026-10-24), on top of the fixer's permissions.
 //
 // Every repairs op, and every journal row that is Repairs data, is refused for
 // a nil *Repairs: a handler the server did not wire cannot leak.
 type Repairs struct {
 	fixers FixerLookup
+	ops    OpLookup
 	holds  func(c *gin.Context, p auth.Permission) bool
 }
 
@@ -60,11 +67,18 @@ type FixerLookup interface {
 	Get(id string) (repairs.Fixer, bool)
 }
 
+// OpLookup reads an operation row: (nil, nil) when there is none. It is how
+// MayReadChange scopes a journal row that names no fixer.
+type OpLookup interface {
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+}
+
 // NewRepairs builds the check. holds reports whether the request's
 // caller holds a permission and writes nothing (server.permHolds: every
-// permission is held with auth disabled and on a first run).
-func NewRepairs(fixers FixerLookup, holds func(c *gin.Context, p auth.Permission) bool) *Repairs {
-	return &Repairs{fixers: fixers, holds: holds}
+// permission is held with auth disabled and on a first run). A nil fixers,
+// ops or holds leaves the check unwired, which fails closed.
+func NewRepairs(fixers FixerLookup, ops OpLookup, holds func(c *gin.Context, p auth.Permission) bool) *Repairs {
+	return &Repairs{fixers: fixers, ops: ops, holds: holds}
 }
 
 // IsRepairsOp reports whether defID is one of the Repairs lane's operations.
@@ -100,11 +114,15 @@ type Reader struct {
 	a       *Repairs
 	c       *gin.Context
 	verdict map[string]bool
+	// opVerdict is unstampedOpVerdict per operation id.
+	opVerdict map[string]opScope
+	// userData caches mayReadUserData: nil until asked.
+	userData *bool
 }
 
 // For binds the check to one request.
 func (a *Repairs) For(c *gin.Context) *Reader {
-	return &Reader{a: a, c: c, verdict: map[string]bool{}}
+	return &Reader{a: a, c: c, verdict: map[string]bool{}, opVerdict: map[string]opScope{}}
 }
 
 // MayRead reports whether the caller may read row's data: always for an
@@ -124,46 +142,132 @@ func (r *Reader) MayRead(row *database.OperationV2Row) bool {
 }
 
 // MayReadChange reports whether the caller may read one change-journal row.
-// It decides from the row alone, so it holds after the row's operation has
-// been discarded (registry.Discard keeps the journal).
+// It holds after the row's operation has been discarded (registry.Discard
+// keeps the journal).
 //
-// A row is Repairs data when either holds:
+// A row is readable when the caller may use the fixer it belongs to
+// (MayUndoChange) and, for a row that carries one user's own data
+// (undo.IsUserDataChangeType), also holds users.manage: other users'
+// listening state, playlists and identity are admin data whoever ran the
+// fixer, so an editor who may run fragment-consolidation still does not read
+// its user_state_follow rows.
 //
-//   - its ChangeType is undo.ChangeTypeUserBookStateSet: one user's listening
-//     state and positions, before and after. Only repairs.Writer.SetUserState
-//     writes it, so it is always scoped: to the fixer its Source names, or,
-//     when Source names no registered fixer (or none at all), to the strictest
-//     set (see fixerPermitted). Every such row names its fixer: Source
-//     stamping landed on 2026-10-03 (563a229e9) and the only writer of this
-//     change type, the Audible read-status fixer, on 2026-10-05 (7f437d343).
-//   - its Source is a registered fixer's id: the fixer's permissions.
-//
-// Any other row is readable. A non-empty Source alone does not make a row
-// Repairs data: the v3 op writer stamps its definition id there too
-// (registry's v3 adapter via opswriter.NewBookHistory), and that history is
-// library.view data. A removed fixer's rows other than user state therefore
-// read as ordinary history here; the operation routes still apply MayRead to
-// the op row while it exists.
-//
-// Unwired (nil *Repairs or no fixer registry), user-state rows are refused and
-// so is every row with a Source, since which Sources are fixers is unknown.
+// Unwired (nil *Repairs, or no fixer registry, op lookup or permission
+// check), user-data rows are refused and so is every row with a Source, since
+// which Sources are fixers is unknown.
 func (r *Reader) MayReadChange(ch *database.OperationChange) bool {
 	if ch == nil {
 		return true
 	}
-	userState := ch.ChangeType == undo.ChangeTypeUserBookStateSet
+	userData := undo.IsUserDataChangeType(ch.ChangeType)
 	if !r.wired() {
-		return !userState && ch.Source == ""
+		return !userData && ch.Source == ""
 	}
-	if !userState {
-		if ch.Source == "" {
-			return true
+	if userData && !r.mayReadUserData() {
+		return false
+	}
+	return r.MayUndoChange(ch)
+}
+
+// MayUndoChange reports whether the caller may use the fixer a journal row
+// belongs to, which is what the operation's undo report needs: the report
+// carries a row's id, book, change type and refusal reason, never its values,
+// so a user-data row in it is no reason to refuse a caller who may run (and
+// so undo) the fixer. MayReadChange adds the user-data leg.
+//
+// The fixer a row belongs to:
+//
+//   - its Source, when that is a registered fixer's id: the fixer's
+//     permissions.
+//   - its Source, when that names no registered fixer: a v3 op stamps its
+//     definition id there too (registry's v3 adapter via
+//     opswriter.NewBookHistory), and that history is library.view data, so
+//     such a row is readable -- unless it carries user data, which only
+//     repairs.Writer writes: then the fixer's scope is unknown and every
+//     permission is needed (fixerPermitted). A removed fixer's rows other
+//     than user data therefore read as ordinary history.
+//   - no Source (a row journaled before Source stamping landed on 2026-10-03,
+//     563a229e9, or by a writer that does not stamp): the row's op row, while
+//     it exists, decides (MayRead: a Repairs op needs its fixer's
+//     permissions). With no op row left, or one that is not a Repairs op, the
+//     row is readable unless it carries user data, which then needs every
+//     permission. A store error refuses the row.
+//
+// Unwired, as MayReadChange.
+func (r *Reader) MayUndoChange(ch *database.OperationChange) bool {
+	if ch == nil {
+		return true
+	}
+	userData := undo.IsUserDataChangeType(ch.ChangeType)
+	if !r.wired() {
+		return !userData && ch.Source == ""
+	}
+	if ch.Source != "" {
+		if _, ok := r.a.fixers.Get(ch.Source); ok || userData {
+			return r.fixerPermitted(ch.Source)
 		}
-		if _, ok := r.a.fixers.Get(ch.Source); !ok {
-			return true
+		return true
+	}
+	switch r.unstampedOpVerdict(ch.OperationID) {
+	case opRepairsReadable:
+		return true
+	case opRepairsRefused, opUnreadable:
+		return false
+	}
+	// No op row, or one that is not a Repairs op.
+	if userData {
+		return r.fixerPermitted("")
+	}
+	return true
+}
+
+// opScope is what a journal row's op row says about a row that names no
+// fixer.
+type opScope int
+
+const (
+	// opNotRepairs: no op row, or one that is not a Repairs op.
+	opNotRepairs opScope = iota
+	// opRepairsReadable: a Repairs op the caller may read (MayRead).
+	opRepairsReadable
+	// opRepairsRefused: a Repairs op the caller may not read.
+	opRepairsRefused
+	// opUnreadable: the op row could not be read (fail closed).
+	opUnreadable
+)
+
+// unstampedOpVerdict reads operation id's row once per request and scopes it.
+func (r *Reader) unstampedOpVerdict(id string) opScope {
+	if id == "" {
+		return opNotRepairs
+	}
+	if v, ok := r.opVerdict[id]; ok {
+		return v
+	}
+	v := opNotRepairs
+	row, err := r.a.ops.GetOperationV2(id)
+	switch {
+	case err != nil:
+		v = opUnreadable
+	case row != nil && IsRepairsOp(row.DefID):
+		v = opRepairsRefused
+		if r.MayRead(row) {
+			v = opRepairsReadable
 		}
 	}
-	return r.fixerPermitted(ch.Source)
+	r.opVerdict[id] = v
+	return v
+}
+
+// mayReadUserData reports, once per request, whether the caller may read
+// other users' own data: users.manage, the permission that already shows an
+// admin every account.
+func (r *Reader) mayReadUserData() bool {
+	if r.userData == nil {
+		v := r.a.holds(r.c, auth.PermUsersManage)
+		r.userData = &v
+	}
+	return *r.userData
 }
 
 // ReadableChanges is changes without the rows the caller may not read
@@ -179,12 +283,12 @@ func (r *Reader) ReadableChanges(changes []*database.OperationChange) []*databas
 }
 
 func (r *Reader) wired() bool {
-	return r.a != nil && r.a.fixers != nil && r.a.holds != nil
+	return r.a != nil && r.a.fixers != nil && r.a.ops != nil && r.a.holds != nil
 }
 
 // fixerPermitted reports whether the caller holds every permission fixer id
 // requires, asking once per fixer per request. An id this build does not
-// register (a fixer removed or renamed since it ran, or "" for a user-state
+// register (a fixer removed or renamed since it ran, or "" for a user-data
 // row that names none) has an unknown scope, so it needs every permission
 // there is (auth.All(), the admin role's set): nothing a fixer could name,
 // such as master-list-import's users.manage, is left out.

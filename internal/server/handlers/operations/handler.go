@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -24,7 +24,7 @@
 // interfaces (OperationsStore, OperationsRegistry, Scheduler, ScanCanceler,
 // AIScanLister) and three injected funcs (collectStale, preflightUndo, revert)
 // that wrap server-private helpers, so package operations never imports package
-// server. preflightUndo wraps undo.PreflightUndoConflicts and revert wraps
+// server. preflightUndo wraps undo.PreflightUndoConflictsFromChanges and revert wraps
 // audiobooks.NewRevertService(...).RevertOperation; both consume a full
 // database.Store opaquely, so the controller closes over s.Ops() rather than
 // the handler enumerating "methods used".
@@ -88,10 +88,13 @@ type Handler struct {
 	// s.Ops() and passes RepairOpsV2MissingCompletedAt.
 	repairPhantomLive func() (int, error)
 
-	// preflightUndo wraps undo.PreflightUndoConflicts(s.Ops(), id). The undo
-	// report type is an importable alias, but PreflightUndoConflicts consumes a
-	// full database.Store opaquely, so the controller closes over s.Ops().
-	preflightUndo func(id string) (*undo.UndoConflictReport, error)
+	// preflightUndo wraps undo.PreflightUndoConflictsFromChanges(s.Ops(),
+	// changes): the report over an operation's journal rows, which the
+	// handler has already read for its access check, so the journal is
+	// scanned once per request. The undo report type is an importable alias,
+	// but the preflight consumes a full database.Store opaquely, so the
+	// controller closes over s.Ops().
+	preflightUndo func(changes []*database.OperationChange) (*undo.UndoConflictReport, error)
 
 	// revert wraps audiobooks.NewRevertService(s.Ops()).RevertOperation(id).
 	// Same opaque-store rationale as preflightUndo. The result carries the
@@ -150,7 +153,7 @@ func New(
 	scanStore AIScanLister,
 	collectStale func(timeout time.Duration) ([]database.Operation, error),
 	repairPhantomLive func() (int, error),
-	preflightUndo func(id string) (*undo.UndoConflictReport, error),
+	preflightUndo func(changes []*database.OperationChange) (*undo.UndoConflictReport, error),
 	revert func(id string) (*audiobooks.RevertResult, error),
 ) *Handler {
 	return &Handler{
@@ -488,9 +491,13 @@ func (h *Handler) GetOperationChanges(c *gin.Context) {
 // UndoPreflightHandler checks for conflicts before executing an undo.
 // Implements GET /operations/:id/undo/preflight. The report is built from
 // every row of the operation's journal, so it is refused (403) when the caller
-// may not read the op row or any one of those rows
-// (opaccess.Reader.MayReadChange): a discarded Repairs op has no op row left
-// to refuse on.
+// may not read the op row or may not use the fixer of any one of those rows
+// (opaccess.Reader.MayUndoChange): a discarded Repairs op has no op row left
+// to refuse on. A user-data row the caller may not read
+// (opaccess.Reader.MayReadChange) does not refuse the report: it carries each
+// row's id, book, change type and refusal reason, never a row's values, so an
+// editor keeps Undo on the fixers he may run. The rows read here are the ones
+// the report is built from (one journal scan per request).
 func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 	id := c.Param("id")
 	r := h.repairsAccess.For(c)
@@ -503,12 +510,12 @@ func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 		return
 	}
 	for _, ch := range changes {
-		if !r.MayReadChange(ch) {
+		if !r.MayUndoChange(ch) {
 			httputil.RespondWithForbidden(c, "permission denied: this operation's changes belong to a Repairs fixer you may not use")
 			return
 		}
 	}
-	report, err := h.preflightUndo(id)
+	report, err := h.preflightUndo(changes)
 	if err != nil {
 		httputil.InternalError(c, "failed to check conflicts", err)
 		return

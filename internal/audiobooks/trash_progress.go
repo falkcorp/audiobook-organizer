@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -576,19 +577,22 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if aerr := rec.Record(database.ActivityEntry{
 		Timestamp: time.Now().UTC(),
 		Tier:      "audit",
-		Type:      "trash_discard_progress_purge",
+		Type:      activity.TypeTrashDiscardProgressPurge,
 		Level:     "info",
 		Source:    "trash",
 		BookID:    id,
 		Summary:   fmt.Sprintf("discarded listening progress and purged %q from the trash (%d user(s), %d bookmark(s))", book.Title, res.UsersCleared, res.BookmarksCleared),
 		Details: map[string]any{
-			"actor":             actor,
-			"book_id":           id,
-			"title":             book.Title,
-			"progress_summary":  res.ProgressSummary,
-			"users_cleared":     res.UsersCleared,
-			"bookmarks_cleared": res.BookmarksCleared,
-			"files_deleted":     res.FilesDeleted,
+			"actor":   actor,
+			"book_id": id,
+			"title":   book.Title,
+			// Every user's state, for the owner's audit. The activity
+			// routes withhold it from a caller who may not manage users
+			// (activity.WithoutOthersUserData).
+			activity.DetailProgressSummary: res.ProgressSummary,
+			"users_cleared":                res.UsersCleared,
+			"bookmarks_cleared":            res.BookmarksCleared,
+			"files_deleted":                res.FilesDeleted,
 		},
 	}); aerr != nil {
 		trashLog.Error("discard progress and purge: audit row not written for %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(aerr.Error()))
