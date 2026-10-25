@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.63.2
+// version: 1.63.3
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-25
 
@@ -1949,6 +1949,30 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 		journal.Absorbed = append(journal.Absorbed, a)
 	}
+
+	// Everything that can refuse for want of an answer is settled BEFORE the
+	// journal exists, so a refusal leaves nothing Pending (the journal lists every
+	// absorbed book and the failure would be wrapped as a CombineIncompleteError
+	// telling the user to revert a combine that never wrote anything). The
+	// survivor's own file is planned here (it is attached after the pointer is
+	// journaled; nothing runs between the two to change the answer). Each absorbed
+	// book that has no rows and so attaches its FilePath is checked for an
+	// answerable path lookup now; its plan is made later, after the bulk move and
+	// the survivor's own attach, because those change which rows hold the path
+	// (an absorbed path equal to the survivor's must find the survivor's row, not
+	// plan a second one).
+	ownPlan, err := ms.planOwnFile(survivor)
+	if err != nil {
+		return nil, fmt.Errorf("combine refused: %w", err)
+	}
+	for _, a := range journal.Absorbed {
+		if len(movedFiles[a.BookID]) == 0 && a.FilePath != "" {
+			if _, err := ms.pathRowsForWrite(a.FilePath); err != nil {
+				return nil, fmt.Errorf("combine refused: absorbed book %s: %w", a.BookID, err)
+			}
+		}
+	}
+
 	if err := ms.putCombineJournal(journal); err != nil {
 		return nil, fmt.Errorf("combine refused: undo journal could not be written: %w", err)
 	}
@@ -1985,10 +2009,6 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 
 	// Materialize the survivor's own single-file (virtual-segment) audio as a
 	// BookFile so the combined book owns ALL its files explicitly.
-	ownPlan, err := ms.planOwnFile(survivor)
-	if err != nil {
-		return nil, fmt.Errorf("combine refused: %w", err)
-	}
 	ownN, err := ms.attachJournaledFile(journal, &journal.SurvivorFiles, ownPlan, survivor.ID)
 	if err != nil {
 		return nil, fmt.Errorf("combine refused: %w", err)
@@ -2728,9 +2748,9 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtu
 	// path and the single-owner lookup below is the whole answer, which keeps a
 	// combine of a rowless book working through the warmup after a restart. When
 	// the complete lookup is needed and cannot be answered, that is an error.
-	rows, rowsErr := database.BookFileRowsAtPathForWrite(ms.db, b.FilePath)
+	rows, rowsErr := ms.pathRowsForWrite(b.FilePath)
 	if rowsErr != nil {
-		return virtualFilePlan{}, fmt.Errorf("cannot tell whether a retired version holds %s: %w", b.FilePath, rowsErr)
+		return virtualFilePlan{}, rowsErr
 	}
 	if held := database.RetiredClaimOnPath(rows); held != nil {
 		mlog.Info("combine: the file is held by a retired version; no row planned for it book=%s path=%s retired_file=%s holder=%s",
@@ -2772,6 +2792,18 @@ func (ms *Service) planVirtualFile(b *database.Book, targetBookID string) (virtu
 		create:   bf,
 		attached: true,
 	}, nil
+}
+
+// pathRowsForWrite is the lookup planVirtualFile gates on, and the one the
+// combine runs ahead of its journal to learn whether planVirtualFile can answer:
+// every row at path, complete once a retired version exists
+// (BookFileRowsAtPathForWrite). An error means the path cannot be checked.
+func (ms *Service) pathRowsForWrite(path string) ([]database.BookFile, error) {
+	rows, err := database.BookFileRowsAtPathForWrite(ms.db, path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot tell whether a retired version holds %s: %w", path, err)
+	}
+	return rows, nil
 }
 
 // liveRowAtPath picks the live row of rows (one path's lookup answer) that
