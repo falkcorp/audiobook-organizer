@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_holders_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2dc80dae-a233-411b-ba47-721acf3d06b6
 // last-edited: 2026-10-25
 
@@ -258,11 +258,11 @@ func TestCombineBooks_PathHeldByTwoLiveBooksIsJournaledAndLeavesThemTheirRows(t 
 func TestCombineBooks_RowlessAbsorbedBookAtAPathHeldByTwoLiveBooksIsReported(t *testing.T) {
 	store := setupTestStore(t)
 	path := "/tmp/pvh-absorbed-two-live.mp3"
-	h1, row1 := seedHolder(t, store, "Holder one", path)
-	h2, row2 := seedHolder(t, store, "Holder two", path)
-	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Survivor", Format: "mp3", FilePath: "/tmp/pvh-absorbed-two-live-s.mp3"})
+	h1, row1 := seedHolder(t, store, "Knightfall", path)
+	h2, row2 := seedHolder(t, store, "No Man's Land", path)
+	survivor, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "The Long Halloween", Format: "mp3", FilePath: "/tmp/pvh-absorbed-two-live-s.mp3"})
 	require.NoError(t, err)
-	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Rowless absorbed", Format: "mp3", FilePath: path})
+	absorbed, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Hush", Format: "mp3", FilePath: path})
 	require.NoError(t, err)
 
 	ms := NewService(store)
