@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
 // last-edited: 2026-10-24
 
@@ -51,11 +51,13 @@ func (h *Handler) ListRuns(c *gin.Context) {
 		storeErr(c, "list runs", err)
 		return
 	}
-	// A Repairs run the caller may not read is left out, and total gives up the
-	// hidden runs that match the filter, so it stays the number of rows the
-	// listing holds. A page the filter shortened is refilled from the next
-	// pages (each consumed whole, so next_cursor never skips a row).
-	recs := hidden.visible(page.Runs)
+	// A Repairs run the caller may not read is left out, judged on each record
+	// returned (first page and every refill page), and total gives up the hidden
+	// runs the snapshot counted for the filter, so it stays the number of rows the
+	// listing holds. A page the filter shortened is refilled from the next pages
+	// (each consumed whole, so next_cursor never skips a row).
+	reader := h.d.RepairsAccess.For(c)
+	recs := readableRuns(reader, page.Runs)
 	total := page.Total - hidden.matching(q.DefID, q.State)
 	for len(recs) < limit && page.Next != "" {
 		q.Cursor, q.Limit = page.Next, limit-len(recs)
@@ -63,7 +65,7 @@ func (h *Handler) ListRuns(c *gin.Context) {
 			storeErr(c, "list runs", err)
 			return
 		}
-		recs = append(recs, hidden.visible(page.Runs)...)
+		recs = append(recs, readableRuns(reader, page.Runs)...)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"items": h.views(recs), "next_cursor": page.Next, "total": total,

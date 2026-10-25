@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.59.0
+// version: 2.60.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-24
 
@@ -76,7 +76,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 	// The same Repairs access check the operations routes use (one instance per
 	// server): the activity of a Repairs operation is its fixer's data too.
-	activityOpts = append(activityOpts, handlers.WithActivityRepairsAccess(s.repairsOpAccess(), s.storeForWiring()))
+	// Both records an operation has (operations_v2 row, v3 run) are read, so a
+	// missing half cannot make a Repairs operation look like an unknown one.
+	var activityRuns handlers.ActivityRunReader
+	if runs, ok := database.AsCapability[handlers.ActivityRunReader](s.storeForWiring()); ok {
+		activityRuns = runs
+	}
+	activityOpts = append(activityOpts, handlers.WithActivityRepairsAccess(s.repairsOpAccess(), s.storeForWiring(), activityRuns))
 	activityH := handlers.NewActivityHandler(s.activityService, s.storeForWiring(), activityOpts...)
 	// Typed-nil guard, as for mcFileIOPool below: s.opRegistry is a concrete
 	// pointer and a nil one boxed into the interface would pass the handler's

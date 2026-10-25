@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/access.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 2f6c1b9e-7a43-4d85-b0e1-93c5a8d47f20
 // last-edited: 2026-10-24
 
@@ -35,10 +35,11 @@ func (h *Handler) mayReadRun(c *gin.Context, rec *database.RunRecord) bool {
 	return false
 }
 
-// hiddenRuns is the repairs runs one request may not read, with what each
-// census total must give up for them.
+// hiddenRuns counts the repairs runs one request may not read, per state and
+// definition: what each census total must give up for them. It is a snapshot,
+// used for totals only; which records a read returns is decided per record
+// (readableRuns).
 type hiddenRuns struct {
-	ids     map[string]struct{}
 	byState map[state.V3]int64
 	byDef   map[string]int64
 	total   int64
@@ -48,14 +49,6 @@ type hiddenRuns struct {
 type hiddenRun struct {
 	defID string
 	state state.V3
-}
-
-func (hr *hiddenRuns) hides(id string) bool {
-	if hr == nil {
-		return false
-	}
-	_, ok := hr.ids[id]
-	return ok
 }
 
 // matching is how many hidden runs satisfy a listing filter (either may be
@@ -85,7 +78,7 @@ func (h *Handler) hiddenFor(c *gin.Context, rd RunReader, onlyDef string) (*hidd
 		return nil, nil
 	}
 	reader := h.d.RepairsAccess.For(c)
-	out := &hiddenRuns{ids: map[string]struct{}{}, byState: map[state.V3]int64{}, byDef: map[string]int64{}}
+	out := &hiddenRuns{byState: map[state.V3]int64{}, byDef: map[string]int64{}}
 	for _, def := range repairsDefs {
 		if onlyDef != "" && onlyDef != def {
 			continue
@@ -101,7 +94,6 @@ func (h *Handler) hiddenFor(c *gin.Context, rd RunReader, onlyDef string) (*hidd
 				if reader.MayReadRun(r) {
 					continue
 				}
-				out.ids[r.ID] = struct{}{}
 				out.byState[r.State]++
 				out.byDef[r.DefID]++
 				out.total++
@@ -116,15 +108,15 @@ func (h *Handler) hiddenFor(c *gin.Context, rd RunReader, onlyDef string) (*hidd
 	return out, nil
 }
 
-// visible drops the hidden runs of recs.
-func (hr *hiddenRuns) visible(recs []database.RunRecord) []database.RunRecord {
-	if hr == nil || len(hr.ids) == 0 {
-		return recs
-	}
+// readableRuns is recs without the runs reader may not read. It judges the
+// records a listing is about to return, not a snapshot taken earlier: a Repairs
+// run created after hiddenFor read the store (a run can appear between that
+// read and the page read) is still checked. hiddenRuns only adjusts totals.
+func readableRuns(reader *opaccess.Reader, recs []database.RunRecord) []database.RunRecord {
 	out := make([]database.RunRecord, 0, len(recs))
-	for _, r := range recs {
-		if !hr.hides(r.ID) {
-			out = append(out, r)
+	for i := range recs {
+		if reader.MayReadRun(&recs[i]) {
+			out = append(out, recs[i])
 		}
 	}
 	return out

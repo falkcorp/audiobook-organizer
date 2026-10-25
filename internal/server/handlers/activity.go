@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-24
 
@@ -104,17 +104,27 @@ type ActivityHandler struct {
 	// repairsAccess and opRows decide, per operation, whether the caller may read
 	// the activity of a Repairs operation (see WithActivityRepairsAccess). opRows
 	// nil means no operation can be resolved, so nothing is hidden; repairsAccess
-	// nil with opRows set refuses every Repairs operation.
+	// nil with opRows set refuses every Repairs operation. opRuns is the v3 run
+	// lookup for an operation whose v2 row is missing.
 	repairsAccess *opaccess.Repairs
 	opRows        ActivityOperationReader
+	opRuns        ActivityRunReader // may be nil
 }
 
-// ActivityOperationReader is the one read the activity handler makes of an
-// operation: its operations_v2 row, whose definition and params say which
-// Repairs fixer it belongs to. database.Store implements it. It is separate from
-// ActivityOpsStore, which is mocked and read only for log fallbacks.
+// ActivityOperationReader is what the activity handler reads of an operation to
+// tell whether it is a Repairs one: its operations_v2 row, whose definition and
+// params say which fixer it belongs to. database.Store implements it. It is
+// separate from ActivityOpsStore, which is mocked and read only for log
+// fallbacks.
 type ActivityOperationReader interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
+}
+
+// ActivityRunReader is the same read through the operation's v3 run record, for
+// an operation whose v2 row is missing. The PebbleStore implements it (it is not
+// part of database.Store); nil means no v3 lookup.
+type ActivityRunReader interface {
+	GetRunV3(id string) (*database.RunRecord, error)
 }
 
 // ActivityOpDefLookup resolves an operation def ID -- canonical or a former ID
@@ -140,7 +150,8 @@ func WithActivityOpDefs(defs ActivityOpDefLookup) ActivityHandlerOption {
 // operation's fixer, as every other read of those operations does (opaccess).
 // The engine's log lines for an owner apply carry the owner's user id, and an
 // activity row is tied to its operation by id only (the slog "system" rows carry
-// no def tag), so each read resolves the operation's row:
+// no def tag), so each read resolves the operation from its operations_v2 row
+// and, when that is gone, its v3 run record (runs may be nil: no v3 lookup):
 //
 //   - GET /operations/:id/activity answers 403 for an operation the caller may
 //     not read, before querying anything (the op-log fallback included);
@@ -149,20 +160,29 @@ func WithActivityOpDefs(defs ActivityOpDefLookup) ActivityHandlerOption {
 //   - GET /activity leaves their rows (and the digests naming them) out inside
 //     the store's scan, so its page, offset and total are counted without them.
 //
-// Without it (not wired) no operation is resolved and nothing is hidden;
+// An operation with neither record is not assumed harmless: an entry of it whose
+// type or def: tag names repairs.plan or repairs.apply is hidden (an entry with
+// no operation id at all too), so a pruned record fails closed; its plain log
+// lines carry nothing to tell them apart and are shown.
+//
+// Without the option (not wired) no operation is resolved and nothing is hidden;
 // TestWireHandlers_ActivityRepairsAccessIsInstalled pins the server's wiring.
-func WithActivityRepairsAccess(a *opaccess.Repairs, rows ActivityOperationReader) ActivityHandlerOption {
-	return func(h *ActivityHandler) { h.repairsAccess, h.opRows = a, rows }
+func WithActivityRepairsAccess(a *opaccess.Repairs, rows ActivityOperationReader, runs ActivityRunReader) ActivityHandlerOption {
+	return func(h *ActivityHandler) { h.repairsAccess, h.opRows, h.opRuns = a, rows, runs }
 }
 
-// opVisibility is one request's verdict on whether the caller may read an
-// operation's activity, remembered per operation id. The store calls it from its
-// scan and the merged read from a worker pool, so it is locked.
+// opVerdict is what one request learned about an operation id: known says a
+// record (v2 row or v3 run) was found, and ok whether the caller may read it.
+type opVerdict struct{ known, ok bool }
+
+// opVisibility is one request's judgement of which activity entries the caller
+// may read, remembering what it learned per operation id. The store calls it
+// from its scan and the merged read from a worker pool, so it is locked.
 type opVisibility struct {
 	h      *ActivityHandler
 	reader *opaccess.Reader
 	mu     sync.Mutex
-	seen   map[string]bool
+	seen   map[string]opVerdict
 }
 
 // visibility binds the check to c's request; nil when no operation can be
@@ -171,48 +191,86 @@ func (h *ActivityHandler) visibility(c *gin.Context) *opVisibility {
 	if h.opRows == nil {
 		return nil
 	}
-	return &opVisibility{h: h, reader: h.repairsAccess.For(c), seen: map[string]bool{}}
+	return &opVisibility{h: h, reader: h.repairsAccess.For(c), seen: map[string]opVerdict{}}
 }
 
-// mayRead reports whether the caller may read operation id's activity: yes for
-// an id with no operations_v2 row (not an operation a repairs check could hide)
-// and for any operation but a Repairs one; the Repairs fixer's permissions
-// decide the rest. An id whose row cannot be read is refused (fail closed) and
-// asked again next time.
-func (v *opVisibility) mayRead(id string) (bool, error) {
-	if v == nil || id == "" {
-		return true, nil
-	}
+// verdict looks an operation up: its operations_v2 row first, then, when that is
+// gone, its v3 run record (the two are mirrors, and a pruned or never-mirrored
+// half must not decide for the other). known is false only when neither exists.
+// A lookup that fails is an error and is asked again next time.
+func (v *opVisibility) verdict(id string) (opVerdict, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if ok, known := v.seen[id]; known {
-		return ok, nil
+	if r, ok := v.seen[id]; ok {
+		return r, nil
 	}
+	var r opVerdict
 	row, err := v.h.opRows.GetOperationV2(id)
 	if err != nil {
-		return false, err
+		return opVerdict{}, err
 	}
-	ok := v.reader.MayRead(row)
-	v.seen[id] = ok
-	return ok, nil
+	if row != nil {
+		r = opVerdict{known: true, ok: v.reader.MayRead(row)}
+	} else {
+		if v.h.opRuns != nil {
+			rec, err := v.h.opRuns.GetRunV3(id)
+			if err != nil {
+				return opVerdict{}, err
+			}
+			if rec != nil {
+				r = opVerdict{known: true, ok: v.reader.MayReadRun(rec)}
+			}
+		}
+	}
+	v.seen[id] = r
+	return r, nil
 }
 
-// excludes is the store's ExcludeOperation predicate: true hides the operation.
-func (v *opVisibility) excludes(id string) bool {
-	ok, err := v.mayRead(id)
-	return err != nil || !ok
+// looksRepairs reports whether an entry says it belongs to the Repairs lane: its
+// type or its def: tag names repairs.plan or repairs.apply. It is what is left to
+// go on for an operation no record exists for.
+func looksRepairs(e database.ActivityEntry) bool {
+	if opaccess.IsRepairsOp(e.Type) {
+		return true
+	}
+	for _, t := range e.Tags {
+		if def, ok := strings.CutPrefix(t, activityDefTagPrefix); ok && opaccess.IsRepairsOp(def) {
+			return true
+		}
+	}
+	return false
 }
 
-// keep returns the entries that name no operation the caller may not read, and
-// how many it dropped. Only a digest row can name an operation other than the
-// one a read asked for.
+// excludes is the store's ExcludeEntry predicate: true hides the entry. An entry
+// is hidden when it belongs to an operation whose record says the caller may not
+// read it; when no record exists for an operation (pruned, never written) the
+// entry's own type and tags decide, and an entry that looks like Repairs is
+// hidden (fail closed). So is a lookup that fails, and a Repairs-looking entry
+// that names no operation at all.
+func (v *opVisibility) excludes(e database.ActivityEntry) bool {
+	named := false
+	hide := database.EntryOperationIDs(e, func(id string) bool {
+		named = true
+		r, err := v.verdict(id)
+		if err != nil {
+			return true
+		}
+		if r.known {
+			return !r.ok
+		}
+		return looksRepairs(e)
+	})
+	return hide || (!named && looksRepairs(e))
+}
+
+// keep returns the entries the caller may read, and how many it dropped.
 func (v *opVisibility) keep(entries []database.ActivityEntry) ([]database.ActivityEntry, int) {
 	if v == nil {
 		return entries, 0
 	}
 	out := entries[:0:0]
 	for _, e := range entries {
-		if database.EntryOperationIDs(e, v.excludes) {
+		if v.excludes(e) {
 			continue
 		}
 		out = append(out, e)
@@ -220,15 +278,29 @@ func (v *opVisibility) keep(entries []database.ActivityEntry) ([]database.Activi
 	return out, len(entries) - len(out)
 }
 
-// require is mayRead that answers for the caller: 403 for an operation they may
-// not read, 500 when its row cannot be read. false means the response is written.
+// denied reports whether operation id has a record the caller may not read (an
+// error is a refusal too, with err set). An operation with no record is not
+// denied here: its entries are judged one by one (excludes).
+func (v *opVisibility) denied(id string) (bool, error) {
+	if v == nil || id == "" {
+		return false, nil
+	}
+	r, err := v.verdict(id)
+	if err != nil {
+		return true, err
+	}
+	return r.known && !r.ok, nil
+}
+
+// require answers for the caller: 403 for an operation whose record they may not
+// read, 500 when it cannot be looked up. false means the response is written.
 func (v *opVisibility) require(c *gin.Context, id string) bool {
-	ok, err := v.mayRead(id)
+	denied, err := v.denied(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to fetch operation", err)
 		return false
 	}
-	if !ok {
+	if denied {
 		httputil.RespondWithForbidden(c, "permission denied: this operation belongs to a Repairs fixer you may not use")
 		return false
 	}
@@ -422,7 +494,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	// Repairs operations the caller may not read are hidden inside the store's
 	// scan, so the page and total are counted without them.
 	if vis := h.visibility(c); vis != nil {
-		filter.ExcludeOperation = vis.excludes
+		filter.ExcludeEntry = vis.excludes
 	}
 
 	var (
@@ -649,12 +721,12 @@ func (h *ActivityHandler) ListMergedOperationActivity(c *gin.Context) {
 	if vis != nil {
 		readable := ids[:0:0]
 		for _, id := range ids {
-			ok, err := vis.mayRead(id)
+			denied, err := vis.denied(id)
 			if err != nil {
 				httputil.InternalError(c, "failed to fetch operation", err)
 				return
 			}
-			if ok {
+			if !denied {
 				readable = append(readable, id)
 			}
 		}

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
 // last-edited: 2026-10-24
 
@@ -543,7 +543,7 @@ func TestActivityFilterFieldCountIsPinned(t *testing.T) {
 		"Since", "Until", // in pactPushdownDecidable ONLY because both paths ignore them
 		"Tags", "TagAliases", "Search", "Source", // refused: not in the index key
 		"ExcludeSources", "ExcludeTiers", "ExcludeTags", "ExcludeTagAliases", // refused: not in the index key
-		"ExcludeOperation", // refused: a caller-supplied predicate over every row's operation ids, not the index key
+		"ExcludeEntry", // refused: a caller-supplied predicate over every row, not the index key
 	}, names, "ActivityFilter's fields changed; re-read pactIndexPushdownEligible")
 
 	// The gate's ALLOW-LIST is pinned too, symmetric with the field list above.

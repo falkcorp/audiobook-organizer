@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/access_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 91c4e7a2-5d38-4b06-a2f1-6e0b8d3c7a95
 // last-edited: 2026-10-24
 
@@ -135,6 +135,55 @@ func TestRepairsRun_ApproveNeedsToReadTheRun(t *testing.T) {
 	both := caller{perms: approver.perms + "," + auth.PermUsersManage, user: "u-both", method: string(auth.MethodSession)}
 	if w := do(t, r, both, http.MethodPost, "/api/v3/ops/runs/run1/approve", `{}`); w.Code != http.StatusAccepted {
 		t.Fatalf("approve by a caller who may read it = %d %s, want 202", w.Code, w.Body.String())
+	}
+}
+
+// lateRuns is a RunReader whose by-definition reads (hiddenFor's snapshot) see
+// no repairs run, and whose listing reads return repairs runs that appeared
+// after the snapshot: one on the first page, one on the last refill page, a plain
+// run between them.
+type lateRuns struct {
+	*memRuns
+	first, last database.RunRecord
+}
+
+func (l *lateRuns) ListRunsV3(q database.RunQuery) (database.RunPage, error) {
+	if q.DefID != "" {
+		return database.RunPage{}, nil
+	}
+	switch q.Cursor {
+	case "":
+		return database.RunPage{Runs: []database.RunRecord{l.first}, Next: "n1", Total: 3}, nil
+	case "n1":
+		return database.RunPage{Runs: []database.RunRecord{{ID: "plain", DefID: "library.scan", State: state.V3Succeeded}}, Next: "n2", Total: 3}, nil
+	}
+	return database.RunPage{Runs: []database.RunRecord{l.last}, Total: 3}, nil
+}
+
+// The runs a listing returns are each checked, not looked up in the snapshot
+// hiddenFor took before the page was read: a repairs run created in between
+// (on the first page or on a refill page) must not be returned.
+func TestRepairsRun_ListChecksEveryReturnedRecord(t *testing.T) {
+	d := Deps{
+		Runs: &lateRuns{
+			memRuns: &memRuns{runs: map[string]database.RunRecord{}},
+			first:   repairsRun("late-first", "needs.users", state.V3Running, "x"),
+			last:    repairsRun("late-last", "needs.users", state.V3Running, "x"),
+		},
+		RepairsAccess: opaccess.NewRepairs(fixerSet{"needs.users": usersManageFixer{}}, holdsHeader),
+	}
+	r := newRouter(New(d))
+	w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs?limit=3", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list = %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "late-") || !strings.Contains(w.Body.String(), `"plain"`) {
+		t.Fatalf("viewer's list = %s, want the plain run and neither run created after the snapshot", w.Body.String())
+	}
+	admin := caller{perms: auth.PermLibraryView + "," + auth.PermUsersManage, user: "u-adm", method: string(auth.MethodSession)}
+	w = do(t, r, admin, http.MethodGet, "/api/v3/ops/runs?limit=3", nil)
+	if !strings.Contains(w.Body.String(), "late-first") || !strings.Contains(w.Body.String(), "late-last") {
+		t.Fatalf("permitted caller's list = %s, want both runs", w.Body.String())
 	}
 }
 

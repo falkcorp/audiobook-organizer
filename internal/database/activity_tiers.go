@@ -1,5 +1,5 @@
 // file: internal/database/activity_tiers.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1e5c2a-4d3f-4a86-9e0b-2f6c8d1a5e47
 // last-edited: 2026-10-24
 
@@ -71,7 +71,7 @@ func matchesFilter(e ActivityEntry, f ActivityFilter) bool {
 		return false
 	}
 	// Last: the one predicate that can cost a lookup.
-	return !f.rejectsOperation(e)
+	return !f.rejectsEntry(e)
 }
 
 func boolInt(b bool) int {
