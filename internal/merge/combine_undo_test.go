@@ -1,5 +1,5 @@
 // file: internal/merge/combine_undo_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 0c6e2f94-7b1d-4a58-9e3c-5d8a1f27b640
 // last-edited: 2026-10-25
 
@@ -501,6 +501,48 @@ func TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedGoesToTheAbsorbedBook(t *te
 	restored := viewBook(t, store, virt)
 	assert.False(t, restored.SoftDel, "the rest of the combine is undone: the absorbed book is back")
 	assert.Equal(t, shared, restored.FilePath, "naming the file whose row it owns again")
+	j, err := ms.GetCombineJournal(res.JournalID)
+	require.NoError(t, err)
+	assert.Equal(t, CombineJournalUndone, j.Status)
+}
+
+// The undo above stops part way (its external-id step fails) after it has already
+// given the row to the absorbed book, and is retried. The retry must recognise the
+// row on the absorbed book as already undone: the row is neither on the survivor
+// nor on its recorded owner, which is purged, and a retry that refused for that
+// would block the undo for good.
+func TestCombineUndo_RetryAfterTheRowWentToTheAbsorbedBookBecauseItsOwnerWasPurged(t *testing.T) {
+	store := setupTestStore(t)
+	survivor, virt, outside := ulid.Make().String(), ulid.Make().String(), ulid.Make().String()
+	shared := "/lib/Gotham/retry-" + outside + ".m4b"
+	for _, b := range []*database.Book{
+		{ID: survivor, Title: "The Long Halloween", Format: "m4b", FilePath: "/lib/Gotham/rs-" + survivor + ".m4b"},
+		{ID: virt, Title: "Hush", Format: "m4b", FilePath: shared},
+		{ID: outside, Title: "Knightfall", Format: "m4b", FilePath: "/lib/Gotham/ro-" + outside + ".m4b"},
+	} {
+		_, err := store.CreateBook(b)
+		require.NoError(t, err)
+	}
+	rowID := ulid.Make().String()
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: rowID, BookID: outside, FilePath: shared, Format: "m4b"}))
+	require.NoError(t, store.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "gq-retry-0001", BookID: virt}))
+
+	res, err := NewService(store).CombineBooks([]string{survivor, virt}, survivor, nil)
+	require.NoError(t, err)
+	require.Contains(t, viewFiles(t, store, survivor), rowID)
+	require.NoError(t, store.DeleteBook(outside))
+
+	ms := NewService(&failNthStore{Store: store, method: "ReassignExternalID", nth: 1})
+	_, err = ms.UndoCombine(res.JournalID)
+	require.Error(t, err, "the injected failure must surface")
+	var refused *CombineUndoRefusedError
+	require.NotErrorAs(t, err, &refused, "attempt 1 passed its preconditions and failed while applying")
+	require.Contains(t, viewFiles(t, store, virt), rowID, "attempt 1 had already given the row to the absorbed book")
+
+	_, err = ms.UndoCombine(res.JournalID)
+	require.NoError(t, err, "the retry must accept the row where the first attempt put it")
+	assert.Contains(t, viewFiles(t, store, virt), rowID)
+	assert.NotContains(t, viewFiles(t, store, survivor), rowID)
 	j, err := ms.GetCombineJournal(res.JournalID)
 	require.NoError(t, err)
 	assert.Equal(t, CombineJournalUndone, j.Status)
