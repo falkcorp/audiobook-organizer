@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
-// last-edited: 2026-10-06
+// last-edited: 2026-10-25
 
 package audiobookshandler_test
 
@@ -126,6 +126,14 @@ func TestDeleteAudiobook_StatusMapping(t *testing.T) {
 		{"live carry target unreadable", fmt.Errorf("hard delete b1: %w: boom", merge.ErrCarryTargetUnreadable), http.StatusInternalServerError, "CARRY_FAILED"},
 		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
 		{"live delete owns files after carry", fmt.Errorf("hard delete b1: delete book b1: %w (1 row(s))", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
+		// The state WAS moved and the delete then failed: not the OWNS_FILES
+		// "nothing was deleted", so a client can tell the two apart.
+		{"state moved, book kept on file rows", &merge.StateMovedBookKeptError{BookID: "b1", MovedTo: "b2",
+			Err: fmt.Errorf("hard delete b1 after its state moved to b2: delete book b1: %w (1 row(s))", database.ErrBookOwnsFiles)},
+			http.StatusConflict, "STATE_MOVED_BOOK_KEPT"},
+		{"state moved, book kept on a store failure", &merge.StateMovedBookKeptError{BookID: "b1", MovedTo: "b2",
+			Err: fmt.Errorf("hard delete b1 after its state moved to b2: pebble closed")},
+			http.StatusInternalServerError, "STATE_MOVED_BOOK_KEPT"},
 		{"not found", errString("audiobook not found"), http.StatusNotFound, ""},
 		{"other", errString("pebble closed"), http.StatusInternalServerError, "DELETE_FAILED"},
 	}

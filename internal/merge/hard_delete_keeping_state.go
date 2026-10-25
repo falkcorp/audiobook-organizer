@@ -1,5 +1,5 @@
 // file: internal/merge/hard_delete_keeping_state.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 051a1636-d299-45a5-80d2-9b72255cffcf
 // last-edited: 2026-10-25
 
@@ -105,17 +105,20 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 // Errors: a probe that cannot be made wraps ErrUserStateCheckFailed; an
 // unreadable target ErrCarryTargetUnreadable; a carry that does not complete
 // ErrStateCarryIncomplete (put back, del not run); del's own error is
-// returned wrapped (after a carry the state is on carriedTo by then).
+// returned wrapped (after a carry the state is on carriedTo by then, and the
+// error is a StateMovedBookKeptError: errors.Is(err, ErrStateMovedBookKept),
+// with carriedTo set).
 //
 // precheck, when non-nil, is a condition the caller must see hold before
 // anything is written (e.g. "the book owns no book_file rows": del, a hard
 // delete, refuses such a book, but only after a carry has already moved the
 // state off it). It runs under the same hold of the merge lock as the carry
 // and del, before the carry moves anything, so what it read cannot change to
-// a merge's detriment between it and the carry. A carry's precheck refusal
-// returns wrapped in ErrCarryPrecheckRefused with nothing moved; with no
-// state to carry it runs just before del and its error is returned as is.
-// Either way errors.Is reaches the precheck's own error.
+// a merge's detriment between it and the carry. A precheck refusal is
+// returned as a *PrecheckRefusedError on both branches (with nothing moved
+// and del not run): errors.Is reaches ErrCarryPrecheckRefused and the
+// precheck's own error, and PrecheckCause returns that error unwrapped. With
+// no state to carry the precheck runs just before del, under the same lock.
 //
 // The caller must hold neither the merge lock nor a version-group lock.
 func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader, book *database.Book, precheck, del func() error) (carriedTo string, err error) {
@@ -136,7 +139,7 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 		}
 		return "", HardDeleteWithoutUserState(db, book.ID, func() error {
 			if err := precheck(); err != nil {
-				return err
+				return &PrecheckRefusedError{DoomedID: book.ID, Err: err}
 			}
 			return del()
 		})
@@ -164,7 +167,29 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 		if errors.Is(err, ErrCarryPrecheckRefused) || errors.Is(err, ErrStateCarryIncomplete) {
 			return "", err
 		}
-		return target, err
+		// The carry completed and del failed: the state is on target and the
+		// book was kept.
+		return target, &StateMovedBookKeptError{BookID: book.ID, MovedTo: target, Err: err}
 	}
 	return target, nil
 }
+
+// ErrStateMovedBookKept is what a StateMovedBookKeptError satisfies: the
+// users' listening state WAS moved to another copy, and the hard delete then
+// failed, so the book was kept without it. It is not "nothing was changed":
+// a caller that maps a refusal to "nothing deleted" must test for this first.
+var ErrStateMovedBookKept = errors.New("the listening progress was moved to another copy, but the book was not deleted")
+
+// StateMovedBookKeptError is HardDeleteKeepingUserState's error when del fails
+// after a completed carry. Its text is Err's (which already names both books);
+// errors.Is reaches ErrStateMovedBookKept and whatever del returned
+// (database.ErrBookOwnsFiles, say, from a file row a non-merge writer added
+// after the precheck).
+type StateMovedBookKeptError struct {
+	BookID, MovedTo string
+	Err             error
+}
+
+func (e *StateMovedBookKeptError) Error() string { return e.Err.Error() }
+
+func (e *StateMovedBookKeptError) Unwrap() []error { return []error{ErrStateMovedBookKept, e.Err} }

@@ -1,7 +1,7 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
-// last-edited: 2026-10-05
+// last-edited: 2026-10-25
 
 package merge
 
@@ -90,6 +90,39 @@ var errCarryCheckFailed = errors.New("check failed")
 // the carry. It wraps the precheck's own error. Nothing was moved or deleted.
 var ErrCarryPrecheckRefused = errors.New("merge: carry refused by its precheck")
 
+// PrecheckRefusedError is the error CarryStateThenHardDelete (and the
+// no-state branch of HardDeleteKeepingUserState) returns when the caller's
+// precheck refused. It satisfies errors.Is for ErrCarryPrecheckRefused AND for
+// whatever the precheck itself returned, and PrecheckCause hands that cause
+// back unwrapped, so a caller can report the precheck's own message instead of
+// this package's wrapper text. Nothing was moved or deleted.
+type PrecheckRefusedError struct {
+	// DoomedID is the book the delete was for; KeepID the book the state would
+	// have moved to ("" when there was no state to move).
+	DoomedID, KeepID string
+	// Err is what the precheck returned.
+	Err error
+}
+
+func (e *PrecheckRefusedError) Error() string {
+	if e.KeepID == "" {
+		return fmt.Sprintf("merge: hard delete refused by its precheck: %s: %v", e.DoomedID, e.Err)
+	}
+	return fmt.Sprintf("%v: %s -> %s: %v", ErrCarryPrecheckRefused, e.DoomedID, e.KeepID, e.Err)
+}
+
+func (e *PrecheckRefusedError) Unwrap() []error { return []error{ErrCarryPrecheckRefused, e.Err} }
+
+// PrecheckCause returns what the caller's precheck returned when err is (or
+// wraps) a PrecheckRefusedError, and nil otherwise.
+func PrecheckCause(err error) error {
+	var pe *PrecheckRefusedError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return nil
+}
+
 // ErrSyncRedirectNotCleared is returned by CarryStateBetweenLiveBooks when the
 // state moved but the ABS sync redirect between the two books could not be
 // cleared. Unlike ErrStateCarryIncomplete, the state IS on the target book.
@@ -121,7 +154,7 @@ func CarryStateThenHardDelete(db UserProgressMerger, keepID, doomedID string, pr
 	defer mergeSerializeMu.Unlock()
 	if precheck != nil {
 		if err := precheck(); err != nil {
-			return fmt.Errorf("%w: %s -> %s: %w", ErrCarryPrecheckRefused, doomedID, keepID, err)
+			return &PrecheckRefusedError{DoomedID: doomedID, KeepID: keepID, Err: err}
 		}
 	}
 	if err := carryStateLocked(db, keepID, doomedID); err != nil {

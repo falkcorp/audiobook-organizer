@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-bulk-delete-progress-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2d6f9b84-7a13-4c5e-b0d8-e4a1c37f5962 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -19,8 +19,9 @@ Audiobookshelf, so the book itself no longer showed it.
 
 This change makes the bulk delete look at the files **first**. A book that still
 has files is skipped before anything about its progress is touched. The delete
-of one book at a time had the same weak spot in a much smaller form (see below)
-and gets the same treatment.
+of one book at a time and the purge of trashed books had the same weak spot in a
+much smaller form (see below) and get the same treatment. All three now share
+one check, so they cannot disagree about what counts as "still has files".
 
 ## What changed
 
@@ -36,6 +37,20 @@ and gets the same treatment.
 - The check is made again at the last moment, inside the same protected step
   that moves the progress, so a file attached to a book a moment after the first
   look is also caught before any progress moves.
+- The shared check also counts files kept for older versions of a book ("retired"
+  files). Those cannot be moved to another book, so a book that has only those is
+  refused too, and the message says they cannot be moved instead of suggesting
+  to move them. Before, such a book passed the first look, had its progress
+  moved, and was then refused.
+- The purge of trashed books (the nightly clean-up and "discard progress and
+  purge") does the same last-moment check before it moves any progress.
+- If a file does slip in after that last check, the message now says plainly that
+  the progress was moved to another copy and the book was kept, instead of saying
+  nothing was deleted.
+- Bulk hard delete now needs the "delete" permission, the same as deleting one
+  book. Before, anyone allowed to edit metadata could permanently delete books
+  through the bulk route. Updating, soft deleting and restoring in bulk are
+  unchanged.
 - Deleting a single book now does the same last-moment check. Before, it
   looked at the files once, then took the protected step without looking again,
   so a file attached in that gap could still end with the progress moved and the
@@ -62,3 +77,6 @@ that copy, and is gone only if that copy was later removed.
   step) could still slip through. That window is very small and the store's own refusal
   is the final guard. If it happens, the message for that book says the progress
   was moved and names where.
+- Other clean-up jobs (the duplicate clean-up and the iTunes regroup) check for
+  files in a similar way and have the same retired-files gap and last-moment
+  gap. They are filed as follow-up work, not changed here.

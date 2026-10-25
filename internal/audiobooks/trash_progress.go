@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -49,6 +49,10 @@ type purgeOutcome struct {
 	kind         purgeKind
 	filesDeleted int
 	errs         []string
+	// stateMovedTo names the copy the book's users' listening state was
+	// carried to when the book was nevertheless kept (a delete that failed
+	// after a completed carry). "" when nothing was moved.
+	stateMovedTo string
 }
 
 // add folds one book's outcome into r. The caller serializes calls.
@@ -411,6 +415,13 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 	case purgeOwnsFiles:
 		if detail == "" {
 			detail = "the purge never deletes a book that owns file rows"
+		}
+		if out.stateMovedTo != "" {
+			// A file row landed after the check under the merge lock and the
+			// delete refused it AFTER the carry: not "nothing was deleted",
+			// the state is on another copy (merge.ErrStateMovedBookKept).
+			return nil, &merge.StateMovedBookKeptError{BookID: book.ID, MovedTo: out.stateMovedTo,
+				Err: fmt.Errorf("purge %s: %s: %w", book.ID, detail, database.ErrBookOwnsFiles)}
 		}
 		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, database.ErrBookOwnsFiles, detail)
 	case purgeKeptHasProgress:

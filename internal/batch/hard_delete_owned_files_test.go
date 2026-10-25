@@ -1,5 +1,5 @@
 // file: internal/batch/hard_delete_owned_files_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b8e2d71-3c94-4a06-9f1d-7e2a60c4b839
 // last-edited: 2026-10-25
 
@@ -7,7 +7,6 @@ package batch
 
 import (
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -167,26 +166,29 @@ func TestExecuteOperations_HardDeleteMixedBatchSkipsOnlyBooksOwningFiles(t *test
 	require.Equal(t, 40, moved.ProgressPct)
 }
 
-// gainsFileStore adds a book_file row to bookID right after the FIRST
-// GetBookFiles of it returns: a file that lands after the batch's first check
-// and before the merge lock the carry runs under.
+// gainsFileStore adds a book_file row to bookID right after its gainOnCall-th
+// read of the book's files returns (1 = after the batch's first check and
+// before the merge lock the carry runs under; 2 = after the check under that
+// lock). The files are read through GetBookFilesIncludingRetired, the reader
+// database.CheckBookOwnsNoFiles uses.
 type gainsFileStore struct {
 	*database.PebbleStore
-	t      *testing.T
-	bookID string
+	t          *testing.T
+	bookID     string
+	gainOnCall int
 
 	mu    sync.Mutex
 	calls int
 }
 
-func (g *gainsFileStore) GetBookFiles(id string) ([]database.BookFile, error) {
-	rows, err := g.PebbleStore.GetBookFiles(id)
+func (g *gainsFileStore) GetBookFilesIncludingRetired(id string) ([]database.BookFile, error) {
+	rows, err := g.PebbleStore.GetBookFilesIncludingRetired(id)
 	if id == g.bookID {
 		g.mu.Lock()
 		g.calls++
-		first := g.calls == 1
+		gain := g.calls == g.gainOnCall
 		g.mu.Unlock()
-		if first {
+		if gain {
 			require.NoError(g.t, g.PebbleStore.CreateBookFile(&database.BookFile{
 				ID: ulid.Make().String(), BookID: id, FilePath: "/tmp/owned/gained.m4b", Format: "m4b",
 			}))
@@ -196,26 +198,110 @@ func (g *gainsFileStore) GetBookFiles(id string) ([]database.BookFile, error) {
 }
 
 // 3: a file gained after the first check is caught by the check under the
-// merge lock, before the carry moves anything.
+// merge lock, before the carry moves anything, and reported in exactly the
+// words of the first check (not wrapped in the merge package's text).
 func TestExecuteOperations_HardDeleteCatchesFileGainedBeforeTheLock(t *testing.T) {
 	f := newOwnedFilesFixture(t)
 	f.book(t, "keep", true, "g1")
 	f.book(t, "gains-file", false, "g1")
 	f.state(t, "gains-file")
-	store := &gainsFileStore{PebbleStore: f.s, t: t, bookID: "gains-file"}
+	store := &gainsFileStore{PebbleStore: f.s, t: t, bookID: "gains-file", gainOnCall: 1}
 
 	resp := NewBatchService(store).ExecuteOperations(hardDeleteOps("gains-file"))
 
 	require.Equal(t, 0, resp.Success, "%+v", resp.Results)
 	require.Equal(t, 1, resp.Failed)
 	r := resultFor(t, resp, "gains-file")
-	require.Contains(t, r.Error, database.ErrBookOwnsFiles.Error())
-	require.True(t, strings.HasPrefix(r.Error, "hard delete gains-file: "), "same wording as the first check, not the carry's wrapper: %s", r.Error)
-	require.Contains(t, r.Error, "soft-delete it instead, or move its files to another book first")
+	require.Equal(t, "hard delete gains-file: book still owns book_file rows (1 row(s)); soft-delete it instead, or move its files to another book first", r.Error)
 	require.GreaterOrEqual(t, store.calls, 2, "the files were checked again under the merge lock")
 
 	require.True(t, f.exists("gains-file"))
 	src := f.stateOf(t, "gains-file")
+	require.NotNil(t, src, "the source keeps its state")
+	require.Equal(t, 40, src.ProgressPct)
+	require.Nil(t, f.stateOf(t, "keep"), "nothing was carried to the target")
+}
+
+// 3b: the same race for a book with no state to carry (the no-carry branch of
+// the merge helper): refused under the lock, in the same words.
+func TestExecuteOperations_HardDeleteWithoutStateCatchesFileGainedBeforeTheLock(t *testing.T) {
+	f := newOwnedFilesFixture(t)
+	f.book(t, "gains-file", false, "")
+	store := &gainsFileStore{PebbleStore: f.s, t: t, bookID: "gains-file", gainOnCall: 1}
+
+	resp := NewBatchService(store).ExecuteOperations(hardDeleteOps("gains-file"))
+
+	require.Equal(t, 0, resp.Success, "%+v", resp.Results)
+	require.Equal(t, "hard delete gains-file: book still owns book_file rows (1 row(s)); soft-delete it instead, or move its files to another book first",
+		resultFor(t, resp, "gains-file").Error)
+	require.GreaterOrEqual(t, store.calls, 2, "the files were checked again under the merge lock")
+	require.True(t, f.exists("gains-file"))
+}
+
+// 3c: a file that lands after even the check under the lock (a writer that is
+// not a merge does not take it) is refused by DeleteBook AFTER the carry. The
+// item says the state was moved, and where, instead of reading like a clean
+// refusal.
+func TestExecuteOperations_HardDeleteLateRefusalAfterCarrySaysStateMoved(t *testing.T) {
+	f := newOwnedFilesFixture(t)
+	f.book(t, "keep", true, "g1")
+	f.book(t, "late-file", false, "g1")
+	f.state(t, "late-file")
+	store := &gainsFileStore{PebbleStore: f.s, t: t, bookID: "late-file", gainOnCall: 2}
+
+	resp := NewBatchService(store).ExecuteOperations(hardDeleteOps("late-file"))
+
+	require.Equal(t, 0, resp.Success, "%+v", resp.Results)
+	require.Equal(t, 1, resp.Failed)
+	r := resultFor(t, resp, "late-file")
+	require.Contains(t, r.Error, "after its state moved to keep")
+	require.Contains(t, r.Error, database.ErrBookOwnsFiles.Error())
+	require.True(t, f.exists("late-file"), "the book is kept")
+	moved := f.stateOf(t, "keep")
+	require.NotNil(t, moved, "its state was moved before DeleteBook refused")
+	require.Equal(t, 40, moved.ProgressPct)
+}
+
+// retire gives holderID one retired book_file row (re-keyed from a shell book
+// into it), so the holder owns only a retired row.
+func (f *ownedFilesFixture) retire(t *testing.T, holderID string) {
+	t.Helper()
+	f.book(t, "shell-"+holderID, false, "")
+	row := &database.BookFile{ID: ulid.Make().String(), BookID: "shell-" + holderID, FilePath: "/tmp/owned/" + holderID + "-retired.m4b", Format: "m4b"}
+	require.NoError(t, f.s.CreateBookFile(row))
+	v, err := f.s.CreateBookVersion(&database.BookVersion{
+		BookID: holderID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
+		RetiredFromBookID: "shell-" + holderID, RetireOpID: "op-1",
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.s.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: "shell-" + holderID}}, holderID, v.ID))
+}
+
+// 4: DeleteBook refuses a book holding only retired rows, but GetBookFiles
+// does not list them, so a check made with it let the carry run first. A book
+// with only a retired row and listening state is refused with nothing carried,
+// in words that do not tell the user to move files that cannot be moved.
+func TestExecuteOperations_HardDeleteOfBookWithOnlyRetiredRowsLeavesStateUntouched(t *testing.T) {
+	f := newOwnedFilesFixture(t)
+	f.book(t, "keep", true, "g1")
+	f.book(t, "holder", false, "g1")
+	f.retire(t, "holder")
+	f.state(t, "holder")
+	live, err := f.s.GetBookFiles("holder")
+	require.NoError(t, err)
+	require.Empty(t, live, "the holder's only row is retired: GetBookFiles does not list it")
+
+	resp := NewBatchService(f.s).ExecuteOperations(hardDeleteOps("holder"))
+
+	require.Equal(t, 0, resp.Success, "%+v", resp.Results)
+	require.Equal(t, 1, resp.Failed)
+	r := resultFor(t, resp, "holder")
+	require.Contains(t, r.Error, database.ErrBookOwnsFiles.Error())
+	require.Contains(t, r.Error, "retired")
+	require.Contains(t, r.Error, "cannot be moved")
+	require.NotContains(t, r.Error, "move its files to another book first")
+	require.True(t, f.exists("holder"))
+	src := f.stateOf(t, "holder")
 	require.NotNil(t, src, "the source keeps its state")
 	require.Equal(t, 40, src.ProgressPct)
 	require.Nil(t, f.stateOf(t, "keep"), "nothing was carried to the target")
