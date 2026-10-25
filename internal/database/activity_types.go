@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // Package database — activity log types and helpers shared by the Pebble
 // activity store, activity.Service and their callers. Extracted from the
@@ -121,12 +121,17 @@ type ActivityFilter struct {
 	// ExcludeEntry, when set, hides every entry it returns true for. It is how a
 	// read decides per caller what it may show without the page, offset and total
 	// being counted before the hiding (the Repairs lane's operations are readable
-	// only to callers who may use the fixer). It sees the whole entry, not just an
-	// operation id, so a caller can refuse a row whose operation it cannot resolve
-	// but whose type or tags say what it is; EntryOperationIDs lists the
-	// operations an entry belongs to. The function is called from the scan, so it
-	// must be cheap (memoise a lookup) and safe to call from one goroutine at a
-	// time. Only Query and QueryWithPartial honour it; GetDistinctSources does not
+	// only to callers who may use the fixer). It sees every field a filter reads
+	// (tier, type, level, source, operation id, book id, summary, tags), so a
+	// caller can refuse a row whose operation it cannot resolve but whose type or
+	// tags say what it is; EntryOperationIDs lists the operations an entry belongs
+	// to. It does NOT reliably see Details: the filter-index path decodes only the
+	// fields it filters on and hands the predicate an entry whose Details is nil,
+	// while the tier scan hands it the whole row. A predicate must therefore never
+	// depend on Details, and a read that has to look inside Details (a daily
+	// digest's items) does so on the page after the query, not here. The function
+	// is called from the scan, so it must be cheap (memoise a lookup) and safe to
+	// call from one goroutine at a time. Only Query and QueryWithPartial honour it; GetDistinctSources does not
 	// read it. A non-nil value is a live predicate and refuses the id-index
 	// pushdown (see pactPushdownDecidable), so the scan applies it to every
 	// candidate row.
@@ -259,6 +264,14 @@ type DigestItem struct {
 	// Empty for digests compacted before 2026-05-20.
 	Tags []string `json:"tags,omitempty"`
 }
+
+// DigestTier and DailyDigestType are the tier and type of the row CompactByDay
+// writes for each day it folds. The row names no operation of its own; what it
+// folded sits in Details["items"] (see DigestItem).
+const (
+	DigestTier      = "digest"
+	DailyDigestType = "daily_digest"
+)
 
 // DigestDetails is the JSON structure stored in a daily digest row's details column.
 type DigestDetails struct {

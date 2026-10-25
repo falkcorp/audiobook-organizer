@@ -1,7 +1,7 @@
 // file: internal/database/activity_exclude_operation_test.go
-// version: 1.1.0
+// version: 1.0.0
 // guid: 6b1e84c3-d927-4f50-a3b8-5e0c7d219f64
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package handlers
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"runtime"
 	"slices"
 	"sort"
@@ -31,6 +32,10 @@ import (
 // statusClientClosedRequest is nginx's 499: the client went away before the
 // response was written. Not in net/http, so it is spelled out here.
 const statusClientClosedRequest = 499
+
+// activityLog routes this file's own log lines through internal/logger, which
+// strips control characters from values; the slog guard forbids new direct calls.
+var activityLog = logger.New("activity")
 
 // abortIfClientGone reports whether err is a cancelled/expired request context
 // and, when it is, ends the request with 499 and no body.
@@ -157,13 +162,24 @@ func WithActivityOpDefs(defs ActivityOpDefLookup) ActivityHandlerOption {
 //     not read, before querying anything (the op-log fallback included);
 //   - POST /operations/activity/merged leaves such members out of the read and of
 //     operation_ids, and answers 403 when every member is one;
-//   - GET /activity leaves their rows (and the digests naming them) out inside
-//     the store's scan, so its page, offset and total are counted without them.
+//   - GET /activity leaves their rows (and the Summarize rows naming them) out
+//     inside the store's scan, so its page, offset and total are counted
+//     without them. A daily digest (CompactByDay folds a day's rows into one
+//     row whose Details.items copy each folded row's type, operation id,
+//     summary and tags) is not hidden: it names no operation itself, and
+//     hiding it would hide the day's other activity. Its items are redacted on
+//     the returned page instead, by the same verdicts, which leaves the page,
+//     offset and total as the store counted them. Its counts, original_count
+//     and tag_counts are aggregates over every row of the day and are not
+//     redacted: they say how many rows of a type were folded, nothing more.
 //
 // An operation with neither record is not assumed harmless: an entry of it whose
 // type or def: tag names repairs.plan or repairs.apply is hidden (an entry with
 // no operation id at all too), so a pruned record fails closed; its plain log
-// lines carry nothing to tell them apart and are shown.
+// lines carry nothing to tell them apart and are shown. So is an operation whose
+// record cannot be read (a corrupt row): it falls back to the same type and tag
+// test, and the failure is logged once per operation per request, rather than
+// hiding every row of an unrelated operation from every caller.
 //
 // Without the option (not wired) no operation is resolved and nothing is hidden;
 // TestWireHandlers_ActivityRepairsAccessIsInstalled pins the server's wiring.
@@ -183,6 +199,9 @@ type opVisibility struct {
 	reader *opaccess.Reader
 	mu     sync.Mutex
 	seen   map[string]opVerdict
+	// failed holds the operation ids whose lookup errored this request: they are
+	// not asked again, and each is logged once.
+	failed map[string]struct{}
 }
 
 // visibility binds the check to c's request; nil when no operation can be
@@ -191,7 +210,7 @@ func (h *ActivityHandler) visibility(c *gin.Context) *opVisibility {
 	if h.opRows == nil {
 		return nil
 	}
-	return &opVisibility{h: h, reader: h.repairsAccess.For(c), seen: map[string]opVerdict{}}
+	return &opVisibility{h: h, reader: h.repairsAccess.For(c), seen: map[string]opVerdict{}, failed: map[string]struct{}{}}
 }
 
 // verdict looks an operation up: its operations_v2 row first, then, when that is
@@ -243,17 +262,21 @@ func looksRepairs(e database.ActivityEntry) bool {
 
 // excludes is the store's ExcludeEntry predicate: true hides the entry. An entry
 // is hidden when it belongs to an operation whose record says the caller may not
-// read it; when no record exists for an operation (pruned, never written) the
-// entry's own type and tags decide, and an entry that looks like Repairs is
-// hidden (fail closed). So is a lookup that fails, and a Repairs-looking entry
-// that names no operation at all.
+// read it; when no record exists for an operation (pruned, never written), or it
+// cannot be read, the entry's own type and tags decide, and an entry that looks
+// like Repairs is hidden (fail closed). So is a Repairs-looking entry that names
+// no operation at all.
+//
+// It reads only the fields of e a filter reads (never Details; see
+// ActivityFilter.ExcludeEntry), because the store's filter-index path does not
+// hand it Details.
 func (v *opVisibility) excludes(e database.ActivityEntry) bool {
 	named := false
 	hide := database.EntryOperationIDs(e, func(id string) bool {
 		named = true
-		r, err := v.verdict(id)
+		r, err := v.lookup(id)
 		if err != nil {
-			return true
+			return looksRepairs(e)
 		}
 		if r.known {
 			return !r.ok
@@ -261,6 +284,106 @@ func (v *opVisibility) excludes(e database.ActivityEntry) bool {
 		return looksRepairs(e)
 	})
 	return hide || (!named && looksRepairs(e))
+}
+
+// lookup is verdict for the activity listing, where a failed read must not decide
+// the whole operation: the first failure for an id is logged, remembered for the
+// request, and every later ask returns it without reading the store again. The
+// caller falls back to the entry's own type and tags.
+func (v *opVisibility) lookup(id string) (opVerdict, error) {
+	v.mu.Lock()
+	_, bad := v.failed[id]
+	v.mu.Unlock()
+	if bad {
+		return opVerdict{}, errOpLookupFailed
+	}
+	r, err := v.verdict(id)
+	if err == nil {
+		return r, nil
+	}
+	v.mu.Lock()
+	_, again := v.failed[id]
+	v.failed[id] = struct{}{}
+	v.mu.Unlock()
+	if !again {
+		activityLog.Warn("operation lookup failed; judging its rows by type and tags: operation_id=%s: %v",
+			logger.SanitizeLogValue(id), err)
+	}
+	return opVerdict{}, errOpLookupFailed
+}
+
+// errOpLookupFailed marks an operation whose record could not be read earlier in
+// this request; the underlying error was logged where it happened.
+var errOpLookupFailed = errors.New("operation lookup failed")
+
+// redactDigest removes from a daily digest's Details.items every item the caller
+// may not read, and returns e otherwise untouched. CompactByDay copies each row it
+// folds into an item (type, tier, operation id, summary, tags, and for a warn or
+// error row its error details), so the log line of a hidden Repairs run -- the
+// owner-apply line naming the owner's user id, a failed run's error naming its
+// target -- survives there after the row itself is deleted. The digest row names
+// no operation itself, so the store's predicate cannot see it (and on the
+// filter-index path has no Details to look at); the page is redacted instead.
+// Only items go: the row, its position and the count of rows stay, so the page,
+// offset and total the store computed remain right.
+//
+// An item is judged the way a row is (excludes), from its type, operation id and
+// tags. One that is not a JSON object cannot be judged and is dropped. The
+// returned entry has its own Details map and items slice; the one passed in
+// is never written to, because a store may hand out a map it keeps.
+func (v *opVisibility) redactDigest(e database.ActivityEntry) database.ActivityEntry {
+	if v == nil || (e.Tier != database.DigestTier && e.Type != database.DailyDigestType) {
+		return e
+	}
+	raw, present := e.Details["items"]
+	if !present || raw == nil {
+		return e
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		// A typed slice (an in-process store keeping DigestItem values): take
+		// its JSON form, which is what a client is sent anyway.
+		b, err := json.Marshal(raw)
+		if err == nil {
+			err = json.Unmarshal(b, &items)
+		}
+		if err != nil {
+			items = nil // unreadable: nothing in it can be shown
+		}
+	}
+	kept := make([]any, 0, len(items))
+	for _, it := range items {
+		m, isObj := it.(map[string]any)
+		if !isObj || v.excludes(digestItemEntry(m)) {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	details := maps.Clone(e.Details)
+	details["items"] = kept
+	e.Details = details
+	return e
+}
+
+// digestItemEntry is the part of a DigestItem that excludes reads, as the entry
+// the item was folded from. Source is left empty on purpose: the Summarize
+// row's op: tags are not a digest item's business, only its own operation_id.
+func digestItemEntry(m map[string]any) database.ActivityEntry {
+	e := database.ActivityEntry{}
+	e.Type, _ = m["type"].(string)
+	e.Tier, _ = m["tier"].(string)
+	e.OperationID, _ = m["operation_id"].(string)
+	switch tags := m["tags"].(type) {
+	case []any:
+		for _, t := range tags {
+			if s, ok := t.(string); ok {
+				e.Tags = append(e.Tags, s)
+			}
+		}
+	case []string:
+		e.Tags = tags
+	}
+	return e
 }
 
 // keep returns the entries the caller may read, and how many it dropped.
@@ -493,7 +616,8 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 
 	// Repairs operations the caller may not read are hidden inside the store's
 	// scan, so the page and total are counted without them.
-	if vis := h.visibility(c); vis != nil {
+	vis := h.visibility(c)
+	if vis != nil {
 		filter.ExcludeEntry = vis.excludes
 	}
 
@@ -525,6 +649,14 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	// Ensure entries is always a JSON array, never null.
 	if entries == nil {
 		entries = []database.ActivityEntry{}
+	}
+
+	// A daily digest carries the rows it folded; take out those the caller may
+	// not read. Same count of rows, so total and paging are untouched.
+	if vis != nil {
+		for i := range entries {
+			entries[i] = vis.redactDigest(entries[i])
+		}
 	}
 
 	// partial: the store stopped at its scan budget before filling the page or

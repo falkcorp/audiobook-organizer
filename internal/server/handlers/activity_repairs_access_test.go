@@ -1,12 +1,15 @@
 // file: internal/server/handlers/activity_repairs_access_test.go
 // version: 1.0.0
 // guid: c7d2f9a1-3b84-4e60-91a5-0d6e8f2b4c37
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,9 +69,27 @@ type v3Runs map[string]*database.RunRecord
 func (m v3Runs) GetRunV3(id string) (*database.RunRecord, error) { return m[id], nil }
 
 const (
-	marker      = "REPAIRS-LOG-LINE"
-	plainMarker = "PLAIN-LOG-LINE"
+	marker         = "REPAIRS-LOG-LINE"
+	plainMarker    = "PLAIN-LOG-LINE"
+	corruptOp      = "corrupt"
+	corruptPlain   = "CORRUPT-OP-PLAIN-LINE"
+	corruptRepairs = "CORRUPT-OP-REPAIRS-LINE"
 )
+
+// failingRows is v2Rows whose read of corruptOp fails (an undecodable record),
+// counting how often it was asked.
+type failingRows struct {
+	v2Rows
+	asked int
+}
+
+func (m *failingRows) GetOperationV2(id string) (*database.OperationV2Row, error) {
+	if id == corruptOp {
+		m.asked++
+		return nil, errors.New("operations_v2 row cannot be decoded")
+	}
+	return m.v2Rows[id], nil
+}
 
 func activityRouter(rows ActivityOperationReader, runs ActivityRunReader) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -83,6 +104,10 @@ func activityRouter(rows ActivityOperationReader, runs ActivityRunReader) *gin.E
 		{Summary: plainMarker + " scan", Type: "library.scan", OperationID: "scan", Tags: []string{"def:library.scan"}},
 		// A repairs-looking row that names no operation at all.
 		{Summary: marker + " orphan", Type: repairs.ApplyOpID, Tags: []string{"def:" + repairs.ApplyOpID}},
+		// Two rows of an operation whose record cannot be read (corruptOp): one
+		// of a plain definition, one that says repairs.
+		{Summary: corruptPlain, Type: "library.scan", OperationID: corruptOp, Tags: []string{"def:library.scan"}},
+		{Summary: corruptRepairs, Type: repairs.ApplyOpID, OperationID: corruptOp, Tags: []string{"def:" + repairs.ApplyOpID}},
 	}}
 	h := NewActivityHandler(log, nil, WithActivityRepairsAccess(
 		opaccess.NewRepairs(activityFixers{"needs.users": activityFixer{}}, func(c *gin.Context, p auth.Permission) bool {
@@ -162,5 +187,37 @@ func TestActivityRepairsAccess_OtherOperationsUnchanged(t *testing.T) {
 	w := activityGet(r, http.MethodGet, "/operations/scan/activity", viewerPerms, "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), plainMarker+" scan") {
 		t.Fatalf("plain op = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// An operation whose record cannot be read must not take every row of an
+// unrelated operation out of the log, for admins included, and must not stay
+// silent: its rows are judged by their own type and def: tag (the Repairs-looking
+// one is hidden, the plain one shown), the store is asked once for it however many
+// rows it has, and the failure is logged once. The by-id read still fails closed.
+func TestActivityRepairsAccess_UnreadableRecordFallsBackToTheEntryAndLogsOnce(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(prev)
+
+	rows := &failingRows{v2Rows: v2Rows{}}
+	r := activityRouter(rows, v3Runs{})
+	for _, perms := range []string{viewerPerms, adminPerms} {
+		rows.asked = 0
+		logged.Reset()
+		w := activityGet(r, http.MethodGet, "/activity", perms, "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), corruptPlain) || strings.Contains(w.Body.String(), corruptRepairs) {
+			t.Fatalf("%s: /activity = %d %s, want the plain row of the unreadable operation and not its repairs row", perms, w.Code, w.Body.String())
+		}
+		if rows.asked != 1 {
+			t.Fatalf("%s: the unreadable record was read %d times in one request, want once", perms, rows.asked)
+		}
+		if n := strings.Count(logged.String(), "operation lookup failed"); n != 1 || !strings.Contains(logged.String(), corruptOp) {
+			t.Fatalf("%s: the failure was logged %d times (%q), want once, naming the operation", perms, n, logged.String())
+		}
+	}
+	if w := activityGet(r, http.MethodGet, "/operations/"+corruptOp+"/activity", adminPerms, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("by-id read of the unreadable operation = %d, want a 500 (fails closed)", w.Code)
 	}
 }
