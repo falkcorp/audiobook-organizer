@@ -25,9 +25,11 @@ clears the in-memory index.
 
 Nothing retires a row yet, so the retired-version rules themselves cannot fire
 on production. The write-path changes in this entry do run there as soon as it
-merges. Every book-file create, update and delete now commits under one
-process-wide mutex, so those writers no longer run in parallel with each other
-at the commit itself. The book-file deletes and the segment and fingerprint
+merges. Every book-file create, batch upsert, move, delete and path-key claim, and the
+segment and fingerprint wipes, now commits under one process-wide mutex, so those
+writers no longer run in parallel with each other at the commit itself. The
+in-place rewrites (`PatchBookFileFields` and the scan-cache stamp) are not
+covered: they write one row under its book's stripe only. The book-file deletes and the segment and fingerprint
 wipes apply without a sync and fsync the write-ahead log once afterwards, so a
 failed fsync now reports durability unknown instead of a plain error.
 `tag-backfill` writes 32-row chunks of whole books, about eight times as many
@@ -35,3 +37,10 @@ batch writes and log fsyncs as before (roughly 23,000 instead of 3,000 on a
 750,000-row library). `rewrite-path-prefix` groups its work by book, and a
 combine refuses with an error on a store that cannot say whether a retired
 version exists, where it used to proceed.
+
+The combine's planner for a single-file book's own file (`planVirtualFile`) also
+behaves differently on production. With the in-memory index serving it now reads
+the complete list of rows at the path, where it used to read only the one row the
+path index names, and it prefers the target book's own row. A failed read of the
+survivor's file rows now refuses the combine, where it used to be read as "no
+rows".
