@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-decisions-appendix.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: e75847e4-760a-4d0d-8527-1eeffece31f9 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -26,3 +26,4 @@ From 2026-10-25 12:53 EDT to 2026-10-26 12:53 EDT (or until you say otherwise), 
 | D15 | 10-25 18:05 | Whisper: one audiobook intro loops forever and had all four Mac workers stuck since 10-24 01:06. Restart now and clean up? | Restart the 4 workers, stop the orphaned looping processes, delete 1,260 leaked clip folders (7.4 GB) · Wait for the code fix | **Restart + clean up now** (done 18:00) | Workers were useless while stuck; no live run starts until the code fix ships |
 | D16 | 10-25 18:05 | Whisper code fix scope | Per-clip time limit in a killable child + timeout as a per-file result, permanent after 2 strikes; split timed-out batches; health shows busy time; log real errors · Just add a timeout | **Full fix (A–E), 2 strikes then permanent skip** | A plain timeout leaves the loop retried forever; 2 strikes stops the poison file without a manual prod write |
 | D17 | 10-25 18:05 | #4159 re-scan: 1 real title left (split across two comment lines), 3 weak lookalikes | Fix all 4 in a new squashed PR · Fix the blocker only · Amend + force-push | **Fix all 4, new squashed PR** | Force-push is banned; a fix-up commit would land the bad commit on main |
+| D18 | 10-25 19:12 | #4158 review blocker: flagging absent files with the existing "missing" flag lets a version with missing chapters win the primary election (that flag already means "superseded" elsewhere). | (a) separate "hash found it absent" marker read only by this job · (b) new superseded marker + backfill + election fix · (c) hold the apply | **(a) separate marker**, plus mount check, preview-only Fingerprint button, per-row report | Narrowest change that cannot affect elections or other readers |
