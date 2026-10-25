@@ -1,9 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-25-collections-per-viewer-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 5b8e2d71-3c4a-4f06-9a17-d2e6c0b94f83 -->
 <!-- last-edited: 2026-10-25 -->
 
 # Smart collections show each person their own listening
+
+Pull request: https://github.com/falkcorp/audiobook-organizer/pull/4155 (merge commit added at merge).
 
 ## Executive Summary
 
