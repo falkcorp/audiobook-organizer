@@ -27,3 +27,23 @@ reports a `blocked` count. Removed with the owner model: the 403
 `evaluation_blocked` response fields and 409 `COLLECTION_OWNER_MISSING_PER_USER_QUERY`,
 the startup owner backfill, and the "Take ownership" checkbox and blocked banner on
 the collection page. `created_by_user_id` is attribution only.
+
+### Fixed
+
+A per-viewer collection whose members could not be worked out (search index not
+ready, a query that no longer parses, an unreadable listening-state row) is flagged
+in the native response with `members_unavailable` and `members_unavailable_message`,
+shown as a warning on the collection page, and logged once per kind per minute,
+instead of passing for a collection with no matches. A query that stopped parsing
+counts as per-viewer, so a list it holds is never served on either surface; the
+store itself drops a per-viewer collection's stored list on every create and update
+(this closes the Audiobookshelf rename writing a creator's list back), and the startup
+purge fails closed the same way and keeps going past a row the store refuses. A rename
+or description-only update now answers with the caller's own members. The page no
+longer offers Materialize for a per-user query.
+
+A viewer's listening state is read in one scan per request instead of a point read per
+candidate book per collection, and the 10,000-result window on a per-viewer evaluation
+is gone: a library of any size is evaluated in full. Evaluations are bounded across
+requests, and a failed state read is an error, not an empty history. The
+Audiobookshelf `lastUpdate` of a per-viewer collection is the time of the request.

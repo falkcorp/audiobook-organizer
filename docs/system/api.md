@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -174,8 +174,23 @@ each row of `GET /collections`, and on the create, update and materialize respon
 and are never stored: the stored row's `materialized_book_ids` is empty. Rows written
 before 2026-10-25 held the creator's answer; they are cleared at start (the
 `collection-peruser-purge` step, logged to the system activity log) and the read
-paths never serve a leftover list. An evaluation that cannot run (the search index is
-closed or rebuilding) answers no members, never the stored list. A background or
+paths never serve a leftover list, and the store itself drops the list of such a
+collection on every create and update, whichever route writes it. A query that no
+longer parses counts as per-viewer (nobody can say it reads no per-user state), so a
+list it holds is never served either. An evaluation that cannot run (the search index
+is closed or rebuilding, the query no longer parses, or the caller's state could not
+be read) answers no members, never the stored list, and says so: the collection in the
+response carries `members_unavailable: true` and a `members_unavailable_message`
+(`GET /collections/:id`, each row of `GET /collections`, and the create, update and
+materialize responses), so "could not be worked out" is told apart from "nothing
+matches". The cause is logged once per kind per minute. A `PUT` on a per-viewer
+collection always answers with the caller's own members, including a rename-only one.
+The caller's listening state is read once per request and shared by every per-viewer
+collection on the page, and no result window applies: a library of any size is
+evaluated in full. On the Audiobookshelf surface such a collection has no flag to
+carry, so it shows no books, and its `lastUpdate` is the time of the request (its
+members move with the viewer's state and the library, none of which touches the row),
+which makes a client that caches by `lastUpdate` refetch it every time. A background or
 system evaluation with no viewer matches nothing for a per-user rule, and never falls
 back to the creator or an admin. With authentication off the one viewer is the
 synthetic `_local` user. A query with no per-user field is unchanged: evaluated with
