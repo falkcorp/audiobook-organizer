@@ -157,7 +157,7 @@ func decodeViewerList(t *testing.T, w *httptest.ResponseRecorder) map[string]vie
 
 func perViewerRow(id, query string, stored ...string) database.Collection {
 	return database.Collection{
-		ID: id, Name: "Gorsel " + id, Type: database.CollectionTypeDynamic,
+		ID: id, Name: "Knightfall " + id, Type: database.CollectionTypeDynamic,
 		Query: query, CreatedByUserID: "alice", MaterializedBookIDs: stored,
 	}
 }
@@ -204,11 +204,11 @@ func TestRenameOnlyPutOfAPerViewerCollectionAnswersTheCallersMembers(t *testing.
 	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
 
 	got := decodeViewerResponse(t, rig.do(t, http.MethodPut, "/api/v1/collections/c1", "alice",
-		map[string]any{"name": "Renamed Gorsel"}))
-	assert.Equal(t, "Renamed Gorsel", got.Name)
+		map[string]any{"name": "Renamed Knightfall"}))
+	assert.Equal(t, "Renamed Knightfall", got.Name)
 	assert.Equal(t, []string{"b1"}, got.Members, "alice's own members, though only the name changed")
 	assert.False(t, got.MembersUnavailable)
-	assert.Equal(t, "Renamed Gorsel", store.cols[0].Name)
+	assert.Equal(t, "Renamed Knightfall", store.cols[0].Name)
 	assert.Empty(t, store.cols[0].MaterializedBookIDs, "the viewer's members are never stored; the leftover list is cleared")
 
 	got = decodeViewerResponse(t, rig.do(t, http.MethodPut, "/api/v1/collections/c1", "bob",
@@ -221,7 +221,7 @@ func TestRenameOnlyPutOfAPerViewerCollectionAnswersTheCallersMembers(t *testing.
 func TestUnavailableMembersAreFlaggedAndLoggedOncePerKind(t *testing.T) {
 	store := &colFakeStore{cols: []database.Collection{
 		perViewerRow("c1", "read_status:finished", "b1"),
-		{ID: "plain", Name: "Plain Quoxx", Type: database.CollectionTypeDynamic, Query: "title:Alpha",
+		{ID: "plain", Name: "Year One", Type: database.CollectionTypeDynamic, Query: "title:Alpha",
 			MaterializedBookIDs: []string{"b1"}},
 	}}
 	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, false)
@@ -240,9 +240,9 @@ func TestUnavailableMembersAreFlaggedAndLoggedOncePerKind(t *testing.T) {
 	assert.Equal(t, []string{"b1"}, list["plain"].Members)
 
 	put := decodeViewerResponse(t, rig.do(t, http.MethodPut, "/api/v1/collections/c1", "alice",
-		map[string]any{"name": "Renamed Gorsel"}))
+		map[string]any{"name": "Renamed Knightfall"}))
 	assert.True(t, put.MembersUnavailable, "the edit is saved and the members flagged")
-	assert.Equal(t, "Renamed Gorsel", store.cols[0].Name)
+	assert.Equal(t, "Renamed Knightfall", store.cols[0].Name)
 
 	assert.Len(t, rig.warns(), 1, "the same kind is logged once per minute, not once per request")
 }
@@ -254,14 +254,14 @@ func TestUnreadableViewerStateIsUnavailableNotEveryBook(t *testing.T) {
 		perViewerRow("c1", "-read_status:finished"),
 		perViewerRow("c2", "read_status:unstarted"),
 	}}
-	ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}, listErr: errors.New("disk read failed at /lib/Plimmet")}
+	ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}, listErr: errors.New("disk read failed at /lib/Gotham")}
 	rig := newFailureRig(t, store, ev, true)
 
 	get := rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil)
 	got := decodeViewerResponse(t, get)
 	assert.True(t, got.MembersUnavailable)
 	assert.Empty(t, got.Members, "not every book")
-	assert.NotContains(t, get.Body.String(), "Plimmet", "internal error text is not sent to the client")
+	assert.NotContains(t, get.Body.String(), "Gotham", "internal error text is not sent to the client")
 
 	list := decodeViewerList(t, rig.do(t, http.MethodGet, "/api/v1/collections", "alice", nil))
 	for _, id := range []string{"c1", "c2"} {

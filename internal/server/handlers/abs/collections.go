@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
 // last-edited: 2026-10-25
 
@@ -306,6 +306,10 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 		col.BookIDs = database.MergeMemberListNoLoss(col.BookIDs, ids)
 	}
 
+	// col was read from the store and still carries whatever list the row held. For
+	// a per-viewer collection the store itself drops that list on write
+	// (database.SetCollectionPerViewerClassifier), so this edit of the name or
+	// description cannot write a creator's list back with a fresh Version.
 	if err := h.collections.UpdateCollection(col); err != nil {
 		if errors.Is(err, database.ErrCollectionVersionConflict) || errors.Is(err, database.ErrCollectionNameInUse) {
 			respondError(c, http.StatusConflict, err.Error())

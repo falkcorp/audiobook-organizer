@@ -50,7 +50,7 @@ func TestUpdateCollection_KeepsTheListOfACollectionThatIsNotPerViewer(t *testing
 	useTestClassifier(t)
 	store := newTestCollectionsStore(t)
 	created, err := store.CreateCollection(&Collection{
-		Name: "quoxx", Type: CollectionTypeDynamic, Query: "author:quoxx",
+		Name: "Hush", Type: CollectionTypeDynamic, Query: "author:kyle",
 		MaterializedBookIDs: []string{"b1", "b2"},
 	})
 	if err != nil {

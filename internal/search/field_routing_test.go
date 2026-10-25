@@ -134,7 +134,7 @@ func TestQueryMayUsePerUserField_FailsClosedOnUnparseableText(t *testing.T) {
 			t.Errorf("QueryMayUsePerUserField(%q) = false, want true (fail closed)", q)
 		}
 	}
-	for _, q := range []string{"read_status:finished", "-progress_pct:>10", "author:x (last_played:>-7d | title:y)", "author:quoxx", "title:foo bar"} {
+	for _, q := range []string{"read_status:finished", "-progress_pct:>10", "author:x (last_played:>-7d | title:y)", "author:kyle", "title:foo bar"} {
 		if got, want := QueryMayUsePerUserField(q), QueryUsesPerUserField(q); got != want {
 			t.Errorf("%q: QueryMayUsePerUserField = %v, QueryUsesPerUserField = %v; they must agree on text that parses", q, got, want)
 		}
