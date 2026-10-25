@@ -230,15 +230,22 @@ type opVisibility struct {
 	// failed holds the operation ids whose lookup errored this request: they are
 	// not asked again, and each is logged once.
 	failed map[string]struct{}
+	// resolve says operations can be looked up at all (the handler was given a
+	// reader); without it no operation is judged, and only user data is.
+	resolve bool
+	// seeAll is mayReadOthersUserData: without it an entry that names a user, or
+	// carries one user's own data, is hidden (activity.NamesOthersUserData).
+	seeAll bool
 }
 
-// visibility binds the check to c's request; nil when no operation can be
-// resolved (nothing is hidden).
+// visibility binds the check to c's request. It is never nil: without an
+// operation reader no operation is resolved (no Repairs run is hidden), but
+// other users' data still is.
 func (h *ActivityHandler) visibility(c *gin.Context) *opVisibility {
-	if h.opRows == nil {
-		return nil
+	return &opVisibility{
+		h: h, reader: h.repairsAccess.For(c), seen: map[string]opVerdict{}, failed: map[string]struct{}{},
+		resolve: h.opRows != nil, seeAll: h.mayReadOthersUserData(c),
 	}
-	return &opVisibility{h: h, reader: h.repairsAccess.For(c), seen: map[string]opVerdict{}, failed: map[string]struct{}{}}
 }
 
 // verdict looks an operation up: its operations_v2 row first, then, when that is
@@ -299,6 +306,12 @@ func looksRepairs(e database.ActivityEntry) bool {
 // ActivityFilter.ExcludeEntry), because the store's filter-index path does not
 // hand it Details.
 func (v *opVisibility) excludes(e database.ActivityEntry) bool {
+	if !v.seeAll && activity.NamesOthersUserData(e) {
+		return true
+	}
+	if !v.resolve {
+		return false
+	}
 	named := false
 	hide := database.EntryOperationIDs(e, func(id string) bool {
 		named = true
@@ -401,6 +414,13 @@ func digestItemEntry(m map[string]any) database.ActivityEntry {
 	e.Type, _ = m["type"].(string)
 	e.Tier, _ = m["tier"].(string)
 	e.OperationID, _ = m["operation_id"].(string)
+	// The summary and the error details of the folded row decide whether it names
+	// a user (activity.NamesOthersUserData); the Source is gone, but the item's
+	// source: tag says it.
+	e.Summary, _ = m["summary"].(string)
+	if d, _ := m["details"].(string); d != "" {
+		e.Summary += " " + d
+	}
 	switch tags := m["tags"].(type) {
 	case []any:
 		for _, t := range tags {
@@ -433,7 +453,7 @@ func (v *opVisibility) keep(entries []database.ActivityEntry) ([]database.Activi
 // error is a refusal too, with err set). An operation with no record is not
 // denied here: its entries are judged one by one (excludes).
 func (v *opVisibility) denied(id string) (bool, error) {
-	if v == nil || id == "" {
+	if v == nil || !v.resolve || id == "" {
 		return false, nil
 	}
 	r, err := v.verdict(id)
@@ -645,9 +665,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	// Repairs operations the caller may not read are hidden inside the store's
 	// scan, so the page and total are counted without them.
 	vis := h.visibility(c)
-	if vis != nil {
-		filter.ExcludeEntry = vis.excludes
-	}
+	filter.ExcludeEntry = vis.excludes
 
 	var (
 		entries []database.ActivityEntry
@@ -682,10 +700,8 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 
 	// A daily digest carries the rows it folded; take out those the caller may
 	// not read. Same count of rows, so total and paging are untouched.
-	if vis != nil {
-		for i := range entries {
-			entries[i] = vis.redactDigest(entries[i])
-		}
+	for i := range entries {
+		entries[i] = vis.redactDigest(entries[i])
 	}
 
 	// partial: the store stopped at its scan budget before filling the page or
@@ -780,7 +796,7 @@ func (h *ActivityHandler) operationActivity(ctx context.Context, vis *opVisibili
 	entries, dropped := vis.keep(entries)
 	total -= dropped
 	if len(entries) == 0 {
-		opLogEntries, opLogErr := h.operationActivityFromOpLogs(opID, limit)
+		opLogEntries, opLogErr := h.operationActivityFromOpLogs(vis, opID, limit)
 		if opLogErr != nil {
 			return nil, 0, opLogErr
 		}
@@ -978,7 +994,7 @@ func dedupeOperationIDs(raw []string) []string {
 // operationActivityFromOpLogs fetches op-log v2 rows as a fallback when the
 // activity log has no entries for an operation. Returns nil (not an error)
 // when opsStore is nil or returns no rows.
-func (h *ActivityHandler) operationActivityFromOpLogs(opID string, limit int) ([]operationActivityEntry, error) {
+func (h *ActivityHandler) operationActivityFromOpLogs(vis *opVisibility, opID string, limit int) ([]operationActivityEntry, error) {
 	if h.opsStore == nil {
 		return nil, nil
 	}
@@ -991,6 +1007,11 @@ func (h *ActivityHandler) operationActivityFromOpLogs(opID string, limit int) ([
 	}
 	out := make([]operationActivityEntry, 0, len(logs))
 	for _, l := range logs {
+		// The op-log rows are the source of the activity rows mirrored from them,
+		// so a line that names a user is withheld here as it is there.
+		if !vis.seeAll && activity.NamesUserText(l.Message) {
+			continue
+		}
 		attrs := opLogAttrs(l.Attrs)
 		opType, _ := attrs["def_id"].(string)
 		out = append(out, operationActivityEntry{

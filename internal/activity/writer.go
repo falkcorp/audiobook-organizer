@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.8.6
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-25
 
 package activity
 
@@ -234,6 +234,18 @@ func (w *Writer) sendEntry(line string) {
 		for _, a := range parsed.Attrs {
 			if _, exists := entry.Details[a.Key]; !exists {
 				entry.Details[a.Key] = a.Value
+			}
+		}
+	}
+	// A line that names a user stays out of what a caller who may not manage
+	// users reads (NamesOthersUserData), so the row says so itself.
+	if NamesUserText(entry.Summary) {
+		entry.Tags = append(entry.Tags, TagUserData)
+	} else {
+		for _, a := range parsed.Attrs {
+			if NamesUserText(a.Key + "=") {
+				entry.Tags = append(entry.Tags, TagUserData)
+				break
 			}
 		}
 	}

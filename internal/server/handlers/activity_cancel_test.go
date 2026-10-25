@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_cancel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c48f1a9-2d76-4b03-8e91-6a3fd027b8ce
-// last-edited: 2026-08-11
+// last-edited: 2026-10-25
 
 // Package handlers_test — the activity handlers' behaviour when the client
 // disconnects mid-scan.
@@ -23,6 +23,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -33,6 +34,19 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// sameFilterButPredicate matches a filter equal to want in every field except
+// ExcludeEntry, which ListActivity always sets (a func cannot be compared, and
+// the caller's own paging and filters are what these tests pin).
+func sameFilterButPredicate(want database.ActivityFilter) any {
+	return mock.MatchedBy(func(got database.ActivityFilter) bool {
+		if got.ExcludeEntry == nil {
+			return false
+		}
+		got.ExcludeEntry = nil
+		return reflect.DeepEqual(got, want)
+	})
+}
 
 // statusClientClosedRequest mirrors the handler's unexported constant (nginx's
 // 499). Spelled out rather than exported from the production package: the wire
@@ -81,7 +95,7 @@ func TestListActivity_CancelledScanDoesNotReturn200(t *testing.T) {
 	// caller's paging or filters.
 	wantFilter := database.ActivityFilter{Limit: 5, Offset: 0}
 	svc.EXPECT().
-		Query(cancelledCtx(), wantFilter).
+		Query(cancelledCtx(), sameFilterButPredicate(wantFilter)).
 		Return(nil, 0, context.Canceled).
 		Once()
 
@@ -157,7 +171,7 @@ func TestListActivity_RealErrorStillReturns500(t *testing.T) {
 
 	wantFilter := database.ActivityFilter{Limit: 5, Offset: 0}
 	svc.EXPECT().
-		Query(cancelledCtx(), wantFilter).
+		Query(cancelledCtx(), sameFilterButPredicate(wantFilter)).
 		Return(nil, 0, assert.AnError).
 		Once()
 

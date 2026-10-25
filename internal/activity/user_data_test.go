@@ -1,14 +1,18 @@
 // file: internal/activity/user_data_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
 // last-edited: 2026-10-25
 
 package activity
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -27,4 +31,76 @@ func TestWithoutOthersUserData(t *testing.T) {
 	other := database.ActivityEntry{Type: "library.scan", Details: map[string]any{DetailProgressSummary: "kept"}}
 	assert.Equal(t, other, WithoutOthersUserData(other))
 	assert.Equal(t, database.ActivityEntry{Type: TypeTrashDiscardProgressPurge}, WithoutOthersUserData(database.ActivityEntry{Type: TypeTrashDiscardProgressPurge}))
+}
+
+// The server's own log lines are mirrored into the activity log, and several
+// name a user. NamesOthersUserData must hold for the real shapes (the abs
+// progress handler, the merge undo's warnings, the owner guard, the openid hop,
+// the engine's owner-apply line) and must not hold for ordinary lines.
+func TestNamesOthersUserData(t *testing.T) {
+	sys := func(source, summary string, tags ...string) database.ActivityEntry {
+		return database.ActivityEntry{Type: "system", Source: source, Summary: summary, Tags: tags}
+	}
+	for name, tc := range map[string]struct {
+		e    database.ActivityEntry
+		want bool
+	}{
+		"abs progress patch": {sys("abs", "progress patch: user=01INVENTEDUSER0000000000A item=li_1 currentTime=3600.5 isFinished=false"), true},
+		"abs line without a user in it, still the abs source": {sys("abs", "library listing served"), true},
+		"abs-cache source":            {sys("abs-cache", "refreshed 12 libraries"), true},
+		"merge source":                {sys("merge", "survivor reconciled"), true},
+		"merge undo warning":          {sys("revert", "revert of change c1 restored in part: user 01INVENTEDUSER0000000000A progress on b2 was written after the follow"), true},
+		"owner guard":                 {sys("http", "owner action allowed: route=/x http_method=POST user=01INVENTEDUSER0000000000A access_email=a@example.invalid method=cookie"), true},
+		"openid rejection":            {sys("abs", "openid browser hop rejected an assertion: reason=x status=403 email=a@example.invalid"), true},
+		"config update":               {sys("config", "config update refused: method=cookie access_email=a@example.invalid"), true},
+		"owner apply line":            {database.ActivityEntry{Type: "repairs.apply", Summary: "repairs.apply maintenance.audible-read-status: owner apply by user 01INVENTEDUSER0000000000A (cookie): 3 of 3 owner row(s) written"}, true},
+		"tagged by the writer":        {sys("scheduler", "something with no recognisable shape", TagUserData), true},
+		"source tag on a digest item": {sys("", "plain words", "source:abs"), true},
+
+		"scheduler line":       {sys("scheduler", "Next sync in 28m"), false},
+		"scan line":            {sys("scanner", "scan complete count=12"), false},
+		"the word user alone":  {sys("server", "the user should confirm the interface"), false},
+		"non-system abs-named": {database.ActivityEntry{Type: "library.scan", Source: "abs", Summary: "imported 4 books"}, false},
+		"empty":                {database.ActivityEntry{}, false},
+	} {
+		assert.Equal(t, tc.want, NamesOthersUserData(tc.e), name)
+	}
+}
+
+// Writer stamps TagUserData on a line that names a user, from its text or from
+// the key of one of its attrs, and leaves other lines untagged.
+func TestWriter_TagsLinesThatNameAUser(t *testing.T) {
+	store := newTestPebbleActivityStore(t)
+	devNull, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	defer devNull.Close()
+
+	w := NewWriter(store, 50)
+	w.stdout = devNull
+	for _, line := range []string{
+		"2026/03/25 17:35:08 logger.go:103: [info] abs: progress patch: user=01INVENTEDUSER0000000000A currentTime=12.5",
+		`time=2026-08-16T01:00:00.000-04:00 level=INFO msg="owner action allowed" user_id=01INVENTEDUSER0000000000A`,
+		"2026/03/25 17:35:08 logger.go:103: [info] scheduler: Next sync in 28m",
+	} {
+		fmt.Fprintln(w, line)
+	}
+	w.Flush()
+
+	entries, _, err := store.Query(context.Background(), database.ActivityFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	tagged := 0
+	for _, e := range entries {
+		has := false
+		for _, tag := range e.Tags {
+			has = has || tag == TagUserData
+		}
+		if e.Source == "scheduler" {
+			assert.False(t, has, "an ordinary line is not tagged")
+			continue
+		}
+		assert.True(t, has, "the line %q names a user and is tagged", e.Summary)
+		tagged++
+	}
+	assert.Equal(t, 2, tagged)
 }
