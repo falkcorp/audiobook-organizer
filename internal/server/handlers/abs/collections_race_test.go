@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_race_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b2a8e4f6-7c19-4d53-a0e8-3f5d1c9b6a27
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package abs_test
 
@@ -52,7 +52,7 @@ func TestCollectionMembership_ABSAndNativeWritesDoNotLoseEachOther(t *testing.T)
 	// The sync id is minted up front, on this goroutine.
 	singleSync := absplSyncIDFor(t, seed, seed.singleID)
 
-	native := handlers.NewCollectionHandler(store, store, nil, &ownerEvalStore{}, nil)
+	native := handlers.NewCollectionHandler(store, store, &viewerEvalStore{}, nil)
 	nr := gin.New()
 	g := nr.Group("/api/v1")
 	g.POST("/collections/:id/books", native.AddBooksToCollection)

@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-25 -->
 
 # HTTP API
 
@@ -154,20 +154,32 @@ Reads need `library.view`; every write needs `collections.manage`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/collections` · `/collections/:id` | List collections / get one. A dynamic collection's members are `materialized_book_ids` (a static one's are `book_ids`); `GET /collections/:id` re-evaluates a dynamic collection first and stores the result when it changed, the list does not |
-| `POST` | `/api/v1/collections` | Create a static or dynamic collection; the caller is stored as its owner (`created_by_user_id`) |
+| `GET` | `/api/v1/collections` · `/collections/:id` | List collections / get one. A dynamic collection's members are `materialized_book_ids` (a static one's are `book_ids`); `GET /collections/:id` re-evaluates a dynamic collection first and stores the result when it changed, the list does not. A collection whose query uses a per-user field is evaluated for the caller on every read and nothing is stored (see below) |
+| `POST` | `/api/v1/collections` | Create a static or dynamic collection; the caller is stored as its creator (`created_by_user_id`, attribution only) |
 | `PUT` | `/api/v1/collections/:id` | Update name, description, query (dynamic) or the whole book list (static; `book_ids` requires the `version` you read, see below) |
 | `DELETE` | `/api/v1/collections/:id` | Delete a collection |
-| `POST` | `/api/v1/collections/:id/materialize` | Re-evaluate a dynamic collection and store the members |
+| `POST` | `/api/v1/collections/:id/materialize` | Re-evaluate a dynamic collection and store the members (a per-user collection stores nothing: the response is the caller's own members) |
 | `POST` | `/api/v1/collections/:id/books` `{"book_ids":[...]}` | Add books to a static collection (atomic; duplicates ignored; `404` unknown collection, `409` not static) |
 | `DELETE` | `/api/v1/collections/:id/books/:bookId` | Remove one book from a static collection (`404` when it is not a member) |
 
-A dynamic collection is evaluated as its owner: the user who created it, or the
-first active admin when that user no longer exists (`503` when there is neither).
-The result is stored and served to everyone. With authentication off the evaluator
-and owner is the synthetic `_local` user. The evaluator is only resolved when the
-query uses a per-user field, so a query without one is evaluated with no user at all
-and never answers `503`.
+A dynamic collection whose query uses a per-user field (`read_status`,
+`progress_pct`, `last_played`) is evaluated for the VIEWER: the signed-in caller on
+the native API and on the Audiobookshelf surface. Two users see different members of
+the same collection, a collection's creator never decides what anyone else sees, and
+nobody can infer another user's listening state from a collection's membership. This
+holds for admins too; reading another user's listening state needs `users.manage` and
+its own tooling, and no collection route takes an "as user" parameter. The members
+are returned in the response (`materialized_book_ids` on `GET /collections/:id`, on
+each row of `GET /collections`, and on the create, update and materialize responses)
+and are never stored: the stored row's `materialized_book_ids` is empty. Rows written
+before 2026-10-25 held the creator's answer; they are cleared at start (the
+`collection-peruser-purge` step, logged to the system activity log) and the read
+paths never serve a leftover list. An evaluation that cannot run (the search index is
+closed or rebuilding) answers no members, never the stored list. A background or
+system evaluation with no viewer matches nothing for a per-user rule, and never falls
+back to the creator or an admin. With authentication off the one viewer is the
+synthetic `_local` user. A query with no per-user field is unchanged: evaluated with
+no user, stored, and the same for everyone.
 
 A static collection's whole-list replace (`PUT` with `book_ids`) requires `version`,
 the `version` of the collection you read: a missing one is `400` (`version is required
@@ -176,58 +188,28 @@ atomically through `POST /collections/:id/books` since your read is never silent
 dropped. The web UI does not call this route; the Audiobookshelf-compatible routes
 use the atomic add and remove.
 
-Dynamic collections whose query has a relative date (`last_played:>-30d`,
-`date_added:>-7d`) are refreshed hourly by the scheduled op
+Dynamic collections whose query has a relative date and no per-user field
+(`date_added:>-7d`) are refreshed hourly by the scheduled op
 `collections.refresh-relative-dynamic`, so the members the Audiobookshelf surface
-serves follow the clock without anyone opening the collection. It evaluates each as
-its owner, skips and counts a per-user query whose owner is gone, skips a collection
-edited while the run was in flight (picked up next hour), and stores a member list
-only when it changed. The hourly task enqueues the op only when such a collection
-exists and the search index is open (there is no collections-disabled config switch),
-and a run that still finds the index closed finishes as a clean no-op with one log
-line. Launched by hand (`POST /operations/v2`) it is a preview unless
-`dry_run` is `false`; the hourly run sends `dry_run: false`.
+serves follow the clock without anyone opening the collection. A collection with a
+per-user field (`last_played:>-30d`) is not refreshed: it stores no member list and
+the job has no viewer. The job skips a collection edited while the run was in flight
+(picked up next hour), and stores a member list only when it changed. The hourly task
+enqueues the op only when such a collection exists and the search index is open
+(there is no collections-disabled config switch), and a run that still finds the index
+closed finishes as a clean no-op with one log line. Launched by hand
+(`POST /operations/v2`) it is a preview unless `dry_run` is `false`; the hourly run
+sends `dry_run: false`.
 
-Per-user fields in a query (`read_status`, `progress_pct`, `last_played`) read the
-evaluating user's own listening state. A query that cannot be parsed or
-translated, such as a malformed date on one of them (`last_played:>30d`, missing the
-sign), is a `400` at create time and when the query is changed (the message names the
-parse or translate error and nothing is stored), not a collection that silently
-matches nothing; a closed search index does not block saving a good query. To stop anyone with `collections.manage`
-from reading the owner's state back out of the members, only the evaluating user
-may write one into a query. `POST /collections` (dynamic) and `PUT
-/collections/:id` answer `403` with code `COLLECTION_PER_USER_QUERY_OWNER_ONLY`
-(`only the collection's owner can use per-user fields (last_played, progress_pct,
-read_status) in its query`) when anyone else sends a query that uses one. The query and the stored members
-are left unchanged. A query with no per-user field, a rename, or re-sending the
-unchanged query is allowed to any caller with the permission. A collection that
-falls back to the first admin can have per-user fields set only by that admin. The
-Audiobookshelf-compatible routes cannot set a query (their create is static only
-and their PATCH touches name, description and books), so they have no path to it.
-
-A stand-in admin never evaluates a per-user query. When the owner row is gone (or
-the stored owner is empty or `_local`) the collection falls back to the first
-active admin only if its query has no per-user field. With one, the collection is
-not evaluated at all and keeps its stored members: `POST /collections/:id/materialize`
-answers `409` with code `COLLECTION_OWNER_MISSING_PER_USER_QUERY`, and `GET
-/collections/:id` answers `200` with the stored collection plus
-`evaluation_blocked` (the same code) and `evaluation_blocked_message` (a read has
-always served the last known members rather than failing). The first active admin
-takes such a collection over by saving its query again with `"adopt_owner": true`
-(`PUT /collections/:id` with `query` and `adopt_owner`), which records that admin as
-`created_by_user_id`. The flag is required: re-sending a query without it never
-adopts, whatever the query, so an admin who edits for another reason cannot become
-the evaluator of per-user state they did not mean to claim. `adopt_owner` is a
-constraint on any client (07-F5b's UI included): it must be sent explicitly, by the
-first active admin, with a query that uses a per-user field, on a collection that has
-no owner; anything else is `400`, `403` or `409` and nothing is stored. A `PUT` that
-changes only `sort_json` or `limit` on a blocked collection answers `200` with the
-same `evaluation_blocked` flag as the read. The
-startup owner backfill leaves these collections ownerless and lists their ids and
-names in one warning, written to the system activity log under the source
-`collection-owner-backfill`, on every start until they are resolved. Queries
-written before the 403 gate existed by someone other than the owner cannot be
-detected (there is no authorship history); the gate prevents new ones.
+Because every viewer is evaluated as themselves, anyone with `collections.manage` may
+write a per-user field into a query: it can only ever read their own state. A query
+that cannot be parsed or translated, such as a malformed date on one of them
+(`last_played:>30d`, missing the sign), is a `400` at create time and when the query is
+changed (the message names the parse or translate error and nothing is stored), not a
+collection that silently matches nothing; a closed search index does not block saving a
+good query. The earlier owner gate (`403 COLLECTION_PER_USER_QUERY_OWNER_ONLY`), the
+`adopt_owner` flag and the `evaluation_blocked` / `409 COLLECTION_OWNER_MISSING_PER_USER_QUERY`
+answers are gone: they existed only to protect owner evaluation.
 
 ### Authentication
 

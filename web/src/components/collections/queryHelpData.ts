@@ -1,7 +1,7 @@
 // file: web/src/components/collections/queryHelpData.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7793a6b3-1c06-4470-ae92-563d9c29b9c4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 import { firstSearchError } from '../../utils/queryGrammar';
 import { parseSearch } from '../../utils/searchParser';
@@ -87,7 +87,7 @@ export const PER_USER_FIELDS: readonly string[] = QUERY_FIELD_HELP.filter(
 ).map((f) => f.name);
 
 export const PER_USER_NOTE =
-  'These fields use the reading state of the person who created this collection, for everyone, including the Audiobookshelf app.';
+  'These fields use the reading state of whoever is viewing the collection, so each person sees their own members, including in the Audiobookshelf app.';
 
 export interface WorkedExample {
   title: string;

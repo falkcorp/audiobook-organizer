@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 1.8.0
+// version: 2.0.0
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package handlers
 
@@ -9,17 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/playlist"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
 )
 
 // ── Collections, native API ─────────────────────────────────────────────────
@@ -48,52 +48,40 @@ import (
 // belongs to a person, a collection belongs to the server. VISIBILITY is
 // server-wide; CreatedByUserID never decides who may see or edit a collection.
 //
-// A DYNAMIC COLLECTION IS EVALUATED AS ITS OWNER, NOT AS THE READER (D75).
+// A DYNAMIC COLLECTION IS EVALUATED FOR THE VIEWER, NEVER FOR ITS CREATOR (owner
+// decision 2026-10-25, replacing D75's owner evaluation).
 // Per-user query fields (read_status, progress_pct, last_played) mean "for whom?",
-// and a collection that answered with the signed-in reader's state would show
-// different members to different people, store whichever answer was computed last
-// as MaterializedBookIDs, and serve that to everyone on the ABS surface, which
-// never evaluates. So the evaluating user is CreatedByUserID (see evaluatorFor).
-// Smart PLAYLISTS stay per-user; they are a different feature.
+// and the answer is: for whoever is looking. "Unfinished" means unfinished for the
+// signed-in reader, so two readers see different members of the same collection
+// and nobody can infer what another user has read from a collection's membership.
+// D75 evaluated as CreatedByUserID and served that one answer to everyone, which
+// published the creator's listening state to every reader. Even an admin gets
+// their own state: reading another user's listening state needs users.manage and
+// its own tooling, and nothing on this surface takes an "as user" parameter.
 //
-// ONLY THE EVALUATOR MAY WRITE A PER-USER FIELD INTO A QUERY. Because the query is
-// evaluated as the owner and the answer (MaterializedBookIDs) is served to every
-// reader, anyone allowed to edit a collection could otherwise set
-// read_status:finished or last_played:>2026-01-01 on someone else's collection and
-// read that person's private listening state back out of its members. So a query
-// that references a per-user field (search.QueryUsesPerUserField) is accepted
-// only from the user evaluatorFor resolves to; anyone else with collections.manage
-// still edits every other part of the collection, and any query without one. A
-// collection with no usable owner evaluates as the first active admin, so only
-// that admin may set one there. See requirePerUserQueryEvaluator.
+// A PER-VIEWER MEMBER LIST IS NEVER STORED. MaterializedBookIDs would bake one
+// viewer's answer into a row every other viewer (and the ABS surface) reads, so
+// for a dynamic collection whose query uses a per-user field it is always empty
+// on the stored row: create, update, materialize and GET evaluate for the caller,
+// return the answer in the response only, and never write it. Rows written before
+// this change are scrubbed at boot (the collection-peruser-purge step) and again
+// on any write here, and every read path replaces the stored list with the
+// viewer's own, so a leftover list is never served. A per-viewer answer is not
+// cached at all: it changes on every position heartbeat, a per-user cache would
+// need invalidation hooked into every state write plus a users x collections
+// refresh loop, and a library has tens of collections, so one search plus a state
+// read per hit at read time is cheap.
 //
-// AN EVALUATOR IS RESOLVED ONLY FOR A PER-USER QUERY. A query with no per-user
-// field is evaluated with no user at all, as it always was, so it never needs an
-// owner and never answers 503 because the install has no admin.
+// NO VIEWER, NO MATCH. An evaluation with no viewer (a background job, an
+// unresolved caller) matches nothing for a per-user rule; it never falls back to
+// the creator or to an admin. See playlist.EvaluateSmartPlaylist.
 //
-// WITH AUTH OFF, "_local" IS THE EVALUATOR. A single-user install (EnableAuth
-// false) has no user rows to speak of: every request is the caller "_local", and
-// it is the one person whose listening state exists. A collection owned by
-// "_local" is therefore evaluated as "_local" (not as a stand-in), and per-user
-// queries work there. With auth on, "_local" is not a user and is treated like any
-// other owner that no longer exists.
+// A query WITHOUT a per-user field is unchanged: evaluated with no user, stored as
+// MaterializedBookIDs, served from the stored list by the ABS surface, and kept
+// current by materialize and the scheduled relative-date refresh.
 //
-// A STAND-IN ADMIN NEVER EVALUATES A PER-USER QUERY. The first-admin fallback
-// exists so a collection whose owner was deleted keeps working, but for a query
-// that uses a per-user field it would publish the admin's listening state (the
-// members are served to every reader) for a query the admin did not write, and a
-// per-user query on an ownerless collection may have been written by someone else
-// before the evaluator gate existed. So evaluate refuses it with
-// ErrCollectionOwnerMissingPerUserQuery and the stored members stay as they were:
-// materialize answers 409 COLLECTION_OWNER_MISSING_PER_USER_QUERY, and a native
-// read answers 200 with the stored collection and an evaluation_blocked flag (a
-// read has always served the last known members rather than failing, see
-// GetCollection). A query without a per-user field still falls back to the admin.
-// The first active admin takes the collection over by saving its query again
-// WITH "adopt_owner": true in the PUT body (UpdateCollection stores that admin as
-// the owner). The flag is required: re-sending a query, changed or not, never
-// adopts, so an admin who edits a query for another reason cannot become the
-// evaluator of per-user state they did not mean to claim.
+// Because the evaluating user is always the caller, anyone with collections.manage
+// may put a per-user field in a query: it can only ever read their own state.
 
 // CollectionCreateReq is the payload for POST /api/v1/collections.
 //
@@ -118,9 +106,7 @@ type CollectionCreateReq struct {
 // one would discard its members with no way back.
 //
 // Version is required when BookIDs is present (a whole-list replace is only safe
-// against the list the caller last read), and AdoptOwner is the explicit opt-in
-// for the first active admin to take an ownerless per-user collection over; see
-// the file header.
+// against the list the caller last read).
 type CollectionUpdateReq struct {
 	Name        *string   `json:"name,omitempty"`
 	Description *string   `json:"description,omitempty"`
@@ -129,7 +115,6 @@ type CollectionUpdateReq struct {
 	SortJSON    *string   `json:"sort_json,omitempty"`
 	Limit       *int      `json:"limit,omitempty"`
 	Version     *int      `json:"version,omitempty"`
-	AdoptOwner  bool      `json:"adopt_owner,omitempty"`
 }
 
 // CollectionMembers is the locked member-list slice of the store: the two
@@ -141,42 +126,8 @@ type CollectionMembers interface {
 	RemoveBookFromCollection(id, bookID string) (*database.Collection, error)
 }
 
-// CollectionOwnerStore is what the owner evaluator reads: the owning user by id,
-// and the user list for the first-admin fallback.
-type CollectionOwnerStore interface {
-	GetUserByID(id string) (*database.User, error)
-	ListUsers() ([]database.User, error)
-}
-
-// ErrNoCollectionEvaluator means a dynamic collection has no owner that still
-// exists and the install has no active admin to fall back to, so there is no
-// user whose per-user state the query could be evaluated against.
-var ErrNoCollectionEvaluator = errors.New("no admin user to evaluate this collection as")
-
-// ErrCollectionOwnerMissingPerUserQuery means a dynamic collection's owner no
-// longer exists and its query uses a per-user field, so it must not be evaluated
-// as the first-admin stand-in (see the file header). The stored members are kept.
-var ErrCollectionOwnerMissingPerUserQuery = errors.New(
-	"the collection's owner no longer exists and its query uses per-user fields; it is not evaluated as the first admin")
-
-// ErrCodeCollectionOwnerMissingPerUserQuery is the error code and the
-// evaluation_blocked flag value for ErrCollectionOwnerMissingPerUserQuery.
-const ErrCodeCollectionOwnerMissingPerUserQuery = "COLLECTION_OWNER_MISSING_PER_USER_QUERY"
-
-// collectionBlockedResponse is a collection read whose evaluation was refused:
-// the stored collection, flattened, plus why it was not re-evaluated.
-type collectionBlockedResponse struct {
-	*database.Collection
-	EvaluationBlocked        string `json:"evaluation_blocked"`
-	EvaluationBlockedMessage string `json:"evaluation_blocked_message"`
-}
-
 // maxCollectionBooksPerRequest bounds one add-books request.
 const maxCollectionBooksPerRequest = 500
-
-// collectionLog records the owner fallback so an operator can see which
-// collections are being evaluated as someone other than their stored owner.
-var collectionLog = logger.New("handlers.collections")
 
 // CollectionStore is the narrow database interface CollectionHandler requires.
 type CollectionStore interface {
@@ -200,8 +151,6 @@ type CollectionHandler struct {
 	// members is nil when the store has no locked membership operations; the
 	// add/remove-books routes then answer 503 rather than a read-modify-write.
 	members CollectionMembers
-	// owners resolves the user a dynamic collection is evaluated as.
-	owners CollectionOwnerStore
 	// evalStore is the wider store the smart-query evaluator needs. Separate
 	// from store because CollectionStore is deliberately narrow and the
 	// evaluator's requirements are not this handler's business.
@@ -210,56 +159,36 @@ type CollectionHandler struct {
 	// works when the search index is opened later in Start(). A dynamic
 	// collection answers 503 rather than 500 while it is nil.
 	indexFn func() *search.BleveIndex
-	// authEnabled reports whether authentication is on, read per request so a
-	// config change applies without a restart. Off means single-user mode, where
-	// "_local" is a legitimate evaluator. Defaults to on, the strict reading.
-	authEnabled func() bool
-	// log receives the owner-fallback warning; fallbackLogged holds the ids it
-	// has already been written for, so each collection warns once.
-	log            collectionWarner
-	fallbackLogged sync.Map
+	// log receives scheduled-refresh warnings.
+	log collectionWarner
 }
+
+// collectionLog is the logger the handler's scheduled refresh writes to.
+var collectionLog = logger.New("handlers.collections")
 
 // collectionWarner is the part of a logger the handler writes warnings to.
 type collectionWarner interface {
 	Warn(msg string, args ...any)
 }
 
-// CollectionOption configures optional CollectionHandler behaviour.
-type CollectionOption func(*CollectionHandler)
-
-// WithAuthEnabled tells the handler whether authentication is on. The server
-// passes the live config value; without it the handler assumes auth is on.
-func WithAuthEnabled(fn func() bool) CollectionOption {
-	return func(h *CollectionHandler) {
-		if fn != nil {
-			h.authEnabled = fn
-		}
-	}
-}
-
 // NewCollectionHandler constructs a CollectionHandler with a lazy index getter.
+//
+// There is no owner store: a dynamic collection is evaluated for the requesting
+// viewer, so no user has to be looked up to evaluate it (see the file header).
 func NewCollectionHandler(
 	store CollectionStore,
 	members CollectionMembers,
-	owners CollectionOwnerStore,
 	evalStore CollectionEvalStore,
 	indexFn func() *search.BleveIndex,
-	opts ...CollectionOption,
 ) *CollectionHandler {
 	if indexFn == nil {
 		indexFn = func() *search.BleveIndex { return nil }
 	}
-	h := &CollectionHandler{
-		store: store, members: members, owners: owners,
+	return &CollectionHandler{
+		store: store, members: members,
 		evalStore: evalStore, indexFn: indexFn,
-		authEnabled: func() bool { return true },
-		log:         collectionLog,
+		log: collectionLog,
 	}
-	for _, opt := range opts {
-		opt(h)
-	}
-	return h
 }
 
 // validateCollectionCreate enforces the type/field agreement.
@@ -329,28 +258,29 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 		}
 	}
 
-	// The creator is the owner and the evaluator, never a stand-in: a per-user
-	// query is refused unless evaluatorFor resolves to the creator, which it does
-	// whenever the creator is a user row, or is "_local" with auth off. A creator
-	// who is neither (a row deleted mid-request) would otherwise be evaluated as
-	// the first admin and read the admin's state.
-	if col.Type == database.CollectionTypeDynamic && !h.requirePerUserQueryEvaluator(c, col, col.Query) {
-		return
-	}
-
 	// Evaluate a dynamic collection ONCE at creation so it is populated the first
 	// time anyone looks at it. Read paths deliberately serve MaterializedBookIDs
 	// without re-evaluating (they must not depend on the index being open), so a
 	// collection created and never materialized would render empty forever —
 	// indistinguishable from a query that matches nothing.
 	//
+	// A per-viewer query (a per-user field) is evaluated for the creator as a
+	// viewer, answered in the response only and NEVER stored: the stored row
+	// carries no per-user members (see the file header).
+	//
 	// A failure here does NOT fail the create: the collection is valid, the query
 	// is stored, and an explicit materialize can populate it later. Refusing to
 	// create it because the index happens to be closed would lose the user's work
 	// for a reason that has nothing to do with what they typed.
+	var viewerIDs []string
+	perViewer := collectionIsPerViewer(col)
 	if col.Type == database.CollectionTypeDynamic {
-		if ids, err := h.evaluate(col); err == nil {
-			col.MaterializedBookIDs = ids
+		if ids, err := h.evaluate(col, CallingUserID(c)); err == nil {
+			if perViewer {
+				viewerIDs = ids
+			} else {
+				col.MaterializedBookIDs = ids
+			}
 		}
 	}
 
@@ -362,6 +292,9 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 		}
 		httputil.InternalError(c, "failed to create collection", err)
 		return
+	}
+	if perViewer {
+		created = withViewerMembers(created, viewerIDs)
 	}
 	httputil.RespondWithCreated(c, created)
 }
@@ -385,6 +318,18 @@ func (h *CollectionHandler) ListCollections(c *gin.Context) {
 		httputil.InternalError(c, "failed to list collections", err)
 		return
 	}
+	// A per-viewer collection's stored list is never served (it is empty by
+	// construction and may hold a pre-change leftover): the caller's own members
+	// replace it, so a card's count is the viewer's, not anyone else's.
+	// The slice is cloned first: it is the store's, and rewriting a member list on
+	// it would write the viewer's answer into the store's own view of the row.
+	cols = slices.Clone(cols)
+	sets := h.ViewerMemberSets(cols, CallingUserID(c))
+	for i := range cols {
+		if collectionIsPerViewer(&cols[i]) {
+			cols[i].MaterializedBookIDs = sets[cols[i].ID]
+		}
+	}
 	// total is the count BEFORE paging, so the client can tell whether another
 	// page exists. Returning len(cols) would say page 0 is always everything.
 	httputil.RespondWithList(c, cols, total, p.Limit, p.Offset)
@@ -396,6 +341,9 @@ func (h *CollectionHandler) ListCollections(c *gin.Context) {
 // membership, refreshing MaterializedBookIDs as a side effect. That is the
 // opposite of the ABS read path, on purpose: this surface is the one that keeps
 // the materialized set current, so the ABS surface can stay index-independent.
+//
+// EXCEPT a per-viewer collection (a per-user field in its query): its members are
+// evaluated for the caller, returned in the response, and never stored.
 func (h *CollectionHandler) GetCollection(c *gin.Context) {
 	col, ok := h.load(c)
 	if !ok {
@@ -406,17 +354,16 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 		return
 	}
 
-	ids, err := h.evaluate(col)
-	if errors.Is(err, ErrCollectionOwnerMissingPerUserQuery) {
-		// Not a transient condition, so say so: the stored members are served
-		// unchanged (nothing is re-materialized from the stand-in admin's state)
-		// with a flag a client can show. A 409 would black out the collection for
-		// every reader, which is what the paragraph below exists to avoid.
-		httputil.RespondWithOK(c, collectionBlockedResponse{
-			Collection:               col,
-			EvaluationBlocked:        ErrCodeCollectionOwnerMissingPerUserQuery,
-			EvaluationBlockedMessage: ownerMissingMessage(),
-		})
+	ids, err := h.evaluate(col, CallingUserID(c))
+	if collectionIsPerViewer(col) {
+		// The viewer's own members, in the response only: nothing is persisted
+		// (a stored list would be one viewer's answer served to all). An
+		// evaluation that cannot run (index closed or rebuilding) serves no
+		// members rather than the stored list, which is never trusted here.
+		if err != nil {
+			ids = nil
+		}
+		httputil.RespondWithOK(c, withViewerMembers(col, ids))
 		return
 	}
 	if err != nil {
@@ -514,10 +461,6 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		}
 		col.BookIDs = *req.BookIDs
 	}
-	if req.AdoptOwner && req.Query == nil {
-		httputil.RespondWithBadRequest(c, "adopt_owner applies to a query: send the per-user query with it")
-		return
-	}
 	if req.Query != nil {
 		if col.Type != database.CollectionTypeDynamic {
 			httputil.RespondWithBadRequest(c, "only a dynamic collection has a query")
@@ -527,27 +470,15 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "a dynamic collection requires a query")
 			return
 		}
-		// Only a CHANGED query is checked: renaming a collection whose stored query
-		// already has a per-user field, or re-sending that query unchanged, writes
-		// nothing new into what the evaluator's state is asked about.
+		// Only a CHANGED query is checked, for syntax (400). Who may write a
+		// per-user field is not a question any more: the collection is evaluated
+		// for the viewer, so a per-user field in a query reads only the state of
+		// whoever is looking, never the writer's.
 		if *req.Query != origQuery {
-			// Syntax first (400), then who may write it (403). A query stored
-			// before this check existed is not re-validated unless it changes.
 			if err := validateCollectionQuery(*req.Query); err != nil {
 				httputil.RespondWithBadRequest(c, err.Error())
 				return
 			}
-			if !h.requirePerUserQueryEvaluator(c, col, *req.Query) {
-				return
-			}
-		}
-		// The first active admin takes an ownerless per-user collection over, but
-		// only by asking: the stand-in never evaluates such a query (see the file
-		// header), so without adoption the one user the gate lets write it could
-		// not make it work, and with adoption implied by a re-save an admin editing
-		// the query for another reason would claim someone else's per-user state.
-		if req.AdoptOwner && !h.adoptOwner(c, col, *req.Query) {
-			return
 		}
 		col.Query = *req.Query
 	}
@@ -560,19 +491,26 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 
 	// Re-materialize when the query or its shaping changed, so the next reader —
 	// including the ABS surface, which never evaluates — sees the new answer
-	// rather than the previous query's members.
-	blocked := false
-	if col.Type == database.CollectionTypeDynamic &&
-		(req.Query != nil || req.SortJSON != nil || req.Limit != nil) {
-		ids, err := h.evaluate(col)
-		switch {
-		case err == nil:
-			col.MaterializedBookIDs = ids
-		case errors.Is(err, ErrCollectionOwnerMissingPerUserQuery):
-			// The edit is saved (name, sort, limit, even the query) but the members
-			// stay as they were, and the caller is told so instead of being handed
-			// a 200 that reads as a fresh evaluation.
-			blocked = true
+	// rather than the previous query's members. A per-viewer query has nothing to
+	// store: its stored list is cleared (also scrubbing a pre-change leftover) and
+	// the caller's own members ride in the response only.
+	perViewer := collectionIsPerViewer(col)
+	var viewerIDs []string
+	if col.Type == database.CollectionTypeDynamic {
+		if perViewer {
+			col.MaterializedBookIDs = nil
+		}
+		if req.Query != nil || req.SortJSON != nil || req.Limit != nil {
+			ids, err := h.evaluate(col, CallingUserID(c))
+			switch {
+			case err != nil:
+				// The edit is saved; the members stay as they were (stored) or
+				// empty (per-viewer) until the next evaluation.
+			case perViewer:
+				viewerIDs = ids
+			default:
+				col.MaterializedBookIDs = ids
+			}
 		}
 	}
 
@@ -584,49 +522,11 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		httputil.InternalError(c, "failed to update collection", err)
 		return
 	}
-	if blocked {
-		httputil.RespondWithOK(c, collectionBlockedResponse{
-			Collection:               col,
-			EvaluationBlocked:        ErrCodeCollectionOwnerMissingPerUserQuery,
-			EvaluationBlockedMessage: ownerMissingMessage(),
-		})
+	if perViewer {
+		httputil.RespondWithOK(c, withViewerMembers(col, viewerIDs))
 		return
 	}
 	httputil.RespondWithOK(c, col)
-}
-
-// adoptOwner handles "adopt_owner": true on a PUT carrying query: the caller must
-// be the first active admin standing in for an ownerless collection, and the query
-// must use a per-user field (adopting for any other query would change nothing the
-// evaluator reads). It stores the caller as the owner on col, or writes the error
-// response and reports false. Every refusal is explicit; nothing is a silent no-op.
-func (h *CollectionHandler) adoptOwner(c *gin.Context, col *database.Collection, query string) bool {
-	if !search.QueryUsesPerUserField(query) {
-		httputil.RespondWithBadRequest(c, "adopt_owner applies only to a query that uses a per-user field ("+
-			strings.Join(search.PerUserFieldNames(), ", ")+")")
-		return false
-	}
-	id, fallback, err := h.resolveEvaluator(col)
-	switch {
-	case errors.Is(err, ErrNoCollectionEvaluator):
-		httputil.RespondWithError(c, http.StatusForbidden,
-			"only the first active admin can adopt a collection, and there is none",
-			ErrCodeCollectionPerUserQueryOwnerOnly)
-		return false
-	case err != nil:
-		httputil.InternalError(c, "failed to resolve the collection's evaluating user", err)
-		return false
-	case !fallback:
-		httputil.RespondWithConflict(c, "the collection already has an owner; adopt_owner applies only to an ownerless collection")
-		return false
-	case id != CallingUserID(c):
-		httputil.RespondWithError(c, http.StatusForbidden,
-			"only the first active admin can adopt an ownerless collection",
-			ErrCodeCollectionPerUserQueryOwnerOnly)
-		return false
-	}
-	col.CreatedByUserID = id
-	return true
 }
 
 // DeleteCollection — DELETE /api/v1/collections/:id
@@ -648,6 +548,9 @@ func (h *CollectionHandler) DeleteCollection(c *gin.Context) {
 // serves MaterializedBookIDs without evaluating, so this is how a collection
 // created while the index was down becomes populated without waiting for
 // somebody to open it on the native API.
+//
+// A per-viewer collection (a per-user field in its query) stores nothing: the
+// response is the caller's own members.
 func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 	col, ok := h.load(c)
 	if !ok {
@@ -657,21 +560,19 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "only a dynamic collection can be materialized")
 		return
 	}
-	ids, err := h.evaluate(col)
+	ids, err := h.evaluate(col, CallingUserID(c))
 	if err != nil {
-		if errors.Is(err, ErrCollectionOwnerMissingPerUserQuery) {
-			// An explicit request to re-evaluate cannot be honoured, and the
-			// caller should be told why rather than handed the old members as if
-			// they were fresh.
-			httputil.RespondWithError(c, http.StatusConflict, ownerMissingMessage(),
-				ErrCodeCollectionOwnerMissingPerUserQuery)
-			return
-		}
-		if errors.Is(err, playlist.ErrSearchIndexUnavailable) || errors.Is(err, ErrNoCollectionEvaluator) {
+		if errors.Is(err, playlist.ErrSearchIndexUnavailable) {
 			httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "SERVICE_UNAVAILABLE")
 			return
 		}
 		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+	if collectionIsPerViewer(col) {
+		// Nothing to store: a per-viewer collection's members are the caller's
+		// own and are evaluated on every read. This answers what THIS caller sees.
+		httputil.RespondWithOK(c, withViewerMembers(col, ids))
 		return
 	}
 	// Same no-op guard as the read path, for the same reason: this endpoint is what
@@ -702,7 +603,7 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 // runs first, so every error EvaluateSmartPlaylist would return for the query's
 // text is returned here (an unsigned per-user date such as last_played:>30d among
 // them). It does not need the search index, so it works while the index is closed
-// or rebuilding. It deliberately does not look at the evaluator or the owner.
+// or rebuilding. It deliberately does not look at who is evaluating.
 func validateCollectionQuery(query string) error {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
@@ -714,31 +615,39 @@ func validateCollectionQuery(query string) error {
 	return nil
 }
 
-// evaluate runs a dynamic collection's query as the collection's owner.
+// collectionIsPerViewer reports whether who is looking decides col's members: a
+// dynamic collection whose query uses a per-user field (read_status,
+// progress_pct, last_played). Its members are evaluated for the viewer on every
+// read and never stored.
+func collectionIsPerViewer(col *database.Collection) bool {
+	return col.Type == database.CollectionTypeDynamic && search.QueryUsesPerUserField(col.Query)
+}
+
+// withViewerMembers returns a copy of col whose dynamic member list is ids, for a
+// response. It is a copy on purpose: col is the stored row's value, and a viewer's
+// members must never be written back onto it. No ids is an empty list, never the
+// stored one.
+func withViewerMembers(col *database.Collection, ids []string) *database.Collection {
+	out := *col
+	out.MaterializedBookIDs = ids
+	return &out
+}
+
+// evaluate runs a dynamic collection's query for viewerID.
 //
 // It reuses playlist.EvaluateSmartPlaylist rather than growing a second query
 // engine: the two features ask the same question of the same index, and a
 // private copy would drift — a query that worked in a smart playlist and failed
 // in a dynamic collection would be indistinguishable from a bad query.
 //
-// The user passed to it is evaluatorFor's answer, never the caller: see the file
-// header. That is what makes a materialize, a native read and the ABS surface
-// (which serves the stored set) agree whoever is signed in.
-func (h *CollectionHandler) evaluate(col *database.Collection) ([]string, error) {
-	// Only a per-user query has anyone to be evaluated as. Resolving an evaluator
-	// for every query would make a plain one depend on the owner row and on an
-	// active admin existing, and answer 503 for neither reason being its business.
+// viewerID reaches the evaluator only for a query with a per-user field, and an
+// empty one (no viewer: a background job, an unresolved caller) matches nothing
+// for such a query; it is never replaced by the collection's creator or an admin.
+// A query with no per-user field is evaluated with no user at all.
+func (h *CollectionHandler) evaluate(col *database.Collection, viewerID string) ([]string, error) {
 	userID := ""
 	if search.QueryUsesPerUserField(col.Query) {
-		id, fallback, err := h.resolveEvaluator(col)
-		if err != nil {
-			return nil, err
-		}
-		if fallback {
-			h.logOwnerFallback(col, id)
-			return nil, ErrCollectionOwnerMissingPerUserQuery
-		}
-		userID = id
+		userID = viewerID
 	}
 	return playlist.EvaluateSmartPlaylist(
 		h.evalStore, h.indexFn(),
@@ -747,110 +656,51 @@ func (h *CollectionHandler) evaluate(col *database.Collection) ([]string, error)
 	)
 }
 
-// ErrCodeCollectionPerUserQueryOwnerOnly is the error code of the 403 a caller
-// gets for writing a per-user field into a query they do not evaluate as.
-const ErrCodeCollectionPerUserQueryOwnerOnly = "COLLECTION_PER_USER_QUERY_OWNER_ONLY"
+// ViewerMemberSetsConcurrency is how many per-viewer collections are evaluated at
+// once for one request. A library has tens of dynamic collections at most, so the
+// pool rarely fills; it is bounded because each evaluation is a search plus one
+// state read per hit.
+const ViewerMemberSetsConcurrency = 4
 
-// requirePerUserQueryEvaluator reports whether the caller may put query on col,
-// writing the 403 itself when not. A query with no per-user field is always fine.
-// One with one is allowed only when the caller IS the collection's evaluator
-// (evaluatorFor), so nobody can read another user's state through the members
-// the owner-evaluated collection stores. No evaluator at all (no owner row, no
-// active admin) means nobody qualifies.
-func (h *CollectionHandler) requirePerUserQueryEvaluator(c *gin.Context, col *database.Collection, query string) bool {
-	if !search.QueryUsesPerUserField(query) {
-		return true
-	}
-	evaluator, err := h.evaluatorFor(col)
-	if err != nil && !errors.Is(err, ErrNoCollectionEvaluator) {
-		httputil.InternalError(c, "failed to resolve the collection's evaluating user", err)
-		return false
-	}
-	if err == nil && evaluator == CallingUserID(c) {
-		return true
-	}
-	httputil.RespondWithError(c, http.StatusForbidden,
-		"only the collection's owner can use per-user fields ("+strings.Join(search.PerUserFieldNames(), ", ")+
-			") in its query",
-		ErrCodeCollectionPerUserQueryOwnerOnly)
-	return false
-}
-
-// evaluatorFor names the user whose per-user state a dynamic collection is
-// evaluated against: CreatedByUserID when that user still exists, otherwise the
-// first active admin (logged, because the stored owner is stale), otherwise
-// ErrNoCollectionEvaluator.
+// ViewerMemberSets evaluates every per-viewer collection in cols for viewerID and
+// returns collection id to ordered member ids. A collection that is not per-viewer
+// is absent from the map (its members are the stored list). A per-viewer one whose
+// evaluation fails (index closed or rebuilding, a query that no longer parses) or
+// that has no viewer is present with an empty list: the answer is "none", never
+// the stored list and never another user's.
 //
-// "Exists" is a row lookup, not an active check: a deactivated owner's reading
-// state is still theirs, and moving a collection to a different user's state
-// because its owner was deactivated would silently change its members. The
-// fallback admin, by contrast, must be active (auth.FirstActiveAdmin).
-func (h *CollectionHandler) evaluatorFor(col *database.Collection) (string, error) {
-	userID, fallback, err := h.resolveEvaluator(col)
-	if err == nil && fallback {
-		h.logOwnerFallback(col, userID)
-	}
-	return userID, err
-}
-
-// localCallerID is the caller id a request carries when nobody is authenticated
-// (CallingUserID), and so the owner of a collection created with auth off.
-const localCallerID = "_local"
-
-// resolveEvaluator is evaluatorFor that also says whether the answer is the
-// first-admin stand-in (the stored owner is empty, "_local" or not a user row)
-// rather than the owner. It does not log; callers that evaluate do.
-func (h *CollectionHandler) resolveEvaluator(col *database.Collection) (userID string, fallback bool, err error) {
-	// Single-user mode: "_local" is the one user whose state exists, not a
-	// stand-in. With auth on it is not a user row and falls through like any other
-	// owner that does not exist.
-	if col.CreatedByUserID == localCallerID && !h.authEnabled() {
-		return localCallerID, false, nil
-	}
-	if h.owners == nil {
-		return "", false, ErrNoCollectionEvaluator
-	}
-	if col.CreatedByUserID != "" {
-		u, err := h.owners.GetUserByID(col.CreatedByUserID)
-		if err != nil {
-			return "", false, err
-		}
-		if u != nil {
-			return u.ID, false, nil
+// PARTITIONING: each collection is evaluated by exactly one worker and written to
+// its own slot, so workers share no mutable state.
+func (h *CollectionHandler) ViewerMemberSets(cols []database.Collection, viewerID string) map[string][]string {
+	out := make(map[string][]string)
+	var idx []int
+	for i := range cols {
+		if collectionIsPerViewer(&cols[i]) {
+			idx = append(idx, i)
 		}
 	}
-	users, err := h.owners.ListUsers()
-	if err != nil {
-		return "", false, err
+	if len(idx) == 0 {
+		return out
 	}
-	admin := auth.FirstActiveAdmin(users)
-	if admin == nil {
-		return "", false, ErrNoCollectionEvaluator
+	results := make([][]string, len(idx))
+	var g errgroup.Group
+	g.SetLimit(ViewerMemberSetsConcurrency)
+	for n, i := range idx {
+		g.Go(func() error {
+			if ids, err := h.evaluate(&cols[i], viewerID); err == nil {
+				results[n] = ids
+			}
+			return nil // an evaluation that fails is "no members", it never aborts the rest
+		})
 	}
-	return admin.ID, true, nil
-}
-
-// logOwnerFallback records that a collection has no usable owner and its first
-// active admin stand-in applies. It warns once per collection per process, and
-// never for a collection with no id (a create in flight has none yet, and an
-// empty id names nothing an operator could act on).
-func (h *CollectionHandler) logOwnerFallback(col *database.Collection, adminID string) {
-	if col.ID == "" {
-		return
+	_ = g.Wait()
+	for n, i := range idx {
+		if results[n] == nil {
+			results[n] = []string{}
+		}
+		out[cols[i].ID] = results[n]
 	}
-	if _, seen := h.fallbackLogged.LoadOrStore(col.ID, struct{}{}); seen {
-		return
-	}
-	h.log.Warn("collections: collection %s has owner %q which is not a user; first admin %s stands in for it and its per-user query is not evaluated",
-		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.CreatedByUserID), logger.SanitizeLogValue(adminID))
-}
-
-// ownerMissingMessage is the text of the 409 and of the evaluation_blocked flag.
-func ownerMissingMessage() string {
-	return "this collection's owner no longer exists and its query uses per-user fields (" +
-		strings.Join(search.PerUserFieldNames(), ", ") +
-		"), so it is not evaluated as the first admin and keeps its stored members; " +
-		"the first active admin can save its query again with adopt_owner set to true to take ownership, or the per-user fields can be removed"
+	return out
 }
 
 // load resolves :id, writing the error response itself.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_test.go
-// version: 1.6.0
+// version: 2.0.0
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package handlers_test
 
@@ -97,24 +97,6 @@ func (f *colFakeStore) RemoveBookFromCollection(id, bookID string) (*database.Co
 	}
 	return nil, fmt.Errorf("collection %s %w", id, database.ErrCollectionNotFound)
 }
-
-// colFakeUsers is the owner lookup. byID is what GetUserByID answers (nil for an
-// id with no row), list is what the first-admin fallback scans.
-type colFakeUsers struct {
-	list []database.User
-}
-
-func (f *colFakeUsers) GetUserByID(id string) (*database.User, error) {
-	for i := range f.list {
-		if f.list[i].ID == id {
-			cp := f.list[i]
-			return &cp, nil
-		}
-	}
-	return nil, nil
-}
-
-func (f *colFakeUsers) ListUsers() ([]database.User, error) { return f.list, nil }
 
 // colFakeBooks answers the two reads the handler and the evaluator make. known
 // is the set of book ids that exist; states is keyed "user/book".
@@ -215,7 +197,7 @@ func colRouter(store handlers.CollectionStore) (*gin.Engine, *handlers.Collectio
 	// validation and routing, not query evaluation, and a dynamic collection is
 	// specified to survive an unavailable index rather than fail creation.
 	members, _ := store.(handlers.CollectionMembers)
-	h := handlers.NewCollectionHandler(store, members, nil, &colFakeBooks{}, nil)
+	h := handlers.NewCollectionHandler(store, members, &colFakeBooks{}, nil)
 	r := gin.New()
 	g := r.Group("/api/v1")
 	g.POST("/collections", h.CreateCollection)
@@ -530,7 +512,7 @@ func colGatedRouter(
 ) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	members, _ := colStore.(handlers.CollectionMembers)
-	h := handlers.NewCollectionHandler(colStore, members, nil, &colFakeBooks{}, nil)
+	h := handlers.NewCollectionHandler(colStore, members, &colFakeBooks{}, nil)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		ctx := auth.WithUser(c.Request.Context(), &database.User{ID: "u1", Username: "gatekeeper"})
@@ -583,7 +565,7 @@ func colEvalRouter(t *testing.T, store handlers.CollectionStore, bookIDs ...stri
 		return books, nil
 	}).Maybe()
 
-	h := handlers.NewCollectionHandler(store, nil, colEvalOwners(), evalStore, func() *search.BleveIndex { return idx })
+	h := handlers.NewCollectionHandler(store, nil, evalStore, func() *search.BleveIndex { return idx })
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	g := r.Group("/api/v1")
@@ -674,15 +656,6 @@ func TestCollectionNameInUse_Maps409(t *testing.T) {
 	})
 }
 
-// colEvalOwners is the owner lookup for tests that do not care who the owner is:
-// one active admin, so the first-admin fallback always has an answer.
-func colEvalOwners() *colFakeUsers {
-	return &colFakeUsers{list: []database.User{{
-		ID: "admin-1", Username: "admin", Roles: []string{auth.SeedRoleAdmin}, Status: "active",
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	}}}
-}
-
 // ── add / remove books ──────────────────────────────────────────────────────
 
 func staticCollection(ids ...string) *colFakeStore {
@@ -746,7 +719,7 @@ func TestAddBooksToCollection(t *testing.T) {
 	t.Run("400 names the first unknown book and writes nothing", func(t *testing.T) {
 		store := staticCollection("b1")
 		gin.SetMode(gin.TestMode)
-		h := handlers.NewCollectionHandler(store, store, nil,
+		h := handlers.NewCollectionHandler(store, store,
 			&colFakeBooks{known: map[string]bool{"b1": true, "b2": true}}, nil)
 		r := gin.New()
 		r.POST("/collections/:id/books", h.AddBooksToCollection)
@@ -783,7 +756,7 @@ func TestAddBooksToCollection(t *testing.T) {
 		// not static. The mapping must still be 409 rather than a 500.
 		store := &racingMembership{colFakeStore: staticCollection(), err: database.ErrCollectionNotStatic}
 		gin.SetMode(gin.TestMode)
-		h := handlers.NewCollectionHandler(store, store, nil, &colFakeBooks{}, nil)
+		h := handlers.NewCollectionHandler(store, store, &colFakeBooks{}, nil)
 		r := gin.New()
 		r.POST("/collections/:id/books", h.AddBooksToCollection)
 		w := colDo(t, r, http.MethodPost, "/collections/c1/books",
@@ -793,7 +766,7 @@ func TestAddBooksToCollection(t *testing.T) {
 
 	t.Run("503 without a membership store", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
-		h := handlers.NewCollectionHandler(staticCollection(), nil, nil, &colFakeBooks{}, nil)
+		h := handlers.NewCollectionHandler(staticCollection(), nil, &colFakeBooks{}, nil)
 		r := gin.New()
 		r.POST("/collections/:id/books", h.AddBooksToCollection)
 		w := colDo(t, r, http.MethodPost, "/collections/c1/books",
@@ -850,31 +823,34 @@ func TestRemoveBookFromCollection(t *testing.T) {
 	})
 }
 
-// ── owner evaluation (D75) ──────────────────────────────────────────────────
+// ── per-viewer evaluation (owner decision 2026-10-25, replacing D75) ────────────
 
-// ownerRig is a real Bleve index over b1..b3 plus fakes for the owner lookup and
-// per-user state. The caller is injected from the X-Test-User header so a test
-// can prove the answer does not depend on who is signed in.
-type ownerRig struct {
+// viewerRig is a real Bleve index over b1..b3 plus a fake per-user state store.
+// The caller is injected from the X-Test-User header, so a test can prove the
+// answer follows whoever is signed in and nothing else.
+type viewerRig struct {
 	r     *gin.Engine
 	store *colFakeStore
 	h     *handlers.CollectionHandler
 }
 
-func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
-	states map[string]*database.UserBookState, opts ...handlers.CollectionOption) *ownerRig {
+func newViewerRig(t *testing.T, store *colFakeStore, states map[string]*database.UserBookState) *viewerRig {
 	t.Helper()
 	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = idx.Close() })
 	require.NoError(t, idx.MarkRebuilt())
+	// Added 2, 20 and 60 days ago, so a date_added window picks a known subset.
+	added := func(days int) *time.Time { d := time.Now().AddDate(0, 0, -days); return &d }
 	require.NoError(t, idx.IndexBookBatch([]search.BookDocument{
-		{BookID: "b1", Title: "Alpha"}, {BookID: "b2", Title: "Bravo"}, {BookID: "b3", Title: "Charlie"},
+		{BookID: "b1", Title: "Alpha", DateAdded: added(2)},
+		{BookID: "b2", Title: "Bravo", DateAdded: added(20)},
+		{BookID: "b3", Title: "Charlie", DateAdded: added(60)},
 	}))
 
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewCollectionHandler(store, nil, &colFakeUsers{list: users},
-		&colFakeBooks{states: states}, func() *search.BleveIndex { return idx }, opts...)
+	h := handlers.NewCollectionHandler(store, nil,
+		&colFakeBooks{states: states}, func() *search.BleveIndex { return idx })
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		if id := c.GetHeader("X-Test-User"); id != "" {
@@ -885,30 +861,31 @@ func newOwnerRig(t *testing.T, store *colFakeStore, users []database.User,
 		c.Next()
 	})
 	g := r.Group("/api/v1")
+	g.GET("/collections", h.ListCollections)
 	g.GET("/collections/:id", h.GetCollection)
 	g.POST("/collections/:id/materialize", h.MaterializeCollection)
 	g.POST("/collections", h.CreateCollection)
 	g.PUT("/collections/:id", h.UpdateCollection)
-	return &ownerRig{r: r, store: store, h: h}
+	return &viewerRig{r: r, store: store, h: h}
 }
 
-func (o *ownerRig) do(t *testing.T, method, path, asUser string) *httptest.ResponseRecorder {
+func (o *viewerRig) do(t *testing.T, method, path, asUser string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, nil)
-	if asUser != "" {
-		req.Header.Set("X-Test-User", asUser)
+	return o.send(t, method, path, asUser, nil)
+}
+
+// send is do with an optional JSON body.
+func (o *viewerRig) send(t *testing.T, method, path, asUser string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(raw)
+	} else {
+		reader = bytes.NewReader(nil)
 	}
-	w := httptest.NewRecorder()
-	o.r.ServeHTTP(w, req)
-	return w
-}
-
-// send is do with a JSON body.
-func (o *ownerRig) send(t *testing.T, method, path, asUser string, body any) *httptest.ResponseRecorder {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-	req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+	req := httptest.NewRequest(method, path, reader)
 	req.Header.Set("Content-Type", "application/json")
 	if asUser != "" {
 		req.Header.Set("X-Test-User", asUser)
@@ -920,7 +897,7 @@ func (o *ownerRig) send(t *testing.T, method, path, asUser string, body any) *ht
 
 func decodeMaterialized(t *testing.T, w *httptest.ResponseRecorder) []string {
 	t.Helper()
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Contains(t, []int{http.StatusOK, http.StatusCreated}, w.Code, "body: %s", w.Body.String())
 	var env struct {
 		Data database.Collection `json:"data"`
 	}
@@ -928,7 +905,25 @@ func decodeMaterialized(t *testing.T, w *httptest.ResponseRecorder) []string {
 	return env.Data.MaterializedBookIDs
 }
 
-func ownerStates() map[string]*database.UserBookState {
+// decodeListMembers returns collection id to the members the list response
+// carries for it.
+func decodeListMembers(t *testing.T, w *httptest.ResponseRecorder) map[string][]string {
+	t.Helper()
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var env struct {
+		Items []database.Collection `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env), "body: %s", w.Body.String())
+	out := make(map[string][]string, len(env.Items))
+	for _, c := range env.Items {
+		out[c.ID] = c.MaterializedBookIDs
+	}
+	return out
+}
+
+// viewerStates: alice finished b1 and is part-way through b2; bob finished b2.
+// Nobody has a row for b3, and carol has no rows at all.
+func viewerStates() map[string]*database.UserBookState {
 	return map[string]*database.UserBookState{
 		"alice/b1": {UserID: "alice", BookID: "b1", Status: database.UserBookStatusFinished},
 		"alice/b2": {UserID: "alice", BookID: "b2", Status: database.UserBookStatusInProgress},
@@ -936,388 +931,161 @@ func ownerStates() map[string]*database.UserBookState {
 	}
 }
 
-func ownerUsers() []database.User {
-	return []database.User{
-		{ID: "alice", Username: "alice", Roles: []string{auth.SeedRoleAdmin}, Status: "active",
-			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active",
-			CreatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
-	}
-}
-
-// TestDynamicCollectionIsEvaluatedAsItsOwner is the D75 regression: the answer
-// follows CreatedByUserID, not whoever is signed in. Alice finished b1 and bob
-// finished b2, so a reader-scoped evaluation would flip the members with the
-// caller.
-func TestDynamicCollectionIsEvaluatedAsItsOwner(t *testing.T) {
-	newStore := func() *colFakeStore {
-		return &colFakeStore{cols: []database.Collection{
-			{ID: "owned-by-alice", Name: "A", Type: database.CollectionTypeDynamic,
-				Query: "read_status:finished", CreatedByUserID: "alice"},
-			{ID: "owned-by-bob", Name: "B", Type: database.CollectionTypeDynamic,
-				Query: "read_status:finished", CreatedByUserID: "bob"},
-		}}
-	}
-
-	for _, caller := range []string{"alice", "bob", ""} {
-		t.Run("materialize as "+caller, func(t *testing.T) {
-			rig := newOwnerRig(t, newStore(), ownerUsers(), ownerStates())
-			w := rig.do(t, http.MethodPost, "/api/v1/collections/owned-by-alice/materialize", caller)
-			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w),
-				"alice owns it, so it holds what alice finished, whoever asked")
-			w = rig.do(t, http.MethodPost, "/api/v1/collections/owned-by-bob/materialize", caller)
-			assert.Equal(t, []string{"b2"}, decodeMaterialized(t, w))
-		})
-		t.Run("read as "+caller, func(t *testing.T) {
-			rig := newOwnerRig(t, newStore(), ownerUsers(), ownerStates())
-			w := rig.do(t, http.MethodGet, "/api/v1/collections/owned-by-alice", caller)
-			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w))
-			// What a read stores is what the ABS surface serves without
-			// evaluating, so it must be the owner's answer too.
-			assert.Equal(t, []string{"b1"}, rig.store.cols[0].MaterializedBookIDs)
-		})
-	}
-}
-
-// TestDynamicCollectionUnstartedMatchesBooksWithNoStateRow is the end-to-end
-// side of the read_status:unstarted fix: books the owner never touched have no
-// state row at all, and they are exactly the unstarted ones.
-func TestDynamicCollectionUnstartedMatchesBooksWithNoStateRow(t *testing.T) {
-	store := &colFakeStore{cols: []database.Collection{{
-		ID: "c1", Name: "Untouched", Type: database.CollectionTypeDynamic,
-		Query: "read_status:unstarted", CreatedByUserID: "alice",
+// aliceFinishedCollection is a per-user dynamic collection CREATED BY alice, with
+// a stale stored list standing in for what the creator-evaluated behaviour left.
+func aliceFinishedCollection(query string) *colFakeStore {
+	return &colFakeStore{cols: []database.Collection{{
+		ID: "c1", Name: "Finished", Type: database.CollectionTypeDynamic,
+		Query: query, CreatedByUserID: "alice",
 	}}}
-	rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-	w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-	assert.Equal(t, []string{"b3"}, decodeMaterialized(t, w),
-		"b1 is finished and b2 in progress for alice; only b3 has no row")
 }
 
-func TestDynamicCollectionFallsBackToFirstActiveAdmin(t *testing.T) {
-	users := []database.User{
-		// Earliest admin, but not active: must be skipped.
-		{ID: "old-admin", Username: "old", Roles: []string{auth.SeedRoleAdmin}, Status: "inactive",
-			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active",
-			CreatedAt: time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)},
-		{ID: "alice", Username: "alice", Roles: []string{auth.SeedRoleAdmin}, Status: "active",
-			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-	}
-	for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner recorded": ""} {
-		t.Run(name, func(t *testing.T) {
-			// A query that reads nobody's state still falls back to the admin (D75).
-			store := &colFakeStore{cols: []database.Collection{{
-				ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
-				Query: "title:Alpha", CreatedByUserID: owner,
-			}}}
-			rig := newOwnerRig(t, store, users, ownerStates())
-			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w))
-
-			// A per-user query is never evaluated as the stand-in: the first ACTIVE
-			// admin (alice, not the earlier but inactive old-admin) takes it over by
-			// saving it, and only then does it evaluate, as alice (b1), never as bob (b2).
-			store = &colFakeStore{cols: []database.Collection{{
-				ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
-				Query: "read_status:finished", CreatedByUserID: owner, MaterializedBookIDs: []string{"b9"},
-			}}}
-			rig = newOwnerRig(t, store, users, ownerStates())
-			w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-			assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
-
-			for _, who := range []string{"old-admin", "bob"} {
-				w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", who, map[string]any{"query": "read_status:finished"})
-				assert.Equal(t, http.StatusOK, w.Code, "%s re-sending the same query: %s", who, w.Body.String())
-				assert.Equal(t, owner, store.cols[0].CreatedByUserID, "%s is not the stand-in, so nothing is adopted", who)
-			}
-			// The admin re-sending the query without the flag adopts nothing; the
-			// collection stays blocked and the response says so.
-			w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": "read_status:finished"})
-			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-			assert.Equal(t, owner, store.cols[0].CreatedByUserID, "no adopt_owner, no adoption")
-			assert.Contains(t, w.Body.String(), "evaluation_blocked")
-			// Adoption is the explicit act, and only the stand-in admin's.
-			for _, who := range []string{"old-admin", "bob"} {
-				w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", who,
-					map[string]any{"query": "read_status:finished", "adopt_owner": true})
-				assert.Equal(t, http.StatusForbidden, w.Code, "%s: %s", who, w.Body.String())
-				assert.Equal(t, owner, store.cols[0].CreatedByUserID)
-			}
-			w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice",
-				map[string]any{"query": "read_status:finished", "adopt_owner": true})
-			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-			assert.Equal(t, "alice", store.cols[0].CreatedByUserID)
-			w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-			assert.Equal(t, []string{"b1"}, decodeMaterialized(t, w), "bob's state (b2) must not leak in")
+// TestDynamicCollectionIsEvaluatedForTheViewer is the owner decision of
+// 2026-10-25: alice (the creator) finished b1 and bob finished b2, so the members
+// of the SAME collection flip with whoever is looking, on every native read path.
+func TestDynamicCollectionIsEvaluatedForTheViewer(t *testing.T) {
+	want := map[string][]string{"alice": {"b1"}, "bob": {"b2"}, "carol": {}}
+	for viewer, members := range want {
+		t.Run("read as "+viewer, func(t *testing.T) {
+			rig := newViewerRig(t, aliceFinishedCollection("read_status:finished"), viewerStates())
+			got := decodeMaterialized(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", viewer))
+			assert.ElementsMatch(t, members, got)
+		})
+		t.Run("materialize as "+viewer, func(t *testing.T) {
+			rig := newViewerRig(t, aliceFinishedCollection("read_status:finished"), viewerStates())
+			got := decodeMaterialized(t, rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", viewer))
+			assert.ElementsMatch(t, members, got)
+		})
+		t.Run("list as "+viewer, func(t *testing.T) {
+			rig := newViewerRig(t, aliceFinishedCollection("read_status:finished"), viewerStates())
+			got := decodeListMembers(t, rig.do(t, http.MethodGet, "/api/v1/collections", viewer))
+			assert.ElementsMatch(t, members, got["c1"], "a collection card's count is the viewer's own")
 		})
 	}
 }
 
-func TestDynamicCollectionWithNoEvaluatorIs503(t *testing.T) {
-	// The owner is gone and nobody is an active admin.
-	users := []database.User{
-		{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active"},
-		{ID: "old-admin", Username: "old", Roles: []string{auth.SeedRoleAdmin}, Status: "revoked"},
+// TestCreatorStateNeverDecidesAnotherViewersMembership: the creator (alice)
+// finished b1; no other viewer may ever see b1 because of that. Covers a
+// positive rule, a negated one and "unstarted" (which matches books with no row),
+// and an admin viewer, who gets their own state like everybody else.
+func TestCreatorStateNeverDecidesAnotherViewersMembership(t *testing.T) {
+	cases := []struct {
+		name, query string
+		viewer      string
+		want        []string
+	}{
+		{"finished, bob", "read_status:finished", "bob", []string{"b2"}},
+		{"finished, admin with no state", "read_status:finished", "admin-1", nil},
+		{"unstarted, bob (only b2 has a row)", "read_status:unstarted", "bob", []string{"b1", "b3"}},
+		{"unstarted, admin with no state", "read_status:unstarted", "admin-1", []string{"b1", "b2", "b3"}},
+		{"not finished, bob", "-read_status:finished", "bob", []string{"b1", "b3"}},
+		{"unstarted, alice herself", "read_status:unstarted", "alice", []string{"b3"}},
 	}
-	store := &colFakeStore{cols: []database.Collection{{
-		ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic, Query: "read_status:finished",
-		CreatedByUserID: "deleted-user", MaterializedBookIDs: []string{"b9"},
-	}}}
-	rig := newOwnerRig(t, store, users, ownerStates())
-
-	w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "body: %s", w.Body.String())
-	assert.Equal(t, 0, store.updates)
-
-	w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
-	assert.Equal(t, []string{"b9"}, decodeMaterialized(t, w),
-		"a read serves the last stored members rather than failing")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newViewerRig(t, aliceFinishedCollection(tc.query), viewerStates())
+			got := decodeMaterialized(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", tc.viewer))
+			assert.ElementsMatch(t, tc.want, got)
+		})
+	}
 }
 
-// ── per-user fields in a query are the evaluator's to write ─────────────────
+// TestPerViewerCollectionStoresNoMemberList is the leak test that matters: after
+// any evaluation for a viewer the STORED row still carries no members. A stored
+// list is one viewer's answer served to everyone else (and to the ABS surface,
+// which never evaluates).
+func TestPerViewerCollectionStoresNoMemberList(t *testing.T) {
+	t.Run("get, materialize and list write nothing", func(t *testing.T) {
+		store := aliceFinishedCollection("read_status:finished")
+		rig := newViewerRig(t, store, viewerStates())
+		for _, viewer := range []string{"alice", "bob"} {
+			rig.do(t, http.MethodGet, "/api/v1/collections/c1", viewer)
+			rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", viewer)
+			rig.do(t, http.MethodGet, "/api/v1/collections", viewer)
+		}
+		assert.Zero(t, store.updates, "a per-viewer read must not write the row")
+		assert.Empty(t, store.cols[0].MaterializedBookIDs)
+	})
 
-// A dynamic collection is evaluated as its owner and the answer is stored and
-// served to everybody. Anyone with collections.manage could therefore edit the
-// query to read the owner's private state back out of the members. The fix:
-// only the evaluating user may write a per-user field into the query.
-func TestCollectionPerUserQueryIsEvaluatorOnly(t *testing.T) {
-	const forbidden = http.StatusForbidden
-	aliceOwned := func() *colFakeStore {
-		return &colFakeStore{cols: []database.Collection{{
-			ID: "c1", Name: "Alice's", Type: database.CollectionTypeDynamic,
+	t.Run("create answers the creator but stores nothing", func(t *testing.T) {
+		store := &colFakeStore{}
+		rig := newViewerRig(t, store, viewerStates())
+		w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
+			map[string]any{"name": "Finished", "type": "dynamic", "query": "read_status:finished"})
+		assert.ElementsMatch(t, []string{"b1"}, decodeMaterialized(t, w))
+		require.NotNil(t, store.created)
+		assert.Empty(t, store.created.MaterializedBookIDs, "the stored row carries no creator state")
+	})
+
+	t.Run("update answers the editor but stores nothing", func(t *testing.T) {
+		store := &colFakeStore{cols: []database.Collection{{
+			ID: "c1", Name: "Mine", Type: database.CollectionTypeDynamic,
 			Query: "title:Alpha", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b1"},
 		}}}
-	}
-	put := func(rig *ownerRig, who, query string) *httptest.ResponseRecorder {
-		return rig.send(t, http.MethodPut, "/api/v1/collections/c1", who, map[string]any{"query": query})
-	}
-	requireRefused := func(t *testing.T, w *httptest.ResponseRecorder) {
-		t.Helper()
-		require.Equal(t, forbidden, w.Code, "body: %s", w.Body.String())
-		var body struct {
-			Code  string `json:"code"`
-			Error string `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), w.Body.String())
-		assert.Equal(t, handlers.ErrCodeCollectionPerUserQueryOwnerOnly, body.Code)
-		assert.Contains(t, body.Error, "only the collection's owner can use per-user fields")
-		for _, f := range []string{"read_status", "progress_pct", "last_played"} {
-			assert.Contains(t, body.Error, f)
-		}
-	}
-
-	t.Run("a non-owner cannot put a per-user field in the query", func(t *testing.T) {
-		for _, q := range []string{
-			"read_status:finished",
-			"title:Alpha AND read_status:finished",
-			"-read_status:finished",
-			"NOT read_status:unstarted",
-			"progress_pct:>5",
-			"last_played:>2026-01-01",
-			"last_played:>-30d",
-			"title:Alpha OR (title:Bravo AND read_status:in_progress)",
-			"read_status:(finished|in_progress)",
-		} {
-			store := aliceOwned()
-			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-			requireRefused(t, put(rig, "bob", q))
-			assert.Equal(t, "title:Alpha", store.cols[0].Query, "%q: the query must be unchanged", q)
-			assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "%q: so must the members", q)
-			assert.Zero(t, store.updates, "%q: nothing is written", q)
-		}
+		rig := newViewerRig(t, store, viewerStates())
+		// bob is not the creator and may use a per-user field: it reads his own state.
+		w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "bob",
+			map[string]any{"query": "read_status:finished"})
+		assert.ElementsMatch(t, []string{"b2"}, decodeMaterialized(t, w))
+		assert.Empty(t, store.cols[0].MaterializedBookIDs)
 	})
 
-	t.Run("a non-owner may still edit a query with no per-user field", func(t *testing.T) {
-		store := aliceOwned()
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-		w := put(rig, "bob", "title:Bravo")
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, "title:Bravo", store.cols[0].Query)
-		assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs)
+	t.Run("a leftover stored list is never served and is scrubbed by any write", func(t *testing.T) {
+		store := aliceFinishedCollection("read_status:finished")
+		store.cols[0].MaterializedBookIDs = []string{"b1", "b3"} // alice's old answer
+		rig := newViewerRig(t, store, viewerStates())
+		got := decodeMaterialized(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob"))
+		assert.ElementsMatch(t, []string{"b2"}, got, "bob must not see alice's stored list")
+		got = decodeListMembers(t, rig.do(t, http.MethodGet, "/api/v1/collections", "bob"))["c1"]
+		assert.ElementsMatch(t, []string{"b2"}, got)
+
+		rig.send(t, http.MethodPut, "/api/v1/collections/c1", "bob", map[string]any{"name": "Renamed"})
+		assert.Empty(t, store.cols[0].MaterializedBookIDs, "a name-only write clears the leftover")
 	})
 
-	t.Run("the owner may use a per-user field, and it is read as the owner", func(t *testing.T) {
-		store := aliceOwned()
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-		w := put(rig, "alice", "read_status:finished")
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, "read_status:finished", store.cols[0].Query)
-		assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
-	})
-
-	t.Run("only the query is gated: a non-owner can rename, re-send or strip it", func(t *testing.T) {
-		store := &colFakeStore{cols: []database.Collection{{
-			ID: "c1", Name: "Alice's", Type: database.CollectionTypeDynamic,
-			Query: "read_status:finished", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b1"},
-		}}}
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-
-		w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "bob", map[string]any{"name": "Renamed"})
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, "Renamed", store.cols[0].Name)
-
-		// The same text again changes nothing the evaluator's state is asked about.
-		w = put(rig, "bob", "read_status:finished")
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-		// Changing it to another per-user query is refused ...
-		requireRefused(t, put(rig, "bob", "read_status:in_progress"))
-		assert.Equal(t, "read_status:finished", store.cols[0].Query)
-
-		// ... and removing the per-user field is not.
-		w = put(rig, "bob", "title:Charlie")
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, "title:Charlie", store.cols[0].Query)
-	})
-
-	t.Run("a collection evaluated as the first admin: only that admin may set one", func(t *testing.T) {
-		for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner recorded": ""} {
-			t.Run(name, func(t *testing.T) {
-				store := aliceOwned()
-				store.cols[0].CreatedByUserID = owner
-				rig := newOwnerRig(t, store, ownerUsers(), ownerStates()) // alice is the first admin
-				requireRefused(t, put(rig, "bob", "read_status:finished"))
-				assert.Equal(t, "title:Alpha", store.cols[0].Query)
-				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
-
-				// The stand-in admin may write the query, but writing it adopts nothing:
-				// the collection stays ownerless and unevaluated until adopt_owner.
-				w := put(rig, "alice", "read_status:finished")
-				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-				assert.Equal(t, owner, store.cols[0].CreatedByUserID, "no adopt_owner, no adoption")
-				assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "members untouched")
-
-				w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice",
-					map[string]any{"query": "read_status:in_progress", "adopt_owner": true})
-				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-				assert.Equal(t, "alice", store.cols[0].CreatedByUserID,
-					"the admin who asks to adopt an ownerless per-user collection takes it over")
-				assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs, "and it is evaluated as alice")
-			})
-		}
-	})
-
-	t.Run("nobody can set one when there is no evaluator at all", func(t *testing.T) {
-		users := []database.User{{ID: "bob", Username: "bob", Roles: []string{"viewer"}, Status: "active"}}
-		store := aliceOwned()
-		store.cols[0].CreatedByUserID = "deleted-user"
-		rig := newOwnerRig(t, store, users, ownerStates())
-		requireRefused(t, put(rig, "bob", "read_status:finished"))
-		assert.Equal(t, "title:Alpha", store.cols[0].Query)
-	})
-
-	t.Run("create: the creator is the owner and the evaluator", func(t *testing.T) {
-		store := &colFakeStore{}
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-		w := rig.send(t, http.MethodPost, "/api/v1/collections", "bob", map[string]any{
-			"name": "Bob finished", "type": "dynamic", "query": "read_status:finished"})
-		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
-		require.Len(t, store.cols, 1)
-		assert.Equal(t, "bob", store.cols[0].CreatedByUserID)
-		assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs,
-			"evaluated as bob (b2), never as the first admin alice (b1)")
-	})
-
-	t.Run("create: a creator who is not a user row never borrows the admin's state", func(t *testing.T) {
-		store := &colFakeStore{}
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-		w := rig.send(t, http.MethodPost, "/api/v1/collections", "ghost", map[string]any{
-			"name": "Ghost finished", "type": "dynamic", "query": "read_status:finished"})
-		requireRefused(t, w)
-		assert.Empty(t, store.cols, "nothing is stored")
-
-		// Without a per-user field the same caller may create one.
-		w = rig.send(t, http.MethodPost, "/api/v1/collections", "ghost", map[string]any{
-			"name": "Ghost title", "type": "dynamic", "query": "title:Alpha"})
-		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	t.Run("an index that is not open serves no members, not the stored list", func(t *testing.T) {
+		store := aliceFinishedCollection("read_status:finished")
+		store.cols[0].MaterializedBookIDs = []string{"b1"}
+		r, _ := colRouter(store) // nil index getter
+		w := colDo(t, r, http.MethodGet, "/api/v1/collections/c1", nil)
+		assert.Empty(t, decodeMaterialized(t, w))
+		w = colDo(t, r, http.MethodGet, "/api/v1/collections", nil)
+		assert.Empty(t, decodeListMembers(t, w)["c1"])
 	})
 }
 
-// ── a stand-in admin never evaluates a per-user query ───────────────────────
-
-// An ownerless collection falls back to the first active admin, but only for a
-// query that does not read anyone's state. With a per-user field the fallback
-// would publish the admin's listening state, so the evaluation is refused and
-// the stored members stay as they were.
-func TestCollectionFallbackNeverEvaluatesPerUserQuery(t *testing.T) {
-	ownerless := func(query string, owner string) *colFakeStore {
-		return &colFakeStore{cols: []database.Collection{{
-			ID: "c1", Name: "Orphan", Type: database.CollectionTypeDynamic,
-			Query: query, CreatedByUserID: owner, MaterializedBookIDs: []string{"b3"}, Version: 1,
-		}}}
-	}
-	for name, owner := range map[string]string{"owner row gone": "deleted-user", "no owner": "", "_local": "_local"} {
-		t.Run(name+": materialize is a 409 and keeps the stored members", func(t *testing.T) {
-			store := ownerless("read_status:finished", owner)
-			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "alice")
-			require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
-			var body struct {
-				Code  string `json:"code"`
-				Error string `json:"error"`
-			}
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), w.Body.String())
-			assert.Equal(t, handlers.ErrCodeCollectionOwnerMissingPerUserQuery, body.Code)
-			assert.Contains(t, body.Error, "per-user fields")
-			assert.Equal(t, []string{"b3"}, store.cols[0].MaterializedBookIDs,
-				"not re-materialized from the stand-in admin's state (alice finished b1)")
-			assert.Zero(t, store.updates, "nothing is written")
-		})
-
-		t.Run(name+": a read serves the stored members with a flag", func(t *testing.T) {
-			store := ownerless("read_status:finished", owner)
-			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-			w := rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
-			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-			data, _ := body["data"].(map[string]any)
-			require.NotNil(t, data, w.Body.String())
-			assert.Equal(t, handlers.ErrCodeCollectionOwnerMissingPerUserQuery, data["evaluation_blocked"])
-			assert.NotEmpty(t, data["evaluation_blocked_message"])
-			assert.Equal(t, "c1", data["id"], "the collection fields are still flattened at the top level")
-			assert.Equal(t, []any{"b3"}, data["materialized_book_ids"])
-			assert.Zero(t, store.updates, "a read stores nothing")
-		})
-
-		t.Run(name+": without a per-user field it still falls back to the admin", func(t *testing.T) {
-			store := ownerless("title:Alpha", owner)
-			rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-			w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-			assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
-
-			w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "bob")
-			require.Equal(t, http.StatusOK, w.Code)
-			assert.NotContains(t, w.Body.String(), "evaluation_blocked")
+// TestNoViewerMatchesNothingForPerUserCollections: ViewerMemberSets with no
+// viewer is "none", never the creator's members and never a stored list; a
+// collection with no per-user rule is not in the answer at all.
+func TestNoViewerMatchesNothingForPerUserCollections(t *testing.T) {
+	for _, q := range []string{"read_status:finished", "read_status:unstarted", "-read_status:finished", "progress_pct:<50"} {
+		t.Run(q, func(t *testing.T) {
+			store := aliceFinishedCollection(q)
+			store.cols[0].MaterializedBookIDs = []string{"b1"}
+			store.cols = append(store.cols, database.Collection{
+				ID: "plain", Name: "Plain", Type: database.CollectionTypeDynamic, Query: "title:Alpha",
+			})
+			rig := newViewerRig(t, store, viewerStates())
+			sets := rig.h.ViewerMemberSets(store.cols, "")
+			assert.Equal(t, []string{}, sets["c1"], "no viewer, no members")
+			_, present := sets["plain"]
+			assert.False(t, present, "a collection without a per-user rule is not per-viewer")
 		})
 	}
+}
 
-	t.Run("a collection with a live owner evaluates a per-user query as before", func(t *testing.T) {
-		store := ownerless("read_status:finished", "bob")
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-		w := rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "alice")
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, []string{"b2"}, store.cols[0].MaterializedBookIDs, "as bob, who finished b2")
-		w = rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice")
-		assert.NotContains(t, w.Body.String(), "evaluation_blocked")
-	})
-
-	t.Run("the first admin saving the query with adopt_owner takes the collection over", func(t *testing.T) {
-		store := ownerless("read_status:finished", "deleted-user")
-		rig := newOwnerRig(t, store, ownerUsers(), ownerStates())
-		// Not a non-admin: bob re-sending the same query neither adopts nor errors.
-		w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "bob", map[string]any{"query": "read_status:finished"})
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, "deleted-user", store.cols[0].CreatedByUserID)
-
-		w = rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice",
-			map[string]any{"query": "read_status:finished", "adopt_owner": true})
-		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-		assert.Equal(t, "alice", store.cols[0].CreatedByUserID)
-		assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
-
-		w = rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", "bob")
-		require.Equal(t, http.StatusOK, w.Code, "now it has an owner and evaluates")
-	})
+// A query with no per-user field keeps its behaviour: evaluated with no user,
+// stored, and the same for every viewer.
+func TestNonPerUserDynamicCollectionIsStillMaterialized(t *testing.T) {
+	store := &colFakeStore{cols: []database.Collection{{
+		ID: "c1", Name: "Alpha", Type: database.CollectionTypeDynamic,
+		Query: "title:Alpha", CreatedByUserID: "alice",
+	}}}
+	rig := newViewerRig(t, store, viewerStates())
+	for _, viewer := range []string{"alice", "bob"} {
+		got := decodeMaterialized(t, rig.do(t, http.MethodPost, "/api/v1/collections/c1/materialize", viewer))
+		assert.Equal(t, []string{"b1"}, got, "viewer %s", viewer)
+	}
+	assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs, "the shared answer is stored")
+	assert.Equal(t, 1, store.updates, "and written once: the second materialize found nothing changed")
 }
