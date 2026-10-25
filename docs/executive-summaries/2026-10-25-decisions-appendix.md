@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-decisions-appendix.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: e75847e4-760a-4d0d-8527-1eeffece31f9 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -22,3 +22,4 @@ From 2026-10-25 12:53 EDT to 2026-10-26 12:53 EDT (or until you say otherwise), 
 | D11 | 10-25 15:10 | #4155 review: 2 blockers (an unparseable per-user query still serves the creator's stored list; per-user collections only look at the 10,000 oldest books, also true on main) and 6 should-fix. Fix the 10k cap here or as a follow-up? | Fix everything in #4155, incl. the per-user state lookup (~1 day) · Merge with the cap as a follow-up | **Fix everything in #4155** | The PR makes the capped path the only path for every viewer; per D7 the lookup was already chosen |
 | D12 | 10-25 16:10 | #4140 review: the purge already replays file records at boot when a run resumes, so an unmounted library can still be read as "files gone". Add a mount check? | Mount-readiness check before any replay or file decision, then also add the boot replay · Keep the dialog-only approach | **Mount check + boot replay** (replaces D4) | The boot path exists anyway; the check is what keeps records safe |
 | D13 | 10-25 16:10 | #4140: 0 blockers, 4 should-fix (new button unreachable on an empty trash; stale decision at removal; single-book paths leave files with no record). Merge now or fix first? | Fix first · Merge, follow up | **Fix first** | Runs on prod without a flag |
+| D14 | 10-25 16:50 | #4149 superseded by squashed #4159. The old #4149 commits (and the #4145 head) still hold real titles on GitHub. | Delete the old branches and add both PR heads to the GitHub Support purge request · Leave them | **Delete + purge request** (branch delete needs you: the classifier blocks remote branch deletes) | Public repo; closed-PR refs stay reachable until GitHub purges them |
