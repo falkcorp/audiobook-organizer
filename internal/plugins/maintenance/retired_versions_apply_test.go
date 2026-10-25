@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
 // last-edited: 2026-10-25
 
@@ -700,11 +700,17 @@ func TestRetiredApply_SetMergedIntoThatSkipsIsNotAWrite(t *testing.T) {
 	require.False(t, wrote, "the skipped write must not be reported as made")
 	changes, err := rf.st.GetOperationChanges(opID)
 	require.NoError(t, err)
+	// The row must exist for the Voided check to prove anything: a loop over a
+	// journal that holds no merged-into row at all would pass whatever the writer
+	// did with its row.
+	rows := 0
 	for _, c := range changes {
 		if c.ChangeType == undo.ChangeTypeBookMergedInto {
+			rows++
 			require.True(t, c.Voided, "a skipped write leaves no standing journal row: %+v", c)
 		}
 	}
+	require.Equal(t, 1, rows, "the skipped write journaled exactly one merged-into row, then voided it: %+v", changes)
 }
 
 // runReads counts the whole-library reads one apply run makes.
