@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package server
 
@@ -88,5 +88,23 @@ func (s *Server) repairsOpAccess() *opaccess.Repairs {
 	if s.repairFixers != nil {
 		fixers = s.repairFixers
 	}
-	return opaccess.NewRepairs(fixers, s.permHolds())
+	// The op lookup scopes a journal row journaled before Source stamping by
+	// its op row. Same typed-nil care: no store leaves the check unwired.
+	var ops opaccess.OpLookup
+	if s.store != nil {
+		ops = s.Ops()
+	}
+	return opaccess.NewRepairs(fixers, ops, s.permHolds())
+}
+
+// othersUserDataAccess reports whether the request's caller may read other
+// users' own data -- their listening state and positions -- where a
+// library.view route serves it alongside library data (the merge journals'
+// progress, the trash purge's activity row). users.manage, the same
+// permission opaccess.Reader.MayReadChange requires for a user-data journal
+// row (owner decision, 2026-10-24). It asks permHolds, so auth disabled and a
+// first run hold it, as everywhere else.
+func (s *Server) othersUserDataAccess() func(*gin.Context) bool {
+	holds := s.permHolds()
+	return func(c *gin.Context) bool { return holds(c, auth.PermUsersManage) }
 }

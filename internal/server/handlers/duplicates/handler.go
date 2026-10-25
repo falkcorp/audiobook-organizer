@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
@@ -37,7 +37,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -93,6 +95,30 @@ type Handler struct {
 	// (server_title_helpers.go) over the live store, returning the preview payload
 	// (any) and an error. seriesPrunePreview serializes the payload verbatim.
 	computeSeriesPrunePreview func() (any, error)
+
+	// othersUserData reports whether the request's caller may read other
+	// users' listening state (users.manage). The merge journals carry every
+	// user's progress on the books a merge folded together; the two list
+	// routes are library.view reads, so they strip that for a caller this
+	// refuses. Unset (nil) strips it for everyone: see
+	// WithOthersUserDataAccess.
+	othersUserData func(*gin.Context) bool
+}
+
+// WithOthersUserDataAccess installs the check that keeps the merge journals'
+// per-user progress (GET /merge/combine-journal, /merge/sibling-journal) to
+// callers who may manage users. A setter rather than a New parameter, like
+// the other handlers' access checks; omitting it fails closed (the progress
+// is stripped for everyone), and the server's wiring is pinned by
+// TestMergeJournals_ProgressIsAdminOnly.
+func (h *Handler) WithOthersUserDataAccess(f func(*gin.Context) bool) *Handler {
+	h.othersUserData = f
+	return h
+}
+
+// mayReadOthersUserData is othersUserData, false when unset.
+func (h *Handler) mayReadOthersUserData(c *gin.Context) bool {
+	return h.othersUserData != nil && h.othersUserData(c)
 }
 
 // New constructs a duplicates Handler from its dependencies.
@@ -241,6 +267,9 @@ func (h *Handler) ListCombineJournals(c *gin.Context) {
 		httputil.InternalError(c, "failed to list combine journals", err)
 		return
 	}
+	if !h.mayReadOthersUserData(c) {
+		journals = combineJournalsWithoutUserData(journals)
+	}
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
 }
 
@@ -277,7 +306,69 @@ func (h *Handler) ListSiblingMoveJournals(c *gin.Context) {
 		httputil.InternalError(c, "failed to list sibling-move journals", err)
 		return
 	}
+	if !h.mayReadOthersUserData(c) {
+		journals = siblingJournalsWithoutUserData(journals)
+	}
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
+}
+
+// combineJournalsWithoutUserData is js without other users' listening state,
+// for a caller who may not manage users: each absorbed book's Progress (every
+// user's state and positions on both books, before and after) and the
+// warnings that name a user (a skipped or kept follow: "progress of user
+// <id> on <book> ...", "user <id> progress on survivor ..."). The rest of
+// the journal -- books, files, ids, status -- is library data and stays. js
+// is not modified.
+func combineJournalsWithoutUserData(js []merge.CombineJournal) []merge.CombineJournal {
+	out := make([]merge.CombineJournal, len(js))
+	for i, j := range js {
+		j.Absorbed = slices.Clone(j.Absorbed)
+		for k := range j.Absorbed {
+			j.Absorbed[k].Progress = nil
+		}
+		j.Warnings = warningsWithoutUsers(j.Warnings)
+		j.LastError = withoutUser(j.LastError)
+		out[i] = j
+	}
+	return out
+}
+
+// siblingJournalsWithoutUserData is combineJournalsWithoutUserData for
+// sibling-move journals: each state follow's Progress and the warnings that
+// name a user go. js is not modified.
+func siblingJournalsWithoutUserData(js []merge.SiblingMoveJournal) []merge.SiblingMoveJournal {
+	out := make([]merge.SiblingMoveJournal, len(js))
+	for i, j := range js {
+		j.StateFollows = slices.Clone(j.StateFollows)
+		for k := range j.StateFollows {
+			j.StateFollows[k].Progress = nil
+		}
+		j.Warnings = warningsWithoutUsers(j.Warnings)
+		j.LastError = withoutUser(j.LastError)
+		out[i] = j
+	}
+	return out
+}
+
+// warningsWithoutUsers drops every warning that mentions a user. The merge
+// writes a user's id only into its progress warnings, so this errs towards
+// withholding: a warning that says "user" for any other reason goes too.
+func warningsWithoutUsers(ws []string) []string {
+	var out []string
+	for _, w := range ws {
+		if withoutUser(w) != "" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// withoutUser is s, or "" when s mentions a user (see warningsWithoutUsers).
+func withoutUser(s string) string {
+	if strings.Contains(strings.ToLower(s), "user") {
+		return ""
+	}
+	return s
 }
 
 // mergedAwayIDs returns ids minus the survivor, for handing to

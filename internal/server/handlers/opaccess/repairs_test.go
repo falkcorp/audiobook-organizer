@@ -1,11 +1,12 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package opaccess
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,6 +32,27 @@ func (f scopedFixer) RequiredPermissions() []auth.Permission { return f.perms }
 type fixers map[string]repairs.Fixer
 
 func (m fixers) Get(id string) (repairs.Fixer, bool) { f, ok := m[id]; return f, ok }
+
+// opRows is an OpLookup over a fixed set of op rows; an id in fail errors.
+type opRows struct {
+	rows  map[string]*database.OperationV2Row
+	fail  map[string]bool
+	reads map[string]int
+}
+
+func (o *opRows) GetOperationV2(id string) (*database.OperationV2Row, error) {
+	if o.reads == nil {
+		o.reads = map[string]int{}
+	}
+	o.reads[id]++
+	if o.fail[id] {
+		return nil, errors.New("invented store failure")
+	}
+	return o.rows[id], nil
+}
+
+// noOps is an OpLookup with no op rows at all.
+var noOps = &opRows{}
 
 func ptr(s string) *string { return &s }
 
@@ -90,7 +112,7 @@ func TestReader_MayRead(t *testing.T) {
 		"unknown fixer, admin":                                {row(repairs.ApplyOpID, `{"fixer_id":"gone"}`, nil), everything, true},
 	} {
 		c, _ := ctxHolding()
-		got := NewRepairs(reg, holdsOnly(tc.held...)).For(c).MayRead(tc.row)
+		got := NewRepairs(reg, noOps, holdsOnly(tc.held...)).For(c).MayRead(tc.row)
 		require.Equal(t, tc.want, got, name)
 	}
 }
@@ -104,8 +126,9 @@ func TestReader_FailsClosedWhenUnwired(t *testing.T) {
 	c, w := ctxHolding()
 	for name, a := range map[string]*Repairs{
 		"nil check":    nil,
-		"nil fixers":   NewRepairs(nil, all),
-		"nil holds":    NewRepairs(fixers{"plain": scopedFixer{}}, nil),
+		"nil fixers":   NewRepairs(nil, noOps, all),
+		"nil ops":      NewRepairs(fixers{"plain": scopedFixer{}}, nil, all),
+		"nil holds":    NewRepairs(fixers{"plain": scopedFixer{}}, noOps, nil),
 		"zero checker": {},
 	} {
 		require.False(t, a.For(c).MayRead(apply), name)
@@ -118,7 +141,7 @@ func TestReader_FailsClosedWhenUnwired(t *testing.T) {
 // The verdict for a fixer is asked once per request, not once per row.
 func TestReader_AsksOncePerFixer(t *testing.T) {
 	asked := 0
-	a := NewRepairs(fixers{"plain": scopedFixer{}}, func(*gin.Context, auth.Permission) bool { asked++; return true })
+	a := NewRepairs(fixers{"plain": scopedFixer{}}, noOps, func(*gin.Context, auth.Permission) bool { asked++; return true })
 	c, _ := ctxHolding()
 	r := a.For(c)
 	row := &database.OperationV2Row{DefID: repairs.PlanOpID, Params: `{"fixer_id":"plain"}`}
@@ -128,22 +151,38 @@ func TestReader_AsksOncePerFixer(t *testing.T) {
 	require.Equal(t, 1, asked)
 }
 
-// MayReadChange decides from the journal row alone: a user-state row is always
-// scoped (to its fixer, or to every permission when the fixer is unknown), a
-// row whose Source is a registered fixer is scoped to that fixer, and every
-// other row, including one whose Source is a v3 op definition id, is readable.
+// MayReadChange: a row whose Source is a registered fixer is scoped to that
+// fixer; a row with no Source is scoped by its op row while that exists; a
+// user-data row (undo.IsUserDataChangeType) also needs users.manage, and
+// every permission when its fixer is unknown or unnamed; every other row,
+// including one whose Source is a v3 op definition id, is readable.
 func TestReader_MayReadChange(t *testing.T) {
 	reg := fixers{
 		"plain":  scopedFixer{}, // default: library.edit_metadata
 		"scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage, auth.PermLibraryEditMetadata}},
 	}
+	ops := &opRows{
+		rows: map[string]*database.OperationV2Row{
+			"op-plain-apply": {ID: "op-plain-apply", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"plain"}`},
+			"op-nofixer":     {ID: "op-nofixer", DefID: repairs.ApplyOpID, Params: `{}`},
+			"op-scan":        {ID: "op-scan", DefID: "library.scan"},
+		},
+		fail: map[string]bool{"op-unreadable": true},
+	}
 	change := func(changeType, source string) *database.OperationChange {
 		return &database.OperationChange{ID: "c", OperationID: "op-gone", BookID: "b", ChangeType: changeType, Source: source}
 	}
+	under := func(changeType, opID string) *database.OperationChange {
+		return &database.OperationChange{ID: "c", OperationID: opID, BookID: "b", ChangeType: changeType}
+	}
 	userState := undo.ChangeTypeUserBookStateSet
+	follow := undo.ChangeTypeUserStateFollow
+	content := undo.ChangeTypeUserContentFollow
 	view := []auth.Permission{auth.PermLibraryView}
 	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
 	settings := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage}
+	// A custom role that may manage users and edit metadata, nothing else.
+	editUsers := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermUsersManage}
 	everything := auth.All()
 
 	for name, tc := range map[string]struct {
@@ -151,29 +190,115 @@ func TestReader_MayReadChange(t *testing.T) {
 		held []auth.Permission
 		want bool
 	}{
-		"nil row":                                 {nil, view, true},
-		"unstamped metadata row, viewer":          {change("metadata_update", ""), view, true},
-		"v3 def id as source, viewer":             {change("metadata_update", "library.scan"), view, true},
-		"removed fixer's metadata row, viewer":    {change("metadata_update", "gone"), view, true},
-		"fixer's metadata row, viewer":            {change("metadata_update", "plain"), view, false},
-		"fixer's metadata row, editor":            {change("metadata_update", "plain"), edit, true},
-		"scoped fixer's row, editor":              {change("file_move", "scoped"), edit, false},
-		"scoped fixer's row, settings":            {change("file_move", "scoped"), settings, true},
-		"user state, fixer, viewer":               {change(userState, "plain"), view, false},
-		"user state, fixer, editor":               {change(userState, "plain"), edit, true},
-		"user state, unknown fixer, settings":     {change(userState, "gone"), settings, false},
-		"user state, unknown fixer, admin":        {change(userState, "gone"), everything, true},
-		"user state, no source, settings":         {change(userState, ""), settings, false},
-		"user state, no source, admin":            {change(userState, ""), everything, true},
-		"user state, v3 def id as source, editor": {change(userState, "library.scan"), edit, false},
+		"nil row":                              {nil, view, true},
+		"unstamped metadata row, viewer":       {change("metadata_update", ""), view, true},
+		"v3 def id as source, viewer":          {change("metadata_update", "library.scan"), view, true},
+		"removed fixer's metadata row, viewer": {change("metadata_update", "gone"), view, true},
+		"fixer's metadata row, viewer":         {change("metadata_update", "plain"), view, false},
+		"fixer's metadata row, editor":         {change("metadata_update", "plain"), edit, true},
+		"scoped fixer's row, editor":           {change("file_move", "scoped"), edit, false},
+		"scoped fixer's row, settings":         {change("file_move", "scoped"), settings, true},
+
+		// User data is admin data: users.manage on top of the fixer's
+		// permissions, whoever may run the fixer.
+		"user state, fixer, viewer":                       {change(userState, "plain"), view, false},
+		"user state, fixer, editor":                       {change(userState, "plain"), edit, false},
+		"user state, fixer, editor with users.manage":     {change(userState, "plain"), editUsers, true},
+		"user state, fixer, admin":                        {change(userState, "plain"), everything, true},
+		"user state, unknown fixer, settings":             {change(userState, "gone"), settings, false},
+		"user state, unknown fixer, users.manage":         {change(userState, "gone"), editUsers, false},
+		"user state, unknown fixer, admin":                {change(userState, "gone"), everything, true},
+		"user state, no source, settings":                 {change(userState, ""), settings, false},
+		"user state, no source, admin":                    {change(userState, ""), everything, true},
+		"user state, v3 def id as source, editor":         {change(userState, "library.scan"), edit, false},
+		"follow, no source, viewer":                       {change(follow, ""), view, false},
+		"follow, no source, editor":                       {change(follow, ""), edit, false},
+		"follow, no source, users.manage without all":     {change(follow, ""), editUsers, false},
+		"follow, no source, admin":                        {change(follow, ""), everything, true},
+		"follow, removed fixer, viewer":                   {change(follow, "gone"), view, false},
+		"follow, removed fixer, editor":                   {change(follow, "gone"), edit, false},
+		"follow, removed fixer, admin":                    {change(follow, "gone"), everything, true},
+		"follow, registered fixer, viewer":                {change(follow, "plain"), view, false},
+		"follow, registered fixer, editor":                {change(follow, "plain"), edit, false},
+		"follow, registered fixer, editor with users.mgr": {change(follow, "plain"), editUsers, true},
+		"follow, registered fixer, admin":                 {change(follow, "plain"), everything, true},
+		"content follow, no source, viewer":               {change(content, ""), view, false},
+		"content follow, registered fixer, editor":        {change(content, "plain"), edit, false},
+		"content follow, registered fixer, admin":         {change(content, "plain"), everything, true},
+		"owner apply note, registered fixer, editor":      {change(undo.ChangeTypeRepairOwnerApply, "plain"), edit, false},
+
+		// A row with no Source is scoped by its op row while that exists.
+		"unstamped row of a repairs op, viewer":           {under("metadata_update", "op-plain-apply"), view, false},
+		"unstamped row of a repairs op, editor":           {under("metadata_update", "op-plain-apply"), edit, true},
+		"unstamped row of a fixerless repairs op, admin":  {under("metadata_update", "op-nofixer"), everything, false},
+		"unstamped row of a plain op, viewer":             {under("metadata_update", "op-scan"), view, true},
+		"unstamped row, op row unreadable, admin":         {under("metadata_update", "op-unreadable"), everything, false},
+		"unstamped row, no op id, viewer":                 {under("metadata_update", ""), view, true},
+		"unstamped follow of a repairs op, editor":        {under(follow, "op-plain-apply"), edit, false},
+		"unstamped follow of a repairs op, editor+users":  {under(follow, "op-plain-apply"), editUsers, true},
+		"unstamped follow of a plain op, editor+users":    {under(follow, "op-scan"), editUsers, false},
+		"unstamped follow of a plain op, admin":           {under(follow, "op-scan"), everything, true},
+		"unstamped follow, op row unreadable, admin":      {under(follow, "op-unreadable"), everything, false},
+		"unstamped follow of a fixerless repairs op, adm": {under(follow, "op-nofixer"), everything, false},
 	} {
 		c, _ := ctxHolding()
-		got := NewRepairs(reg, holdsOnly(tc.held...)).For(c).MayReadChange(tc.ch)
+		got := NewRepairs(reg, ops, holdsOnly(tc.held...)).For(c).MayReadChange(tc.ch)
 		require.Equal(t, tc.want, got, name)
 	}
 }
 
-// Unwired, a journal row that could be Repairs data (user state, or any
+// MayUndoChange is MayReadChange without the user-data leg: the undo report
+// names rows, never their values, so a caller who may run the fixer keeps it.
+func TestReader_MayUndoChange(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}}
+	ops := &opRows{rows: map[string]*database.OperationV2Row{
+		"op-plain-apply": {ID: "op-plain-apply", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"plain"}`},
+	}}
+	view := []auth.Permission{auth.PermLibraryView}
+	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	for name, tc := range map[string]struct {
+		ch   *database.OperationChange
+		held []auth.Permission
+		want bool
+	}{
+		"stamped follow, editor":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, edit, true},
+		"stamped follow, viewer":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, view, false},
+		"unstamped follow of op, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, edit, true},
+		"unstamped follow of op, viewer":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, view, false},
+		"unstamped follow, no op, editor":   {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-gone"}, edit, false},
+		"removed fixer's follow, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "gone"}, edit, false},
+		"unstamped metadata, no op, viewer": {&database.OperationChange{ChangeType: "metadata_update", OperationID: "op-gone"}, view, true},
+	} {
+		c, _ := ctxHolding()
+		r := NewRepairs(reg, ops, holdsOnly(tc.held...)).For(c)
+		require.Equal(t, tc.want, r.MayUndoChange(tc.ch), name)
+	}
+}
+
+// An op row is read once per request however many of its rows are checked,
+// and users.manage is asked once.
+func TestReader_MayReadChangeReadsEachOpOnce(t *testing.T) {
+	ops := &opRows{rows: map[string]*database.OperationV2Row{
+		"op-plain-apply": {ID: "op-plain-apply", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"plain"}`},
+	}}
+	askedUsers := 0
+	holds := func(_ *gin.Context, p auth.Permission) bool {
+		if p == auth.PermUsersManage {
+			askedUsers++
+		}
+		return true
+	}
+	c, _ := ctxHolding()
+	r := NewRepairs(fixers{"plain": scopedFixer{}}, ops, holds).For(c)
+	for range 40 {
+		require.True(t, r.MayReadChange(&database.OperationChange{OperationID: "op-plain-apply", ChangeType: "metadata_update"}))
+		require.True(t, r.MayReadChange(&database.OperationChange{OperationID: "op-plain-apply", ChangeType: undo.ChangeTypeUserStateFollow}))
+	}
+	require.Equal(t, 1, ops.reads["op-plain-apply"])
+	require.Equal(t, 1, askedUsers)
+}
+
+// Unwired, a journal row that could be Repairs data (user data, or any
 // stamped Source, since which Sources are fixers is unknown) is refused and an
 // unstamped row is not.
 func TestReader_MayReadChangeFailsClosedWhenUnwired(t *testing.T) {
@@ -181,21 +306,24 @@ func TestReader_MayReadChangeFailsClosedWhenUnwired(t *testing.T) {
 	c, _ := ctxHolding()
 	for name, a := range map[string]*Repairs{
 		"nil check":    nil,
-		"nil fixers":   NewRepairs(nil, all),
-		"nil holds":    NewRepairs(fixers{"plain": scopedFixer{}}, nil),
+		"nil fixers":   NewRepairs(nil, noOps, all),
+		"nil ops":      NewRepairs(fixers{"plain": scopedFixer{}}, nil, all),
+		"nil holds":    NewRepairs(fixers{"plain": scopedFixer{}}, noOps, nil),
 		"zero checker": {},
 	} {
 		r := a.For(c)
 		require.False(t, r.MayReadChange(&database.OperationChange{ChangeType: undo.ChangeTypeUserBookStateSet, Source: "plain"}), name)
 		require.False(t, r.MayReadChange(&database.OperationChange{ChangeType: undo.ChangeTypeUserBookStateSet}), name)
 		require.False(t, r.MayReadChange(&database.OperationChange{ChangeType: "metadata_update", Source: "plain"}), name)
+		require.False(t, r.MayReadChange(&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow}), name)
+		require.False(t, r.MayUndoChange(&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow}), name)
 		require.True(t, r.MayReadChange(&database.OperationChange{ChangeType: "metadata_update"}), name)
 	}
 }
 
 // ReadableChanges keeps the readable rows in order and never answers nil.
 func TestReader_ReadableChanges(t *testing.T) {
-	a := NewRepairs(fixers{"plain": scopedFixer{}}, holdsOnly(auth.PermLibraryView))
+	a := NewRepairs(fixers{"plain": scopedFixer{}}, noOps, holdsOnly(auth.PermLibraryView))
 	c, _ := ctxHolding()
 	r := a.For(c)
 	require.NotNil(t, r.ReadableChanges(nil))

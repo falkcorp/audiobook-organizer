@@ -1,14 +1,16 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // The generic operations routes as the server wires them, driven through the
 // real router: a Repairs operation's data (repairs.plan, repairs.apply) is
 // readable only by a caller who holds the op's fixer's permissions, however it
 // is reached (result, change journal, undo report, single-op read, log reads,
 // timeline, event stream, and a book's change journal and changelog). A
-// fixer's journal rows stay scoped after the op row is discarded. Other
+// fixer's journal rows stay scoped after the op row is discarded. Journal rows
+// that carry other users' own data (listening state, playlists) are readable
+// only by a caller who may manage users, whoever may run the fixer. Other
 // operations are unchanged for a viewer.
 
 package server
@@ -41,9 +43,19 @@ const (
 	opPlainScan     = "op-plain-scan"              // not a repairs op
 	opDiscarded     = "op-repairs-apply-discarded" // a repairs apply whose op row was discarded
 	opV3Plain       = "op-v3-plain-history"        // a v3 op whose journal rows carry its def id as Source
+	opDiscardedOld  = "op-repairs-apply-prestamp"  // a discarded repairs apply journaled before Source stamping
 	journalBookID   = "book-invented-journal"      // the book the journal rows below are on
 	scopedFixerID   = "reconcile.missing-files"    // settings.manage (repairs_permission_wiring_test.go)
 	secondaryUserID = "user-whose-state-was-read"  // appears in the repairs rows and logs
+
+	// Each user-data row below carries its own marker, so an assertion that a
+	// caller does not see one cannot pass because a different row is missing.
+	listenerUnstampedFollow = "invented-listener-unstamped-follow"   // user_state_follow, Source ""
+	listenerRemovedFixer    = "invented-listener-removed-fixer"      // user_state_follow, Source a removed fixer
+	listenerDiscardedOld    = "invented-listener-prestamp-discard"   // user_state_follow, Source "", op row gone
+	playlistOfAnotherUser   = "invented-playlist-of-another-user"    // user_content_follow, playlist kind
+	fixerFileMove           = "/invented/library/moved-by-fixer.m4b" // book_file_move stamped by the default fixer
+	scopedUnstampedTitle    = "Invented Scoped Prestamp Title"       // metadata_update, Source "", scoped repairs op
 )
 
 // repairsOpAccessFixture seeds the five operations above with a result, a log
@@ -129,6 +141,35 @@ func newRepairsOpAccessFixture(t *testing.T) *repairsOpAccessFixture {
 	journal("chg-discarded-user-state", opDiscarded, undo.ChangeTypeUserBookStateSet, undo.UserStateField(secondaryUserID),
 		state("in_progress"), state("finished"), defaultFixer)
 	_, deleted, err := store.DeleteOperationV2(opDiscarded, []string{"completed"})
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	// Rows journaled before Source stamping (2026-10-03), as the fragment
+	// consolidation apply of 2026-10-01 left thousands of: user_state_follow
+	// with no Source under the default fixer's apply, a follow under the
+	// removed fixer's op naming it, a playlist carry, a file move the default
+	// fixer stamped, and an unstamped metadata row of the scoped fixer's op,
+	// which only its op row scopes.
+	follow := func(listener string) string {
+		return `{"sync_redirected":false,"progress":[{"user_id":"` + listener + `","absorbed_state":{"user_id":"` + listener + `","status":"finished"}}]}`
+	}
+	journal("chg-follow-unstamped", opDefaultApply, undo.ChangeTypeUserStateFollow, undo.SurvivorField("book-invented-survivor"),
+		"", follow(listenerUnstampedFollow), "")
+	journal("chg-follow-removed-fixer", opUnknownFixer, undo.ChangeTypeUserStateFollow, undo.SurvivorField("book-invented-survivor"),
+		"", follow(listenerRemovedFixer), "fixer.removed-since")
+	journal("chg-playlist-carry", opDefaultApply, undo.ChangeTypeUserContentFollow,
+		undo.UserContentField(undo.UserContentPlaylist, playlistOfAnotherUser),
+		`{"index":2,"anchored":true,"prev":"book-invented-prev","next":"book-invented-next"}`, "book-invented-survivor", defaultFixer)
+	journal("chg-fixer-file-move", opDefaultApply, undo.ChangeTypeBookFileMove, "book_file:file-invented-1",
+		"/invented/library/before.m4b", fixerFileMove, defaultFixer)
+	journal("chg-scoped-unstamped-title", opScopedPlan, "metadata_update", "title", "", scopedUnstampedTitle, "")
+
+	// A discarded apply from before Source stamping: its only row is an
+	// unstamped follow and nothing names its fixer any more.
+	insert(opDiscardedOld, repairs.ApplyOpID, `{"fixer_id":"`+defaultFixer+`"}`, body(defaultFixer))
+	journal("chg-follow-prestamp-discarded", opDiscardedOld, undo.ChangeTypeUserStateFollow, undo.SurvivorField("book-invented-survivor"),
+		"", follow(listenerDiscardedOld), "")
+	_, deleted, err = store.DeleteOperationV2(opDiscardedOld, []string{"completed"})
 	require.NoError(t, err)
 	require.True(t, deleted)
 	gone, err := store.GetOperationV2(opDiscarded)
@@ -245,23 +286,30 @@ func requireReadShape(t *testing.T, route, op string, w *httptest.ResponseRecord
 
 // TestRepairsOpData_BookJournalLeavesOutWhatTheCallerMayNotRead: a book's
 // change journal (GET /audiobooks/:id/changes) and changelog
-// (/audiobooks/:id/changelog) leave a Repairs fixer's user-state rows out for
-// a caller without the fixer's permission, whether or not the row's op still
-// has its row, and keep the book's other history, including a v3 op's rows
-// stamped with its def id. The editor (the default fixer's permission) and the
-// admin read the user-state rows.
+// (/audiobooks/:id/changelog) keep the book's ordinary history, including a v3
+// op's rows stamped with its def id, for everyone. A Repairs fixer's library
+// rows (a stamped file move, an unstamped row whose op row names a fixer) need
+// the fixer's permissions. Rows that carry other users' own data -- the
+// read-status fixer's user state, user_state_follow stamped, unstamped or
+// naming a removed fixer, a playlist carry -- need users.manage as well, so
+// the editor, who may run the default fixer, reads its file move and not its
+// user data; only the admin reads those, whether or not the row's op still has
+// its row.
 // Not parallel: it swaps the process-wide config.
 func TestRepairsOpData_BookJournalLeavesOutWhatTheCallerMayNotRead(t *testing.T) {
 	f := newRepairsOpAccessFixture(t)
+	userData := []string{secondaryUserID, listenerUnstampedFollow, listenerRemovedFixer, playlistOfAnotherUser}
 	for _, route := range []string{"changes", "changelog"} {
 		path := "/api/v1/audiobooks/" + f.bookID + "/" + route
 		for _, tc := range []struct {
-			who, token string
-			seesState  bool
+			who, token     string
+			seesFixerRows  bool // the default fixer's file move
+			seesScopedRows bool // the settings.manage fixer's unstamped row
+			seesUserData   bool
 		}{
-			{"viewer", f.viewer, false},
-			{"editor", f.editor, true},
-			{"admin", f.admin, true},
+			{"viewer", f.viewer, false, false, false},
+			{"editor", f.editor, true, false, false},
+			{"admin", f.admin, true, true, true},
 		} {
 			w := getAs(f.srv, tc.token, path)
 			require.Equal(t, http.StatusOK, w.Code, "%s %s: %s", tc.who, route, w.Body.String())
@@ -273,15 +321,20 @@ func TestRepairsOpData_BookJournalLeavesOutWhatTheCallerMayNotRead(t *testing.T)
 			require.Contains(t, body, key, "%s %s", tc.who, route)
 			require.Contains(t, body, "Invented New Title", "%s %s: the book's other history stays", tc.who, route)
 			require.Contains(t, body, "Invented Narrator", "%s %s: a v3 op's history stays", tc.who, route)
-			if !tc.seesState {
-				require.NotContains(t, body, secondaryUserID, "%s %s", tc.who, route)
-				require.NotContains(t, body, f.defaultApply, "%s %s", tc.who, route)
-				require.NotContains(t, body, f.discarded, "%s %s", tc.who, route)
-				continue
+			requireSeen := func(want bool, marker, what string) {
+				if want {
+					require.Contains(t, body, marker, "%s %s: %s", tc.who, route, what)
+				} else {
+					require.NotContains(t, body, marker, "%s %s: %s", tc.who, route, what)
+				}
 			}
-			require.Contains(t, body, secondaryUserID, "%s %s", tc.who, route)
-			require.Contains(t, body, f.defaultApply, "%s %s", tc.who, route)
-			require.Contains(t, body, f.discarded, "%s %s: the discarded op's row", tc.who, route)
+			requireSeen(tc.seesFixerRows, fixerFileMove, "the default fixer's file move")
+			requireSeen(tc.seesScopedRows, scopedUnstampedTitle, "the scoped fixer's unstamped row (its op row scopes it)")
+			for _, marker := range userData {
+				requireSeen(tc.seesUserData, marker, "a user-data row")
+			}
+			requireSeen(tc.seesUserData, f.discarded, "the discarded op's user-state row")
+			requireSeen(tc.seesFixerRows, f.defaultApply, "the default fixer's op id")
 		}
 	}
 }
@@ -289,8 +342,10 @@ func TestRepairsOpData_BookJournalLeavesOutWhatTheCallerMayNotRead(t *testing.T)
 // TestRepairsOpData_DiscardedOpJournalStaysScoped: once a repairs apply's op
 // row is discarded, its journal is still kept from a caller without the
 // fixer's permission: GET /operations/:id/changes answers 200 without the
-// rows, and /undo/preflight, a report built from every row, is a 403. The
-// editor (the default fixer's permission) and the admin read both.
+// rows, and /undo/preflight, a report built from every row, is a 403. Its
+// user-state row is admin data: the editor (the default fixer's permission)
+// gets the changes without it, and still gets the undo report, which names
+// rows and never their values. The admin reads both.
 // Not parallel: it swaps the process-wide config.
 func TestRepairsOpData_DiscardedOpJournalStaysScoped(t *testing.T) {
 	f := newRepairsOpAccessFixture(t)
@@ -306,16 +361,99 @@ func TestRepairsOpData_DiscardedOpJournalStaysScoped(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 	require.NotContains(t, w.Body.String(), secondaryUserID)
 
-	for who, token := range map[string]string{"editor": f.editor, "admin": f.admin} {
-		w := getAs(f.srv, token, changes)
-		require.Equal(t, http.StatusOK, w.Code, "%s: %s", who, w.Body.String())
-		require.Contains(t, w.Body.String(), "chg-discarded-user-state", who)
-		require.Contains(t, w.Body.String(), secondaryUserID, who)
+	w = getAs(f.srv, f.editor, changes)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"changes":[]`, "the editor may run the fixer, not read other users' state")
+	require.NotContains(t, w.Body.String(), secondaryUserID)
 
-		w = getAs(f.srv, token, preflight)
-		require.Equal(t, http.StatusOK, w.Code, "%s: %s", who, w.Body.String())
-		require.Contains(t, w.Body.String(), `"total_changes":1`, who)
+	w = getAs(f.srv, f.editor, preflight)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"total_changes":1`, "the editor keeps Undo on a fixer he may run")
+	require.NotContains(t, w.Body.String(), secondaryUserID)
+
+	w = getAs(f.srv, f.admin, changes)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "chg-discarded-user-state")
+	require.Contains(t, w.Body.String(), secondaryUserID)
+
+	w = getAs(f.srv, f.admin, preflight)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"total_changes":1`)
+}
+
+// TestRepairsOpData_UserDataRowsNeedUsersManage: on the two operation journal
+// routes, a row carrying other users' own data is withheld from every caller
+// without users.manage, stamped or not.
+//
+//   - The default fixer's apply (op row present): a viewer is refused the op;
+//     the editor reads its file move but none of its user state, unstamped
+//     follow or playlist carry, and keeps the undo report; the admin reads
+//     every row.
+//   - The removed fixer's op: its follow row names a fixer this build does not
+//     register; only the admin reads the op and the row.
+//   - A discarded apply from before Source stamping: its unstamped follow row
+//     has no op row to name its fixer, so it needs every permission: the
+//     viewer and the editor get its changes empty and its undo report
+//     refused; the admin gets both.
+//
+// Not parallel: it swaps the process-wide config.
+func TestRepairsOpData_UserDataRowsNeedUsersManage(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	changes := func(op string) string { return "/api/v1/operations/" + op + "/changes" }
+	preflight := func(op string) string { return "/api/v1/operations/" + op + "/undo/preflight" }
+	defaultUserData := []string{secondaryUserID, listenerUnstampedFollow, playlistOfAnotherUser}
+
+	// The default fixer's apply.
+	for _, path := range []string{changes(f.defaultApply), preflight(f.defaultApply)} {
+		w := getAs(f.srv, f.viewer, path)
+		require.Equal(t, http.StatusForbidden, w.Code, "viewer %s: %s", path, w.Body.String())
 	}
+	w := getAs(f.srv, f.editor, changes(f.defaultApply))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), fixerFileMove, "the editor reads the fixer's library rows")
+	for _, marker := range defaultUserData {
+		require.NotContains(t, w.Body.String(), marker, "the editor reads no user data")
+	}
+	w = getAs(f.srv, f.editor, preflight(f.defaultApply))
+	require.Equal(t, http.StatusOK, w.Code, "the editor keeps Undo: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), `"total_changes":`)
+	for _, marker := range defaultUserData {
+		require.NotContains(t, w.Body.String(), marker, "the undo report carries no user data")
+	}
+	w = getAs(f.srv, f.admin, changes(f.defaultApply))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	for _, marker := range append([]string{fixerFileMove}, defaultUserData...) {
+		require.Contains(t, w.Body.String(), marker, "the admin reads every row")
+	}
+
+	// The removed fixer's op.
+	for who, token := range map[string]string{"viewer": f.viewer, "editor": f.editor} {
+		w := getAs(f.srv, token, changes(f.unknownFixer))
+		require.Equal(t, http.StatusForbidden, w.Code, "%s: %s", who, w.Body.String())
+		require.NotContains(t, w.Body.String(), listenerRemovedFixer, who)
+	}
+	w = getAs(f.srv, f.admin, changes(f.unknownFixer))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), listenerRemovedFixer)
+	w = getAs(f.srv, f.admin, preflight(f.unknownFixer))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// The discarded pre-stamp apply.
+	for who, token := range map[string]string{"viewer": f.viewer, "editor": f.editor} {
+		w := getAs(f.srv, token, changes(opDiscardedOld))
+		require.Equal(t, http.StatusOK, w.Code, "%s: %s", who, w.Body.String())
+		require.Contains(t, w.Body.String(), `"changes":[]`, who)
+		require.NotContains(t, w.Body.String(), listenerDiscardedOld, who)
+		w = getAs(f.srv, token, preflight(opDiscardedOld))
+		require.Equal(t, http.StatusForbidden, w.Code, "%s: %s", who, w.Body.String())
+		require.NotContains(t, w.Body.String(), listenerDiscardedOld, who)
+	}
+	w = getAs(f.srv, f.admin, changes(opDiscardedOld))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), listenerDiscardedOld)
+	w = getAs(f.srv, f.admin, preflight(opDiscardedOld))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"total_changes":1`)
 }
 
 // TestRepairsOpData_TimelineLeavesOutWhatTheCallerMayNotRead: the timeline

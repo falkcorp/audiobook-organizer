@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -121,7 +121,16 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 	if err != nil {
 		return nil, fmt.Errorf("load changes: %w", err)
 	}
+	return PreflightUndoConflictsFromChanges(store, changes)
+}
 
+// PreflightUndoConflictsFromChanges is PreflightUndoConflicts over an
+// operation's journal rows the caller has already read
+// (store.GetOperationChanges), so a caller that checked every row first (the
+// GET /operations/:id/undo/preflight handler's access check) does not scan
+// and decode the journal a second time. changes must be the operation's whole
+// journal: the report predicts the revert, which walks every row.
+func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*database.OperationChange) (*UndoConflictReport, error) {
 	report := &UndoConflictReport{TotalChanges: len(changes)}
 
 	var restorable []*database.OperationChange

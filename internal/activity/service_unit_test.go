@@ -1,7 +1,7 @@
 // file: internal/activity/service_unit_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 33be7b20-e994-4c24-9017-3f20f6ea2fe4
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package activity
 
@@ -20,9 +20,12 @@ import (
 // ChangelogService tests (mock-based)
 // --------------------------------------------------------------------------
 
+// readAll is the predicate of a caller that may read every journal row.
+func readAll(*database.OperationChange) bool { return true }
+
 func TestChangelogService_NilDB(t *testing.T) {
 	svc := NewChangelogService(nil)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database not initialized")
 	assert.Nil(t, entries)
@@ -36,7 +39,7 @@ func TestChangelogService_EmptyHistory(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return([]*database.OperationChange{}, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
@@ -62,7 +65,7 @@ func TestChangelogService_MergesAndSortsByTimestamp(t *testing.T) {
 	}, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 
@@ -94,7 +97,7 @@ func TestChangelogService_LimitsToMax(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return([]*database.OperationChange{}, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	assert.Len(t, entries, MaxChangelogEntries)
 }
@@ -108,7 +111,7 @@ func TestChangelogService_StoreErrorsNonFatal(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, errors.New("op error"))
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
@@ -125,7 +128,7 @@ func TestChangelogService_TagWriteEntryType(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "tag_write", entries[0].Type)
@@ -146,7 +149,7 @@ func TestChangelogService_SeriesObjectDropSummary(t *testing.T) {
 	}, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
-	entries, err := NewChangelogService(mockStore).GetBookChangelog("book-1", nil)
+	entries, err := NewChangelogService(mockStore).GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "metadata_apply", entries[0].Type)
@@ -167,7 +170,7 @@ func TestChangelogService_OperationChangeTypes(t *testing.T) {
 	}, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
@@ -206,7 +209,7 @@ func TestChangelogService_ImportPathChangeLabeledImport(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "import", entries[0].Type)
@@ -228,7 +231,7 @@ func TestChangelogService_RealRenameStillLabeledRename(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "rename", entries[0].Type)
@@ -250,7 +253,7 @@ func TestChangelogService_OrganizePathChangeLabeledOrganize(t *testing.T) {
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
-	entries, err := svc.GetBookChangelog("book-1", nil)
+	entries, err := svc.GetBookChangelog("book-1", readAll)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "rename", entries[0].Type)
@@ -301,5 +304,32 @@ func TestChangelogService_MayReadFiltersOperationChangesBeforeTheCap(t *testing.
 	require.Len(t, entries, MaxChangelogEntries)
 	for _, e := range entries {
 		assert.Equal(t, "op-shown", e.Details["operation_id"])
+	}
+}
+
+// A nil predicate refuses every operation_changes row rather than keeping
+// them all: a caller that names no check gets none of the journal, which
+// holds other users' listening state. The path and metadata history stay.
+func TestChangelogService_NilPredicateRefusesJournalRows(t *testing.T) {
+	mockStore := mocks.NewMockStore(t)
+	now := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	mockStore.EXPECT().GetBookPathHistory("book-1").Return([]database.BookPathChange{
+		{BookID: "book-1", OldPath: "/invented/old", NewPath: "/invented/new", ChangeType: "rename", CreatedAt: now},
+	}, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return([]database.MetadataChangeRecord{}, nil)
+	mockStore.EXPECT().GetBookChanges("book-1").Return([]*database.OperationChange{
+		{OperationID: "op-a", BookID: "book-1", ChangeType: "user_state_follow", FieldName: "survivor:book-2",
+			NewValue: `{"progress":[{"user_id":"invented-listener"}]}`, CreatedAt: now.Add(time.Minute)},
+		{OperationID: "op-b", BookID: "book-1", ChangeType: "metadata_update", FieldName: "title",
+			NewValue: "Invented Title", CreatedAt: now.Add(2 * time.Minute)},
+	}, nil)
+
+	entries, err := NewChangelogService(mockStore).GetBookChangelog("book-1", nil)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "only the path history entry")
+	assert.Equal(t, "rename", entries[0].Type)
+	for _, e := range entries {
+		assert.NotContains(t, e.Summary, "invented-listener")
+		assert.Nil(t, e.Details["operation_id"])
 	}
 }

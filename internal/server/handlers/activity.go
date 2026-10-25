@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package handlers
 
@@ -98,6 +98,10 @@ type ActivityHandler struct {
 	svc      ActivityService
 	opsStore ActivityOpsStore    // may be nil
 	opDefs   ActivityOpDefLookup // may be nil: ?type= is then matched literally
+	// othersUserData reports whether the caller may read other users' own
+	// data (users.manage). nil: no caller may (activity.WithoutOthersUserData
+	// applies to everyone). See WithActivityOthersUserData.
+	othersUserData func(*gin.Context) bool
 }
 
 // ActivityOpDefLookup resolves an operation def ID -- canonical or a former ID
@@ -116,6 +120,30 @@ type ActivityHandlerOption func(*ActivityHandler)
 // (or omit the option) to match ?type= literally.
 func WithActivityOpDefs(defs ActivityOpDefLookup) ActivityHandlerOption {
 	return func(h *ActivityHandler) { h.opDefs = defs }
+}
+
+// WithActivityOthersUserData installs the check that keeps the Details of an
+// entry that carry other users' listening state (activity.WithoutOthersUserData:
+// the trash purge's per-user progress summary) to callers who may manage
+// users. Omitting it fails closed: those Details are withheld from everyone.
+func WithActivityOthersUserData(f func(*gin.Context) bool) ActivityHandlerOption {
+	return func(h *ActivityHandler) { h.othersUserData = f }
+}
+
+// mayReadOthersUserData is othersUserData, false when unset.
+func (h *ActivityHandler) mayReadOthersUserData(c *gin.Context) bool {
+	return h.othersUserData != nil && h.othersUserData(c)
+}
+
+// withoutOthersUserData is entries with activity.WithoutOthersUserData applied
+// to each, in place, unless seeAll.
+func withoutOthersUserData(entries []database.ActivityEntry, seeAll bool) {
+	if seeAll {
+		return
+	}
+	for i := range entries {
+		entries[i] = activity.WithoutOthersUserData(entries[i])
+	}
 }
 
 // NewActivityHandler constructs an ActivityHandler.
@@ -331,6 +359,7 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 	if entries == nil {
 		entries = []database.ActivityEntry{}
 	}
+	withoutOthersUserData(entries, h.mayReadOthersUserData(c))
 
 	// partial: the store stopped at its scan budget before filling the page or
 	// exhausting the matches, so older matches were NOT examined and total is
@@ -410,11 +439,15 @@ func parseOperationActivityLimit(raw string) int {
 // The returned slice is never nil. total is the activity log's own count for
 // the op (which can exceed len(entries) once limit bites) or, on the fallback
 // path, the number of op-log rows returned.
-func (h *ActivityHandler) operationActivity(ctx context.Context, opID string, limit int) ([]operationActivityEntry, int, error) {
+//
+// seeAll is mayReadOthersUserData: without it an entry's Details that carry
+// other users' own data are withheld (activity.WithoutOthersUserData).
+func (h *ActivityHandler) operationActivity(ctx context.Context, opID string, limit int, seeAll bool) ([]operationActivityEntry, int, error) {
 	entries, total, err := h.svc.Query(ctx, database.ActivityFilter{OperationID: opID, Limit: limit})
 	if err != nil {
 		return nil, 0, err
 	}
+	withoutOthersUserData(entries, seeAll)
 	if len(entries) == 0 {
 		opLogEntries, opLogErr := h.operationActivityFromOpLogs(opID, limit)
 		if opLogErr != nil {
@@ -450,7 +483,7 @@ func (h *ActivityHandler) ListOperationActivity(c *gin.Context) {
 	}
 	limit := parseOperationActivityLimit(c.Query("limit"))
 
-	entries, total, err := h.operationActivity(c.Request.Context(), opID, limit)
+	entries, total, err := h.operationActivity(c.Request.Context(), opID, limit, h.mayReadOthersUserData(c))
 	if err != nil {
 		if abortIfClientGone(c, err, "ListOperationActivity") {
 			return
@@ -515,13 +548,15 @@ func (h *ActivityHandler) ListMergedOperationActivity(c *gin.Context) {
 	// name hundreds of members, and each read is a store round-trip. Results
 	// land in their own slot so the merge below is deterministic regardless of
 	// which read finished first.
+	// Asked once, here: a gin.Context is not for the pool's goroutines.
+	seeAll := h.mayReadOthersUserData(c)
 	perOp := make([][]operationActivityEntry, len(ids))
 	totals := make([]int, len(ids))
 	g, ctx := errgroup.WithContext(c.Request.Context())
 	g.SetLimit(runtime.NumCPU())
 	for i, id := range ids {
 		g.Go(func() error {
-			entries, total, err := h.operationActivity(ctx, id, limit)
+			entries, total, err := h.operationActivity(ctx, id, limit, seeAll)
 			if err != nil {
 				return err
 			}
