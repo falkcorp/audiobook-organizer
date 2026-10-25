@@ -1,5 +1,5 @@
 // file: internal/undo/user_data.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
 // last-edited: 2026-10-25
 
@@ -32,6 +32,10 @@ var changeTypeHoldsUserData = map[string]bool{
 	ChangeTypeUserContentFollow: true,
 	// Names the user who applied the row and how he signed in.
 	ChangeTypeRepairOwnerApply: true,
+	// One read-elsewhere record the master-list import created: the user it is
+	// for, the book they have read or own, its status and finish time. That is
+	// one user's reading history, so it is kept to callers who may manage users.
+	ChangeTypeMasterListElsewhereCreate: true,
 
 	// Library data: books, files, authors, series, tags and the ledger notes
 	// about them.
