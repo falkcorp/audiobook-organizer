@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -44,9 +44,9 @@ func newJunkLib(t *testing.T) *junkLib {
 
 	authorA, err := st.CreateAuthor("Alma Reed")
 	require.NoError(t, err)
-	phipps, err := st.CreateAuthor("C. T. Phipps")
+	phipps, err := st.CreateAuthor("D. R. Pellwick")
 	require.NoError(t, err)
-	dw, err := st.CreateSeries("Doctor Who: The Monthly Adventures", nil)
+	dw, err := st.CreateSeries("Doctor Who: The Zorblax Chronicles", nil)
 	require.NoError(t, err)
 
 	add := func(name, title, bookPath string, author *int, series *int, files ...string) string {
@@ -87,18 +87,18 @@ func newJunkLib(t *testing.T) *junkLib {
 			json.RawMessage(`{"title":"Second Best","author":"Alma Reed","score":0.6}`),
 			json.RawMessage(`{"title":"Candidate Title","author":"alma reed","score":0.8}`),
 		}}))
-	// The cached search ran on "01 - Eldest" and its top hit is the series'
-	// first book: the stripped title wins and Eragon is refused.
-	paolini, err := st.CreateAuthor("Christopher Paolini")
+	// The cached search ran on "01 - Quillon" and its top hit is the series'
+	// first book: the stripped title wins and Zarvane is refused.
+	authQ, err := st.CreateAuthor("Peregrine Strand")
 	require.NoError(t, err)
-	el := add("eldest-prefix", "01 - Eldest", "/lib/Christopher Paolini/Eldest/01 - Eldest.mp3", &paolini.ID, nil,
-		"/lib/Christopher Paolini/Eldest/01 - Eldest.mp3")
+	el := add("eldest-prefix", "01 - Quillon", "/lib/Peregrine Strand/Quillon/01 - Quillon.mp3", &authQ.ID, nil,
+		"/lib/Peregrine Strand/Quillon/01 - Quillon.mp3")
 	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: el, FetchedAt: time.Now(),
 		Candidates: []json.RawMessage{
-			json.RawMessage(`{"title":"Eragon","author":"Christopher Paolini","score":0.9}`),
+			json.RawMessage(`{"title":"Zarvane","author":"Peregrine Strand","score":0.9}`),
 		}}))
-	kate := "Kate Reading"
-	named, err := st.CreateBook(&database.Book{Title: "Read by Kate Reading", FilePath: "/lib/Alma Reed/Named Credit Book",
+	kate := "Odessa Plume"
+	named, err := st.CreateBook(&database.Book{Title: "Read by Odessa Plume", FilePath: "/lib/Alma Reed/Named Credit Book",
 		AuthorID: a, Narrator: &kate, Format: "mp3", Duration: &junkFixtureRuntimeSec})
 	require.NoError(t, err)
 	for _, fp := range []string{"/lib/Alma Reed/Named Credit Book/01.mp3", "/lib/Alma Reed/Named Credit Book/02.mp3"} {
@@ -106,8 +106,8 @@ func newJunkLib(t *testing.T) *junkLib {
 	}
 	lib.ids["named-credit"] = named.ID
 	// ---- fragments ----
-	add("frag1", "01", "/lib/Eldest/Eldest/01.mp3", nil, nil, "/lib/Eldest/Eldest/01.mp3")
-	add("frag2", "02", "/lib/Eldest/Eldest/02.mp3", nil, nil, "/lib/Eldest/Eldest/02.mp3")
+	add("frag1", "01", "/lib/Quillon/Quillon/01.mp3", nil, nil, "/lib/Quillon/Quillon/01.mp3")
+	add("frag2", "02", "/lib/Quillon/Quillon/02.mp3", nil, nil, "/lib/Quillon/Quillon/02.mp3")
 	add("chapter-alone", "Chapter 3", "/lib/X/Solo/03.mp3", nil, nil, "/lib/X/Solo/03.mp3")
 	add("existing", "Existing Title", "/lib/Alma Reed/Existing Title.m4b", a, nil, "/lib/Alma Reed/Existing Title.m4b")
 	add("dup", "Intro", "/lib/Alma Reed/Existing Title", a, nil,
@@ -117,10 +117,10 @@ func newJunkLib(t *testing.T) *junkLib {
 	// chapter title, so only the ownership check can catch it.
 	add("parent", "Big Parent", "/lib/Parent/Big", a, nil, "/lib/Parent/Big/a.mp3", "/lib/Parent/Big/b.mp3")
 	add("owned", "Opening", "/lib/Moved/Opening", nil, nil, "/lib/Parent/Big/a.mp3", "/lib/Moved/Opening/x.mp3")
-	// The organizer-moved chapter: author "Eldest", title "98", alone.
-	eldest, err := st.CreateAuthor("Eldest")
+	// The organizer-moved chapter: author "Quillon", title "98", alone.
+	eldest, err := st.CreateAuthor("Quillon")
 	require.NoError(t, err)
-	add("eldest98", "98", "/lib/Eldest/02/98/98.mp3", &eldest.ID, nil, "/lib/Eldest/02/98/98.mp3")
+	add("eldest98", "98", "/lib/Quillon/02/98/98.mp3", &eldest.ID, nil, "/lib/Quillon/02/98/98.mp3")
 	// ---- skipped for other reasons ----
 	locked := add("locked", "Unknown Title", "/lib/Alma Reed/Locked Folder", a, nil,
 		"/lib/Alma Reed/Locked Folder/01.mp3", "/lib/Alma Reed/Locked Folder/02.mp3")
@@ -129,8 +129,8 @@ func newJunkLib(t *testing.T) *junkLib {
 	add("manual", "read by narrator", "", nil, nil)
 	// The one-level climb above a junk-named folder lands on "Books": refused.
 	add("generic", "Unknown", "/lib/Books/Unknown/Unknown.mp3", nil, nil, "/lib/Books/Unknown/Unknown.mp3")
-	person := add("person", "read by narrator", "/lib/Someone/C. T. Phipps", nil, nil,
-		"/lib/Someone/C. T. Phipps/01.mp3", "/lib/Someone/C. T. Phipps/02.mp3")
+	person := add("person", "read by narrator", "/lib/Someone/D. R. Pellwick", nil, nil,
+		"/lib/Someone/D. R. Pellwick/01.mp3", "/lib/Someone/D. R. Pellwick/02.mp3")
 	require.NoError(t, st.SetBookAuthors(person, []database.BookAuthor{{BookID: person, AuthorID: phipps.ID, Role: "author"}}))
 	add("bf-title", "Big Finish Ident", "/lib/Neutral/Real Title", nil, nil,
 		"/lib/Neutral/Real Title/01.mp3", "/lib/Neutral/Real Title/02.mp3")
@@ -142,7 +142,7 @@ func newJunkLib(t *testing.T) *junkLib {
 	tw := add("owner-proposal", "Opening", "/lib/Neutral/Plain Folder", nil, nil,
 		"/lib/Neutral/Plain Folder/01.mp3", "/lib/Neutral/Plain Folder/02.mp3")
 	_, err = st.ModifyBook(tw, func(b *database.Book) error {
-		s := "Torchwood: The Dead Line"
+		s := "Torchwood: The Quiet Line"
 		b.TranscribedTitle = &s
 		return nil
 	})
@@ -153,10 +153,10 @@ func newJunkLib(t *testing.T) *junkLib {
 	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: prov, Field: "title",
 		FetchedValue: &fetched, UpdatedAt: time.Now()}))
 	// A series-position prefix a refetch echoed back as the provider's value
-	// ("02 - No Quarter"): 350 such books on prod, 2026-10-03.
-	fetchedPos := `"02 - No Quarter"`
-	pos := add("provider-prefix", "02 - No Quarter", "/lib/Author P/02 - No Quarter.m4b", nil, nil,
-		"/lib/Author P/02 - No Quarter.m4b")
+	// ("02 - Tally Moon"): 350 such books on prod, 2026-10-03.
+	fetchedPos := `"02 - Tally Moon"`
+	pos := add("provider-prefix", "02 - Tally Moon", "/lib/Author P/02 - Tally Moon.m4b", nil, nil,
+		"/lib/Author P/02 - Tally Moon.m4b")
 	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: pos, Field: "title",
 		FetchedValue: &fetchedPos, UpdatedAt: time.Now()}))
 	// The provider's recorded title differs from the stored junk one: it is
@@ -178,19 +178,19 @@ func newJunkLib(t *testing.T) *junkLib {
 	// agrees with the stripped title
 	withFetched("provider-agrees", "85 - Echo Book", `"Echo Book: A LitRPG Adventure"`, "", nil, "/lib/Author Q/85 - Echo Book.m4b")
 	// the fetch searched on the junk title and hit another book
-	withFetched("provider-wrong-hit", "07 - Mutineer Song", `"Shadowfall"`, "", nil, "/lib/Author R/07 - Mutineer Song.m4b")
+	withFetched("provider-wrong-hit", "07 - Wicker Chorus", `"Gloamreach"`, "", nil, "/lib/Author R/07 - Wicker Chorus.m4b")
 	// a narrator credit with nothing in the title: recorded under the book's
 	// author, and the folder agrees
-	withFetched("provider-credit", "read by narrator", `"Divine Creation"`, "Alma Reed", a,
-		"/lib/Alma Reed/Divine Creation/01.mp3", "/lib/Alma Reed/Divine Creation/02.mp3")
+	withFetched("provider-credit", "read by narrator", `"Hollow Genesis"`, "Alma Reed", a,
+		"/lib/Alma Reed/Hollow Genesis/01.mp3", "/lib/Alma Reed/Hollow Genesis/02.mp3")
 	// …and the folder disagrees
-	withFetched("provider-conflict", "read by narrator", `"Divine Wrath"`, "Alma Reed", a,
+	withFetched("provider-conflict", "read by narrator", `"Hollow Reckoning"`, "Alma Reed", a,
 		"/lib/Alma Reed/Quite Another Folder/01.mp3", "/lib/Alma Reed/Quite Another Folder/02.mp3")
 	// recorded under nobody the book knows: the value is not used at all
-	withFetched("provider-no-author", "read by narrator", `"Marvel Comics"`, "Somebody Else", nil,
+	withFetched("provider-no-author", "read by narrator", `"Gorsel Comics"`, "Somebody Else", nil,
 		"/lib/Author U/Third Folder/01.mp3", "/lib/Author U/Third Folder/02.mp3")
 	// the same title by its letters and digits is "the provider recorded this title"
-	withFetched("provider-near-equal", "3-10 to Yuma", `"3:10 to Yuma"`, "", nil, "/lib/Author V/3-10 to Yuma.m4b")
+	withFetched("provider-near-equal", "4-20 to Vellmar", `"4:20 to Vellmar"`, "", nil, "/lib/Author V/4-20 to Vellmar.m4b")
 	// a value on record that is no string
 	withFetched("provider-unreadable", "04 - Null Book", `null`, "", nil, "/lib/Author W/04 - Null Book.m4b")
 	// a catalog title's bracketed edition marker is dropped, the title kept
@@ -198,31 +198,31 @@ func newJunkLib(t *testing.T) *junkLib {
 		"/lib/Alma Reed/Probe Title/01.mp3", "/lib/Alma Reed/Probe Title/02.mp3")
 	// The path and the provider agree exactly; the transcription misheard the
 	// name: the transcription is overruled.
-	withFetched("provider-outvotes", "20 - Hilldiggers", `"Hilldiggers"`, "", nil, "/lib/Author X/20 - Hilldiggers.m4b")
+	withFetched("provider-outvotes", "20 - Brannoch", `"Brannoch"`, "", nil, "/lib/Author X/20 - Brannoch.m4b")
 	// …also for a credit title whose folder and author-gated provider agree
-	withFetched("provider-outvotes-folder", "read by narrator", `"Line of Polity"`, "Alma Reed", a,
-		"/lib/Alma Reed/Line of Polity/01.mp3", "/lib/Alma Reed/Line of Polity/02.mp3")
+	withFetched("provider-outvotes-folder", "read by narrator", `"Vale of Marrow"`, "Alma Reed", a,
+		"/lib/Alma Reed/Vale of Marrow/01.mp3", "/lib/Alma Reed/Vale of Marrow/02.mp3")
 	// the same disagreement with no provider on record stays a conflict
-	add("no-provider-conflict", "21 - Line War", "/lib/Author Y/21 - Line War.m4b", nil, nil, "/lib/Author Y/21 - Line War.m4b")
+	add("no-provider-conflict", "21 - Dusk Wren", "/lib/Author Y/21 - Dusk Wren.m4b", nil, nil, "/lib/Author Y/21 - Dusk Wren.m4b")
 	// the provider names the series' first book, the path only the series:
 	// the transcription is the one source that has the book right
-	withFetched("provider-series-hit", "03 - Mistborn", `"Mistborn: The Final Empire"`, "", nil, "/lib/Author S/03 - Mistborn.m4b")
-	withFetched("provider-series-hit-folder", "read by narrator", `"Mistborn: The Final Empire"`, "Alma Reed", a,
-		"/lib/Alma Reed/Mistborn/01.mp3", "/lib/Alma Reed/Mistborn/02.mp3")
+	withFetched("provider-series-hit", "03 - Gorsemoor", `"Gorsemoor: The Tally Throne"`, "", nil, "/lib/Author S/03 - Gorsemoor.m4b")
+	withFetched("provider-series-hit-folder", "read by narrator", `"Gorsemoor: The Tally Throne"`, "Alma Reed", a,
+		"/lib/Alma Reed/Gorsemoor/01.mp3", "/lib/Alma Reed/Gorsemoor/02.mp3")
 	// a refused candidate sides with the transcription: two against the path
-	withFetched("provider-vs-two", "03 - Gridlinked", `"Gridlinked"`, "", a, "/lib/Shelf G/03 - Gridlinked.m4b")
-	cacheRaw := `{"title":"The Line of Polity","author":"Alma Reed","score":0.95}`
+	withFetched("provider-vs-two", "03 - Cobblewick", `"Cobblewick"`, "", a, "/lib/Shelf G/03 - Cobblewick.m4b")
+	cacheRaw := `{"title":"The Vale of Marrow","author":"Alma Reed","score":0.95}`
 	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: lib.ids["provider-vs-two"], FetchedAt: time.Now(),
 		Candidates: []json.RawMessage{json.RawMessage(cacheRaw)}}))
 	// the transcription names a book this author already has
-	add("owned-title", "Brass Man", "/lib/Shelf O/Brass Man.m4b", a, nil, "/lib/Shelf O/Brass Man.m4b")
-	withFetched("provider-vs-owned", "05 - Polity Agent", `"Polity Agent"`, "", a, "/lib/Shelf P/05 - Polity Agent.m4b")
+	add("owned-title", "Tin Warden", "/lib/Shelf O/Tin Warden.m4b", a, nil, "/lib/Shelf O/Tin Warden.m4b")
+	withFetched("provider-vs-owned", "05 - Marrow Agent", `"Marrow Agent"`, "", a, "/lib/Shelf P/05 - Marrow Agent.m4b")
 	// an owner-manual transcription is never overruled into a proposal
 	withFetched("provider-vs-owner", "06 - Plain Title", `"Plain Title"`, "", nil, "/lib/Author T/06 - Plain Title.m4b")
 	for name, heard := range map[string]string{
-		"provider-outvotes": "Hildiggers", "provider-outvotes-folder": "Lime of Polly Tea", "no-provider-conflict": "Lime Wart",
-		"provider-series-hit": "The Hero of Ages", "provider-series-hit-folder": "The Well of Ascension",
-		"provider-vs-two": "The Line of Polity", "provider-vs-owned": "Brass Man", "provider-vs-owner": "Doctor Who: The Daleks",
+		"provider-outvotes": "Branoch", "provider-outvotes-folder": "Veil of Marrow", "no-provider-conflict": "Dusk Wart",
+		"provider-series-hit": "The Crown of Tarns", "provider-series-hit-folder": "The Cistern of Dusk",
+		"provider-vs-two": "The Vale of Marrow", "provider-vs-owned": "Tin Warden", "provider-vs-owner": "Doctor Who: The Zorblax",
 	} {
 		_, err := st.ModifyBook(lib.ids[name], func(b *database.Book) error { b.TranscribedTitle = &heard; return nil })
 		require.NoError(t, err)
@@ -230,14 +230,14 @@ func newJunkLib(t *testing.T) *junkLib {
 	// A bare unpadded number beside other books of its author may be the
 	// real title: needs a person, never a (possible) fragment.
 	add("bare13", "13", "/lib/Alma Reed/13.m4b", a, nil, "/lib/Alma Reed/13.m4b")
-	add("unabridged", "read by narrator", "/lib/Author B/Dune (Unabridged)", nil, nil,
-		"/lib/Author B/Dune (Unabridged)/01.mp3", "/lib/Author B/Dune (Unabridged)/02.mp3")
+	add("unabridged", "read by narrator", "/lib/Author B/Marl (Unabridged)", nil, nil,
+		"/lib/Author B/Marl (Unabridged)/01.mp3", "/lib/Author B/Marl (Unabridged)/02.mp3")
 	// "Read by Moonlight" is a title, and nothing may climb to "lib" for it.
 	add("moonlight", "Read by Moonlight", "/lib/A/Read by Moonlight.m4b", nil, nil, "/lib/A/Read by Moonlight.m4b")
 	// ---- real titles: never rows ----
-	add("robot", "I, Robot", "/lib/Asimov/I, Robot.m4b", nil, nil, "/lib/Asimov/I, Robot.m4b")
-	add("etranger", "l'Étranger", "/lib/Camus/l'Étranger.m4b", nil, nil, "/lib/Camus/l'Étranger.m4b")
-	add("1984", "1984", "/lib/Orwell/1984.m4b", nil, nil, "/lib/Orwell/1984.m4b")
+	add("robot", "I Left My Hat in Wexmoor", "/lib/Wexmoor/I Left My Hat in Wexmoor.m4b", nil, nil, "/lib/Wexmoor/I Left My Hat in Wexmoor.m4b")
+	add("etranger", "l'Ébrouement", "/lib/Pellegrine/l'Ébrouement.m4b", nil, nil, "/lib/Pellegrine/l'Ébrouement.m4b")
+	add("1673", "1673", "/lib/Thistlewood/1673.m4b", nil, nil, "/lib/Thistlewood/1673.m4b")
 	return lib
 }
 
@@ -271,22 +271,22 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"disc":      "Whole Work",
 		"candidate": "Candidate Title",
 		// highest score among the trustworthy candidates, not the first
-		"eldest-prefix": "Eldest",
+		"eldest-prefix": "Quillon",
 		"named-credit":  "Named Credit Book",
 		// a provider-recorded title that fails the junk classifier is
 		// repaired like a file-derived one (owner decision 2026-10-03)
 		"provider":        "Provider Folder",
-		"provider-prefix": "No Quarter",
+		"provider-prefix": "Tally Moon",
 		// the provider's recorded title is evidence
 		"provider-agrees":     "Echo Book",
-		"provider-wrong-hit":  "Mutineer Song",
-		"provider-credit":     "Divine Creation",
-		"provider-near-equal": "to Yuma",
+		"provider-wrong-hit":  "Wicker Chorus",
+		"provider-credit":     "Hollow Genesis",
+		"provider-near-equal": "to Vellmar",
 		"provider-unreadable": "Null Book",
 		"provider-format":     "Probe Title",
 		// path + provider outvote a transcription that disagrees
-		"provider-outvotes":        "Hilldiggers",
-		"provider-outvotes-folder": "Line of Polity",
+		"provider-outvotes":        "Brannoch",
+		"provider-outvotes-folder": "Vale of Marrow",
 	}
 	for name, want := range applicable {
 		r, ok := rows[name]
@@ -311,7 +311,7 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	// One that disagrees with the title's own evidence is never proposed,
 	// is named in the reason, and takes the row out of low risk.
 	require.Contains(t, rows["provider-wrong-hit"].Reason, "title_prefix_stripped")
-	require.Contains(t, rows["provider-wrong-hit"].Reason, `not used: provider value "Shadowfall" disagrees`)
+	require.Contains(t, rows["provider-wrong-hit"].Reason, `not used: provider value "Gloamreach" disagrees`)
 	require.Equal(t, repairs.RiskReview, rows["provider-wrong-hit"].Risk)
 	// With nothing in the title to vouch for it, it must be recorded under
 	// the book's own author.
@@ -319,11 +319,11 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	// A junk stored author has nothing to compare the provider's author with
 	// (2026-10-23): the value must agree with the path or the transcription,
 	// and when it does not the row is skipped, not repaired from the folder.
-	require.Contains(t, rows["provider-no-author"].SkipReason, `provider value "Marvel Comics" does not agree`)
+	require.Contains(t, rows["provider-no-author"].SkipReason, `provider value "Gorsel Comics" does not agree`)
 	require.Contains(t, rows["provider-no-author"].SkipReason, "the stored author is junk")
 	require.Contains(t, rows["provider-format"].Reason, "proposed from provider_value")
 	// Overruling a transcription is said in the reason and is never low risk.
-	for name, heard := range map[string]string{"provider-outvotes": "Hildiggers", "provider-outvotes-folder": "Lime of Polly Tea"} {
+	for name, heard := range map[string]string{"provider-outvotes": "Branoch", "provider-outvotes-folder": "Veil of Marrow"} {
 		require.Equal(t, repairs.RiskReview, rows[name].Risk, name)
 		require.Contains(t, rows[name].Reason, fmt.Sprintf("the transcription %q disagrees and was overruled", heard), name)
 	}
@@ -331,10 +331,10 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 	for _, name := range []string{"no-provider-conflict", "provider-series-hit", "provider-series-hit-folder", "provider-vs-two", "provider-vs-owned"} {
 		require.Contains(t, rows[name].SkipReason, "conflicting evidence", name)
 	}
-	require.Contains(t, rows["provider-vs-two"].SkipReason, `which the candidate "The Line of Polity" agrees with`)
+	require.Contains(t, rows["provider-vs-two"].SkipReason, `which the candidate "The Vale of Marrow" agrees with`)
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
 	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
-	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
+	require.NotContains(t, rows["eldest-prefix"].Reason, "Zarvane")
 
 	skipped := map[string]string{
 		// possible: only the shape says fragment
@@ -370,17 +370,17 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		require.True(t, ok, "%s: no row", name)
 		require.Equal(t, want, r.Skipped, "%s: %s", name, r.SkipReason)
 	}
-	require.Contains(t, rows["provider-conflict"].SkipReason, `provider_value "Divine Wrath"`)
+	require.Contains(t, rows["provider-conflict"].SkipReason, `provider_value "Hollow Reckoning"`)
 	require.Contains(t, rows["frag1"].SkipReason, "possible fragment")
 	require.Contains(t, rows["owned"].SkipReason, "fragment — use the consolidation fixer")
-	require.Contains(t, rows["eldest98"].SkipReason, `its author "Eldest" is the name of its folder`)
-	require.Contains(t, rows["owner-proposal"].SkipReason, "Torchwood: The Dead Line")
+	require.Contains(t, rows["eldest98"].SkipReason, `its author "Quillon" is the name of its folder`)
+	require.Contains(t, rows["owner-proposal"].SkipReason, "Torchwood: The Quiet Line")
 	require.Contains(t, rows["unabridged"].SkipReason, "format, edition or disc marker")
 	require.Contains(t, rows["transcribed"].SkipReason, `conflicting evidence: folder "Some Folder" vs transcription "The Spoken Name"`)
 	require.Contains(t, rows["person"].SkipReason, "names the author or narrator")
 	require.Contains(t, rows["owned"].SkipReason, "is also a file of book "+lib.ids["parent"])
 
-	for _, name := range []string{"robot", "etranger", "1984", "existing", "parent", "moonlight"} {
+	for _, name := range []string{"robot", "etranger", "1673", "existing", "parent", "moonlight"} {
 		_, ok := rows[name]
 		require.False(t, ok, "%s has a real title and must not be a row", name)
 	}
@@ -504,29 +504,29 @@ func TestJunkTitleFixer_TitleChangedAfterReplanIsRefused(t *testing.T) {
 }
 
 func TestJunkProposalCheck_Refusals(t *testing.T) {
-	pc := junkProposalCheck{stored: "read by narrator", people: []string{"Frank Herbert"},
+	pc := junkProposalCheck{stored: "read by narrator", people: []string{"Fenwick Harbrook"},
 		roots: []string{"/mnt/data/audiobooks"},
-		paths: []string{"/mnt/data/audiobooks/Frank Herbert/Dune/01.mp3", "/lib/X/y.mp3"}}
+		paths: []string{"/mnt/data/audiobooks/Fenwick Harbrook/Marl/01.mp3", "/lib/X/y.mp3"}}
 	refused := map[string]string{
-		"Dune MP3":                 "format",
-		"Dune (Unabridged)":        "format",
-		"Dune Abridged":            "format",
-		"Dune Side A":              "format",
-		"Dune Tape 3":              "format",
-		"Dune CD01-02":             "format",
-		"Dune [B002V1OF70]":        "ASIN",
-		"B002V1OF70":               "ASIN",
-		"Dune 9780441013593":       "ASIN",
-		"merged":                   "generic",
-		"Output":                   "generic",
-		"Book":                     "generic",
-		"audio":                    "generic",
-		"Frank Herbert - Dune":     "person",
-		"Herbert, Frank":           "author or narrator",
-		"lib":                      "root",
-		"mnt":                      "root",
-		"data":                     "root",
-		"Frank Herbert Collection": "",
+		"Marl MP3":                    "format",
+		"Marl (Unabridged)":           "format",
+		"Marl Abridged":               "format",
+		"Marl Side A":                 "format",
+		"Marl Tape 3":                 "format",
+		"Marl CD01-02":                "format",
+		"Marl [B0ZZ99QQ11]":           "ASIN",
+		"B0ZZ99QQ11":                  "ASIN",
+		"Marl 9781234567897":          "ASIN",
+		"merged":                      "generic",
+		"Output":                      "generic",
+		"Book":                        "generic",
+		"audio":                       "generic",
+		"Fenwick Harbrook - Marl":     "person",
+		"Harbrook, Fenwick":           "author or narrator",
+		"lib":                         "root",
+		"mnt":                         "root",
+		"data":                        "root",
+		"Fenwick Harbrook Collection": "",
 	}
 	for c, want := range refused {
 		got := pc.refusal(c, junkSrcFolder)
@@ -540,39 +540,39 @@ func TestJunkProposalCheck_Refusals(t *testing.T) {
 	// The format list applies to every source since 2026-10-23: a transcription
 	// that reads "Tape 3" or "Side A" is a studio's announcement. The root,
 	// person and generic checks always applied to every source.
-	require.Contains(t, pc.refusal("Dune Tape 3", junkSrcTranscribed), "format")
+	require.Contains(t, pc.refusal("Marl Tape 3", junkSrcTranscribed), "format")
 	// A transcription that is the intro's first sentence, a publisher ident
 	// or a chapter heading is not a title (every one of these was proposed on
 	// prod 2026-10-03).
 	for c, want := range map[string]string{
-		"Chapter 26 The apartment was in Asimov, a city at":                        "chapter heading",
-		"Chapter 77. Testing. Primordials were strange, en":                        "chapter heading",
-		"Together, they fell toward the light. The wall be":                        "prose",
-		"his brain loose. The simulated G-forces, as he ro":                        "prose",
-		"It's easy to idealize the past. Take sailing ships, for instance. Not th": "prose",
-		"Tantor Audio, a division of recorded books presents. Class A threat":      "publisher",
-		"Tantor audio presents, The Legend of Coronair":                            "publisher",
-		"from Simon and Schuster Audio, Star Trek, Voyager, Pathways":              "publisher",
-		"Full cast audio resents. Wild magic":                                      "publisher",
-		"This is Audible.":                                                         "publisher",
-		"Star Force, Endless Crusade. Written":                                     "prose",
+		"Chapter 26 The cellar was in Wexmoor, a town at":                       "chapter heading",
+		"Chapter 77. Testing. Lanterns were strange, en":                        "chapter heading",
+		"Together, they drifted toward the dock. The wall be":                   "prose",
+		"his scarf loose. The distant bells, as he ro":                          "prose",
+		"It is simple to forget the winter. Take lanterns, for example. Not th": "prose",
+		"Tantor Audio, a division of recorded books presents. Grade B hazard":   "publisher",
+		"Tantor audio presents, The Lantern of Orsolay":                         "publisher",
+		"from Simon and Schuster Audio, Starhaven, Wraith, Pathways":            "publisher",
+		"Full cast audio resents. Quiet embers":                                 "publisher",
+		"This is Audible.":                                                      "publisher",
+		"Orbit Corps, Endless Vigil. Written":                                   "prose",
 	} {
 		got := pc.refusal(c, junkSrcTranscribed)
 		require.NotEmpty(t, got, "%q must be refused", c)
 		require.Contains(t, got, want, c)
 	}
-	for _, c := range []string{"The Shadow of Saginami", "Quantico", "Stormborn, The Seaborn Cycle", "Star Trek, Spectre",
-		"So Long and Thanks for All the Fish", "1984", "Life, the universe, and everything",
-		"Star Trek Deep Space Nine Millennium The Fall of Terok Nor", "Reunion, a Star Trek The Next Generation novel"} {
+	for _, c := range []string{"The Lantern of Orsolay", "Dunmarrow", "Galeborn, The Tidewrought Cycle", "Starhaven, Wraith",
+		"Farewell and Gratitude for All the Moss", "1673", "Moss, the quay, and nothing",
+		"Orbital Station Nine Millennium The Fall of Kessel Norr", "Homecoming, a Tarnside Chronicles novel"} {
 		require.Empty(t, pc.refusal(c, junkSrcTranscribed), c)
 	}
 	// A chapter heading is refused from every source: "01 - Prologue" strips
 	// to "Prologue", "03 Chapter Two - The Hunter" to "Chapter Two - The Hunter".
-	require.Contains(t, pc.refusal("Prologue Bobbie Draper", junkSrcStripped), "chapter heading")
+	require.Contains(t, pc.refusal("Prologue Tessa Vorn", junkSrcStripped), "chapter heading")
 	require.Contains(t, pc.refusal("Chapter Two - The Hunter", junkSrcStripped), "chapter heading")
-	require.Empty(t, pc.refusal("Prologue to Murder", junkSrcStripped), "a title can start with the word")
+	require.Empty(t, pc.refusal("Prologue to Mooncalf", junkSrcStripped), "a title can start with the word")
 	require.NotEmpty(t, pc.refusal("lib", junkSrcCandidate))
-	require.Empty(t, pc.refusal("Dune", junkSrcFolder))
+	require.Empty(t, pc.refusal("Marl", junkSrcFolder))
 	// The author folder directly below an author-first library root is a path.
 	pc2 := junkProposalCheck{stored: "x", roots: []string{"/mnt/data/audiobooks"}, authorRoot: "/mnt/data/audiobooks",
 		paths: []string{"/mnt/data/audiobooks/Some Author/Real Work/01.mp3"}}
@@ -586,13 +586,13 @@ func TestJunkProposalCheck_Refusals(t *testing.T) {
 }
 
 func TestTitleAgreesWithAny(t *testing.T) {
-	require.True(t, titleAgreesWithAny("Eldest", []string{"Eldest"}))
-	require.True(t, titleAgreesWithAny("Assassin's Apprentice", []string{"Assassins Apprentice"}))
-	require.True(t, titleAgreesWithAny("Assassin’s Apprentice", []string{"Assassins Apprentice"}))
-	require.True(t, titleAgreesWithAny("Eldest: Inheritance, Book 2", []string{"Eldest"}))
-	require.False(t, titleAgreesWithAny("Eragon", []string{"Eldest"}))
-	require.False(t, titleAgreesWithAny("Eldest Son", []string{"Eldest"}))
-	require.False(t, titleAgreesWithAny("Eldest", nil))
+	require.True(t, titleAgreesWithAny("Quillon", []string{"Quillon"}))
+	require.True(t, titleAgreesWithAny("Tarnwick's Foundling", []string{"Tarnwicks Foundling"}))
+	require.True(t, titleAgreesWithAny("Tarnwick’s Foundling", []string{"Tarnwicks Foundling"}))
+	require.True(t, titleAgreesWithAny("Quillon: Harrowmere, Book 2", []string{"Quillon"}))
+	require.False(t, titleAgreesWithAny("Zarvane", []string{"Quillon"}))
+	require.False(t, titleAgreesWithAny("Quillon Son", []string{"Quillon"}))
+	require.False(t, titleAgreesWithAny("Quillon", nil))
 }
 
 func TestJunkTitleFixer_SameProposalTwiceIsAPossibleFragment(t *testing.T) {
@@ -601,7 +601,7 @@ func TestJunkTitleFixer_SameProposalTwiceIsAPossibleFragment(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	author, err := st.CreateAuthor("Some Author")
 	require.NoError(t, err)
-	for _, title := range []string{"01 - Eldest", "02 - Eldest"} {
+	for _, title := range []string{"01 - Quillon", "02 - Quillon"} {
 		b, err := st.CreateBook(&database.Book{Title: title, FilePath: "/lib/" + title + ".mp3", AuthorID: &author.ID})
 		require.NoError(t, err)
 		require.NoError(t, st.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: "/lib/" + title + ".mp3"}))
@@ -620,7 +620,7 @@ func TestLetterLOrdinalFixer(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	ids := map[string]string{}
-	for _, title := range []string{"l Corinthians", "ll Kings 4", "I Corinthians", "l'Étranger", "l Timothy"} {
+	for _, title := range []string{"l Corinthians", "ll Kings 4", "I Corinthians", "l'Ébrouement", "l Timothy"} {
 		b, err := st.CreateBook(&database.Book{Title: title, FilePath: "/lib/Bible/" + title + ".mp3"})
 		require.NoError(t, err)
 		ids[title] = b.ID
@@ -714,60 +714,60 @@ func TestJunkTitleFixer_ConflictingEvidenceProposesNeither(t *testing.T) {
 		_, err := st.ModifyBook(id, func(b *database.Book) error { b.TranscribedTitle = &s; return nil })
 		require.NoError(t, err)
 	}
-	herbert, banks, rowling := author("Frank Herbert"), author("Iain M. Banks"), author("J.K. Rowling")
-	sanderson, weir, hobb := author("Brandon Sanderson"), author("Andy Weir"), author("Robin Hobb")
+	authA, authB, authC := author("Fenwick Harbrook"), author("Osric M. Tamblyn"), author("K.J. Harrowgate")
+	authD, authE, authF := author("Hadley Voss"), author("Orrin Bexley"), author("Linnea Garrow")
 	two := func(dir string) []string { return []string{dir + "/01.mp3", dir + "/02.mp3"} }
 
 	conflicts := map[string][2]string{} // id -> the two values the reason must name
 	proposed := map[string]string{}     // id -> the title the row must propose
-	id := addJunkBook(t, st, "Unknown Title", herbert, "/lib/Frank Herbert/Dune Messiah/Dune Messiah.m4b")
-	cache(id, "Dune", "Frank Herbert", 0.6)
-	conflicts[id] = [2]string{"Dune Messiah", "Dune"}
-	id = addJunkBook(t, st, "Opening", herbert, two("/lib/Frank Herbert/Children of Dune")...)
-	cache(id, "Dune", "Frank Herbert", 0.9)
-	conflicts[id] = [2]string{"Children of Dune", "Dune"}
+	id := addJunkBook(t, st, "Unknown Title", authA, "/lib/Fenwick Harbrook/Marl Hollow/Marl Hollow.m4b")
+	cache(id, "Marl", "Fenwick Harbrook", 0.6)
+	conflicts[id] = [2]string{"Marl Hollow", "Marl"}
+	id = addJunkBook(t, st, "Opening", authA, two("/lib/Fenwick Harbrook/Children of Marl")...)
+	cache(id, "Marl", "Fenwick Harbrook", 0.9)
+	conflicts[id] = [2]string{"Children of Marl", "Marl"}
 	// A publisher ident is refused as a transcription (not evidence, not a
 	// conflict): the folder alone names the book.
-	id = addJunkBook(t, st, "read by narrator", banks, two("/lib/Iain M. Banks/Excession")...)
+	id = addJunkBook(t, st, "read by narrator", authB, two("/lib/Osric M. Tamblyn/Fallowmere")...)
 	transcribe(id, "Audible Studios presents")
-	proposed[id] = "Excession"
-	id = addJunkBook(t, st, "Opening", sanderson, two("/lib/Brandon Sanderson/Libation")...)
-	transcribe(id, "Mistborn: The Final Empire")
-	conflicts[id] = [2]string{"Libation", "Mistborn: The Final Empire"}
+	proposed[id] = "Fallowmere"
+	id = addJunkBook(t, st, "Opening", authD, two("/lib/Hadley Voss/Pennywhistle")...)
+	transcribe(id, "Gorsemoor: The Tally Throne")
+	conflicts[id] = [2]string{"Pennywhistle", "Gorsemoor: The Tally Throne"}
 
-	stormlight, err := st.CreateSeries("The Stormlight Archive", sanderson)
+	ledgerSeries, err := st.CreateSeries("The Lanternfall Ledger", authD)
 	require.NoError(t, err)
-	id = addJunkBook(t, st, "Opening", sanderson, two("/lib/Brandon Sanderson/The Stormlight Archive")...)
-	_, err = st.ModifyBook(id, func(b *database.Book) error { b.SeriesID = &stormlight.ID; return nil })
+	id = addJunkBook(t, st, "Opening", authD, two("/lib/Hadley Voss/The Lanternfall Ledger")...)
+	_, err = st.ModifyBook(id, func(b *database.Book) error { b.SeriesID = &ledgerSeries.ID; return nil })
 	require.NoError(t, err)
-	cache(id, "Words of Radiance", "Brandon Sanderson", 0.8)
-	proposed[id] = "Words of Radiance"
+	cache(id, "Wells of Cinderlight", "Hadley Voss", 0.8)
+	proposed[id] = "Wells of Cinderlight"
 	// A generic folder ("New Folder (2)", "Complete Collection") is no
 	// evidence and no proposal.
-	id = addJunkBook(t, st, "Opening", rowling, two("/lib/J.K. Rowling/New Folder (2)")...)
-	transcribe(id, "Harry Potter and the Chamber of Secrets")
-	proposed[id] = "Harry Potter and the Chamber of Secrets"
-	id = addJunkBook(t, st, "Unknown Title", weir, two("/lib/Andy Weir/Complete Collection")...)
-	cache(id, "The Martian", "Andy Weir", 0.8)
-	proposed[id] = "The Martian"
+	id = addJunkBook(t, st, "Opening", authC, two("/lib/K.J. Harrowgate/New Folder (2)")...)
+	transcribe(id, "Pip Bellwether and the Cellar of Whispers")
+	proposed[id] = "Pip Bellwether and the Cellar of Whispers"
+	id = addJunkBook(t, st, "Unknown Title", authE, two("/lib/Orrin Bexley/Complete Collection")...)
+	cache(id, "The Cinder Courier", "Orrin Bexley", 0.8)
+	proposed[id] = "The Cinder Courier"
 	for stem, want := range map[string]string{
-		"hp1":                   "Harry Potter and the Philosopher's Stone",
-		"dune_messiah_64kbps":   "Dune Messiah",
-		"final":                 "Chapterhouse: Dune",
-		"audible_download_2019": "God Emperor of Dune",
+		"pb1":                   "Pip Bellwether and the Tinker's Lantern",
+		"marl_hollow_64kbps":    "Marl Hollow",
+		"final":                 "Hearthstone: Marl",
+		"audible_download_2019": "Warden Queen of Marl",
 	} {
-		by, byName := herbert, "Frank Herbert"
-		if stem == "hp1" {
-			by, byName = rowling, "J.K. Rowling"
+		by, byName := authA, "Fenwick Harbrook"
+		if stem == "pb1" {
+			by, byName = authC, "K.J. Harrowgate"
 		}
 		id = addJunkBook(t, st, "Unknown Title", by, "/lib/"+byName+"/Rips/"+stem+".m4b")
 		cache(id, want, byName, 0.8)
 		proposed[id] = want
 	}
 	// Agreement still proposes, apostrophes aside.
-	id = addJunkBook(t, st, "Opening", hobb, two("/lib/Robin Hobb/Assassins Apprentice")...)
-	transcribe(id, "Assassin's Apprentice")
-	proposed[id] = "Assassin's Apprentice"
+	id = addJunkBook(t, st, "Opening", authF, two("/lib/Linnea Garrow/Tarnwicks Foundling")...)
+	transcribe(id, "Tarnwick's Foundling")
+	proposed[id] = "Tarnwick's Foundling"
 
 	rows := planRows(t, st)
 	for id, want := range conflicts {
@@ -785,10 +785,10 @@ func TestJunkTitleFixer_ConflictingEvidenceProposesNeither(t *testing.T) {
 }
 
 func TestIsWeakFileStem(t *testing.T) {
-	for _, s := range []string{"zz", "hp1", "dune_messiah_64kbps", "final", "Merged", "output", "audible_download_2019", "Dune 64kbps"} {
+	for _, s := range []string{"zz", "pb1", "marl_hollow_64kbps", "final", "Merged", "output", "audible_download_2019", "Marl 64kbps"} {
 		require.True(t, isWeakFileStem(s), s)
 	}
-	for _, s := range []string{"Dune Messiah", "The Martian", "1984 Revisited", "Words of Radiance"} {
+	for _, s := range []string{"Marl Hollow", "The Cinder Courier", "1673 Revisited", "Wells of Cinderlight"} {
 		require.False(t, isWeakFileStem(s), s)
 	}
 }
@@ -803,7 +803,7 @@ func TestJunkTitleFixer_ClimbToAFolderUnderARootNeedsCorroboration(t *testing.T)
 	require.NoError(t, err)
 	unknown, err := st.CreateAuthor("Unknown Author")
 	require.NoError(t, err)
-	id := addJunkBook(t, st, "Chapter 1", &unknown.ID, "/imports/dl/Robin Hobb/01/a.mp3", "/imports/dl/Robin Hobb/01/b.mp3")
+	id := addJunkBook(t, st, "Chapter 1", &unknown.ID, "/imports/dl/Linnea Garrow/01/a.mp3", "/imports/dl/Linnea Garrow/01/b.mp3")
 	r := planRows(t, st)[id]
 	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
 	require.Contains(t, r.SkipReason, "may be the author")
@@ -841,7 +841,7 @@ func TestJunkTitleFixer_WeakStemAloneNeedsManual(t *testing.T) {
 	a, err := st.CreateAuthor("Some Author")
 	require.NoError(t, err)
 	ids := map[string]string{}
-	for _, stem := range []string{"hp1", "final", "audible_download_2019"} {
+	for _, stem := range []string{"pb1", "final", "audible_download_2019"} {
 		ids[stem] = addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/Rips/"+stem+".m4b")
 	}
 	rows := planRows(t, st)
@@ -862,15 +862,15 @@ func TestJunkTitleFixer_WeakStemStillVetoesDisagreeingEvidence(t *testing.T) {
 		_, err := st.ModifyBook(id, func(b *database.Book) error { b.TranscribedTitle = &s; return nil })
 		require.NoError(t, err)
 	}
-	q84 := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/A/1Q84.m4b")
+	q84 := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/A/7K36.m4b")
 	spoken(q84, "Audible Studios presents")
-	it := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/B/It.m4b")
+	it := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/B/Ox.m4b")
 	spoken(it, "This is Audible")
-	fe := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/C/The_Final_Empire.m4b")
+	fe := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/C/The_Gorse_Tally.m4b")
 	require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: fe, FetchedAt: time.Now(),
-		Candidates: []json.RawMessage{json.RawMessage(`{"title":"Elantris","author":"Some Author","score":0.9}`)}}))
+		Candidates: []json.RawMessage{json.RawMessage(`{"title":"Quillmere","author":"Some Author","score":0.9}`)}}))
 	rows := planRows(t, st)
-	for name, id := range map[string]string{"1Q84": q84, "It": it, "The_Final_Empire": fe} {
+	for name, id := range map[string]string{"7K36": q84, "Ox": it, "The_Gorse_Tally": fe} {
 		r := rows[id]
 		require.False(t, r.Applicable(), "%s: proposed %q over its own filename", name, r.Proposed["title"])
 		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s: %s", name, r.SkipReason)
@@ -878,21 +878,21 @@ func TestJunkTitleFixer_WeakStemStillVetoesDisagreeingEvidence(t *testing.T) {
 }
 
 func TestWeakStemVeto(t *testing.T) {
-	vetoes := map[string]string{"The_Final_Empire": "The Final Empire", "It": "It", "1Q84": "1Q84",
-		"dune_messiah_64kbps": "dune messiah"}
+	vetoes := map[string]string{"The_Gorse_Tally": "The Gorse Tally", "Ox": "Ox", "7K36": "7K36",
+		"marl_hollow_64kbps": "marl hollow"}
 	for stem, want := range vetoes {
 		got, ok := weakStemVeto(stem)
 		require.True(t, ok, stem)
 		require.Equal(t, want, got, stem)
 	}
-	for _, stem := range []string{"hp1", "zz", "final", "merged", "audible_download_2019"} {
+	for _, stem := range []string{"pb1", "zz", "final", "merged", "audible_download_2019"} {
 		_, ok := weakStemVeto(stem)
 		require.False(t, ok, stem)
 	}
 }
 
 func TestJunkTitleFixer_DottedWeakStemVetoesDisagreeingCandidate(t *testing.T) {
-	for _, stem := range []string{"The_Final_Empire", "The.Final.Empire", "the-final-empire-64kbps", "The.Final.Empire.64kbps"} {
+	for _, stem := range []string{"The_Gorse_Tally", "The.Gorse.Tally", "the-gorse-tally-64kbps", "The.Gorse.Tally.64kbps"} {
 		t.Run(stem, func(t *testing.T) {
 			st, err := database.NewPebbleStore(t.TempDir())
 			require.NoError(t, err)
@@ -901,7 +901,7 @@ func TestJunkTitleFixer_DottedWeakStemVetoesDisagreeingCandidate(t *testing.T) {
 			require.NoError(t, err)
 			id := addJunkBook(t, st, "Unknown Title", &a.ID, "/lib/Some Author/Rips/"+stem+".m4b")
 			require.NoError(t, st.PutMetadataCache(&database.MetadataCandidateCache{BookID: id, FetchedAt: time.Now(),
-				Candidates: []json.RawMessage{json.RawMessage(`{"title":"Elantris","author":"Some Author","score":0.9}`)}}))
+				Candidates: []json.RawMessage{json.RawMessage(`{"title":"Quillmere","author":"Some Author","score":0.9}`)}}))
 			r := planRows(t, st)[id]
 			require.False(t, r.Applicable(), "%s: proposed %q over its own filename (%s)", stem, r.Proposed["title"], r.Reason)
 		})

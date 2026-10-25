@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_filters.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 642f415f-8f15-4d76-83b6-8290d9c7029f
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -127,9 +127,17 @@ var articleEndRe = regexp.MustCompile(`(?i)\b(?:the|a|an|of|and|in|to|for|on|at|
 //
 // A series can also END a real title: with series "Ember Wars", "Dark Ember
 // Wars Book 3" is the title "Dark Ember Wars" and book 3 of its series, not
-// "Dark" followed by the series. isTitle (nil: none) says whether a string is
-// the title of a live book; the tail form leaves the string alone when the
-// whole text before "Book N" is one.
+// "Dark" followed by the series; with series "Quillmoor", "Second Quillmoor
+// Book 3" is "Second Quillmoor", not "Second". Nothing in the text tells the
+// two readings apart when the series follows the title after a plain space, and
+// the book being judged is junk-titled, so no live title can vouch for its own
+// real one. The tail form therefore needs an explicit separator ("," "." ";"
+// ":" "-") between the title and the series name; a series that simply
+// follows the title after a space is left in the text (the proposal check then
+// refuses a title that still ends in "Book N"). Past that, isTitle (nil: none)
+// says whether a string is a title: a live book's, or one the book's own other
+// evidence (transcription, file name) spells. The tail form leaves the string
+// alone when the title plus the series is one.
 func stripRecordedSeries(s, series string, isTitle func(string) bool) string {
 	t := strings.TrimSpace(s)
 	if t == "" || strings.TrimSpace(series) == "" {
@@ -150,7 +158,8 @@ func stripRecordedSeries(s, series string, isTitle func(string) bool) string {
 	}
 	// tail: m[1] is everything before "Book N", m[2] the title it leaves.
 	if m := res.tail.FindStringSubmatch(t); m != nil {
-		if isTitle != nil && isTitle(strings.TrimRight(strings.TrimSpace(m[1]), " ,;:.-–")) {
+		if isTitle != nil && (isTitle(strings.TrimRight(strings.TrimSpace(m[1]), " ,;:.-–")) ||
+			isTitle(strings.TrimSpace(m[2])+" "+strings.TrimSpace(series))) {
 			return t
 		}
 		if rest, ok := usable(m[2]); ok {
@@ -165,9 +174,24 @@ func stripRecordedSeries(s, series string, isTitle func(string) bool) string {
 	return t
 }
 
-// recordedSeriesRes are the two regexps stripRecordedSeries builds for one
-// series name.
-type recordedSeriesRes struct{ tail, prefix *regexp.Regexp }
+// seriesEndsText reports whether s is text followed by the book's own series
+// after a plain space and a book number ("Second Quillmoor Book 3" in series
+// "Quillmoor"). It is the shape stripRecordedSeries cannot cut: the series may
+// be the end of the title ("Second Quillmoor") or a tail on one ("Second"), and
+// nothing in the text says which, so a proposal of the text as it stands would
+// carry the series in the title and one that cut it might cut a real title.
+// The book's whole title ("Quillmoor Book 3") is not this shape.
+func seriesEndsText(s, series string) bool {
+	if strings.TrimSpace(series) == "" {
+		return false
+	}
+	res := recordedSeriesRegexps(series)
+	return res != nil && res.bare.MatchString(strings.TrimSpace(s))
+}
+
+// recordedSeriesRes are the three regexps stripRecordedSeries and
+// seriesEndsText build for one series name.
+type recordedSeriesRes struct{ tail, prefix, bare *regexp.Regexp }
 
 // recordedSeriesCache memoizes recordedSeriesRegexps by series name. The
 // regexps depend on nothing but the name, stripRecordedSeries runs twice per
@@ -183,11 +207,14 @@ func recordedSeriesRegexps(series string) *recordedSeriesRes {
 		return v.(*recordedSeriesRes)
 	}
 	name := seriesNamePattern(key)
-	tail, err1 := regexp.Compile(`(?i)^((.+?)(?:\s*[,.;:\-–]\s*|\s+)` + name + `)\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b[\s.]*$`)
+	tail, err1 := regexp.Compile(`(?i)^((.+?)\s*[,.;:\-–]\s*` + name + `)\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b[\s.]*$`)
 	prefix, err2 := regexp.Compile(`(?i)^` + name + `\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b\s*(?:[,.;:\-–]+\s*|\s+)(.+)$`)
+	// bare: text, then the series after a plain space (no separator), then
+	// "Book N" and nothing else: the shape stripRecordedSeries leaves alone.
+	bare, err3 := regexp.Compile(`(?i)^.*[^\s,.;:\-–]\s+` + name + `\s*[,.;:\-–]?\s*\bbook\s+` + bookMarkerAlt + `\b[\s.]*$`)
 	var res *recordedSeriesRes
-	if err1 == nil && err2 == nil {
-		res = &recordedSeriesRes{tail: tail, prefix: prefix}
+	if err1 == nil && err2 == nil && err3 == nil {
+		res = &recordedSeriesRes{tail: tail, prefix: prefix, bare: bare}
 	}
 	v, _ := recordedSeriesCache.LoadOrStore(key, res)
 	return v.(*recordedSeriesRes)
@@ -354,7 +381,7 @@ var (
 		`)`)
 
 	// sentenceLeadRe: a pronoun-led opening followed by a lowercase word
-	// ("He turned toward the door"). Title Case ("She Walks in Beauty") and a
+	// ("He turned toward the door"). Title Case ("She Wandered Quillow") and a
 	// lone pronoun ("It") are not matched.
 	sentenceLeadRe = regexp.MustCompile(`^(?:[Hh]e|[Ss]he|[Tt]hey|[Ii]t|[Ww]e|[Yy]ou|I|[Hh]is|[Hh]er|[Tt]heir)\s+\p{Ll}+`)
 	// nameVerbRe: a capitalised word and a past-tense or auxiliary verb
@@ -370,8 +397,8 @@ var (
 // a spoken title: it ends in a full stop or comma, carries a quotation mark,
 // opens with a pronoun and a lowercase word, starts with a lowercase letter
 // (the middle of a sentence), or is a name followed by a past tense verb.
-// transcribedProse (length and sentence breaks) is the other half. "Salt
-// Postal", "It", "Cell" and "Misery" are titles and pass.
+// transcribedProse (length and sentence breaks) is the other half. "Brindle
+// Quoxx", "Ox", "Kreel" and "Dorvins" are titles and pass.
 func transcribedSentence(c string) bool {
 	s := strings.TrimSpace(c)
 	if trailingStopRe.MatchString(s) && !abbreviationEndRe.MatchString(s) {
@@ -397,7 +424,7 @@ func startsLowercase(s string) bool {
 }
 
 // abbreviationEndRe: a title that ends in an abbreviation's full stop
-// ("Dr.", "Vol.", an initial: "Bound to the Throne, by J.").
+// ("Dr.", "Vol.", an initial: "Bound to the Orchard, by J.").
 var abbreviationEndRe = regexp.MustCompile(`(?i)(?:\b(?:dr|mr|mrs|ms|st|vol|no|jr|sr)|\b\p{L})\.\s*$`)
 
 // ---- folder and filename filters ----
@@ -484,8 +511,8 @@ func looksLikePersonSegment(s string) bool {
 // endsWithAuthorCredit returns the trailing " - <segment>" of c when that
 // segment is a person's name or a placeholder author: a known person of the
 // book, an "Unknown Author", or a segment shaped like a name. The last is a
-// refusal, not a strip: nothing proves "Time Lord" in "Dark Harbor - Time
-// Lord" is not a subtitle, and a skipped row costs less than a wrong title.
+// refusal, not a strip: nothing proves "Bram Wickle" in "Dark Harbor - Bram
+// Wickle" is not a subtitle, and a skipped row costs less than a wrong title.
 func endsWithAuthorCredit(c string, isPerson func(string) bool) (string, bool) {
 	i := strings.LastIndex(c, " - ")
 	if i < 0 {
@@ -537,16 +564,19 @@ var positionLeadRe = regexp.MustCompile(`(?i)^(?:volume|vol|part|pt|book|disc|di
 // positionWordRe: a word that places a file inside a book (disc, CD, track,
 // part, chapter, volume, "N of M"). A number beside one is a position in the
 // book, never the book's position in a series. "of" alone is no position: a
-// series named "The Wheel of Tides" is a series. An underscore follows a
+// series named "The Orb of Quallow" is a series. An underscore follows a
 // position word in a file name ("CD_01"), where \b would not see the end of
 // the word.
 var positionWordRe = regexp.MustCompile(`(?i)\b(?:(?:disc|disk|cd|dvd|tape|side|track|part|pt|chapter|chap|ch)(?:\b|\d|_)|(?:volume|vol)\b|\d+\s*of\s*\d+)`)
 
-// positionMarkerRe: a position word WITH its number ("Disc 04", "CD5", "Part
-// II", "Side_2", "3 of 12"). positionWordRe also fires on the bare word, which
-// is right for a stored title ("Part" alone is no title) but refuses real
-// series that contain one ("Side Effects", "Track Marks", "Tape Deck Tales").
-// A series is refused only when the word carries a number: digits may follow
-// the word directly, a roman numeral or a spelled number needs a separator
-// ("Chi Alpha" is no "Ch I").
-var positionMarkerRe = regexp.MustCompile(`(?i)\b(?:(?:disc|disk|cd|dvd|tape|side|track|part|pt|chapter|chap|ch|volume|vol)\.?(?:[\s_]*\d+|[\s_]+(?:[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\b|\d+\s*of\s*\d+)`)
+// positionMarkerRe: a position word WITH its number ("Disc 04", "CD5", "CD-2",
+// "Disc-02", "Part II", "Side_2", "Vol.III", "Side A", "3 of 12").
+// positionWordRe also fires on the bare word, which is right for a stored title
+// ("Part" alone is no title) but refuses real series that contain one ("Side
+// Effects", "Track Marks", "Tape Deck Tales"). A series is refused only when
+// the word carries a number: digits may follow the word directly or after a
+// space, underscore, hyphen or dot ("CD-2", "Vol.3"); a roman numeral or a
+// spelled number needs one of those separators ("Chi Alpha" is no "Ch I",
+// "Disc-Cover" no "Disc C"); and a side is a single letter A to D standing
+// alone ("Side A", "Side-B"; "Side Dish", "Side Effects" are not).
+var positionMarkerRe = regexp.MustCompile(`(?i)\b(?:(?:disc|disk|cd|dvd|tape|side|track|part|pt|chapter|chap|ch|volume|vol)(?:[\s_.\-]*\d+|[\s_.\-]+(?:[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\b|side[\s_.\-]*[a-d]\b|\d+\s*of\s*\d+)`)

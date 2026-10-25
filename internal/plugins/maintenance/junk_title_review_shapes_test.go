@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_review_shapes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d2e8a1c-47b3-4c90-9e6f-3a1b7c0d8e24
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -25,22 +25,32 @@ import (
 func TestStripRecordedSeries(t *testing.T) {
 	const ser = "Ember Wars"
 	cases := []struct{ in, series, want string }{
-		// tail: "<title> [,.] <series> Book N"
-		{"Harbor Lights Ember Wars Book 3", ser, "Harbor Lights"},
+		// tail: "<title> [,.;:-] <series> Book N", the separator explicit
+		{"Harbor Lights, Ember Wars Book 3", ser, "Harbor Lights"},
 		{"Harbor Lights, Ember Wars, Book 3", ser, "Harbor Lights"},
 		{"Harbor Lights, the Ember Wars, Book Three", ser, "Harbor Lights"},
 		{"Harbor Lights. Ember Wars Book IV", ser, "Harbor Lights"},
-		{"harbor lights ember wars book 3", ser, "harbor lights"},
+		{"Harbor Lights - Ember Wars - Book 3", ser, "Harbor Lights"},
+		{"harbor lights; ember wars book 3", ser, "harbor lights"},
+		// a series that follows the title after a plain space is left in the
+		// text: it may end the title ("Second Quillmoor Book 3" in series
+		// "Quillmoor" is the title "Second Quillmoor"), and nothing tells the
+		// two readings apart
+		{"Harbor Lights Ember Wars Book 3", ser, "Harbor Lights Ember Wars Book 3"},
+		{"harbor lights ember wars book 3", ser, "harbor lights ember wars book 3"},
+		{"Second Quillmoor Book 3", "Quillmoor", "Second Quillmoor Book 3"},
+		{"Second Quillmoor, Book 3", "Quillmoor", "Second Quillmoor, Book 3"},
+		{"Tarn Hollow Quillmoor Book 6", "Quillmoor", "Tarn Hollow Quillmoor Book 6"},
 		// prefix: "<series> [,] Book N [,] <title>"
 		{"Ember Wars, Book 3, Harbor Lights", ser, "Harbor Lights"},
 		{"Ember Wars Book 3 Harbor Lights", ser, "Harbor Lights"},
 		{"The Ember Wars - Book 3 - Harbor Lights", ser, "Harbor Lights"},
 		// the series' own leading "The" and an apostrophe a transcription lacks
 		{"Harbor Lights, Ember Wars Book 2", "The Ember Wars", "Harbor Lights"},
-		{"Harbor Lights Captains Tide Book 2", "Captain's Tide", "Harbor Lights"},
+		{"Harbor Lights, Captains Tide Book 2", "Captain's Tide", "Harbor Lights"},
 		// look-alikes of titles a reviewer accepted stay as they are
 		{"Harbor Lights, Book 9", ser, "Harbor Lights, Book 9"},
-		{"Lantern Mage 8", "Lantern Mage", "Lantern Mage 8"},
+		{"Orchard Wizzle 8", "Orchard Wizzle", "Orchard Wizzle 8"},
 		{"The Lantern Keeper, book 10", ser, "The Lantern Keeper, book 10"},
 		{"Wrath of the Marsh, Book V", ser, "Wrath of the Marsh, Book V"},
 		// nothing after the number is the book's whole title, not a tail
@@ -54,24 +64,25 @@ func TestStripRecordedSeries(t *testing.T) {
 		// another series is not this book's
 		{"Harbor Lights Salt Road Book 3", ser, "Harbor Lights Salt Road Book 3"},
 		// no recorded series
-		{"Harbor Lights Ember Wars Book 3", "", "Harbor Lights Ember Wars Book 3"},
+		{"Harbor Lights, Ember Wars Book 3", "", "Harbor Lights, Ember Wars Book 3"},
 		{"  Harbor Lights  ", ser, "Harbor Lights"},
 	}
 	for _, c := range cases {
 		require.Equal(t, c.want, stripRecordedSeries(c.in, c.series, nil), "%q / %q", c.in, c.series)
 	}
-	// The series can end a real title: with no live book holding the text
-	// before "Book N" it is a title and a series tail, with one it is a title.
+	// The series can end a real title that has a separator before it too
+	// ("Dark, Ember Wars Book 3"): with no title in sight the text before
+	// "Book N" is a title and a series tail, with one it is a title.
 	live := func(s string) bool { return strings.EqualFold(s, "Dark Ember Wars") }
-	require.Equal(t, "Dark", stripRecordedSeries("Dark Ember Wars Book 3", ser, nil))
-	require.Equal(t, "Dark Ember Wars Book 3", stripRecordedSeries("Dark Ember Wars Book 3", ser, live))
-	require.Equal(t, "Dark Ember Wars, Book 3", stripRecordedSeries("Dark Ember Wars, Book 3", ser, live))
-	require.Equal(t, "Harbor Lights", stripRecordedSeries("Harbor Lights Ember Wars Book 3", ser, live),
+	require.Equal(t, "Dark", stripRecordedSeries("Dark, Ember Wars Book 3", ser, nil))
+	require.Equal(t, "Dark, Ember Wars Book 3", stripRecordedSeries("Dark, Ember Wars Book 3", ser, live))
+	require.Equal(t, "Dark - Ember Wars, Book 3", stripRecordedSeries("Dark - Ember Wars, Book 3", ser, live))
+	require.Equal(t, "Harbor Lights", stripRecordedSeries("Harbor Lights, Ember Wars Book 3", ser, live),
 		"a live title elsewhere does not stop the strip")
 	// The regexps are cached by series name: repeated calls, a name with
 	// regexp metacharacters included, answer the same.
 	for range 2 {
-		require.Equal(t, "Harbor Lights", stripRecordedSeries("Harbor Lights Ember (Wars Book 3", "Ember (Wars", nil))
+		require.Equal(t, "Harbor Lights", stripRecordedSeries("Harbor Lights, Ember (Wars Book 3", "Ember (Wars", nil))
 		require.Equal(t, "Harbor Lights Book 3", stripRecordedSeries("Harbor Lights Book 3", "Ember (Wars", nil))
 	}
 }
@@ -82,8 +93,8 @@ func TestStartsLowercase(t *testing.T) {
 		"the wall be":                       true,
 		"  and so on":                       true,
 		"(lowercase after a bracket":        true,
-		"Salt Postal":                       false,
-		"I, Lantern":                        false,
+		"Brindle Quoxx":                     false,
+		"I Left My Hat in Wexmoor":          false,
 		"3 Tides":                           false,
 		"3 tides":                           false,
 		"":                                  false,
@@ -116,7 +127,7 @@ func TestJunkProposalCheck_SecondReviewShapes(t *testing.T) {
 		require.Contains(t, got, want, c)
 	}
 	for _, c := range []string{
-		"Booked Solid", "Book of Tides", "The Book Thief of Salt", "Tide", "Civil Tide", "Chapter House", "Part Time Gods",
+		"Bookeddle Prill", "Book of Tides", "Brindle's Book Plinth", "Tide", "Civil Tide", "Chapter Hollow", "Part Quillow Gods",
 	} {
 		require.Empty(t, pc.refusal(c, junkSrcTranscribed), c)
 	}
@@ -278,10 +289,10 @@ func TestJunkTitleFixer_FilenameAuthorStripping(t *testing.T) {
 		files: []string{"/lib/Books/Salt Road 4 - Orphan Writer - read by narrator.mp3"}})
 	// The head of "<series> - Volume II" is the series even when the author
 	// table holds a row of that name that has a book: it is not name-shaped.
-	l.authorWithBook("The Wheel Keepers")
+	l.authorWithBook("The Quallow Wardens")
 	l.add(evBook{name: "series-shaped-head", title: "read by narrator", author: nil,
-		path:  "/lib/Books/The Wheel Keepers - Volume II.mp3",
-		files: []string{"/lib/Books/The Wheel Keepers - Volume II.mp3"}})
+		path:  "/lib/Books/The Quallow Wardens - Volume II.mp3",
+		files: []string{"/lib/Books/The Quallow Wardens - Volume II.mp3"}})
 	// A credited library author is the author, whatever the title.
 	l.add(evBook{name: "credited-library-author", title: "read by narrator", author: nil,
 		path:  "/lib/Books/Salt Road 3 - Zed Writer - read by narrator.mp3",
@@ -313,7 +324,7 @@ func TestJunkTitleFixer_FilenameAuthorStripping(t *testing.T) {
 
 	r = rows["series-shaped-head"]
 	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-	require.Equal(t, "The Wheel Keepers - Volume II", r.Proposed["title"])
+	require.Equal(t, "The Quallow Wardens - Volume II", r.Proposed["title"])
 
 	r = rows["credited-library-author"]
 	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
@@ -444,13 +455,13 @@ func TestJunkTitleFixer_AcceptedProviderShapesStay(t *testing.T) {
 	l := newEvLib(t)
 	a := l.author("Zed Writer")
 	l.add(evBook{name: "volume-subtitle", title: "read by narrator", author: a, path: "/lib/Books/zz1.mp3",
-		files: []string{"/lib/Books/zz1.mp3"}, providerTitle: "Moss Keeper Wakes in the Orchard: Volume 1", providerAuthor: "Zed Writer"})
+		files: []string{"/lib/Books/zz1.mp3"}, providerTitle: "Quillow Tales: Volume 1", providerAuthor: "Zed Writer"})
 	l.add(evBook{name: "multi-colon", title: "Intro", author: a, path: "/lib/Books/zz2.mp3",
-		files: []string{"/lib/Books/zz2.mp3"}, providerTitle: "Quill Chronicle: The Third Ferry: Harbor Hymn IX: Dawn", providerAuthor: "Zed Writer"})
+		files: []string{"/lib/Books/zz2.mp3"}, providerTitle: "Harbor Lights: Salt: Tide", providerAuthor: "Zed Writer"})
 	rows := l.rows(l.fixer())
 	for name, want := range map[string]string{
-		"volume-subtitle": "Moss Keeper Wakes in the Orchard: Volume 1",
-		"multi-colon":     "Quill Chronicle: The Third Ferry: Harbor Hymn IX: Dawn",
+		"volume-subtitle": "Quillow Tales: Volume 1",
+		"multi-colon":     "Harbor Lights: Salt: Tide",
 	} {
 		r := rows[name]
 		require.True(t, r.Applicable(), "%s: %s: %s", name, r.Skipped, r.SkipReason)
@@ -567,12 +578,15 @@ func TestJunkTitleFixer_CoAuthorsAreCountedWithoutTheJudgedBook(t *testing.T) {
 	require.Contains(t, r.SkipReason, "author credit")
 }
 
+// zedOwner is a throwaway author for a book that only has to exist.
+func zedOwner(l *evLib) *int { return l.author("Elsewhere Writer") }
+
 // S2/SF4: with no " - read by " credit the stem is a bare "<Title> - <Segment>",
 // which the scanner reads as a title and an author. A stored author with no
 // other book is that segment read back, so stripping it is circular and the
 // subtitle it cuts off goes with it. A stored author with other books, or the
-// book's narrator, is evidence of its own, and a credit vouches for any
-// of the book's people.
+// book's narrator who narrates another book, is evidence of its own, and a
+// credit vouches for any of the book's people.
 func TestJunkTitleFixer_NoCreditStripNeedsIndependentEvidence(t *testing.T) {
 	l := newEvLib(t)
 	// The stored author's only book is the judged one: the segment is kept
@@ -589,7 +603,10 @@ func TestJunkTitleFixer_NoCreditStripNeedsIndependentEvidence(t *testing.T) {
 	established := l.authorWithBook("Ivy Keeper")
 	l.add(evBook{name: "established", title: "read by narrator", author: established,
 		path: "/lib/u09/Quiet Orchard - Ivy Keeper.mp3", files: []string{"/lib/u09/Quiet Orchard - Ivy Keeper.mp3"}})
-	// The segment is the narrator, who is on the book's narrator field.
+	// The segment is the narrator, who is on the book's narrator field and
+	// narrates another book of the library under a real title.
+	l.add(evBook{name: "narrated elsewhere", title: "Tides Told Thrice", narrator: "Oliver Narrate",
+		author: zedOwner(l), path: "/lib/Elsewhere/book.m4b", files: []string{"/lib/Elsewhere/book.m4b"}})
 	soloAuthor := l.author("Fern Writer")
 	l.add(evBook{name: "narrator", title: "read by narrator", author: soloAuthor, narrator: "Oliver Narrate",
 		path: "/lib/u10/Quiet Orchard - Oliver Narrate.mp3", files: []string{"/lib/u10/Quiet Orchard - Oliver Narrate.mp3"}})
@@ -737,4 +754,133 @@ func TestJunkTitleFixer_IndexAuthorPassIsOrderIndependent(t *testing.T) {
 			require.NotContains(t, ids, id)
 		}
 	}
+}
+
+// seriesEndsText is the shape stripRecordedSeries cannot cut: the series after a
+// plain space and a book number, with something before it.
+func TestSeriesEndsText(t *testing.T) {
+	const ser = "Ember Wars"
+	for _, c := range []string{
+		"Harbor Lights Ember Wars Book 3", "Second Quillmoor Book 3", "harbor lights ember wars, book IV",
+		"Harbor Lights Ember Wars Book Three.",
+	} {
+		series := ser
+		if strings.Contains(c, "Quillmoor") {
+			series = "Quillmoor"
+		}
+		require.True(t, seriesEndsText(c, series), c)
+	}
+	for _, c := range []string{
+		"Ember Wars Book 3",                // the book's whole title
+		"Ember Wars, Book 3",               // …
+		"Harbor Lights, Ember Wars Book 3", // an explicit separator: stripRecordedSeries cuts it
+		"Dark - Ember Wars, Book 3",
+		"Harbor Lights Ember Wars Book 3 Salt Road", // not at the end
+		"Harbor Lights",
+		"Harbor Lights Salt Road Book 3", // another series
+	} {
+		require.False(t, seriesEndsText(c, ser), c)
+	}
+	require.False(t, seriesEndsText("Harbor Lights Ember Wars Book 3", ""), "no recorded series")
+}
+
+// SF-2: a series that ends a real title. The book being judged has a junk
+// title, so no live book can hold its real title: "Second Quillmoor" in series
+// "Quillmoor" is held by nobody, and a strip that trusted the live titles alone
+// proposed "Second". A series that follows the title after a plain space is no
+// longer cut, and the text is refused rather than proposed with the series in
+// it; a series after an explicit separator is still cut unless the book's own
+// other evidence (here the transcription) spells the whole of it.
+func TestJunkTitleFixer_SeriesEndingTheTitleIsNotCutOff(t *testing.T) {
+	l := newEvLib(t)
+	zed := l.author("Zed Writer")
+	quill, err := l.store.CreateSeries("Quillmoor", nil)
+	require.NoError(t, err)
+	two := func(dir string) []string { return []string{dir + "/01.mp3", dir + "/02.mp3"} }
+	// The real title is "Second Quillmoor", the third book of the series
+	// "Quillmoor": the folder says it with no separator.
+	dir := "/lib/Zed Writer/Second Quillmoor Book 3"
+	l.add(evBook{name: "bare", title: "read by narrator", author: zed, series: &quill.ID, seq: intp(3),
+		path: dir, files: two(dir)})
+	// The same, with a comma after the title's first word, so the strip is
+	// reached: the transcription spells the whole title, which keeps the
+	// series in it.
+	dir2 := "/lib/Zed Writer/Second, Quillmoor Book 4"
+	l.add(evBook{name: "separated-own-file", title: "read by narrator", author: zed, series: &quill.ID, seq: intp(4),
+		path: dir2, files: two(dir2), transcribed: "Second Quillmoor"})
+	// A genuine "<title>, <series>, Book N": cut, as before.
+	dir3 := "/lib/Zed Writer/Tarn Hollow, Quillmoor, Book 5"
+	l.add(evBook{name: "genuine-tail", title: "read by narrator", author: zed, series: &quill.ID, seq: intp(5),
+		path: dir3, files: two(dir3)})
+	rows := l.rows(l.fixer())
+
+	r := rows["bare"]
+	require.False(t, r.Applicable(), "proposed %q", r.Proposed["title"])
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "ends with the book's own series")
+
+	// The transcription spells "Second Quillmoor", so the text before "Book 4"
+	// is a title and not a title plus the series: the folder is named whole in
+	// the conflict, never cut down to "Second" (which would be the evidence
+	// the transcription is then compared with).
+	r = rows["separated-own-file"]
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, `folder "Second, Quillmoor Book 4"`)
+	require.NotContains(t, r.SkipReason, `folder "Second"`)
+
+	r = rows["genuine-tail"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Tarn Hollow", r.Proposed["title"])
+}
+
+// SF-4: a narrator is independent evidence only when the library knows the name
+// apart from this book: it narrates another live book that has a real title, and
+// it is not a live title itself. The narrator field is filled from the same file
+// name and tags the stem came from (the AI filename parse, the artist tag), so a
+// subtitle or a character's name in "Harbor Lights - Marlow Finch" can land in
+// it, and the strip would then cut the subtitle off the title.
+func TestJunkTitleFixer_NarratorIsIndependentOnlyWhenItNarratesElsewhere(t *testing.T) {
+	l := newEvLib(t)
+	narrated := func(name, narrator, title string) {
+		l.add(evBook{name: name, title: title, narrator: narrator, author: l.author("Writer of " + name),
+			path: "/lib/narrated/" + name + ".m4b", files: []string{"/lib/narrated/" + name + ".m4b"}})
+	}
+	junk := func(name, narrator, stem string) {
+		l.add(evBook{name: name, title: "read by narrator", narrator: narrator, author: l.author("Solo Writer " + name),
+			path: "/lib/" + name + "/" + stem + ".mp3", files: []string{"/lib/" + name + "/" + stem + ".mp3"}})
+	}
+	// 1: the narrator is a subtitle the AI parse labelled: no other book.
+	junk("subtitle-narrator", "Marlow Finch", "Harbor Lights - Marlow Finch")
+	// 2: the same name on another book with a real title: a narrator.
+	narrated("elsewhere", "Wren Ostrander", "Tides Told Four Times")
+	junk("real-narrator", "Wren Ostrander", "Harbor Lights - Wren Ostrander")
+	// 3: narrates elsewhere, but the name is also a live book's title.
+	narrated("titled-narrator-book", "Pell Garrow", "Tides Told Five Times")
+	narrated("titled-narrator-title", "Someone Else", "Pell Garrow")
+	junk("name-is-a-title", "Pell Garrow", "Cold Quay - Pell Garrow")
+	// 4: the only other books under the name are junk-titled siblings of the
+	// same work, whose narrator field came from the same file name.
+	for _, n := range []string{"sibling-one", "sibling-two"} {
+		junk(n, "Corin Vale", "Just a Moment - Corin Vale")
+	}
+	// 5: a junk narrator value never vouches, even when it is on another book.
+	narrated("junk-narrator-book", "Unknown Author", "Tides Told Six Times")
+	junk("junk-narrator", "Unknown Author", "Ash Meadow - Unknown Author")
+	rows := l.rows(l.fixer())
+
+	r := rows["real-narrator"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Harbor Lights", r.Proposed["title"])
+
+	for _, name := range []string{"subtitle-narrator", "name-is-a-title", "sibling-one", "sibling-two"} {
+		r := rows[name]
+		require.False(t, r.Applicable(), "%s: proposed %q: the subtitle was cut off", name, r.Proposed["title"])
+		require.Equal(t, junkSkipNeedsManual, r.Skipped, "%s: %s", name, r.SkipReason)
+		require.Contains(t, r.SkipReason, "author credit", name)
+	}
+	// An "Unknown Author" segment is a placeholder: stripped as one, never as a
+	// narrator, so the title is what is left either way.
+	r = rows["junk-narrator"]
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, "Ash Meadow", r.Proposed["title"])
 }

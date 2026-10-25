@@ -67,6 +67,25 @@ apply; the change is in the plan step.
   same rule, so a duplicate author row of the same person, or a book with no
   author, holds it too. The author a provider recorded names the owner only when
   the provider's title was not refused.
+- The book's own series is cut off a title only after an explicit separator
+  ("Harbor Lights, Ember Wars, Book 3"). A series that follows the title after a
+  plain space ("Second Quillmoor Book 3" in series "Quillmoor") may be the end of
+  the title, and the book being judged has a junk title, so no live book can say
+  so: the text is left whole and then refused, so the row is listed for a person.
+  Where a separator is there, the book's own transcription or file name spelling
+  the whole title also stops the cut.
+- A narrator counts as evidence for stripping a name from a file name only when
+  it narrates another live book that has a real title and is not itself a live
+  title. The narrator field is filled from the same file name and tags (the AI
+  filename parse, the artist-tag fallback), so on its own it proves nothing.
+- A series named like a disc, side, tape or volume marker is refused as
+  "series and number" whatever separates the word from its number ("CD-2",
+  "Disc-02", "Side A", "Vol.III"), while a series that merely contains one of the
+  words ("Side Effects", "Part-Time Tides") still is a series.
+- The junk-title tests and the comments in the fixer no longer quote published
+  book titles, authors, narrators or library paths (including the variants with
+  one word swapped); they use made-up names. Names the code itself matches on
+  (publisher idents, the Doctor Who range, Bible book names) stay.
 
 Checked offline by replaying the 2026-10-23 plan's rows through the new string
 filters (no live library, so the library-author rule had no live-title guard and

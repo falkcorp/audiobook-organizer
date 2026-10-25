@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -48,7 +48,7 @@ func TestStripSeriesTail(t *testing.T) {
 		// nothing to strip
 		{"Harbor Lights", "Harbor Lights"},
 		{"Harbor Lights: A Tale of Salt", "Harbor Lights: A Tale of Salt"},
-		{"Life, the universe, and tides", "Life, the universe, and tides"},
+		{"Salt, the harbor, and morning", "Salt, the harbor, and morning"},
 		{"  Harbor Lights  ", "Harbor Lights"},
 		// only the tail
 		{"Book One of Ember Wars", ""},
@@ -158,8 +158,8 @@ func TestJunkProposalCheck_TranscriptionAnnouncersAndSentences(t *testing.T) {
 	// Titles, the shapes a reviewer accepted: short, name-led, pronoun alone,
 	// ending in ? or !, a trailing abbreviation, a subtitle.
 	for _, c := range []string{
-		"Salt Postal", "It", "Tide", "Gull", "Gannets", "The Lanternless", "Marta Grabbed the Moon",
-		"She Sails in Starlight", "They Both Sail at the End", "I, Lantern", "Who Walks Here?", "Sunday at the Pier!", "Dr Quillby Sails!",
+		"Brindle Quoxx", "Ox", "Tide", "Kreel", "Dorvins", "The Wenvarrow", "Bexil Ploomed Varn",
+		"She Quibbled at Tarnwick", "They Plonked Nine Gorsels", "I Left My Hat in Wexmoor", "Whither Plonk Garrow?", "Zonday at the Prill!", "Dr Quillby Plonks!",
 		"Harbor Lights: A Tale of Salt", "Harbor Lights, Book 9", "Gifts and Presents",
 		"Sidewalk Tides", "Welcomed Guests", "Episodes of Salt",
 	} {
@@ -195,7 +195,7 @@ func TestJunkProposalCheck_FolderAndFilenameTokens(t *testing.T) {
 		"Harbor Lights - Zed Writer":                  "author",
 		"Zed Writer - Harbor Lights":                  "person",
 		"Ripped Harbor Lights (Unabridged)":           "format",
-		"Harbor Lights [B002V1OF70]":                  "ASIN",
+		"Harbor Lights [B0ZZ99QQ11]":                  "ASIN",
 	}
 	for c, want := range refused {
 		for _, src := range []string{junkSrcFolder, junkSrcFilename} {
@@ -207,10 +207,10 @@ func TestJunkProposalCheck_FolderAndFilenameTokens(t *testing.T) {
 	for _, c := range []string{
 		"Harbor Lights", "Harbor Lights - Salt Winds 2", "Dark Harbor - The Salt Wind Part 2", "The Chapter House",
 		"Salt and Stone", "Charity Tides", "Trackless Sea", "Harbor Lights - The Second Tide",
-		"Dark Harbor - Time Lord", // looks like a name; refused below only when the segment is two capitalised words
+		"Dark Harbor - Bram Wickle", // looks like a name; refused below only when the segment is two capitalised words
 	} {
 		got := pc.refusal(c, junkSrcFolder)
-		if c == "Dark Harbor - Time Lord" {
+		if c == "Dark Harbor - Bram Wickle" {
 			require.Contains(t, got, "author credit", "a segment shaped like a name is refused, not guessed: "+c)
 			continue
 		}
@@ -266,7 +266,7 @@ func TestSeriesNumberRefusal(t *testing.T) {
 		{"series is a placeholder album", "Unknown Album", "04", seq(4), nil, "not a real series name"},
 		{"series is the stored title", "03", "03", seq(3), nil, "not a real series name"},
 		// "of" in a series name is not a position ("2 of 19" is).
-		{"series name with of", "The Wheel of Tides", "03", seq(3), nil, ""},
+		{"series name with of", "The Orb of Quallow", "03", seq(3), nil, ""},
 		{"series name with of, book of", "Book of Tides", "03", seq(3), nil, ""},
 		// A series that merely contains a position word is a series; one that
 		// is a position word with its number is not.
@@ -275,6 +275,27 @@ func TestSeriesNumberRefusal(t *testing.T) {
 		{"series name with part", "Part of Your Harbor", "03", seq(3), nil, ""},
 		{"series name with chapter house", "Chapter House Tides", "03", seq(3), nil, ""},
 		{"series name with chi", "Chi Alpha Tides", "03", seq(3), nil, ""},
+		// A disc, side or volume marker is refused whatever separates the word
+		// from its number: a hyphen, a dot or an underscore too.
+		{"series ends in a hyphenated CD", "Ember Wars CD-2", "02", seq(2), nil, "not a real series name"},
+		{"series ends in a hyphenated disc", "Ember Wars Disc-02", "02", seq(2), nil, "not a real series name"},
+		{"series is a side letter", "Side A", "02", seq(2), nil, "not a real series name"},
+		{"series is a hyphenated side letter", "Side-B", "02", seq(2), nil, "not a real series name"},
+		{"series is a dotted roman volume", "Vol.III", "02", seq(2), nil, "not a real series name"},
+		{"series ends in a dotted volume number", "Ember Wars Vol.3", "03", seq(3), nil, "not a real series name"},
+		{"series is a tape and a side", "Tape 1 Side B", "02", seq(2), nil, "not a real series name"},
+		{"series is a spaced disc", "Disc 04", "04", seq(4), nil, "not a real series name"},
+		{"series is a joined CD", "CD1", "01", seq(1), nil, "not a real series name"},
+		// …and a series that merely holds one of those words, with a hyphen or a
+		// dot beside it, is still a series (the false refusal that made the
+		// separator-less form the original).
+		{"series with a hyphenated part word", "Part-Time Tides", "03", seq(3), nil, ""},
+		{"series with disc and a word", "Disc-Cover Tides", "03", seq(3), nil, ""},
+		{"series with side dish", "Side Dish Tides", "03", seq(3), nil, ""},
+		{"series with side-eye", "Side-Eye Tides", "03", seq(3), nil, ""},
+		{"series with sidecar", "Sidecar Tides", "03", seq(3), nil, ""},
+		{"series with a hyphenated chi", "Chi-Alpha Tides", "03", seq(3), nil, ""},
+		{"series with a dotted vol word", "Vol.Cano Tides", "03", seq(3), nil, ""},
 		{"series is a side and number", "Side 3", "03", seq(3), nil, "not a real series name"},
 		{"series is a part and roman number", "Part IV", "03", seq(3), nil, "not a real series name"},
 		{"series is a spaced N of M", "3 of 12", "03", seq(3), nil, "not a real series name"},
@@ -675,7 +696,7 @@ func TestJunkTitleFixer_ProviderTitleWithJunkAuthor(t *testing.T) {
 	// the provider title and the transcription agree: accepted although the
 	// recorded author cannot be compared with the stored one
 	l.add(evBook{name: "agrees-with-transcription", title: "read by narrator", author: &junk.ID, path: "/lib/Books/zz.mp3",
-		files: []string{"/lib/Books/zz.mp3"}, providerTitle: "Dungeon Keeper One", providerAuthor: "Zed Writer", transcribed: "Dungeon Keeper One"})
+		files: []string{"/lib/Books/zz.mp3"}, providerTitle: "Quillow Keeper One", providerAuthor: "Zed Writer", transcribed: "Quillow Keeper One"})
 	// the provider title extends the folder with a subtitle: accepted
 	l.add(evBook{name: "agrees-with-folder", title: "read by narrator", author: nil, path: folder("Real Folder")[0],
 		files: folder("Real Folder"), providerTitle: "Real Folder: The Sequel", providerAuthor: "Zed Writer"})
@@ -694,7 +715,7 @@ func TestJunkTitleFixer_ProviderTitleWithJunkAuthor(t *testing.T) {
 
 	r := rows["agrees-with-transcription"]
 	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-	require.Equal(t, "Dungeon Keeper One", r.Proposed["title"])
+	require.Equal(t, "Quillow Keeper One", r.Proposed["title"])
 	require.Contains(t, r.Reason, "proposed from provider_value")
 
 	r = rows["agrees-with-folder"]

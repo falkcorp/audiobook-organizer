@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -74,8 +74,11 @@ type authorRecognisers struct {
 	// without one they go only when independent says so.
 	own func(string) bool
 	// independent recognises a name the book's own file name is not the only
-	// evidence for: an author with books other than this one, or a narrator
-	// (read from the narrator field, which a title segment cannot have set).
+	// evidence for: an author with books other than this one, or a narrator who
+	// narrates another book (the narrator field is NOT out of a title
+	// segment's reach: the AI filename parse and the artist-tag fallback fill
+	// it from the very file name and tags the stem came from, so only a name
+	// the library holds elsewhere counts).
 	// Without a credit the stem is a bare "<Title> - <Segment>" and the scanner
 	// reads such a stem as a title and an author, so a stored author with no
 	// other book is that very segment read back, and stripping it is circular:
@@ -114,15 +117,15 @@ func filenameHead(filename string) (head string, credited bool) {
 // whole point. Naively dropping the last " - " segment after the credit would
 // corrupt any title that legitimately contains one:
 //
-//	"Dark Gallifrey - The War Master Part 2 - read by narrator.mp3"
-//	  naive → "Dark Gallifrey - The War Master"   ✗ eats real title text
-//	  ours  → "Dark Gallifrey - The War Master Part 2"  ✓ (no author match, so
+//	"Vessmir Hollow - The Quorn Warden Part 2 - read by narrator.mp3"
+//	  naive → "Vessmir Hollow - The Quorn Warden"   ✗ eats real title text
+//	  ours  → "Vessmir Hollow - The Quorn Warden Part 2"  ✓ (no author match, so
 //	                                                       only the credit goes)
 //
 // When author is known and present, both it and the credit are removed:
 //
-//	"Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b"
-//	  → "Nocturne - 3 - Umbra Mortem"
+//	"Pellmoor - 3 - Dolmen Hush - Tamsin Verrow - read by narrator.m4b"
+//	  → "Pellmoor - 3 - Dolmen Hush"
 //
 // A filename carrying no credit at all is used whole, but for a trailing
 // placeholder author and a name with evidence of its own. rec (the zero value
@@ -222,12 +225,12 @@ func majorityDirOf(paths []string) string {
 //
 //  1. Multi-file book → the deepest folder segment. These are the ID3-residue
 //     cases, and the organizer already named the folder correctly:
-//     ".../Big Finish Productions/Dark Gallifrey/Dark Gallifrey - The War Master Part 2"
+//     ".../Big Finish Productions/Vessmir Hollow/Vessmir Hollow - The Quorn Warden Part 2"
 //  2. The filename, parsed for the "read by" convention. This is the only
 //     evidence for the single-file cases, whose folder was named from the same
 //     bad title and is therefore useless.
 //  3. Walking up the directory, first segment that is not itself junk — a last
-//     resort for ".../Kaiju Task/read by narrator/..." shapes.
+//     resort for ".../Brindlewick/read by narrator/..." shapes.
 //
 // Returns ok=false when nothing trustworthy is found; the caller must then leave
 // the book alone rather than invent a title.
@@ -280,7 +283,7 @@ func deriveJunkTitleReplacement(storedTitle, author string, filePaths []string, 
 	//    the author, and happily returns a library root. It produced "lib" from
 	//    "/lib/A/intro.mp3" and "Author" from "/lib/Author/Some Book/Some Book.m4b"
 	//    before this bound existed. The real shape needing rescue is only ever one
-	//    level up — ".../Kaiju Task/read by narrator/<file>" — so one level is all
+	//    level up — ".../Brindlewick/read by narrator/<file>" — so one level is all
 	//    it gets.
 	//    The hop is also only taken to ESCAPE A POISONED FOLDER. If the folder was
 	//    rejected for any other reason — too short, corroborating the stored title —
