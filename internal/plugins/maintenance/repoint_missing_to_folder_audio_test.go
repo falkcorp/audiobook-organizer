@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio_test.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: 7aa3a17c-fb70-48c4-ad3c-0911029bae0b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-24
 
 package maintenance
 
@@ -26,6 +26,8 @@ import (
 // UpdateBookFiles read and write the same rows, so an apply is visible to the
 // owner checks that follow it.
 type rfFakeStore struct {
+	noRetiredRows // the op reads database.AllBookFilesCoreIncludingRetired; see retired_reader_fake_test.go
+
 	mu         sync.Mutex
 	books      []database.BookCore
 	rows       map[string][]database.BookFile
@@ -50,6 +52,12 @@ func (s *rfFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 		}
 	}
 	return out, nil
+}
+
+// GetAllBookFilesCoreIncludingRetired: this fake holds no retired rows, so the
+// including-retired read is the plain read.
+func (s *rfFakeStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return s.GetAllBookFilesCore()
 }
 
 func (s *rfFakeStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
