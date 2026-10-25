@@ -6,8 +6,9 @@ collection's creator. A query on `read_status:`, `progress_pct:` or
 read, in the native API (list, get, create, update, materialize) and in the
 Audiobookshelf-compatible collection endpoints. Two people looking at the same
 collection can see different members, and no response carries the creator's
-listening state any more. This supersedes the 2026-10-18 owner-evaluation
-change (D75): even an admin is evaluated as themselves.
+listening state any more. This replaces the owner evaluation (D75): even
+an admin is evaluated as themselves. The per-user filter pass now reads listening
+state over a bounded worker pool instead of one book at a time.
 
 A system evaluation with no viewer matches nothing for a per-user query and never
 falls back to the creator. Previously a missing user was read as an empty

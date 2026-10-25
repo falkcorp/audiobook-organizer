@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
 // last-edited: 2026-10-25
 //
@@ -28,8 +28,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -162,15 +164,49 @@ func applyPerUserFilters(
 	if userID == "" {
 		return []string{}
 	}
+	// One point read per candidate. A negated or `unstarted` filter leaves almost
+	// the whole library as candidates, and collections now run this on every
+	// read for the requesting viewer, so the reads are spread over a bounded
+	// worker pool in contiguous chunks. Each worker writes only its own slots of
+	// matched, so the result keeps the candidates' order with no lock.
+	matched := make([]bool, len(ids))
+	check := func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			state, _ := store.GetUserBookState(userID, ids[i])
+			matched[i] = search.MatchPerUserFilters(state, filters, now)
+		}
+	}
+	workers := runtime.NumCPU()
+	if workers > len(ids)/perUserFilterChunk {
+		workers = len(ids) / perUserFilterChunk
+	}
+	if workers < 2 {
+		check(0, len(ids))
+	} else {
+		chunk := (len(ids) + workers - 1) / workers
+		var wg sync.WaitGroup
+		for lo := 0; lo < len(ids); lo += chunk {
+			hi := min(lo+chunk, len(ids))
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				check(lo, hi)
+			}()
+		}
+		wg.Wait()
+	}
 	kept := make([]string, 0, len(ids))
-	for _, id := range ids {
-		state, _ := store.GetUserBookState(userID, id)
-		if search.MatchPerUserFilters(state, filters, now) {
+	for i, id := range ids {
+		if matched[i] {
 			kept = append(kept, id)
 		}
 	}
 	return kept
 }
+
+// perUserFilterChunk is the fewest candidates worth giving a worker of their
+// own in applyPerUserFilters; below two chunks the filter runs inline.
+const perUserFilterChunk = 256
 
 // sortBookIDs reorders ids per the playlist's SortJSON directives.
 // When SortJSON is empty or invalid, ids are sorted by ID string for
