@@ -1,5 +1,5 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
 // last-edited: 2026-10-25
 
@@ -44,6 +44,7 @@ const (
 	opDiscarded     = "op-repairs-apply-discarded" // a repairs apply whose op row was discarded
 	opV3Plain       = "op-v3-plain-history"        // a v3 op whose journal rows carry its def id as Source
 	opDiscardedOld  = "op-repairs-apply-prestamp"  // a discarded repairs apply journaled before Source stamping
+	opDiscardedGone = "op-repairs-apply-removed"   // a discarded repairs apply of a fixer this build removed
 	journalBookID   = "book-invented-journal"      // the book the journal rows below are on
 	scopedFixerID   = "reconcile.missing-files"    // settings.manage (repairs_permission_wiring_test.go)
 	secondaryUserID = "user-whose-state-was-read"  // appears in the repairs rows and logs
@@ -53,6 +54,7 @@ const (
 	listenerUnstampedFollow = "invented-listener-unstamped-follow"   // user_state_follow, Source ""
 	listenerRemovedFixer    = "invented-listener-removed-fixer"      // user_state_follow, Source a removed fixer
 	listenerDiscardedOld    = "invented-listener-prestamp-discard"   // user_state_follow, Source "", op row gone
+	listenerDiscardedGone   = "invented-listener-removed-discard"    // user_state_follow, Source a removed fixer, op row gone
 	playlistOfAnotherUser   = "invented-playlist-of-another-user"    // user_content_follow, playlist kind
 	fixerFileMove           = "/invented/library/moved-by-fixer.m4b" // book_file_move stamped by the default fixer
 	scopedUnstampedTitle    = "Invented Scoped Prestamp Title"       // metadata_update, Source "", scoped repairs op
@@ -170,6 +172,16 @@ func newRepairsOpAccessFixture(t *testing.T) *repairsOpAccessFixture {
 	journal("chg-follow-prestamp-discarded", opDiscardedOld, undo.ChangeTypeUserStateFollow, undo.SurvivorField("book-invented-survivor"),
 		"", follow(listenerDiscardedOld), "")
 	_, deleted, err = store.DeleteOperationV2(opDiscardedOld, []string{"completed"})
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	// A discarded apply of a fixer this build no longer registers: its only
+	// row is a follow stamped with that fixer's id, and no op row is left to
+	// refuse on first.
+	insert(opDiscardedGone, repairs.ApplyOpID, `{"fixer_id":"fixer.removed-since"}`, body("fixer.removed-since"))
+	journal("chg-follow-removed-discarded", opDiscardedGone, undo.ChangeTypeUserStateFollow, undo.SurvivorField("book-invented-survivor"),
+		"", follow(listenerDiscardedGone), "fixer.removed-since")
+	_, deleted, err = store.DeleteOperationV2(opDiscardedGone, []string{"completed"})
 	require.NoError(t, err)
 	require.True(t, deleted)
 	gone, err := store.GetOperationV2(opDiscarded)
@@ -395,6 +407,9 @@ func TestRepairsOpData_DiscardedOpJournalStaysScoped(t *testing.T) {
 //     has no op row to name its fixer, so it needs every permission: the
 //     viewer and the editor get its changes empty and its undo report
 //     refused; the admin gets both.
+//   - A discarded apply of a removed fixer: its follow row names a fixer this
+//     build does not register, so even the undo report (which skips the
+//     users.manage leg) needs every permission; the same answers.
 //
 // Not parallel: it swaps the process-wide config.
 func TestRepairsOpData_UserDataRowsNeedUsersManage(t *testing.T) {
@@ -438,22 +453,24 @@ func TestRepairsOpData_UserDataRowsNeedUsersManage(t *testing.T) {
 	w = getAs(f.srv, f.admin, preflight(f.unknownFixer))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
-	// The discarded pre-stamp apply.
-	for who, token := range map[string]string{"viewer": f.viewer, "editor": f.editor} {
-		w := getAs(f.srv, token, changes(opDiscardedOld))
-		require.Equal(t, http.StatusOK, w.Code, "%s: %s", who, w.Body.String())
-		require.Contains(t, w.Body.String(), `"changes":[]`, who)
-		require.NotContains(t, w.Body.String(), listenerDiscardedOld, who)
-		w = getAs(f.srv, token, preflight(opDiscardedOld))
-		require.Equal(t, http.StatusForbidden, w.Code, "%s: %s", who, w.Body.String())
-		require.NotContains(t, w.Body.String(), listenerDiscardedOld, who)
+	// The discarded pre-stamp apply and the discarded removed-fixer apply.
+	for op, listener := range map[string]string{opDiscardedOld: listenerDiscardedOld, opDiscardedGone: listenerDiscardedGone} {
+		for who, token := range map[string]string{"viewer": f.viewer, "editor": f.editor} {
+			w := getAs(f.srv, token, changes(op))
+			require.Equal(t, http.StatusOK, w.Code, "%s %s: %s", who, op, w.Body.String())
+			require.Contains(t, w.Body.String(), `"changes":[]`, "%s %s", who, op)
+			require.NotContains(t, w.Body.String(), listener, "%s %s", who, op)
+			w = getAs(f.srv, token, preflight(op))
+			require.Equal(t, http.StatusForbidden, w.Code, "%s %s: %s", who, op, w.Body.String())
+			require.NotContains(t, w.Body.String(), listener, "%s %s", who, op)
+		}
+		w = getAs(f.srv, f.admin, changes(op))
+		require.Equal(t, http.StatusOK, w.Code, "%s: %s", op, w.Body.String())
+		require.Contains(t, w.Body.String(), listener, op)
+		w = getAs(f.srv, f.admin, preflight(op))
+		require.Equal(t, http.StatusOK, w.Code, "%s: %s", op, w.Body.String())
+		require.Contains(t, w.Body.String(), `"total_changes":1`, op)
 	}
-	w = getAs(f.srv, f.admin, changes(opDiscardedOld))
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), listenerDiscardedOld)
-	w = getAs(f.srv, f.admin, preflight(opDiscardedOld))
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), `"total_changes":1`)
 }
 
 // TestRepairsOpData_TimelineLeavesOutWhatTheCallerMayNotRead: the timeline
