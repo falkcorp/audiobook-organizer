@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_scan_ctx_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f7a1d92-6c48-4e05-b1a9-8d2e5c70f634
-// last-edited: 2026-10-14
+// last-edited: 2026-10-25
 
 package reconcile
 
@@ -83,11 +83,15 @@ type progressEvent struct {
 type phaseRecorder struct {
 	logger.Logger // everything this does not record goes to a real logger
 
-	mu       sync.Mutex
-	phase    string
-	beats    map[string]int
-	progress []progressEvent
-	infos    []string
+	mu    sync.Mutex
+	phase string
+	beats map[string]int
+	// fired is set once the cancel has run; afterCancel counts, per phase, the
+	// beats that began after that. See beat.
+	fired       bool
+	afterCancel map[string]int
+	progress    []progressEvent
+	infos       []string
 
 	cancelPhase string
 	cancelAt    int
@@ -95,7 +99,7 @@ type phaseRecorder struct {
 }
 
 func newPhaseRecorder() *phaseRecorder {
-	return &phaseRecorder{Logger: logger.New("reconcile-test"), beats: map[string]int{}}
+	return &phaseRecorder{Logger: logger.New("reconcile-test"), beats: map[string]int{}, afterCancel: map[string]int{}}
 }
 
 // cancelOnBeat cancels the scan on the nth heartbeat of phase.
@@ -106,14 +110,26 @@ func (r *phaseRecorder) cancelOnBeat(phase string, n int, cancel context.CancelF
 
 func (r *phaseRecorder) hooks() ScanHooks { return ScanHooks{Heartbeat: r.beat} }
 
+// beat records a heartbeat and, on the configured one, cancels the scan.
+//
+// The cancel runs while r.mu is held, so the beat order is a total order around
+// it: every beat that takes the lock after the firing one sees fired == true and
+// is counted in afterCancel, and none can slip in between "the beat that decided
+// to cancel" and "the context actually being canceled". Firing outside the lock
+// left that window open, and a firing goroutine descheduled inside it (slow
+// -race runner) let hundreds of stats start before ctx was canceled at all,
+// which a raw beat total cannot tell apart from a pool that ignores ctx.
 func (r *phaseRecorder) beat() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.beats[r.phase]++
-	fire := r.cancel != nil && r.phase == r.cancelPhase && r.beats[r.phase] == r.cancelAt
-	cancel := r.cancel
-	r.mu.Unlock()
-	if fire {
-		cancel()
+	if r.fired {
+		r.afterCancel[r.phase]++
+		return
+	}
+	if r.cancel != nil && r.phase == r.cancelPhase && r.beats[r.phase] == r.cancelAt {
+		r.cancel()
+		r.fired = true
 	}
 }
 
@@ -137,6 +153,14 @@ func (r *phaseRecorder) Info(msg string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.infos = append(r.infos, fmt.Sprintf(msg, args...))
+}
+
+// beatsAfterCancelIn reports how many beats of phase began after the cancel had
+// returned.
+func (r *phaseRecorder) beatsAfterCancelIn(phase string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.afterCancel[phase]
 }
 
 func (r *phaseRecorder) beatsIn(phase string) int {
@@ -293,8 +317,9 @@ func TestBuildReconcilePreviewCtx_UncanceledRunCompletes(t *testing.T) {
 //
 // No library root is configured here, so nothing after the stat pass looks at
 // ctx; only the check that follows the pool can notice. The test also bounds how
-// many stats ran: that bound, not the returned error, is what pins the
-// per-worker ctx check (the check after the pool returns Canceled either way).
+// many stats began after the cancel returned: that bound, not the returned
+// error, is what pins the per-worker ctx check (the check after the pool returns
+// Canceled either way).
 func TestBuildReconcilePreviewCtx_CancelDuringStatPassFailsTheScan(t *testing.T) {
 	_ = withEmptyExtensionConfig(t, nil)
 	config.Mutate(func(c *config.Config) { c.RootDir = "" })
@@ -315,10 +340,16 @@ func TestBuildReconcilePreviewCtx_CancelDuringStatPassFailsTheScan(t *testing.T)
 	if res != nil {
 		t.Errorf("a canceled scan must not return a result, got %+v", res)
 	}
-	// Workers already past their ctx check when the cancel lands may still beat
-	// (at most the pool size); a pool that ignores ctx beats all 3000.
-	if got := rec.beatsIn(phaseStat); got > books/10 {
-		t.Errorf("stat pool kept starting stats after cancel: %d of %d ran", got, books)
+	// Only workers already past their ctx check when the cancel returned may
+	// still beat, and the pool never has more than its limit in flight (the
+	// canceling worker is one of them); a pool that ignores ctx beats nearly all
+	// 3000 after the cancel. The count is of beats after the cancel, not the
+	// total: the total also holds every beat that ran before the canceling
+	// goroutine was scheduled, which depends on runner speed.
+	poolLimit := max(runtime.NumCPU(), 1)
+	if got := rec.beatsAfterCancelIn(phaseStat); got >= poolLimit {
+		t.Errorf("stat pool kept starting stats after cancel: %d began after it (pool limit %d, %d books, %d ran in total)",
+			got, poolLimit, books, rec.beatsIn(phaseStat))
 	}
 }
 
