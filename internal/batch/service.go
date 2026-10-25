@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-25
 
 package batch
 
@@ -30,6 +30,10 @@ type batchBookStore interface {
 	// read and its write is kept. See database.BookMutator.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	DeleteBook(id string) error
+	// GetBookFiles: a hard delete refuses a book that still owns book_file
+	// rows, and has to know that BEFORE it carries the book's users' listening
+	// state anywhere (hardDelete).
+	GetBookFiles(bookID string) ([]database.BookFile, error)
 	// UserOverrideRecorder: a batch update is a HUMAN editing many books at
 	// once. It must record a lock row per edited field, exactly as the
 	// single-book edit handler does, or the next fetch or scan overwrites
@@ -592,19 +596,69 @@ func groupOf(b *database.Book) string {
 // (merge.HardDeleteKeepingUserState: merge.ErrBookHasListeningState). A
 // store that cannot check or carry the state refuses every hard delete.
 //
+// A book that still owns book_file rows is refused FIRST, before anything is
+// read for or written to its users' state: DeleteBook never deletes those rows
+// and refuses (database.ErrBookOwnsFiles), but it does so after the carry, so
+// until 2026-10-25 a batch hard delete of such a book moved its users'
+// progress to another version and then left the book standing, its state
+// duplicated or gone from it. The check is made twice: once here, so a book
+// that is refused never takes the global merge lock, and again under the merge
+// lock the carry and the delete run in (refuseIfOwnsFiles), where a merge can
+// no longer move a file onto the book before the carry starts. The store's own
+// check inside DeleteBook stays the last line: a book_file writer that is not
+// a merge does not take that lock.
+//
 // The batch runs its operations one after another, and so this: each carry
 // holds the global merge lock for its whole check-carry-delete, so a worker
 // pool would only queue on that lock.
 func (bs *BatchService) hardDelete(book *database.Book) error {
+	if err := bs.refuseIfOwnsFiles(book.ID); err != nil {
+		return err
+	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
 	if !ok {
 		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
 	}
-	if _, err := merge.HardDeleteKeepingUserState(merger, bs.db, book, func() error { return bs.db.DeleteBook(book.ID) }); err != nil {
-		if errors.Is(err, merge.ErrBookHasListeningState) {
+	var refused error
+	carriedTo, err := merge.HardDeleteKeepingUserState(merger, bs.db, book,
+		func() error {
+			refused = bs.refuseIfOwnsFiles(book.ID)
+			return refused
+		},
+		func() error { return bs.db.DeleteBook(book.ID) })
+	if err != nil {
+		switch {
+		case refused != nil && errors.Is(refused, database.ErrBookOwnsFiles) && carriedTo == "":
+			// The check under the merge lock refused it with nothing moved:
+			// report it in the same words as the first check, not wrapped in
+			// the merge package's carry-refusal text.
+			return refused
+		case errors.Is(err, merge.ErrBookHasListeningState):
 			return fmt.Errorf("%w; soft-delete it and purge it from the trash instead, where the progress can be moved or discarded on purpose", err)
+		case errors.Is(err, database.ErrBookOwnsFiles) && carriedTo != "":
+			// A file row landed after the check under the merge lock, from a
+			// writer that does not take it, and DeleteBook refused. The state
+			// has already moved; say so rather than pretend nothing happened.
+			return fmt.Errorf("hard delete %s: its listening state was moved to %s, but the book was not deleted: %w", book.ID, carriedTo, err)
 		}
 		return err
+	}
+	return nil
+}
+
+// refuseIfOwnsFiles returns an error wrapping database.ErrBookOwnsFiles when
+// the book still owns book_file rows, worded as the single-book hard delete
+// words it (audiobooks: "hard delete <id>: ... (<n> row(s)); soft-delete it
+// instead, or move its files to another book first"). It fails closed: an
+// unreadable file list is not proof there are no rows.
+func (bs *BatchService) refuseIfOwnsFiles(bookID string) error {
+	owned, err := bs.db.GetBookFiles(bookID)
+	if err != nil {
+		return fmt.Errorf("hard delete %s: cannot read its book_file rows: %w", bookID, err)
+	}
+	if len(owned) > 0 {
+		return fmt.Errorf("hard delete %s: %w (%d row(s)); soft-delete it instead, or move its files to another book first",
+			bookID, database.ErrBookOwnsFiles, len(owned))
 	}
 	return nil
 }
