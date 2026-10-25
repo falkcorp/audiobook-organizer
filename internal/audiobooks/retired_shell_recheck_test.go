@@ -1,5 +1,5 @@
 // file: internal/audiobooks/retired_shell_recheck_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 451c02fe-0c9c-4bd1-9bcd-2b1f5484b71e
 // last-edited: 2026-10-24
 
@@ -243,4 +243,57 @@ func TestPurge_TrashedHolderOfOnlyRetiredRowsIsKeptAsHoldingRetiredVersions(t *t
 	require.NotNil(t, mustBook(t, store, "holder"))
 	tomb, _ := store.GetBookTombstone("holder")
 	require.Nil(t, tomb, "no tombstone for a book that is not deleted")
+}
+
+// holderOfOnlyRetiredRows builds a book that owns no live row but has a
+// retired version's rows keyed under it (a shell was retired onto it), and
+// seeds a listening position on it. DeleteBook refuses such a book
+// (ErrBookOwnsFiles), so every operation that writes anything before the
+// delete must refuse it first.
+func holderOfOnlyRetiredRows(t *testing.T, store *database.PebbleStore, hash *string) (userID string) {
+	t.Helper()
+	_, err := store.CreateBook(&database.Book{ID: "holder", Title: "holder", FilePath: "/lib/holder", FileHash: hash})
+	require.NoError(t, err)
+	softDeleted(t, store, "shell", "/lib/shell")
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "shell-f", BookID: "shell", FilePath: "/lib/shell/a.mp3"}))
+	retireShellInto(t, store, "shell", "holder")
+	live, err := store.GetBookFiles("holder")
+	require.NoError(t, err)
+	require.Empty(t, live, "fixture: the holder owns no LIVE row")
+	return purgeSeedProgress(t, store, "holder").ID
+}
+
+// "Discard progress and purge" on a trashed holder of only retired rows is
+// refused BEFORE any user's listening state is discarded: the delete would
+// refuse afterwards (ErrBookOwnsFiles) and the progress would already be gone.
+func TestDiscardProgressAndPurge_HolderOfOnlyRetiredRowsKeepsItsProgress(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	uid := holderOfOnlyRetiredRows(t, store, nil)
+	yes, at := true, time.Now().Add(-time.Hour)
+	_, err := store.ModifyBook("holder", func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &at
+		return nil
+	})
+	require.NoError(t, err)
+	svc := NewAudiobookService(store)
+	svc.auditOverride = &fakeRecorder{}
+	_, err = svc.DiscardProgressAndPurge(context.Background(), "holder", "owner")
+	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.Equal(t, 40, userPct(t, store, uid, "holder"), "no state was discarded before the refusal")
+	require.NotNil(t, mustBook(t, store, "holder"))
+}
+
+// A live hard delete of a holder of only retired rows is refused before the
+// hash block and before the user state is carried to another version.
+func TestDeleteAudiobook_LiveHolderOfOnlyRetiredRowsIsRefusedBeforeAnyWrite(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	hash := "holder-hash"
+	uid := holderOfOnlyRetiredRows(t, store, &hash)
+	_, err := NewAudiobookService(store).DeleteAudiobook(context.Background(), "holder", &DeleteAudiobookOptions{BlockHash: true})
+	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	blocked, berr := store.IsHashBlocked(hash)
+	require.NoError(t, berr)
+	require.False(t, blocked, "the hash must not be blocked for a delete that was refused")
+	require.Equal(t, 40, userPct(t, store, uid, "holder"))
+	require.NotNil(t, mustBook(t, store, "holder"))
 }

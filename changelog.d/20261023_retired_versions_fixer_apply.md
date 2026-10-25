@@ -36,6 +36,8 @@ from bringing back an empty imported book.
 The same refusal now guards every other un-trash or delete path for a retire
 shell: `DeleteBook` and `RevertBookToVersion` at the store (fail closed,
 `ErrBookIsRetiredShell`), the metadata revert handler (409), `UnmergeAuto`,
-the soft-delete revert, undo preflight and combine-undo. A trashed holder whose
-only rows are retired versions is kept by the purge as owning files. Restoring
+the soft-delete revert, undo preflight and combine-undo. A book that holds only
+retired versions (no live row) counts as owning files: the purge keeps it,
+"Discard progress and purge" refuses it before any listening state is discarded,
+and a live hard delete refuses it before the hash block or the progress carry. Restoring
 a book that does not exist returns 404.

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-23-retired-versions-apply-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: b7e34a18-52c9-4f60-9d1b-8a63c0e5f247 -->
 <!-- last-edited: 2026-10-24 -->
 
@@ -43,9 +43,10 @@ the purge, "Purge now", "Discard progress and purge", the hard delete and
 "Restore" all refuse such a book and say why (restoring it would only bring
 back an empty book). The same refusal now covers the other ways a trashed book
 could be brought back or removed: the metadata "revert" button, undoing an
-automatic merge, undoing a delete, and undoing a combine. A trashed book that
-holds nothing but older versions of other books is kept as "owns files" by the
-purge rather than failing every night. If the check cannot be read, the book is
+automatic merge, undoing a delete, and undoing a combine. A book that holds
+nothing but older versions of other books counts as owning files: the purge
+keeps it rather than failing every night, and "Discard progress and purge" and
+the live delete refuse it before anyone's listening progress is touched. If the check cannot be read, the book is
 left alone. Asking to restore a book that does not exist now says "not found"
 rather than a generic server error.
 
