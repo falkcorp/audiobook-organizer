@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-decisions-appendix.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: e75847e4-760a-4d0d-8527-1eeffece31f9 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -28,3 +28,4 @@ From 2026-10-25 12:53 EDT to 2026-10-26 12:53 EDT (or until you say otherwise), 
 | D17 | 10-25 18:05 | #4159 re-scan: 1 real title left (split across two comment lines), 3 weak lookalikes | Fix all 4 in a new squashed PR · Fix the blocker only · Amend + force-push | **Fix all 4, new squashed PR** | Force-push is banned; a fix-up commit would land the bad commit on main |
 | D18 | 10-25 19:12 | #4158 review blocker: flagging absent files with the existing "missing" flag lets a version with missing chapters win the primary election (that flag already means "superseded" elsewhere). | (a) separate "hash found it absent" marker read only by this job · (b) new superseded marker + backfill + election fix · (c) hold the apply | **(a) separate marker**, plus mount check, preview-only Fingerprint button, per-row report | Narrowest change that cannot affect elections or other readers |
 | D19 | 10-25 19:30 | #4153 re-review: 0 blockers, 4 should-fix (incl. an older window where discard can erase progress then answer "nothing changed"), and a scanner path that can take a trashed book out of the trash (older, outside this PR). | Fix the should-fixes + nits in a rebased new PR; file the scanner issue as a TODO · Also fix the scanner here · Merge as is | **Fix in rebased PR, scanner as TODO** | Bulk-delete changes run on prod without a flag; the scanner issue is a separate path |
+| D20 | 10-25 19:40 | #4162 (was #4136): combine warnings now reach the review approve response, but the web UI drops them. Show them? | Toast in the regroup lane, no storage change · Also store them on the review item (schema change) · Leave backend-only | **Toast, no storage change** | The fix is only real if the person approving sees the warning |
