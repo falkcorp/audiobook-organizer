@@ -159,6 +159,13 @@ type Handler struct {
 	// Unset (nil) refuses every row that could be Repairs data: see
 	// WithRepairsOpAccess.
 	repairsAccess *opaccess.Repairs
+
+	// permCheck is the check for a permission the handler learns it needs only
+	// after reading the request body (BatchOperations: library.delete when an
+	// operation is a hard delete). nil means the strict check
+	// (StrictPermissionCheck); the server installs its own with
+	// SetPermissionCheck.
+	permCheck PermissionCheck
 }
 
 // WithRepairsOpAccess installs the check that keeps a Repairs fixer's

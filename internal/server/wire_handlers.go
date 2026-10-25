@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.60.0
+// version: 2.61.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-25
 
@@ -610,6 +610,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// The same check the operations handlers got (repairsOps, above): a
 	// Repairs fixer's change-journal rows on a book need its permissions.
 	audiobooksH.WithRepairsOpAccess(repairsOps)
+	// A batch hard delete needs library.delete, checked after the body is read
+	// (same semantics as s.perm: no-op with auth off, first-run bypass).
+	audiobooksH.SetPermissionCheck(audiobookshandler.PermissionCheck(s.permCheck()))
 	audiobooksH.SetSearchResultCached(func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool {
 		return s.audiobookService != nil && s.audiobookService.SearchIsCached(search, authorID, seriesID, f)
 	})

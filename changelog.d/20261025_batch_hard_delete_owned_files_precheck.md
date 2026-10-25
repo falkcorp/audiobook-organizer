@@ -39,7 +39,10 @@ read, refuses the delete. The batch path reads the rows through the
 
 `POST /api/v1/audiobooks/batch-operations` now also requires `library.delete`
 when any operation is a hard delete (`action: "delete"`, `hard_delete: true`),
-as `DELETE /api/v1/audiobooks/:id` does. It previously needed only
+as `DELETE /api/v1/audiobooks/:id` does. The check is made by the handler on the
+request it has bound and is about to run (not by a second parse of the body), so
+a body with trailing bytes or a duplicate `hard_delete` key cannot slip past it.
+The route previously needed only
 `library.edit_metadata`, so a role with edit but not delete could permanently
 delete books through the batch route. Update, soft delete and restore are
 unchanged.

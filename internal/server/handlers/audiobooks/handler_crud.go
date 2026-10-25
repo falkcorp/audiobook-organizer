@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-25
 
@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -335,6 +336,20 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 	if len(req.Operations) == 0 {
 		httputil.RespondWithBadRequest(c, "no operations provided")
 		return
+	}
+	// The route needs library.edit_metadata (right for update, soft delete and
+	// restore). A hard delete is the same act as DELETE /audiobooks/:id with
+	// hard_delete, which needs library.delete, so any hard delete in the list
+	// needs it too. The check reads the request this handler just bound and is
+	// about to execute, never a second parse of the body, so what is checked
+	// is exactly what runs.
+	for _, op := range req.Operations {
+		if op.Action == "delete" && op.HardDelete {
+			if !h.permitted(c, auth.PermLibraryDelete) {
+				return
+			}
+			break
+		}
 	}
 	// Fail-safe cap (internal/applycap). The old fixed 10,000 ceiling sat
 	// ABOVE the cap and the operation list includes hard_delete; the cap is
