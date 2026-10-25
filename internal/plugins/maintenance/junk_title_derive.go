@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
 // last-edited: 2026-10-24
 
@@ -66,31 +66,7 @@ func stripAudioExt(name string) string {
 	return name
 }
 
-// titleFromFilename recovers the title from a file named by the
-// "<Title> - <Author> - read by <narrator>" convention.
-//
-// 🔑 Only a segment that is provably an author is stripped, and that is the
-// whole point. Naively dropping the last " - " segment after the credit would
-// corrupt any title that legitimately contains one:
-//
-//	"Dark Gallifrey - The War Master Part 2 - read by narrator.mp3"
-//	  naive → "Dark Gallifrey - The War Master"   ✗ eats real title text
-//	  ours  → "Dark Gallifrey - The War Master Part 2"  ✓ (no author match, so
-//	                                                       only the credit goes)
-//
-// When author is known and present, both it and the credit are removed:
-//
-//	"Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b"
-//	  → "Nocturne - 3 - Umbra Mortem"
-//
-// A filename carrying no credit at all is used whole, but for a trailing
-// placeholder author and a name with evidence of its own (see
-// titleFromFilenameWith).
-func titleFromFilename(filename, author string) string {
-	return titleFromFilenameWith(filename, author, authorRecognisers{})
-}
-
-// authorRecognisers tells titleFromFilenameWith which trailing " - <segment>"
+// authorRecognisers tells titleFromFilename which trailing " - <segment>"
 // is a person's credit. A recogniser that is nil recognises nobody.
 type authorRecognisers struct {
 	// own recognises the book's own credited people: the stored author, a
@@ -131,8 +107,27 @@ func filenameHead(filename string) (head string, credited bool) {
 	return stem, false
 }
 
-// titleFromFilenameWith is titleFromFilename with the recognisers of names
-// beyond the stored author. A trailing " - <segment>" goes when it is
+// titleFromFilename recovers the title from a file named by the
+// "<Title> - <Author> - read by <narrator>" convention.
+//
+// 🔑 Only a segment that is provably an author is stripped, and that is the
+// whole point. Naively dropping the last " - " segment after the credit would
+// corrupt any title that legitimately contains one:
+//
+//	"Dark Gallifrey - The War Master Part 2 - read by narrator.mp3"
+//	  naive → "Dark Gallifrey - The War Master"   ✗ eats real title text
+//	  ours  → "Dark Gallifrey - The War Master Part 2"  ✓ (no author match, so
+//	                                                       only the credit goes)
+//
+// When author is known and present, both it and the credit are removed:
+//
+//	"Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b"
+//	  → "Nocturne - 3 - Umbra Mortem"
+//
+// A filename carrying no credit at all is used whole, but for a trailing
+// placeholder author and a name with evidence of its own. rec (the zero value
+// recognises nobody) names the people beyond the stored author that a trailing
+// segment may be. A trailing " - <segment>" goes when it is
 //
 //   - a placeholder author ("Unknown Author", "Unknown"): never title text, so
 //     with or without a credit ("Marble Gate - Unknown Author.mp3" is "Marble
@@ -151,7 +146,7 @@ func filenameHead(filename string) (head string, credited bool) {
 // A segment that opens with a position word ("Volume II", "Part 3") is title
 // text even when a scan stored it as the author (a reviewer accepted such a
 // title).
-func titleFromFilenameWith(filename, author string, rec authorRecognisers) string {
+func titleFromFilename(filename, author string, rec authorRecognisers) string {
 	head, credited := filenameHead(filename)
 	if head == "" {
 		return ""
@@ -220,7 +215,7 @@ func majorityDirOf(paths []string) string {
 	return best
 }
 
-// DeriveJunkTitleReplacement works out the real title for a book whose stored
+// deriveJunkTitleReplacement works out the real title for a book whose stored
 // title is junk, and reports which evidence it used.
 //
 // Candidates are tried in order of trustworthiness for the shape observed:
@@ -236,12 +231,8 @@ func majorityDirOf(paths []string) string {
 //
 // Returns ok=false when nothing trustworthy is found; the caller must then leave
 // the book alone rather than invent a title.
-func DeriveJunkTitleReplacement(storedTitle, author string, filePaths []string) (title, method string, ok bool) {
-	return deriveJunkTitleReplacement(storedTitle, author, filePaths, authorRecognisers{})
-}
-
-// deriveJunkTitleReplacement is DeriveJunkTitleReplacement with rec, the
-// recognisers of names beyond the stored author that titleFromFilenameWith
+//
+// rec recognises the names beyond the stored author that titleFromFilename
 // strips from a filename's tail (the zero value recognises none).
 func deriveJunkTitleReplacement(storedTitle, author string, filePaths []string, rec authorRecognisers) (title, method string, ok bool) {
 	stored := strings.TrimSpace(storedTitle)
@@ -277,7 +268,7 @@ func deriveJunkTitleReplacement(storedTitle, author string, filePaths []string, 
 
 	// 2. The filename and its "read by" convention.
 	if len(filePaths) > 0 {
-		if t, m, good := accept(titleFromFilenameWith(filepath.Base(filePaths[0]), author, rec), "filename"); good {
+		if t, m, good := accept(titleFromFilename(filepath.Base(filePaths[0]), author, rec), "filename"); good {
 			return t, m, true
 		}
 	}

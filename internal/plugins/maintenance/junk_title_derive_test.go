@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
 // last-edited: 2026-10-24
 
@@ -15,7 +15,7 @@ import (
 // whenever the title itself contains " - " — which, for series audiobooks, is
 // most of them. The author name is what makes the strip safe.
 func TestTitleFromFilename_DoesNotEatTitleTextWhenAuthorIsAbsent(t *testing.T) {
-	got := titleFromFilename("Dark Gallifrey - The War Master Part 2 - read by narrator.mp3", "")
+	got := titleFromFilename("Dark Gallifrey - The War Master Part 2 - read by narrator.mp3", "", authorRecognisers{})
 	want := "Dark Gallifrey - The War Master Part 2"
 	if got != want {
 		t.Fatalf("got %q, want %q — with no author to match, only the credit may be removed", got, want)
@@ -31,15 +31,15 @@ func TestTitleFromFilename_StripsAuthorAndCredit(t *testing.T) {
 			"Dennis E. Taylor", "Bobiverse - 1 - We Are Legion (We Are Bob)"},
 	}
 	for _, c := range cases {
-		if got := titleFromFilename(c.file, c.author); got != c.want {
-			t.Errorf("titleFromFilename(%q, %q) = %q, want %q", c.file, c.author, got, c.want)
+		if got := titleFromFilename(c.file, c.author, authorRecognisers{}); got != c.want {
+			t.Errorf("titleFromFilename(%q, %q, authorRecognisers{}) = %q, want %q", c.file, c.author, got, c.want)
 		}
 	}
 }
 
 // A filename with no credit at all is a title in its own right.
 func TestTitleFromFilename_NoCreditUsesWholeStem(t *testing.T) {
-	got := titleFromFilename("Kaiju Task Force_ Code Omega Season.m4b", "Some Author")
+	got := titleFromFilename("Kaiju Task Force_ Code Omega Season.m4b", "Some Author", authorRecognisers{})
 	if got != "Kaiju Task Force_ Code Omega Season" {
 		t.Fatalf("got %q, want the whole stem", got)
 	}
@@ -48,7 +48,7 @@ func TestTitleFromFilename_NoCreditUsesWholeStem(t *testing.T) {
 // Author matching is case-insensitive, because the tag case and the filename
 // case disagree constantly in this library.
 func TestTitleFromFilename_AuthorMatchIsCaseInsensitive(t *testing.T) {
-	got := titleFromFilename("Some Book - DENNIS E. TAYLOR - read by narrator.mp3", "dennis e. taylor")
+	got := titleFromFilename("Some Book - DENNIS E. TAYLOR - read by narrator.mp3", "dennis e. taylor", authorRecognisers{})
 	if got != "Some Book" {
 		t.Fatalf("got %q, want %q", got, "Some Book")
 	}
@@ -72,7 +72,7 @@ func TestDeriveJunkTitleReplacement_MultiFileUsesFolder(t *testing.T) {
 		"/lib/Big Finish Productions/Dark Gallifrey/Dark Gallifrey - The War Master Part 2/01 Big Finish Ident.mp3",
 		"/lib/Big Finish Productions/Dark Gallifrey/Dark Gallifrey - The War Master Part 2/02 The War Master Part 2 Track 01.mp3",
 	}
-	got, method, ok := DeriveJunkTitleReplacement("Big Finish Ident", "Big Finish Productions", paths)
+	got, method, ok := deriveJunkTitleReplacement("Big Finish Ident", "Big Finish Productions", paths, authorRecognisers{})
 	if !ok {
 		t.Fatal("expected a derivation")
 	}
@@ -90,7 +90,7 @@ func TestDeriveJunkTitleReplacement_SingleFileUsesFilenameWhenFolderIsPoisoned(t
 	paths := []string{
 		"/lib/Nocturne/read by narrator/Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b",
 	}
-	got, method, ok := DeriveJunkTitleReplacement("read by narrator", "JD Glasscock", paths)
+	got, method, ok := deriveJunkTitleReplacement("read by narrator", "JD Glasscock", paths, authorRecognisers{})
 	if !ok {
 		t.Fatal("expected a derivation")
 	}
@@ -109,7 +109,7 @@ func TestDeriveJunkTitleReplacement_RejectsJunkFolderAndFallsThrough(t *testing.
 		"/lib/Nocturne/read by narrator/Nocturne - 3 - Umbra Mortem - JD Glasscock - read by narrator.m4b",
 		"/lib/Nocturne/read by narrator/Nocturne - 3 - Umbra Mortem.m4b",
 	}
-	got, _, ok := DeriveJunkTitleReplacement("read by narrator", "JD Glasscock", paths)
+	got, _, ok := deriveJunkTitleReplacement("read by narrator", "JD Glasscock", paths, authorRecognisers{})
 	if !ok {
 		t.Fatal("expected a derivation")
 	}
@@ -125,7 +125,7 @@ func TestDeriveJunkTitleReplacement_RejectsJunkFolderAndFallsThrough(t *testing.
 // the filename itself is unhelpful.
 func TestDeriveJunkTitleReplacement_WalksUpToAnAncestorFolder(t *testing.T) {
 	paths := []string{"/lib/Kaiju Task/read by narrator/read by narrator.m4b"}
-	got, method, ok := DeriveJunkTitleReplacement("read by narrator", "", paths)
+	got, method, ok := deriveJunkTitleReplacement("read by narrator", "", paths, authorRecognisers{})
 	if !ok {
 		t.Fatal("expected a derivation from an ancestor folder")
 	}
@@ -141,17 +141,17 @@ func TestDeriveJunkTitleReplacement_WalksUpToAnAncestorFolder(t *testing.T) {
 // writing a guessed title is worse than leaving a known-bad one, because the bad
 // one is at least detectable by this same op later.
 func TestDeriveJunkTitleReplacement_RefusesWhenThereIsNoEvidence(t *testing.T) {
-	if _, _, ok := DeriveJunkTitleReplacement("read by narrator", "", nil); ok {
+	if _, _, ok := deriveJunkTitleReplacement("read by narrator", "", nil, authorRecognisers{}); ok {
 		t.Fatal("derived a title from no files at all")
 	}
-	if _, _, ok := DeriveJunkTitleReplacement("read by narrator", "", []string{"read by narrator.m4b"}); ok {
+	if _, _, ok := deriveJunkTitleReplacement("read by narrator", "", []string{"read by narrator.m4b"}, authorRecognisers{}); ok {
 		t.Fatal("derived a title when every candidate was junk")
 	}
 }
 
 // A single-character result is not a title.
 func TestDeriveJunkTitleReplacement_RejectsTooShortResults(t *testing.T) {
-	if _, _, ok := DeriveJunkTitleReplacement("intro", "", []string{"/lib/A/intro.mp3"}); ok {
+	if _, _, ok := deriveJunkTitleReplacement("intro", "", []string{"/lib/A/intro.mp3"}, authorRecognisers{}); ok {
 		t.Fatal("accepted a one-character title")
 	}
 }
@@ -159,7 +159,7 @@ func TestDeriveJunkTitleReplacement_RejectsTooShortResults(t *testing.T) {
 // Never report a change when the derived value equals what is already stored.
 func TestDeriveJunkTitleReplacement_RejectsNoOpRewrite(t *testing.T) {
 	paths := []string{"/lib/Author/Some Book/Some Book.m4b"}
-	if _, _, ok := DeriveJunkTitleReplacement("Some Book", "Author", paths); ok {
+	if _, _, ok := deriveJunkTitleReplacement("Some Book", "Author", paths, authorRecognisers{}); ok {
 		t.Fatal("reported a change that would rewrite the title to itself")
 	}
 }
@@ -204,7 +204,7 @@ func TestDeriveJunkTitleReplacement_NoHopOutOfAClassifierJunkFolder(t *testing.T
 		{"/lib/Chapter 1/x.mp3"},
 		{"/lib/Read by Moonlight/x.mp3"},
 	} {
-		if got, method, ok := DeriveJunkTitleReplacement("intro", "", paths); ok {
+		if got, method, ok := deriveJunkTitleReplacement("intro", "", paths, authorRecognisers{}); ok {
 			t.Fatalf("%v: derived %q via %s, want nothing", paths, got, method)
 		}
 	}
@@ -271,20 +271,20 @@ func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := titleFromFilenameWith(c.file, c.author, rec); got != c.want {
-				t.Errorf("titleFromFilenameWith(%q, %q) = %q, want %q", c.file, c.author, got, c.want)
+			if got := titleFromFilename(c.file, c.author, rec); got != c.want {
+				t.Errorf("titleFromFilename(%q, %q, authorRecognisers{}) = %q, want %q", c.file, c.author, got, c.want)
 			}
 		})
 	}
 	// Without the recognisers a name that is not the stored author stays.
-	if got := titleFromFilename("Marble Gate - Zed Writer - read by narrator.mp3", ""); got != "Marble Gate - Zed Writer" {
+	if got := titleFromFilename("Marble Gate - Zed Writer - read by narrator.mp3", "", authorRecognisers{}); got != "Marble Gate - Zed Writer" {
 		t.Errorf("no recogniser: got %q", got)
 	}
 	// And a stored author is stripped only behind a credit, as before.
-	if got := titleFromFilename("Marble Gate - Someone New.mp3", "Someone New"); got != "Marble Gate - Someone New" {
+	if got := titleFromFilename("Marble Gate - Someone New.mp3", "Someone New", authorRecognisers{}); got != "Marble Gate - Someone New" {
 		t.Errorf("no recogniser, no credit: got %q", got)
 	}
-	if got := titleFromFilename("Marble Gate - Someone New - read by narrator.mp3", "Someone New"); got != "Marble Gate" {
+	if got := titleFromFilename("Marble Gate - Someone New - read by narrator.mp3", "Someone New", authorRecognisers{}); got != "Marble Gate" {
 		t.Errorf("no recogniser, credit: got %q", got)
 	}
 }
@@ -292,7 +292,7 @@ func TestTitleFromFilenameWith_StripsAuthorSegments(t *testing.T) {
 // A stem that is only an author credit has no title.
 func TestTitleFromFilename_AuthorCreditOnlyStemHasNoTitle(t *testing.T) {
 	for _, file := range []string{"read by Some Narrator.mp3", "Read By Some Narrator", "narrated by Some Narrator.m4b", "  read by narrator  .mp3"} {
-		if got := titleFromFilename(file, "Some Author"); got != "" {
+		if got := titleFromFilename(file, "Some Author", authorRecognisers{}); got != "" {
 			t.Errorf("titleFromFilename(%q) = %q, want no title", file, got)
 		}
 	}

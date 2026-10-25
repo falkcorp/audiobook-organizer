@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-12
+// last-edited: 2026-10-24
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -210,7 +210,7 @@ var lastFirstRe = regexp.MustCompile(`^\p{Lu}[\pL'’-]+,\s+\p{Lu}[\pL.'’ -]*$
 // narrator", "Unknown Title"): the organizer once named a book's folder from
 // its bad title, so the folder is as junk as the title, and the one above it
 // names the book (".../Glass Orchard/read by narrator/read by
-// narrator.mp3"). One level only, as maintenance.DeriveJunkTitleReplacement
+// narrator.mp3"). One level only, as maintenance.deriveJunkTitleReplacement
 // climbs: further up is the author or a library root. A folder's leading
 // dash ("- The Quiet Field", an empty field the template dropped) is
 // trimmed. A person's folder above ("Example, Jane", or a name the

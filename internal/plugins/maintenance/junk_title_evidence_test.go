@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
 // last-edited: 2026-10-24
 
@@ -784,10 +784,10 @@ func TestJunkTitleFixer_DuplicateGuardWithJunkAuthor(t *testing.T) {
 // A position in a work ("Volume II") is title text even when a scan stored it
 // as the book's author: a reviewer accepted "Harbor Lights - Volume II".
 func TestTitleFromFilename_PositionSegmentIsNotAnAuthor(t *testing.T) {
-	require.Equal(t, "Harbor Lights - Volume II", titleFromFilename("Harbor Lights - Volume II.mp3", "Volume II"))
-	require.Equal(t, "Harbor Lights - Part 3", titleFromFilename("Harbor Lights - Part 3.mp3", ""))
+	require.Equal(t, "Harbor Lights - Volume II", titleFromFilename("Harbor Lights - Volume II.mp3", "Volume II", authorRecognisers{}))
+	require.Equal(t, "Harbor Lights - Part 3", titleFromFilename("Harbor Lights - Part 3.mp3", "", authorRecognisers{}))
 	// The stored author is stripped behind a credit; with none it may be this
 	// name's own last segment read back, so the stem stays whole.
-	require.Equal(t, "Harbor Lights", titleFromFilename("Harbor Lights - Zed Writer - read by narrator.mp3", "Zed Writer"))
-	require.Equal(t, "Harbor Lights - Zed Writer", titleFromFilename("Harbor Lights - Zed Writer.mp3", "Zed Writer"))
+	require.Equal(t, "Harbor Lights", titleFromFilename("Harbor Lights - Zed Writer - read by narrator.mp3", "Zed Writer", authorRecognisers{}))
+	require.Equal(t, "Harbor Lights - Zed Writer", titleFromFilename("Harbor Lights - Zed Writer.mp3", "Zed Writer", authorRecognisers{}))
 }
