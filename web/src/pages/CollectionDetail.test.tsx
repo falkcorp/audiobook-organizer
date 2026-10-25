@@ -1,5 +1,5 @@
 // file: web/src/pages/CollectionDetail.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a9e1afd-e004-4591-8fe6-2cf5dcb3eef4
 // last-edited: 2026-10-25
 
@@ -364,13 +364,70 @@ describe('dynamic collection', () => {
     expect(screen.queryByText(/reading state of whoever is viewing/)).toBeNull();
   });
 
+  it('offers no Materialize for a per-user query: its members are never stored', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      name: 'The Long Halloween',
+      query: 'read_status:finished',
+    });
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    expect(screen.queryByRole('button', { name: 'Materialize' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/never stored, so there is nothing to materialize/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Materialize needs the/)).toBeNull();
+  });
+
+  it('keeps Materialize and its caption for a query with no per-user field', async () => {
+    renderPage('c2');
+    await screen.findByRole('link', { name: 'Test Book b1' });
+    expect(screen.getByRole('button', { name: 'Materialize' })).toBeInTheDocument();
+    expect(screen.getByText(/Materialize needs the/)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing to materialize/)).toBeNull();
+  });
+
+  it('says so when the members could not be worked out, instead of "no books match"', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      name: 'Year One',
+      query: 'read_status:finished',
+      materialized_book_ids: [],
+      members_unavailable: true,
+      members_unavailable_message:
+        'The search index is not ready, so these members could not be worked out yet.',
+    });
+    renderPage('c2');
+    expect(
+      await screen.findByText(
+        /The search index is not ready, so these members could not be worked out yet\./
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No books match this query.')).toBeNull();
+  });
+
+  it('falls back to a generic line when the server flags unavailable without a message', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      query: 'read_status:finished',
+      materialized_book_ids: [],
+      members_unavailable: true,
+    });
+    renderPage('c2');
+    expect(await screen.findByText(/could not be worked out right now/)).toBeInTheDocument();
+    expect(screen.queryByText('No books match this query.')).toBeNull();
+  });
+
   it('has no ownership or blocked-evaluation UI and never sends adopt_owner', async () => {
     m.getCollection.mockResolvedValue({ ...dynamicCol, query: 'read_status:finished' });
     m.updateCollection.mockResolvedValue(dynamicCol);
     renderPage('c2');
     await screen.findByLabelText('Query');
     expect(screen.queryByLabelText(/Take ownership/)).toBeNull();
-    fireEvent.change(screen.getByLabelText('Query'), { target: { value: 'read_status:unstarted' } });
+    fireEvent.change(screen.getByLabelText('Query'), {
+      target: { value: 'read_status:unstarted' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(m.updateCollection).toHaveBeenCalled());
     expect(m.updateCollection).toHaveBeenCalledWith('c2', { query: 'read_status:unstarted' });
