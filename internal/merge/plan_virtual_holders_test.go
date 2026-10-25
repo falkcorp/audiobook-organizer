@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_holders_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2dc80dae-a233-411b-ba47-721acf3d06b6
 // last-edited: 2026-10-25
 
@@ -48,33 +48,20 @@ func TestPickRowAtPath(t *testing.T) {
 	boom := errors.New("injected book read error")
 	rows := func(rs ...database.BookFile) []database.BookFile { return rs }
 	tests := []struct {
-		name     string
-		rows     []database.BookFile
-		arriving map[string]bool
-		books    pickBooks
-		wantRow  string // row id picked
-		arrives  bool
-		warning  bool
-		wantErr  error
-		asked    []string // books bookOf must have been asked about, in order
+		name    string
+		rows    []database.BookFile
+		books   pickBooks
+		wantRow string // row id picked
+		trashed bool   // the picked row is a trashed book's
+		warning string // substring the warning must contain; "" means no warning
+		wantErr error
+		asked   []string // books bookOf must have been asked about, in order
 	}{
 		{name: "no rows", rows: nil},
 		{
 			name:    "the target's own row wins over everything, and no book is read",
 			rows:    rows(database.BookFile{ID: "r0", BookID: "b1"}, database.BookFile{ID: "r1", BookID: "tgt"}),
 			wantRow: "r1",
-		},
-		{
-			name:     "a row of a book the combine moves anyway: nothing is planned",
-			rows:     rows(database.BookFile{ID: "r0", BookID: "b1"}, database.BookFile{ID: "r1", BookID: "abs"}),
-			arriving: map[string]bool{"abs": true},
-			arrives:  true,
-		},
-		{
-			name:     "the target's own row still beats an arriving one",
-			rows:     rows(database.BookFile{ID: "r0", BookID: "abs"}, database.BookFile{ID: "r1", BookID: "tgt"}),
-			arriving: map[string]bool{"abs": true},
-			wantRow:  "r1",
 		},
 		{
 			name:    "a retired row is never picked",
@@ -95,6 +82,7 @@ func TestPickRowAtPath(t *testing.T) {
 				"b1": liveBook("b1"), "b2": trashedBook("b2"),
 			}},
 			wantRow: "r1",
+			trashed: true,
 		},
 		{
 			name: "several trashed holders: the smallest (BookID, ID), whatever the order of the rows",
@@ -103,6 +91,7 @@ func TestPickRowAtPath(t *testing.T) {
 				"b2": trashedBook("b2"), "b3": trashedBook("b3"),
 			}},
 			wantRow: "r2",
+			trashed: true,
 		},
 		{
 			name: "two live holders: nothing is planned, and a warning says why",
@@ -110,7 +99,7 @@ func TestPickRowAtPath(t *testing.T) {
 			books: pickBooks{books: map[string]*database.Book{
 				"b1": liveBook("b1"), "b2": liveBook("b2"),
 			}},
-			warning: true,
+			warning: "path held by 2 live book(s) (2 row(s))",
 		},
 		{
 			name: "two rows of ONE live book are still two rows: nothing is planned",
@@ -118,14 +107,22 @@ func TestPickRowAtPath(t *testing.T) {
 			books: pickBooks{books: map[string]*database.Book{
 				"b1": liveBook("b1"),
 			}},
-			warning: true,
+			warning: "path held by 1 live book(s) (2 row(s))",
 			asked:   []string{"b1"},
 		},
 		{
 			name:    "a row whose book is gone is not moved (undo could not move it back) and not duplicated",
 			rows:    rows(database.BookFile{ID: "r0", BookID: "gone"}),
 			books:   pickBooks{books: map[string]*database.Book{}},
-			warning: true,
+			warning: "path held by 1 row(s) of books that no longer exist",
+		},
+		{
+			name: "a live holder next to a row of a gone book: the live one is not taken either",
+			rows: rows(database.BookFile{ID: "r0", BookID: "b1"}, database.BookFile{ID: "r1", BookID: "gone"}),
+			books: pickBooks{books: map[string]*database.Book{
+				"b1": liveBook("b1"),
+			}},
+			warning: "path held by 1 live book(s) (1 row(s)) and 1 row(s) of books that no longer exist",
 		},
 		{
 			name:    "a book read error is an error, never 'not trashed'",
@@ -136,14 +133,18 @@ func TestPickRowAtPath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			pick, err := pickRowAtPath(tc.rows, "tgt", tc.arriving, tc.books.bookOf)
+			pick, err := pickRowAtPath(tc.rows, "tgt", tc.books.bookOf)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tc.arrives, pick.arrives)
-			assert.Equal(t, tc.warning, pick.warning != "", "warning: %q", pick.warning)
+			assert.Equal(t, tc.trashed, pick.trashed)
+			if tc.warning == "" {
+				assert.Empty(t, pick.warning)
+			} else {
+				assert.Contains(t, pick.warning, tc.warning)
+			}
 			if tc.wantRow == "" {
 				assert.Nil(t, pick.row)
 			} else {
@@ -192,6 +193,8 @@ func TestPlanVirtualFile_PrefersATrashedHoldersRowOverALiveBystanders(t *testing
 	assert.Equal(t, trashed.ID, plan.fm.FromBookID)
 	assert.Nil(t, plan.create)
 	assert.Empty(t, plan.warning)
+	assert.Contains(t, plan.notice, trashedRow, "taking a trashed book's row is noted for the journal")
+	assert.Contains(t, plan.notice, trashed.ID)
 }
 
 // Two live books hold the path: the plan is empty, with a warning, and neither
@@ -211,7 +214,7 @@ func TestPlanVirtualFile_TwoLiveHoldersPlansNothingAndWarns(t *testing.T) {
 	assert.Nil(t, plan.create, "and no second row may be put on the file")
 	assert.Empty(t, plan.fm.FileID)
 	assert.False(t, plan.attached)
-	assert.Contains(t, plan.warning, "path held by 2 rows")
+	assert.Contains(t, plan.warning, "path held by 2 live book(s) (2 row(s))")
 	assert.Contains(t, plan.warning, target.ID)
 }
 
@@ -235,7 +238,8 @@ func TestCombineBooks_PathHeldByTwoLiveBooksIsJournaledAndLeavesThemTheirRows(t 
 	require.NoError(t, err)
 	assert.Equal(t, CombineJournalApplied, j.Status)
 	require.Len(t, j.Warnings, 1, "the ambiguity is recorded once, on the journal read back from the store")
-	assert.Contains(t, j.Warnings[0], "path held by 2 rows")
+	assert.Contains(t, j.Warnings[0], "path held by 2 live book(s) (2 row(s))")
+	assert.Contains(t, res.Warnings, j.Warnings[0], "the caller is told as well as the journal")
 	assert.Empty(t, j.SurvivorFiles, "no row was moved or created for the survivor's own file")
 
 	assert.Contains(t, viewFiles(t, store, h1.ID), row1, "the first holder keeps its row")
@@ -288,17 +292,18 @@ func TestCombineBooks_RowlessPrimaryAtAnAbsorbedBooksRowPathCombinesCleanly(t *t
 	assert.Equal(t, before, viewFiles(t, store, survivor.ID, absorbed.ID), "undo puts the row back on its book")
 }
 
-// A row of a book the combine is moving is not planned at all, so the survivor's
-// own plan no longer races the bulk move for it.
+// A path the combine's bulk move brings is not planned at all, so the survivor's
+// own plan no longer races the bulk move for it. The set is of paths, known from
+// the moved rows themselves: no lookup decides it.
 func TestPlanVirtualFile_RowOfAnArrivingBookPlansNothing(t *testing.T) {
 	store := setupTestStore(t)
 	ms := NewService(store)
 	path := "/tmp/pvh-arriving.mp3"
-	arriving, _ := seedHolder(t, store, "Absorbed with a row", path)
+	seedHolder(t, store, "Absorbed with a row", path)
 	target, err := store.CreateBook(&database.Book{ID: ulid.Make().String(), Title: "Target", FilePath: path})
 	require.NoError(t, err)
 
-	plan, err := ms.planVirtualFile(target, target.ID, map[string]bool{arriving.ID: true})
+	plan, err := ms.planVirtualFile(target, target.ID, map[string]bool{path: true})
 	require.NoError(t, err)
 	assert.Equal(t, virtualFilePlan{}, plan)
 
