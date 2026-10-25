@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-decisions-appendix.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e75847e4-760a-4d0d-8527-1eeffece31f9 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -16,3 +16,5 @@ From 2026-10-25 12:53 EDT to 2026-10-26 12:53 EDT (or until you say otherwise), 
 | D5 | 10-25 12:53 | #4140: `DiscardProgressAndPurge` still deletes the row before checking the file. Reorder it the same way? | Fix in #4140 · Follow-up PR · Leave | **Fix in #4140** | Same defect class as B-2, fix it properly |
 | D6 | 10-25 12:53 | E2E invite test: how to receive the email | Cloudflare Email Routing catch-all on jdfalk.com · Dedicated Gmail over IMAP | **Cloudflare catch-all** | No new account, scriptable |
 | D7 | 10-25 12:53 | #4155: per-user `unstarted`/negated filters read library-scale state. Add a per-user prefix-scan store method? | Add the method · Accept the scan cost | **Add the method** (pending the review's numbers) | Keeps collection reads from scaling with library size |
+| D8 | 10-25 14:35 | #4149 privacy scan: 7 strings echo real titles/transcripts (blockers), 14 more look invented but match or resemble real works (warnings), incl. a real person's name. Earlier commits also carry real titles and would land on main with a rebase merge. | Fix blockers + warnings and squash into a new PR · Fix blockers only · Fix all, keep history | **Fix all 21 and squash into a new PR that supersedes #4149** | Your rule bans even word-swapped titles; a rebase merge would publish the old commits |
+| D9 | 10-25 14:35 | #4136 re-review: 0 blockers, 4 should-fix (combine during startup warmup warns instead of refusing; regroup hides warnings; undo puts a file on the wrong book when the original owner was purged; untested claim). Merge now or fix first? | Fix all should-fix items first · Merge now, follow up | **Fix first** | It runs on prod without a flag, so standing rule says should-fixes before merge |
