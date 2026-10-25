@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_review_shapes_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d2e8a1c-47b3-4c90-9e6f-3a1b7c0d8e24
 // last-edited: 2026-10-25
 
@@ -837,7 +837,7 @@ func TestJunkTitleFixer_SeriesEndingTheTitleIsNotCutOff(t *testing.T) {
 // apart from this book: it narrates another live book that has a real title, and
 // it is not a live title itself. The narrator field is filled from the same file
 // name and tags the stem came from (the AI filename parse, the artist tag), so a
-// subtitle or a character's name in "Harbor Lights - Marlow Finch" can land in
+// subtitle or a character's name in "Saltmarsh Row - Marlow Finch" can land in
 // it, and the strip would then cut the subtitle off the title.
 func TestJunkTitleFixer_NarratorIsIndependentOnlyWhenItNarratesElsewhere(t *testing.T) {
 	l := newEvLib(t)
@@ -850,7 +850,7 @@ func TestJunkTitleFixer_NarratorIsIndependentOnlyWhenItNarratesElsewhere(t *test
 			path: "/lib/" + name + "/" + stem + ".mp3", files: []string{"/lib/" + name + "/" + stem + ".mp3"}})
 	}
 	// 1: the narrator is a subtitle the AI parse labelled: no other book.
-	junk("subtitle-narrator", "Marlow Finch", "Harbor Lights - Marlow Finch")
+	junk("subtitle-narrator", "Marlow Finch", "Saltmarsh Row - Marlow Finch")
 	// 2: the same name on another book with a real title: a narrator.
 	narrated("elsewhere", "Wren Ostrander", "Tides Told Four Times")
 	junk("real-narrator", "Wren Ostrander", "Harbor Lights - Wren Ostrander")

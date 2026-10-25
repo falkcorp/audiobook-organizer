@@ -82,10 +82,13 @@ apply; the change is in the plan step.
   "series and number" whatever separates the word from its number ("CD-2",
   "Disc-02", "Side A", "Vol.III"), while a series that merely contains one of the
   words ("Side Effects", "Part-Time Tides") still is a series.
-- The junk-title tests and the comments in the fixer no longer quote published
-  book titles, authors, narrators or library paths (including the variants with
-  one word swapped); they use made-up names. Names the code itself matches on
-  (publisher idents, the Doctor Who range, Bible book names) stay.
+- The junk-title tests and the comments in the fixer no longer use the titles,
+  authors and library paths of published works that earlier revisions of the
+  fixtures carried, nor the same titles with a word swapped. The replacements
+  are made-up word combinations that keep only the shape a test needs ("Series:
+  Title, Book 2", a bare number, a comma title). Only the names the code itself
+  matches on stay: publisher idents, the Big Finish, Doctor Who and Torchwood
+  owner-manual brands (with invented episode names), and Bible book names.
 
 Checked offline by replaying the 2026-10-23 plan's rows through the new string
 filters (no live library, so the library-author rule had no live-title guard and

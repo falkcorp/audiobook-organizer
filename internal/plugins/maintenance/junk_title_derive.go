@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive.go
-// version: 2.2.3
+// version: 2.2.4
 // guid: 6fb9129d-4c59-4097-979e-6cfe61bc6894
 // last-edited: 2026-10-25
 
@@ -117,15 +117,15 @@ func filenameHead(filename string) (head string, credited bool) {
 // whole point. Naively dropping the last " - " segment after the credit would
 // corrupt any title that legitimately contains one:
 //
-//	"Vessmir Hollow - The Quorn Warden Part 2 - read by narrator.mp3"
-//	  naive → "Vessmir Hollow - The Quorn Warden"   ✗ eats real title text
-//	  ours  → "Vessmir Hollow - The Quorn Warden Part 2"  ✓ (no author match, so
+//	"Plover Mathis - Ostler Rune Part 2 - read by narrator.mp3"
+//	  naive → "Plover Mathis - Ostler Rune"   ✗ eats real title text
+//	  ours  → "Plover Mathis - Ostler Rune Part 2"  ✓ (no author match, so
 //	                                                       only the credit goes)
 //
 // When author is known and present, both it and the credit are removed:
 //
-//	"Pellmoor - 3 - Dolmen Hush - Tamsin Verrow - read by narrator.m4b"
-//	  → "Pellmoor - 3 - Dolmen Hush"
+//	"Yondermere - 3 - Skellick Dunt - Tamsin Verrow - read by narrator.m4b"
+//	  → "Yondermere - 3 - Skellick Dunt"
 //
 // A filename carrying no credit at all is used whole, but for a trailing
 // placeholder author and a name with evidence of its own. rec (the zero value
@@ -225,7 +225,7 @@ func majorityDirOf(paths []string) string {
 //
 //  1. Multi-file book → the deepest folder segment. These are the ID3-residue
 //     cases, and the organizer already named the folder correctly:
-//     ".../Big Finish Productions/Vessmir Hollow/Vessmir Hollow - The Quorn Warden Part 2"
+//     ".../Big Finish Productions/Plover Mathis/Plover Mathis - Ostler Rune Part 2"
 //  2. The filename, parsed for the "read by" convention. This is the only
 //     evidence for the single-file cases, whose folder was named from the same
 //     bad title and is therefore useless.

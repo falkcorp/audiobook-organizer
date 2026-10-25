@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_evidence_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0b7c1d4e-93a6-4f21-8d5a-2e6f7a9c3b18
 // last-edited: 2026-10-25
 
@@ -48,7 +48,7 @@ func TestStripSeriesTail(t *testing.T) {
 		// nothing to strip
 		{"Harbor Lights", "Harbor Lights"},
 		{"Harbor Lights: A Tale of Salt", "Harbor Lights: A Tale of Salt"},
-		{"Salt, the harbor, and morning", "Salt, the harbor, and morning"},
+		{"Plank, Wren Hatch, Tobin", "Plank, Wren Hatch, Tobin"},
 		{"  Harbor Lights  ", "Harbor Lights"},
 		// only the tail
 		{"Book One of Ember Wars", ""},
@@ -228,7 +228,7 @@ func TestStripReadByCredit(t *testing.T) {
 		"Foreword - 1987 Harbor Lights - read by narrator": "Foreword - 1987 Harbor Lights",
 		"41.Chapter 9 - 12) Tides - read by narrator":      "41.Chapter 9 - 12) Tides",
 		"Harbor Lights":      "Harbor Lights",
-		"Read by Moonlight":  "Read by Moonlight",
+		"Read by Quillgrass": "Read by Quillgrass",
 		"Tides (Unabridged)": "Tides (Unabridged)",
 	}
 	for in, want := range cases {
@@ -301,7 +301,7 @@ func TestSeriesNumberRefusal(t *testing.T) {
 		{"series is a spaced N of M", "3 of 12", "03", seq(3), nil, "not a real series name"},
 		{"disc with an underscore", "Ember Wars", "CD_01", seq(1), nil, "position inside a book"},
 		{"track of a total, spaced", "Ember Wars", "3 of 19", seq(3), nil, "position inside a book"},
-		{"series is the book's folder", "Prince Tides", "03", seq(3), []string{"Prince Tides"}, "own folder or title"},
+		{"series is the book's folder", "Quimby Gutters", "03", seq(3), []string{"Quimby Gutters"}, "own folder or title"},
 	}
 	for _, c := range cases {
 		b := database.BookCore{Title: c.title, SeriesSequence: c.seq}
@@ -696,7 +696,7 @@ func TestJunkTitleFixer_ProviderTitleWithJunkAuthor(t *testing.T) {
 	// the provider title and the transcription agree: accepted although the
 	// recorded author cannot be compared with the stored one
 	l.add(evBook{name: "agrees-with-transcription", title: "read by narrator", author: &junk.ID, path: "/lib/Books/zz.mp3",
-		files: []string{"/lib/Books/zz.mp3"}, providerTitle: "Quillow Keeper One", providerAuthor: "Zed Writer", transcribed: "Quillow Keeper One"})
+		files: []string{"/lib/Books/zz.mp3"}, providerTitle: "Wumbo Spindle Eleven", providerAuthor: "Zed Writer", transcribed: "Wumbo Spindle Eleven"})
 	// the provider title extends the folder with a subtitle: accepted
 	l.add(evBook{name: "agrees-with-folder", title: "read by narrator", author: nil, path: folder("Real Folder")[0],
 		files: folder("Real Folder"), providerTitle: "Real Folder: The Sequel", providerAuthor: "Zed Writer"})
@@ -715,7 +715,7 @@ func TestJunkTitleFixer_ProviderTitleWithJunkAuthor(t *testing.T) {
 
 	r := rows["agrees-with-transcription"]
 	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-	require.Equal(t, "Quillow Keeper One", r.Proposed["title"])
+	require.Equal(t, "Wumbo Spindle Eleven", r.Proposed["title"])
 	require.Contains(t, r.Reason, "proposed from provider_value")
 
 	r = rows["agrees-with-folder"]

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-25
 
@@ -229,11 +229,11 @@ type junkIndex struct {
 
 // junkWorkDir is the folder that names the work a book path belongs to: the
 // book's folder (the file's folder for a file path), climbing past up to two
-// disc/part/chapter-number folders ("Quillon/CD1", the organizer-moved
-// "Quillon/02/98/98.mp3").
+// disc/part/chapter-number folders ("Brosk/CD1", the organizer-moved
+// "Brosk/02/98/98.mp3").
 //
 // A number folder named like the book's own title is that book's folder, not
-// a chapter folder: "Kelley Armstrong/13/13.m4b" is the book "13" filed
+// a chapter folder: "Perpetua Gamble/13/13.m4b" is the book "13" filed
 // author/title, so the climb stops there — unless another number folder sits
 // right above it, which is the organizer-moved chapter shape ("02/98/98").
 func junkWorkDir(p, title string) string {
@@ -833,15 +833,15 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		// 2026-10-03). The book only gets here because its STORED title
 		// fails the junk classifier. Measured on prod that day over the
 		// 1,233 rows the old skipped_provider_title rule held: in 1,216 the
-		// recorded value is a DIFFERENT title ("85 - Embers of the Orchard…"
-		// has "Embers of the Orchard: A LitRPG Adventure" on record), because
+		// recorded value is a DIFFERENT title ("85 - Plumb Cellar…"
+		// has "Plumb Cellar: A Moonlit Quest Tale" on record), because
 		// a scheduled fetch records the provider's candidate and then only
 		// fills empty fields, so the junk title stayed. The stored title is
 		// file-derived and the recorded value is evidence, weighed below
 		// (the fetch searched on the junk title, and its hit can be another
-		// book: "01 The Lantern of Moths 01-34" has "Gloamreach" on record).
+		// book: "01 Whitlow Gantry 01-34" has "Gloamreach" on record).
 		// In 11 the recorded title IS the stored one, by the letters and
-		// digits ("4-20 to Vellmar" is "4:20 to Vellmar"): a provider may have
+		// digits ("7-45 Tallow Gantry" is "7:45 Tallow Gantry"): a provider may have
 		// answered with it, or returned no title at all (the fetch then
 		// records the book's own). Those are repaired too, never at low risk.
 		if states[i].HasProviderValue() {
@@ -993,7 +993,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	var props []proposal
 	// An embedded kind still carries (or sits in a folder that names) the
 	// real title; the cached candidate search ran on the junk title and its
-	// top hit is often the series' first book ("01 - Quillon" → "Zarvane"), so
+	// top hit is often the series' first book ("01 - Brosk" → "Plimmock"), so
 	// for an embedded kind a candidate must agree with that evidence to count
 	// at all.
 	embedded := kind.HasRealTitleInside() || kind.IsChapterKind()
@@ -1052,7 +1052,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		// Book 3, Harbor Lights"), is not part of the title.
 		folderTitle = stripRecordedSeries(folderTitle, seriesName, liveTitle)
 	}
-	// A folder named like the book's series ("The Lanternfall Ledger/") says
+	// A folder named like the book's series ("The Hobblewick Sequence/") says
 	// which series, not which book: it is neither evidence nor a proposal.
 	if folderSrc == junkSrcFolder && b.SeriesID != nil && idx.series[*b.SeriesID] != "" &&
 		strings.EqualFold(strings.TrimSpace(folderTitle), strings.TrimSpace(idx.series[*b.SeriesID])) {
@@ -1069,7 +1069,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		folder, _ = accept(folderTitle, folderSrc)
 	}
 	// weakFolder: a filename stem that looks like a rip's file name
-	// ("pb1", "marl_hollow_64kbps", "final", "audible_download_2019"), not a
+	// ("pb1", "quonk_brasswhistle_64kbps", "final", "audible_download_2019"), not a
 	// title. It never outranks a transcription or candidate.
 	weakFolder := folder != "" && folderSrc == junkSrcFilename && isWeakFileStem(folder)
 
@@ -1115,7 +1115,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	provided, providerRefusal, providerSkip, providerEchoesPath := "", "", "", ""
 	if fetchedTitle != "" && !providerSaidIt {
 		a := strings.TrimSpace(author)
-		// A catalog title carries its edition in brackets ("Marl
+		// A catalog title carries its edition in brackets ("Quonk
 		// (Unabridged)"): the marker is dropped, the title kept. The
 		// folder rule's formatWordRe is not used here, it would refuse
 		// real catalog titles ("Magnum Opus", "The Abridged History of…").
@@ -1215,7 +1215,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// stripped title, the folder, a filename stem that reads like a title.
 	// When it and a transcription, candidate or provider value disagree, neither is
 	// proposed: each side has a known way to be wrong ("New Folder (2)",
-	// "Pennywhistle" vs "Audible Studios presents", a series' first book), and
+	// "Cobbleknock" vs "Audible Studios presents", a series' first book), and
 	// picking one would write the other's mistake half the time.
 	type evidence struct{ source, title string }
 	var pathEv []evidence
@@ -1227,7 +1227,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		pathEv = append(pathEv, evidence{folderSrc, folder})
 	} else if weakFolder {
 		// A weak stem is never proposed, but one that still names something
-		// ("The_Gorse_Tally", "Ox", "7K36") vetoes evidence that disagrees
+		// ("The_Blimm_Orchard", "Ox", "4Z59") vetoes evidence that disagrees
 		// with it. A stem of rip tokens only ("pb1", "final",
 		// "audible_download_2019") says nothing and vetoes nothing.
 		if clean, ok := weakStemVeto(folder); ok {
@@ -1247,15 +1247,15 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		// prove is that a catalog work with that spelling exists, which is the
 		// evidence that separates a real title from a transcription that
 		// misheard it ("Branoch" for "Brannoch"), appended the series
-		// ("Marrow Agent An Agent Tolliver novel") or caught a fragment ("ated").
+		// ("Pomfret Gate A Sprocket Hume novel") or caught a fragment ("ated").
 		// 32 number-leading books on prod sat in needs-manual for exactly this,
 		// 2026-10-03. The proposal is the one the fixer would have made with no
 		// transcription at all; what is given up is the warning, so the row is
 		// never low risk and the reason names what was overruled.
 		//
 		// Exact, not titleAgreesWithAny: its "plus a subtitle" form is the shape
-		// of the first-book-of-the-series wrong hit (folder "Gorsemoor", provider
-		// "Gorsemoor: The Tally Throne", transcription "The Cistern of Dusk"),
+		// of the first-book-of-the-series wrong hit (folder "Dremmick", provider
+		// "Dremmick: Soot Parliament", transcription "Willowby Thrum"),
 		// where the transcription is the only source that has the book right.
 		//
 		// And not when the transcription has support of its own: a refused
@@ -1330,7 +1330,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if folder != "" {
 		// A folder reached by climbing past a chapter folder that sits right
 		// under a library or import root is as likely the AUTHOR folder
-		// ("/imports/dl/Linnea Garrow/01/a.mp3"): only a transcription or
+		// ("/imports/dl/Ines Pargeter/01/a.mp3"): only a transcription or
 		// candidate naming the same work makes it a title.
 		climbed := titleDir != "" && titleDir != filepath.Dir(paths[0])
 		if climbed && slices.Contains(idx.roots, filepath.Dir(titleDir)) {
@@ -1417,7 +1417,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	r.Risk = best.risk
 	if providerSaidIt || providerUnreadable || providerRefusal != "" {
 		// The recorded title is this very title (it may be a real one the
-		// classifier misreads: "4-20 to Vellmar"), cannot be read, or names
+		// classifier misreads: "7-45 Tallow Gantry"), cannot be read, or names
 		// something else: a provider on record against the proposal is a
 		// reason for a person to look. Never a low-risk row.
 		r.Risk = repairs.RiskReview
@@ -1460,10 +1460,10 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 // titleAgreesWithAny reports whether a candidate title names the same work
 // as any of the evidence titles: equal sort keys, or one is the other plus a
-// subtitle after ":", " (", " - " or "," ("Quillon" vs "Quillon: Inheritance,
-// Book 2"). A longer title that merely starts with the word ("Quillon Son")
+// subtitle after ":", " (", " - " or "," ("Brosk" vs "Brosk: Tallowmere,
+// Book 2"). A longer title that merely starts with the word ("Brosk Minor")
 // is a different work. Apostrophes are ignored: a folder cannot always hold
-// one ("Tarnwicks Foundling" is "Tarnwick's Foundling").
+// one ("Dunnocks Larder" is "Dunnock's Larder").
 func titleAgreesWithAny(cand string, evidence []string) bool {
 	c := util.TitleSortKey(dropApostrophes(cand))
 	if c == "" {
@@ -1518,13 +1518,14 @@ var kbpsTokenRe = regexp.MustCompile(`(?i)^\d+kbps$`)
 
 // weakStemVeto decides whether a weak filename stem still names a work, and
 // returns it cleaned for the conflict check: underscores, dots and hyphens
-// become spaces ("The.Gorse.Tally", "marl-hollow-64kbps") and rip tokens are trimmed off both ends ("marl_hollow_64kbps" → "marl
-// hollow"; a bare year at an end goes too while another word remains).
-// Tokens inside the stem stay, so "The_Gorse_Tally" keeps its "Gorse".
+// become spaces ("The.Blimm.Orchard", "quonk-brasswhistle-64kbps") and rip
+// tokens are trimmed off both ends ("quonk_brasswhistle_64kbps" → "quonk
+// brasswhistle"; a bare year at an end goes too while another word remains).
+// Tokens inside the stem stay, so "The_Blimm_Orchard" keeps its "Blimm".
 // It vetoes when the cleaned stem keeps a word of three or more letters
 // that is no rip token, or when it is one short word that reads like a
 // title rather than an abbreviation: a vowel ("Ox") or a leading digit
-// with a letter ("7K36"), not "pb1" or "zz". A stem of rip tokens only
+// with a letter ("4Z59"), not "pb1" or "zz". A stem of rip tokens only
 // ("final", "audible_download_2019") vetoes nothing.
 func weakStemVeto(stem string) (string, bool) {
 	words := strings.FieldsFunc(stem, func(r rune) bool {
@@ -1601,14 +1602,14 @@ type junkProposalCheck struct {
 var (
 	// formatWordRe: a container, format or edition word, a side/tape/disc
 	// position or range. A folder or filename carrying one names a rip, not
-	// a work ("Marl (Unabridged)", "Marl MP3", "Side A", "Tape 3", "CD01-02").
+	// a work ("Quonk (Unabridged)", "Quonk MP3", "Side A", "Tape 3", "CD01-02").
 	// chapterHeadingRe: a chapter/part heading with a number or spelled
 	// number, or a bare prologue/epilogue heading followed by more words
-	// ("Prologue Tessa Vorn"). "Prologue to Mooncalf" is a title: the word
+	// ("Prologue Tessa Vorn"). "Prologue to Gribbling" is a title: the word
 	// must be followed by a capitalised name or a dash, not a lowercase word.
 	chapterHeadingRe = regexp.MustCompile(`(?i)^(?:chapter|chap|ch|part|pt)\.?[\s_\-]*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)(?:[^\pL\d]|$)`)
 	// prologueHeadingRe is case-sensitive on purpose: the capital after the
-	// word is what separates "Prologue Tessa Vorn" from "Prologue to Mooncalf".
+	// word is what separates "Prologue Tessa Vorn" from "Prologue to Gribbling".
 	prologueHeadingRe = regexp.MustCompile(`^(?:[Pp]rologue|[Ee]pilogue|[Ii]ntroduction)(?:\s*[-–:.]\s*\S|\s+\p{Lu})`)
 	// romanChapterHeadingRe: "CHAPTER XIII …", "Part III <name>": a heading
 	// with a roman numeral. Case-sensitive, and a lone I, V or X only before
@@ -1618,7 +1619,7 @@ var (
 	publisherIdentRe = regexp.MustCompile(`(?i)^(?:this is audible|audible (?:presents|studios)|(?:from\s+)?(?:tantor|blackstone|brilliance|podium|hachette|recorded books|simon and schuster|simon & schuster|penguin|random house|harper\s*(?:audio|collins)?|macmillan|graphic\s*audio|full cast audio|books on tape|listening library|audible|recorded books)\b.*\b(?:presents?|resents|production|audio\b.*,)|.*\ba division of\b)`)
 	formatWordRe     = regexp.MustCompile(`(?i)\b(?:mp3|m4b|m4a|aac|flac|ogg|opus|wma|unabridged|abridged|side\s+[a-d0-9]|tape\s*\d+|(?:cd|disc|disk)\s*\d+(?:\s*-\s*\d+)?)\b`)
 	// idCodeRe: an ASIN (B0 + 8), an ISBN-10/13, or a trailing bracketed
-	// 10-character id ("Marl [B0ZZ99QQ11]").
+	// 10-character id ("Quonk [B0ZZ99QQ11]").
 	idCodeRe = regexp.MustCompile(`(?i)\bB0[0-9A-Z]{8}\b|\b(?:97[89][- ]?)?\d{9}[\dX]\b|\[[0-9A-Z]{10}\]\s*$`)
 	// genericStems are tool-output stems that name no work.
 	genericStems = map[string]bool{"merged": true, "output": true, "book": true, "audio": true, "audiobook": true,
@@ -1657,7 +1658,7 @@ func (pc junkProposalCheck) refusal(c, source string) string {
 		// the publisher's ident or the opening sentence of the text, not the
 		// title. Measured on prod 2026-10-03: the plan proposed "Chapter 26
 		// The apartment was in Wexmoor, a town at" and "Tantor audio
-		// presents, The Legend of Marl Hollow" as book titles.
+		// presents, The Legend of Quonk Brasswhistle" as book titles.
 		//
 		// And the announcer, the format word and the sentence: "an unabridged
 		// recording of X", "<studio> presents, X", "You're listening to X",
@@ -1844,8 +1845,8 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 		}
 	}
 	sort.Strings(keys)
-	// The organizer-moved chapter: author "Quillon", filed at
-	// Quillon/02/98/98.mp3 (work folder "Quillon", junkWorkDir). The author
+	// The organizer-moved chapter: author "Brosk", filed at
+	// Brosk/02/98/98.mp3 (work folder "Brosk", junkWorkDir). The author
 	// named like the work folder is the shape a chapter file parsed as its
 	// own book gets. Only the work folder: the folder above it is the author
 	// folder of every correctly filed book. And not for a single file that
@@ -2007,7 +2008,7 @@ func legacyStateUnreadable(reader database.MetadataFieldStateReader, bookID stri
 
 // junkLettersKey is a title reduced to its letters and digits, NFC and lower
 // case: what two spellings of one title share whatever punctuation, spacing
-// or Unicode form each uses ("4-20 to Vellmar", "4:20 to Vellmar").
+// or Unicode form each uses ("7-45 Tallow Gantry", "7:45 Tallow Gantry").
 func junkLettersKey(title string) string {
 	var sb strings.Builder
 	for _, r := range norm.NFC.String(strings.ToLower(title)) {

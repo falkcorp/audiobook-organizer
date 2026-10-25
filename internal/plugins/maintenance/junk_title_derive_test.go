@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_derive_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 51758d2b-4a45-4c0b-9bd0-5b22cc579c19
 // last-edited: 2026-10-25
 
@@ -15,8 +15,8 @@ import (
 // whenever the title itself contains " - " — which, for series audiobooks, is
 // most of them. The author name is what makes the strip safe.
 func TestTitleFromFilename_DoesNotEatTitleTextWhenAuthorIsAbsent(t *testing.T) {
-	got := titleFromFilename("Vessmir Hollow - The Quorn Warden Part 2 - read by narrator.mp3", "", authorRecognisers{})
-	want := "Vessmir Hollow - The Quorn Warden Part 2"
+	got := titleFromFilename("Plover Mathis - Ostler Rune Part 2 - read by narrator.mp3", "", authorRecognisers{})
+	want := "Plover Mathis - Ostler Rune Part 2"
 	if got != want {
 		t.Fatalf("got %q, want %q — with no author to match, only the credit may be removed", got, want)
 	}
@@ -25,10 +25,10 @@ func TestTitleFromFilename_DoesNotEatTitleTextWhenAuthorIsAbsent(t *testing.T) {
 // With the author known, both the author and the credit come off.
 func TestTitleFromFilename_StripsAuthorAndCredit(t *testing.T) {
 	cases := []struct{ file, author, want string }{
-		{"Pellmoor - 3 - Dolmen Hush - Tamsin Verrow - read by narrator.m4b",
-			"Tamsin Verrow", "Pellmoor - 3 - Dolmen Hush"},
-		{"Glimmerfen - 1 - Ossik Tarn (Ossik Two) - Corwin P. Ashby - read by narrator.m4b",
-			"Corwin P. Ashby", "Glimmerfen - 1 - Ossik Tarn (Ossik Two)"},
+		{"Yondermere - 3 - Skellick Dunt - Tamsin Verrow - read by narrator.m4b",
+			"Tamsin Verrow", "Yondermere - 3 - Skellick Dunt"},
+		{"Crumbleton - 1 - Hobnail Drum (Hobnail Reprise) - Nettie V. Fosk-Bell - read by narrator.m4b",
+			"Nettie V. Fosk-Bell", "Crumbleton - 1 - Hobnail Drum (Hobnail Reprise)"},
 	}
 	for _, c := range cases {
 		if got := titleFromFilename(c.file, c.author, authorRecognisers{}); got != c.want {
@@ -39,8 +39,8 @@ func TestTitleFromFilename_StripsAuthorAndCredit(t *testing.T) {
 
 // A filename with no credit at all is a title in its own right.
 func TestTitleFromFilename_NoCreditUsesWholeStem(t *testing.T) {
-	got := titleFromFilename("Brindlewick Squad_ Code Tessel Season.m4b", "Some Author", authorRecognisers{})
-	if got != "Brindlewick Squad_ Code Tessel Season" {
+	got := titleFromFilename("Lumbergrove Pack_ Vesper Plink Quarter.m4b", "Some Author", authorRecognisers{})
+	if got != "Lumbergrove Pack_ Vesper Plink Quarter" {
 		t.Fatalf("got %q, want the whole stem", got)
 	}
 }
@@ -48,7 +48,7 @@ func TestTitleFromFilename_NoCreditUsesWholeStem(t *testing.T) {
 // Author matching is case-insensitive, because the tag case and the filename
 // case disagree constantly in this library.
 func TestTitleFromFilename_AuthorMatchIsCaseInsensitive(t *testing.T) {
-	got := titleFromFilename("Some Book - CORWIN P. ASHBY - read by narrator.mp3", "corwin p. ashby", authorRecognisers{})
+	got := titleFromFilename("Some Book - NETTIE V. FOSK-BELL - read by narrator.mp3", "nettie v. fosk-bell", authorRecognisers{})
 	if got != "Some Book" {
 		t.Fatalf("got %q, want %q", got, "Some Book")
 	}
@@ -69,14 +69,14 @@ func TestStripAudioExt_LeavesNonAudioSuffixesAlone(t *testing.T) {
 // like "01 Big Finish Ident.mp3" and would be worse than useless).
 func TestDeriveJunkTitleReplacement_MultiFileUsesFolder(t *testing.T) {
 	paths := []string{
-		"/lib/Big Finish Productions/Vessmir Hollow/Vessmir Hollow - The Quorn Warden Part 2/01 Big Finish Ident.mp3",
-		"/lib/Big Finish Productions/Vessmir Hollow/Vessmir Hollow - The Quorn Warden Part 2/02 The Quorn Warden Part 2 Track 01.mp3",
+		"/lib/Big Finish Productions/Plover Mathis/Plover Mathis - Ostler Rune Part 2/01 Big Finish Ident.mp3",
+		"/lib/Big Finish Productions/Plover Mathis/Plover Mathis - Ostler Rune Part 2/02 Ostler Rune Part 2 Track 01.mp3",
 	}
 	got, method, ok := deriveJunkTitleReplacement("Big Finish Ident", "Big Finish Productions", paths, authorRecognisers{})
 	if !ok {
 		t.Fatal("expected a derivation")
 	}
-	if got != "Vessmir Hollow - The Quorn Warden Part 2" {
+	if got != "Plover Mathis - Ostler Rune Part 2" {
 		t.Fatalf("title = %q, want the folder name", got)
 	}
 	if method != "folder" {
@@ -88,13 +88,13 @@ func TestDeriveJunkTitleReplacement_MultiFileUsesFolder(t *testing.T) {
 // filename is the only evidence, and the folder must not be used.
 func TestDeriveJunkTitleReplacement_SingleFileUsesFilenameWhenFolderIsPoisoned(t *testing.T) {
 	paths := []string{
-		"/lib/Pellmoor/read by narrator/Pellmoor - 3 - Dolmen Hush - Tamsin Verrow - read by narrator.m4b",
+		"/lib/Yondermere/read by narrator/Yondermere - 3 - Skellick Dunt - Tamsin Verrow - read by narrator.m4b",
 	}
 	got, method, ok := deriveJunkTitleReplacement("read by narrator", "Tamsin Verrow", paths, authorRecognisers{})
 	if !ok {
 		t.Fatal("expected a derivation")
 	}
-	if got != "Pellmoor - 3 - Dolmen Hush" {
+	if got != "Yondermere - 3 - Skellick Dunt" {
 		t.Fatalf("title = %q, want the filename-derived title", got)
 	}
 	if method != "filename" {
@@ -106,8 +106,8 @@ func TestDeriveJunkTitleReplacement_SingleFileUsesFilenameWhenFolderIsPoisoned(t
 // rather than accept the poisoned folder name.
 func TestDeriveJunkTitleReplacement_RejectsJunkFolderAndFallsThrough(t *testing.T) {
 	paths := []string{
-		"/lib/Pellmoor/read by narrator/Pellmoor - 3 - Dolmen Hush - Tamsin Verrow - read by narrator.m4b",
-		"/lib/Pellmoor/read by narrator/Pellmoor - 3 - Dolmen Hush.m4b",
+		"/lib/Yondermere/read by narrator/Yondermere - 3 - Skellick Dunt - Tamsin Verrow - read by narrator.m4b",
+		"/lib/Yondermere/read by narrator/Yondermere - 3 - Skellick Dunt.m4b",
 	}
 	got, _, ok := deriveJunkTitleReplacement("read by narrator", "Tamsin Verrow", paths, authorRecognisers{})
 	if !ok {
@@ -116,8 +116,8 @@ func TestDeriveJunkTitleReplacement_RejectsJunkFolderAndFallsThrough(t *testing.
 	if IsJunkTitle(got) {
 		t.Fatalf("derived another junk title: %q", got)
 	}
-	if got != "Pellmoor - 3 - Dolmen Hush" {
-		t.Fatalf("title = %q, want %q", got, "Pellmoor - 3 - Dolmen Hush")
+	if got != "Yondermere - 3 - Skellick Dunt" {
+		t.Fatalf("title = %q, want %q", got, "Yondermere - 3 - Skellick Dunt")
 	}
 }
 
@@ -189,7 +189,7 @@ func TestIsJunkTitle(t *testing.T) {
 			t.Errorf("IsJunkTitle(%q) = false, want true", s)
 		}
 	}
-	for _, s := range []string{"Pellmoor", "The Intro Files", ""} {
+	for _, s := range []string{"Yondermere", "The Intro Files", ""} {
 		if IsJunkTitle(s) {
 			t.Errorf("IsJunkTitle(%q) = true, want false", s)
 		}
@@ -202,7 +202,7 @@ func TestIsJunkTitle(t *testing.T) {
 func TestDeriveJunkTitleReplacement_NoHopOutOfAClassifierJunkFolder(t *testing.T) {
 	for _, paths := range [][]string{
 		{"/lib/Chapter 1/x.mp3"},
-		{"/lib/Read by Moonlight/x.mp3"},
+		{"/lib/Read by Quillgrass/x.mp3"},
 	} {
 		if got, method, ok := deriveJunkTitleReplacement("intro", "", paths, authorRecognisers{}); ok {
 			t.Fatalf("%v: derived %q via %s, want nothing", paths, got, method)
