@@ -1,5 +1,5 @@
 // file: internal/merge/retired_shell.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c1d9e42-8a35-4b60-95f1-d3e8a02b6c74
 // last-edited: 2026-10-24
 
@@ -28,16 +28,6 @@ import (
 // RevertBookToVersion) returns the same sentinel, so a caller's check and the
 // primitive's refusal are one error.
 var ErrBookIsRetiredShell = database.ErrBookIsRetiredShell
-
-// RetiredRowsHeldFor returns how many retired book_file rows, across every
-// holder, belong to a retired version made from shellID. It fails closed: a
-// read error is returned, never treated as zero, and so is a store that cannot
-// read retired rows (database.ErrRetiredReaderUnavailable) unless it declares
-// that it never holds one (database.NoRetiredBookFiles). See
-// database.RetiredRowsHeldFor.
-func RetiredRowsHeldFor(store any, shellID string) (int, error) {
-	return database.RetiredRowsHeldFor(store, shellID)
-}
 
 // RefuseRetiredShell returns an error wrapping ErrBookIsRetiredShell, naming
 // the row count and what to do instead, when shellID still has retired

@@ -1,5 +1,5 @@
 // file: internal/merge/retired_shell_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d8b0c63-1e27-4a95-b3f8-6c19e7a02d54
 // last-edited: 2026-10-24
 
@@ -44,7 +44,7 @@ func TestRestoreFromTrash_RefusesARetireShell(t *testing.T) {
 	// The holder is live while rows are retired onto it.
 	require.NoError(t, s.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{rows[0].ID}, SourceBookID: "shell"}}, "holder", "rv-shell"))
 
-	n, err := RetiredRowsHeldFor(s, "shell")
+	n, err := database.RetiredRowsHeldFor(s, "shell")
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 
@@ -62,7 +62,7 @@ func TestRestoreFromTrash_RefusesARetireShell(t *testing.T) {
 
 	// A shell whose retired rows went back (unretire) holds nothing.
 	require.NoError(t, s.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rows[0].ID}, SourceBookID: "holder"}}, "shell", "rv-shell", nil))
-	n, err = RetiredRowsHeldFor(s, "shell")
+	n, err = database.RetiredRowsHeldFor(s, "shell")
 	require.NoError(t, err)
 	require.Zero(t, n)
 	res, err = RestoreFromTrash(s, "shell", nil, nil)
