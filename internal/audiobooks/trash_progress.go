@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-28
 
@@ -619,8 +619,8 @@ var ErrPurgeUndoPossible = errors.New("this book is still needed by an undo that
 // not soft-deleted. Nothing was changed.
 var ErrNotInTrash = errors.New("audiobook is not in the trash")
 
-// ErrAudiobookNotFound is returned by DiscardProgressAndPurge for an id with
-// no book row.
+// ErrAudiobookNotFound is returned by DiscardProgressAndPurge and
+// RestoreAudiobook for an id with no book row.
 var ErrAudiobookNotFound = errors.New("audiobook not found")
 
 // ErrAuditUnavailable is returned by DiscardProgressAndPurge when there is
