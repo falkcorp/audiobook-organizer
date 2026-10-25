@@ -1,5 +1,5 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
 // last-edited: 2026-10-25
 
@@ -60,11 +60,14 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/:id/external-ids", s.perm(auth.PermLibraryView), audiobooksH.GetAudiobookExternalIDs)
 	protected.POST("/audiobooks/:id/extract-track-info", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ExtractTrackInfo)
 	protected.POST("/audiobooks/:id/relocate", s.perm(auth.PermLibraryOrganize), audiobooksH.RelocateBookFiles)
+	// The batch routes stay on library.edit_metadata, which is right for a
+	// metadata edit. What a request does to books' place in the library needs
+	// what the single-book route for the same act needs, and the handler asks
+	// for it once it has read the body (permittedForTrashEffects): hard delete
+	// and soft delete (action "delete", marked_for_deletion=true, library_state
+	// "deleted") need library.delete, restore (action "restore",
+	// marked_for_deletion=false) needs library.organize.
 	protected.POST("/audiobooks/batch", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchUpdateAudiobooks)
-	// A batch hard delete is DELETE /audiobooks/:id?hard_delete=true N times, so
-	// the handler also requires library.delete for it once it has read the
-	// body (BatchOperations); update, soft delete and restore stay on
-	// library.edit_metadata alone.
 	protected.POST("/audiobooks/batch-operations", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchOperations)
 	protected.GET("/tags", s.perm(auth.PermLibraryView), audiobooksH.ListAllUserTags)
 	protected.GET("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryView), audiobooksH.GetBookUserTags)

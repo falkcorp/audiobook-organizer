@@ -1,9 +1,14 @@
 // file: web/src/components/BatchToolbar.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b5c6d7e8f9a0b
-// last-edited: 2026-08-19
+// last-edited: 2026-10-25
 
 import { Button, Chip, Box, Stack } from '@mui/material';
+import {
+  LIBRARY_DELETE_PERMISSION,
+  LIBRARY_ORGANIZE_PERMISSION,
+  useHasPermission,
+} from '../hooks/useLibraryPermission';
 
 export interface BatchToolbarProps {
   selectedCount: number;
@@ -46,6 +51,11 @@ export const BatchToolbar = ({
   selectedHasImport,
   selectedAudiobooksLength,
 }: BatchToolbarProps) => {
+  // Trashing needs library.delete and restoring library.organize on the server.
+  // Advisory: the buttons are disabled with the reason instead of failing after
+  // the click; the server still refuses a caller who lacks them.
+  const mayDelete = useHasPermission(LIBRARY_DELETE_PERMISSION);
+  const mayRestore = useHasPermission(LIBRARY_ORGANIZE_PERMISSION);
   if (selectedCount === 0) {
     return null;
   }
@@ -139,7 +149,12 @@ export const BatchToolbar = ({
         variant="outlined"
         color="secondary"
         onClick={onDeleteSelectedClick}
-        disabled={!selectedHasActive}
+        disabled={!selectedHasActive || !mayDelete}
+        title={
+          mayDelete
+            ? undefined
+            : "You don't have permission to move books to the trash (library.delete)."
+        }
       >
         Delete Selected
       </Button>
@@ -148,7 +163,12 @@ export const BatchToolbar = ({
         variant="outlined"
         color="success"
         onClick={onRestoreSelectedClick}
-        disabled={!selectedHasDeleted || batchRestoreInProgress}
+        disabled={!selectedHasDeleted || batchRestoreInProgress || !mayRestore}
+        title={
+          mayRestore
+            ? undefined
+            : "You don't have permission to restore books from the trash (library.organize)."
+        }
       >
         {batchRestoreInProgress ? 'Restoring...' : 'Restore Selected'}
       </Button>

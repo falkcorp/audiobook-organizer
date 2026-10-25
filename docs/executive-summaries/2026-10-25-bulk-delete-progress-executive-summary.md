@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-bulk-delete-progress-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2d6f9b84-7a13-4c5e-b0d8-e4a1c37f5962 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -43,14 +43,24 @@ one check, so they cannot disagree about what counts as "still has files".
   to move them. Before, such a book passed the first look, had its progress
   moved, and was then refused.
 - The purge of trashed books (the nightly clean-up and "discard progress and
-  purge") does the same last-moment check before it moves any progress.
+  purge") does the same last-moment check before it moves any progress, and its
+  very first look at the files now uses the shared check too. A trashed book that
+  has only older-version files is refused before anything about it is touched, and
+  the nightly report counts each book once.
 - If a file does slip in after that last check, the message now says plainly that
   the progress was moved to another copy and the book was kept, instead of saying
   nothing was deleted.
 - Bulk hard delete now needs the "delete" permission, the same as deleting one
   book. Before, anyone allowed to edit metadata could permanently delete books
-  through the bulk route. Updating, soft deleting and restoring in bulk are
-  unchanged.
+  through the bulk route.
+- Moving books to the trash in bulk now needs the "delete" permission, and taking
+  them out of the trash in bulk needs the "organize" permission, the same as doing
+  it to one book. Before, anyone allowed to edit metadata could trash or restore
+  books in bulk, on both bulk routes. Ordinary bulk edits of titles, authors and
+  the like still need only the edit permission. The library page now greys out
+  "Delete Selected" and "Restore Selected" for people who lack the permission and
+  says which one is missing, and shows the server's message if a bulk action is
+  refused.
 - Deleting a single book now does the same last-moment check. Before, it
   looked at the files once, then took the protected step without looking again,
   so a file attached in that gap could still end with the progress moved and the
@@ -61,7 +71,9 @@ one check, so they cannot disagree about what counts as "still has files".
 
 Anyone who used the bulk hard delete on books that still had files and had
 listening progress on them. The bulk delete is an API operation; the website
-does not offer it today, so the exposure was to direct API use.
+does not offer it today, so the exposure was to direct API use. The missing
+permission checks on bulk trash and restore could be used by any account that
+could edit metadata, from the website's bulk edit or directly.
 
 ## What the owner needs to do
 

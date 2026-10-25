@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-25
 
@@ -21,7 +21,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -313,6 +312,13 @@ func (h *Handler) BatchUpdateAudiobooks(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
+	// Setting marked_for_deletion or library_state "deleted" in `updates` trashes
+	// every listed book and marked_for_deletion=false restores them: the same
+	// permissions as the single-book routes (see BatchOperations), checked on
+	// the bound request about to run.
+	if !h.permittedForTrashEffects(c, req.TrashEffects()) {
+		return
+	}
 	// Fail-safe cap (internal/applycap). This is the endpoint the web UI's
 	// bulk edit actually calls (web/src/services/api.ts), so of every gate in
 	// this PR it is the one a "filter matched everything" click reaches first.
@@ -337,19 +343,14 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "no operations provided")
 		return
 	}
-	// The route needs library.edit_metadata (right for update, soft delete and
-	// restore). A hard delete is the same act as DELETE /audiobooks/:id with
-	// hard_delete, which needs library.delete, so any hard delete in the list
-	// needs it too. The check reads the request this handler just bound and is
-	// about to execute, never a second parse of the body, so what is checked
-	// is exactly what runs.
-	for _, op := range req.Operations {
-		if op.Action == "delete" && op.HardDelete {
-			if !h.permitted(c, auth.PermLibraryDelete) {
-				return
-			}
-			break
-		}
+	// The route needs library.edit_metadata, right for a metadata edit. What
+	// the request does to books' place in the library needs what the
+	// single-book routes need: hard delete and soft delete library.delete,
+	// restore library.organize. The check reads the request this handler just
+	// bound and is about to execute, never a second parse of the body, so what
+	// is checked is exactly what runs.
+	if !h.permittedForTrashEffects(c, req.TrashEffects()) {
+		return
 	}
 	// Fail-safe cap (internal/applycap). The old fixed 10,000 ceiling sat
 	// ABOVE the cap and the operation list includes hard_delete; the cap is

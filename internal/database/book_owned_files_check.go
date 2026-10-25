@@ -1,5 +1,5 @@
 // file: internal/database/book_owned_files_check.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3c9e15-0b64-4d28-8f1e-c5d2a96b4e07
 // last-edited: 2026-10-25
 
@@ -30,8 +30,9 @@ import (
 // neither is proof that the book owns rows, and neither is proof it owns
 // none.
 //
-// action names what is being refused, for the message ("hard delete",
-// "purge"); the wording tells a live row (which can be moved to another book)
+// action names what is being refused, for the message ("hard delete", which
+// is offered a soft delete as the alternative, or "purge" and "discard
+// progress and purge", which act on a book already in the trash); the wording tells a live row (which can be moved to another book)
 // from a retired one (which cannot: the generic moves refuse it with
 // ErrBookFileRetired).
 func CheckBookOwnsNoFiles(store any, bookID, action string) error {
@@ -55,8 +56,14 @@ func CheckBookOwnsNoFiles(store any, bookID, action string) error {
 	case live == 0 && retired == 0:
 		return nil
 	case retired == 0:
-		return fmt.Errorf("%s %s: %w (%d row(s)); soft-delete it instead, or move its files to another book first",
-			action, bookID, ErrBookOwnsFiles, live)
+		advice := "move its files to another book first"
+		if action == "hard delete" {
+			// A book being hard deleted is not in the trash yet; one being
+			// purged already is, so soft-deleting it is no advice.
+			advice = "soft-delete it instead, or " + advice
+		}
+		return fmt.Errorf("%s %s: %w (%d row(s)); %s",
+			action, bookID, ErrBookOwnsFiles, live, advice)
 	case live == 0:
 		return fmt.Errorf("%s %s: %w (%d retired row(s) kept for another version of the book; they cannot be moved, so it cannot be deleted while they exist)",
 			action, bookID, ErrBookOwnsFiles, retired)

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/delete_owned_files_lock_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c41e7a92-6d05-4b38-8e1f-2a9d5b073c64
 // last-edited: 2026-10-25
 
@@ -7,8 +7,10 @@ package audiobooks
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -17,10 +19,12 @@ import (
 )
 
 // gainsFileStore adds a book_file row to bookID right after chosen reads of
-// the book's files return. database.CheckBookOwnsNoFiles (the hard delete's
-// checks, the purge's check under the merge lock) reads
-// GetBookFilesIncludingRetired; the purge's first check, outside the lock,
-// reads GetBookFiles. A trigger of 0 never fires; N fires after the Nth call.
+// the book's files return. database.CheckBookOwnsNoFiles (every check: the
+// hard delete's, the purge's up front and under the merge lock, the discard's
+// two) reads GetBookFilesIncludingRetired, so afterInclRetCall counts those
+// checks in order; afterFilesCall counts plain GetBookFiles reads, which no
+// delete check makes any more. A trigger of 0 never fires; N fires after the
+// Nth call.
 type gainsFileStore struct {
 	*database.PebbleStore
 	t                  *testing.T
@@ -80,6 +84,21 @@ func retireRowInto(t *testing.T, store *database.PebbleStore, holderID string) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: shell}}, holderID, v.ID))
+}
+
+// trashBook soft-deletes an existing book the way a trashed fixture is made:
+// RetireBookFiles refuses a soft-deleted holder, so a trashed holder of only
+// retired rows is built live and trashed afterwards.
+func trashBook(t *testing.T, store *database.PebbleStore, id string) {
+	t.Helper()
+	yes := true
+	now := time.Now().Add(-time.Hour)
+	_, err := store.ModifyBook(id, func(b *database.Book) error {
+		b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now
+		b.LibraryState = new("deleted")
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 // A file row that lands after the up-front check refuses the hard delete in
@@ -206,7 +225,7 @@ func TestPurgeNow_FileGainedBeforeTheLockMovesNothing(t *testing.T) {
 	groupBook(t, store, "keep", "g1", false, true)
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
-	wrapped := &gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterFilesCall: 1}
+	wrapped := &gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 1}
 	svc := NewAudiobookService(wrapped)
 
 	res, err := svc.DeleteAudiobook(context.Background(), "dup", &DeleteAudiobookOptions{})
@@ -218,7 +237,7 @@ func TestPurgeNow_FileGainedBeforeTheLockMovesNothing(t *testing.T) {
 	require.False(t, bookGone(t, store, "dup"), "the book stays in the trash")
 	require.Equal(t, 40, userPct(t, store, u.ID, "dup"), "the source keeps its progress")
 	require.Zero(t, userPct(t, store, u.ID, "keep"), "nothing was carried to the listed copy")
-	require.GreaterOrEqual(t, wrapped.inclRC, 1, "the files were checked under the merge lock")
+	require.GreaterOrEqual(t, wrapped.inclRC, 2, "the files were checked up front and again under the merge lock")
 }
 
 // The nightly purge shares the path: the same race leaves the state where it
@@ -229,7 +248,7 @@ func TestPurgeSoftDeletedBooks_FileGainedBeforeTheLockMovesNothing(t *testing.T)
 	groupBook(t, store, "keep", "g1", false, true)
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
-	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterFilesCall: 1})
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 1})
 
 	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
 
@@ -248,14 +267,127 @@ func TestPurgeNow_LateRefusalAfterCarrySaysStateMoved(t *testing.T) {
 	groupBook(t, store, "keep", "g1", false, true)
 	groupBook(t, store, "dup", "g1", true, false)
 	u := purgeSeedProgress(t, store, "dup")
-	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 1})
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 2})
 
 	res, err := svc.DeleteAudiobook(context.Background(), "dup", &DeleteAudiobookOptions{})
 
 	require.Nil(t, res)
 	require.ErrorIs(t, err, merge.ErrStateMovedBookKept)
 	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
-	require.Contains(t, err.Error(), "listening state moved to keep")
+	require.Contains(t, err.Error(), "after its state moved to keep")
 	require.False(t, bookGone(t, store, "dup"))
 	require.Equal(t, 40, userPct(t, store, u.ID, "keep"), "the state moved before DeleteBook refused")
+}
+
+// N1: a delete that fails after the carry for a reason other than a file row
+// (here the tombstone write) also moved the state, so "Purge now" reports it
+// as ErrStateMovedBookKept too (the handler answers 500 STATE_MOVED_BOOK_KEPT:
+// not owns-files, so not 409).
+type tombstoneFailsStore struct{ *database.PebbleStore }
+
+func (s tombstoneFailsStore) CreateBookTombstone(*database.Book) error {
+	return errors.New("synthetic tombstone failure")
+}
+
+func TestPurgeNow_NonFileFailureAfterCarryAlsoSaysStateMoved(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "keep", "g1", false, true)
+	groupBook(t, store, "dup", "g1", true, false)
+	u := purgeSeedProgress(t, store, "dup")
+	svc := NewAudiobookService(tombstoneFailsStore{store})
+
+	res, err := svc.DeleteAudiobook(context.Background(), "dup", &DeleteAudiobookOptions{})
+
+	require.Nil(t, res)
+	require.ErrorIs(t, err, merge.ErrStateMovedBookKept)
+	require.NotErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.Contains(t, err.Error(), "synthetic tombstone failure")
+	require.False(t, bookGone(t, store, "dup"))
+	require.Equal(t, 40, userPct(t, store, u.ID, "keep"), "the state moved before the delete failed")
+}
+
+// N3/N4: the late-refusal text names the cause once, and the nightly purge
+// counts a book refused after the carry once (an Errors line, not also
+// "skipped: still owns book_file rows").
+func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryIsCountedOnce(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "keep", "g1", false, true)
+	groupBook(t, store, "dup", "g1", true, false)
+	purgeSeedProgress(t, store, "dup")
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 2})
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+
+	require.NoError(t, err)
+	require.Zero(t, res.SkippedOwnsFiles, "result %+v", res)
+	require.Len(t, res.Errors, 1, "result %+v", res)
+	require.Contains(t, res.Errors[0], "listening state moved to keep")
+}
+
+// The file-row refusal under the lock (nothing moved) is counted once too:
+// skipped, with no Errors line.
+func TestPurgeSoftDeletedBooks_RefusalUnderTheLockIsCountedOnce(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "keep", "g1", false, true)
+	groupBook(t, store, "dup", "g1", true, false)
+	purgeSeedProgress(t, store, "dup")
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 1})
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SkippedOwnsFiles, "result %+v", res)
+	require.Empty(t, res.Errors, "result %+v", res)
+}
+
+// R2: a trashed book holding only retired rows (DeleteBook refuses it,
+// GetBookFiles does not list the rows) with NO listening state: the nightly
+// purge refuses it up front, before the tombstone snapshot, the external-ID
+// tombstones or any delete, and counts it as skipped.
+func TestPurgeSoftDeletedBooks_RetiredOnlyStatelessBookIsRefusedBeforeAnySideEffect(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "holder", "g1", false, false)
+	retireRowInto(t, store, "holder")
+	trashBook(t, store, "holder")
+	live, err := store.GetBookFiles("holder")
+	require.NoError(t, err)
+	require.Empty(t, live, "the holder's only row is retired: GetBookFiles does not list it")
+	svc := NewAudiobookService(store)
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"holder"}, res.SkippedOwnsFilesIDs, "result %+v", res)
+	require.Zero(t, res.Purged)
+	require.Empty(t, res.Errors)
+	require.False(t, bookGone(t, store, "holder"))
+	tomb, err := store.GetBookTombstone("holder")
+	require.NoError(t, err)
+	require.Nil(t, tomb, "no tombstone snapshot was written for a book that was kept")
+}
+
+// R2: discard-progress-and-purge of a trashed book holding only retired rows
+// is refused before any user's progress is erased, in the helper's wording for
+// retired rows.
+func TestDiscardProgressAndPurge_RetiredOnlyBookIsRefusedBeforeAnythingIsCleared(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	svc.auditOverride = &fakeRecorder{}
+	groupBook(t, store, "holder", "g1", false, false)
+	retireRowInto(t, store, "holder")
+	trashBook(t, store, "holder")
+	u := purgeSeedProgress(t, store, "holder")
+	live, err := store.GetBookFiles("holder")
+	require.NoError(t, err)
+	require.Empty(t, live, "the holder's only row is retired: GetBookFiles does not list it")
+
+	_, err = svc.DiscardProgressAndPurge(context.Background(), "holder", "owner")
+
+	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.Contains(t, err.Error(), "retired")
+	require.Contains(t, err.Error(), "cannot be moved")
+	require.False(t, bookGone(t, store, "holder"))
+	require.Equal(t, 40, userPct(t, store, u.ID, "holder"), "no progress was erased")
+	tomb, err := store.GetBookTombstone("holder")
+	require.NoError(t, err)
+	require.Nil(t, tomb)
 }
