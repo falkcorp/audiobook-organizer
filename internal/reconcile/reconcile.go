@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package reconcile
 
@@ -201,6 +201,16 @@ type VersionGroupCleanupResult struct {
 	// organized library copy with its files present, so nothing was crowned
 	// and the group is left for version-group-primary-repair.
 	PrimaryHeld int `json:"primary_held"`
+	// FilesKeptReferenced counts duplicates whose book row was removed but whose
+	// file was kept because a book_file row (live or retired, of any book) still
+	// names that path: the file is that row's audio, not the duplicate's.
+	// Included in DuplicatesRemoved.
+	FilesKeptReferenced int `json:"files_kept_referenced"`
+	// PathCheckErrors counts duplicates left in place, file and row, because
+	// whether a book_file row names the duplicate's path could not be answered
+	// (fail closed): the store has no path lookup, or the lookup is not
+	// complete yet (memdb warming up). The next pass asks again.
+	PathCheckErrors int `json:"path_check_errors"`
 }
 
 // BrokenSegmentResult describes books with missing segment files.
@@ -1127,6 +1137,31 @@ func keepListed(store VersionGroupStore, groupID, keepID, rootDir string, dryRun
 	return database.ABSLibraryFilter().Matches(&row), nil
 }
 
+// errPathUnverifiable: whether a book_file row names a duplicate's path could
+// not be answered, so its file is not removed and the duplicate is kept.
+var errPathUnverifiable = errors.New("cannot verify no book_file row names the duplicate's path")
+
+// bookFileNamingPath answers whether a book_file row of ANY book names path,
+// retired rows included (BookFilesAtPath keeps them: a retired row still owns
+// the path its shell had). It returns a description of the first such row, or
+// "" when none does. Strict: a lookup that is not complete (memdb not serving)
+// or a store that has none is an error wrapping errPathUnverifiable, never "no
+// row", the same fail-closed reading as the purge's path check.
+func bookFileNamingPath(store any, path string) (string, error) {
+	lk, ok := database.AsCapability[database.BookFilePathLookup](store)
+	if !ok {
+		return "", fmt.Errorf("%w: the store has no book_file path lookup", errPathUnverifiable)
+	}
+	rows, err := database.BookFileRowsAtPathStrict(lk, path)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errPathUnverifiable, err)
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("%s is still book_file %s of book %s (%d row(s) at this path)", path, rows[0].ID, rows[0].BookID, len(rows)), nil
+}
+
 // errKeepNotListed: the kept copy is not a book ABS lists (keepListed), so a
 // duplicate's users' state is not carried onto it.
 var errKeepNotListed = errors.New("kept copy is not a book ABS lists")
@@ -1153,17 +1188,56 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 		}
 		return false
 	}
+	// The library file the duplicate would lose, and whether a book_file row
+	// still names it. Answered once, under the merge lock (a retire holds that
+	// lock, so a row cannot be keyed at this path between this lookup and the
+	// remove). With keepID it runs in the precheck, before the users' state is
+	// carried, so a lookup that cannot be answered refuses with nothing moved.
+	var (
+		pathChecked bool
+		hasFile     bool
+		namedBy     string
+	)
+	checkPath := func() error {
+		if pathChecked {
+			return nil
+		}
+		if rootDir == "" || !pathutil.IsWithin(dup.FilePath, rootDir) {
+			pathChecked = true
+			return nil
+		}
+		if _, statErr := os.Stat(dup.FilePath); statErr != nil {
+			pathChecked = true
+			return nil
+		}
+		why, err := bookFileNamingPath(store, dup.FilePath)
+		if err != nil {
+			return err
+		}
+		pathChecked, hasFile, namedBy = true, true, why
+		return nil
+	}
 	// Logged only past the guards, so the log never says a duplicate is
 	// being removed when it is about to be kept.
 	del := func() error {
+		if err := checkPath(); err != nil {
+			return err
+		}
 		slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
-		if rootDir != "" && pathutil.IsWithin(dup.FilePath, rootDir) {
-			if _, err := os.Stat(dup.FilePath); err == nil {
-				if err := os.Remove(dup.FilePath); err != nil {
-					slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
-				} else {
-					result.FilesDeleted++
-				}
+		switch {
+		case hasFile && namedBy != "":
+			// A retired row keeps the path of a shell it was retired out of; a
+			// live row of another book can name it too. Either way the audio
+			// belongs to that row: the duplicate's book row goes, the file stays
+			// (the same outcome as a purge of a trashed book).
+			pkgLog.Warn("version-group cleanup keeping the file of removed duplicate %s of group %s: %s",
+				logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), namedBy)
+			result.FilesKeptReferenced++
+		case hasFile:
+			if err := os.Remove(dup.FilePath); err != nil {
+				slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
+			} else {
+				result.FilesDeleted++
 			}
 		}
 		return store.DeleteBook(dup.ID)
@@ -1178,7 +1252,7 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 			if !listed {
 				return errKeepNotListed
 			}
-			return nil
+			return checkPath()
 		}
 		err = merge.CarryStateThenHardDelete(um, keepID, dup.ID, precheck, del)
 	} else {
@@ -1188,6 +1262,10 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 	case err == nil:
 		result.DuplicatesRemoved++
 		return true
+	case errors.Is(err, errPathUnverifiable):
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s and its file: %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)
+		result.PathCheckErrors++
 	case errors.Is(err, errKeepNotListed):
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: a user has listening state on it and kept copy %s is not a book ABS lists (re-checked under the merge lock): %v",
 			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), err)
