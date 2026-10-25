@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_books_at_path.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
 // last-edited: 2026-10-25
 
@@ -70,13 +70,9 @@ func (p *PebbleStore) bookIDsAtPath(path string, includeTrashed bool) ([]string,
 	return p.bookIDsAtPathIndex(path, includeTrashed)
 }
 
-// liveBookIDsAtPathScan reads every book row. It is the pre-backfill fallback,
-// and the oracle the index reader and the verify op are tested against.
-func (p *PebbleStore) liveBookIDsAtPathScan(path string) ([]string, error) {
-	return p.bookIDsAtPathScan(path, false)
-}
-
-// bookIDsAtPathScan is liveBookIDsAtPathScan with the live filter optional.
+// bookIDsAtPathScan reads every book row, keeping soft-deleted ones when
+// includeTrashed. It is the pre-backfill fallback, and the oracle the index
+// reader and the verify op are tested against.
 func (p *PebbleStore) bookIDsAtPathScan(path string, includeTrashed bool) ([]string, error) {
 	var ids []string
 	err := forEachBookRow(p.db, func(id string, v []byte) error {
@@ -95,15 +91,10 @@ func (p *PebbleStore) bookIDsAtPathScan(path string, includeTrashed bool) ([]str
 	return ids, nil
 }
 
-// liveBookIDsAtPathIndex reads path's index keys and point-verifies each
-// candidate row, all from one snapshot. An index key and its row are committed
-// in one batch, so a book moving into or out of path mid-lookup is seen
-// consistently.
-func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
-	return p.bookIDsAtPathIndex(path, false)
-}
-
-// bookIDsAtPathIndex is liveBookIDsAtPathIndex with the live filter optional.
+// bookIDsAtPathIndex reads path's index keys and point-verifies each candidate
+// row, all from one snapshot, keeping soft-deleted rows when includeTrashed. An
+// index key and its row are committed in one batch, so a book moving into or out
+// of path mid-lookup is seen consistently.
 func (p *PebbleStore) bookIDsAtPathIndex(path string, includeTrashed bool) ([]string, error) {
 	snap, markerIDs, err := p.undecodableMarkerSnapshot()
 	if err != nil {

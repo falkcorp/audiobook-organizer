@@ -5719,68 +5719,6 @@ func (_c *MockStore_BookFilesWithHash_Call) RunAndReturn(run func(hash string) (
 	return _c
 }
 
-// BookIDsAtPath provides a mock function for the type MockStore
-func (_mock *MockStore) BookIDsAtPath(path string) ([]string, error) {
-	ret := _mock.Called(path)
-
-	if len(ret) == 0 {
-		panic("no return value specified for BookIDsAtPath")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) ([]string, error)); ok {
-		return returnFunc(path)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) []string); ok {
-		r0 = returnFunc(path)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(path)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockStore_BookIDsAtPath_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BookIDsAtPath'
-type MockStore_BookIDsAtPath_Call struct {
-	*mock.Call
-}
-
-// BookIDsAtPath is a helper method to define mock.On call
-//   - path string
-func (_e *MockStore_Expecter) BookIDsAtPath(path any) *MockStore_BookIDsAtPath_Call {
-	return &MockStore_BookIDsAtPath_Call{Call: _e.mock.On("BookIDsAtPath", path)}
-}
-
-func (_c *MockStore_BookIDsAtPath_Call) Run(run func(path string)) *MockStore_BookIDsAtPath_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_BookIDsAtPath_Call) Return(strings []string, err error) *MockStore_BookIDsAtPath_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockStore_BookIDsAtPath_Call) RunAndReturn(run func(path string) ([]string, error)) *MockStore_BookIDsAtPath_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // BulkCreateExternalIDMappings provides a mock function for the type MockStore
 func (_mock *MockStore) BulkCreateExternalIDMappings(mappings []database.ExternalIDMapping) error {
 	ret := _mock.Called(mappings)

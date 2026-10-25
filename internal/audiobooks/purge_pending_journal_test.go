@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_pending_journal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8a4c71-6d09-4b35-9f1a-c7d3b05e8a62
 // last-edited: 2026-10-25
 
@@ -50,6 +50,50 @@ func (h *hookedPathStore) BookIDsAtPath(path string) ([]string, error) {
 	return h.PebbleStore.BookIDsAtPath(path)
 }
 
+// opaqueStore embeds the Store interface, so the all-rows path lookup (a
+// capability, not a Store method) is hidden behind it, and it does not opt in to
+// database.StoreUnwrapper. unwrappingStore is the same wrapper that does.
+type opaqueStore struct{ database.Store }
+
+type unwrappingStore struct{ opaqueStore }
+
+func (u unwrappingStore) Unwrap() database.Store { return u.Store }
+
+// The all-rows lookup is not on Store, so a store that cannot answer it must
+// make the removal fail closed: the file stays, and the line says why.
+func TestRemoveDeferredFiles_StoreWithoutAllRowsLookupKeepsTheFile(t *testing.T) {
+	_, store, base := setupPurgeBoundary(t)
+	x := filepath.Join(base, "lib", "Author", "nocap.m4b")
+	writeFile(t, x)
+
+	svc := NewAudiobookService(opaqueStore{store})
+	files := &pendingFiles{}
+	files.add("purged", purgeFileVerdict{remove: x, id: identityAt(t, x)})
+	removed, errs := svc.removeDeferredFiles(files, nil)
+
+	assert.Zero(t, removed)
+	assert.True(t, fileExists(x), "a path that cannot be vouched for is not a free path")
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0], "BookRowPathReader")
+}
+
+// A decorator that opts in through StoreUnwrapper keeps the lookup reachable,
+// so the same removal goes through when no book names the path.
+func TestRemoveDeferredFiles_UnwrappingDecoratorStillReachesAllRowsLookup(t *testing.T) {
+	_, store, base := setupPurgeBoundary(t)
+	x := filepath.Join(base, "lib", "Author", "viawrap.m4b")
+	writeFile(t, x)
+
+	svc := NewAudiobookService(unwrappingStore{opaqueStore{store}})
+	files := &pendingFiles{}
+	files.add("purged", purgeFileVerdict{remove: x, id: identityAt(t, x)})
+	removed, errs := svc.removeDeferredFiles(files, nil)
+
+	assert.Empty(t, errs)
+	assert.Equal(t, 1, removed)
+	assert.False(t, fileExists(x))
+}
+
 // pendingJournal returns the pending-removal records in the store.
 func pendingJournal(t *testing.T, store *database.PebbleStore) []database.KVPair {
 	t.Helper()
@@ -84,14 +128,14 @@ func crashAfterRowAndTombstone(t *testing.T, svc *AudiobookService, store *datab
 // first read of the path and its check for other books) still keeps the file.
 // A trash listing taken once at the start of the loop would have shown it live.
 func TestRemoveDeferredFiles_BookTrashedMidLoopStillKeepsItsFile(t *testing.T) {
-	svc, store, base := setupPurgeBoundary(t)
+	_, store, base := setupPurgeBoundary(t)
 	x := filepath.Join(base, "lib", "Author", "race.m4b")
 	writeFile(t, x)
 	_, err := store.CreateBook(&database.Book{ID: "L", Title: "L", FilePath: x})
 	require.NoError(t, err)
 
 	hooked := &hookedPathStore{PebbleStore: store}
-	svc = NewAudiobookService(hooked)
+	svc := NewAudiobookService(hooked)
 	var trashedL atomic.Bool
 	hooked.beforeLive = func(string) {
 		if trashedL.CompareAndSwap(false, true) {

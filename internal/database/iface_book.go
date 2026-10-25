@@ -1,5 +1,5 @@
 // file: internal/database/iface_book.go
-// version: 2.29.0
+// version: 2.30.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
 // last-edited: 2026-10-25
 
@@ -107,15 +107,27 @@ type BookPathSetReader interface {
 	// It is on Store (via BookLookupReader), not a narrower capability, so
 	// every decorator that embeds Store forwards it.
 	LiveBookIDsAtPath(path string) ([]string, error)
+}
 
-	// BookIDsAtPath is LiveBookIDsAtPath without the live filter: the id of
-	// EVERY book row, soft-deleted ones included, whose FilePath is exactly
-	// path, in id order, with the same fail-closed rule. It answers "does any
-	// book, a trashed one that a restore would bring back included, still name
-	// this path?", which the purge asks per path at the moment it removes a
-	// file, instead of reading the whole trash once beforehand.
+// BookRowPathReader is LiveBookIDsAtPath without the live filter. It is NOT
+// part of Store (Store's flattened width is a ratchet, store_width_test.go, and
+// exactly one consumer needs this), so it is discovered with AsCapability, which
+// looks through decorators that opt in via StoreUnwrapper. *PebbleStore and
+// MockStore implement it.
+type BookRowPathReader interface {
+	// BookIDsAtPath returns the id of EVERY book row, soft-deleted ones
+	// included, whose FilePath is exactly path, in id order, with the same
+	// fail-closed rule as LiveBookIDsAtPath. It answers "does any book, a
+	// trashed one that a restore would bring back included, still name this
+	// path?", which the purge asks per path at the moment it removes a file,
+	// instead of reading the whole trash once beforehand.
 	BookIDsAtPath(path string) ([]string, error)
 }
+
+var (
+	_ BookRowPathReader = (*PebbleStore)(nil)
+	_ BookRowPathReader = (*MockStore)(nil)
+)
 
 // BookDirLister lists live books beneath a folder. Its own interface,
 // embedded in BookStore (so still on Store and forwarded by decorators) rather

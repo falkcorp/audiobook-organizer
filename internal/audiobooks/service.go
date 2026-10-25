@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.58.1
+// version: 1.58.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-25
 
@@ -56,14 +56,18 @@ type bookReader interface {
 	GetBookAtVersion(id string, ts time.Time) (*database.Book, error)
 	CountPrimaryBooks() (int, error)
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+	bookPathReader
+}
+
+// bookPathReader is the "who names this path" read the purge makes before it
+// removes a file from disk, kept apart from bookReader so neither grows past
+// the interface-width limit.
+type bookPathReader interface {
 	// LiveBookIDsAtPath backs the purge's "is this path still someone's"
-	// check before it removes a file from disk.
+	// check. The all-rows variant (trashed books included) is not here:
+	// database.BookRowPathReader is off Store, so the purge resolves it with
+	// database.AsCapability (purge_files.go, bookRowsAtPath).
 	LiveBookIDsAtPath(path string) ([]string, error)
-	// BookIDsAtPath is the same lookup without the live filter: every book
-	// row at the path, trashed ones included. The purge asks it, per path, at
-	// the moment it removes a file, so a book trashed a moment ago (restorable,
-	// and a restore wants its audio) still keeps the file.
-	BookIDsAtPath(path string) ([]string, error)
 }
 
 // bookWriter is the write side of the book entity, including the soft-delete

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.3
+// version: 1.234.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package database
 
@@ -5966,7 +5966,7 @@ func (p *PebbleStore) Reset() error {
 	// cached positive read of it FIRST: a LiveBookIDsAtPath that starts after
 	// this line takes the full-scan path instead of trusting a wiped index.
 	// This narrows the window but does not close it. A reader already inside
-	// liveBookIDsAtPathIndex can snapshot after the wipe and return an empty
+	// bookIDsAtPathIndex can snapshot after the wipe and return an empty
 	// set. Reset is a factory-reset path with no concurrent library work.
 	p.bookAtPathBuilt.Store(false)
 	// Same for the file-hash index sentinel: a wiped store has no index, and a

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-25
 
@@ -181,7 +181,11 @@ func errTrashedTwin(path string, ids []string) error {
 // failed lookup is an error too (errPathLookupFailed): fail closed, a path
 // that cannot be vouched for is not a free path.
 func (svc *AudiobookService) otherBookRowAt(path string) error {
-	ids, err := svc.store.BookIDsAtPath(path)
+	rows, err := svc.bookRowsAtPath()
+	if err != nil {
+		return fmt.Errorf("cannot verify %s is not a book's file: %w: %w", path, errPathLookupFailed, err)
+	}
+	ids, err := rows.BookIDsAtPath(path)
 	if err != nil {
 		return fmt.Errorf("cannot verify %s is not a book's file: books-at-path lookup: %w: %w", path, errPathLookupFailed, err)
 	}
@@ -189,6 +193,19 @@ func (svc *AudiobookService) otherBookRowAt(path string) error {
 		return errTrashedTwin(path, ids)
 	}
 	return nil
+}
+
+// bookRowsAtPath resolves the all-rows path lookup from the service's store.
+// It is a capability, not a Store method (database.BookRowPathReader), so a
+// store that cannot answer it makes the removal fail closed: the file stays on
+// disk and the journal retries it, rather than the purge deleting a file a
+// trashed book may still want. Never a silent "no rows".
+func (svc *AudiobookService) bookRowsAtPath() (database.BookRowPathReader, error) {
+	rows, ok := database.AsCapability[database.BookRowPathReader](svc.store)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not provide the all-rows book path lookup (database.BookRowPathReader)", svc.store)
+	}
+	return rows, nil
 }
 
 // removeDeferredFiles is the second half of a purge pass's file removal, run
