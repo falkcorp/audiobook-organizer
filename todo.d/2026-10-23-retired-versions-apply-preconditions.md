@@ -17,11 +17,14 @@
       `RevertBookToVersion` shell check runs under the book write stripe but
       retire takes only owner stripes and the merge lock, so a revert racing a
       retire can still slip through; (7) a generic whole-row `UpdateBook` from a
-      stale read can still overwrite the merged-into link; (8) same-shape
-      owned-files pre-checks that read only live rows remain in
-      `DiscardProgressAndPurge` (`trash_progress.go`), the `DeleteAudiobook`
-      live branch (`service_mutation.go`) and the batch hard delete (all are
-      still backstopped by `DeleteBook`'s refusal); (9) the comment at
+      stale read can still overwrite the merged-into link; (8) the batch hard delete (`internal/batch/service.go` `hardDelete`) has no
+      owned-files pre-check at all, live or retired, so a book that owns rows
+      has its listening state carried to another version
+      (`merge.HardDeleteKeepingUserState`) before `DeleteBook` refuses with
+      `ErrBookOwnsFiles`; this predates the retire work, and adding the check
+      changes the batch's behaviour for live rows too, so it is left for its own
+      change (`DiscardProgressAndPurge`, the `DeleteAudiobook` live branch and
+      the purge pre-check now count retired rows); (9) the comment at
       `internal/repairs/writer_files.go:29` still says a whole apply is undone
       from the Operations page, which is not true until PR 5 (#4146); (10) decorator
       stores that do not implement `Unwrap() database.Store` cannot be read for
