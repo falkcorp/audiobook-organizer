@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package server
 
@@ -61,7 +61,10 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.POST("/audiobooks/:id/extract-track-info", s.perm(auth.PermLibraryEditMetadata), audiobooksH.ExtractTrackInfo)
 	protected.POST("/audiobooks/:id/relocate", s.perm(auth.PermLibraryOrganize), audiobooksH.RelocateBookFiles)
 	protected.POST("/audiobooks/batch", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchUpdateAudiobooks)
-	protected.POST("/audiobooks/batch-operations", s.perm(auth.PermLibraryEditMetadata), audiobooksH.BatchOperations)
+	// A batch hard delete is DELETE /audiobooks/:id?hard_delete=true N times, so
+	// it also needs library.delete (batchHardDeleteGuard); update, soft delete
+	// and restore stay on library.edit_metadata alone.
+	protected.POST("/audiobooks/batch-operations", s.perm(auth.PermLibraryEditMetadata), s.batchHardDeleteGuard(), audiobooksH.BatchOperations)
 	protected.GET("/tags", s.perm(auth.PermLibraryView), audiobooksH.ListAllUserTags)
 	protected.GET("/audiobooks/:id/user-tags", s.perm(auth.PermLibraryView), audiobooksH.GetBookUserTags)
 	protected.GET("/audiobooks/:id/tags-detailed", s.perm(auth.PermLibraryView), audiobooksH.GetBookTagsDetailed)

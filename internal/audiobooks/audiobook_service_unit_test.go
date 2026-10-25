@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 package audiobooks
 
@@ -28,17 +28,40 @@ func expectNoUserState(m *mocks.MockStore) {
 	m.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
 }
 
+// retiredAwareMock lets a MockStore answer the hard delete's owned-files check
+// (database.CheckBookOwnsNoFiles reads GetBookFilesIncludingRetired through
+// database.RetiredBookFileReader, which MockStore does not implement, and the
+// check fails closed without it). rows is what each book owns.
+type retiredAwareMock struct {
+	*mocks.MockStore
+	rows map[string][]database.BookFile
+}
+
+func (m *retiredAwareMock) GetBookFilesIncludingRetired(bookID string) ([]database.BookFile, error) {
+	return m.rows[bookID], nil
+}
+
+// The rest of database.RetiredBookFileReader: unused by the delete path.
+func (m *retiredAwareMock) GetRetiredBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+func (m *retiredAwareMock) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return nil, nil
+}
+func (m *retiredAwareMock) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
+	return nil, nil
+}
+
 // A book that still owns file rows cannot be hard-deleted.
 func TestAudiobookService_DeleteAudiobook_HardDeleteRefusedWhileFilesOwned(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
+	svc := NewAudiobookService(&retiredAwareMock{MockStore: mockStore, rows: map[string][]database.BookFile{
+		"del-itl2": {
+			{ID: "f1", ITunesPersistentID: "deadbeefdeadbeef"},
+			{ID: "f2", ITunesPersistentID: "feedfacefeedface"},
+		},
+	}})
 
 	book := &database.Book{ID: "del-itl2", Title: "Has iTunes Tracks"}
 	mockStore.EXPECT().GetBookByID("del-itl2").Return(book, nil)
-	mockStore.EXPECT().GetBookFiles("del-itl2").Return([]database.BookFile{
-		{ID: "f1", ITunesPersistentID: "deadbeefdeadbeef"},
-		{ID: "f2", ITunesPersistentID: "feedfacefeedface"},
-	}, nil)
 
 	_, err := svc.DeleteAudiobook(context.Background(), "del-itl2", &DeleteAudiobookOptions{})
 	assert.ErrorIs(t, err, database.ErrBookOwnsFiles)
@@ -309,11 +332,10 @@ func TestAudiobookService_DeleteAudiobook_NotFound(t *testing.T) {
 
 func TestAudiobookService_DeleteAudiobook_HardDelete(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
+	svc := NewAudiobookService(&retiredAwareMock{MockStore: mockStore})
 
 	book := &database.Book{ID: "del-1", Title: "To Delete"}
 	mockStore.EXPECT().GetBookByID("del-1").Return(book, nil)
-	mockStore.EXPECT().GetBookFiles("del-1").Return(nil, nil)
 	mockStore.EXPECT().DeleteBook("del-1").Return(nil)
 	expectNoUserState(mockStore)
 
@@ -330,12 +352,13 @@ func TestAudiobookService_DeleteAudiobook_HardDelete(t *testing.T) {
 // the handler answers 409 rather than 404.
 func TestAudiobookService_DeleteAudiobook_HardDeleteRefusedWhenBookOwnsFiles(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
+	svc := NewAudiobookService(&retiredAwareMock{MockStore: mockStore, rows: map[string][]database.BookFile{
+		"del-2": {{ID: "f1", BookID: "del-2", FilePath: "/lib/x.m4b"}},
+	}})
 
 	hash := "h1"
 	book := &database.Book{ID: "del-2", Title: "Has Files", FileHash: &hash}
 	mockStore.EXPECT().GetBookByID("del-2").Return(book, nil)
-	mockStore.EXPECT().GetBookFiles("del-2").Return([]database.BookFile{{ID: "f1", BookID: "del-2", FilePath: "/lib/x.m4b"}}, nil)
 
 	_, err := svc.DeleteAudiobook(context.Background(), "del-2", &DeleteAudiobookOptions{BlockHash: true})
 	assert.ErrorIs(t, err, database.ErrBookOwnsFiles)
