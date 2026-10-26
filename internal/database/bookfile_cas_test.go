@@ -1,15 +1,17 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
 package database
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1002,5 +1004,49 @@ func TestCAS_DeleteBookFilesForBook_GivesUpUnderRotatingChurn(t *testing.T) {
 	}
 	if ref := f.indexRef(t, fmt.Sprintf("book_file_hash:gotham-churn-%02d", maxBatchStageRounds)); ref != f.ref() {
 		t.Errorf("the surviving row lost its index key: %q", ref)
+	}
+}
+
+// N1: a pure reader decodes straight from the Pebble buffer. The compare-and-swap
+// writers need a copy of the stored bytes to compare at commit, but GetBookFileByID,
+// GetBookFileByPath and GetBookFileByPID throw it away, and a fingerprinted row
+// runs to hundreds of kilobytes: a copy per read is a second allocation of the
+// whole row for nothing. The decode itself keeps one copy of the fingerprint
+// (decoded from base64), so a reader that also copies the raw bytes allocates
+// over twice the fingerprint, one that does not about once.
+func TestReaders_DoNotCopyTheStoredRow(t *testing.T) {
+	f := newCASFixture(t)
+	fp := bytes.Repeat([]byte("A"), 200<<10)
+	rewriteRaw(t, f.s, f.book.ID, f.file.ID, func(r *BookFile) { r.AcoustIDFingerprint = fp })
+
+	readers := map[string]func() (*BookFile, error){
+		"GetBookFileByID":   func() (*BookFile, error) { return f.s.GetBookFileByID(f.book.ID, f.file.ID) },
+		"GetBookFileByPath": func() (*BookFile, error) { return f.s.GetBookFileByPath(casPath) },
+		"GetBookFileByPID":  func() (*BookFile, error) { return f.s.GetBookFileByPID(casPID) },
+	}
+	for name, read := range readers {
+		t.Run(name, func(t *testing.T) {
+			got, err := read()
+			if err != nil || got == nil || !bytes.Equal(got.AcoustIDFingerprint, fp) {
+				t.Fatalf("read: row=%v err=%v", got != nil, err)
+			}
+			const reads = 20
+			best := ^uint64(0)
+			for range 5 { // the least of several runs: other goroutines only add
+				var before, after runtime.MemStats
+				runtime.GC()
+				runtime.ReadMemStats(&before)
+				for range reads {
+					if _, err := read(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				runtime.ReadMemStats(&after)
+				best = min(best, (after.TotalAlloc-before.TotalAlloc)/reads)
+			}
+			if limit := uint64(len(fp)) * 3 / 2; best > limit {
+				t.Errorf("%s allocates %d bytes per read of a %d-byte fingerprint, want under %d: it is copying the stored row", name, best, len(fp), limit)
+			}
+		})
 	}
 }

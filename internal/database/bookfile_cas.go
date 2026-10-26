@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6b991179-c549-4086-9050-022c32b0cfce
 // last-edited: 2026-10-26
 
@@ -125,6 +125,17 @@ func (s *PebbleStore) readBookFileRow(bookID, fileID string) (*BookFile, []byte,
 
 // readBookFileRowAt is readBookFileRow for a primary key already in hand.
 func (s *PebbleStore) readBookFileRowAt(key []byte) (*BookFile, []byte, error) {
+	return s.loadBookFileRowAt(key, true)
+}
+
+// loadBookFileRowAt reads and decodes the row at key. With copyRaw it also
+// returns the stored bytes, copied, for a writer that compares them at commit.
+// Without it the row is decoded straight from the Pebble buffer and raw is nil:
+// a pure reader pays no copy of a row that can run to hundreds of kilobytes
+// once its fingerprint is in it. (The decode copies every string and byte
+// slice it keeps, so the row outlives the buffer.) (nil, nil, nil) when the row
+// is absent.
+func (s *PebbleStore) loadBookFileRowAt(key []byte, copyRaw bool) (*BookFile, []byte, error) {
 	value, closer, err := s.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil, nil, nil
@@ -133,8 +144,14 @@ func (s *PebbleStore) readBookFileRowAt(key []byte) (*BookFile, []byte, error) {
 		return nil, nil, err
 	}
 	defer closer.Close()
-	raw := append([]byte(nil), value...)
 	var f BookFile
+	if !copyRaw {
+		if err := json.Unmarshal(value, &f); err != nil {
+			return nil, nil, err
+		}
+		return &f, nil, nil
+	}
+	raw := append([]byte(nil), value...)
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, nil, err
 	}

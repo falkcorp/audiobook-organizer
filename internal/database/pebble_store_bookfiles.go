@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.4
+// version: 1.47.5
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -25,7 +25,7 @@ import (
 
 // getBookFileByID fetches a BookFile by its primary key (book_file:<bookID>:<fileID>).
 func (s *PebbleStore) getBookFileByID(bookID, fileID string) (*BookFile, error) {
-	f, _, err := s.readBookFileRow(bookID, fileID)
+	f, _, err := s.loadBookFileRowAt(bookFileKey(bookID, fileID), false)
 	return f, err
 }
 
@@ -1298,13 +1298,19 @@ func (s *PebbleStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, err
 // GetBookFileByPID looks up a BookFile by iTunes persistent ID using the
 // book_file_pid:<pid> secondary index.
 func (s *PebbleStore) GetBookFileByPID(itunesPID string) (*BookFile, error) {
-	f, _, err := s.getBookFileByPIDRaw(itunesPID)
+	f, _, err := s.lookupBookFileByPID(itunesPID, false)
 	return f, err
 }
 
 // getBookFileByPIDRaw is GetBookFileByPID plus the stored bytes of the row it
 // returns, for a writer that rewrites that row and compares them at commit.
 func (s *PebbleStore) getBookFileByPIDRaw(itunesPID string) (*BookFile, []byte, error) {
+	return s.lookupBookFileByPID(itunesPID, true)
+}
+
+// lookupBookFileByPID resolves a PID through its index; copyRaw is
+// loadBookFileRowAt's.
+func (s *PebbleStore) lookupBookFileByPID(itunesPID string, copyRaw bool) (*BookFile, []byte, error) {
 	if itunesPID == "" {
 		return nil, nil, nil
 	}
@@ -1323,19 +1329,25 @@ func (s *PebbleStore) getBookFileByPIDRaw(itunesPID string) (*BookFile, []byte, 
 	if len(parts) != 2 {
 		return nil, nil, fmt.Errorf("corrupt book_file_pid index value: %q", ref)
 	}
-	return s.readBookFileRow(parts[0], parts[1])
+	return s.loadBookFileRowAt(bookFileKey(parts[0], parts[1]), copyRaw)
 }
 
 // GetBookFileByPath looks up a BookFile by file path using the
 // book_file_path:<crc32hex> secondary index.
 func (s *PebbleStore) GetBookFileByPath(filePath string) (*BookFile, error) {
-	f, _, err := s.getBookFileByPathRaw(filePath)
+	f, _, err := s.lookupBookFileByPath(filePath, false)
 	return f, err
 }
 
 // getBookFileByPathRaw is GetBookFileByPath plus the stored bytes of the row it
 // returns, for a writer that rewrites that row and compares them at commit.
 func (s *PebbleStore) getBookFileByPathRaw(filePath string) (*BookFile, []byte, error) {
+	return s.lookupBookFileByPath(filePath, true)
+}
+
+// lookupBookFileByPath resolves a path through its index; copyRaw is
+// loadBookFileRowAt's.
+func (s *PebbleStore) lookupBookFileByPath(filePath string, copyRaw bool) (*BookFile, []byte, error) {
 	if filePath == "" {
 		return nil, nil, nil
 	}
@@ -1354,7 +1366,7 @@ func (s *PebbleStore) getBookFileByPathRaw(filePath string) (*BookFile, []byte, 
 	if len(parts) != 2 {
 		return nil, nil, fmt.Errorf("corrupt book_file_path index value: %q", ref)
 	}
-	f, raw, err := s.readBookFileRow(parts[0], parts[1])
+	f, raw, err := s.loadBookFileRowAt(bookFileKey(parts[0], parts[1]), copyRaw)
 	if err != nil {
 		return nil, nil, err
 	}
