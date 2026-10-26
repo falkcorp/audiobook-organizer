@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator_tag_terms_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f9c6b13-84d7-4a50-b1e8-d3a07c5f9e46
 // last-edited: 2026-10-26
 
@@ -139,4 +139,38 @@ func TestEvaluate_ATagTermFailsClosedOnAStoreThatCannotListATag(t *testing.T) {
 	got, err := EvaluateSmartPlaylist(context.Background(), noTagStore{store}, idx, `read_status:finished`, "", 0, "alice")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"b1", "b2"}, got)
+}
+
+// N4: a stored regex the grammar cannot parse (its parentheses and pipes are the
+// grammar's own) reads as the regex refusal, not as "parse query: ...", with and
+// without a viewer and before the index state is looked at. A parenthesised title
+// that is no regex, and a URL, keep the plain parse error.
+func TestEvaluate_AnUnparsableRegexReadsAsTheRegexRefusal(t *testing.T) {
+	store, idx := tagFixture(t)
+	for _, q := range []string{
+		"title:/^(the|a) /",
+		"metadata:/(audible|google)/",
+		"title:/^(a|b)/ OR title:Synthetic",
+	} {
+		t.Run(q, func(t *testing.T) {
+			for _, user := range []string{"alice", ""} {
+				ids, err := EvaluateSmartPlaylist(context.Background(), store, idx, q, "", 0, user)
+				require.Error(t, err, "user %q", user)
+				if q == "metadata:/(audible|google)/" {
+					// metadata is not a field the index holds: the plain parse error
+					assert.False(t, search.IsRegexValueError(err), "user %q: %v", user, err)
+				} else {
+					assert.True(t, search.IsRegexValueError(err), "user %q: %v", user, err)
+				}
+				assert.True(t, IsDefinitionError(err), "a stored definition, not a server failure: %v", err)
+				assert.Nil(t, ids)
+			}
+		})
+	}
+	for _, q := range []string{"title:(unclosed", "Batman (Year One", "http://example.invalid/a(b)/"} {
+		_, err := EvaluateSmartPlaylist(context.Background(), store, idx, q, "", 0, "alice")
+		require.Error(t, err, q)
+		assert.False(t, search.IsRegexValueError(err), "%s: %v", q, err)
+		assert.Contains(t, err.Error(), "parse query", q)
+	}
 }

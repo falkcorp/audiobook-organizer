@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.7.6 -->
+<!-- version: 1.7.7 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -201,10 +201,15 @@ itself and still matches by word.
 The Library search box sends a query with boolean structure whole as `search=`, with no
 filters or `tags[]` of its own for it, so the server judges the whole query and the page
 shows its message. Structure is decided from the terms the box cuts the text into, never
-from the raw characters: a bare `OR`, `AND`, `NOT`, `||`, `&&` or `|`, the opening of a group
-(`(a`, `-(a`), a `-` or `NOT` before a `tag:` term, a `tag:` value that is not one whole name
-(`*`, `~` or `^` in it, a comparison, a range), or a boost after a tag (`tag:noir ^2`, with or
-without a space). A field's VALUE is never structure: the parentheses, pipes and spaces
+from the raw characters, and only where it binds a term the box pulls out of the text: an
+`OR`, `AND`, `||`, `&&` or `|` next to a field term (`title:bat OR robin`), a field term inside
+a group (`(robin title:bat)`), a `-` or `NOT` before a `tag:` term, a `tag:` value that is not
+one whole name (`*`, `~` or `^` in it, a comparison, a range), or a boost after a tag
+(`tag:noir ^2`, with or without a space). Structure among free words alone is not sent whole:
+`title:bat NOT robin`, `title:bat Batman (1987)` and `title:bat robin OR joker` keep `title:bat`
+as a filter and send the rest as `search=`, which the server's own parser reads, as it always
+has. Sent whole, the filter would be matched as whole words in the index and the list would
+change. A field's VALUE is never structure: the parentheses, pipes and spaces
 inside a `/regex/` (`title:/^(the|a) /`, `title:/hush|knight/`), a quoted value
 (`title:"Year (One)"`) or a plain value (`title:Batman(1989)`) are text, and such a term
 stays a filter. `Batman -tag:"to-read"`, `-tag:noir`, `tag:noir OR tag:gotham` and
@@ -220,12 +225,16 @@ or everything, and a field only the filter layer knows would be refused in `sear
 
 A `/regex/` value is refused in `search=` with a 400 (`invalid search: a /regex/ value
 cannot be used in the search parameter ...`), also in a dynamic collection or smart
-playlist query, whether or not the text parses. The search index has no regular
+playlist query, whether or not the text parses (an unparsable one gets the same message when
+it is saved and when a stored one is read). Only a field the index holds is read as a regex
+term: a pasted URL (`https://...`), a drive path (`c:/lib/Gotham/x`) or a title with a colon
+(`Batman: /Year One/`) is searched as text, as before. The search index has no regular
 expressions: `title:/hush|knight/` was read as the words "hush" and "knight" and found one
 book of two, and `title:/^(the|a) /` (which the parser cannot read) fell to a substring
 match that found nothing, both without a message. A regex works as a field filter on its
 own, which is how the Library sends it; to combine it with an `OR` or a group, use plain
-words in the group and keep the regex term outside it. A quoted value that starts with a
+words in the group and keep the regex term outside it (one that is sent whole, because an
+`OR` or a group binds it, is refused). A quoted value that starts with a
 slash (`title:"/x/"`) is plain text.
 
 How the search reads the viewer's listening state for a `read_status`, `progress_pct` or
@@ -234,7 +243,11 @@ survives is loaded. With 256 candidates or fewer each id is one point read of th
 state row; with more, the viewer's rows are listed in one scan (measured: 1.6 ms for 1,000
 rows, 30 ms for 20,000, against a few microseconds per point read, so a narrow search does
 not pay for the scan). A row that cannot be read or decoded is judged as an unstarted book
-and logged with the book id: the search does not fail for it. The collection evaluator is
+and logged with the book id: the search does not fail for it. If the scan itself fails
+(one undecodable row fails it) the search falls back to point reads, but only up to 10,000
+candidates (about 20 to 90 ms); above that, which only a search scoped to a very large set
+can reach, it answers the error, because a point read per id would cost about a second on
+every request for as long as the row stays broken. The collection evaluator is
 the opposite on purpose and fails closed (the collection reads as `members_unavailable`),
 because a collection is a saved definition other screens and the Audiobookshelf endpoints
 show as the truth about its members, while a search is a filter the viewer reads at once

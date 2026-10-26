@@ -145,14 +145,16 @@ Audiobookshelf surface the collection mutation routes answer with the committed 
 no books when the members cannot be worked out, a 499 after the write means the change was
 kept, and a refused smart playlist is an empty one with no signal.
 
-A query typed in the Library with boolean structure (a bare `OR`, `AND`, `NOT`, `||`, `&&` or
-`|`, the opening of a group, a `-` or `NOT` before a `tag:` term, a `tag:` value that is not
-one whole name, or a boost after a tag) is now sent to the server whole, with or without a
+A query typed in the Library with boolean structure that binds a field term (an `OR`, `AND`,
+`||`, `&&` or `|` next to one, a field term inside a group, a `-` or `NOT` before a `tag:` term, a
+`tag:` value that is not one whole name, or a boost after a tag) is now sent to the server whole, with or without a
 per-user field, and the server's message is shown. Structure is read from the terms the box
 cuts the text into: a field's value is never structure, so `title:/^(the|a) /`,
 `title:/hush|knight/`, `description:/(?i)gotham/` and `title:Batman(1989)` stay filters, as
-before. A `/regex/` value that does reach `search=` (inside an `OR` or a group, or in a
-collection or smart playlist query) is refused with a 400 instead of being read as the words
+before. Structure among free words alone (`title:bat NOT robin`, `title:bat Batman (1987)`)
+still splits, so the field term keeps its filter matching. A `/regex/` value on an indexed field
+that does reach `search=` (inside an `OR` or a group, or in a collection or smart playlist
+query, parsable or not) is refused with a 400 instead of being read as the words
 between the slashes or falling to a substring match. Before, `Batman -tag:"to-read"` was split into filters and the
 negation was dropped without a word. A stop word or punctuation left next to a tag term
 (`the tag:noir`, `- tag:noir`, `(tag:noir OR)`) is dropped instead of silently emptying the

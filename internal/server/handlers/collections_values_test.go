@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_values_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c3a8e5d1-6b27-4f90-a1d4-52e7b09c6f38
 // last-edited: 2026-10-26
 
@@ -50,6 +50,8 @@ var refusedTermQueries = []string{
 	`tag:"noir"^2`,
 	// a /regex/ is a filter-layer form; the index would read it as the words in it
 	"title:/hush|knight/",
+	// and one whose own parentheses defeat the parser
+	"title:/^(the|a) /",
 }
 
 // B-alpha: creating or updating a dynamic collection with such a value is refused
@@ -78,6 +80,19 @@ func TestCollections_RefuseAPerUserValueTheEvaluatorCannotEvaluate(t *testing.T)
 			assert.Zero(t, store.updates)
 		})
 	}
+
+	// N4: a regex the grammar cannot parse is refused with the regex sentence, not with
+	// "parse query: ..." as a query that is merely malformed.
+	t.Run("an unparsable regex gets the regex sentence", func(t *testing.T) {
+		for _, q := range []string{"title:/^(the|a) /", "title:/^(a|b)/ OR title:Alpha"} {
+			rig := newViewerRig(t, &colFakeStore{}, viewerStates())
+			w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
+				map[string]any{"name": "The Long Halloween", "type": "dynamic", "query": q})
+			require.Equal(t, http.StatusBadRequest, w.Code, "%s: %s", q, w.Body.String())
+			assert.Contains(t, w.Body.String(), "/regex/ value", q)
+			assert.NotContains(t, w.Body.String(), "parse query", q)
+		}
+	})
 
 	t.Run("the message names the valid statuses", func(t *testing.T) {
 		rig := newViewerRig(t, &colFakeStore{}, viewerStates())
@@ -257,6 +272,20 @@ func TestPlaylists_RefuseAPerUserValueTheEvaluatorCannotEvaluate(t *testing.T) {
 			h.UpdatePlaylist(c)
 			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 		})
+	}
+}
+
+// N4 for smart playlists: an unparsable regex gets the regex sentence on create.
+func TestPlaylists_AnUnparsableRegexGetsTheRegexSentence(t *testing.T) {
+	for _, q := range []string{"title:/^(the|a) /", "title:/^(a|b)/ OR title:Alpha"} {
+		store := handlersmocks.NewMockPlaylistStore(t) // no call may reach the store
+		h := handlers.NewPlaylistHandler(store, noSearchIndex)
+		c, w := playlistRequest(t, http.MethodPost, "/playlists", "alice",
+			map[string]any{"name": "Hush", "type": "smart", "query": q})
+		h.CreatePlaylist(c)
+		require.Equal(t, http.StatusBadRequest, w.Code, "%s: %s", q, w.Body.String())
+		assert.Contains(t, w.Body.String(), "/regex/ value", q)
+		assert.NotContains(t, w.Body.String(), "parse", q)
 	}
 }
 

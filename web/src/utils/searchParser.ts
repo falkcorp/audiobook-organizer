@@ -1,5 +1,5 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.7.3
+// version: 1.7.4
 // last-edited: 2026-10-26
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
@@ -28,9 +28,9 @@ export interface ParsedSearch {
   fieldFilters: FieldFilter[];
   /**
    * Set when the query has boolean structure the field/value split below cannot
-   * carry (see hasBooleanStructure): an OR or AND, a parenthesised group or an
-   * alternation, a `|`, a `tag:` term under NOT or `-`, a `tag:` term that is not
-   * one whole tag name. The Library then sends this raw text as `search=` and no
+   * carry (see hasBooleanStructure): an OR, AND, `||`, `&&` or `|` next to a field
+   * term, a field term inside a parenthesised group, an alternation, a `tag:` term
+   * under NOT or `-`, a `tag:` term that is not one whole tag name. The Library then sends this raw text as `search=` and no
    * field filters for it, so the server's own parser reads it and answers it, or
    * refuses it with a message the Library shows. Without it the flat split dropped
    * `-tag:"to-read"`, turned `tag:noir OR tag:gotham` into a search for the word
@@ -118,16 +118,25 @@ function fieldTermIsStructure(
 }
 
 /**
- * Whether one free word (a token that is not a known `field:value`) is boolean
- * structure: a bare OR, AND, NOT, `||` or `&&`, a `|`, or the opening of a group,
- * `(a`, `-(a`. The split leaves such a word in the free text, where the server never
- * reads it as an operator. A parenthesis inside or after a word (`Batman(1989)`,
- * `Year (One)` closing) is not a group: the server reads it as text.
+ * A free word that is a binary operator the server's grammar reads: OR, AND, `||`,
+ * `&&`, or a lone `|`. A bare NOT is not one: the tokenizer already takes `NOT field:x`
+ * as a negated term, and a NOT that touches only free words changes nothing the split
+ * does. A `|` inside or on the edge of a longer word is text in free text; it is
+ * an alternation only inside a field value.
  */
-function freeWordIsStructure(word: string): boolean {
-  if (word === 'OR' || word === 'AND' || word === 'NOT' || word === '&&') return true;
-  if (word.includes('|')) return true;
-  return word.replace(/^-/, '').startsWith('(');
+function freeWordIsOperator(word: string): boolean {
+  return word === 'OR' || word === 'AND' || word === '&&' || word === '||' || word === '|';
+}
+
+/**
+ * The `(` a word opens and the `)` it closes, `-(` counting as a `(`. A `(` inside the
+ * word (`Batman(1989)`) is text and pairs with the `)` after it, so it closes nothing.
+ */
+function wordGroupDelta(word: string): { opens: number; closes: number } {
+  const opens = /^-?(\(+)/.exec(word)?.[1].length ?? 0;
+  const inner = (word.match(/\(/g) ?? []).length - opens;
+  const trailing = /(\)+)$/.exec(word)?.[1].length ?? 0;
+  return { opens, closes: Math.max(0, trailing - inner) };
 }
 
 /**
@@ -136,7 +145,16 @@ function freeWordIsStructure(word: string): boolean {
  * tokens parseSearch cuts the input into, never from a second pass over the raw text
  * (a second grammar drifted: it counted the `(`, `)` and `|` inside a `/regex/` or
  * a plain value as groups, and sent `title:/^(the|a) /` to a search index that has no
- * regex). See fieldTermIsStructure and freeWordIsStructure for what counts.
+ * regex). See fieldTermIsStructure for the terms that count on their own.
+ *
+ * Structure among free words alone does NOT count. `robin NOT joker`, `Batman (1987)`
+ * and `a OR b` stay on the split: the free text goes to `search=` and the server's own
+ * parser reads the operators in it, exactly as it always has. What the split cannot
+ * carry is an operator or a group that binds a term it pulls out of the text, because
+ * the field filters then drop out of `filters=` and are matched as whole words in the
+ * index instead. So an OR, AND, `||`, `&&` or `|` counts only when it sits next to an
+ * extracted field term (`title:x OR robin`), and an extracted term counts only while a
+ * group opened by a free word is still open (`(robin title:x)`).
  *
  * A boost or fuzzy marker that follows a tag term, glued (`tag:"noir"^2`) or after a
  * space (`tag:noir ^2`), is the tag's: the server refuses it as one.
@@ -247,9 +265,16 @@ function scanSearch(input: string): {
   let structure = false;
   // The previous token was a tag: term, so a modifier word right after it is the tag's.
   let afterTag = false;
-  // Inside a double-quoted phrase that began in an earlier free word
+  // Inside a double-quoted phrase that began in an earlier token
   // (`"Dark (Knight)"` is two words here): a phrase is text, never structure.
   let inQuote = false;
+  // The kind of the previous token, and whether it was an operator word: an operator
+  // is structure when an extracted field term sits on either side of it.
+  let prev: 'field' | 'free' | null = null;
+  let prevIsOperator = false;
+  // Groups opened by free words and not yet closed: an extracted term inside one is
+  // bound by the group, which the split cannot carry.
+  let depth = 0;
   const freeWord = (word: string) => {
     freeTextParts.push(word);
     let bare = word;
@@ -259,9 +284,14 @@ function scanSearch(input: string): {
     }
     if ((word.match(/"/g) ?? []).length % 2 === 1) inQuote = !inQuote;
     bare = bare.replace(/"[^"]*"?/g, '');
-    if (freeWordIsStructure(bare)) structure = true;
+    const operator = freeWordIsOperator(bare);
+    if (operator && prev === 'field') structure = true;
+    const { opens, closes } = wordGroupDelta(bare);
+    depth = Math.max(0, depth + opens - closes);
     if (afterTag && TAG_MODIFIER_WORD.test(word)) structure = true;
     afterTag = false;
+    prev = 'free';
+    prevIsOperator = operator;
   };
 
   if (!input.trim()) {
@@ -308,11 +338,22 @@ function scanSearch(input: string): {
       const trimmedValue = fieldMatch.value.trim();
       if (
         !inQuote &&
-        fieldTermIsStructure(fieldMatch.field, trimmedValue, fieldMatch.quoted, negated)
+        (fieldTermIsStructure(fieldMatch.field, trimmedValue, fieldMatch.quoted, negated) ||
+          prevIsOperator ||
+          depth > 0)
       ) {
         structure = true;
       }
       afterTag = !inQuote && fieldMatch.field === 'tag';
+      prev = 'field';
+      prevIsOperator = false;
+      if (!fieldMatch.quoted && !trimmedValue.startsWith('/')) {
+        // A quote that opens inside a plain value (`title:x"a b"`) opens a phrase
+        // that a later word closes, and one that closes a phrase (`"a title:b"`)
+        // ends it: the quotes in the value count like those of a free word.
+        if ((trimmedValue.match(/"/g) ?? []).length % 2 === 1) inQuote = !inQuote;
+        depth = Math.max(0, depth - wordGroupDelta(trimmedValue).closes);
+      }
       if (trimmedValue) {
         fieldFilters.push({
           field: fieldMatch.field,

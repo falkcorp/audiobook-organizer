@@ -1,5 +1,5 @@
 // file: internal/search/regex_terms_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 148c6695-1e57-4f30-82d5-738fbd5a4a76
 // last-edited: 2026-10-26
 
@@ -70,6 +70,34 @@ func TestCheckRegexTerms_AcceptsEverythingThatIsNotARegexValue(t *testing.T) {
 		})
 	}
 	assert.NoError(t, CheckRegexTerms(nil))
+}
+
+// N1: the parser reads any `name:` as a field, so a pasted URL, a drive path and a title
+// with a colon are "fields" with a slash value. They are no regex, and no field the
+// index holds: they are searched as they always were and get no regex message.
+func TestCheckRegexTerms_AFieldTheIndexDoesNotHoldIsNotARegexTerm(t *testing.T) {
+	for _, q := range []string{
+		"https://www.audible.com/pd/B0123",
+		"http://example.invalid/",
+		"https://www.audible.com/pd/B0123/",
+		`c:/lib/Gotham/Hush`,
+		"Batman: /Year One/",
+		"mailto:/x/",
+		"foo:/bar",
+		"title:Hush OR https://example.invalid/knightfall",
+		"foo:(a|/x/)",
+	} {
+		t.Run(q, func(t *testing.T) {
+			ast, err := ParseQuery(q)
+			require.NoError(t, err)
+			assert.NoError(t, CheckRegexTerms(ast))
+			assert.NoError(t, CheckQueryTerms(ast, time.Now()))
+		})
+	}
+	// the same slash on a field the index holds is still refused
+	ast, err := ParseQuery("title:/Year One/ OR https://example.invalid/")
+	require.NoError(t, err)
+	assert.True(t, IsRegexValueError(CheckRegexTerms(ast)))
 }
 
 func TestUnparsableRegexQuery(t *testing.T) {

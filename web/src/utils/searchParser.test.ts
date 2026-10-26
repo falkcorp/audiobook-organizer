@@ -1,5 +1,5 @@
 // file: web/src/utils/searchParser.test.ts
-// version: 1.2.4
+// version: 1.2.5
 // guid: 3c7e9a15-6d2f-4b84-a0e3-9f1b5c8d2e47
 // last-edited: 2026-10-26
 
@@ -318,6 +318,64 @@ describe('parseSearch: a field value is never structure (B1)', () => {
       [{ field: 'title', value: '/(a|b)/', negated: false, quoted: false }],
       'Hush Batman(1989)',
     ],
+    // B1': structure among free words alone is the server's to read. Sent whole, the
+    // field term next to it would stop being a filter (substring, glob, regex) and
+    // become a whole-word match in the index, or be refused for a field the index
+    // does not know: `title:bat NOT robin` answered nothing, `codec:aac NOT x` a 400.
+    [
+      'title:bat NOT robin',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      'NOT robin',
+    ],
+    [
+      'title:bat Batman (1987)',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      'Batman (1987)',
+    ],
+    [
+      'title:/^the/ NOT robin',
+      [{ field: 'title', value: '/^the/', negated: false, quoted: false }],
+      'NOT robin',
+    ],
+    [
+      'codec:aac NOT dramatized',
+      [{ field: 'codec', value: 'aac', negated: false, quoted: false }],
+      'NOT dramatized',
+    ],
+    [
+      'ident:missing NOT batman',
+      [{ field: 'ident', value: 'missing', negated: false, quoted: false }],
+      'NOT batman',
+    ],
+    [
+      'title:bat robin OR joker',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      'robin OR joker',
+    ],
+    [
+      'title:bat NOT (robin OR hush)',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      'NOT (robin OR hush)',
+    ],
+    ['Hush NOT foo:bar', [], 'Hush NOT foo:bar'],
+    ['NOT Batman', [], 'NOT Batman'],
+    ['Batman || Robin', [], 'Batman || Robin'],
+    ['Batman && Robin', [], 'Batman && Robin'],
+    ['Batman | Robin', [], 'Batman | Robin'],
+    // a closed group of free words around no field term, and a pipe inside a word
+    [
+      'title:bat (robin OR hush) year:1989',
+      [
+        { field: 'title', value: 'bat', negated: false, quoted: false },
+        { field: 'year', value: '1989', negated: false, quoted: false },
+      ],
+      '(robin OR hush)',
+    ],
+    [
+      'title:bat robin|joker',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      'robin|joker',
+    ],
   ];
 
   it.each(flat)(
@@ -345,12 +403,23 @@ describe('parseSearch: a field value is never structure (B1)', () => {
     // a group or an alternation around a value is structure
     'title:(Hush|Knightfall)',
     'Hush (title:Year OR title:Zero)',
-    'Batman || Robin',
-    'Batman && Robin',
-    'Batman | Robin',
-    // a bare NOT: the split leaves it in the free text
-    'NOT Batman',
-    'Hush NOT foo:bar',
+    // an operator next to a field term, on either side of it
+    'title:bat OR robin',
+    'robin OR title:bat',
+    'title:bat AND robin',
+    'title:bat || robin',
+    'title:bat && robin',
+    'title:bat | robin',
+    'title:bat OR NOT title:robin',
+    'title:bat robin OR title:joker',
+    // a field term inside a group a free word opened
+    '(robin title:bat)',
+    '-(robin title:bat)',
+    'Hush (robin OR joker title:bat) Knightfall',
+    '(robin title:"bat")',
+    '((robin) title:bat)',
+    // a parenthesis inside a word pairs with its own `)` and closes nothing
+    '(robin Batman(1989) title:bat)',
   ])('%s is sent whole', (typed) => {
     const parsed = parseSearch(typed);
     expect(parsed.serverQuery).toBe(typed);
@@ -381,6 +450,21 @@ describe('parseSearch: a field value is never structure (B1)', () => {
     const parsed = parseSearch(typed);
     expect(parsed.serverQuery).toBe(typed);
     expect(listFieldFilters(parsed)).toEqual([]);
+  });
+
+  // N6: a quote that opens inside a field value, or a field glued inside a phrase, is
+  // counted like the quotes of a free word, so the phrase around it is text and the
+  // structure outside it is seen
+  it.each(['title:x"a b" OR title:y', '"foo title:bar" OR title:y', 'title:y OR title:x"a b"'])(
+    '%s is sent whole: the quote does not swallow the OR',
+    (typed) => {
+      expect(parseSearch(typed).serverQuery).toBe(typed);
+    }
+  );
+
+  it('keeps an OR inside a phrase that a field value opened as text', () => {
+    expect(parseSearch('title:x"a OR b" Hush').serverQuery).toBeUndefined();
+    expect(parseSearch('title:x"a (b" title:y').serverQuery).toBeUndefined();
   });
 
   it('does not read a number or a caret that follows a plain word as a tag modifier', () => {
