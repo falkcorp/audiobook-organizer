@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.124.0
+// version: 2.125.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -1224,6 +1224,26 @@ type BookFile struct {
 	// IntroSourceHash. It survives rescans (the merge keeps it), which is the
 	// reason it lives on the row rather than in an op-side list.
 	IntroRunOpID string `json:"intro_run_op_id,omitempty"`
+	// IntroTimeouts counts how many times the Whisper worker's decoder ran past
+	// its per-clip deadline on THIS file's audio (transcribe_timeout), and
+	// IntroTimeoutHash is the FileHash those strikes were counted against: a
+	// replaced file (new hash) starts again at zero. At the strike limit the
+	// file's TranscribeStatus becomes transcribe_timeout, which both transcribe
+	// ops skip. Written only by BookFileIntroStore.RecordIntroTimeout; cleared
+	// with the rest of the result by ClearBookFileIntro.
+	IntroTimeouts    int    `json:"intro_timeouts,omitempty"`
+	IntroTimeoutHash string `json:"intro_timeout_hash,omitempty"`
+	// IntroTimeoutRunID is the run that counted the latest strike. A strike is
+	// one per (file, run): a run that sees the same file time out again (a
+	// retry round, or a worker that stalls on everything) is not a second
+	// piece of evidence about the audio, so a repeat from the same run is
+	// refused rather than counted.
+	IntroTimeoutRunID string `json:"intro_timeout_run_id,omitempty"`
+	// IntroTimeoutAt is when the latest strike was counted. A run id cannot say
+	// that two different ops saw ONE stall (each op has its own id), so a strike
+	// is also refused while the previous one is closer than the caller's MinGap.
+	// Travels with the strikes; zero (never recorded) means "long ago".
+	IntroTimeoutAt *time.Time `json:"intro_timeout_at,omitempty"`
 	// IntroMeta is how the clip was made and which model heard it. Not queried by
 	// any filter, so stripBookFileForMemdb clears it like IntroTranscription.
 	IntroMeta *IntroMeta `json:"intro_meta,omitempty"`

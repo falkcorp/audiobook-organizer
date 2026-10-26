@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.38.0
+// version: 3.40.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,29 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// introTranscribeOpID is the per-book op's registry id (error prefixes, the
+// write gate).
+const introTranscribeOpID = "maintenance.transcribe-book-intros"
+
+// bookIntroHeartbeat is the liveness tick the per-book op sends while a whisper
+// request is outstanding. It stamps the watchdog's clock (TouchLiveness) and
+// nothing else: the page goroutines each own their own progress numerator
+// (base + done, see onBook), so a tick that wrote a number would step the
+// op's progress backwards between two books. The message goes to the current
+// item label, which is an event and writes nothing to the store.
+//
+// A timer-driven TouchLiveness is acceptable here, against that method's own
+// advice, because the ticker exists only while a request is in flight and the
+// transport supervises that request (it polls the worker's /health and ends
+// the request when the worker is wedged or gone), so the tick cannot outlive
+// the work it vouches for.
+func bookIntroHeartbeat(reporter sdk.Reporter) func(msg string) {
+	return func(msg string) {
+		registry.TouchLiveness(reporter)
+		reporter.SetCurrentItem(msg)
+	}
+}
 
 // transcribeBatchFn is a test seam over transcribe.TranscribeBatchOpts so tests
 // can substitute a stub (e.g. one returning *transcribe.TransportError) without
@@ -359,7 +383,11 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// journalled): that run exists to get a different answer for the same
 	// audio after VAD/decoder tuning, which a served entry would defeat.
 	startedAt := time.Now()
-	accum := newTranscribeStatsAccum(statsSink, startedAt.Format(time.RFC3339), total, startedAt)
+	// The run id is the registry op id, the same scheme the per-file op uses, so
+	// a strike, a permanent verdict and `clear_run_id` mean the same thing in
+	// both ops (a start time string matched no op id, so clear_run_id could not
+	// select this op's verdicts and SameRun could never match the other op's).
+	accum := newTranscribeStatsAccum(statsSink, fileIntroRunID(reporter), total, startedAt)
 	pj := pageJournal{refresh: retrySilence}
 	if j, jerr := resultjournal.New(store, whisperJournalKind); jerr != nil {
 		log.Warn("transcribe-book-intros: result journal unavailable, running without restart protection", "err", jerr)
@@ -386,6 +414,18 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// thread-safe. processed uses atomic arithmetic; lastID uses a mutex because
 	// string assignment is not atomic (pointer + length, two words).
 	var processed atomic.Int64
+	accum.heartbeat = bookIntroHeartbeat(reporter)
+	// A timeout strike is a write to a book_file row, which a library scan's
+	// unlocked batch upsert can race (see waitWhileScanBusy). The book op does
+	// not wait for the scan: it checks once per page, and while one is running it
+	// defers the strike (the book is simply retried next run) instead of holding
+	// the page, and its liveness beat, for as long as the scan lasts. A host with
+	// no queue reader runs ungated, as this op always has.
+	if queue := p.deps.OperationQueueStore(); queue != nil {
+		accum.gate = func(context.Context) error {
+			return scanBusyNow(introTranscribeOpID, queue)
+		}
+	}
 	var lastIDMu sync.Mutex
 	var lastID string
 
@@ -448,9 +488,16 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				mark+fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, pj, mode)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, retryFailed, pj, mode)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
+		if n := accum.stuck.n.Load(); n >= whisperStuckMaxBatches {
+			// Every one of these pages was deferred with nothing written. A pool
+			// that stays wedged would otherwise defer the whole library one page
+			// at a time and report a clean run.
+			return fmt.Errorf("%s: %w: %d pages in a row; stopping the run, nothing was written for them and the books stay undone (restart the stuck workers)",
+				"maintenance.transcribe-book-intros", errWhisperStuck, n)
+		}
 		log.Info("transcribe-book-intros: page complete",
 			"page_books", done, "cumulative_processed", cum, "total_books", total)
 		return nil
@@ -840,12 +887,13 @@ func needsTranscribeWork(b *database.Book, sel transcribeSelect) bool {
 
 // isDurableTranscribeFailure reports whether a stored TranscribeStatus means the
 // last attempt failed for a reason that re-running the exact same input cannot
-// fix: the source file is gone, the book has no audio file, or ffmpeg could not
-// decode the bytes. Selection skips these (needsTranscribeWork) and only
+// fix: the source file is gone, the book has no audio file, ffmpeg could not
+// decode the bytes, or the Whisper decoder timed out on the audio on every one
+// of its allowed attempts (transcribe_timeout). Selection skips these (needsTranscribeWork) and only
 // re-attempts them when transcribeInputChanged sees the underlying file back.
 func isDurableTranscribeFailure(status string) bool {
 	switch status {
-	case statusSourceMissing, statusNoAudio, statusFFmpegError:
+	case statusSourceMissing, statusNoAudio, statusFFmpegError, statusTranscribeTimeout:
 		return true
 	default:
 		return false
@@ -894,7 +942,7 @@ func hasTranscriptAlready(b *database.Book, sel transcribeSelect) bool {
 // stat failure) means "still broken, keep skipping".
 //
 // For source_file_missing / no_audio the file being present again IS the change.
-// For ffmpeg_error the file was present at failure time too, so require the bytes
+// For ffmpeg_error and transcribe_timeout the file was present at failure time too, so require the bytes
 // to have changed — mtime after the failed attempt (a re-encode or replace).
 // TranscribeAttemptedAt holds the FIRST-failure time (applyOutcome's change-guard
 // does not refresh it on a repeat, and selection skips the book on later runs so
@@ -917,7 +965,7 @@ func transcribeInputChanged(store bookFileLister, b *database.Book) bool {
 	if err != nil {
 		return false // source still absent
 	}
-	if *b.TranscribeStatus == statusFFmpegError {
+	if *b.TranscribeStatus == statusFFmpegError || *b.TranscribeStatus == statusTranscribeTimeout {
 		if b.TranscribeAttemptedAt == nil {
 			return false
 		}
@@ -1074,6 +1122,7 @@ func (p *Plugin) processTranscribePage(
 	onBook transcribe.ProgressFunc,
 	accum *transcribeStatsAccum,
 	extractOnly bool,
+	retryDurable bool, // retry_failed: re-attempt durable failures instead of skipping them
 	pj pageJournal,
 	mode extractMode,
 ) (processed int) {
@@ -1100,6 +1149,9 @@ func (p *Plugin) processTranscribePage(
 	}
 
 	now := time.Now()
+	// gate answers once per page whether a library scan is running, and is asked
+	// only when the page has a book_file write to make.
+	gate := sync.OnceValue(func() error { return accum.gateWrite(ctx) })
 	bookByID := make(map[string]database.Book, len(books))
 	for _, b := range books {
 		bookByID[b.ID] = b
@@ -1112,11 +1164,37 @@ func (p *Plugin) processTranscribePage(
 		fileHash string // empty → no cache key available
 	}
 	jobs := make([]bookJob, 0, len(books))
+	// refByID keeps each book's first-file reference: step 4 needs its row id and
+	// stored hash to count a transcribe_timeout strike against the right file.
+	refByID := make(map[string]audioFileRef, len(books))
 	for _, b := range books {
 		ref, _ := firstAudioFile(store, b)
+		if !retryDurable && !extractOnly && ref.TranscribeStatus == statusTranscribeTimeout {
+			// The per-file op (or an earlier run) already made this file's
+			// decoder timeout permanent. Do not send it again: stamp the verdict
+			// on the book so selection skips it from now on, and move on.
+			log.Warn("transcribe: first file is a permanent transcribe_timeout, book not sent",
+				"book_id", b.ID, "file_id", ref.BookFileID)
+			// Not sent, so not an attempt: it is counted as skipped (a verdict
+			// is already held), never through recordOutcome, which would add an
+			// Attempted and a TranscribeTimeout for a book no worker saw (and
+			// again on every forced run). A book that already carries a
+			// transcript is left exactly as it is: labelling real text a
+			// failure would be wrong.
+			accum.recordSkipped(1)
+			p.writeOutcome(store, log, &b, statusTranscribeTimeout,
+				"first audio file is a permanent transcribe_timeout (decoder ran past its deadline)", "", transcribe.IntroFields{}, now, true)
+			continue
+		}
+		refByID[b.ID] = ref
 		src, hash := ref.Path, ref.CacheKey
 		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
+
+	// sentRef is the file each book's LATEST request actually carried. It starts
+	// as the first file and moves to the second when retry 2 sends that one, so
+	// a timeout is charged to the file that timed out and not to file 1.
+	sentRef := maps.Clone(refByID)
 
 	// Step 2: extract WAVs in parallel with bounded ffmpeg workers. Each
 	// goroutine owns its wavResults[idx] slot, so writes there are race-free.
@@ -1258,34 +1336,89 @@ func (p *Plugin) processTranscribePage(
 	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: pj.journal, RefreshJournal: pj.refresh}
 	var batchResults map[string]transcribe.BatchResult
 	var err error
-	if remote {
-		batchResults, err = transcribePathBatchFn(ctx, pathJobs, batchOpts)
-	} else {
-		batchResults, err = transcribeBatchFn(ctx, batchJobs, batchOpts)
+	// A request can outlast the watchdog's progress budget (a chunk of clips each
+	// allowed up to the worker's per-clip deadline), so say the run is alive
+	// while it waits. The ticker is stopped by a defer, so it ends even if the
+	// call panics.
+	func() {
+		defer tickWhileWaiting(whisperWaitTickInterval, func(elapsed time.Duration) {
+			accum.beat(fmt.Sprintf("waiting on whisper: %d books in flight for %s", len(submitted), elapsed.Round(time.Second)))
+		})()
+		if remote {
+			batchResults, err = transcribePathBatchFn(ctx, pathJobs, batchOpts)
+		} else {
+			batchResults, err = transcribeBatchFn(ctx, batchJobs, batchOpts)
+		}
+	}()
+	// A cancelled run writes nothing: whatever the pool answered before the cancel
+	// is discarded (the books are retried by the next run), the same as the
+	// per-file op. Applying a half-finished page after the operator stopped the
+	// run is the surprising choice, and the strike writes below would go on to
+	// wait on the scan gate with nobody listening.
+	if ctx.Err() != nil {
+		log.Warn("transcribe: run cancelled during the whisper call, page discarded (no status written)", "jobs", len(submitted))
+		accum.recordDeferred(len(submitted))
+		return 0
 	}
+	// On an error the pool may still have answered some books: batchResults
+	// holds what settled before it. Those are applied below; every other
+	// submitted book has no answer and is deferred (or, for a whole-batch
+	// failure that is not a transport error, written as the failure).
+	if batchResults == nil {
+		batchResults = map[string]transcribe.BatchResult{}
+	}
+	if err != nil {
+		// A pool that failed this call produced its timeouts and crashes under
+		// conditions that say nothing about the clips: they are read as no
+		// answer (deferred, never struck), except what the dispatcher itself
+		// condemned. See dropPoolStrikes.
+		if before := len(batchResults); before > 0 {
+			batchResults = dropPoolStrikes(batchResults, batchStrike)
+			if dropped := before - len(batchResults); dropped > 0 {
+				log.Warn("transcribe: the pool failed this call, so its timeouts/crashes are not read as verdicts; those books are deferred without a strike",
+					"dropped", dropped, "answered", len(batchResults))
+			}
+		}
+	}
+	answered := len(batchResults)
+	if err == nil || !transcribe.IsWorkerStuck(err) || answered > 0 {
+		accum.stuck.reset() // the pool answered (or failed some other way)
+	}
+	// batchErr is the detail written for a book with no answer when the whole
+	// batch failed in a way that is not a transport error. Empty otherwise.
+	batchErr := ""
 	var te *transcribe.TransportError
 	switch {
 	case errors.As(err, &te):
-		// Endpoint problem, not a file problem. Write NOTHING; the page is
-		// deferred and will be retried next run. On 2026-07-01 this exact
-		// branch's absence recorded a day-long endpoint outage as ~34,000
-		// false per-book whisper_error verdicts.
-		log.Warn("transcribe: endpoints unreachable, page deferred (no status written)",
-			"jobs", len(submitted), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err)
-		accum.recordDeferred(len(submitted))
-		return 0
-	case err != nil:
-		// Whole-batch failure: every book that had a WAV is a whisper_error.
-		// Note classifyTransport wraps EVERY batch-level error from the remote
-		// path as a TransportError, so in practice this arm is unreachable from
-		// the remote path; kept as defence for the local path.
-		log.Warn("transcribe: whisper batch failed", "jobs", len(submitted), "err", err)
-		detail := truncateDetail(err.Error())
-		for bookID := range submitted {
-			b := bookByID[bookID]
-			p.applyOutcome(store, log, &b, statusWhisperError, detail, "", transcribe.IntroFields{}, now, accum)
+		// Endpoint problem, not a file problem. Write NOTHING for a book that got
+		// no answer; it is retried next run. On 2026-07-01 this exact branch's
+		// absence recorded a day-long endpoint outage as ~34,000 false per-book
+		// whisper_error verdicts.
+		if transcribe.IsWorkerStuck(err) {
+			// Reachable but wedged: not an outage, and not a verdict on any book.
+			// The run loop stops the run after whisperStuckMaxBatches in a row.
+			streak := accum.stuck.n.Load()
+			if answered == 0 {
+				streak = accum.stuck.hit()
+			}
+			log.Warn("transcribe: whisper worker stuck, unanswered books deferred (no status written for them)",
+				"jobs", len(submitted), "answered", answered, "stuck_pages_in_a_row", streak, "of", whisperStuckMaxBatches,
+				"endpoints", te.Endpoints, "err", te.Err.Error())
+		} else {
+			log.Warn("transcribe: endpoints unreachable, unanswered books deferred (no status written for them)",
+				"jobs", len(submitted), "answered", answered, "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err.Error())
 		}
-		return 0
+		if answered == 0 {
+			accum.recordDeferred(len(submitted))
+			return 0
+		}
+	case err != nil:
+		// Whole-batch failure: every book that had a WAV and no answer is a
+		// whisper_error. Note classifyTransport wraps EVERY batch-level error from
+		// the remote path as a TransportError, so in practice this arm is
+		// unreachable from the remote path; kept as defence for the local path.
+		log.Warn("transcribe: whisper batch failed", "jobs", len(submitted), "answered", answered, "err", err)
+		batchErr = truncateDetail(err.Error())
 	}
 
 	// Step 3b: retry silence — books that Whisper returned 0 chars for get two
@@ -1300,6 +1433,10 @@ func (p *Plugin) processTranscribePage(
 		src  string
 	}
 	var silentQueue []silentBook
+	// wasSilent is every book that came back empty on the first pass, kept after
+	// silentQueue is consumed: a retry that cannot be judged (see
+	// bookTimeoutHeldResult) still has to know the book was silent.
+	wasSilent := map[string]bool{}
 	for bookID, result := range batchResults {
 		if result.Error == "" && result.Text == "" {
 			if b, ok := bookByID[bookID]; ok {
@@ -1307,6 +1444,7 @@ func (p *Plugin) processTranscribePage(
 				src := ref.Path
 				if src != "" {
 					silentQueue = append(silentQueue, silentBook{book: b, src: src})
+					wasSilent[bookID] = true
 				}
 			}
 		}
@@ -1331,21 +1469,25 @@ func (p *Plugin) processTranscribePage(
 	// a worker, so a remote-mode run's retries never decode on this server either.
 	retryRound := func(name string, srcs map[string]string, seconds int) (map[string]transcribe.BatchResult, map[string]bool) {
 		failed := map[string]bool{}
-		failAll := func() {
-			for id := range srcs {
-				failed[id] = true
-			}
-		}
 		// collect flags every submitted id whose retry says nothing about the
 		// book: no result at all, or (remote) a worker that is itself
 		// misconfigured. A per-job error that IS a verdict about the book
 		// (ffmpeg_error on the 300 s clip, a not_found the server's own stat
 		// confirms) is not a failure here: the caller keeps it in batchResults
 		// and Step 4's classifyTranscribeError decides what it means.
-		collect := func(res map[string]transcribe.BatchResult, sent map[string]string) {
+		//
+		// A worker_misconfigured answer is the worker's fault on either transport
+		// (the upload worker answers it too when its decoder cannot start), so it
+		// is never a verdict. When the dispatch itself failed, a strike-type
+		// answer in it is not a verdict either (see dropPoolStrikes), unless the
+		// dispatcher condemned the file.
+		collect := func(res map[string]transcribe.BatchResult, sent map[string]string, rerr error) {
 			for id := range sent {
 				r, ok := res[id]
-				if !ok || (remote && transcribe.PathErrorCode(r.Error) == transcribe.PathErrWorkerMisconfigured) {
+				switch {
+				case !ok, transcribe.PathErrorCode(r.Error) == transcribe.PathErrWorkerMisconfigured:
+					failed[id] = true
+				case rerr != nil && isTimeoutResult(r.Error) && !r.Condemned:
 					failed[id] = true
 				}
 			}
@@ -1360,11 +1502,11 @@ func (p *Plugin) processTranscribePage(
 			}
 			res, rerr := transcribePathBatchFn(ctx, jobs, batchOpts)
 			if rerr != nil {
-				log.Warn("transcribe: "+name+" path batch failed", "jobs", len(jobs), "err", rerr)
-				failAll()
-				return nil, failed
+				// Whatever the pool answered before it failed stands; collect
+				// marks every id it did not answer as failed.
+				log.Warn("transcribe: "+name+" path batch failed", "jobs", len(jobs), "answered", len(res), "err", rerr)
 			}
-			collect(res, srcs)
+			collect(res, srcs, rerr)
 			return res, failed
 		}
 		wavs := make(map[string]string, len(srcs))
@@ -1385,12 +1527,21 @@ func (p *Plugin) processTranscribePage(
 		}
 		res, rerr := transcribeBatchFn(ctx, wavs, batchOpts)
 		if rerr != nil {
-			log.Warn("transcribe: "+name+" batch failed", "jobs", len(wavs), "err", rerr)
-			failAll()
-			return nil, failed
+			log.Warn("transcribe: "+name+" batch failed", "jobs", len(wavs), "answered", len(res), "err", rerr)
 		}
-		collect(res, wavs)
+		collect(res, wavs, rerr)
 		return res, failed
+	}
+
+	if err != nil && len(silentQueue) > 0 {
+		// The pool is failing, so a longer clip would go to the same place. A
+		// book that came back empty is not known to be silent here either way:
+		// it is deferred (see retryFailed), not written as silence.
+		log.Warn("transcribe: pool failed this page, silence retries skipped and those books deferred", "count", len(silentQueue))
+		for _, sb := range silentQueue {
+			retryFailed[sb.book.ID] = true
+		}
+		silentQueue = nil
 	}
 
 	if len(silentQueue) > 0 {
@@ -1401,6 +1552,20 @@ func (p *Plugin) processTranscribePage(
 		}
 		r1, r1failed := retryRound("retry1", retry1Srcs, remoteRetryLongSeconds)
 		for id, res := range r1 {
+			if r1failed[id] {
+				continue // says nothing about the book; Step 4 defers it
+			}
+			if isTimeoutResult(res.Error) {
+				// The 300 s clip ran the decoder out of time (or killed it). The
+				// per-file op only ever sends the 90 s clip, which decoded fine
+				// here, so a strike on THIS file would walk a file the rest of
+				// the library can read toward a permanent verdict on the strength
+				// of a clip nobody else sends. The book is simply still silent
+				// as far as retry 1 could tell, and goes on to retry 2.
+				log.Warn("transcribe: retry 1 (300s clip) timed out, no strike counted, book stays silent for retry 2",
+					"book_id", id, "err", truncateDetail(res.Error))
+				continue
+			}
 			// A transcript replaces the empty first pass; so does a per-job
 			// error, which Step 4 classifies (see retryRound's collect).
 			if res.Text != "" || res.Error != "" {
@@ -1431,10 +1596,23 @@ func (p *Plugin) processTranscribePage(
 				if ref2.Path == "" {
 					continue
 				}
+				if !retryDurable && ref2.TranscribeStatus == statusTranscribeTimeout {
+					// The second file is already a permanent transcribe_timeout:
+					// sending it again only costs a worker its decoder. The book
+					// is treated as having no usable second file.
+					log.Warn("transcribe: second audio file is a permanent transcribe_timeout, retry 2 not sent",
+						"book_id", sb.book.ID, "file_id", ref2.BookFileID)
+					continue
+				}
 				retry2Srcs[sb.book.ID] = ref2.Path
+				// From here a timeout on this book is the SECOND file's.
+				sentRef[sb.book.ID] = ref2
 			}
 			r2, r2failed := retryRound("retry2", retry2Srcs, remoteClipSeconds)
 			for id, res := range r2 {
+				if r2failed[id] {
+					continue // says nothing about the book; Step 4 defers it
+				}
 				if res.Text != "" || res.Error != "" {
 					batchResults[id] = res
 				}
@@ -1444,39 +1622,19 @@ func (p *Plugin) processTranscribePage(
 			}
 
 			// Mark books that exhausted all retries with the silence sentinel.
-			sentinel := silenceSentinel
 			markedSilent := 0
 			for _, s := range stillSilent {
 				if br := batchResults[s.book.ID]; br.Text != "" || br.Error != "" || retryFailed[s.book.ID] {
 					continue
 				}
-				// s.book was copied before ffmpeg and two whisper passes ran.
-				// Write only the sentinel column, under the book's write lock
-				// (ModifyBook), so a column another writer committed meanwhile
-				// is not reverted (audit A1#15). A transcript that landed
-				// meanwhile outranks the sentinel and is kept.
+				// s.book was copied before ffmpeg and two whisper passes ran, so
+				// the write re-reads the row (see writeSilenceSentinel).
 				id := s.book.ID
-				wrote := false
-				written, uerr := store.ModifyBook(id, func(cur *database.Book) error {
-					if cur.IntroTranscription != nil && *cur.IntroTranscription != "" {
-						// A real transcript that landed meanwhile outranks the
-						// sentinel; a row already carrying the sentinel needs
-						// no second write (and no UpdatedAt bump).
-						return database.ErrSkipBookWrite
-					}
-					cur.IntroTranscription = &sentinel
-					wrote = true
-					return nil
-				})
-				switch {
-				case uerr != nil:
-					log.Warn("transcribe: silence sentinel write failed", "book_id", id, "err", uerr)
-				case written == nil:
-					log.Warn("transcribe: silence sentinel write skipped, book gone", "book_id", id)
-				default:
-					if wrote {
-						markedSilent++
-					}
+				wrote, settled := writeSilenceSentinel(store, log, id)
+				if wrote {
+					markedSilent++
+				}
+				if settled {
 					silencedBookIDs[id] = true
 				}
 			}
@@ -1493,14 +1651,57 @@ func (p *Plugin) processTranscribePage(
 		book := bookByID[bookID]
 		result, ok := batchResults[bookID]
 		switch {
-		case remote && ok && transcribe.PathErrorCode(result.Error) == transcribe.PathErrWorkerMisconfigured:
+		case !ok && batchErr == "":
+			// No answer is not a verdict. The pool failed before it reached this
+			// book, or a transport dropped the job: nothing is written, and the
+			// next run sends it again. (Writing "no whisper result" as a
+			// whisper_error here is what turned a half-answered page into
+			// per-book failures.)
+			log.Warn("transcribe: no whisper result for a sent book, deferred (no status written)", "book_id", bookID)
+			accum.recordDeferred(1)
+		case ok && transcribe.PathErrorCode(result.Error) == transcribe.PathErrWorkerMisconfigured:
 			// The worker, not the book, is broken (ffmpeg missing from its
-			// PATH). Storing it as a per-book verdict is the 2026-08-31 shape:
-			// write nothing and defer, like an unreachable endpoint.
+			// PATH, or a decoder that cannot start). Storing it as a per-book
+			// verdict is the 2026-08-31 shape: write nothing and defer, like an
+			// unreachable endpoint. Both transports use the code.
 			log.Warn("transcribe: worker misconfigured, book deferred (no status written)", "book_id", bookID, "err", result.Error)
 			accum.recordDeferred(1)
+		case ok && isTimeoutResult(result.Error):
+			// The worker killed its decoder on this clip, or it died holding it.
+			// Counted per file (the file that clip came from), and permanent only
+			// at the strike limit; see recordBookTimeout.
+			outcome, held := p.recordBookTimeout(ctx, store, log, &book, sentRef[bookID], result.Error, now, accum, gate)
+			if outcome != bookTimeoutHeldResult {
+				continue
+			}
+			// The file the request carried already holds a result, so the timeout
+			// says nothing about it: use that result rather than guess.
+			switch {
+			case held.real():
+				// The file's own transcript (the per-file op covered it) outranks
+				// silence: it is the book's answer, parsed like any other.
+				log.Warn("transcribe: the timed-out file already holds a transcript, applied as the book's result",
+					"book_id", bookID, "file_id", sentRef[bookID].BookFileID)
+				if p.applyTranscript(store, log, &book, held.text, now, accum) {
+					processed++
+				}
+			case held.silent() && wasSilent[bookID]:
+				// The file is itself recorded as silent and the book was silent
+				// on the first pass: silent as far as every clip could listen.
+				if _, settled := writeSilenceSentinel(store, log, bookID); settled {
+					log.Warn("transcribe: silent book whose retry hit a file already recorded as silent, marked as silence", "book_id", bookID)
+					continue
+				}
+				accum.recordDeferred(1)
+			default:
+				// A result that is neither text nor silence cannot be judged;
+				// the sentinel is never written on that.
+				log.Warn("transcribe: the timed-out file holds a result that is neither a transcript nor silence, book deferred",
+					"book_id", bookID, "file_id", sentRef[bookID].BookFileID, "held_status", held.status)
+				accum.recordDeferred(1)
+			}
 		case !ok || result.Error != "":
-			status, detail := statusWhisperError, "no whisper result"
+			status, detail := statusWhisperError, batchErr
 			if ok {
 				status, detail = classifyTranscribeError(remote, srcByID[bookID], result.Error)
 			}
@@ -1520,22 +1721,61 @@ func (p *Plugin) processTranscribePage(
 			}
 			p.applyOutcome(store, log, &book, statusEmpty, "whisper returned empty text", "", transcribe.IntroFields{}, now, accum)
 		default:
-			fields := transcribe.ParseAudiobookIntro(result.Text)
-			// statusOK requires a parsed title. When Whisper returns text but
-			// the parser can't extract a title, store the raw transcript but
-			// mark it statusUnparsed so it's excluded by OnlyParsedTranscription
-			// and can be retried later via reparse_only after a parser fix.
-			outcome := statusOK
-			if fields.Title == "" {
-				outcome = statusUnparsed
-			}
-			if p.applyOutcome(store, log, &book, outcome, "", result.Text, fields, now, accum) {
+			if p.applyTranscript(store, log, &book, result.Text, now, accum) {
 				processed++
 			}
+			// The audio decoded after all: strikes counted against these bytes
+			// (by this op or the per-file one) are evidence the file no longer
+			// supports.
+			p.clearFileTimeouts(store, log, bookID, sentRef[bookID], gate)
 		}
 	}
 
 	return processed
+}
+
+// applyTranscript parses a transcript and writes it as the book's outcome.
+// statusOK requires a parsed title. When Whisper returns text but the parser
+// can't extract a title, the raw transcript is stored but marked statusUnparsed
+// so it's excluded by OnlyParsedTranscription and can be retried later via
+// reparse_only after a parser fix. Returns whether a transcript was written.
+func (p *Plugin) applyTranscript(store bookModifier, log interface {
+	Info(string, ...any)
+	Warn(string, ...any)
+}, book *database.Book, text string, now time.Time, accum *transcribeStatsAccum) bool {
+	fields := transcribe.ParseAudiobookIntro(text)
+	outcome := statusOK
+	if fields.Title == "" {
+		outcome = statusUnparsed
+	}
+	return p.applyOutcome(store, log, book, outcome, "", text, fields, now, accum)
+}
+
+// writeSilenceSentinel stores the silence sentinel on a book, under the book's
+// write lock (ModifyBook), so a column another writer committed meanwhile is
+// not reverted (audit A1#15). A transcript that landed meanwhile outranks the
+// sentinel and is kept, and a row already carrying it is not written again (no
+// UpdatedAt bump). wrote reports a new write; settled reports that the book now
+// carries the sentinel or a transcript, i.e. nothing more is owed for it.
+func writeSilenceSentinel(store bookModifier, log interface{ Warn(string, ...any) }, bookID string) (wrote, settled bool) {
+	sentinel := silenceSentinel
+	written, err := store.ModifyBook(bookID, func(cur *database.Book) error {
+		if cur.IntroTranscription != nil && *cur.IntroTranscription != "" {
+			return database.ErrSkipBookWrite
+		}
+		cur.IntroTranscription = &sentinel
+		wrote = true
+		return nil
+	})
+	switch {
+	case err != nil:
+		log.Warn("transcribe: silence sentinel write failed", "book_id", bookID, "err", err)
+		return false, false
+	case written == nil:
+		log.Warn("transcribe: silence sentinel write skipped, book gone", "book_id", bookID)
+		return false, false
+	}
+	return wrote, true
 }
 
 // applyOutcome writes a book's transcription outcome and records it in the
@@ -1563,7 +1803,29 @@ func (p *Plugin) applyOutcome(
 	accum *transcribeStatsAccum,
 ) (ok bool) {
 	accum.recordOutcome(status, now)
+	return p.writeOutcome(store, log, book, status, detail, text, fields, now, false)
+}
 
+// writeOutcome is applyOutcome without the accounting: it writes the book's
+// outcome and counts nothing. A caller that did not attempt the book (it holds
+// a verdict already and was not sent) uses it directly so Attempted and the
+// per-status counters stay a count of books a worker actually saw.
+//
+// keepTranscript leaves a book that already carries a transcript untouched
+// (re-read under the write lock): a failure label over real text is wrong, and
+// the stored verdict is no reason to relabel it.
+func (p *Plugin) writeOutcome(
+	store bookModifier,
+	log interface {
+		Info(string, ...any)
+		Warn(string, ...any)
+	},
+	book *database.Book,
+	status, detail, text string,
+	fields transcribe.IntroFields,
+	now time.Time,
+	keepTranscript bool,
+) (ok bool) {
 	newDetail := strPtrOrNil(detail)
 	hasTranscript := status == statusOK || status == statusUnparsed
 
@@ -1573,6 +1835,9 @@ func (p *Plugin) applyOutcome(
 	// while the clip was being transcribed is not reverted (audit A1#15).
 	wrote := false
 	written, err := store.ModifyBook(book.ID, func(cur *database.Book) error {
+		if keepTranscript && cur.IntroTranscription != nil && *cur.IntroTranscription != "" {
+			return database.ErrSkipBookWrite
+		}
 		// A transcript outcome (OK or Unparsed) always carries fresh text and must
 		// write. Only pure failures are change-guarded: identical status+detail
 		// already stored → no write (avoids churning ~45K stale-path books on re-run).
@@ -1674,6 +1939,140 @@ func classifyTranscribeError(remote bool, src, errText string) (status, detail s
 	}
 }
 
+// bookTimeoutOutcome is what recordBookTimeout did with one book.
+type bookTimeoutOutcome int
+
+const (
+	// bookTimeoutDone: the book was accounted for (deferred, or made permanent)
+	// and nothing more is owed.
+	bookTimeoutDone bookTimeoutOutcome = iota
+	// bookTimeoutHeldResult: the file that timed out already holds a result, so
+	// the timeout is no information about the book and NOTHING was recorded or
+	// counted. The caller decides what the book gets from the held result
+	// (see heldIntroResult and Step 4).
+	bookTimeoutHeldResult
+)
+
+// heldIntroResult is what the timed-out file already held: its stored
+// transcript and TranscribeStatus ("" when unset), read under the row lock that
+// refused the strike.
+type heldIntroResult struct{ text, status string }
+
+// real reports a transcript that is the file's actual answer.
+func (h heldIntroResult) real() bool { return h.text != "" && h.text != silenceSentinel }
+
+// silent reports a result that says the clip held no speech: the sentinel, or an
+// empty verdict with no text.
+func (h heldIntroResult) silent() bool {
+	return h.text == silenceSentinel || (h.text == "" && h.status == statusEmpty)
+}
+
+// recordBookTimeout handles one book whose request the worker answered with a
+// transcribe_timeout (or decoder_crashed). ref is the file that request carried
+// (sentRef: the first file, or the second when retry 2 sent it), and the strike
+// is counted on THAT file's row, so the per-file op shares it and a replaced file
+// starts again; only when the file reaches the strike limit does the book itself
+// get the permanent status. Below the limit the book is deferred: nothing about
+// it is written and the next run retries. A strike counts once per run, and only
+// when the previous one is at least transcribeStrikeMinGap old (one stall seen
+// by both ops, or by two pages, is one occasion): otherwise the book is
+// deferred without a second strike.
+//
+// A book with no book_file row (the Book.FilePath fallback) or no stored hash
+// has nowhere to keep a strike, so it can never become permanent here: it is
+// deferred and logged, and every run will send it again. The worker's own
+// deadline bounds the cost of each attempt, which is why that is tolerable.
+//
+// gate answers whether a book_file write may be made now (no scan running); it
+// is asked at most once per page by the caller.
+func (p *Plugin) recordBookTimeout(
+	ctx context.Context,
+	store transcribePageStore,
+	log interface {
+		Info(string, ...any)
+		Warn(string, ...any)
+	},
+	book *database.Book, ref audioFileRef, errText string, now time.Time, accum *transcribeStatsAccum,
+	gate func() error,
+) (bookTimeoutOutcome, heldIntroResult) {
+	intros, hasCap := database.AsCapability[database.BookFileIntroStore](store)
+	if !hasCap || ref.BookFileID == "" || ref.StoredHash == "" {
+		log.Warn("transcribe: transcribe_timeout but no book_file row/hash to count strikes on, book deferred (no status written)",
+			"book_id", book.ID, "has_row", ref.BookFileID != "", "has_hash", ref.StoredHash != "", "has_capability", hasCap)
+		accum.recordDeferred(1)
+		return bookTimeoutDone, heldIntroResult{}
+	}
+	// The strike is a book_file write; a library scan can race it, so while one
+	// is running the book is deferred instead of the page waiting for the scan.
+	if err := gate(); err != nil {
+		log.Warn("transcribe: write gate closed, transcribe_timeout strike not recorded, book deferred",
+			"book_id", book.ID, "file_id", ref.BookFileID, "err", err.Error())
+		accum.recordDeferred(1)
+		return bookTimeoutDone, heldIntroResult{}
+	}
+	detail := truncateDetail(errText)
+	out, err := intros.RecordIntroTimeout(book.ID, ref.BookFileID, database.IntroTimeoutStrike{
+		SourceHash: ref.StoredHash, RunOpID: accum.snapshot().RunOpID, Detail: detail, At: now,
+		Limit: transcribeTimeoutStrikeLimit, MinGap: transcribeStrikeMinGap,
+	})
+	switch {
+	case err != nil:
+		log.Warn("transcribe: recording a transcribe_timeout strike failed, book deferred", "book_id", book.ID, "file_id", ref.BookFileID, "err", err.Error())
+		accum.recordDeferred(1)
+	case out.SameRun:
+		log.Info("transcribe: transcribe_timeout already counted for this file in this run, book deferred without a second strike",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes)
+		accum.recordDeferred(1)
+	case out.TooSoon:
+		log.Info("transcribe: transcribe_timeout too soon after the file's last strike, book deferred without a second strike",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "min_gap", transcribeStrikeMinGap.String())
+		accum.recordDeferred(1)
+	case out.Stale:
+		log.Warn("transcribe: transcribe_timeout strike not recorded (file changed), book deferred",
+			"book_id", book.ID, "file_id", ref.BookFileID)
+		accum.recordDeferred(1)
+	case out.Skipped:
+		log.Warn("transcribe: transcribe_timeout strike not recorded (file already has a result)",
+			"book_id", book.ID, "file_id", ref.BookFileID)
+		return bookTimeoutHeldResult, heldIntroResult{text: out.HeldText, status: out.HeldStatus}
+	case out.Permanent:
+		log.Warn("transcribe: transcribe_timeout is now permanent for this book",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "limit", transcribeTimeoutStrikeLimit)
+		p.applyOutcome(store, log, book, statusTranscribeTimeout, detail, "", transcribe.IntroFields{}, now, accum)
+	default:
+		log.Warn("transcribe: transcribe_timeout strike recorded, book deferred to the next run",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "limit", transcribeTimeoutStrikeLimit)
+		accum.recordDeferred(1)
+	}
+	return bookTimeoutDone, heldIntroResult{}
+}
+
+// clearFileTimeouts drops the timeout strikes on the file whose audio just
+// produced a transcript (and a transcribe_timeout verdict they led to). It only
+// acts when the ref shows strikes counted against the bytes that were sent, and
+// is best-effort: a failure, or a scan running, leaves the strikes for the next
+// run's success.
+func (p *Plugin) clearFileTimeouts(
+	store transcribePageStore,
+	log interface{ Warn(string, ...any) },
+	bookID string, ref audioFileRef, gate func() error,
+) {
+	if ref.BookFileID == "" || ref.StoredHash == "" || ref.IntroTimeouts == 0 || ref.IntroTimeoutHash != ref.StoredHash {
+		return
+	}
+	intros, ok := database.AsCapability[database.BookFileIntroStore](store)
+	if !ok {
+		return
+	}
+	if err := gate(); err != nil {
+		log.Warn("transcribe: write gate closed, timeout strikes left in place", "book_id", bookID, "file_id", ref.BookFileID, "err", err.Error())
+		return
+	}
+	if _, err := intros.ClearIntroTimeouts(bookID, ref.BookFileID, ref.StoredHash); err != nil {
+		log.Warn("transcribe: clearing timeout strikes failed", "book_id", bookID, "file_id", ref.BookFileID, "err", err.Error())
+	}
+}
+
 // ffmpegErrorTail returns the most diagnostic tail of ffmpeg stderr. ffmpeg
 // prints a long build banner before the actual error; the real reason is on the
 // last non-empty line(s). Returns at most ~200 chars.
@@ -1733,6 +2132,14 @@ type audioFileRef struct {
 	// value that disagrees with filehash.BookFileHash is a corrupted row, not a
 	// signal to rewrite.
 	StoredHash string
+	// TranscribeStatus is the per-file transcription status stored on the row
+	// ("" when none, and always "" for the Book.FilePath fallback). The book op
+	// reads it to honour a permanent per-file verdict the per-file op wrote.
+	TranscribeStatus string
+	// IntroTimeouts and IntroTimeoutHash are the decoder-timeout strikes the row
+	// carries and the FileHash they were counted against (zero/"" when none).
+	IntroTimeouts    int
+	IntroTimeoutHash string
 }
 
 // firstAudioFile returns the first (lowest disc/track) audio file of book.
@@ -1824,7 +2231,12 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (audioFileRef
 		h := sha256.Sum256([]byte(f.FilePath))
 		key = "path:" + hex.EncodeToString(h[:])
 	}
-	return audioFileRef{Path: f.FilePath, CacheKey: key, BookFileID: f.ID, StoredHash: f.FileHash}, nil
+	ref := audioFileRef{Path: f.FilePath, CacheKey: key, BookFileID: f.ID, StoredHash: f.FileHash}
+	if f.TranscribeStatus != nil {
+		ref.TranscribeStatus = *f.TranscribeStatus
+	}
+	ref.IntroTimeouts, ref.IntroTimeoutHash = f.IntroTimeouts, f.IntroTimeoutHash
+	return ref, nil
 }
 
 // wavCacheDir returns the directory used to cache extracted 90s WAV clips.

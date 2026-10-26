@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.5.4
+// version: 1.5.6
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -338,6 +338,11 @@ var introMigratedFields = []string{
 //   - IntroMeta: model, language and clip length of the transcription. The book
 //     op's settings at the time are not recorded on the book, so there is nothing
 //     truthful to put here.
+//   - IntroTimeouts / IntroTimeoutHash / IntroTimeoutRunID / IntroTimeoutAt: how many times the Whisper decoder ran
+//     past its deadline on THESE bytes. A migration never ran the decoder, so it
+//     has no strikes to carry, and copying a book-level status cannot say
+//     which file (or which bytes) caused it. Left zero, the per-file op counts
+//     from scratch.
 //
 // A test fails if a new BookFile intro field is in neither list, and the
 // reflective diff test fails if this migration modifies any field in this one.
@@ -345,6 +350,10 @@ var introNotMigratedFields = []string{
 	"IntroSourceHash",
 	"IntroRunOpID",
 	"IntroMeta",
+	"IntroTimeouts",
+	"IntroTimeoutHash",
+	"IntroTimeoutRunID",
+	"IntroTimeoutAt",
 }
 
 // applyBookIntroFieldsToFile copies the ten-field intro-transcription group

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -142,6 +142,7 @@ type stubWhisper struct {
 	errs        map[string]string // path -> per-file error
 	transErr    error             // returned for the whole call
 	transErrFor int               // when > 0, transErr is returned for this many calls, then cleared
+	alsoErr     error             // returned WITH the per-file answers: a dispatch that settled some clips and then failed
 	dropKeys    bool              // answer with an empty map (a transport that dropped every job)
 	calls       [][]fileIntroJob
 	inFlight    atomic.Int32
@@ -192,7 +193,7 @@ func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ fu
 		}
 		out[k] = fileIntroWhisperResult{Text: w.texts[j.Path], Model: "model-x", Language: "en"}
 	}
-	return out, nil
+	return out, w.alsoErr
 }
 
 func (w *stubWhisper) sentPaths() map[string]int {
@@ -222,6 +223,11 @@ func newIntroFx(t *testing.T) *introFx {
 	fx := &introFx{t: t, s: s, p: New(fakeDeps{store: s}), dir: t.TempDir(), whisp: &stubWhisper{texts: map[string]string{}, errs: map[string]string{}}}
 
 	origFn, origSlots, origPause, origPre, origOutage := fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight, fileIntroOutageInterval
+	// Most tests strike a file twice within one test run, so the 12 h gap
+	// between strikes is off by default; the gap tests turn it back on.
+	origGap := transcribeStrikeMinGap
+	transcribeStrikeMinGap = 0
+	t.Cleanup(func() { transcribeStrikeMinGap = origGap })
 	fileIntroWhisperFn = fx.whisp.fn
 	fileIntroOutageInterval = time.Millisecond
 	fileIntroPreflight = func(context.Context) error { return nil }

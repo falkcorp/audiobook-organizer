@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.7.2
+// version: 1.9.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -11,11 +11,15 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // Endpoint describes one Whisper server in the dispatch pool.
@@ -126,21 +130,47 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// the loop. gateEndpoints also performs the /health probe that the batch
 	// decision needs, so this adds no requests.
 	gated, refused := gateEndpoints(ctx, endpoints, requires)
-	if extraRefusal != nil {
+	{
 		kept := gated[:0:0]
 		for _, g := range gated {
-			if reason := extraRefusal(g); reason != "" {
+			// A wedged worker is refused for every kind of job: a request sent
+			// to it is never answered, and queueing behind it is how one bad
+			// clip parked the whole pool.
+			if reason := stuckRefusal(g); reason != "" {
+				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Stuck: true})
+				continue
+			}
+			if reason := childFaultRefusal(g); reason != "" {
 				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason})
 				continue
+			}
+			if extraRefusal != nil {
+				if reason := extraRefusal(g); reason != "" {
+					refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason})
+					continue
+				}
 			}
 			kept = append(kept, g)
 		}
 		gated = kept
 	}
 	for _, r := range refused {
+		if r.Stuck {
+			dispatchLog.Warn("worker stuck, skipping it: url=%s label=%s reason=%s",
+				logger.SanitizeLogValue(r.URL), logger.SanitizeLogValue(r.Label), logger.SanitizeLogValue(r.Reason))
+			continue
+		}
 		slog.Warn("transcribe: endpoint refused by capability requirements", "url", r.URL, "label", r.Label, "reason", r.Reason)
 	}
 	if len(gated) == 0 {
+		if allStuck(refused) {
+			// Reachable and answering /health, but wedged: not an outage, and
+			// waiting it out by re-sending is the wrong response (see
+			// ErrWorkerStuck).
+			return nil, classifyTransport(endpointURLs(endpoints), fmt.Errorf(
+				"%w: all %d whisper endpoint(s) are stuck on a decode past its deadline: %s",
+				ErrWorkerStuck, len(endpoints), describeRefusals(refused)))
+		}
 		// Distinct from "no whisper endpoints configured": that sends an
 		// operator hunting a config typo, when the real answer is that the
 		// box they configured is not on a GPU.
@@ -163,7 +193,14 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		g := probeByURL[eligible[0].URL]
 		results, err := send(ctx, g, jobs, onProgress)
 		if err != nil {
-			return nil, classifyTransport([]string{g.Endpoint.URL}, err)
+			if IsWorkerStuck(err) && ctx.Err() == nil {
+				// A request that went unanswered because the host vanished is an
+				// outage, not a wedged decoder (see afterStuck).
+				err, _ = afterStuck(ctx, g.Endpoint.URL, err)
+			}
+			// Whatever the sender settled before failing is valid; hand it up
+			// with the error.
+			return results, classifyTransport([]string{g.Endpoint.URL}, err)
 		}
 		return results, nil
 	}
@@ -196,10 +233,54 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 	}
 
-	var lastErr error
+	// bump advances the pool-wide count for jobs settled without a send.
+	bump := func(n int) {
+		if onProgress == nil || n == 0 {
+			return
+		}
+		progressMu.Lock()
+		poolDone += n
+		cur := poolDone
+		progressMu.Unlock()
+		onProgress(cur, total)
+	}
+
+	// Stuck-batch bookkeeping. A request that a reachable worker never answers
+	// says nothing about WHICH of its jobs is to blame, so the failed request
+	// is split and the parts retried (units); every stuck part is smaller than
+	// the request it came from, so the splitting terminates. A job is only
+	// condemned when it was stuck ALONE, on soloLimit distinct endpoints: an
+	// innocent job that shared a request with the culprit was stuck in a batch,
+	// never alone, so it is never condemned for the culprit's sake -- and for
+	// the same reason a part may be retried on a worker it was stuck on in a
+	// larger batch (that says nothing about the part itself).
+	soloStuck := make(map[string]map[string]bool) // job -> endpoints it was stuck on alone
+	// soloOverran is the weaker record: a lone job's request outlived its
+	// ceiling on a worker that, when asked, was NOT wedged (it answered /health
+	// and was inside its own decode deadline), so the request most likely waited
+	// behind another one. That is no evidence about the job, so it never counts
+	// toward a verdict; it only keeps the job from being placed on the same
+	// worker again straight away.
+	soloOverran := make(map[string]map[string]bool)
+	soloLimit := min(2, len(ordered))
+	var units [][]string
+	// followerOf is the journal's content dedup seen from here: a follower was
+	// never sent (its audio is byte-identical to its leader's) and shares the
+	// leader's fate, so it travels with the leader's unit and is condemned with
+	// it. Without this a follower of a stuck leader would be re-sent on its own
+	// as if it were an unrelated file, and wedge another worker.
+	followersOf := make(map[string][]string)
+	followerOf := make(map[string]string)
+
+	// lastErr is the most recent failure PER ENDPOINT. One error variable
+	// overwritten in goroutine-drain order made the final classification (stuck,
+	// which the ops answer by stopping, versus outage, which they wait out)
+	// depend on which endpoint's result arrived last.
+	lastErr := make(map[string]error)
+
 	for len(remaining) > 0 {
 		if err := ctx.Err(); err != nil {
-			return nil, classifyTransport(endpointURLs(ordered), err)
+			return results, classifyTransport(endpointURLs(ordered), err)
 		}
 		var healthy []Endpoint
 		for _, ep := range ordered {
@@ -208,13 +289,105 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 		}
 		if len(healthy) == 0 {
-			if lastErr == nil {
-				lastErr = fmt.Errorf("all %d whisper endpoints in cooldown", len(ordered))
-			}
-			return nil, classifyTransport(endpointURLs(ordered), lastErr)
+			return results, classifyTransport(endpointURLs(ordered), poolFailure(lastErr,
+				fmt.Errorf("all %d whisper endpoints in cooldown", len(ordered))))
 		}
 
-		assignments := allocateJobs(healthy, remaining)
+		var (
+			assignments []map[string]J
+			unitOf      = make(map[int][]string)
+		)
+		if len(units) > 0 {
+			// Split parts run before normal allocation, one part per healthy
+			// endpoint. A lone job avoids the endpoints it was already stuck on
+			// alone, so its verdict needs soloLimit DIFFERENT workers.
+			assignments = make([]map[string]J, len(healthy))
+			var left [][]string
+			placedAny := false
+			inUnit := make(map[string]bool)
+			for _, u := range units {
+				live := slices.DeleteFunc(slices.Clone(u), func(id string) bool { _, ok := remaining[id]; return !ok })
+				if len(live) == 0 {
+					continue
+				}
+				for _, id := range live {
+					inUnit[id] = true
+				}
+				placed := false
+				for idx, ep := range healthy {
+					if assignments[idx] != nil || len(live) == 1 && (soloStuck[live[0]][ep.URL] || soloOverran[live[0]][ep.URL]) {
+						continue
+					}
+					sub := make(map[string]J, len(live))
+					for _, id := range live {
+						sub[id] = remaining[id]
+						for _, f := range followersOf[id] {
+							if fj, ok := remaining[f]; ok {
+								sub[f] = fj
+							}
+						}
+					}
+					assignments[idx], unitOf[idx], placed, placedAny = sub, live, true, true
+					break
+				}
+				if !placed {
+					left = append(left, live)
+				}
+			}
+			units = left
+
+			// Jobs outside every split part are ordinary work. Sending only the
+			// parts left every other endpoint idle for as long as a part ran, and
+			// a part can run for a full request ceiling; hand the free jobs to the
+			// endpoints no part was placed on. A follower rides with its leader,
+			// so it is free only once the leader is no longer waiting.
+			free := make(map[string]J)
+			for id, j := range remaining {
+				if inUnit[id] {
+					continue
+				}
+				if leader, ok := followerOf[id]; ok {
+					if _, waiting := remaining[leader]; waiting {
+						continue
+					}
+				}
+				free[id] = j
+			}
+			var idle []Endpoint
+			var idleAt []int
+			for idx, ep := range healthy {
+				if assignments[idx] == nil {
+					idle = append(idle, ep)
+					idleAt = append(idleAt, idx)
+				}
+			}
+			if len(free) > 0 && len(idle) > 0 {
+				for k, sub := range allocateJobs(idle, free) {
+					if len(sub) > 0 {
+						// A leader that was never part of a stuck request (it sat
+						// in a later chunk) can still have followers: send them in
+						// the same request, or the leader succeeds alone, nothing
+						// fans its answer out, and the follower is decoded again
+						// next round.
+						for id := range maps.Clone(sub) {
+							for _, f := range followersOf[id] {
+								if fj, ok := remaining[f]; ok {
+									sub[f] = fj
+								}
+							}
+						}
+						assignments[idleAt[k]] = sub
+						placedAny = true
+					}
+				}
+			}
+			if !placedAny {
+				return results, classifyTransport(endpointURLs(ordered), poolFailure(lastErr,
+					fmt.Errorf("%w: no healthy endpoint is left that these split jobs have not already stuck", ErrWorkerStuck)))
+			}
+		} else {
+			assignments = allocateJobs(healthy, remaining)
+		}
 
 		type epResult struct {
 			idx int
@@ -239,33 +412,216 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 
 		for r := range resCh {
 			ep := healthy[r.idx]
-			if r.err != nil {
-				// Bench the endpoint; its jobs stay in remaining and are
-				// re-queued to a surviving endpoint on the next round.
-				//
-				// ErrSlotWait is NOT endpoint evidence: the request was never
-				// sent, we only failed to get a slot (usually because the op
-				// was cancelled). poolHealth is process-global and its cooldown
-				// OUTLIVES the op, so benching here would make the next run
-				// report "all N endpoints in cooldown" about servers that were
-				// never contacted.
-				if !errors.Is(r.err, ErrSlotWait) {
-					markEndpointFailure(ep.URL)
+			// Work the endpoint completed is valid whether or not the call as a
+			// whole failed: a sender returns the chunks that finished before the
+			// failing one alongside its error.
+			maps.Copy(results, r.res)
+			if r.err == nil {
+				markEndpointSuccess(ep.URL)
+				delete(lastErr, ep.URL)
+				// Clear the whole assigned set, not just returned IDs: the
+				// transport skips unreadable WAVs without error (same as the
+				// single-URL path), so a missing result is a skip, not a retry.
+				for id := range assignments[r.idx] {
+					delete(remaining, id)
 				}
-				lastErr = fmt.Errorf("%s: %w", ep.URL, r.err)
 				continue
 			}
-			markEndpointSuccess(ep.URL)
-			maps.Copy(results, r.res)
-			// Clear the whole assigned set, not just returned IDs: the
-			// transport skips unreadable WAVs without error (same as the
-			// single-URL path), so a missing result is a skip, not a retry.
-			for id := range assignments[r.idx] {
+			for id := range r.res {
 				delete(remaining, id)
+			}
+			stuck, isStuck := errors.AsType[*WorkerStuckError](r.err)
+			// A request that went unanswered is "stuck" only while the worker is
+			// still there to be stuck. If it no longer answers /health the host
+			// went away mid-request, which is an outage: the ops wait it out and
+			// re-send, and no file is blamed. A cancelled op is not evidence about
+			// the worker at all, so it is neither probed nor benched.
+			wedged := true
+			if isStuck && ctx.Err() == nil {
+				r.err, wedged = afterStuck(ctx, ep.URL, r.err)
+				stuck, isStuck = errors.AsType[*WorkerStuckError](r.err)
+			}
+			// Bench the endpoint; its unfinished jobs stay in remaining and are
+			// re-queued to a surviving endpoint on the next round.
+			//
+			// ErrSlotWait is NOT endpoint evidence: the request was never
+			// sent, we only failed to get a slot (usually because the op
+			// was cancelled). poolHealth is process-global and its cooldown
+			// OUTLIVES the op, so benching here would make the next run
+			// report "all N endpoints in cooldown" about servers that were
+			// never contacted. The same holds for any failure seen after the
+			// op's own context ended.
+			//
+			// A worker that missed a request ceiling is benched only while it
+			// is still wedged. One that answers /health and reports it is
+			// within its own deadline is alive: benching it would leave the
+			// split parts nowhere to run, and a pool of a few workers could
+			// then never narrow a stuck batch down to the file responsible.
+			// A worker that cannot say (old, or /health hangs too) is benched:
+			// an old worker holds its inference lock until restarted.
+			if !errors.Is(r.err, ErrSlotWait) && ctx.Err() == nil && (!isStuck || wedged) {
+				markEndpointFailure(ep.URL)
+			}
+			lastErr[ep.URL] = fmt.Errorf("%s: %w", ep.URL, r.err)
+
+			if !isStuck || ctx.Err() != nil {
+				// Not a stuck request: a part that was riding on this endpoint
+				// keeps its split and goes to another one.
+				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool { _, ok := remaining[id]; return !ok }); len(u) > 0 {
+					units = append(units, u)
+				}
+				continue
+			}
+			for leader, fs := range stuck.Followers {
+				followersOf[leader] = fs
+				for _, f := range fs {
+					followerOf[f] = leader
+				}
+			}
+			failed := slices.DeleteFunc(slices.Clone(stuck.Jobs), func(id string) bool { _, ok := remaining[id]; return !ok })
+			slices.Sort(failed)
+			dispatchLog.Warn("worker stuck, splitting its request and retrying the parts: url=%s after=%s jobs=%d",
+				logger.SanitizeLogValue(ep.URL), stuck.After.Round(time.Second), len(failed))
+			switch {
+			case len(failed) == 1 && !wedged:
+				// Alone, but on a worker that is not wedged: the request waited,
+				// it did not hang the decoder. Retry the job elsewhere, blame
+				// nobody.
+				id := failed[0]
+				if soloOverran[id] == nil {
+					soloOverran[id] = make(map[string]bool)
+				}
+				soloOverran[id][ep.URL] = true
+				units = append(units, failed)
+			case len(failed) == 1:
+				id := failed[0]
+				if soloStuck[id] == nil {
+					soloStuck[id] = make(map[string]bool)
+				}
+				soloStuck[id][ep.URL] = true
+				if len(soloStuck[id]) >= soloLimit {
+					// Stuck by itself on soloLimit different workers: a verdict
+					// about this file, not about any worker. Byte-identical
+					// followers are the same audio and get the same verdict.
+					verdict := BatchResult{Condemned: true, Error: fmt.Sprintf(
+						"%s%sno result: this file alone left %d worker(s) stuck past their deadline",
+						PathErrTranscribeTimeout, pathErrSeparator, len(soloStuck[id]))}
+					settled := 0
+					for _, cid := range append([]string{id}, followersOf[id]...) {
+						if _, ok := remaining[cid]; !ok {
+							continue
+						}
+						results[cid] = verdict
+						delete(remaining, cid)
+						settled++
+					}
+					bump(settled)
+					continue
+				}
+				units = append(units, failed)
+			case len(failed) > 1:
+				mid := len(failed) / 2
+				units = append(units, failed[:mid], failed[mid:])
 			}
 		}
 	}
 	return results, nil
+}
+
+// poolFailure is the error for a dispatch that ran out of endpoints, built from
+// the last failure of EACH endpoint in URL order, so it does not depend on the
+// order results happened to arrive in.
+//
+//   - Every failing endpoint was stuck: the pool is wedged, not down. The error
+//     is a stuck error (IsWorkerStuck is true) and the ops stop rather than wait.
+//   - Any failing endpoint was an outage: the error is an outage, and
+//     IsWorkerStuck is false even though some endpoints were stuck. The ops wait
+//     it out and re-send, which is right for the endpoint that is merely down;
+//     stopping the run because another endpoint was wedged would turn a partial
+//     outage into "restart your workers". The stuck endpoints are named in the
+//     text only (not wrapped) so they cannot make the error read as stuck.
+//
+// fallback is returned when no endpoint recorded a failure in this dispatch.
+func poolFailure(errs map[string]error, fallback error) error {
+	if len(errs) == 0 {
+		return fallback
+	}
+	var stuckErrs, outageErrs []error
+	for _, url := range slices.Sorted(maps.Keys(errs)) {
+		if IsWorkerStuck(errs[url]) {
+			stuckErrs = append(stuckErrs, errs[url])
+		} else {
+			outageErrs = append(outageErrs, errs[url])
+		}
+	}
+	if len(outageErrs) == 0 {
+		if len(stuckErrs) == 1 {
+			return stuckErrs[0]
+		}
+		return fmt.Errorf("%w (and %s)", stuckErrs[0], joinErrs(stuckErrs[1:]))
+	}
+	rest := slices.Concat(outageErrs[1:], stuckErrs)
+	if len(rest) == 0 {
+		return outageErrs[0]
+	}
+	return fmt.Errorf("%w (and %s)", outageErrs[0], joinErrs(rest))
+}
+
+func joinErrs(errs []error) string {
+	parts := make([]string, len(errs))
+	for i, e := range errs {
+		parts[i] = e.Error()
+	}
+	return strings.Join(parts, "; ")
+}
+
+// probeWorker re-probes url after one of its requests went unanswered. reachable
+// is false when /health itself does not answer. wedged is true when the worker
+// cannot say it is healthy: it does not report busy_seconds (an old worker holds
+// its inference lock until restarted), or it is running past its deadline plus
+// grace.
+func probeWorker(ctx context.Context, url string) (reachable, wedged bool) {
+	h, ok := probeRemoteHealth(ctx, url)
+	if !ok {
+		return false, true
+	}
+	if h.BusySeconds == nil {
+		return true, true
+	}
+	return true, stuckRefusal(gatedEndpoint{Endpoint: Endpoint{URL: url}, Health: h, Probed: true}) != ""
+}
+
+// afterStuck decides what an unanswered request at url really was. A worker
+// that no longer answers /health did not wedge: its host went away (asleep,
+// partitioned, rebooted) after accepting the request, and the transport timeout
+// the request died of is indistinguishable from a stuck decode until something
+// asks again. That case is returned as an outage error -- the original is
+// quoted with %v, NOT wrapped, so IsWorkerStuck is false -- and wedged is true
+// so the endpoint is benched. A reachable worker keeps the stuck error, and
+// wedged says whether it should still be benched.
+func afterStuck(ctx context.Context, url string, stuckErr error) (out error, wedged bool) {
+	reachable, wedged := probeWorker(ctx, url)
+	if !reachable {
+		return &TransportError{
+			Endpoints: []string{url},
+			Err: fmt.Errorf("a request went unanswered and %s no longer answers /health, so this is an outage, not a stuck decode (%v)",
+				url, stuckErr),
+			Recognized: true,
+		}, true
+	}
+	return stuckErr, wedged
+}
+
+func allStuck(refused []gpuRefusal) bool {
+	if len(refused) == 0 {
+		return false
+	}
+	for _, r := range refused {
+		if !r.Stuck {
+			return false
+		}
+	}
+	return true
 }
 
 // allocCursor rotates which equal-priority endpoint an allocation offers
@@ -273,6 +629,10 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 // sends one small batch per call (the per-file intro op sends 8 jobs per call)
 // would put every batch on endpoint 0 while the others idle.
 var allocCursor atomic.Uint64
+
+// dispatchLog carries the dispatcher's stuck-worker warnings through the
+// logger package (which sanitizes line breaks), not log/slog directly.
+var dispatchLog = logger.New("transcribe-dispatch")
 
 // endpointFreeSlots is how many request slots url has free right now: its
 // Concurrency (values < 1 mean 1) minus the slots currently held.

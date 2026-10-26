@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -161,7 +161,7 @@ func runRemotePage(t *testing.T, store *database.MockStore, books []database.Boo
 	t.Helper()
 	p := New(fakeDeps{store: store})
 	accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
-	n := p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false, pageJournal{}, extractRemote)
+	n := p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false, false, pageJournal{}, extractRemote)
 	return n, accum
 }
 
