@@ -1,5 +1,5 @@
 // file: internal/database/collection_perviewer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e5a91-3d48-4b06-8f1a-e4b9d0c63a57
 // last-edited: 2026-10-25
 
@@ -21,8 +21,9 @@ import "sync/atomic"
 // (QueryMayUsePerUserField: text that does not parse counts as per-user) from an
 // init function, so every binary that links the search package (the server
 // does) has it. A binary or test without it keeps the stored list as given;
-// TestProductionStoreScrubsPerViewerMembers in internal/server proves the
-// server's store has it, because an unset classifier would fail open silently.
+// TestProductionStoreScrubsPerViewerMembers in internal/server and
+// TestInit_RegistersThePerViewerClassifierWithTheStore in internal/search prove the
+// registration, because an unset classifier would fail open silently.
 
 var perViewerClassifier atomic.Pointer[func(query string) bool]
 
@@ -35,11 +36,6 @@ func SetCollectionPerViewerClassifier(f func(query string) bool) {
 		return
 	}
 	perViewerClassifier.Store(&f)
-}
-
-// CollectionPerViewerClassifierSet reports whether a classifier is installed.
-func CollectionPerViewerClassifierSet() bool {
-	return perViewerClassifier.Load() != nil
 }
 
 // scrubPerViewerMembers empties col.MaterializedBookIDs when col is a dynamic

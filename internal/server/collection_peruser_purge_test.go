@@ -1,5 +1,5 @@
 // file: internal/server/collection_peruser_purge_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2a9e54-1b38-4d60-8f17-a5e3b9d0c682
 // last-edited: 2026-10-25
 
@@ -218,8 +218,6 @@ func TestPurgePerViewerCollectionMembersAgainstTheRealStore(t *testing.T) {
 // the registration holds in the server's own build, through the real store, for
 // both the create and the update path, and for a query that does not parse.
 func TestProductionStoreScrubsPerViewerMembers(t *testing.T) {
-	require.True(t, database.CollectionPerViewerClassifierSet(),
-		"the server build must have the per-viewer classifier installed")
 	ps, err := database.NewPebbleStoreInMemory(t.TempDir() + "/c.pebble")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
