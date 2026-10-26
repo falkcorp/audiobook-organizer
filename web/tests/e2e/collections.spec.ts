@@ -1,7 +1,7 @@
 // file: web/tests/e2e/collections.spec.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: bd2cb2a2-6bcf-4036-9269-c4563947e32d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
@@ -205,7 +205,7 @@ test.describe('Collections page', () => {
     await dialog.getByLabel(/^Name/).fill('Test New Dynamic');
     await dialog.getByRole('button', { name: 'Use this query' }).first().click();
     await expect(
-      dialog.getByText(/reading state of the person who created this collection/)
+      dialog.getByText(/reading state of whoever is viewing the collection/)
     ).toBeVisible();
     await dialog.getByRole('button', { name: 'Create' }).click();
 

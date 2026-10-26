@@ -1,13 +1,16 @@
 <!-- file: docs/executive-summaries/2026-10-18-collections-backend-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: bc1b7020-e5ad-4493-90ab-243c0a1234fc -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Collections now show everyone the same books, searches understand "the last 30 days", and adding books can no longer lose changes
 
 Task 07-F5a, branch `task/07-f5a`, PR not yet merged. The decisions behind it are
 the owner's D74 to D77 (keep the collection routes, evaluate as the owner,
 relative dates in the one search syntax, atomic add and remove).
+
+**Superseded in part (2026-10-25, #4175):** the owner evaluation described in this
+summary was replaced by per-viewer evaluation; the other changes stand.
 
 ## Executive Summary
 
@@ -81,6 +84,12 @@ relative dates in the one search syntax, atomic add and remove).
   The rolling-date change has not yet been tried on the production library.
 
 ## Dynamic collections evaluated as their owner
+
+**Superseded (2026-10-25, #4175).** This design was replaced: a collection is now
+worked out for whoever is looking at it, never for its creator or a stand-in
+administrator, and the start-up owner repair below was removed. See
+`2026-10-25-collections-per-viewer-executive-summary.md`. What follows describes
+the 2026-10-18 behaviour only.
 
 **What it was.** Whoever opened a collection decided what it contained.
 

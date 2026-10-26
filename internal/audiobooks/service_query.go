@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.2
+// version: 1.38.7
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -292,7 +292,7 @@ func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit 
 			if build {
 				mode = hydrateBuild
 			}
-			books, resultTotal, err = svc.searchWithinIDs(search, idMembership, f.UserID, mode)
+			books, resultTotal, err = svc.searchWithinIDs(ctx, search, idMembership, f.UserID, mode)
 		} else if svc.bleveSearchable() {
 			// When post-filters will run below, the index must hand back the
 			// whole candidate set, NOT one page.
@@ -334,7 +334,7 @@ func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit 
 					mode = hydrateIDsOnly
 				}
 			}
-			books, resultTotal, err = svc.searchWithBleve(search, fetchLimit, fetchOffset, f.UserID, nil, mode)
+			books, resultTotal, err = svc.searchWithBleve(ctx, search, fetchLimit, fetchOffset, f.UserID, nil, mode)
 			if hasPostFilters && !build && len(books) >= window {
 				// Truncated: rows past the window were never considered, so any
 				// count derived below is a lower bound. Say so rather than
@@ -348,6 +348,9 @@ func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit 
 			// tokenise, so a multi-word query like "jobs classes" matches
 			// nothing rather than ANDing the terms. That is a large, silent
 			// behaviour change from the Bleve path, so say it happened.
+			if perr := SearchPerUserProblem(search); perr != nil {
+				return nil, 0, fmt.Errorf("search: %w", perr)
+			}
 			slog.Warn("search: search index is nil or rebuilding; falling back to substring SearchBooks",
 				"query", search, "fallback", "store.SearchBooks")
 			// Same over-fetch as the Bleve branch, for the same reason: the
@@ -878,7 +881,7 @@ func (svc *AudiobookService) resolveIDMembership(authorID, seriesID *int) (map[s
 // conjunction, so ranking and the DSL (including per-user filters) behave as
 // for an unscoped search. With no index it runs the SearchBooks substring
 // predicate over just the scoped books; see substringSearchWithin.
-func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct{}, userID string, mode hydrateMode) ([]database.Book, int, error) {
+func (svc *AudiobookService) searchWithinIDs(ctx context.Context, query string, set map[string]struct{}, userID string, mode hydrateMode) ([]database.Book, int, error) {
 	if len(set) == 0 {
 		return []database.Book{}, 0, nil
 	}
@@ -888,11 +891,14 @@ func (svc *AudiobookService) searchWithinIDs(query string, set map[string]struct
 	}
 	sort.Strings(ids)
 	if !svc.bleveSearchable() {
+		if perr := SearchPerUserProblem(query); perr != nil {
+			return nil, 0, fmt.Errorf("search: %w", perr)
+		}
 		slog.Warn("search: search index is nil or rebuilding; scoped search falling back to the substring predicate",
 			"query", query, "scope", len(ids), "fallback", "database.SubstringSearchRank")
 		return svc.substringSearchWithin(query, ids)
 	}
-	return svc.searchWithBleve(query, len(ids), 0, userID, ids, mode)
+	return svc.searchWithBleve(ctx, query, len(ids), 0, userID, ids, mode)
 }
 
 // substringSearchWithin applies the store.SearchBooks predicate
@@ -1211,7 +1217,7 @@ func (svc *AudiobookService) bleveSearchable() bool {
 // IDs, see BleveIndex.IndexBook), every in-scope hit is fetched rather than
 // searchPostFilterWindow of them, and the substring fallbacks match only those
 // books. Callers pass limit=len(restrictIDs), offset=0.
-func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, userID string, restrictIDs []string, mode hydrateMode) ([]database.Book, int, error) {
+func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, limit, offset int, userID string, restrictIDs []string, mode hydrateMode) ([]database.Book, int, error) {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		// Parser failure: fall back to the substring search path so
@@ -1224,6 +1230,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// nothing in the logs said so — an investigation into wrong search
 		// results had to rule this path out by probing production instead of
 		// reading a log line.
+		if perr := search.UnparsablePerUserQuery(query, err); perr != nil {
+			return nil, 0, fmt.Errorf("search: %w", perr)
+		}
 		slog.Warn("search: DSL parse failed; falling back to substring SearchBooks",
 			"query", query, "err", err, "fallback", "store.SearchBooks")
 		if restrictIDs != nil {
@@ -1238,7 +1247,20 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	// One instant for this whole search: relative date terms in the Bleve query
 	// and in the per-user pass below resolve against the same now.
 	now := time.Now()
-	bleveQ, perUser, err := search.TranslateAt(ast, now)
+	// A per-user term the flat post-filter below cannot evaluate as written (an OR
+	// with a sibling, a NOT over a group, a value that is no status/number/date,
+	// a pattern) is refused, never answered as something else: read_status:finished
+	// OR author:kyle used to return the kyle books the viewer had finished. The
+	// HTTP list refuses it up front; this is the same check for every other caller
+	// (a scoped search), and its error is a search.PerUserValueError or
+	// search.ErrPerUserBoolean, which the handler answers with a 400.
+	//
+	// A tag: term is refused the same way where it cannot be applied exactly (under
+	// an OR, an alternation or a NOT; search.CheckTagTerms).
+	if err := search.CheckQueryTerms(ast, now); err != nil {
+		return nil, 0, fmt.Errorf("search: %w", err)
+	}
+	tr, err := search.TranslateQuery(ast, now)
 	if err != nil {
 		// Same silent-degradation hazard as the parse-failure branch above:
 		// the query parsed fine but could not be expressed as a Bleve query,
@@ -1250,6 +1272,27 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		}
 		books, sErr := svc.store.SearchBooks(query, limit, offset)
 		return books, len(books), sErr
+	}
+
+	bleveQ, perUser := tr.Query, tr.PerUser
+
+	// tag: terms are EXACT tag filters, not index terms: the index holds a tag as
+	// words ("to-read" would match every book tagged "read"), so each is resolved
+	// with GetBooksByTag, the lookup the tags[] parameter and the tag chips use,
+	// and the books that carry every one of them become the scope of the rest of
+	// the query, ANDed with any scope the caller already set (author, series).
+	if len(tr.Tags) > 0 {
+		tagIDs, tagErr := search.ResolveTagIDs(svc.store, tr.Tags)
+		if tagErr != nil {
+			return nil, 0, tagErr
+		}
+		if restrictIDs != nil {
+			tagIDs = intersectSortedIDs(tagIDs, restrictIDs)
+		}
+		if len(tagIDs) == 0 {
+			return []database.Book{}, 0, nil
+		}
+		restrictIDs = tagIDs
 	}
 
 	window := postFilterWindow()
@@ -1274,42 +1317,36 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		for _, h := range hits {
 			ids = append(ids, h.BookID)
 		}
-		// Batch-hydrate (INIT-4 T3): one store call instead of one per hit.
-		// FAIL-OPEN at the call site (spec §C3): a non-nil error from
-		// GetBooksByIDs must not fail the whole search page — warn and
-		// keep serving the rows hydrated so far, mirroring the old
-		// per-hit loop's silent-skip-on-error semantics.
-		hydrated, hydrateErr := svc.hydrateSearchHits(ids, mode)
+		// Judge every candidate by id, load no book yet: the viewer's rows are read
+		// once (or one point read per id when the store cannot list them), the
+		// candidates that fail the per-user filters go, and only the page that is
+		// left is hydrated. A scope of tens of thousands of books (a system tag, an
+		// author) therefore costs one row scan and one page of books, not a book and
+		// a state row per candidate.
+		ids, err = svc.idsMatchingPerUser(ctx, userID, ids, perUser, now)
+		if err != nil {
+			return nil, 0, err
+		}
+		// The match count is taken BEFORE the page is cut from it. Taking it
+		// afterwards is exactly the bug this change fixes.
+		perUserTotal := len(ids)
+		// Apply pagination after filtering: an offset beyond the matches yields an
+		// empty page, not an error (mirrors GetAudiobooks' heavy post-filter
+		// slicing above).
+		if offset > 0 && offset < len(ids) {
+			ids = ids[offset:]
+		} else if offset >= len(ids) {
+			ids = nil
+		}
+		if limit > 0 && limit < len(ids) {
+			ids = ids[:limit]
+		}
+		// Batch-hydrate (INIT-4 T3): one store call for the page. FAIL-OPEN at the
+		// call site (spec §C3): hydrateSearchHits warns and serves the rows it got
+		// when GetBooksByIDs errors, rather than failing the whole page.
+		filtered, hydrateErr := svc.hydrateSearchHits(ids, mode)
 		if hydrateErr != nil {
 			return nil, 0, hydrateErr
-		}
-		filtered := make([]database.Book, 0, len(hydrated))
-		for _, b := range hydrated {
-			state, stateErr := svc.store.GetUserBookState(userID, b.ID)
-			if stateErr != nil {
-				// FAIL-OPEN (Decision 5): evaluate the zero-value state, loudly.
-				slog.Warn("search: per-user state read failed; evaluating zero-value state",
-					"book_id", b.ID, "err", stateErr)
-				state = nil
-			}
-			if !search.MatchPerUserFilters(state, perUser, now) {
-				continue
-			}
-			filtered = append(filtered, b)
-		}
-		// Capture the match count BEFORE the slice below cuts it to a page.
-		// Taking it afterwards is exactly the bug this change fixes.
-		perUserTotal := len(filtered)
-		// Apply pagination after filtering — offset beyond len yields an
-		// empty slice, not an error (mirrors GetAudiobooks' heavy
-		// post-filter slicing above).
-		if offset > 0 && offset < len(filtered) {
-			filtered = filtered[offset:]
-		} else if offset >= len(filtered) {
-			filtered = nil
-		}
-		if limit > 0 && limit < len(filtered) {
-			filtered = filtered[:limit]
 		}
 		if filtered == nil {
 			filtered = []database.Book{}
@@ -1355,4 +1392,92 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		books = []database.Book{}
 	}
 	return books, int(bleveTotal), nil
+}
+
+// idsMatchingPerUser keeps, in order, the ids whose per-user state for userID
+// satisfies every filter. The viewer's rows are read in ONE scan when the store can
+// list them (database.UserBookStateLister, the capability the per-viewer collection
+// evaluator reads through playlist.LoadViewerStates); a store that cannot, or a scan
+// that fails, is read by one point read per id instead. A point read that fails
+// evaluates the zero-value state, loudly (Decision 5, fail-open): the page is served
+// rather than failed for one unreadable row. Only a request that has gone away is an
+// error.
+func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID string, ids []string, filters []search.PerUserFilter, now time.Time) ([]string, error) {
+	var rows map[string]*database.UserBookState
+	if lister, ok := database.AsCapability[database.UserBookStateLister](svc.store); ok {
+		var err error
+		rows, err = lister.ListUserBookStates(ctx, userID)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			slog.Warn("search: bulk per-user state read failed; reading one row per book",
+				"err", err)
+			rows = nil
+		}
+	}
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		var state *database.UserBookState
+		if rows != nil {
+			state = rows[id]
+		} else {
+			var stateErr error
+			state, stateErr = svc.store.GetUserBookState(userID, id)
+			if stateErr != nil {
+				// FAIL-OPEN (Decision 5): evaluate the zero-value state, loudly.
+				slog.Warn("search: per-user state read failed; evaluating zero-value state",
+					"book_id", id, "err", stateErr)
+				state = nil
+			}
+		}
+		if search.MatchPerUserFilters(state, filters, now) {
+			kept = append(kept, id)
+		}
+	}
+	return kept, nil
+}
+
+// SearchPerUserProblem reports why a search string's per-user terms (read_status,
+// progress_pct, last_played) or tag: terms cannot be evaluated as written, or nil.
+// (A tag: term is exact and top-level only; see search.SplitTagTerms. The name is
+// the older, narrower one.) The library
+// search applies them as one flat AND after the index answers, so an OR with a
+// sibling or a negated group would be answered as an AND, and a value that is not
+// a status, a number or a date (or a pattern) would match nothing, or, negated,
+// every book. Each used to be answered silently; a collection or playlist refuses
+// the same queries when they are saved (search.CheckPerUserTerms).
+//
+// It is the one check every entry to the search runs, the index path
+// (searchWithBleve) and the two substring fallbacks that take over while the
+// index is nil or rebuilding. A string with no field term at all is not a problem;
+// one the DSL parser rejects is a problem only when it writes a per-user term
+// (search.UnparsablePerUserQuery), and otherwise keeps the substring fallback.
+func SearchPerUserProblem(q string) error {
+	if strings.TrimSpace(q) == "" || !strings.Contains(q, ":") {
+		return nil
+	}
+	ast, err := search.ParseQuery(q)
+	if err != nil {
+		// Text the parser rejects takes a substring match, which shows nothing for a
+		// listening-state term and says nothing. Refuse it when it writes one.
+		return search.UnparsablePerUserQuery(q, err)
+	}
+	return search.CheckQueryTerms(ast, time.Now())
+}
+
+// intersectSortedIDs returns the ids of a that are also in b, in a's order. It is
+// how a tag: scope and a caller's own scope (author, series) are ANDed.
+func intersectSortedIDs(a, b []string) []string {
+	in := make(map[string]struct{}, len(b))
+	for _, id := range b {
+		in[id] = struct{}{}
+	}
+	out := make([]string, 0, min(len(a), len(b)))
+	for _, id := range a {
+		if _, ok := in[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

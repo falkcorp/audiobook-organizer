@@ -1,17 +1,18 @@
 // file: internal/search/query_parser_prop_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d169409-96cb-44ea-b915-ccd285d45168
 //
 // Property-based tests for the DSL query parser (plan 4.5 task 3).
 // Uses pgregory.net/rapid to generate random and well-formed inputs
 // and verify invariants that must always hold.
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 package search
 
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"pgregory.net/rapid"
 )
@@ -362,7 +363,7 @@ func TestProp_TranslateValidQueries(t *testing.T) {
 			// is a generator bug, not a parser bug. Surface it.
 			t.Skipf("generator produced unparseable query %q: %v", q, err)
 		}
-		bq, _, terr := Translate(ast)
+		bq, _, terr := TranslateAt(ast, time.Now())
 		if terr != nil {
 			t.Fatalf("Translate(%q) failed: %v", q, terr)
 		}

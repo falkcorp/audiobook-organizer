@@ -1,7 +1,7 @@
 // file: internal/search/underscore_rebuild_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8c6e1a-9d4b-4c37-8a15-6b0e3d7f2c94
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 //
 // Mapping v3: '_' folds to a space before tokenising, the v2 -> v3 bump
 // recreates the index, and a recreated index stays "rebuilding" across a
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // searchIDsFor runs q through the same parse -> translate path the library
@@ -23,7 +24,7 @@ func searchIDsFor(t *testing.T, idx *BleveIndex, q string) []string {
 	if err != nil {
 		t.Fatalf("ParseQuery(%q): %v", q, err)
 	}
-	bq, _, err := Translate(node)
+	bq, _, err := TranslateAt(node, time.Now())
 	if err != nil {
 		t.Fatalf("Translate(%q): %v", q, err)
 	}

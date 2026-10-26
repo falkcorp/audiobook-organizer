@@ -1,13 +1,14 @@
 // file: internal/search/zz_repro_wildcard_phrase_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8c4d1f06-2b93-4a57-91e8-73f5a0c6d284
-// last-edited: 2026-08-14
+// last-edited: 2026-10-26
 
 package search
 
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // Repro for two defects reported by the owner on 2026-08-13, both reproduced
@@ -88,7 +89,7 @@ func runQuery(t *testing.T, idx *BleveIndex, q string) []string {
 	if err != nil {
 		t.Fatalf("parse %q: %v", q, err)
 	}
-	bq, _, err := Translate(ast)
+	bq, _, err := TranslateAt(ast, time.Now())
 	if err != nil {
 		t.Fatalf("translate %q: %v", q, err)
 	}

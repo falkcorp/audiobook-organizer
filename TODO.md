@@ -2,6 +2,7 @@
 <!-- version: 10.78.8 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-25 -->
 
 # Project TODO — live items only
 
@@ -13671,10 +13672,13 @@ book and is most likely to go looking for another by the same author.
 - [ ] **"Dynamic" collections are currently *manually* refreshed.** A query-backed
       collection is evaluated at creation, when its query is edited, when it is read
       through the native API, and when `POST /api/v1/collections/:id/materialize` is
-      called. Nothing refreshes it in the background. The ABS read path deliberately
-      never evaluates (it serves `MaterializedBookIDs`), so a collection created via
-      the native API and then only ever viewed in the app shows its **creation-time**
-      membership indefinitely. Smart playlists solved this with a `Dirty` flag plus a
+      called. Nothing refreshes it in the background. The ABS read path serves
+      `MaterializedBookIDs` for a query with no per-user field, so a collection created
+      via the native API and then only ever viewed in the app shows its
+      **creation-time** membership indefinitely. (Updated 2026-10-25: a query on
+      `read_status`, `progress_pct` or `last_played` is no longer stored at all; every
+      read, native and ABS, evaluates it for the requesting viewer. This entry now
+      concerns only queries without a per-user field.) Smart playlists solved this with a `Dirty` flag plus a
       push worker; collections have no equivalent yet. Either add one, or rename the
       concept so the word stops promising more than it does.
 

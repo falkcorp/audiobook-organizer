@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.13.0
+// version: 1.13.4
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-10-06
+// last-edited: 2026-10-26
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -9,7 +9,8 @@ import * as api from '../services/api';
 import { buildCacheKey, useLibraryCache } from '../stores/useLibraryCache';
 import { SortField, SortOrder } from '../types';
 import type { Audiobook } from '../types';
-import type { ParsedSearch } from '../utils/searchParser';
+import { listSearchText, type ParsedSearch } from '../utils/searchParser';
+import { foldTag, tagTermValues } from '../utils/tagQuery';
 import type { ImportPath } from '../pages/libraryTypes';
 
 /** Payload of the server's `books.changed` SSE event (internal/realtime/book_changes.go). */
@@ -60,28 +61,56 @@ export interface UseLibraryQueryFilters {
 }
 
 /**
+ * Every `tag:` term typed in the search box that narrows the request. A query
+ * sent whole is read from its text (tagTermValues: the flat parser's field filters
+ * miss a term right after "(" and keep a ")" in the value of one right before it,
+ * and know nothing of OR or NOT groups); any other query from the parser's field
+ * filters.
+ */
+function typedTags(parsedSearch: ParsedSearch | null): string[] {
+  if (parsedSearch?.serverQuery) return tagTermValues(parsedSearch.serverQuery);
+  return (parsedSearch?.fieldFilters ?? [])
+    .filter((ff) => ff.field === 'tag' && !ff.negated)
+    .map((ff) => foldTag(ff.value));
+}
+
+function dedupe(tags: Iterable<string>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const t of tags) {
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
  * The tags[] a Library request narrows by: every selected tag AND every
- * non-negated `tag:` term in the search box, deduplicated (the server ANDs
- * them). Until 2026-10-06 only the FIRST parsed `tag:` term was sent, and
- * none at all once a tag was selected, so a second tag chip (or a second
- * typed `tag:`) silently did not narrow.
+ * `tag:` term in the search box that narrows the whole query (a conjunct: on the top
+ * level or in a group that is only ANDed, not negated and not under an OR),
+ * deduplicated (the server ANDs them). tags[] is the exact match (the whole tag,
+ * case folded), the one the tag chips mean, so a chip stays exact however the rest of
+ * the box is written. Until 2026-10-06 only the FIRST parsed `tag:` term was sent,
+ * and none at all once a tag was selected, so a second tag chip (or a second typed
+ * `tag:`) silently did not narrow.
+ *
+ * A query the server reads whole (serverQuery) still carries its `tag:` terms in
+ * `search=`, where the server applies them as the same exact filter; sending them
+ * again as tags[] ANDs the same tag a second time, which changes nothing. A tag
+ * term that does not narrow the whole query (under OR, under NOT or `-`, in an
+ * alternation, with a pattern or a boost) is never sent as tags[]. It is not lost
+ * on the way: any text with such a term has boolean structure, which the search
+ * parser always sends whole (searchParser.ts, hasBooleanStructure), so the server
+ * refuses it with a message the Library shows under the search box. Only a plain
+ * conjunct reaches the flat path below.
  */
 export function libraryTagsParam(
   selectedTags: string[] | undefined,
   parsedSearch: ParsedSearch | null
 ): string[] | undefined {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const add = (t: string) => {
-    if (t && !seen.has(t)) {
-      seen.add(t);
-      out.push(t);
-    }
-  };
-  for (const t of selectedTags ?? []) add(t);
-  for (const ff of parsedSearch?.fieldFilters ?? []) {
-    if (ff.field === 'tag' && !ff.negated) add(ff.value);
-  }
+  const out = dedupe([...(selectedTags ?? []), ...typedTags(parsedSearch)]);
   return out.length > 0 ? out : undefined;
 }
 
@@ -101,7 +130,7 @@ export function buildLibraryListOptions(args: {
 }): api.BookListOptions {
   const { debouncedSearch, parsedSearch, filters, selectedTags, sortBy, sortOrder, fieldFilters } =
     args;
-  const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
+  const searchText = listSearchText(parsedSearch, debouncedSearch);
   // 'deleted' is a client-side concept (marked_for_deletion flag); send no library_state to server
   const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
   return {
@@ -134,7 +163,11 @@ interface UseLibraryQueryParams {
   activeOrganizeOp: api.Operation | null;
   setImportPaths: React.Dispatch<React.SetStateAction<ImportPath[]>>;
   navigate: ReturnType<typeof useNavigate>;
-  toast: (message: string, severity?: 'success' | 'error' | 'warning' | 'info', action?: { label: string; onClick: () => void }) => void;
+  toast: (
+    message: string,
+    severity?: 'success' | 'error' | 'warning' | 'info',
+    action?: { label: string; onClick: () => void }
+  ) => void;
   buildFieldFilters: () => Array<{
     field: string;
     value: string;
@@ -316,7 +349,18 @@ export function useLibraryQuery({
       // the cache-hit return never reaches, so selecting Deleted on a warm
       // cache showed the entire unfiltered library while the Filters chip
       // said 1. It only appeared to work from a cold cache.
-      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax, isPrimaryVersion: filters.isPrimaryVersion, seriesId: filters.seriesId });
+      const filterStr = JSON.stringify({
+        fieldFilters,
+        tagsParam,
+        libraryState: filters.libraryState,
+        showFailed: filters.showFailed,
+        hasFileErrors: filters.hasFileErrors,
+        fingerprintStatus: filters.fingerprintStatus,
+        coveragePercentMin: filters.coveragePercentMin,
+        coveragePercentMax: filters.coveragePercentMax,
+        isPrimaryVersion: filters.isPrimaryVersion,
+        seriesId: filters.seriesId,
+      });
       const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
       const isRefresh = displayedKeyRef.current === cacheKey && audiobooksRef.current.length > 0;
       if (!isRefresh) setLoading(true);

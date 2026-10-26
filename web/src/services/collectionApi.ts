@@ -1,7 +1,7 @@
 // file: web/src/services/collectionApi.ts
-// version: 1.0.0
+// version: 1.2.1
 // guid: 36e44f0d-8a86-4830-8fd9-c0a4fbabc018
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { apiFetch } from '../utils/apiFetch';
 
@@ -28,18 +28,32 @@ export interface Collection {
   query?: string;
   sort_json?: string;
   limit?: number;
+  /**
+   * For a dynamic collection, the members for the person asking. A query on
+   * read_status, progress_pct or last_played is evaluated against the
+   * viewer's own listening state on every read, so two people can see
+   * different members of the same collection. created_by_user_id is
+   * attribution only and never decides membership.
+   */
   materialized_book_ids?: string[];
+  /**
+   * How many books the collection matches when that is more than the server
+   * lists (it caps a member list at 10,000). Absent when the list is complete.
+   */
+  materialized_total?: number;
+  /**
+   * True when the members for this viewer could not be worked out (the search
+   * index is not ready, the query no longer parses, or the viewer's state could
+   * not be read). materialized_book_ids is then empty, and that emptiness means
+   * "unknown", not "nothing matches". Sent only for such a collection.
+   */
+  members_unavailable?: boolean;
+  /** Why, in words for the viewer; present with members_unavailable. */
+  members_unavailable_message?: string;
   created_at: string;
   updated_at: string;
   created_by_user_id?: string;
   version: number;
-  /**
-   * Set by GET and PUT (never by list) when a dynamic collection was NOT
-   * re-evaluated because its owner no longer exists and its query uses a
-   * per-user field. The stored members are served unchanged.
-   */
-  evaluation_blocked?: string;
-  evaluation_blocked_message?: string;
 }
 
 /** POST /collections. Static carries book_ids and never a query; dynamic the reverse. */
@@ -65,8 +79,6 @@ export interface CollectionUpdateInput {
   query?: string;
   sort_json?: string;
   limit?: number;
-  /** First active admin only: take over an ownerless per-user collection. */
-  adopt_owner?: boolean;
 }
 
 /** Any non-2xx answer. `code` is the server's machine code when it sent one. */
@@ -83,7 +95,7 @@ export class CollectionApiError extends Error {
   }
 }
 
-/** 409: name in use, version conflict, dynamic collection on a membership call, or owner missing. */
+/** 409: name in use, version conflict, or dynamic collection on a membership call. */
 export class CollectionConflictError extends CollectionApiError {
   constructor(message: string, code?: string, data?: unknown) {
     super(message, 409, code, data);

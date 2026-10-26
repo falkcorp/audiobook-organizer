@@ -1,11 +1,14 @@
 // file: internal/search/multiword_repro_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f2b9d41-8c05-4e37-a1d9-3b7e0c5a824f
-// last-edited: 2026-08-11
+// last-edited: 2026-10-26
 
 package search
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Reported 2026-08-11: "when there are spaces in the word search doesn't find
 // them. In the app or in the web interface."
@@ -53,7 +56,7 @@ func TestMultiWordFreeTextFindsTheBook(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse %q: %v", tc.query, err)
 			}
-			bq, _, err := Translate(ast)
+			bq, _, err := TranslateAt(ast, time.Now())
 			if err != nil {
 				t.Fatalf("translate %q: %v", tc.query, err)
 			}

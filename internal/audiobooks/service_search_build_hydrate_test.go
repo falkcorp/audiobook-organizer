@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_build_hydrate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e3b1f64-2a9c-4d75-b0e8-5c6f7a2d9b13
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -23,7 +23,7 @@ func TestSearchBuild_NoPostFilterReadsNoRows(t *testing.T) {
 	svc := NewAudiobookService(mocks.NewMockStore(t))
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	books, total, err := svc.queryAudiobooks(context.Background(), 0, 0, "author:sanderson", nil, nil, ListFilters{}, nil, true)
+	books, total, err := svc.queryAudiobooks(context.Background(), 0, 0, "author:kyle", nil, nil, ListFilters{}, nil, true)
 	require.NoError(t, err)
 	ids := make([]string, 0, len(books))
 	for _, b := range books {

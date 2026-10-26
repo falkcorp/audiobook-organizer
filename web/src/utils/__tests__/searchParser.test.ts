@@ -1,6 +1,7 @@
 // file: web/src/utils/__tests__/searchParser.test.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: 48EF2E2E-4660-4C1C-A6C1-584C4A4B6B63
+// last-edited: 2026-10-26
 
 import { describe, it, expect } from 'vitest';
 import { parseSearch, SEARCH_FIELDS } from '../searchParser';
@@ -94,6 +95,9 @@ describe('parseSearch', () => {
       fieldFilters: [
         { field: 'tag', value: 'romance', negated: true, quoted: false },
       ],
+      // a negated tag cannot be a filter the server applies (a tag filter is exact and
+      // only ANDed), so the whole text goes to the server, which says so with a 400
+      serverQuery: '-tag:romance',
     });
   });
 
