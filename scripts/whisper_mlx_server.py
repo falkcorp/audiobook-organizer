@@ -1,7 +1,7 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.8.0
+# version: 1.9.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
-# last-edited: 2026-10-25
+# last-edited: 2026-10-26
 #
 # /// script
 # requires-python = ">=3.11"
@@ -81,6 +81,7 @@
 # each call, and on expiry SIGKILLs the child and returns the per-file error
 # "transcribe_timeout: ...". The next request starts a fresh child.
 
+import asyncio
 import atexit
 import concurrent.futures
 import contextlib
@@ -192,24 +193,42 @@ _PCM_BYTES_PER_S = 32000
 def _audio_seconds(path: str) -> float:
     """Length of the clip in seconds, from the WAV header (frames / rate), not
     from the length the caller asked for: the clip can be shorter than asked
-    (a file shorter than the clip length). Falls back to a size estimate for a
-    file that is not a parseable WAV."""
+    (a file shorter than the clip length), capped by what the file's size can
+    hold. Falls back to a size estimate for a file that is not a parseable WAV."""
+    try:
+        by_size = os.path.getsize(path) / _PCM_BYTES_PER_S
+    except OSError:
+        return 0.0
     try:
         with wave.open(path, "rb") as w:
             rate = w.getframerate()
             if rate > 0:
-                return w.getnframes() / rate
+                # The header is the caller's claim, the size is the file's. A
+                # header that claims more frames than the file can hold would
+                # stretch the clip's deadline (a forged or truncated WAV), so the
+                # deadline is never longer than the bytes on disk allow. The
+                # clips this worker cuts are 16 kHz mono 16-bit, where the two
+                # agree exactly.
+                return min(w.getnframes() / rate, by_size)
     except (wave.Error, EOFError, OSError):
         pass
-    try:
-        return os.path.getsize(path) / _PCM_BYTES_PER_S
-    except OSError:
-        return 0.0
+    return by_size
 
 
 def _clip_timeout(path: str) -> float:
     """The per-clip inference time limit: max(floor, factor x audio seconds)."""
     return max(TRANSCRIBE_MIN_TIMEOUT_S, TRANSCRIBE_TIMEOUT_FACTOR * _audio_seconds(path))
+
+
+class ChildFaultError(RuntimeError):
+    """The inference child could not start, or died: a fault of THIS WORKER, never
+    a statement about the clip being decoded. `starting` is True when the child
+    never became ready (no clip was ever sent to it), which is the case where
+    every later clip in the same request would hit the same wall."""
+
+    def __init__(self, message: str, *, starting: bool):
+        super().__init__(message)
+        self.starting = starting
 
 
 class InferenceChild:
@@ -319,7 +338,10 @@ class InferenceChild:
         if self._proc is not None and self._proc.poll() is None:
             return
         self._kill()
-        self._spawn()
+        try:
+            self._spawn()
+        except OSError as e:
+            raise ChildFaultError(f"inference process could not be started: {e}", starting=True)
         # Model load happens HERE, before the clip's clock starts: at a high
         # machine load it can eat most of a 60 s floor, and a clip must not time
         # out because the model was slow to load.
@@ -328,18 +350,25 @@ class InferenceChild:
         except EOFError:
             code = self._proc.poll() if self._proc else None
             self._kill()
-            raise RuntimeError(f"inference process exited while starting (exit code {code})")
+            raise ChildFaultError(
+                f"inference process exited while starting (exit code {code})", starting=True
+            )
         if line is None:
             self._kill()
-            raise RuntimeError(f"inference process not ready after {CHILD_READY_TIMEOUT_S:.0f}s")
+            raise ChildFaultError(
+                f"inference process not ready after {CHILD_READY_TIMEOUT_S:.0f}s", starting=True
+            )
         if not json.loads(line).get("ready"):
             self._kill()
-            raise RuntimeError("inference process sent an unexpected startup message")
+            raise ChildFaultError(
+                "inference process sent an unexpected startup message", starting=True
+            )
 
     def run(self, path: str, timeout_s: float) -> str:
         """Transcribe `path`. Raises PathJobError(transcribe_timeout) when it does
         not answer in `timeout_s` (the child is killed; the next call starts a
-        fresh one) and RuntimeError when the child dies or reports an error."""
+        fresh one), ChildFaultError when the child cannot start or dies (a worker
+        fault), and RuntimeError when the backend reports an error for the clip."""
         self._ensure_child()
         self._set_busy(timeout_s)
         try:
@@ -350,7 +379,7 @@ class InferenceChild:
                 code = self._proc.poll() if self._proc else None
                 self._kill()
                 # A dead child is a worker fault, NOT a statement about the clip.
-                raise RuntimeError(f"inference process died (exit code {code})")
+                raise ChildFaultError(f"inference process died (exit code {code})", starting=False)
             if line is None:
                 self._kill()
                 log.error(
@@ -469,12 +498,17 @@ def _transcribe_file(path: str) -> str:
         return _inference.run(path, limit)
 
 
-def _do_transcribe(data: bytes, filename: str) -> dict:
+def _do_transcribe(data: bytes, filename: str, on_start_fault=None) -> dict:
     """Run one file and return the {"text","error"} shape the Go client decodes.
 
     Never raises: a failure here must degrade to an error entry for THIS file
     so a single bad WAV cannot fail a 64-file batch. The Go side reads
     error != nil per result and keeps the rest.
+
+    An inference child that cannot start or dies is reported with the
+    worker_misconfigured code (a fault of this worker, which the Go side defers
+    without striking the file), and a child that never became ready is also
+    passed to `on_start_fault` so the caller can stop sending it clips.
     """
     tmp_path = None
     try:
@@ -486,6 +520,11 @@ def _do_transcribe(data: bytes, filename: str) -> dict:
         text = _transcribe_file(tmp_path)
         log.info(f"transcribed {filename}: {len(text)} chars")
         return {"text": text, "error": None}
+    except ChildFaultError as e:
+        log.error(f"inference child fault for {filename}: {e}")
+        if e.starting and on_start_fault is not None:
+            on_start_fault(e)
+        return _error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e)))
     except Exception as e:
         log.error(f"transcription failed for {filename}: {e}")
         return {"text": "", "error": str(e)}
@@ -516,9 +555,17 @@ def transcribe_batch(files: Annotated[List[UploadFile], File()]):
     N single requests is reduced HTTP overhead, not parallelism.
     """
     results = {}
+    start_fault: list[ChildFaultError] = []
     for f in files:
         data = f.file.read()
-        results[f.filename] = _do_transcribe(data, f.filename)
+        if start_fault:
+            # The child never became ready: every further clip would wait out the
+            # same CHILD_READY_TIMEOUT_S. Answer the rest with the same fault.
+            results[f.filename] = _error_result(
+                PathJobError(ERR_WORKER_MISCONFIGURED, str(start_fault[0]))
+            )
+            continue
+        results[f.filename] = _do_transcribe(data, f.filename, start_fault.append)
     return {"results": results}
 
 
@@ -554,8 +601,9 @@ EXTRACT_WORKERS = max(1, int(os.environ.get("WHISPER_EXTRACT_WORKERS", "4")))
 #                   some clips. The Go side counts strikes per file and makes the
 #                   result permanent at 2.
 #   worker_misconfigured  this worker cannot do the job at all (ffmpeg not on
-#                   PATH): a fault of the worker, never a verdict about a book;
-#                   the Go side defers the book and writes nothing
+#                   PATH, or the inference process cannot start or died): a
+#                   fault of the worker, never a verdict about a book; the Go
+#                   side defers the book and writes nothing
 ERR_PATH_UNMAPPED = "path_unmapped"
 ERR_NOT_FOUND = "not_found"
 ERR_FFMPEG = "ffmpeg_error"
@@ -892,17 +940,33 @@ def _run_path_jobs(jobs: dict[str, Any]) -> dict[str, dict]:
             results[key] = _error_result(PathJobError(ERR_PATH_UNMAPPED, str(e)))
             continue
         pending[key] = pool.submit(_extract_clip, src, seconds)
+    start_fault: ChildFaultError | None = None
     try:
         for key, fut in pending.items():
             tmpdir = None
             try:
                 tmpdir, wav = fut.result()
+                if start_fault is not None:
+                    # The child never became ready: every further clip would wait
+                    # out the same CHILD_READY_TIMEOUT_S. Fail them all at once.
+                    results[key] = _error_result(
+                        PathJobError(ERR_WORKER_MISCONFIGURED, str(start_fault))
+                    )
+                    continue
                 text = _transcribe_file(wav)
                 log.info(f"transcribed path job {key}: {len(text)} chars")
                 results[key] = {"text": text, "error": None}
             except PathJobError as e:
                 log.error(f"path job {key} failed: {e}")
                 results[key] = _error_result(e)
+            except ChildFaultError as e:
+                # A child that cannot start or died is this worker's fault, not a
+                # verdict on the clip: the Go side defers worker_misconfigured and
+                # writes nothing, where whisper_error would be recorded as failed.
+                log.error(f"path job {key}: inference child fault: {e}")
+                results[key] = _error_result(PathJobError(ERR_WORKER_MISCONFIGURED, str(e)))
+                if e.starting:
+                    start_fault = e
             except Exception as e:
                 log.error(f"path job {key} failed: {e}")
                 results[key] = _error_result(PathJobError(ERR_WHISPER, str(e)))
@@ -966,19 +1030,43 @@ def _path_health() -> dict:
     return out
 
 
+# /health runs on the event loop, NOT in the anyio threadpool the sync upload
+# handlers share (40 threads by default): a long batch queues handlers on
+# _inference_lock, each parked in a threadpool thread, and a /health that needed
+# a thread too would queue behind them -- the Go liveness probe would then read
+# a busy worker as a dead one. Only the two calls that can block (the NFS root
+# listing and the ffmpeg lookup) go to this dedicated pool, bounded by a
+# deadline a little under the Go probe's 3 s. A hung mount strands at most these
+# two threads; /health then answers 503, which the Go pool already treats as
+# "refuse this endpoint".
+HEALTH_PATH_TIMEOUT_S = 2.5
+_health_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="health")
+
+
+def _blocking_health_fields() -> dict:
+    return {"ffmpeg": shutil.which("ffmpeg"), **_path_health()}
+
+
 @app.get("/health")
-def health():
+async def health():
     """Health probe.
 
-    A plain def, not async: it reads the NFS root, and on a hung mount that
-    call blocks. A sync handler blocks one threadpool thread; an async one would
-    freeze the event loop and with it the upload endpoints.
+    An async def so it never waits for a threadpool thread (see _health_pool),
+    with the filesystem reads, which can block on a hung NFS mount, run on that
+    pool under a deadline.
 
     batch_pipeline MUST be present for the Go client to use /transcribe-batch:
     supportsRemoteBatch decodes it as *bool and enables batching when the
     pointer is non-nil. Reporting the model and backend makes a misconfigured
     worker visible to a health check rather than only to a log line.
     """
+    loop = asyncio.get_running_loop()
+    try:
+        blocking = await asyncio.wait_for(
+            loop.run_in_executor(_health_pool, _blocking_health_fields), HEALTH_PATH_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="filesystem checks did not answer in time")
     busy_seconds, busy_limit = _inference.busy()
     return {
         "status": "ok",
@@ -987,23 +1075,22 @@ def health():
         "device": "metal",
         "backend": "mlx",
         "decode_fingerprint": DECODE_FINGERPRINT,
-        # Reported because "can this worker decode audio" is a different
-        # question from "is the model loaded", and only the first was ever
-        # wrong. Looked up LIVE rather than frozen at import: the startup
-        # preflight proves ffmpeg was present when we booted, not that it
-        # still is.
-        "ffmpeg": shutil.which("ffmpeg"),
         # Inference liveness, read WITHOUT touching _inference_lock (a wedged
         # job holds it). busy_seconds is how long the current clip has been
         # running (0 when idle); busy_limit_seconds is that clip's own limit. A
         # busy_seconds past its limit means the deadline did not fire, and the Go
-        # client then refuses this endpoint. The two clip_timeout_* fields let
-        # the client size its HTTP timeout to the worst case of a batch.
+        # client then refuses this endpoint. The clip_timeout_* fields let the
+        # client size its HTTP timeout to the worst case of a batch, and
+        # child_ready_timeout_s / extract_timeout_s are the two things a request
+        # can wait on BEFORE a clip's own clock starts (a cold model load, and
+        # ffmpeg cutting the clip), so the client's ceiling covers them too.
         "busy_seconds": round(busy_seconds, 1),
         "busy_limit_seconds": busy_limit,
         "clip_timeout_floor_s": TRANSCRIBE_MIN_TIMEOUT_S,
         "clip_timeout_factor": TRANSCRIBE_TIMEOUT_FACTOR,
-        **_path_health(),
+        "child_ready_timeout_s": CHILD_READY_TIMEOUT_S,
+        "extract_timeout_s": EXTRACT_TIMEOUT_S,
+        **blocking,
     }
 
 

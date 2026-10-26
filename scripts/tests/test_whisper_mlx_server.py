@@ -1,7 +1,7 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.8.0
+# version: 1.9.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
-# last-edited: 2026-10-25
+# last-edited: 2026-10-26
 #
 # Contract tests for scripts/whisper_mlx_server.py.
 #
@@ -20,6 +20,7 @@
 #   uv run --with fastapi --with httpx --with pytest --with python-multipart \
 #     pytest scripts/tests/test_whisper_mlx_server.py -v
 
+import contextlib
 import importlib.util
 import os
 import pathlib
@@ -280,12 +281,12 @@ class FfmpegPreflightTest(unittest.TestCase):
 
 @pytest.fixture
 def pathsrv(srv, tmp_path, monkeypatch):
-    """srv plus a mapped share: server /mnt/bigdata -> tmp_path/share."""
+    """srv plus a mapped share: server /lib/Gotham -> tmp_path/share."""
     mod, client = srv
     share = tmp_path / "share"
     (share / "books" / "A").mkdir(parents=True)
     (share / "books" / "A" / "one.m4b").write_bytes(b"audio")
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
 
     def fake_extract(src, seconds):
         # Echo what was asked for, so the tests prove which file and how many
@@ -312,8 +313,8 @@ def test_health_advertises_path_pipeline_and_roots(pathsrv):
     _, client, share = pathsrv
     body = client.get("/health").json()
     assert body["path_pipeline"] is True
-    assert body["path_prefixes"] == ["/mnt/bigdata"]
-    assert body["path_roots"] == [{"prefix": "/mnt/bigdata", "readable": True}]
+    assert body["path_prefixes"] == ["/lib/Gotham"]
+    assert body["path_roots"] == [{"prefix": "/lib/Gotham", "readable": True}]
     assert len(body["extract_fingerprint"]) == 16
     # The upload-path contract is untouched.
     assert body["batch_pipeline"] is True and len(body["decode_fingerprint"]) == 16
@@ -330,15 +331,15 @@ def test_health_without_a_map_is_not_a_path_worker(srv, monkeypatch):
 
 def test_health_reports_a_lost_mount_per_root(pathsrv, monkeypatch, tmp_path):
     mod, client, _ = pathsrv
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={tmp_path / 'gone'}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={tmp_path / 'gone'}")
     body = client.get("/health").json()
     assert body["path_pipeline"] is True
-    assert body["path_roots"] == [{"prefix": "/mnt/bigdata", "readable": False}]
+    assert body["path_roots"] == [{"prefix": "/lib/Gotham", "readable": False}]
 
 
 def test_health_malformed_map_fails_closed(srv, monkeypatch):
     _, client = srv
-    monkeypatch.setenv("WHISPER_PATH_MAP", "/mnt/bigdata")  # no '='
+    monkeypatch.setenv("WHISPER_PATH_MAP", "/lib/Gotham")  # no '='
     body = client.get("/health").json()
     assert body["path_pipeline"] is False
     assert "path_map_error" in body
@@ -349,7 +350,7 @@ def test_path_batch_maps_and_keys_verbatim(pathsrv):
     key = "Jules Verne — 20,000 Leagues"
     r = client.post(
         "/transcribe-path-batch",
-        json={"jobs": {key: _job("/mnt/bigdata/books/A/one.m4b", 300)}},
+        json={"jobs": {key: _job("/lib/Gotham/books/A/one.m4b", 300)}},
     )
     assert r.status_code == 200
     assert r.json() == {"results": {key: {"text": "heard:one.m4b|300", "error": None}}}
@@ -357,16 +358,16 @@ def test_path_batch_maps_and_keys_verbatim(pathsrv):
 
 def test_single_path_endpoint(pathsrv):
     _, client, _ = pathsrv
-    r = client.post("/transcribe-path", json=_job("/mnt/bigdata/books/A/one.m4b"))
+    r = client.post("/transcribe-path", json=_job("/lib/Gotham/books/A/one.m4b"))
     assert r.json() == {"text": "heard:one.m4b|90", "error": None}
 
 
 @pytest.mark.parametrize(
     "path",
     [
-        "/mnt/bigdata/../etc/passwd",
-        "/mnt/bigdata/books/../../etc/passwd",
-        "/mnt/bigdataX/books/A/one.m4b",  # string prefix, not a component prefix
+        "/lib/Gotham/../etc/passwd",
+        "/lib/Gotham/books/../../etc/passwd",
+        "/lib/GothamX/books/A/one.m4b",  # string prefix, not a component prefix
         "/mnt/other/books/A/one.m4b",
         "books/A/one.m4b",  # relative
         "/etc/passwd",
@@ -388,16 +389,16 @@ def test_symlink_escaping_the_root_is_refused(pathsrv, tmp_path):
     outside.write_bytes(b"secret")
     (share / "books" / "link.m4b").symlink_to(outside)
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/link.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/link.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("path_unmapped:")
 
 
 def test_lost_mount_fails_each_job_closed_as_path_unmapped(pathsrv, monkeypatch, tmp_path):
     _, client, _ = pathsrv
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={tmp_path / 'gone'}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={tmp_path / 'gone'}")
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("path_unmapped:") and "mount" in res["error"]
 
@@ -406,7 +407,7 @@ def test_no_map_refuses_every_job(pathsrv, monkeypatch):
     _, client, _ = pathsrv
     monkeypatch.delenv("WHISPER_PATH_MAP")
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("path_unmapped:")
 
@@ -419,7 +420,7 @@ def test_missing_file_under_a_readable_root_is_not_found(pathsrv, monkeypatch):
 
     monkeypatch.setattr(mod, "_extract_clip", real_extract_missing)
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/nope.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/nope.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("not_found:")
 
@@ -428,8 +429,8 @@ def test_missing_file_under_a_readable_root_is_not_found(pathsrv, monkeypatch):
 def test_bad_seconds_is_a_per_job_error(pathsrv, seconds):
     _, client, _ = pathsrv
     jobs = {
-        "bad": {"path": "/mnt/bigdata/books/A/one.m4b", "seconds": seconds},
-        "good": _job("/mnt/bigdata/books/A/one.m4b"),
+        "bad": {"path": "/lib/Gotham/books/A/one.m4b", "seconds": seconds},
+        "good": _job("/lib/Gotham/books/A/one.m4b"),
     }
     results = client.post("/transcribe-path-batch", json={"jobs": jobs}).json()["results"]
     assert results["bad"]["error"].startswith("bad_request:")
@@ -456,8 +457,8 @@ def test_one_failing_path_job_does_not_fail_the_batch(pathsrv, monkeypatch):
         "/transcribe-path-batch",
         json={
             "jobs": {
-                "good": _job("/mnt/bigdata/books/A/one.m4b"),
-                "bad": _job("/mnt/bigdata/books/A/bad.m4b"),
+                "good": _job("/lib/Gotham/books/A/one.m4b"),
+                "bad": _job("/lib/Gotham/books/A/bad.m4b"),
             }
         },
     ).json()["results"]
@@ -473,7 +474,7 @@ def test_a_whisper_failure_is_prefixed_and_isolated(pathsrv, monkeypatch):
 
     monkeypatch.setattr(mod, "_transcribe_file", boom)
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("whisper_error:") and "model fell over" in res["error"]
 
@@ -489,9 +490,7 @@ def test_temp_clips_are_removed(pathsrv, monkeypatch):
         return d, w
 
     monkeypatch.setattr(mod, "_extract_clip", tracking)
-    client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
-    )
+    client.post("/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}})
     assert seen and not any(pathlib.Path(d).exists() for d in seen)
 
 
@@ -518,8 +517,8 @@ def test_parse_path_map_rejects_malformed_entries(srv, raw):
 
 def test_parse_path_map_longest_prefix_first(srv):
     mod, _ = srv
-    pairs = mod.parse_path_map("/mnt/bigdata=/a, /mnt/bigdata/books=/b ,")
-    assert pairs[0][0] == "/mnt/bigdata/books"
+    pairs = mod.parse_path_map("/lib/Gotham=/a, /lib/Gotham/books=/b ,")
+    assert pairs[0][0] == "/lib/Gotham/books"
 
 
 # ── ffmpeg failure classification (the real _extract_clip, subprocess faked) ──
@@ -536,7 +535,7 @@ def extract_env(srv, tmp_path, monkeypatch):
     share.mkdir()
     src = share / "book.m4b"
     src.write_bytes(b"audio")
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/fake/bin/ffmpeg")
     return mod, share, str(src)
 
@@ -647,7 +646,7 @@ def test_worker_misconfigured_reaches_the_client_as_a_prefixed_error(pathsrv, mo
 
     monkeypatch.setattr(mod, "_extract_clip", no_ffmpeg)
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("worker_misconfigured:")
 
@@ -670,11 +669,11 @@ def test_a_forcibly_unmounted_root_fails_closed_per_job_and_in_health(srv, monke
     monkeypatch.setenv("WHISPER_PATH_REQUIRE_MOUNT", "1")
     share = tmp_path / "share"
     share.mkdir()  # empty leftover directory, not a mount
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
     body = client.get("/health").json()
-    assert body["path_roots"] == [{"prefix": "/mnt/bigdata", "readable": False}]
+    assert body["path_roots"] == [{"prefix": "/lib/Gotham", "readable": False}]
     res = client.post(
-        "/transcribe-path-batch", json={"jobs": {"k": _job("/mnt/bigdata/books/A/one.m4b")}}
+        "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
     assert res["error"].startswith("path_unmapped:")
 
@@ -727,7 +726,7 @@ def test_real_ffmpeg_renamed_aiff_is_container_rejected(srv, tmp_path, monkeypat
         check=True,
     )
     (share / "corrupt.m4b").write_bytes(b"not audio at all")
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
     for name, want in (
         ("renamed.m4b", mod.ERR_CONTAINER_REJECTED),
         ("corrupt.m4b", mod.ERR_FFMPEG),
@@ -740,14 +739,57 @@ def test_real_ffmpeg_renamed_aiff_is_container_rejected(srv, tmp_path, monkeypat
 # ── /health liveness with a hung mount ───────────────────────────────────────
 
 
-def test_health_is_sync_and_a_hung_root_does_not_block_the_event_loop(srv):
-    """A plain def runs in the threadpool, so a root listing that hangs on a
-    dead NFS server stalls one thread, not the loop serving the upload
-    endpoints."""
+def test_health_is_async_and_never_waits_for_the_shared_threadpool(childsrv, monkeypatch):
+    """The sync upload handlers each park a threadpool thread while they queue on
+    the inference lock; a sync /health would need a thread too and starve behind
+    them, so the Go liveness probe would read a busy worker as a dead one. With
+    the default 40-thread pool saturated by uploads, /health must still answer."""
+    import asyncio
     import inspect
 
-    mod, _ = srv
-    assert not inspect.iscoroutinefunction(mod.health)
+    import httpx
+
+    mod, _, _, _ = childsrv
+    assert inspect.iscoroutinefunction(mod.health)
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_transcribe_file", lambda p: (release.wait(30), "x")[1])
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mod.app), base_url="http://192.0.2.10"
+        ) as c:
+            uploads = [
+                asyncio.create_task(
+                    c.post("/transcribe", files={"file": ("p.wav", b"abc", "audio/wav")})
+                )
+                for _ in range(48)
+            ]
+            await asyncio.sleep(1.0)
+            try:
+                return await asyncio.wait_for(c.get("/health"), timeout=5)
+            finally:
+                release.set()
+                await asyncio.gather(*uploads, return_exceptions=True)
+
+    resp = asyncio.run(scenario())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_a_hung_root_listing_answers_503_instead_of_hanging_health(srv, monkeypatch):
+    """The NFS listing is the one call that can block; it runs on a dedicated
+    pool under a deadline, and a miss is a 503 (which the Go pool refuses)."""
+    mod, client = srv
+    gate = threading.Event()
+    monkeypatch.setattr(mod, "HEALTH_PATH_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(mod, "_path_health", lambda: (gate.wait(10), {})[1])
+    try:
+        t0 = time.monotonic()
+        r = client.get("/health")
+        assert r.status_code == 503
+        assert time.monotonic() - t0 < 3
+    finally:
+        gate.set()
 
 
 def test_root_readable_reads_one_entry_not_the_whole_listing(srv, monkeypatch, tmp_path):
@@ -767,7 +809,7 @@ def test_mapped_path_returned_is_the_resolved_real_path(srv, monkeypatch, tmp_pa
     (real_share / "f.m4b").write_bytes(b"x")
     link = tmp_path / "link"
     link.symlink_to(real_share)
-    got = mod.map_server_path("/mnt/bigdata/f.m4b", [("/mnt/bigdata", str(link))])
+    got = mod.map_server_path("/lib/Gotham/f.m4b", [("/lib/Gotham", str(link))])
     assert got == str((real_share / "f.m4b").resolve())
 
 
@@ -794,7 +836,7 @@ def test_real_ffmpeg_extracts_a_valid_16k_mono_clip(srv, tmp_path, monkeypatch):
         check=True,
     )
     (share / "broken.m4a").write_bytes(b"not audio at all")
-    monkeypatch.setenv("WHISPER_PATH_MAP", f"/mnt/bigdata={share}")
+    monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={share}")
     import wave
 
     seen = {}
@@ -810,9 +852,9 @@ def test_real_ffmpeg_extracts_a_valid_16k_mono_clip(srv, tmp_path, monkeypatch):
         "/transcribe-path-batch",
         json={
             "jobs": {
-                "tone": _job("/mnt/bigdata/tone.m4a", 2),
-                "broken": _job("/mnt/bigdata/broken.m4a", 2),
-                "absent": _job("/mnt/bigdata/absent.m4a", 2),
+                "tone": _job("/lib/Gotham/tone.m4a", 2),
+                "broken": _job("/lib/Gotham/broken.m4a", 2),
+                "absent": _job("/lib/Gotham/absent.m4a", 2),
             }
         },
     ).json()["results"]
@@ -983,17 +1025,74 @@ def test_upload_batch_isolates_a_timeout_per_file(childsrv):
     assert r["c"] == {"text": "heard-6", "error": None}
 
 
-def test_a_crashed_child_is_a_whisper_error_not_a_timeout(childsrv):
+def test_a_crashed_child_is_a_worker_fault_not_a_timeout_or_a_clip_verdict(childsrv):
     """A child that dies is a worker fault, not a statement about the clip: it
-    must not be reported as transcribe_timeout (which the Go side strikes)."""
+    must not be reported as transcribe_timeout (which the Go side strikes), and
+    not as whisper_error (which the Go side records against the book as failed).
+    worker_misconfigured is the code both ops defer without writing anything."""
     _, client, put, _ = childsrv
     res = client.post(
         "/transcribe-path-batch",
         json={"jobs": {"dies": put("d.m4b", b"DIEDIE"), "next": put("n.m4b", b"abc")}},
     ).json()["results"]
-    assert res["dies"]["error"].startswith("whisper_error:")
+    assert res["dies"]["error"].startswith("worker_misconfigured:")
     assert "died" in res["dies"]["error"]
+    # The next clip starts a fresh child and is served normally.
     assert res["next"] == {"text": "heard-3", "error": None}
+
+
+def test_a_child_that_cannot_start_fails_the_whole_batch_once(childsrv, monkeypatch):
+    """A child that never becomes ready is a worker fault, reported as
+    worker_misconfigured for EVERY job, and the start is attempted ONCE: without
+    the short-circuit each clip would wait out its own CHILD_READY_TIMEOUT_S."""
+    mod, client, put, _ = childsrv
+    monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "no_such_backend_module:factory")
+    spawns = []
+    real_spawn = mod._inference._spawn
+    monkeypatch.setattr(mod._inference, "_spawn", lambda: (spawns.append(1), real_spawn())[1])
+    t0 = time.monotonic()
+    res = client.post(
+        "/transcribe-path-batch",
+        json={"jobs": {k: put(f"{k}.m4b", b"abc") for k in ("a", "b", "c")}},
+    ).json()["results"]
+    assert time.monotonic() - t0 < 30
+    assert len(spawns) == 1, "one failed start must short-circuit the rest of the batch"
+    for k in ("a", "b", "c"):
+        assert res[k]["text"] == ""
+        assert res[k]["error"].startswith("worker_misconfigured:"), res[k]
+        assert "while starting" in res[k]["error"]
+
+
+def test_a_child_that_never_gets_ready_is_a_worker_fault(childsrv, monkeypatch, tmp_path):
+    mod, client, put, _ = childsrv
+    monkeypatch.setattr(mod, "CHILD_READY_TIMEOUT_S", 0.3)
+    monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "slow_loading_backend:factory")
+    # The backend factory sleeps past the ready deadline.
+    slow = tmp_path / "slowdir"
+    slow.mkdir()
+    (slow / "slow_loading_backend.py").write_text(
+        "import time\n\ndef factory():\n    time.sleep(30)\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(slow) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    res = client.post("/transcribe-path-batch", json={"jobs": {"a": put("a.m4b", b"abc")}}).json()[
+        "results"
+    ]
+    assert res["a"]["error"].startswith("worker_misconfigured:")
+    assert "not ready" in res["a"]["error"]
+
+
+def test_upload_batch_short_circuits_after_a_failed_child_start(childsrv, monkeypatch):
+    mod, client, _, _ = childsrv
+    monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "no_such_backend_module:factory")
+    spawns = []
+    real_spawn = mod._inference._spawn
+    monkeypatch.setattr(mod._inference, "_spawn", lambda: (spawns.append(1), real_spawn())[1])
+    r = client.post(
+        "/transcribe-batch",
+        files=[("files", (n, b"abc", "audio/wav")) for n in ("a", "b", "c")],
+    ).json()["results"]
+    assert len(spawns) == 1
+    assert all(r[n]["error"].startswith("worker_misconfigured:") for n in "abc")
 
 
 def test_a_backend_exception_is_a_per_file_whisper_error(childsrv):
@@ -1053,6 +1152,30 @@ def test_clip_timeout_uses_the_header_not_the_requested_length(srv, tmp_path, mo
     assert mod._clip_timeout(str(short)) == pytest.approx(80)
 
 
+def test_audio_seconds_never_exceeds_what_the_file_size_allows(srv, tmp_path):
+    """A header that claims far more frames than the file holds (forged, or a
+    truncated download) must not stretch the clip's deadline."""
+    import struct
+
+    mod, _ = srv
+    lying = tmp_path / "lying.wav"
+    # 100 bytes of audio but a header claiming an hour of 16 kHz mono.
+    frames = 16000 * 3600
+    data_len = frames * 2
+    header = (
+        b"RIFF"
+        + struct.pack("<I", 36 + data_len)
+        + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16)
+        + b"data"
+        + struct.pack("<I", data_len)
+    )
+    lying.write_bytes(header + b"\x00" * 100)
+    size = lying.stat().st_size
+    assert mod._audio_seconds(str(lying)) == pytest.approx(size / 32000)
+    assert mod._audio_seconds(str(lying)) < 1
+
+
 def test_clip_timeout_knobs_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", "7")
     monkeypatch.setenv("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", "2.5")
@@ -1086,8 +1209,60 @@ def test_health_busy_fields_are_present_and_idle_by_default(srv):
     assert body["busy_seconds"] == 0
     assert body["busy_limit_seconds"] is None
     assert body["clip_timeout_floor_s"] == 60 and body["clip_timeout_factor"] == 4
+    # What a request can wait on before a clip's own clock starts: the client's
+    # ceiling for a request that meets a cold worker is built from these.
+    assert body["child_ready_timeout_s"] == 300
+    assert body["extract_timeout_s"] == 120
 
 
 def test_timeout_error_code_is_stable(srv):
     mod, _ = srv
     assert mod.ERR_TRANSCRIBE_TIMEOUT == "transcribe_timeout"
+
+
+def test_the_orphaned_child_exits_when_its_parent_is_killed(tmp_path, monkeypatch):
+    """A child stuck in a decode loop never reads its pipe, so EOF alone would
+    leave it spinning forever after the parent is SIGKILLed. The child watches
+    its parent and exits by itself; this runs a real child under a throwaway
+    parent, kills the parent without any cleanup, and expects the child gone."""
+    import signal as _signal
+
+    here = str(pathlib.Path(__file__).resolve().parent)
+    monkeypatch.setenv("PYTHONPATH", here + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    monkeypatch.setenv("WHISPER_BACKEND_FACTORY", "fake_whisper_backend:factory")
+    hang = tmp_path / "hang.wav"
+    hang.write_bytes(b"HANGHANG")
+    parent_src = (
+        "import json, os, subprocess, sys, time\n"
+        "r1, w1 = os.pipe()\n"
+        "r2, w2 = os.pipe()\n"
+        f"p = subprocess.Popen([sys.executable, {str(_SERVER)!r}, '--inference-child',"
+        " str(r1), str(w2)], pass_fds=(r1, w2))\n"
+        # Hand the child a clip that never decodes: it is now stuck in the
+        # backend and will not read its pipe again, so the pipe closing when this
+        # parent dies cannot be what ends it.
+        f"os.write(w1, json.dumps({{'path': {str(hang)!r}}}).encode() + b'\\n')\n"
+        "print(p.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    parent = subprocess.Popen(
+        [sys.executable, "-c", parent_src], stdout=subprocess.PIPE, text=True, env=os.environ
+    )
+    child_pid = None
+    try:
+        child_pid = int(parent.stdout.readline())
+        assert _alive(child_pid)
+        # Let the child get past its backend load and start its watcher.
+        time.sleep(1.0)
+        os.kill(parent.pid, _signal.SIGKILL)
+        parent.wait(timeout=10)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and _alive(child_pid):
+            time.sleep(0.25)
+        assert not _alive(child_pid), "the orphaned inference child must exit on its own"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        if child_pid is not None and _alive(child_pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child_pid, _signal.SIGKILL)
