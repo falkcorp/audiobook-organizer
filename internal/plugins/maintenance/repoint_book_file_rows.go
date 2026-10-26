@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -60,6 +60,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -683,6 +684,13 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 	}
 
 	newHash, newSize := r.DiskHash, r.DiskSize
+	// ModifyBookFile re-runs its callback on a fresh copy of the row each time
+	// another writer changes the row under it, so the callback must not mint
+	// anything of its own: the journal row is keyed by ONE id for the whole
+	// apply, so each run rewrites the same row (the last run's pre-image, the
+	// one the write commits against) instead of leaving one row per attempt.
+	changeID := ulid.Make().String()
+	var journaled *database.OperationChange // the row stored under changeID, nil until one is written
 	updated, err := env.store.ModifyBookFile(r.BookID, r.RowID, func(f *database.BookFile) error {
 		if f.FilePath != planned.OldPath || f.FileSize != planned.RowSize || f.FileHash != planned.RowHash {
 			return errRBFRowChanged
@@ -691,19 +699,21 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 		if mErr != nil {
 			return fmt.Errorf("serialize row for the undo ledger: %w", mErr)
 		}
-		// Journal first: a failure here returns before any field changes, so
-		// ModifyBookFile writes nothing.
-		if jErr := env.store.CreateOperationChange(&database.OperationChange{
-			ID:          ulid.Make().String(),
+		change := &database.OperationChange{
+			ID:          changeID,
 			OperationID: opID,
 			BookID:      f.BookID,
 			ChangeType:  rbfChangeType,
 			FieldName:   f.ID,
 			OldValue:    string(blob), // the ENTIRE row, so the repoint can be replayed back
 			NewValue:    planned.NewPath,
-		}); jErr != nil {
+		}
+		// Journal first: a failure here returns before any field changes, so
+		// ModifyBookFile writes nothing.
+		if jErr := env.store.CreateOperationChange(change); jErr != nil {
 			return fmt.Errorf("journal row: %w", jErr)
 		}
+		journaled = change
 		f.FilePath = planned.NewPath
 		f.Missing = false
 		f.FileHash = newHash
@@ -712,16 +722,46 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 		}
 		return nil
 	})
-	if err != nil {
-		return err.Error()
-	}
-	if updated == nil {
+	if err != nil || updated == nil {
+		// Nothing was written, but an earlier run of the callback may have
+		// journaled the repoint (a lost CAS round, then a refusal or a conflict
+		// on the next one). Take the row back so the undo ledger never claims a
+		// repoint that did not happen.
+		voidErr := rbfVoidJournal(env.store, journaled)
+		if err != nil {
+			if voidErr != nil {
+				return err.Error() + "; " + voidErr.Error()
+			}
+			return err.Error()
+		}
+		if voidErr != nil {
+			return "row vanished before the write; " + voidErr.Error()
+		}
 		return "row vanished before the write"
 	}
 	if rErr := env.store.RecomputeBookAggregates(r.BookID); rErr != nil {
 		r.addWarning("row repointed; book aggregate recompute failed: " + rErr.Error())
 	}
 	return ""
+}
+
+// rbfVoidJournal takes back the journal row of a repoint that was refused after
+// its row was written (database.OperationChange.Voided: nothing happened, so no
+// revert, count or preflight sees it). journaled is the row stored under the
+// apply's id, nil when no run of the callback wrote one (nothing to take back).
+// A void that cannot be written is reported: a live row for a write that never
+// happened is worse than a failed op.
+func rbfVoidJournal(store rbfWriter, journaled *database.OperationChange) error {
+	if journaled == nil {
+		return nil
+	}
+	v := *journaled
+	now := time.Now()
+	v.RevertedAt, v.Voided = &now, true
+	if err := store.CreateOperationChange(&v); err != nil {
+		return fmt.Errorf("void journal row %s: %w", v.ID, err)
+	}
+	return nil
 }
 
 // rbfBookStates reads each touched book's aggregates. A book that cannot be
