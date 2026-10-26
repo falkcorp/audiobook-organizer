@@ -353,7 +353,9 @@ class InferenceChild:
                 raise RuntimeError(f"inference process died (exit code {code})")
             if line is None:
                 self._kill()
-                log.error(f"inference exceeded {timeout_s:.0f}s on {os.path.basename(path)}; child killed")
+                log.error(
+                    f"inference exceeded {timeout_s:.0f}s on {os.path.basename(path)}; child killed"
+                )
                 raise PathJobError(
                     ERR_TRANSCRIBE_TIMEOUT,
                     f"no result within {timeout_s:.0f}s; the decode process was killed and restarted",

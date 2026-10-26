@@ -1072,7 +1072,12 @@ def test_timeout_settings_do_not_change_the_decode_fingerprint(srv):
     """The limit says nothing about the text produced, so it must not be in
     DECODE_SETTINGS: that would make every journalled transcript unreachable."""
     mod, _ = srv
-    assert set(mod.DECODE_SETTINGS) == {"backend", "model", "language", "condition_on_previous_text"}
+    assert set(mod.DECODE_SETTINGS) == {
+        "backend",
+        "model",
+        "language",
+        "condition_on_previous_text",
+    }
 
 
 def test_health_busy_fields_are_present_and_idle_by_default(srv):
