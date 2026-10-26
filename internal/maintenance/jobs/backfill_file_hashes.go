@@ -1,13 +1,14 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package jobs
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -119,6 +120,10 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 
 	var hashed atomic.Int64
+	// conflicted counts rows SetBookFileHash gave up on because other writers
+	// kept changing them (database.ErrBookFileConflict): busy rows, not bad
+	// ones, which a later run picks up.
+	var conflicted atomic.Int64
 	// repMu serializes access to reporter, whose maintenance.ProgressAdapter
 	// increments a plain int (progress.go) and is NOT concurrency-safe. The
 	// guarded calls are microseconds; file hashing dominates, so this does not
@@ -169,6 +174,9 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 				}
 				if !dryRun {
 					if serr := store.SetBookFileHash(bf.ID, hash); serr != nil {
+						if errors.Is(serr, database.ErrBookFileConflict) {
+							conflicted.Add(1)
+						}
 						msg := serr.Error()
 						slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
 						repMu.Lock()
@@ -201,6 +209,9 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 
 	// Save a lightweight operation summary for the UI and activity feed.
 	res := fmt.Sprintf("Backfilled hashes for %d files", hashed.Load())
+	if n := conflicted.Load(); n > 0 {
+		res += fmt.Sprintf(" (%d skipped because other writers kept changing them; a later run picks them up)", n)
+	}
 	now := time.Now()
 	opLog := &database.OperationSummaryLog{
 		ID:          opID,

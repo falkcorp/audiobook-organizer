@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7a3b5c8e-d1f2-4e9a-b6c0-3d7f1a2e5b8c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // Package dedup — op dedup.bookfile-seg-drop (T020, SPEC 3 §6 item 2).
 //
@@ -156,19 +156,26 @@ func (p *Plugin) runBookfileSegDrop(ctx context.Context, rawParams json.RawMessa
 		"rewrite", res.Rewrite,
 		"skipped", res.Skipped,
 		"errors", res.Errors,
+		"conflicts", res.Conflicts,
 		"apply", params.Apply)
 
 	if !params.Apply {
 		summary := fmt.Sprintf(
-			"Dry-run complete — %d of %d rows would be rewritten (%d already clean, %d errors). "+
+			"Dry-run complete — %d of %d rows would be rewritten (%d already clean, %d errors, %d busy). "+
 				"Pass apply=true to execute.",
-			res.Rewrite, res.Total, res.Skipped, res.Errors)
+			res.Rewrite, res.Total, res.Skipped, res.Errors, res.Conflicts)
 		_ = reporter.UpdateProgress(2, 2, summary)
 		return nil
 	}
 
-	// Set versioned completion flag.
-	if err := sweepStore.SetSetting(bookfileSegDropDoneFlag, "true", "bool", false); err != nil {
+	// A row the sweep gave up on because other writers kept changing it was left
+	// exactly as stored, with its legacy segment columns. Marking the sweep done
+	// would hide it from every later run, so the flag stays unset and the next
+	// run (which skips already-clean rows) picks those rows up.
+	if res.Conflicts > 0 {
+		reporter.Logger().Warn("bookfile-seg-drop: not setting done flag: rows kept changing under the sweep",
+			"conflicts", res.Conflicts, "flag", bookfileSegDropDoneFlag)
+	} else if err := sweepStore.SetSetting(bookfileSegDropDoneFlag, "true", "bool", false); err != nil {
 		reporter.Logger().Warn("bookfile-seg-drop: could not set done flag",
 			"flag", bookfileSegDropDoneFlag, "error", err)
 	} else {
@@ -176,11 +183,11 @@ func (p *Plugin) runBookfileSegDrop(ctx context.Context, rawParams json.RawMessa
 	}
 
 	summary := fmt.Sprintf(
-		"Complete — %d rows rewritten, %d already clean, %d errors (of %d total rows).",
-		res.Rewrite, res.Skipped, res.Errors, res.Total)
+		"Complete — %d rows rewritten, %d already clean, %d errors, %d left as stored because other writers kept changing them (of %d total rows).",
+		res.Rewrite, res.Skipped, res.Errors, res.Conflicts, res.Total)
 	_ = reporter.UpdateProgress(2, 2, summary)
 	reporter.Logger().Info("bookfile-seg-drop: complete",
-		"rewrite", res.Rewrite, "skipped", res.Skipped, "errors", res.Errors, "total", res.Total)
+		"rewrite", res.Rewrite, "skipped", res.Skipped, "errors", res.Errors, "conflicts", res.Conflicts, "total", res.Total)
 	return nil
 }
 
