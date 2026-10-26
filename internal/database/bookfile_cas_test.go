@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -27,7 +27,10 @@ import (
 // The injected writer must never take the victim's file stripe (it would
 // deadlock): CreateBookFile and the batch upserts take none, and the hook is
 // guarded against re-entry because the injected writer commits through the
-// same hook.
+// same hook. The delete paths run the hook while holding the row's fingerprint
+// window stripes too (commitDeleteWithWindowCascade), so a writer injected into
+// a delete must not take those either: batch upserts and creates take no window
+// stripe, a window write (ReplaceFingerprintWindows) does.
 
 type casFixture struct {
 	s    *PebbleStore
