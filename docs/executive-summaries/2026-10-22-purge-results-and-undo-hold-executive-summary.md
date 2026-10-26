@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.14.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -189,13 +189,20 @@ undo above. Books that own files are still never purged.
   the book in the trash to try again next time, instead of deleting the book and
   losing track of the file.
 - A purge with "Also delete files" now refuses to run, and the start-up
-  clean-up waits, while the library folder is not ready (not set, missing, or
-  completely empty). A network or ZFS share that has not mounted yet looks like
-  an empty folder, and every file would have read as "already gone"; nothing
-  is removed and every note of a pending removal is kept. The start-up clean-up
-  retries for about fifteen minutes, then gives up with an error and tries again
-  at the next purge. The price: a library that really is empty cannot be purged
-  with "Also delete files" until it holds at least one entry.
+  clean-up waits, while the library folder does not look mounted. A network or
+  ZFS share that has not mounted yet looks like an empty folder, and every file
+  would have read as "already gone"; nothing is removed and every note of a
+  pending removal is kept. "Looks mounted" is not "the folder has something in
+  it" (the program's own database and backups live inside it): the purge checks
+  up to fifty of the library's own book files and needs most of them to be
+  visible. A file that is missing while the folder it was in is missing too is
+  also not taken as gone: that book stays in the trash until the folder can be
+  read. The start-up clean-up retries for about fifteen minutes, then gives up
+  with an error and tries again at the next purge. The price: a library that
+  has really lost most of its files is refused the same way until they are back,
+  because that looks exactly like an unmounted share; and a trashed book whose
+  whole folder has been removed cannot be purged with "Also delete files" until
+  the folder is readable again (purging without that option still works).
 - Purging, or discarding progress and purging, a single book from its own page
   now follows the same order as the big purge: it decides about the file first
   and refuses with the reason if it cannot, writes down the file to remove

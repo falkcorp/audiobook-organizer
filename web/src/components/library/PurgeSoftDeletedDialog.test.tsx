@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
 // last-edited: 2026-10-25
 
@@ -262,6 +262,8 @@ describe('PurgeSoftDeletedDialog', () => {
 
   it('passes the delete-files choice to the purge', async () => {
     api.awaitPurgeResult.mockResolvedValueOnce(preview);
+    // Ticking the box previews again, with delete files on.
+    api.awaitPurgeResult.mockResolvedValueOnce(preview);
     api.awaitPurgeResult.mockResolvedValueOnce({
       attempted: 40,
       purged: 3,
@@ -271,9 +273,24 @@ describe('PurgeSoftDeletedDialog', () => {
     const onFinished = setup();
     await screen.findByTestId('purge-preview-headline');
     fireEvent.click(screen.getByLabelText('Also delete files from disk (if they still exist)'));
-    fireEvent.click(screen.getByRole('button', { name: 'Purge 3 books' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Purge 3 books' }));
     await waitFor(() => expect(onFinished).toHaveBeenCalled());
     expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(PREVIEW_AT, true);
+  });
+
+  it('previews again with delete files on when the box is ticked, and off when it is cleared, so the preview is the run', async () => {
+    api.awaitPurgeResult.mockResolvedValue(preview);
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(1);
+    expect(api.previewPurgeSoftDeleted).toHaveBeenLastCalledWith(false);
+    const box = 'Also delete files from disk (if they still exist)';
+    fireEvent.click(screen.getByLabelText(box));
+    await waitFor(() => expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(2));
+    expect(api.previewPurgeSoftDeleted).toHaveBeenLastCalledWith(true);
+    fireEvent.click(await screen.findByLabelText(box));
+    await waitFor(() => expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(3));
+    expect(api.previewPurgeSoftDeleted).toHaveBeenLastCalledWith(false);
   });
 
   it('cannot purge from a preview that did not say what it covered', async () => {
@@ -286,7 +303,7 @@ describe('PurgeSoftDeletedDialog', () => {
   });
 
   it('with delete files ticked, lists the files a purge would remove and how many stay', async () => {
-    api.awaitPurgeResult.mockResolvedValueOnce({
+    api.awaitPurgeResult.mockResolvedValue({
       ...preview,
       files_to_delete: ['/library/A/one.m4b', '/library/B/two.m4b'],
       files_to_delete_count: 12,
@@ -305,7 +322,7 @@ describe('PurgeSoftDeletedDialog', () => {
   });
 
   it('with delete files ticked, says how many files an earlier purge left waiting', async () => {
-    api.awaitPurgeResult.mockResolvedValueOnce({
+    api.awaitPurgeResult.mockResolvedValue({
       ...preview,
       files_to_delete: [],
       files_to_delete_count: 0,
@@ -321,7 +338,7 @@ describe('PurgeSoftDeletedDialog', () => {
   });
 
   it('says so when no file would be deleted', async () => {
-    api.awaitPurgeResult.mockResolvedValueOnce({
+    api.awaitPurgeResult.mockResolvedValue({
       ...preview,
       files_to_delete: [],
       files_to_delete_count: 0,

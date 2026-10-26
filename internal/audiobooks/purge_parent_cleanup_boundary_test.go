@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
 // last-edited: 2026-10-25
 
@@ -52,11 +52,6 @@ func setupPurgeBoundaryUntrusted(t *testing.T) (*AudiobookService, *database.Peb
 	base := t.TempDir()
 	config.AppConfig.RootDir = filepath.Join(base, "lib")
 	if err := os.MkdirAll(config.AppConfig.RootDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A library that is up holds something: a purge with delete_files refuses an
-	// empty root (libraryRootReady), which is what an unmounted library looks like.
-	if err := os.WriteFile(filepath.Join(config.AppConfig.RootDir, ".gotham-mounted"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return NewAudiobookService(store), store, base

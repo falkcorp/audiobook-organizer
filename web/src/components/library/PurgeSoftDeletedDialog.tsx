@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
 // last-edited: 2026-10-25
 
@@ -77,7 +77,11 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
     runRef.current = run;
   });
 
-  const runPreview = useCallback(async () => {
+  // The preview is made with the same delete-files choice the purge will run
+  // with, so what it lists as purgeable is what the run will purge: a book whose
+  // file cannot be decided is kept by a delete-files run, and only a delete-files
+  // preview says so.
+  const runPreview = useCallback(async (withFiles: boolean) => {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
@@ -85,7 +89,7 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
     setPreview(null);
     setPreviewError(null);
     try {
-      const handle = await api.previewPurgeSoftDeleted();
+      const handle = await api.previewPurgeSoftDeleted(withFiles);
       const res = await api.awaitPurgeResult(handle.id, undefined, { signal: ac.signal });
       if (ac.signal.aborted) return;
       setPreview(res);
@@ -103,7 +107,7 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
     // A purge started earlier is still running: show it, do not preview.
     if (runRef.current.running) return;
     runRef.current.reset();
-    void runPreview();
+    void runPreview(false);
     return () => abortRef.current?.abort();
   }, [open, runPreview]);
 
@@ -142,7 +146,7 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
 
   const tryAgain = () => {
     run.reset();
-    void runPreview();
+    void runPreview(deleteFiles);
   };
 
   return (
@@ -198,7 +202,10 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
                   control={
                     <Checkbox
                       checked={deleteFiles}
-                      onChange={(e) => setDeleteFiles(e.target.checked)}
+                      onChange={(e) => {
+                        setDeleteFiles(e.target.checked);
+                        void runPreview(e.target.checked);
+                      }}
                     />
                   }
                   label="Also delete files from disk (if they still exist)"

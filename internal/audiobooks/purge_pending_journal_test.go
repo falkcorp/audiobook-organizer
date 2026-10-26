@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_pending_journal_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2e8a4c71-6d09-4b35-9f1a-c7d3b05e8a62
 // last-edited: 2026-10-25
 
@@ -76,7 +76,7 @@ func TestRemoveDeferredFiles_StoreWithoutAllRowsLookupKeepsTheFile(t *testing.T)
 	svc := NewAudiobookService(opaqueStore{store})
 	files := &pendingFiles{}
 	files.add("purged", purgeFileVerdict{remove: x, id: identityAt(t, x)})
-	removed, errs := svc.removeDeferredFiles(files, nil)
+	removed, errs := svc.removeDeferredFiles(context.Background(), files, nil)
 
 	assert.Zero(t, removed)
 	assert.True(t, fileExists(x), "a path that cannot be vouched for is not a free path")
@@ -94,7 +94,7 @@ func TestRemoveDeferredFiles_UnwrappingDecoratorStillReachesAllRowsLookup(t *tes
 	svc := NewAudiobookService(unwrappingStore{opaqueStore{store}})
 	files := &pendingFiles{}
 	files.add("purged", purgeFileVerdict{remove: x, id: identityAt(t, x)})
-	removed, errs := svc.removeDeferredFiles(files, nil)
+	removed, errs := svc.removeDeferredFiles(context.Background(), files, nil)
 
 	assert.Empty(t, errs)
 	assert.Equal(t, 1, removed)
@@ -157,7 +157,7 @@ func TestRemoveDeferredFiles_BookTrashedMidLoopStillKeepsItsFile(t *testing.T) {
 
 	files := &pendingFiles{}
 	files.add("purged", purgeFileVerdict{remove: x, id: identityAt(t, x)})
-	removed, errs := svc.removeDeferredFiles(files, nil)
+	removed, errs := svc.removeDeferredFiles(context.Background(), files, nil)
 
 	require.True(t, trashedL.Load(), "fixture: L was trashed inside the loop")
 	assert.Zero(t, removed)
@@ -528,7 +528,7 @@ func TestRemoveDeferredFiles_ManyPathsInOneDirectoryAreAllRemoved(t *testing.T) 
 		require.NoError(t, store.DeleteBook(id))
 	}
 
-	removed, errs := svc.removeDeferredFiles(files, nil)
+	removed, errs := svc.removeDeferredFiles(context.Background(), files, nil)
 	assert.Equal(t, 39, removed)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0], "T07")
@@ -541,7 +541,7 @@ func TestRemoveDeferredFiles_ManyPathsInOneDirectoryAreAllRemoved(t *testing.T) 
 	require.NoError(t, store.DeleteBook("L"))
 	files = &pendingFiles{}
 	files.add("T07", purgeFileVerdict{remove: keep, id: identityAt(t, keep)})
-	removed, errs = svc.removeDeferredFiles(files, nil)
+	removed, errs = svc.removeDeferredFiles(context.Background(), files, nil)
 	assert.Equal(t, 1, removed)
 	assert.Empty(t, errs)
 	assert.NoDirExists(t, dir, "the last removal leaves no empty parent behind")

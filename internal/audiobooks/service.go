@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-25
 
@@ -236,12 +236,22 @@ type AudiobookService struct {
 	// preview decided. In memory only.
 	purgePreviewMu sync.Mutex
 	purgePreviews  []*purgePreviewRecord
-	// pendingMu orders the writers and the replayers of the journal of pending
-	// file removals (purge_pending_journal.go): a purge holds it shared across a
-	// record's write and the row delete that follows (purgeDeleteRow), a replay
-	// holds it exclusively, so a replay never sees a record whose book is still
-	// in the trash because its purge is half way through.
+	// pendingMu orders the writers of the journal of pending file removals
+	// (purge_pending_journal.go) against the replay's READ of it: a purge holds
+	// it shared across a record's write and the row delete that follows
+	// (purgeDeleteRow), and a replay holds it exclusively only while it loads
+	// the records (loadPendingFiles), so it never sees a record whose book is
+	// still in the trash because its purge is half way through. Purgers hold
+	// the global merge lock when they take the shared side, so nothing slow
+	// (a stat, an unlink) may ever run under the exclusive side.
 	pendingMu sync.RWMutex
+	// replayMu serializes the removals themselves: one replay or one pass's own
+	// deferred removal at a time (purge_pending_journal.go), held for the whole
+	// run. Two at once would double-count an unresolvable path's attempts
+	// (recordUnresolvableAttempt is a read-modify-write). It is never taken by
+	// a writer of the journal, so a purge holding the merge lock never waits on
+	// a slow replay.
+	replayMu sync.Mutex
 	// runtimeIdx caches canonical book runtimes for the duration: list
 	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
 	// stored Book.Duration aggregate.

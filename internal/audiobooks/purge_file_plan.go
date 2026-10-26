@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
 // last-edited: 2026-10-25
 
@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"syscall"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -41,6 +40,16 @@ type filePlan struct {
 // in the trash for it and a journal record gives up after a few passes
 // (maxUnresolvableAttempts).
 var errPathUnresolvable = errors.New("path cannot be resolved")
+
+// errPathFolderMissing marks a file that is not there while the folder it would
+// be in is not there either. That is what a file that was removed together with
+// its folder looks like, and also what a file on a library that is not mounted
+// looks like (nested datasets mount apart from the root, so the root can be
+// populated and a folder under it still be absent). It cannot be told apart per
+// path, so it is "cannot tell": it always accompanies errPathLookupFailed, a
+// book stays in the trash for it (fileUndecided), and a journal record is kept
+// for a few passes (maxUnresolvableAttempts) and then cleared with a line.
+var errPathFolderMissing = errors.New("folder of the path is missing")
 
 // maxUnresolvableAttempts is how many passes a journal record whose path cannot
 // be resolved is retried before it is cleared with an error line.
@@ -92,13 +101,12 @@ func fileUndecided(book *database.Book, v purgeFileVerdict) *purgeOutcome {
 // verdict (remove it, keep it, protected, already gone, an unresolvable path)
 // lets the purge go on; the ones that keep the file are reported by purgeFinish.
 //
-// The root check is the one a pass makes once at its start (env.rootReady),
-// made here per book only for the single-book paths that run no pass.
+// The root check is the pass's guard (env.root: checked at the pass's start and
+// again at most every rootGuardTTL), and a fresh one per book for the
+// single-book paths that run no pass.
 func (svc *AudiobookService) decideFile(book *database.Book, env purgeEnv) (*filePlan, *purgeOutcome) {
-	if !env.rootReady {
-		if err := libraryRootReady(config.Snapshot().RootDir); err != nil {
-			return nil, &purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged, kept in the trash: %v", book.ID, err)}}
-		}
+	if err := svc.rootCheck(env); err != nil {
+		return nil, &purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged, kept in the trash: %v", book.ID, err)}}
 	}
 	v := svc.planPurgeFile(book)
 	if o := fileUndecided(book, v); o != nil {

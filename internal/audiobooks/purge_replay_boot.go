@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_replay_boot.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4a6f13-2b95-4e07-a1c8-3f6e9b0d5c72
 // last-edited: 2026-10-25
 
@@ -49,9 +49,9 @@ func (svc *AudiobookService) ReplayPendingFileRemovalsOnBoot(ctx context.Context
 		if pending == 0 {
 			return 0, nil, nil
 		}
-		lastRootErr = libraryRootReady(config.Snapshot().RootDir)
+		lastRootErr = svc.libraryRootReady(config.Snapshot().RootDir)
 		if lastRootErr == nil {
-			removed, errs = svc.replayPendingFileRemovals()
+			removed, errs = svc.replayPendingFileRemovals(ctx)
 			return removed, errs, nil
 		}
 		singleLog.Warn("purge journal replay at boot: %d file removal(s) pending, but the library root is not ready (attempt %d of %d): %v", pending, attempt, attempts, lastRootErr)

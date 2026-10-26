@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-25
 
@@ -79,11 +79,12 @@ type purgeEnv struct {
 	// files collects the removals a delete_files pass decides on, to be made once
 	// every book is decided (removeDeferredFiles). nil: not a delete_files pass.
 	files *pendingFiles
-	// rootReady: the pass has checked the library root (libraryRootReady) at its
-	// start, so decideFile need not, per book. Only RunPurge sets it, for a real
-	// delete_files pass; the single-book paths leave it false and decideFile
-	// checks for each.
-	rootReady bool
+	// root is the pass's guard on the library root (rootGuard): checked at the
+	// pass's start and re-checked at most every rootGuardTTL, so a mount lost
+	// mid-pass stops the decisions that follow it. Only RunPurge sets it, for a
+	// real delete_files pass; the single-book paths leave it nil and decideFile
+	// checks afresh for each.
+	root *rootGuard
 	// lockHeld is set by an interactive caller that already holds the merge
 	// lock (merge.TryLockMergeRMWWithin, so it can answer ErrMergeBusy instead
 	// of hanging behind a combine): purgeIfStateless and purgeCarryingState
@@ -286,7 +287,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		// file is already gone", so it runs only with a library root that is
 		// there (libraryRootReady). Refused whole, with every journal record kept:
 		// the books stay in the trash, and the next pass tries again.
-		if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+		if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
 			return &PurgeResult{
 				Errors:        []string{},
 				StoppedEarly:  true,
@@ -294,7 +295,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 				TrashedBefore: opts.TrashedBefore,
 			}, fmt.Errorf("purge refused: %w", rootErr)
 		}
-		replayed, replayErrs = svc.replayPendingFileRemovals()
+		replayed, replayErrs = svc.replayPendingFileRemovals(ctx)
 		if replayed > 0 || len(replayErrs) > 0 {
 			singleLog.Info("purge: replayed the file removals an earlier pass left pending: %d removed, %d error line(s)", replayed, len(replayErrs))
 		}
@@ -411,7 +412,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		result.FilesPendingFromEarlierPass = n
 		// A purge with delete_files is refused while the root is not ready; say
 		// so on the preview, where the owner decides whether to run it.
-		if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+		if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("a purge with delete_files would be refused: %v", rootErr))
 		}
 	}
@@ -434,7 +435,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		env.preview = preview
 		if !opts.DryRun && opts.DeleteFiles {
 			env.files = &pendingFiles{preview: preview}
-			env.rootReady = true // checked above, before the replay
+			env.root = newRootGuard(svc, config.Snapshot().RootDir) // checked above, before the replay
 		}
 	}
 
@@ -518,7 +519,12 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	// list. Both run even on a pass that stopped, because the rows they belong
 	// to are already gone (or, for a preview, the counts say what was decided).
 	if env.files != nil {
-		n, errs := svc.removeDeferredFiles(env.files, env.preview)
+		// Not cancelled with the op: the rows these files belong to are already
+		// gone, and finishing is what a cancelled pass did before. Serialized with
+		// a replay (replayMu): both read and bump the same records.
+		svc.replayMu.Lock()
+		n, errs := svc.removeDeferredFiles(context.WithoutCancel(ctx), env.files, env.preview)
+		svc.replayMu.Unlock()
 		result.FilesDeleted += n
 		result.Errors = append(result.Errors, errs...)
 	}

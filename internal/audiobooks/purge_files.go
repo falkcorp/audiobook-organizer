@@ -1,11 +1,12 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-25
 
 package audiobooks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -264,7 +265,7 @@ func (svc *AudiobookService) bookRowsAtPath() (database.BookRowPathReader, error
 // removed its file stops, and that sibling's own walk removes it. Each worker
 // writes only its own slot of out; the lines are merged in path order, so the
 // result is the same whatever the scheduling.
-func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *purgePreviewRecord) (removed int, errs []string) {
+func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pendingFiles, preview *purgePreviewRecord) (removed int, errs []string) {
 	pending := files.sorted()
 	if len(pending) == 0 {
 		return 0, nil
@@ -275,7 +276,7 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 	// nothing is decided and every record is kept for a later pass
 	// (libraryRootReady). The pass's own entries are among them: it checked at
 	// its start, and a mount lost since is caught here.
-	if rootErr := libraryRootReady(root); rootErr != nil {
+	if rootErr := svc.libraryRootReady(root); rootErr != nil {
 		return 0, []string{fmt.Sprintf("%d file removal(s) not carried out, their records kept for a later pass: %v", len(pending), rootErr)}
 	}
 	type outcome struct {
@@ -285,12 +286,19 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 		// bump: the retry is for a path that cannot be resolved, which counts
 		// against its attempts (maxUnresolvableAttempts).
 		bump bool
+		// notReached: ctx was done before this path was looked at; its record is
+		// kept for the next run.
+		notReached bool
 	}
 	out := make([]outcome, len(pending))
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
 	for i, f := range pending {
 		g.Go(func() error {
+			if ctx.Err() != nil {
+				out[i] = outcome{retry: true, notReached: true}
+				return nil
+			}
 			n, e, retry, bump := svc.removeDeferredFile(f, root, preview)
 			out[i] = outcome{removed: n, errs: e, retry: retry, bump: bump}
 			return nil
@@ -298,7 +306,11 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 	}
 	_ = g.Wait() // the workers return nil: their outcomes are in out
 	var settled []string
+	notReached := 0
 	for i, f := range pending {
+		if out[i].notReached {
+			notReached++
+		}
 		removed += out[i].removed
 		errs = append(errs, out[i].errs...)
 		if !out[i].retry {
@@ -311,6 +323,9 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 			}
 		}
 	}
+	if notReached > 0 {
+		errs = append(errs, fmt.Sprintf("stopped (%v): %d file removal(s) not looked at, their records kept for a later run", ctx.Err(), notReached))
+	}
 	if err := svc.forgetPendingFiles(settled); err != nil {
 		errs = append(errs, fmt.Sprintf("the record of %d decided file removal(s) could not be cleared (a later pass will re-decide them, which removes nothing twice): %v", len(settled), err))
 	}
@@ -320,7 +335,9 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 // removeDeferredFile decides and does one pending path. retry is true when the
 // outcome may change on a later pass, so the journal keeps the record.
 //
-// A path that cannot be resolved at all (ELOOP, ENAMETOOLONG: errPathUnresolvable)
+// A path that cannot be resolved at all (ELOOP, ENAMETOOLONG: errPathUnresolvable),
+// or whose folder is missing along with it (errPathFolderMissing: a file removed
+// with its folder, or a library not mounted, which cannot be told apart per path),
 // is retried only maxUnresolvableAttempts passes, and then cleared with a line
 // saying so: it will not resolve by trying again, and a record that is never
 // cleared is a line in every purge report for ever. bump says the retry counts
@@ -338,9 +355,13 @@ func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, pre
 		if !errors.Is(v.keptErr, errPathLookupFailed) {
 			return 0, []string{line}, false, false
 		}
-		if errors.Is(v.keptErr, errPathUnresolvable) {
+		if errors.Is(v.keptErr, errPathUnresolvable) || errors.Is(v.keptErr, errPathFolderMissing) {
 			if f.attempts+1 >= maxUnresolvableAttempts {
-				return 0, []string{fmt.Sprintf("%s (gave up after %d passes: the path cannot be resolved, so the file is left where it is and its record is cleared)", line, maxUnresolvableAttempts)}, false, false
+				why := "the path cannot be resolved"
+				if errors.Is(v.keptErr, errPathFolderMissing) {
+					why = "its folder is still missing"
+				}
+				return 0, []string{fmt.Sprintf("%s (gave up after %d passes: %s, so the file is left where it is and its record is cleared)", line, maxUnresolvableAttempts, why)}, false, false
 			}
 			return 0, []string{line}, true, true
 		}

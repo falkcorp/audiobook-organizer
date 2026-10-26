@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_root_and_single_book_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3e8a1d6-5f27-4b90-8d14-7a2b9e0f6c35
 // last-edited: 2026-10-25
 
@@ -21,17 +21,50 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// unmountRoot moves the library away and leaves an empty directory at its path:
-// what a mount point looks like while the filesystem that belongs there is not
-// up. The returned func puts the library back; it reports failures with
-// t.Errorf, not require, because the late-mount test calls it from a goroutine
-// (FailNow is only valid on the test's own goroutine).
-func unmountRoot(t *testing.T) (remount func()) {
+// liveBookWithFile adds a live (not trashed) book with one book_file row whose
+// file exists on disk, the evidence libraryRootReady samples to tell a mounted
+// library from a mount point that is not up.
+func liveBookWithFile(t *testing.T, store *database.PebbleStore, id, path string) {
+	t.Helper()
+	writeFile(t, path)
+	_, err := store.CreateBook(&database.Book{ID: id, Title: id, FilePath: path})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: id + "-f", BookID: id, FilePath: path, Format: "m4b"}))
+}
+
+// libraryAppDirs puts the application's own folders inside the root, as on
+// production, where the database, the cover cache and the backups live under
+// root_dir: a root holding them says nothing about whether the books are there.
+func libraryAppDirs(t *testing.T) {
+	t.Helper()
+	root := config.AppConfig.RootDir
+	writeFile(t, filepath.Join(root, ".appdata", "audiobooks.pebble", "MANIFEST"))
+	writeFile(t, filepath.Join(root, ".covers", "year-one.jpg"))
+	writeFile(t, filepath.Join(root, ".backups", "backup-1.tar"))
+}
+
+// unmountRoot moves the library away and leaves a directory at its path that
+// holds only the application's own folders (libraryAppDirs): what a library
+// mount point looks like while the filesystem that belongs there is not up, on a
+// host whose database lives inside it. It first adds a live book whose file is in
+// the library, so there is something for libraryRootReady to find missing. The
+// returned func puts the library back; it reports failures with t.Errorf, not
+// require, because the late-mount test calls it from a goroutine (FailNow is only
+// valid on the test's own goroutine).
+func unmountRoot(t *testing.T, store *database.PebbleStore) (remount func()) {
+	t.Helper()
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	return unmountLibrary(t)
+}
+
+// unmountLibrary is unmountRoot for a test that has added its live books itself.
+func unmountLibrary(t *testing.T) (remount func()) {
 	t.Helper()
 	root := config.AppConfig.RootDir
 	away := root + ".away"
 	require.NoError(t, os.Rename(root, away))
 	require.NoError(t, os.Mkdir(root, 0o755))
+	libraryAppDirs(t)
 	return func() {
 		if err := os.RemoveAll(root); err != nil {
 			t.Errorf("remount: clear the mount point: %v", err)
@@ -50,22 +83,103 @@ func withDeleteFiles(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.PurgeSoftDeletedDeleteFiles = prev })
 }
 
-// S-2. A library root is "ready" only when it is configured, exists, is a
-// directory and holds something.
+// S-2 / SH-1. A library root is "ready" when it is configured, exists, is a
+// directory and most of a sample of the live book files the database says are
+// under it can be seen. Whether the root holds anything is not evidence: the
+// application's own folders (database, covers, backups) live inside it.
 func TestLibraryRootReady(t *testing.T) {
-	dir := t.TempDir()
-	empty := filepath.Join(dir, "empty")
-	require.NoError(t, os.Mkdir(empty, 0o755))
-	full := filepath.Join(dir, "full")
-	writeFile(t, filepath.Join(full, "hush.m4b"))
-	regular := filepath.Join(dir, "regular")
-	writeFile(t, regular)
+	t.Run("not configured, missing or not a directory", func(t *testing.T) {
+		svc, _, base := setupPurgeBoundary(t)
+		regular := filepath.Join(base, "regular")
+		writeFile(t, regular)
+		assert.ErrorIs(t, svc.libraryRootReady(""), ErrLibraryRootNotReady)
+		assert.ErrorIs(t, svc.libraryRootReady(filepath.Join(base, "missing")), ErrLibraryRootNotReady)
+		assert.ErrorIs(t, svc.libraryRootReady(regular), ErrLibraryRootNotReady)
+	})
 
-	assert.ErrorIs(t, libraryRootReady(""), ErrLibraryRootNotReady)
-	assert.ErrorIs(t, libraryRootReady(filepath.Join(dir, "missing")), ErrLibraryRootNotReady)
-	assert.ErrorIs(t, libraryRootReady(regular), ErrLibraryRootNotReady)
-	assert.ErrorIs(t, libraryRootReady(empty), ErrLibraryRootNotReady)
-	assert.NoError(t, libraryRootReady(full))
+	t.Run("no live books under the root is ready", func(t *testing.T) {
+		svc, _, _ := setupPurgeBoundary(t)
+		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir), "an empty library has nothing to protect")
+	})
+
+	t.Run("most sampled files present is ready", func(t *testing.T) {
+		svc, store, base := setupPurgeBoundary(t)
+		libraryAppDirs(t)
+		for _, id := range []string{"hush", "knightfall", "year-one"} {
+			liveBookWithFile(t, store, id, filepath.Join(base, "lib", "Gotham", id+".m4b"))
+		}
+		// One file lost on its own (deleted by hand) does not make a library
+		// look unmounted.
+		require.NoError(t, os.Remove(filepath.Join(base, "lib", "Gotham", "hush.m4b")))
+		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+	})
+
+	t.Run("most sampled files missing is not ready even though the root holds the app's own folders", func(t *testing.T) {
+		svc, store, base := setupPurgeBoundary(t)
+		for _, id := range []string{"hush", "knightfall", "year-one"} {
+			liveBookWithFile(t, store, id, filepath.Join(base, "lib", "Gotham", id+".m4b"))
+		}
+		require.NoError(t, os.RemoveAll(filepath.Join(base, "lib", "Gotham")))
+		libraryAppDirs(t)
+		err := svc.libraryRootReady(config.AppConfig.RootDir)
+		require.ErrorIs(t, err, ErrLibraryRootNotReady)
+		assert.Contains(t, err.Error(), "only 0 of 3 sampled")
+	})
+
+	t.Run("an empty-looking mount is not ready once a live book is known", func(t *testing.T) {
+		svc, store, _ := setupPurgeBoundary(t)
+		unmountRoot(t, store)
+		assert.ErrorIs(t, svc.libraryRootReady(config.AppConfig.RootDir), ErrLibraryRootNotReady)
+	})
+
+	t.Run("trashed and outside-root files are not evidence", func(t *testing.T) {
+		svc, store, base := setupPurgeBoundary(t)
+		// A trashed book and a file outside the root, both missing:
+		// none is sampled, so the library has nothing live to compare against.
+		softDeleted(t, store, "trashed", filepath.Join(base, "lib", "Gotham", "hush.m4b"))
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "trashed-f", BookID: "trashed", FilePath: filepath.Join(base, "lib", "Gotham", "hush.m4b"), Format: "m4b"}))
+		_, err := store.CreateBook(&database.Book{ID: "elsewhere", Title: "elsewhere", FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b")})
+		require.NoError(t, err)
+		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "elsewhere-f", BookID: "elsewhere", FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b"), Format: "m4b"}))
+		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+	})
+
+	t.Run("a store that cannot be read fails closed", func(t *testing.T) {
+		_, store, _ := setupPurgeBoundary(t)
+		svc := NewAudiobookService(&failingSampleStore{PebbleStore: store})
+		err := svc.libraryRootReady(config.AppConfig.RootDir)
+		require.ErrorIs(t, err, ErrLibraryRootNotReady)
+		assert.Contains(t, err.Error(), "cannot sample")
+	})
+}
+
+// failingSampleStore fails the read libraryRootReady's sample starts with.
+type failingSampleStore struct{ *database.PebbleStore }
+
+func (s *failingSampleStore) CountPrimaryBooks() (int, error) {
+	return 0, errors.New("batcave offline")
+}
+
+// The pass's guard trusts a good check for rootGuardTTL and then checks again,
+// so a mount lost in the middle of a long pass stops it, and a failed check is
+// never cached.
+func TestRootGuard_RechecksAfterTheTTLAndNeverCachesAFailure(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	now := time.Now()
+	g := newRootGuard(svc, config.AppConfig.RootDir)
+	g.okAt = now
+	g.now = func() time.Time { return now }
+
+	remount := unmountRoot(t, store)
+	require.NoError(t, g.ready(), "inside the TTL the last good check stands")
+
+	now = now.Add(rootGuardTTL + time.Second)
+	require.ErrorIs(t, g.ready(), ErrLibraryRootNotReady, "past the TTL the library is looked at again")
+	require.ErrorIs(t, g.ready(), ErrLibraryRootNotReady, "and a failure is not cached")
+
+	remount()
+	require.NoError(t, g.ready())
+	assert.Equal(t, now, g.okAt, "a good check is remembered again")
 }
 
 // S-2. A pass that deletes files, run while the library is not mounted, is
@@ -82,7 +196,7 @@ func TestRunPurge_DeleteFilesPassIsRefusedWhileTheRootIsNotReady(t *testing.T) {
 	writeFile(t, stays)
 	softDeleted(t, store, "U", stays)
 
-	remount := unmountRoot(t)
+	remount := unmountRoot(t, store)
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
 	require.ErrorIs(t, err, ErrLibraryRootNotReady)
 	require.NotNil(t, res)
@@ -120,8 +234,8 @@ func TestReplayAndRemoval_KeepEveryRecordWhileTheRootIsNotReady(t *testing.T) {
 	softDeleted(t, store, "T", x)
 	crashAfterRowAndTombstone(t, svc, store, "T")
 
-	remount := unmountRoot(t)
-	removed, errs := svc.replayPendingFileRemovals()
+	remount := unmountRoot(t, store)
+	removed, errs := svc.replayPendingFileRemovals(context.Background())
 	assert.Zero(t, removed)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0], "every record kept")
@@ -129,14 +243,14 @@ func TestReplayAndRemoval_KeepEveryRecordWhileTheRootIsNotReady(t *testing.T) {
 
 	files := &pendingFiles{}
 	files.add("T", purgeFileVerdict{remove: x, id: fileIdentity{Known: true, Size: 1, MtimeNS: 1}})
-	removed, errs = svc.removeDeferredFiles(files, nil)
+	removed, errs = svc.removeDeferredFiles(context.Background(), files, nil)
 	assert.Zero(t, removed)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0], "records kept")
 	assert.Len(t, pendingJournal(t, store), 1, "an unmounted root is not 'already gone': the record is not cleared")
 
 	remount()
-	removed, errs = svc.replayPendingFileRemovals()
+	removed, errs = svc.replayPendingFileRemovals(context.Background())
 	assert.Equal(t, 1, removed, "%v", errs)
 	assert.False(t, fileExists(x))
 }
@@ -163,8 +277,8 @@ func TestReplayPendingFileRemovalsOnBoot(t *testing.T) {
 	})
 
 	t.Run("nothing pending never looks at the root", func(t *testing.T) {
-		svc, _, _ := setupPurgeBoundary(t)
-		unmountRoot(t)
+		svc, store, _ := setupPurgeBoundary(t)
+		unmountRoot(t, store)
 		removed, errs, err := svc.ReplayPendingFileRemovalsOnBoot(context.Background(), time.Millisecond, 1)
 		require.NoError(t, err)
 		assert.Zero(t, removed)
@@ -173,7 +287,7 @@ func TestReplayPendingFileRemovalsOnBoot(t *testing.T) {
 
 	t.Run("waits for a library that is mounted late", func(t *testing.T) {
 		svc, store, x := setup(t)
-		remount := unmountRoot(t)
+		remount := unmountRoot(t, store)
 		// The test must not end (and its temp dir go) before the remount does,
 		// even when an assertion below fails first.
 		remounted := make(chan struct{})
@@ -192,7 +306,7 @@ func TestReplayPendingFileRemovalsOnBoot(t *testing.T) {
 
 	t.Run("gives up with every record kept", func(t *testing.T) {
 		svc, store, _ := setup(t)
-		unmountRoot(t)
+		unmountRoot(t, store)
 		removed, _, err := svc.ReplayPendingFileRemovalsOnBoot(context.Background(), time.Millisecond, 3)
 		require.ErrorIs(t, err, ErrLibraryRootNotReady)
 		assert.Zero(t, removed)
@@ -201,7 +315,7 @@ func TestReplayPendingFileRemovalsOnBoot(t *testing.T) {
 
 	t.Run("stops on shutdown", func(t *testing.T) {
 		svc, store, _ := setup(t)
-		unmountRoot(t)
+		unmountRoot(t, store)
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			time.Sleep(30 * time.Millisecond)
@@ -224,7 +338,7 @@ func TestSingleBookPurges_AreRefusedWhileTheRootIsNotReady(t *testing.T) {
 	writeFile(t, x)
 	softDeleted(t, store, "T", x)
 	purgeSeedProgress(t, store, "T")
-	unmountRoot(t)
+	unmountRoot(t, store)
 
 	_, err := svc.DiscardProgressAndPurge(context.Background(), "T", "owner")
 	require.Error(t, err)
@@ -383,7 +497,7 @@ func TestPurgeNow_FailedLookupAfterTheDeleteKeepsTheRecord(t *testing.T) {
 	assert.Len(t, pendingJournal(t, store), 1, "the removal was not decided: the record stays")
 
 	failing = false
-	removed, errs := svc.replayPendingFileRemovals()
+	removed, errs := svc.replayPendingFileRemovals(context.Background())
 	assert.Equal(t, 1, removed, "%v", errs)
 	assert.False(t, fileExists(x))
 	assert.Empty(t, pendingJournal(t, store))
@@ -423,7 +537,7 @@ func TestPurgeNow_FailedUnlinkKeepsTheRecord(t *testing.T) {
 	assert.Len(t, pendingJournal(t, store), 1, "the unlink failed: a later pass retries it")
 
 	require.NoError(t, os.Chmod(dir, 0o755))
-	removed, errs := svc.replayPendingFileRemovals()
+	removed, errs := svc.replayPendingFileRemovals(context.Background())
 	assert.Equal(t, 1, removed, "%v", errs)
 	assert.False(t, fileExists(x))
 }
@@ -553,19 +667,19 @@ func TestRemoveDeferredFiles_UnresolvablePathFoundByTheJournalingPassGetsThreePa
 	// Pass 1: the pass's own entry.
 	files := &pendingFiles{}
 	files.add("T", v)
-	_, errs := svc.removeDeferredFiles(files, nil)
+	_, errs := svc.removeDeferredFiles(context.Background(), files, nil)
 	require.Len(t, errs, 1)
 	assert.NotContains(t, errs[0], "gave up")
 	require.Len(t, pendingJournal(t, store), 1)
 
 	// Pass 2: replayed from the journal.
-	_, errs = svc.replayPendingFileRemovals()
+	_, errs = svc.replayPendingFileRemovals(context.Background())
 	require.Len(t, errs, 1)
 	assert.NotContains(t, errs[0], "gave up")
 	require.Len(t, pendingJournal(t, store), 1)
 
 	// Pass 3: the last.
-	_, errs = svc.replayPendingFileRemovals()
+	_, errs = svc.replayPendingFileRemovals(context.Background())
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0], "gave up")
 	assert.Empty(t, pendingJournal(t, store))

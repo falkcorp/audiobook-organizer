@@ -1,11 +1,12 @@
 // file: internal/audiobooks/purge_pending_journal.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b2d8e60-1c47-4a93-b0f5-9e3a7d1c4826
 // last-edited: 2026-10-25
 
 package audiobooks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -241,29 +242,40 @@ func (svc *AudiobookService) loadPendingFiles() (files *pendingFiles, errs []str
 // (ErrPurgePreviewUnknown, ErrPurgePreviewRequired) and does not depend on a
 // preview.
 //
+// It stops between paths when ctx is done (a shutdown, a cancelled op): the
+// paths it did not reach keep their records, and the next replay decides them.
+//
 // It reports how many things it removed and the error lines, each labelled as
 // being about an earlier pass (earlierPassLabel).
-func (svc *AudiobookService) replayPendingFileRemovals() (removed int, errs []string) {
+func (svc *AudiobookService) replayPendingFileRemovals(ctx context.Context) (removed int, errs []string) {
 	// A replay changes nothing while the library root is not ready: every "no
 	// file here" it would read is a missing mount, and it would clear the record
 	// of a file that is still on the real disk (libraryRootReady). The records,
 	// readable or not, are all kept.
-	if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+	if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
 		return 0, labelEarlierPass([]string{fmt.Sprintf("nothing replayed, every record kept: %v", rootErr)})
 	}
-	// Exclusive of every writer of a record between its journal write and its
-	// row delete (purgeDeleteRow): a replay that read such a record would find the
-	// book's row still there, take that for "a book still has this file" and clear
-	// the record of a book that is about to be purged.
+	// One removal run at a time (replayMu: held for the whole run, never by a
+	// writer of the journal). Only the READ of the records is exclusive of the
+	// writers (pendingMu), between a record's journal write and its row delete
+	// (purgeDeleteRow): a replay that read such a record would find the book's
+	// row still there, take that for "a book still has this file" and clear the
+	// record of a book that is about to be purged. A record the read returns
+	// belongs to a book already deleted, and a writer that starts afterwards
+	// writes a record the read did not return, so nothing after the read needs
+	// the lock, and a purge holding the merge lock never waits on the stats and
+	// unlinks below.
+	svc.replayMu.Lock()
+	defer svc.replayMu.Unlock()
 	svc.pendingMu.Lock()
-	defer svc.pendingMu.Unlock()
 	files, loadErrs, err := svc.loadPendingFiles()
+	svc.pendingMu.Unlock()
 	errs = append(errs, loadErrs...)
 	if err != nil {
 		errs = append(errs, err.Error())
 		return 0, labelEarlierPass(errs)
 	}
-	n, e := svc.removeDeferredFiles(files, nil)
+	n, e := svc.removeDeferredFiles(ctx, files, nil)
 	return n, labelEarlierPass(append(errs, e...))
 }
 

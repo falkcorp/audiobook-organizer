@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-25
 
@@ -721,23 +721,33 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book, plan *filePlan)
 	// A delete that does not happen takes its journal record back, so a later
 	// pass that deletes files does not remove the file of a book that is
 	// still here (or that a pass without delete_files purges meanwhile).
-	forget := func() {
-		if journaled {
-			_ = svc.forgetPendingFiles([]string{book.ID})
+	//
+	// If taking it back fails too, the record outlives a book that is still in the
+	// trash. That is safe (a later replay finds the book's row at the path, keeps
+	// the file and clears the record: otherBookRowAt), but it is not silent: the
+	// error says so and it is logged.
+	forget := func() string {
+		if !journaled {
+			return ""
 		}
+		err := svc.forgetPendingFiles([]string{book.ID})
+		if err == nil {
+			return ""
+		}
+		singleLog.Warn("purge %s: the delete failed and the record of its file's removal could not be taken back: %v",
+			logger.SanitizeLogValue(book.ID), err)
+		return fmt.Sprintf("; the record of the removal of its file %s could not be taken back either (%v), so it stays until a purge with delete_files finds the book still here, keeps the file and clears it", plan.v.remove, err)
 	}
 	// Step 1: Create tombstone (snapshot of book for rollback)
 	if err := svc.store.CreateBookTombstone(book); err != nil {
-		forget()
-		return fmt.Errorf("failed to create tombstone: %w", err)
+		return fmt.Errorf("failed to create tombstone: %w%s", err, forget())
 	}
 
 	// Step 2: Delete from database (book record gone, tombstone preserved).
 	// On failure the tombstone exists but the book still exists — the
 	// sweeper will clean up the tombstone — and no side effect has run.
 	if err := svc.store.DeleteBook(book.ID); err != nil {
-		forget()
-		return fmt.Errorf("failed to delete DB record: %w", err)
+		return fmt.Errorf("failed to delete DB record: %w%s", err, forget())
 	}
 
 	// Step 3: the side effects, now that the row is gone.
@@ -846,7 +856,7 @@ func (svc *AudiobookService) removeSingleBookFile(book *database.Book, v purgeFi
 		return nil
 	}
 	if plan.isFor(book) {
-		if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+		if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
 			return 0, []string{fmt.Sprintf("%s: book purged, file kept (its record is kept for a later pass): %v", book.ID, rootErr)}
 		}
 		now := svc.planPurgeFile(book)
@@ -938,6 +948,18 @@ func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict
 				return purgeFileVerdict{keptErr: fmt.Errorf("%s has a trailing path separator but names a file, so it is not removed; the file stays at %s", book.FilePath, clean)}
 			}
 		}
+		// ENOENT is "gone" only when the folder is there. With the folder missing
+		// too the library may simply not be mounted (errPathFolderMissing). ENOTDIR
+		// needs no such check: a parent that is not a directory is there.
+		if errors.Is(statErr, fs.ErrNotExist) {
+			ok, ferr := folderIsThere(book.FilePath)
+			switch {
+			case ferr != nil:
+				return purgeFileVerdict{keptErr: statLookupError(filepath.Dir(book.FilePath), "stat of the folder", ferr)}
+			case !ok:
+				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is missing too, which is also how a library that is not (fully) mounted looks: %w: %w", book.FilePath, filepath.Dir(book.FilePath), errPathLookupFailed, errPathFolderMissing)}
+			}
+		}
 		return purgeFileVerdict{}
 	case statErr != nil:
 		// Any other failure (EIO, EACCES on a parent, ESTALE) says nothing
@@ -946,8 +968,8 @@ func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict
 		// nothing naming it. Fail closed and transient: the file stays, the
 		// line is reported, and a book not yet purged stays in the trash, or a
 		// journal record is kept, for the next pass (errPathLookupFailed). (A
-		// mount that is not up reads as ENOENT, not as an error: that is the
-		// owner's to avoid, by not purging with the library unmounted.)
+		// mount that is not up reads as ENOENT, not as an error: the library-root
+		// check (libraryRootReady) and the folder check above are what catch it.)
 		return purgeFileVerdict{keptErr: statLookupError(book.FilePath, "stat", statErr)}
 	case info.IsDir():
 		// Remove the directory only if it is already empty.
