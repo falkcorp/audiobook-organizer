@@ -1,11 +1,12 @@
 // file: internal/batch/trash_grants.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e7d5df1-473b-4136-b691-2798b1df7c12
 // last-edited: 2026-10-26
 
 package batch
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -106,25 +107,46 @@ func (g *TrashGrants) checkRestore(book *database.Book) error {
 	return nil
 }
 
-// judgeRestore is the verdict merge.RestoreFromTrash asks for inside its write:
-// before is the row as locked, after the row as it would be written (the
-// restore and the payload applied). A book in the trash needs library.organize
-// to come back, and a book that was not in the trash and is after the write
-// (library_state "deleted" next to marked_for_deletion=false) needs
-// library.delete, so both directions are judged on both branches. A nil
-// receiver holds neither.
+// judgeRestore is the verdict merge.RestoreFromTrash asks for, before it
+// touches the row's merge redirect and again inside its write: before is the
+// row as read (as locked, the second time), after the row as it would be
+// written (the restore and the payload applied). A book in the trash needs
+// library.organize to come back, and a book that was not in the trash and is
+// after the write (library_state "deleted" next to marked_for_deletion=false)
+// needs library.delete, so both directions are judged on both branches.
+//
+// A restore that leaves the book in the trash is refused whatever the caller
+// holds: {marked_for_deletion: false, library_state: "deleted"} on a trashed
+// book would clear the deletion flag and the merge link and then re-label the
+// row "deleted", a book in the trash by label alone (IsSoftDeleted false) that
+// the purge precheck reads as "restored meanwhile". The handler already asks
+// for library.delete for the "deleted" label; this is the same payload seen by
+// the service, which cannot honour both halves and so honours neither.
+//
+// It runs under the merge lock, the version-group locks and the book's stripe:
+// it reads only the two rows and calls nothing else. A nil receiver holds
+// neither permission.
 func (g *TrashGrants) judgeRestore(before, after *database.Book) error {
 	if g == nil {
 		g = &TrashGrants{}
 	}
-	if database.IsInTrash(before) && !g.Restore {
-		return &TrashDeniedError{Permission: "library.organize", Action: "restore the book from the trash"}
+	if database.IsInTrash(before) {
+		if !g.Restore {
+			return &TrashDeniedError{Permission: "library.organize", Action: "restore the book from the trash"}
+		}
+		if database.IsInTrash(after) {
+			return errRestoreStaysTrashed
+		}
 	}
 	if !database.IsInTrash(before) && database.IsInTrash(after) && !g.Trash {
 		return &TrashDeniedError{Permission: "library.delete", Action: "move the book to the trash"}
 	}
 	return nil
 }
+
+// errRestoreStaysTrashed refuses a restore that would leave the book in the
+// trash (see judgeRestore). Nothing was written.
+var errRestoreStaysTrashed = errors.New(`not changed: this edit would restore the book from the trash and put it back in the trash in one write (marked_for_deletion=false with library_state "deleted"); send one or the other`)
 
 // checkTrash judges the "delete" action, soft or hard: both need
 // library.delete. action says what the edit would do, for the message. A nil

@@ -1,5 +1,5 @@
 // file: internal/batch/action_grants_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b0c5f3e-91a4-4d2b-8c6e-2f1a9d4e5b73
 // last-edited: 2026-10-26
 
@@ -89,6 +89,7 @@ func TestRestorePayload_AlsoJudgesTheTrashDirection(t *testing.T) {
 
 	resp = NewBatchService(f.S).ExecuteOperations(opsFor(id, "update", false, updates, &TrashGrants{Restore: true}))
 	require.Equal(t, 1, resp.Failed, "%+v", resp.Results)
+	require.Contains(t, resp.Results[0].Error, "library.delete")
 	require.False(t, stillInTrash(t, f, id))
 
 	resp = NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{

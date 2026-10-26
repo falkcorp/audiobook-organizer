@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore_reconcile_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b547034-881d-4b1b-b911-df20c1e6ce56
 // last-edited: 2026-10-26
 
@@ -160,4 +160,41 @@ func TestRestoreFromTrash_JudgeRefusalWritesNothingAndKeepsTheRedirect(t *testin
 	res, err = RestoreFromTrash(f.S, loser, nil, func(_, _ *database.Book) error { return nil }, nil)
 	require.NoError(t, err)
 	require.True(t, res.Restored)
+}
+
+// A judge that refuses is asked on the preview, before the merge redirect is
+// removed, so the refusal never depends on putting the redirect back. The first
+// call must still see the redirect in place, and no second call (inside the
+// write) is made once the preview refused. apply runs on the preview, so the
+// judge sees the payload's effect there too.
+func TestRestoreFromTrash_JudgeRefusesOnThePreviewBeforeTheRedirectIsTouched(t *testing.T) {
+	f := combineUndoFixture(t)
+	loser, winner, _ := trashedLoser(t, f, "nil")
+	refused := errors.New("not allowed to restore")
+	calls := 0
+	var redirectAtFirstCall string
+	var afterTitle string
+
+	res, err := RestoreFromTrash(f.S, loser,
+		func(b *database.Book) { b.Title = "Hush" },
+		func(before, after *database.Book) error {
+			calls++
+			if calls == 1 {
+				redirectAtFirstCall = resolvesTo(t, f.S, loser)
+				afterTitle = after.Title
+			}
+			return refused
+		}, nil)
+
+	require.ErrorIs(t, err, refused)
+	require.Equal(t, 1, calls, "the preview refused, so the write was never attempted")
+	require.Equal(t, winner, redirectAtFirstCall, "the redirect was still in place when the judge refused")
+	require.Equal(t, "Hush", afterTitle, "the preview carries the payload")
+	require.False(t, res.Restored)
+	require.Empty(t, res.RedirectFrom)
+	require.Equal(t, winner, resolvesTo(t, f.S, loser))
+	b, err := f.S.GetBookByID(loser)
+	require.NoError(t, err)
+	require.True(t, database.IsInTrash(b), "nothing was written")
+	require.NotEqual(t, "Hush", b.Title)
 }
