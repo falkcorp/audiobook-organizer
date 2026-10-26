@@ -1,7 +1,7 @@
 // file: internal/audiobooks/merge_busy_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0c4f7a19-3e8d-4b52-a6d1-7e92b5c08f34
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -74,7 +74,7 @@ func purgeNowUnderHold(t *testing.T, svc *AudiobookService, book *database.Book)
 	unlock, err := merge.TryLockMergeRMWWithin(time.Second)
 	require.NoError(t, err)
 	defer unlock()
-	return svc.purgeNowLocked(book)
+	return svc.purgeNowLocked(book, purgeFileMode{})
 }
 
 // requireLockFree fails unless the merge lock can be taken at once: an action

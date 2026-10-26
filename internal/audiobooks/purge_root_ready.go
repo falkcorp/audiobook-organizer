@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_root_ready.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0e7b3d52-9a14-4c68-b2f7-5d1c8a4e6b93
 // last-edited: 2026-10-26
 
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -26,13 +27,12 @@ import (
 // the library does not look mounted. See libraryRootReady.
 var ErrLibraryRootNotReady = errors.New("the library root is not ready")
 
-const (
-	// rootSampleFiles is how many live book files libraryRootReady stats.
-	rootSampleFiles = 50
-	// rootGuardTTL is how long a pass trusts a successful check before it makes
-	// the next (rootGuard).
-	rootGuardTTL = 15 * time.Second
-)
+// rootSampleFiles is how many live book files libraryRootReady stats.
+const rootSampleFiles = 50
+
+// rootGuardTTL is how long a pass trusts a successful check before it makes the
+// next (rootGuard). A variable so a test can make every decision check again.
+var rootGuardTTL = 15 * time.Second
 
 // rootStatTimeout is how long the root check waits for its stats. A variable so
 // a test can shorten it.
@@ -65,7 +65,9 @@ var rootStatTimeout = 10 * time.Second
 // reason other than "not there" (EIO, ESTALE) counts as not present, and a stat
 // that does not answer within rootStatTimeout (a hung network mount) makes the
 // root not ready: the check fails closed rather than wait for a mount that is
-// not answering.
+// not answering. While stats from an earlier timed-out check are still blocked
+// (rootStatsHung) no new check starts and the answer is "not ready", so a hung
+// mount costs one check's threads, however often it is asked.
 //
 // The sample is short of rootSampleFiles only when it is every live file under
 // the root, so there is no minimum to apply: one file is evidence when it is the
@@ -85,6 +87,9 @@ var rootStatTimeout = 10 * time.Second
 func (svc *AudiobookService) libraryRootReady(root string) error {
 	if root == "" {
 		return fmt.Errorf("%w: no library root (root_dir) is configured", ErrLibraryRootNotReady)
+	}
+	if n := rootStatsHung.Load(); n > 0 {
+		return fmt.Errorf("%w: %d stat(s) of the library from an earlier check have still not answered (a hung mount?), so it is not asked again until they do", ErrLibraryRootNotReady, n)
 	}
 	sampler, ok := database.AsCapability[database.LiveBookFileSampler](svc.store)
 	if !ok {
@@ -132,21 +137,56 @@ type statResult struct {
 // a test can make one hang.
 var rootStat = os.Stat
 
+// rootStatsHung counts the root-check stats that did not answer within
+// rootStatTimeout and have not answered since: goroutines still blocked in the
+// kernel on a mount that is not answering. Each holds an OS thread for as long as
+// it is blocked, and Go ends the process at 10,000 threads, so a hung mount must
+// cost one check's worth of them in total, not one per check: libraryRootReady
+// refuses at once while this is above zero and starts no new stat.
+var rootStatsHung atomic.Int64
+
+// statCall is the bookkeeping of one statAll call, so that a stat answering
+// after the call gave up takes itself off rootStatsHung exactly once.
+type statCall struct {
+	mu       sync.Mutex
+	timedOut bool
+	pending  int
+}
+
+func (c *statCall) answered() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pending--
+	if c.timedOut {
+		rootStatsHung.Add(-1)
+	}
+}
+
+func (c *statCall) giveUp() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.timedOut = true
+	rootStatsHung.Add(int64(c.pending))
+}
+
 // statAll stats every path at once (at most rootSampleFiles+1 of them) and
 // returns when all have answered or d has passed, whichever is first. A path
 // that has not answered by then is an error for the whole call: the check cannot
 // vouch for a library whose stats hang. The stat goroutines write to their own
 // slot of a buffered channel's results, so a stat that answers after the
-// deadline is dropped, and none of them holds a lock.
+// deadline is dropped, and none of them holds a lock. The ones still blocked at
+// the deadline are counted in rootStatsHung until they return.
 func statAll(paths []string, d time.Duration) ([]statResult, error) {
 	type answer struct {
 		i int
 		r statResult
 	}
 	ch := make(chan answer, len(paths))
+	call := &statCall{pending: len(paths)}
 	for i, p := range paths {
 		go func() {
 			info, err := rootStat(p)
+			call.answered()
 			ch <- answer{i, statResult{err: err, dir: err == nil && info.IsDir()}}
 		}()
 	}
@@ -158,6 +198,7 @@ func statAll(paths []string, d time.Duration) ([]statResult, error) {
 		case a := <-ch:
 			out[a.i] = a.r
 		case <-timer.C:
+			call.giveUp()
 			return nil, fmt.Errorf("the library did not answer a stat within %v (a hung mount?), so it cannot be vouched for", d)
 		}
 	}
@@ -219,21 +260,47 @@ func (g *rootGuard) ready() error {
 	return err
 }
 
-// preLockRoot makes the library-root check for a single-book purge BEFORE the
-// action takes the global merge lock, and returns the guard that carries the
-// answer into it: the decisions made under the lock then reuse the check (within
-// rootGuardTTL) and do no sampling or stat while the lock is held. A nil guard
-// (delete_files is off: nothing is decided about a file) means no check was made.
-func (svc *AudiobookService) preLockRoot() (*rootGuard, error) {
-	if !config.Snapshot().PurgeSoftDeletedDeleteFiles {
-		return nil, nil
+// purgeFileMode is what a single-book purge decides about file deletion BEFORE
+// it takes the global merge lock, and carries into it: whether files are
+// deleted at all (the setting, read once, so the decision about the file, the
+// delete and the removal are all about the same value) and, when they are, the
+// guard that holds the library-root check made outside the lock. The zero value
+// (taken false) means nothing was decided outside the lock: the caller reads the
+// setting itself and the decisions under the lock check the root themselves.
+type purgeFileMode struct {
+	taken       bool
+	deleteFiles bool
+	root        *rootGuard
+}
+
+// preLockRoot reads the delete-files setting once and, when it is on, makes the
+// library-root check for a single-book purge BEFORE the action takes the global
+// merge lock, returning the guard that carries the answer into it: the decisions
+// made under the lock then reuse the check (within rootGuardTTL) and do no
+// sampling or stat while the lock is held. With delete_files off nothing is
+// decided about a file and no check is made.
+func (svc *AudiobookService) preLockRoot() (purgeFileMode, error) {
+	mode := purgeFileMode{taken: true, deleteFiles: config.Snapshot().PurgeSoftDeletedDeleteFiles}
+	if !mode.deleteFiles {
+		return mode, nil
 	}
 	root := config.Snapshot().RootDir
 	at := time.Now()
 	if err := svc.libraryRootReady(root); err != nil {
-		return nil, err
+		return purgeFileMode{}, err
 	}
-	return newRootGuard(svc, root, at), nil
+	mode.root = newRootGuard(svc, root, at)
+	return mode, nil
+}
+
+// settle returns mode as it is to be used under the lock: as decided before it
+// when that was done, else the setting read now with no guard (the decisions then
+// check the root themselves, under the lock).
+func (m purgeFileMode) settle() purgeFileMode {
+	if m.taken {
+		return m
+	}
+	return purgeFileMode{taken: true, deleteFiles: config.Snapshot().PurgeSoftDeletedDeleteFiles}
 }
 
 // rootCheck is the library-root check for one decision: the pass's guard

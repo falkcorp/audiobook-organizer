@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -1431,6 +1431,17 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// of hanging the request. The lock is KEPT and the delete runs under that
 	// one hold (purgeNowLocked, merge.HardDeleteKeepingUserStateLocked), so a
 	// combine that starts after the wait cannot make the request hang either.
+	//
+	// A book in the trash is purged with files per the setting, and the library
+	// root is checked BEFORE the lock (a check samples files and stats them, and
+	// the lock is global); the purge under the lock reuses that answer.
+	var mode purgeFileMode
+	if database.IsInTrash(book) {
+		var rootErr error
+		if mode, rootErr = svc.preLockRoot(); rootErr != nil {
+			return nil, fmt.Errorf("purge %s refused, nothing deleted: %w", id, rootErr)
+		}
+	}
 	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
 	if err != nil {
 		return nil, err
@@ -1462,7 +1473,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
 			blockHashOK, blockWarn = svc.planHashBlock(book)
 		}
-		res, err := svc.purgeNowLocked(book)
+		res, err := svc.purgeNowLocked(book, mode)
 		if err != nil {
 			return nil, err
 		}

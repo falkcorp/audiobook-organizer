@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.14.2
+// version: 1.15.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package batch
 
@@ -52,15 +52,70 @@ type batchBookStore interface {
 	versionprimary.EnsureStore
 }
 
-// TrashPurger purges one book that is in the trash through the purge's own
-// path (the nightly purge and the trash page's "Purge now"): the undo hold,
-// the listening-state carry, the file-row refusal. *audiobooks.AudiobookService
-// implements it (PurgeTrashedBookLocked). The caller holds the merge lock
-// (merge.TryLockMergeRMWWithin) and the purge runs under that hold; the
-// method does not take it, so calling it without the lock is a bug, and it
-// has no unlocked twin here on purpose.
+// TrashPurger purges books that are in the trash through the purge's own path
+// (the nightly purge and the trash page's "Purge now"): the undo hold, the
+// listening-state carry, the file-row refusal. *audiobooks.AudiobookService
+// implements it (BeginTrashPurges).
+//
+// BeginTrashPurges starts ONE run of such deletions (one batch request) and
+// returns its two steps:
+//
+//   - checkRoot makes the library-root check that deleting files needs, and
+//     must be called BEFORE the merge lock is taken for the book: the check
+//     samples files and stats them, which can wait on a slow or hung mount, and
+//     the lock is global. The first call does the work; later ones are answered
+//     from it until it ages out. It does nothing when the deployment keeps files.
+//   - purgeLocked purges one book. The caller holds the merge lock
+//     (merge.TryLockMergeRMWWithin) and the purge runs under that hold; it does
+//     not take the lock, so calling it without the lock is a bug, and it has no
+//     unlocked twin here on purpose.
+//
+// The steps are not safe for concurrent use; the batch runs its items one after
+// another.
 type TrashPurger interface {
-	PurgeTrashedBookLocked(book *database.Book) error
+	BeginTrashPurges() (checkRoot func() error, purgeLocked func(book *database.Book) error)
+}
+
+// trashPurges is one batch request's run of trashed-book purges. It starts the
+// purger's run on first use and remembers the first root-check failure, so the
+// rest of the request's trashed hard deletes fail at once with the same error
+// instead of asking the library again for each one (a hung mount would
+// otherwise cost a stat timeout per book).
+type trashPurges struct {
+	purger  TrashPurger
+	began   bool
+	check   func() error
+	purge   func(*database.Book) error
+	failure error
+}
+
+func (t *trashPurges) begin() {
+	if !t.began {
+		t.began = true
+		t.check, t.purge = t.purger.BeginTrashPurges()
+	}
+}
+
+// checkRoot is the purger's root check, outside the merge lock. A nil purger
+// has nothing to check here (hardDeleteLocked refuses the book itself).
+func (t *trashPurges) checkRoot() error {
+	if t == nil || t.purger == nil {
+		return nil
+	}
+	if t.failure != nil {
+		return t.failure
+	}
+	t.begin()
+	if err := t.check(); err != nil {
+		t.failure = err
+		return err
+	}
+	return nil
+}
+
+func (t *trashPurges) purgeLocked(book *database.Book) error {
+	t.begin()
+	return t.purge(book)
 }
 
 // BatchService handles bulk operations on audiobooks.
@@ -260,6 +315,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 	resp := newBatchResponse(len(req.Operations))
 	// A restore and a hard delete run under the merge lock: see newMergeGate.
 	mergeGate := newMergeGate()
+	purges := &trashPurges{purger: bs.purger}
 	for _, op := range req.Operations {
 		switch op.Action {
 		case "update":
@@ -315,6 +371,16 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				continue
 			}
 			if op.HardDelete {
+				// A trashed book is purged with its files per the setting, and the
+				// library root is checked BEFORE the merge lock (the check stats
+				// files, the lock is global); one failed check fails the rest of
+				// the request's trashed deletes without asking again.
+				if database.IsInTrash(book) {
+					if rootErr := purges.checkRoot(); rootErr != nil {
+						resp.addError(op.ID, fmt.Sprintf("purge %s refused, nothing deleted: %v", op.ID, rootErr))
+						continue
+					}
+				}
 				unlock, gerr := mergeGate()
 				if gerr != nil {
 					resp.addError(op.ID, gerr.Error())
@@ -323,7 +389,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				var err error
 				func() {
 					defer unlock() // a panic in the delete must not strand the merge lock
-					err = bs.hardDeleteLocked(book.ID)
+					err = bs.hardDeleteLocked(book.ID, purges)
 				}()
 				if err != nil {
 					resp.addError(op.ID, err.Error())
@@ -697,7 +763,13 @@ func groupOf(b *database.Book) string {
 // combine's shell, a maintenance operation's soft-deleted shell and an
 // auto-merge's loser (undoHold) are refused instead of hard-deleted out from
 // under an undo that can still run. Without a wired purger the book is refused.
-func (bs *BatchService) hardDeleteLocked(id string) error {
+//
+// The library-root check a purge with files needs has been made by the caller,
+// outside the lock (trashPurges.checkRoot), when the book it read before the
+// lock was in the trash. A book that moved into the trash after that read is
+// purged here without it and the purge checks the root itself, under the lock:
+// rare, and still bounded by the stat timeout.
+func (bs *BatchService) hardDeleteLocked(id string, purges *trashPurges) error {
 	book, err := bs.db.GetBookByID(id)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", id, err)
@@ -709,7 +781,7 @@ func (bs *BatchService) hardDeleteLocked(id string) error {
 		if bs.purger == nil {
 			return errors.New("hard delete of a trashed book refused: the purge path is not wired, so an undo that still needs the book cannot be checked")
 		}
-		return bs.purger.PurgeTrashedBookLocked(book)
+		return purges.purgeLocked(book)
 	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
 	if !ok {

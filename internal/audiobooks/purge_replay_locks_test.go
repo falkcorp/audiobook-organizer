@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_replay_locks_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6371d518-2425-4a76-af03-de3aeb5ea7d3
 // last-edited: 2026-10-26
 
@@ -34,7 +34,7 @@ func purgeNowInBackground(svc *AudiobookService, book *database.Book) <-chan err
 			return
 		}
 		defer unlock()
-		_, err = svc.purgeNowLocked(book)
+		_, err = svc.purgeNowLocked(book, purgeFileMode{})
 		done <- err
 	}()
 	return done

@@ -1,16 +1,19 @@
 // file: internal/batch/service_test.go
-// version: 1.12.0
-// last-edited: 2026-10-22
+// version: 1.13.0
+// last-edited: 2026-10-26
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // MockBookStore is a test double for database.BookStore
@@ -741,13 +744,34 @@ func (m *MockBookStore) GetBookFiles(string) ([]database.BookFile, error)      {
 func (m *MockBookStore) GetChaptersForBook(string) ([]database.Chapter, error) { return nil, nil }
 
 type fakeTrashPurger struct {
-	called []string
-	err    error
+	called    []string
+	err       error
+	rootErr   error // returned by every root check
+	begun     int   // BeginTrashPurges calls (one per batch request that purges)
+	rootCalls int   // root checks made
+	order     []string
+
+	checkUnderLock bool // a root check ran while the merge lock was held
 }
 
-func (f *fakeTrashPurger) PurgeTrashedBookLocked(b *database.Book) error {
-	f.called = append(f.called, b.ID)
-	return f.err
+func (f *fakeTrashPurger) BeginTrashPurges() (func() error, func(*database.Book) error) {
+	f.begun++
+	return func() error {
+			f.rootCalls++
+			f.order = append(f.order, "check")
+			// The check must run BEFORE the merge lock: a stat of a hung mount
+			// under the global lock would stall every merge.
+			if unlock, err := merge.TryLockMergeRMWWithin(0); err != nil {
+				f.checkUnderLock = true
+			} else {
+				unlock()
+			}
+			return f.rootErr
+		}, func(b *database.Book) error {
+			f.called = append(f.called, b.ID)
+			f.order = append(f.order, "purge:"+b.ID)
+			return f.err
+		}
 }
 
 func trashedTestBook(id string) *database.Book {
@@ -789,5 +813,78 @@ func TestExecuteOperations_HardDeleteOfATrashedBookWithoutAPurgerIsRefused(t *te
 	resp := NewBatchService(store).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: "t", Action: "delete", HardDelete: true}}})
 	if resp.Failed != 1 || store.delCnt != 0 {
 		t.Fatalf("resp=%+v delCnt=%d", resp, store.delCnt)
+	}
+}
+
+// The library-root check of a trashed hard delete runs before the merge lock,
+// once per batch request, and the purge itself runs after it.
+func TestExecuteOperations_TrashedHardDeleteChecksTheRootBeforeTheLock(t *testing.T) {
+	store := NewMockBookStore()
+	for _, id := range []string{"t1", "t2", "t3"} {
+		store.books[id] = trashedTestBook(id)
+	}
+	p := &fakeTrashPurger{}
+	bs := NewBatchService(store, WithTrashPurger(p))
+	resp := bs.ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{
+		{ID: "t1", Action: "delete", HardDelete: true},
+		{ID: "t2", Action: "delete", HardDelete: true},
+		{ID: "t3", Action: "delete", HardDelete: true},
+	}})
+	if resp.Success != 3 {
+		t.Fatalf("resp=%+v", resp)
+	}
+	if p.checkUnderLock {
+		t.Error("a root check ran with the merge lock held")
+	}
+	if p.begun != 1 {
+		t.Errorf("BeginTrashPurges called %d times, want one per request", p.begun)
+	}
+	want := []string{"check", "purge:t1", "check", "purge:t2", "check", "purge:t3"}
+	if fmt.Sprint(p.order) != fmt.Sprint(want) {
+		t.Errorf("order = %v, want %v (a check before each purge, none inside the lock)", p.order, want)
+	}
+}
+
+// One failed root check fails every later trashed hard delete of the request
+// with the same error, without asking again and without taking the lock.
+func TestExecuteOperations_FailedRootCheckFailsTheRestOfTheBatchFast(t *testing.T) {
+	store := NewMockBookStore()
+	for _, id := range []string{"t1", "t2", "t3"} {
+		store.books[id] = trashedTestBook(id)
+	}
+	store.books["live"] = testBook("live", "live")
+	p := &fakeTrashPurger{rootErr: errors.New("library root not ready: batcave offline")}
+	bs := NewBatchService(store, WithTrashPurger(p))
+	resp := bs.ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{
+		{ID: "t1", Action: "delete", HardDelete: true},
+		{ID: "t2", Action: "delete", HardDelete: true},
+		{ID: "t3", Action: "delete", HardDelete: true},
+	}})
+	if resp.Failed != 3 || resp.Success != 0 {
+		t.Fatalf("resp=%+v", resp)
+	}
+	for _, r := range resp.Results {
+		if !strings.Contains(r.Error, "nothing deleted") || !strings.Contains(r.Error, "batcave offline") {
+			t.Errorf("result %+v: want the refusal naming nothing deleted and the cause", r)
+		}
+	}
+	if p.rootCalls != 1 {
+		t.Errorf("root checked %d times, want 1 (the failure is remembered for the request)", p.rootCalls)
+	}
+	if len(p.called) != 0 || store.delCnt != 0 {
+		t.Errorf("purged %v, DeleteBook x%d: nothing may be deleted after a failed check", p.called, store.delCnt)
+	}
+}
+
+// A book that is not in the trash is never root-checked: it is deleted without
+// files, so a bad library root must not refuse it.
+func TestExecuteOperations_HardDeleteOfALiveBookDoesNotCheckTheRoot(t *testing.T) {
+	store := NewMockBookStore()
+	store.books["live"] = testBook("live", "live")
+	p := &fakeTrashPurger{rootErr: errors.New("library root not ready")}
+	bs := NewBatchService(store, WithTrashPurger(p))
+	bs.ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: "live", Action: "delete", HardDelete: true}}})
+	if p.rootCalls != 0 || p.begun != 0 {
+		t.Errorf("rootCalls=%d begun=%d, want none for a live book", p.rootCalls, p.begun)
 	}
 }

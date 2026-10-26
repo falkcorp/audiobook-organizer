@@ -1,7 +1,7 @@
 // file: internal/batch/merge_gate_panic_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2f9a14-6b83-4e05-91c7-a3e58d0b4f26
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package batch
 
@@ -24,7 +24,9 @@ func (panicModifyStore) ModifyBook(string, func(*database.Book) error) (*databas
 // panicPurger panics inside the purge.
 type panicPurger struct{}
 
-func (panicPurger) PurgeTrashedBookLocked(*database.Book) error { panic("purge exploded") }
+func (panicPurger) BeginTrashPurges() (func() error, func(*database.Book) error) {
+	return func() error { return nil }, func(*database.Book) error { panic("purge exploded") }
+}
 
 // A gated item keeps the merge lock for its whole action, so a panic inside it
 // must still release the lock: otherwise every later merge, combine and purge

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
 // last-edited: 2026-10-26
 
@@ -112,7 +112,10 @@ func fileUndecided(book *database.Book, v purgeFileVerdict) *purgeOutcome {
 // single-book paths that run no pass.
 func (svc *AudiobookService) decideFile(book *database.Book, env purgeEnv) (*filePlan, *purgeOutcome) {
 	if err := svc.rootCheck(env); err != nil {
-		return nil, &purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged, kept in the trash: %v", book.ID, err)}}
+		// A root that stopped being ready is the same for every remaining book:
+		// the pass stops with it as the reason (purgeOutcome.abort) instead of
+		// asking the library again for each one.
+		return nil, &purgeOutcome{kind: purgeFailed, abort: purgeAbortOf(err), errs: []string{fmt.Sprintf("%s: not purged, kept in the trash: %v", book.ID, err)}}
 	}
 	v := svc.planPurgeFile(book)
 	if o := fileUndecided(book, v); o != nil {
@@ -136,7 +139,7 @@ func (svc *AudiobookService) decideFile(book *database.Book, env purgeEnv) (*fil
 // authoritative one still runs under the merge lock (purgeIfStateless) for every
 // book that gets that far, and a failed read here changes nothing.
 func (svc *AudiobookService) undecidedOutcome(book *database.Book, env purgeEnv, undecided purgeOutcome) purgeOutcome {
-	if env.probe == nil {
+	if undecided.abort != nil || env.probe == nil {
 		return undecided
 	}
 	has, err := env.probe.Has(book.ID)

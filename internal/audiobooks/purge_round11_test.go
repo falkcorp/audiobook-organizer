@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_round11_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4f7a52-3c1e-4b86-a0d5-6e21b8c7f390
 // last-edited: 2026-10-26
 
@@ -205,19 +205,7 @@ func TestLibraryRootReady_HungStatFailsClosedWithinTheTimeout(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
 
-	prevStat, prevTimeout := rootStat, rootStatTimeout
-	release := make(chan struct{})
-	var started atomic.Int32
-	rootStat = func(p string) (os.FileInfo, error) {
-		started.Add(1)
-		<-release
-		return os.Stat(p)
-	}
-	rootStatTimeout = 50 * time.Millisecond
-	t.Cleanup(func() {
-		close(release)
-		rootStat, rootStatTimeout = prevStat, prevTimeout
-	})
+	started := hangRootStats(t)
 
 	began := time.Now()
 	err := svc.libraryRootReady(config.AppConfig.RootDir)
@@ -410,4 +398,34 @@ func TestReplay_RecordWhoseFolderIsEmptyIsKept(t *testing.T) {
 		assert.Contains(t, errs[0], "waiting for a folder that is missing or empty")
 		require.Len(t, pendingJournal(t, store), 1, "pass %d", pass)
 	}
+}
+
+// hangRootStats makes every root-check stat block until the test ends, and the
+// stat timeout short. The cleanup lets them go and waits for the hung-stat count
+// to drain to zero (the check refuses to run while it is not), so the next test
+// does not start against a library still marked hung. It returns the count of
+// stats started.
+func hangRootStats(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	prevStat, prevTimeout := rootStat, rootStatTimeout
+	release := make(chan struct{})
+	started := &atomic.Int32{}
+	rootStat = func(p string) (os.FileInfo, error) {
+		started.Add(1)
+		<-release
+		return os.Stat(p)
+	}
+	rootStatTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		close(release)
+		deadline := time.Now().Add(5 * time.Second)
+		for rootStatsHung.Load() != 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if n := rootStatsHung.Load(); n != 0 {
+			t.Errorf("%d hung stat(s) never answered after they were released", n)
+		}
+		rootStat, rootStatTimeout = prevStat, prevTimeout
+	})
+	return started
 }

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-26
 
@@ -70,7 +70,8 @@ type purgeOutcome struct {
 	wouldKeepFile bool
 	errs          []string
 	// abort, when set, is a failure that will repeat for every remaining book
-	// (the by-book ledger index lost its trust mid-pass: ErrUndoLedgerNotReady).
+	// (the by-book ledger index lost its trust mid-pass: ErrUndoLedgerNotReady;
+	// the library root stopped being ready mid-pass: ErrLibraryRootNotReady).
 	// RunPurge stops the pass with it as the StopReason instead of failing each
 	// remaining book one by one.
 	abort error
@@ -79,7 +80,7 @@ type purgeOutcome struct {
 // purgeAbortOf returns err when it is a pass-wide failure (see
 // purgeOutcome.abort), else nil.
 func purgeAbortOf(err error) error {
-	if errors.Is(err, ErrUndoLedgerNotReady) {
+	if errors.Is(err, ErrUndoLedgerNotReady) || errors.Is(err, ErrLibraryRootNotReady) {
 		return err
 	}
 	return nil
@@ -466,13 +467,20 @@ var ErrPurgeCarryFailed = errors.New("the listening progress could not be moved 
 // removal, which the nightly purge runs outside the lock; for one interactive
 // book it is a single remove and its parent-directory cleanup, and doing it
 // under the hold is what keeps this to one acquisition.
-func (svc *AudiobookService) purgeNowLocked(book *database.Book) (map[string]any, error) {
+//
+// mode is what the caller decided about file deletion before taking the lock
+// (preLockRoot): the setting, and the library-root guard, so no sample or stat
+// runs under the hold. The zero mode reads the setting here and checks the root
+// itself.
+func (svc *AudiobookService) purgeNowLocked(book *database.Book, mode purgeFileMode) (map[string]any, error) {
+	mode = mode.settle()
 	env, err := svc.newPurgeEnv()
 	if err != nil {
 		return nil, fmt.Errorf("purge %s refused: %w", book.ID, err)
 	}
 	env.lockHeld = true
-	out := svc.purgeOne(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, env)
+	env.root = mode.root
+	out := svc.purgeOne(book, mode.deleteFiles, env)
 	detail := strings.Join(out.errs, "; ")
 	switch out.kind {
 	case purgePurged, purgeCarried:
@@ -505,15 +513,45 @@ func (svc *AudiobookService) purgeNowLocked(book *database.Book) (map[string]any
 	}
 }
 
-// PurgeTrashedBookLocked is purgeNowLocked for callers outside the package that
-// delete a book already in the trash (the batch hard delete): the same path,
-// with the result map dropped and the error kept. The caller holds the merge
-// lock (merge.TryLockMergeRMWWithin), as for purgeNowLocked. The errors are the
-// single delete's (ErrPurgeUndoPossible, ErrBookHasProgress,
-// ErrPurgeCarryFailed, database.ErrBookOwnsFiles, ErrNotInTrash).
-func (svc *AudiobookService) PurgeTrashedBookLocked(book *database.Book) error {
-	_, err := svc.purgeNowLocked(book)
-	return err
+// BeginTrashPurges is the purge path for callers outside the package that delete
+// books already in the trash one after another (the batch hard delete). It
+// returns two functions for ONE run of such deletions, which must be called from
+// one goroutine at a time:
+//
+//   - checkRoot makes the library-root check OUTSIDE the merge lock (the first
+//     call samples and stats; later calls are answered by the guard and check
+//     again only after rootGuardTTL), so the deletions under the lock do no
+//     sampling or stat. Call it before taking the lock for each book. With
+//     delete_files off it does nothing.
+//   - purgeLocked is purgeNowLocked with the result map dropped and the error
+//     kept: the same path as the single delete. The caller holds the merge lock
+//     (merge.TryLockMergeRMWWithin). The errors are the single delete's
+//     (ErrPurgeUndoPossible, ErrBookHasProgress, ErrPurgeCarryFailed,
+//     database.ErrBookOwnsFiles, ErrNotInTrash). Called without checkRoot it
+//     checks the root itself, under the lock.
+//
+// The delete-files setting is read once, by the first checkRoot.
+func (svc *AudiobookService) BeginTrashPurges() (checkRoot func() error, purgeLocked func(book *database.Book) error) {
+	var mode purgeFileMode
+	checkRoot = func() error {
+		if !mode.taken {
+			m, err := svc.preLockRoot()
+			if err != nil {
+				return err
+			}
+			mode = m
+			return nil
+		}
+		if mode.root == nil {
+			return nil
+		}
+		return mode.root.ready()
+	}
+	purgeLocked = func(book *database.Book) error {
+		_, err := svc.purgeNowLocked(book, mode)
+		return err
+	}
+	return checkRoot, purgeLocked
 }
 
 // ErrPurgeUndoPossible is returned by "Purge now" for a trashed book an undo
@@ -623,7 +661,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	// With delete_files, the library root is checked first, outside the lock (a
 	// check samples files and stats them, and the lock is global); the decisions
 	// made under the lock reuse that answer (rootGuard).
-	rg, rootErr := svc.preLockRoot()
+	mode, rootErr := svc.preLockRoot()
 	if rootErr != nil {
 		return nil, fmt.Errorf("discard progress and purge %s refused, nothing discarded: %w", id, rootErr)
 	}
@@ -658,9 +696,9 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		return nil, fmt.Errorf("the store cannot clear listening state")
 	}
 
-	// Read once: the decision about the file below, the delete and the removal
-	// must all be about the same setting.
-	deleteFiles := config.AppConfig.PurgeSoftDeletedDeleteFiles
+	// Read once, before the lock (preLockRoot): the decision about the file
+	// below, the delete and the removal must all be about the same setting.
+	deleteFiles := mode.deleteFiles
 	var plan *filePlan
 
 	res := &DiscardProgressResult{BookID: id, Title: book.Title}
@@ -715,7 +753,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// undecidable file refuses the whole action, with nothing discarded; the
 		// removal is journaled with the row delete (purgeDeleteRow).
 		if deleteFiles {
-			p, undecided := svc.decideFile(cur, purgeEnv{root: rg})
+			p, undecided := svc.decideFile(cur, purgeEnv{root: mode.root})
 			if undecided != nil {
 				return fmt.Errorf("discard progress and purge %s refused, nothing discarded: %s", id, strings.Join(undecided.errs, "; "))
 			}
