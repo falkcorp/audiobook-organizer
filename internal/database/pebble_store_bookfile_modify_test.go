@@ -1,12 +1,13 @@
 // file: internal/database/pebble_store_bookfile_modify_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c8e5b31-7a92-4d6f-b3e4-9f1a2c6d8e57
-// last-edited: 2026-09-14
+// last-edited: 2026-10-26
 
 package database
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -91,5 +92,88 @@ func TestModifyBookFile_SkipAndErrorWriteNothing(t *testing.T) {
 	require.Nil(t, row)
 
 	_, err = s.ModifyBookFile(f.BookID, f.ID, func(row *BookFile) error { row.BookID = "other"; return nil })
+	require.Error(t, err, "changing BookID must be refused")
+}
+
+// ModifyBookFileDeferAggregates writes exactly what ModifyBookFile writes but
+// leaves the book's aggregates to the caller: N writes cause no recompute at
+// all, where ModifyBookFile causes one per write (the O(files^2) cost a
+// 400-chapter book paid per stored hash). The caller's one RecomputeBookAggregates
+// afterwards is then the book's only one.
+func TestModifyBookFileDeferAggregates_DoesNotRecomputeUntilTheCallerDoes(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	b, err := s.CreateBook(&Book{Title: "The Long Halloween", FilePath: "/lib/Gotham/The Long Halloween"})
+	require.NoError(t, err)
+	const n = 5
+	ids := make([]string, n)
+	for i := range ids {
+		f := &BookFile{BookID: b.ID, FilePath: fmt.Sprintf("/lib/Gotham/The Long Halloween/%02d.mp3", i+1), Format: "mp3", Duration: 100, FileSize: 1000}
+		require.NoError(t, s.CreateBookFile(f))
+		ids[i] = f.ID
+	}
+	setHash := func(hash string) func(*BookFile) error {
+		return func(row *BookFile) error { row.FileHash = hash; return nil }
+	}
+
+	readLogs := captureAggregateLogs(t)
+	for i, id := range ids {
+		row, err := s.ModifyBookFileDeferAggregates(b.ID, id, setHash(fmt.Sprintf("hash-%d", i)))
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf("hash-%d", i), row.FileHash)
+	}
+	require.Zero(t, countAggregateInvocations(readLogs(), b.ID),
+		"the deferring variant must not recompute the book's aggregates")
+	for i, id := range ids {
+		got, gerr := s.GetBookFileByID(b.ID, id)
+		require.NoError(t, gerr)
+		require.Equal(t, fmt.Sprintf("hash-%d", i), got.FileHash, "the write itself must land, index and all")
+		byHash, herr := s.GetBookBySegmentFileHash(fmt.Sprintf("hash-%d", i))
+		require.NoError(t, herr)
+		require.NotNil(t, byHash, "the hash's secondary index must be written")
+		require.Equal(t, b.ID, byHash.ID)
+	}
+
+	require.NoError(t, s.RecomputeBookAggregates(b.ID))
+	require.Equal(t, 1, countAggregateInvocations(readLogs(), b.ID), "the caller's one recompute is the book's only one")
+
+	// The recomputing variant is the contrast: one recompute per write.
+	readLogs = captureAggregateLogs(t)
+	for i, id := range ids {
+		_, err := s.ModifyBookFile(b.ID, id, setHash(fmt.Sprintf("again-%d", i)))
+		require.NoError(t, err)
+	}
+	require.Equal(t, n, countAggregateInvocations(readLogs(), b.ID), "ModifyBookFile recomputes on every write")
+}
+
+// The deferring variant keeps ModifyBookFile's contract: a skip or an error
+// writes nothing, a missing row is (nil, nil), and the identity cannot change.
+func TestModifyBookFileDeferAggregates_KeepsTheModifyContract(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	f := seedPatchFile(t, s)
+	before, err := s.GetBookFileByID(f.BookID, f.ID)
+	require.NoError(t, err)
+
+	boom := errors.New("boom")
+	for _, ret := range []error{ErrSkipBookFileWrite, boom} {
+		_, err := s.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(row *BookFile) error {
+			row.FileHash = "never"
+			return ret
+		})
+		if ret == boom {
+			require.ErrorIs(t, err, boom)
+		} else {
+			require.NoError(t, err)
+		}
+		got, gerr := s.GetBookFileByID(f.BookID, f.ID)
+		require.NoError(t, gerr)
+		require.Equal(t, before.FileHash, got.FileHash)
+		require.Equal(t, before.UpdatedAt, got.UpdatedAt)
+	}
+
+	row, err := s.ModifyBookFileDeferAggregates(f.BookID, "no-such-file", func(*BookFile) error { t.Fatal("fn ran for a missing row"); return nil })
+	require.NoError(t, err)
+	require.Nil(t, row)
+
+	_, err = s.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(row *BookFile) error { row.BookID = "other"; return nil })
 	require.Error(t, err, "changing BookID must be refused")
 }
