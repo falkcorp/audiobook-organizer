@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_collection_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e8b2d5a7-1f43-4c96-9a08-b7d3c6e4f215
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package playlist
 
@@ -136,7 +136,7 @@ func TestEvaluateCollection_NoViewerMatchesNothingForPerUserRules(t *testing.T) 
 		"progress_pct:<50",
 		"last_played:>-30d",
 		"-last_played:*",
-		"read_status:finished OR read_status:unstarted",
+		"read_status:(finished|unstarted)",
 		"Synthetic read_status:unstarted",
 	}
 	for _, q := range queries {

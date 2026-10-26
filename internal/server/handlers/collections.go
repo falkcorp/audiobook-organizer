@@ -1,11 +1,12 @@
 // file: internal/server/handlers/collections.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -294,14 +295,17 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 	var viewerErr error
 	perViewer := collectionIsPerViewer(col)
 	if col.Type == database.CollectionTypeDynamic {
-		ids, err := h.evaluate(col, CallingUserID(c))
+		ids, err := h.evaluate(c.Request.Context(), col, CallingUserID(c))
+		if abortIfClientGone(c, err, "CreateCollection") {
+			return // nothing is written for a request nobody is waiting on
+		}
 		switch {
 		case err != nil:
 			viewerErr = err
 		case perViewer:
 			viewerIDs = ids
 		default:
-			col.MaterializedBookIDs = ids
+			h.materializeInto(col, ids)
 		}
 	}
 
@@ -348,12 +352,15 @@ func (h *CollectionHandler) ListCollections(c *gin.Context) {
 	// A row whose members could not be worked out for the caller says so
 	// (members_unavailable) instead of passing for a collection with no matches.
 	cols = slices.Clone(cols)
-	viewer := h.ViewerMembers(cols, CallingUserID(c))
+	viewer, verr := h.ViewerMembers(c.Request.Context(), cols, CallingUserID(c))
+	if abortIfClientGone(c, verr, "ListCollections") {
+		return
+	}
 	items := make([]collectionView, len(cols))
 	for i := range cols {
 		items[i].Collection = cols[i]
 		if collectionIsPerViewer(&cols[i]) {
-			items[i].MaterializedBookIDs = viewer.Sets[cols[i].ID]
+			items[i].MaterializedBookIDs, items[i].MaterializedTotal = database.CapMembers(viewer.Sets[cols[i].ID])
 			if err, bad := viewer.Unavailable[cols[i].ID]; bad {
 				items[i].MembersUnavailable = true
 				items[i].MembersUnavailableMessage = membersUnavailableMessage(&cols[i], err)
@@ -384,7 +391,10 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 		return
 	}
 
-	ids, err := h.evaluate(col, CallingUserID(c))
+	ids, err := h.evaluate(c.Request.Context(), col, CallingUserID(c))
+	if abortIfClientGone(c, err, "GetCollection") {
+		return
+	}
 	if collectionIsPerViewer(col) {
 		// The viewer's own members, in the response only: nothing is persisted
 		// (a stored list would be one viewer's answer served to all). An
@@ -413,8 +423,7 @@ func (h *CollectionHandler) GetCollection(c *gin.Context) {
 	// DTO exposes UpdatedAt as lastUpdate, which clients use for cache
 	// invalidation, so an idle collection would look freshly-modified on every
 	// unrelated read and be re-fetched forever.
-	changed := !sameIDs(col.MaterializedBookIDs, ids)
-	col.MaterializedBookIDs = ids
+	changed := h.materializeInto(col, ids)
 	if changed {
 		// Best-effort persist: the response is already correct without it, so a
 		// write failure must not turn a successful read into an error. This now
@@ -532,6 +541,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 	if col.Type == database.CollectionTypeDynamic {
 		if perViewer {
 			col.MaterializedBookIDs = nil
+			col.MaterializedTotal = 0
 		}
 		// A per-viewer collection is evaluated for the caller on EVERY update,
 		// not only when the query, sort or limit changed: its members ride in the
@@ -539,7 +549,10 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		// that answered with none made the detail page, which keeps the PUT's
 		// answer as its state, show an empty collection until a reload.
 		if perViewer || req.Query != nil || req.SortJSON != nil || req.Limit != nil {
-			ids, err := h.evaluate(col, CallingUserID(c))
+			ids, err := h.evaluate(c.Request.Context(), col, CallingUserID(c))
+			if abortIfClientGone(c, err, "UpdateCollection") {
+				return // the edit is not saved for a request nobody is waiting on
+			}
 			switch {
 			case err != nil:
 				// The edit is saved; the members stay as they were (stored) or
@@ -549,7 +562,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 			case perViewer:
 				viewerIDs = ids
 			default:
-				col.MaterializedBookIDs = ids
+				h.materializeInto(col, ids)
 			}
 		}
 	}
@@ -600,7 +613,10 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "only a dynamic collection can be materialized")
 		return
 	}
-	ids, err := h.evaluate(col, CallingUserID(c))
+	ids, err := h.evaluate(c.Request.Context(), col, CallingUserID(c))
+	if abortIfClientGone(c, err, "MaterializeCollection") {
+		return
+	}
 	if err != nil {
 		if errors.Is(err, playlist.ErrSearchIndexUnavailable) {
 			httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "SERVICE_UNAVAILABLE")
@@ -619,8 +635,7 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 	// a periodic refresh would call, so writing unconditionally would bump
 	// Version/UpdatedAt on every cycle whether or not membership moved. Unlike the
 	// read path a write failure IS reported here — the caller asked for a write.
-	changed := !sameIDs(col.MaterializedBookIDs, ids)
-	col.MaterializedBookIDs = ids
+	changed := h.materializeInto(col, ids)
 	if changed {
 		if uerr := h.store.UpdateCollection(col); uerr != nil {
 			// Same conflict class as UpdateCollection above: col was read via
@@ -641,13 +656,16 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 // validateCollectionQuery reports whether query can be evaluated at all, without
 // searching: it parses and translates it, the same pair playlist.EvaluateSmartPlaylist
 // runs first, so every error EvaluateSmartPlaylist would return for the query's
-// text is returned here (an unsigned per-user date such as last_played:>30d among
-// them). It does not need the search index, so it works while the index is closed
+// text is returned here (an unsigned per-user date such as last_played:>30d, or a
+// per-user term under an OR or a grouped NOT, among them). It does not need the search index, so it works while the index is closed
 // or rebuilding. It deliberately does not look at who is evaluating.
 func validateCollectionQuery(query string) error {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		return fmt.Errorf("parse query: %w", err)
+	}
+	if err := search.CheckPerUserBoolean(ast); err != nil {
+		return fmt.Errorf("query: %w", err)
 	}
 	if _, _, err := search.TranslateAt(ast, time.Now()); err != nil {
 		return fmt.Errorf("translate query: %w", err)
@@ -690,9 +708,9 @@ type collectionView struct {
 // logs it.
 func (h *CollectionHandler) viewerView(col *database.Collection, ids []string, evalErr error) *collectionView {
 	out := &collectionView{Collection: *col}
-	out.MaterializedBookIDs = ids
+	out.MaterializedBookIDs, out.MaterializedTotal = database.CapMembers(ids)
 	if evalErr != nil {
-		out.MaterializedBookIDs = nil
+		out.MaterializedBookIDs, out.MaterializedTotal = nil, 0
 		out.MembersUnavailable = true
 		out.MembersUnavailableMessage = membersUnavailableMessage(col, evalErr)
 		h.noteEvalFailure(col, evalErr)
@@ -736,20 +754,75 @@ const evalWarnEvery = time.Minute
 // evalWarnEvery, so the failure is visible in the log without flooding it.
 func (h *CollectionHandler) noteEvalFailure(col *database.Collection, err error) {
 	kind := evalFailureKind(col, err)
+	if !h.shouldWarn(kind) {
+		return
+	}
+	h.log.Warn("collections: members of %s (%s) could not be evaluated for the viewer (%s, shown as no members): %s",
+		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), kind, redactedEvalCause(kind, err))
+}
+
+// shouldWarn reports whether a log line under key may be written now, and records
+// that one was: at most one per key per evalWarnEvery.
+func (h *CollectionHandler) shouldWarn(key string) bool {
 	h.warnMu.Lock()
+	defer h.warnMu.Unlock()
 	if h.warnedAt == nil {
 		h.warnedAt = make(map[string]time.Time)
 	}
-	last, seen := h.warnedAt[kind]
 	now := time.Now()
-	if seen && now.Sub(last) < evalWarnEvery {
-		h.warnMu.Unlock()
+	if last, seen := h.warnedAt[key]; seen && now.Sub(last) < evalWarnEvery {
+		return false
+	}
+	h.warnedAt[key] = now
+	return true
+}
+
+// noteCapped logs, once per collection per evalWarnEvery, that a member list was
+// longer than database.MaxMaterializedMembers and is served and stored cut to it.
+// The answer carries materialized_total, so a client can tell; this is for the
+// operator who wonders why a collection's page stops at 10,000.
+func (h *CollectionHandler) noteCapped(col *database.Collection, total int) {
+	if !h.shouldWarn("capped:" + col.ID) {
 		return
 	}
-	h.warnedAt[kind] = now
-	h.warnMu.Unlock()
-	h.log.Warn("collections: members of %s (%s) could not be evaluated for the viewer (%s, shown as no members): %s",
-		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), kind, logger.SanitizeLogValue(err.Error()))
+	h.log.Warn("collections: %s (%s) matches %d books; its member list is cut to the first %d (materialized_total reports the real count)",
+		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), total, database.MaxMaterializedMembers)
+}
+
+// materializeInto stores ids on col as its materialized list, cut to
+// database.MaxMaterializedMembers with the real count in MaterializedTotal when it
+// was cut, and reports whether that changed what the row holds. The comparison is
+// against the cut list and the total, so an unchanged oversized answer is still a
+// no-op and does not rewrite the row on every read.
+func (h *CollectionHandler) materializeInto(col *database.Collection, ids []string) (changed bool) {
+	kept, total := database.CapMembers(ids)
+	changed = !sameIDs(col.MaterializedBookIDs, kept) || col.MaterializedTotal != total
+	col.MaterializedBookIDs, col.MaterializedTotal = kept, total
+	if total > 0 {
+		h.noteCapped(col, total)
+	}
+	return changed
+}
+
+// redactedEvalCause names why an evaluation failed in words that are safe for the
+// activity log, which any library.view user can read. It deliberately does NOT
+// print err: the text of a state-read failure carries the viewer's user id and a
+// book id (database.ErrUserBookStateUndecodable wraps "<userID>/<bookID>"), and a
+// store error can carry more. The operator who needs the detail has the request
+// that failed; the log needs only the class of the failure.
+func redactedEvalCause(kind string, err error) string {
+	switch {
+	case kind == "search-index-unavailable":
+		return "the search index is not open or is rebuilding"
+	case errors.Is(err, search.ErrPerUserBoolean):
+		return "a per-user term sits under an OR or a negated group"
+	case kind == "query-invalid":
+		return "the stored query no longer parses or translates"
+	case errors.Is(err, database.ErrUserBookStateUndecodable):
+		return "a state row of the viewer did not decode"
+	default:
+		return "reading state or books, or evaluating, failed"
+	}
 }
 
 // collectionEvalSlots bounds how many collection evaluations run at once in the
@@ -773,18 +846,35 @@ var collectionEvalSlots = make(chan struct{}, max(2, runtime.NumCPU()))
 // and an empty one (no viewer: a background job, an unresolved caller) matches
 // nothing for such a query; it is never replaced by the collection's creator or an
 // admin. A query with no per-user field is evaluated with no user at all.
-func (h *CollectionHandler) evaluate(col *database.Collection, viewerID string) ([]string, error) {
-	return h.evaluateWith(col, viewerID, nil)
+//
+// ctx is the request's. Waiting for a slot gives up when it is done, and the
+// returned error is then ctx.Err(): a client that went away must not queue behind
+// the evaluations of everyone else, and must not be reported as a failure of the
+// collection (see abortIfClientGone).
+func (h *CollectionHandler) evaluate(ctx context.Context, col *database.Collection, viewerID string) ([]string, error) {
+	return h.evaluateWith(ctx, col, viewerID, nil)
 }
 
 // evaluateWith is evaluate with the viewer's state already loaded (nil loads it).
-func (h *CollectionHandler) evaluateWith(col *database.Collection, viewerID string, states *playlist.ViewerStates) ([]string, error) {
+func (h *CollectionHandler) evaluateWith(ctx context.Context, col *database.Collection, viewerID string, states *playlist.ViewerStates) ([]string, error) {
 	userID := ""
 	if search.QueryMayUsePerUserField(col.Query) {
 		userID = viewerID
 	}
-	collectionEvalSlots <- struct{}{}
-	defer func() { <-collectionEvalSlots }()
+	// The channel is read once: the release must go back to the channel the slot
+	// came from even if a test swaps the process-wide one in between.
+	slots := collectionEvalSlots
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-slots }()
+	// A slot can be granted in the same instant the request is cancelled; a
+	// search for nobody is not started.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if states != nil && states.UserID() == userID {
 		return playlist.EvaluateSmartPlaylistFor(
 			h.evalStore, h.indexFn(), col.Query, col.SortJSON, col.Limit, states)
@@ -825,7 +915,12 @@ type ViewerCollections struct {
 // PARTITIONING: each collection is evaluated by exactly one worker and written to
 // its own slot; the shared viewer state is read-only. Failures are logged (see
 // noteEvalFailure), once per kind per minute.
-func (h *CollectionHandler) ViewerMembers(cols []database.Collection, viewerID string) ViewerCollections {
+//
+// ctx is the request's. When it is done the error returned is ctx.Err() and the
+// answer is partial; the caller drops the request (see abortIfClientGone). A
+// cancelled evaluation is never recorded as unavailable or logged: the client
+// leaving is not a fault of the collection.
+func (h *CollectionHandler) ViewerMembers(ctx context.Context, cols []database.Collection, viewerID string) (ViewerCollections, error) {
 	out := ViewerCollections{Sets: make(map[string][]string), Unavailable: make(map[string]error)}
 	var idx []int
 	for i := range cols {
@@ -834,7 +929,7 @@ func (h *CollectionHandler) ViewerMembers(cols []database.Collection, viewerID s
 		}
 	}
 	if len(idx) == 0 {
-		return out
+		return out, ctx.Err()
 	}
 	results := make([][]string, len(idx))
 	errs := make([]error, len(idx))
@@ -849,11 +944,14 @@ func (h *CollectionHandler) ViewerMembers(cols []database.Collection, viewerID s
 		g.SetLimit(ViewerMemberSetsConcurrency)
 		for n, i := range idx {
 			g.Go(func() error {
-				results[n], errs[n] = h.evaluateWith(&cols[i], viewerID, states)
+				results[n], errs[n] = h.evaluateWith(ctx, &cols[i], viewerID, states)
 				return nil // a failed evaluation is "unavailable", it never aborts the rest
 			})
 		}
 		_ = g.Wait()
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
 	}
 	for n, i := range idx {
 		if errs[n] != nil {
@@ -864,16 +962,22 @@ func (h *CollectionHandler) ViewerMembers(cols []database.Collection, viewerID s
 		if results[n] == nil {
 			results[n] = []string{}
 		}
+		if len(results[n]) > database.MaxMaterializedMembers {
+			// The consumers cut the list (the native answer and the ABS page both
+			// use database.CapMembers); the log line is here so both are covered.
+			h.noteCapped(&cols[i], len(results[n]))
+		}
 		out.Sets[cols[i].ID] = results[n]
 	}
-	return out
+	return out, nil
 }
 
 // ViewerMemberSets is ViewerMembers' member lists alone, for a surface (the ABS
 // one) that has nowhere to put the unavailable flag: such a collection shows no
 // books there, and the failure is logged.
-func (h *CollectionHandler) ViewerMemberSets(cols []database.Collection, viewerID string) map[string][]string {
-	return h.ViewerMembers(cols, viewerID).Sets
+func (h *CollectionHandler) ViewerMemberSets(ctx context.Context, cols []database.Collection, viewerID string) (map[string][]string, error) {
+	viewer, err := h.ViewerMembers(ctx, cols, viewerID)
+	return viewer.Sets, err
 }
 
 // load resolves :id, writing the error response itself.

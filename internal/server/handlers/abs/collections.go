@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package abs
 
@@ -92,8 +92,10 @@ import (
 // CollectionViewerMembers evaluates the per-viewer dynamic collections in cols for
 // viewerID: collection id to ordered book ids. A collection absent from the map is
 // not per-viewer; one present with an empty list shows nothing. Implemented by the
-// native collection handler so the two surfaces share one definition.
-type CollectionViewerMembers func(cols []database.Collection, viewerID string) map[string][]string
+// native collection handler so the two surfaces share one definition. ctx is the
+// request's; the error is only ever its cancellation, in which case the answer is
+// partial and the caller drops the page.
+type CollectionViewerMembers func(ctx context.Context, cols []database.Collection, viewerID string) (map[string][]string, error)
 
 // CollectionStore is the narrow slice of the store this surface needs.
 //
@@ -144,7 +146,7 @@ func (h *Handler) LibraryCollections(c *gin.Context) {
 
 	results := make([]any, 0, len(cols))
 	for i := range cols {
-		results = append(results, h.collectionDTO(&cols[i], byCollection[cols[i].ID]))
+		results = append(results, h.collectionDTO(&cols[i], byCollection))
 	}
 	// Total is what was RETURNED. A total larger than results would tell the
 	// client there are pages it has no parameter to fetch.
@@ -164,7 +166,7 @@ func (h *Handler) CollectionDetail(c *gin.Context) {
 		return
 	}
 	books := h.collectionsPageBooks(c, []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, books))
 }
 
 // ── POST /api/collections ───────────────────────────────────────────────────
@@ -235,7 +237,7 @@ func (h *Handler) CreateCollection(c *gin.Context) {
 	}
 
 	books := h.collectionsPageBooks(c, []database.Collection{*created})
-	respondJSON(c, http.StatusOK, h.collectionDTO(created, books[created.ID]))
+	respondJSON(c, http.StatusOK, h.collectionDTO(created, books))
 }
 
 // ── PATCH /api/collections/:id ──────────────────────────────────────────────
@@ -320,7 +322,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 	}
 
 	books := h.collectionsPageBooks(c, []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, books))
 }
 
 // ── DELETE /api/collections/:id ─────────────────────────────────────────────
@@ -387,7 +389,7 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 		return
 	}
 	books := h.collectionsPageBooks(c, []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books))
 }
 
 // RemoveBookFromCollection handles DELETE /api/collections/:id/book/:bookId.
@@ -415,7 +417,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		// requested end state already holds; report the collection unchanged
 		// rather than an error the user cannot act on.
 		books := h.collectionsPageBooks(c, []database.Collection{*col})
-		respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+		respondJSON(c, http.StatusOK, h.collectionDTO(col, books))
 		return
 	}
 
@@ -432,7 +434,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		return
 	}
 	books := h.collectionsPageBooks(c, []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books))
 }
 
 // ── POST /api/collections/:id/batch/add, /batch/remove ──────────────────────
@@ -502,7 +504,7 @@ func (h *Handler) batchEditCollection(c *gin.Context, apply func(current, ids []
 		return
 	}
 	books := h.collectionsPageBooks(c, []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books))
 }
 
 // respondMembershipError maps a locked membership operation's error onto the
@@ -632,9 +634,9 @@ func callerID(c *gin.Context) string {
 func (h *Handler) collectionsPageBooks(
 	c *gin.Context,
 	cols []database.Collection,
-) map[string][]any {
+) collectionPage {
 	ctx := c.Request.Context()
-	out := make(map[string][]any, len(cols))
+	out := collectionPage{books: make(map[string][]any, len(cols))}
 	if len(cols) == 0 {
 		return out
 	}
@@ -642,7 +644,10 @@ func (h *Handler) collectionsPageBooks(
 	// bounded pass. Nil (nothing injected) leaves them empty: fail closed.
 	var viewerSets map[string][]string
 	if h.collectionViewerMembers != nil {
-		viewerSets = h.collectionViewerMembers(cols, callerID(c))
+		var err error
+		if viewerSets, err = h.collectionViewerMembers(ctx, cols, callerID(c)); err != nil {
+			return out // the client went away mid-evaluation; nobody reads this page
+		}
 	}
 
 	var ids []string
@@ -651,7 +656,25 @@ func (h *Handler) collectionsPageBooks(
 	for i := range cols {
 		// Merge losers are shown as their survivor (canonicalMembers), so a
 		// member merged away stays visible and removable instead of vanishing.
-		members[i] = h.canonicalMembers(collectionBookIDs(&cols[i], viewerSets))
+		listed := collectionBookIDs(&cols[i], viewerSets)
+		if cols[i].Type == database.CollectionTypeDynamic {
+			// A dynamic collection can match the whole library; expanding every
+			// member into a full library item is paid per member. The cut is the
+			// same one the native API and the stored row use, and the real count
+			// is reported (collectionDTO). A static collection is the user's own
+			// list and is served whole.
+			var total int
+			if listed, total = database.CapMembers(listed); total == 0 {
+				total = cols[i].MaterializedTotal // a stored list that was cut when it was saved
+			}
+			if total > 0 {
+				if out.total == nil {
+					out.total = make(map[string]int)
+				}
+				out.total[cols[i].ID] = total
+			}
+		}
+		members[i] = h.canonicalMembers(listed)
 		for _, id := range members[i] {
 			if _, dup := seen[id]; dup {
 				continue
@@ -684,9 +707,17 @@ func (h *Handler) collectionsPageBooks(
 			}
 			items = append(items, dto)
 		}
-		out[cols[i].ID] = items
+		out.books[cols[i].ID] = items
 	}
 	return out
+}
+
+// collectionPage is the expansion of the collections on one page: the served
+// books of each, and for a dynamic collection that has more members than are
+// served (see database.MaxMaterializedMembers), how many it has.
+type collectionPage struct {
+	books map[string][]any
+	total map[string]int
 }
 
 // memberViews builds the item views for canonical member ids, keyed by book id.
@@ -891,7 +922,8 @@ func respondResolveError(c *gin.Context) {
 // carrying books: [], because members are dropped after the count would be
 // taken. A row that reports a count it cannot list forces the client to guess
 // which half to believe.
-func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
+func (h *Handler) collectionDTO(col *database.Collection, page collectionPage) gin.H {
+	books := page.books[col.ID]
 	if books == nil {
 		books = []any{}
 	}
@@ -909,7 +941,7 @@ func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
 		lastUpdate = time.Now()
 	}
 
-	return gin.H{
+	dto := gin.H{
 		"id":        col.ID,
 		"libraryId": h.libraryID(),
 		// Attribution only — never an access decision. See the file header.
@@ -923,4 +955,11 @@ func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
 		"lastUpdate":    msEpoch(lastUpdate),
 		"createdAt":     msEpoch(col.CreatedAt),
 	}
+	// numBooks stays the served count (see above). A dynamic collection that
+	// matches more books than are served says how many it has under a key the
+	// upstream shape does not use, which a decoder ignores and a person can read.
+	if total := page.total[col.ID]; total > len(books) {
+		dto["totalBooks"] = total
+	}
+	return dto
 }

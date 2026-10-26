@@ -1,7 +1,7 @@
 // file: internal/server/collection_peruser_purge.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4b7e1c93-2d58-4f06-9a31-c6e8d0f5b274
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package server
 
@@ -91,6 +91,7 @@ func purgePerViewerCollectionMembers(store collectionPurgeStore, log collectionP
 			continue
 		}
 		col.MaterializedBookIDs = nil
+		col.MaterializedTotal = 0
 		if uerr := store.UpdateCollection(&col); uerr != nil {
 			if errors.Is(uerr, database.ErrCollectionVersionConflict) {
 				res.Conflicts++

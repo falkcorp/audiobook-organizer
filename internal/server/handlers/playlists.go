@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.2
+// version: 2.6.3
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package handlers
 
@@ -212,10 +212,18 @@ func (h *PlaylistHandler) GetPlaylist(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, evalErr.Error())
 			return
 		}
-		resp["book_ids"] = bookIDs
+		// A query is evaluated with no result window, so a broad one answers with
+		// the whole library. The answer and the cached list are both cut to
+		// database.MaxMaterializedMembers, and book_ids_total / materialized_total
+		// carry the real count when they were.
+		kept, total := database.CapMembers(bookIDs)
+		resp["book_ids"] = kept
+		if total > 0 {
+			resp["book_ids_total"] = total
+		}
 		// Cache for iTunes sync worker. Persist only if changed.
-		if !stringSlicesEqual(pl.MaterializedBookIDs, bookIDs) {
-			pl.MaterializedBookIDs = bookIDs
+		if !stringSlicesEqual(pl.MaterializedBookIDs, kept) || pl.MaterializedTotal != total {
+			pl.MaterializedBookIDs, pl.MaterializedTotal = kept, total
 			_ = h.store.UpdateUserPlaylist(pl)
 		}
 	}
@@ -230,8 +238,8 @@ func (h *PlaylistHandler) UpdatePlaylist(c *gin.Context) {
 		return
 	}
 	if req.Query != nil {
-		if _, err := search.ParseQuery(*req.Query); err != nil {
-			httputil.RespondWithBadRequest(c, "invalid query: "+err.Error())
+		if err := validatePlaylistQuery(*req.Query); err != nil {
+			httputil.RespondWithBadRequest(c, err.Error())
 			return
 		}
 	}
@@ -499,11 +507,26 @@ func validatePlaylistCreate(req *PlaylistCreateReq) error {
 		if strings.TrimSpace(req.Query) == "" {
 			return fmt.Errorf("smart playlist requires a query")
 		}
-		if _, err := search.ParseQuery(req.Query); err != nil {
-			return fmt.Errorf("invalid query: %w", err)
+		if err := validatePlaylistQuery(req.Query); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("type must be static or smart")
+	}
+	return nil
+}
+
+// validatePlaylistQuery reports why a smart playlist's query cannot be saved: it
+// does not parse, or it puts a per-user term (read_status, progress_pct,
+// last_played) where the evaluator cannot give it its boolean meaning (under an
+// OR with a sibling, or under a NOT over a group; search.CheckPerUserBoolean).
+func validatePlaylistQuery(query string) error {
+	ast, err := search.ParseQuery(query)
+	if err != nil {
+		return fmt.Errorf("invalid query: %w", err)
+	}
+	if err := search.CheckPerUserBoolean(ast); err != nil {
+		return fmt.Errorf("invalid query: %w", err)
 	}
 	return nil
 }

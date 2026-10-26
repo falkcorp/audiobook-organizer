@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_refresh.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 5e2a9c74-1b83-4f06-a7d1-8c4e0b3f6a92
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers
 
@@ -118,7 +118,7 @@ func (h *CollectionHandler) RefreshRelativeDynamic(ctx context.Context, dryRun b
 			break
 		}
 		g.Go(func() error {
-			outcome, err := h.refreshOne(&col, dryRun)
+			outcome, err := h.refreshOne(ctx, &col, dryRun)
 			mu.Lock()
 			defer mu.Unlock()
 			done++
@@ -162,10 +162,10 @@ const (
 )
 
 // refreshOne evaluates and, unless dryRun, stores one collection.
-func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (refreshOutcome, error) {
+func (h *CollectionHandler) refreshOne(ctx context.Context, col *database.Collection, dryRun bool) (refreshOutcome, error) {
 	// No viewer: a background job has none, and a candidate has no per-user field
 	// for one to matter (see isRelativeRefreshCandidate).
-	ids, err := h.evaluate(col, "")
+	ids, err := h.evaluate(ctx, col, "")
 	switch {
 	case errors.Is(err, playlist.ErrSearchIndexUnavailable):
 		// The run reports this once, not once per collection.
@@ -175,13 +175,14 @@ func (h *CollectionHandler) refreshOne(col *database.Collection, dryRun bool) (r
 			logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(err.Error()))
 		return refreshFailed, err
 	}
-	if sameIDs(col.MaterializedBookIDs, ids) {
+	// col is this run's copy of the row, so storing the answer on it before the
+	// dry-run check writes nothing.
+	if !h.materializeInto(col, ids) {
 		return refreshUnchanged, nil
 	}
 	if dryRun {
 		return refreshChanged, nil
 	}
-	col.MaterializedBookIDs = ids
 	if err := h.store.UpdateCollection(col); err != nil {
 		if errors.Is(err, database.ErrCollectionVersionConflict) {
 			return refreshConflict, err

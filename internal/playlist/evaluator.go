@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //
@@ -190,6 +190,13 @@ func evaluate(
 	if err != nil {
 		return nil, fmt.Errorf("parse query: %w", err)
 	}
+	// A per-user term the translator cannot give its boolean meaning (under an OR
+	// with a sibling, or under a NOT over a group) is refused rather than answered
+	// as an AND. Creates and updates refuse it up front; this is the same check for
+	// a stored row that predates it, so it reads as unavailable instead of wrong.
+	if err := search.CheckPerUserBoolean(ast); err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
 	// ONE instant for the whole evaluation: relative dates (last_played:>-30d)
 	// in the Bleve translation and in the per-user pass resolve against the same
 	// now, so a window cannot shift between the first book and the last.
@@ -260,8 +267,20 @@ func searchAllIDs(idx *search.BleveIndex, q query.Query, window int) ([]string, 
 	if window < 1 {
 		window = 1 // a size of 0 means "the default page" to the search layer
 	}
-	for {
-		hits, total, err := idx.SearchNativeIDs(q, 0, window)
+	return collectAllHits(window, func(size int) ([]search.SearchResult, uint64, error) {
+		return idx.SearchNativeIDs(q, 0, size)
+	})
+}
+
+// collectAllHits runs fetch with a window of size and, if the search reports more
+// matches than it returned (documents were indexed between the count and the
+// search), again with the reported total. The second pass ends the loop unless the
+// index grew again in between; a bounded number of passes keeps an index that is
+// indexed faster than it is searched from holding the caller (and a shared
+// evaluation slot) forever. Running out of passes is an error, never a short list.
+func collectAllHits(window int, fetch func(size int) ([]search.SearchResult, uint64, error)) ([]string, error) {
+	for range searchAllIDsMaxPasses {
+		hits, total, err := fetch(window)
 		if err != nil {
 			return nil, fmt.Errorf("bleve search: %w", err)
 		}
@@ -274,12 +293,19 @@ func searchAllIDs(idx *search.BleveIndex, q query.Query, window int) ([]string, 
 		}
 		window = int(total)
 	}
+	return nil, fmt.Errorf("bleve search: the index kept growing during %d passes: %w", searchAllIDsMaxPasses, ErrSearchIndexUnavailable)
 }
+
+// searchAllIDsMaxPasses bounds searchAllIDs's re-query when documents are indexed
+// between its count and its search. One re-query is the normal worst case.
+const searchAllIDsMaxPasses = 4
 
 // matchViewerStates answers a query with per-user filters for one viewer: the
 // books that satisfy the indexed part AND every per-user filter, judged against
-// the viewer's own state. The translator drops per-user terms out of an OR, so
-// they always apply as AND post-filters; this keeps exactly those semantics.
+// the viewer's own state. Per-user terms always apply as AND post-filters (a
+// term negated on its own, or an alternation of one field, is one filter);
+// evaluate has already refused, through search.CheckPerUserBoolean, every query
+// where that is not what the boolean tree says.
 //
 // Two strategies, chosen by whether a book the viewer has NO row for can match:
 //

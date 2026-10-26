@@ -1,11 +1,12 @@
 // file: internal/server/handlers/collections_viewer_failures_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e9c1a74-6b05-4d82-a7f1-c20d58e4b196
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -77,6 +78,16 @@ type failureRig struct {
 // state of a server whose index is still opening or rebuilding.
 func newFailureRig(t *testing.T, store *colFakeStore, ev handlers.CollectionEvalStore, indexOpen bool) *failureRig {
 	t.Helper()
+	return newFailureRigDocs(t, store, ev, indexOpen, []search.BookDocument{
+		{BookID: "b1", Title: "Alpha"},
+		{BookID: "b2", Title: "Bravo"},
+		{BookID: "b3", Title: "Charlie"},
+	})
+}
+
+// newFailureRigDocs is newFailureRig over the given indexed documents.
+func newFailureRigDocs(t *testing.T, store *colFakeStore, ev handlers.CollectionEvalStore, indexOpen bool, docs []search.BookDocument) *failureRig {
+	t.Helper()
 	var idx *search.BleveIndex
 	if indexOpen {
 		var err error
@@ -84,11 +95,7 @@ func newFailureRig(t *testing.T, store *colFakeStore, ev handlers.CollectionEval
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = idx.Close() })
 		require.NoError(t, idx.MarkRebuilt())
-		require.NoError(t, idx.IndexBookBatch([]search.BookDocument{
-			{BookID: "b1", Title: "Alpha"},
-			{BookID: "b2", Title: "Bravo"},
-			{BookID: "b3", Title: "Charlie"},
-		}))
+		require.NoError(t, idx.IndexBookBatch(docs))
 	}
 	gin.SetMode(gin.TestMode)
 	h := handlers.NewCollectionHandler(store, nil, ev, func() *search.BleveIndex { return idx })
@@ -106,6 +113,7 @@ func newFailureRig(t *testing.T, store *colFakeStore, ev handlers.CollectionEval
 	g := r.Group("/api/v1")
 	g.GET("/collections", h.ListCollections)
 	g.GET("/collections/:id", h.GetCollection)
+	g.POST("/collections", h.CreateCollection)
 	g.PUT("/collections/:id", h.UpdateCollection)
 	g.POST("/collections/:id/materialize", h.MaterializeCollection)
 	return &failureRig{r: r, h: h, log: rec}
@@ -189,10 +197,13 @@ func TestUnparseablePerViewerQueryNeverServesItsStoredList(t *testing.T) {
 	t.Run("view helper used by the ABS surface", func(t *testing.T) {
 		store := newStore()
 		rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
-		res := rig.h.ViewerMembers(store.cols, "alice")
+		res, err := rig.h.ViewerMembers(context.Background(), store.cols, "alice")
+		require.NoError(t, err)
 		assert.Equal(t, []string{}, res.Sets["c1"])
 		assert.Error(t, res.Unavailable["c1"])
-		assert.Equal(t, []string{}, rig.h.ViewerMemberSets(store.cols, "alice")["c1"])
+		sets, err := rig.h.ViewerMemberSets(context.Background(), store.cols, "alice")
+		require.NoError(t, err)
+		assert.Equal(t, []string{}, sets["c1"])
 	})
 }
 

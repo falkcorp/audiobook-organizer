@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_viewer_states_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a9d2e47-8c13-4f60-b7a1-d3e6f0928c5b
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package playlist
 
@@ -21,32 +21,73 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
-// referenceEvaluate is the evaluator as it was before the viewer-state rewrite,
-// minus its 10,000-document window: search for EVERY indexed match, read one
-// state row per candidate, keep the ones every filter accepts. It is the
-// semantics the rewrite must preserve, so the rewrite is compared against it
-// rather than against hand-written expectations.
+// referenceEvaluate answers a query from its boolean TREE, one book at a time:
+// AND is all, OR is any, NOT is the complement, and each leaf is judged on its
+// own (an indexed term by searching for it alone, a per-user term against the
+// viewer's state row). It shares nothing with the translator's flattening of
+// per-user terms into one AND list, so it is the independent statement of what a
+// query means that the evaluator must agree with, for every shape the evaluator
+// accepts. (Shapes where the two would disagree are refused; see
+// TestEvaluate_RefusesPerUserTermsItCannotEvaluateAsWritten.)
 func referenceEvaluate(t *testing.T, store *database.PebbleStore, idx *search.BleveIndex, query, userID string) []string {
 	t.Helper()
 	ast, err := search.ParseQuery(query)
 	require.NoError(t, err)
 	now := time.Now()
-	bleveQ, filters, err := search.TranslateAt(ast, now)
+	all, _, err := search.TranslateAt(nil, now)
 	require.NoError(t, err)
-	n, err := idx.DocCount()
+	allIDs, err := searchAllIDs(idx, all, 0)
 	require.NoError(t, err)
-	hits, _, err := idx.SearchNative(bleveQ, 0, int(n))
-	require.NoError(t, err)
-	var ids []string
-	for _, h := range hits {
+
+	indexedHits := map[search.Node]map[string]bool{}
+	leaf := func(n search.Node, id string) bool {
+		bq, filters, err := search.TranslateAt(n, now)
+		require.NoError(t, err)
 		if len(filters) > 0 {
-			st, err := store.GetUserBookState(userID, h.BookID)
+			st, err := store.GetUserBookState(userID, id)
 			require.NoError(t, err)
-			if !search.MatchPerUserFilters(st, filters, now) {
-				continue
-			}
+			return search.MatchPerUserFilters(st, filters, now)
 		}
-		ids = append(ids, h.BookID)
+		hits, ok := indexedHits[n]
+		if !ok {
+			ids, err := searchAllIDs(idx, bq, 0)
+			require.NoError(t, err)
+			hits = make(map[string]bool, len(ids))
+			for _, h := range ids {
+				hits[h] = true
+			}
+			indexedHits[n] = hits
+		}
+		return hits[id]
+	}
+	var holds func(n search.Node, id string) bool
+	holds = func(n search.Node, id string) bool {
+		switch v := n.(type) {
+		case *search.AndNode:
+			for _, c := range v.Children {
+				if !holds(c, id) {
+					return false
+				}
+			}
+			return true
+		case *search.OrNode:
+			for _, c := range v.Children {
+				if holds(c, id) {
+					return true
+				}
+			}
+			return false
+		case *search.NotNode:
+			return !holds(v.Child, id)
+		default:
+			return leaf(n, id)
+		}
+	}
+	var ids []string
+	for _, id := range allIDs {
+		if holds(ast, id) {
+			ids = append(ids, id)
+		}
 	}
 	out, err := sortBookIDs(store, ids, "")
 	require.NoError(t, err)
@@ -57,8 +98,9 @@ func referenceEvaluate(t *testing.T, store *database.PebbleStore, idx *search.Bl
 }
 
 // The bulk-read evaluator answers exactly what the per-candidate evaluator did,
-// for every shape of per-user query: positive and negated filters, unstarted,
-// per-user only, mixed with an indexed term, and per-user terms inside an OR.
+// for every shape of per-user query the evaluator accepts: positive and negated
+// filters, unstarted, per-user only, mixed with an indexed term, an alternation of
+// one per-user field, and an OR that holds no per-user term.
 func TestEvaluate_ViewerStatesMatchThePerCandidateReference(t *testing.T) {
 	store, idx, _ := collectionFixture(t)
 	queries := []string{
@@ -76,8 +118,12 @@ func TestEvaluate_ViewerStatesMatchThePerCandidateReference(t *testing.T) {
 		"Synthetic -read_status:finished",
 		"title:b1 read_status:unstarted",
 		"title:b2 OR title:b4",
-		"read_status:finished OR title:b4",
-		"(read_status:finished | read_status:in_progress)",
+		"read_status:(finished|in_progress)",
+		"-read_status:(finished|in_progress)",
+		"(title:b2 OR title:b4) read_status:finished",
+		"-read_status:finished title:b2",
+		"NOT NOT read_status:finished",
+		"-(title:b1 OR title:b3) read_status:unstarted",
 		"title:nomatch read_status:unstarted",
 	}
 	for _, user := range []string{"alice", "bob", "carol"} {
@@ -248,4 +294,54 @@ func TestEvaluate_OverTenThousandBooks(t *testing.T) {
 	got, err = EvaluateSmartPlaylist(store, idx, "Synthetic", "", 0, "bob")
 	require.NoError(t, err)
 	assert.Len(t, got, total, "a query with no per-user filter is uncapped too")
+}
+
+// Per-user terms the evaluator cannot give their boolean meaning are refused, not
+// answered as an AND. The reference above shows the difference: it answers the OR
+// and the grouped NOT as written, and the old evaluator answered something else.
+func TestEvaluate_RefusesPerUserTermsItCannotEvaluateAsWritten(t *testing.T) {
+	store, idx, _ := collectionFixture(t)
+	refused := []string{
+		"read_status:finished OR title:b4",
+		"title:b4 OR read_status:finished",
+		"read_status:finished OR read_status:unstarted",
+		"title:b2 OR (title:b4 AND progress_pct:>0)",
+		"title:b4 OR read_status:(finished|in_progress)",
+		"title:b4 OR -read_status:finished",
+		"-(read_status:finished title:b4)",
+		"NOT (read_status:finished OR title:b4)",
+		"NOT (title:b1 (title:b2 OR last_played:*))",
+	}
+	for _, q := range refused {
+		t.Run(q, func(t *testing.T) {
+			for _, user := range []string{"alice", ""} {
+				ids, err := EvaluateSmartPlaylist(store, idx, q, "", 0, user)
+				require.Error(t, err, "user %q", user)
+				assert.ErrorIs(t, err, search.ErrPerUserBoolean)
+				assert.Nil(t, ids)
+			}
+		})
+	}
+	// The refusal is about the per-user term: the same shapes over indexed terms
+	// alone are evaluated, and so are the per-user shapes with a correct reading.
+	for _, q := range []string{
+		"title:b2 OR title:b4",
+		"-(title:b1 title:b2)",
+		"read_status:(finished|in_progress) title:b1",
+		"-read_status:finished title:b3",
+	} {
+		_, err := EvaluateSmartPlaylist(store, idx, q, "", 0, "alice")
+		assert.NoError(t, err, q)
+	}
+}
+
+// The wrong answer the refusal replaces: the OR evaluated as an AND returned
+// only the books where BOTH sides held.
+func TestEvaluate_TheReferenceAnswersAnOrThatTheFlatPassGotWrong(t *testing.T) {
+	store, idx, _ := collectionFixture(t)
+	got := referenceEvaluate(t, store, idx, "read_status:finished OR title:b4", "alice")
+	assert.Equal(t, []string{"b1", "b2", "b4"}, got, "alice finished b1 and b2; b4 matches by title")
+	flat, err := EvaluateSmartPlaylist(store, idx, "read_status:finished title:b4", "", 0, "alice")
+	require.NoError(t, err)
+	assert.NotEqual(t, got, flat, "AND answers fewer books than OR: that was the silent wrong answer")
 }

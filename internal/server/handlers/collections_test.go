@@ -1,12 +1,13 @@
 // file: internal/server/handlers/collections_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 5d17e903-2b48-4c81-96af-70e3c5a12b8d
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1066,7 +1067,8 @@ func TestNoViewerMatchesNothingForPerUserCollections(t *testing.T) {
 				ID: "plain", Name: "Plain", Type: database.CollectionTypeDynamic, Query: "title:Alpha",
 			})
 			rig := newViewerRig(t, store, viewerStates())
-			sets := rig.h.ViewerMemberSets(store.cols, "")
+			sets, err := rig.h.ViewerMemberSets(context.Background(), store.cols, "")
+			require.NoError(t, err)
 			assert.Equal(t, []string{}, sets["c1"], "no viewer, no members")
 			_, present := sets["plain"]
 			assert.False(t, present, "a collection without a per-user rule is not per-viewer")
