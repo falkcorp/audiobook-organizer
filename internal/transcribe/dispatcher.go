@@ -233,20 +233,16 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 
 	// Stuck-batch bookkeeping. A request that a reachable worker never answers
 	// says nothing about WHICH of its jobs is to blame, so the failed request
-	// is split and the parts retried (units). A job is only condemned when it
-	// was stuck ALONE, on soloLimit distinct endpoints: an innocent job that
-	// shared a request with the culprit is stuck in a batch, never alone, so it
-	// is never condemned for the culprit's sake.
-	stuckOn := make(map[string]map[string]bool)   // job -> endpoints it sat in a stuck request on
+	// is split and the parts retried (units); every stuck part is smaller than
+	// the request it came from, so the splitting terminates. A job is only
+	// condemned when it was stuck ALONE, on soloLimit distinct endpoints: an
+	// innocent job that shared a request with the culprit was stuck in a batch,
+	// never alone, so it is never condemned for the culprit's sake -- and for
+	// the same reason a part may be retried on a worker it was stuck on in a
+	// larger batch (that says nothing about the part itself).
 	soloStuck := make(map[string]map[string]bool) // job -> endpoints it was stuck on alone
 	soloLimit := min(2, len(ordered))
 	var units [][]string
-	mark := func(m map[string]map[string]bool, id, url string) {
-		if m[id] == nil {
-			m[id] = make(map[string]bool)
-		}
-		m[id][url] = true
-	}
 
 	var lastErr error
 	for len(remaining) > 0 {
@@ -272,7 +268,8 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		)
 		if len(units) > 0 {
 			// Split parts run before normal allocation, one part per healthy
-			// endpoint, each on an endpoint it has not already been stuck on.
+			// endpoint. A lone job avoids the endpoints it was already stuck on
+			// alone, so its verdict needs soloLimit DIFFERENT workers.
 			assignments = make([]map[string]J, len(healthy))
 			var left [][]string
 			placedAny := false
@@ -283,7 +280,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				}
 				placed := false
 				for idx, ep := range healthy {
-					if assignments[idx] != nil || slices.ContainsFunc(live, func(id string) bool { return stuckOn[id][ep.URL] }) {
+					if assignments[idx] != nil || len(live) == 1 && soloStuck[live[0]][ep.URL] {
 						continue
 					}
 					sub := make(map[string]J, len(live))
@@ -382,13 +379,13 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			slices.Sort(failed)
 			slog.Warn("transcribe: worker stuck, splitting its request and retrying the parts",
 				"url", ep.URL, "after", stuck.After.Round(time.Second).String(), "jobs", len(failed))
-			for _, id := range failed {
-				mark(stuckOn, id, ep.URL)
-			}
 			switch {
 			case len(failed) == 1:
 				id := failed[0]
-				mark(soloStuck, id, ep.URL)
+				if soloStuck[id] == nil {
+					soloStuck[id] = make(map[string]bool)
+				}
+				soloStuck[id][ep.URL] = true
 				if len(soloStuck[id]) >= soloLimit {
 					// Stuck by itself on soloLimit different workers: a verdict
 					// about this file, not about any worker.
