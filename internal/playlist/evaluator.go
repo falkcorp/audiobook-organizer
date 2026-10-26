@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
 // last-edited: 2026-10-26
 //
@@ -68,7 +68,7 @@ var ErrViewerStateRead = errors.New("viewer state read failed")
 // query does not parse or translate, it has none, or its sort spec is not JSON.
 // The stored row is what is wrong, not the server and not the request, so a
 // caller shows the playlist as unavailable with a way to fix it rather than as a
-// server failure. A per-user refusal (search.IsPerUserQueryError) is the same
+// server failure. A per-user or tag: refusal (search.IsQueryTermError) is the same
 // class and is returned as it is; IsDefinitionError accepts both.
 type definitionError struct{ err error }
 
@@ -79,7 +79,7 @@ func (e *definitionError) Unwrap() error { return e.err }
 // spec cannot be evaluated (see definitionError).
 func IsDefinitionError(err error) bool {
 	var d *definitionError
-	return errors.As(err, &d) || search.IsPerUserQueryError(err)
+	return errors.As(err, &d) || search.IsQueryTermError(err)
 }
 
 // viewerStateReadError carries a state-read failure as ErrViewerStateRead without
@@ -238,7 +238,7 @@ func evaluate(
 		// check for a stored row that predates it, so it reads as unavailable
 		// instead of wrong. It runs before the index is looked at: the query is
 		// what is wrong, and "try again shortly" would be the wrong advice.
-		if err := search.CheckPerUserTerms(ast, now); err != nil {
+		if err := search.CheckQueryTerms(ast, now); err != nil {
 			// Not wrapped: the refusal is a sentence for the person who wrote the
 			// query, and callers (a members_unavailable message) lead into it.
 			return nil, err
@@ -252,9 +252,29 @@ func evaluate(
 	if ast == nil {
 		return nil, &definitionError{fmt.Errorf("empty query")}
 	}
-	bleveQ, perUserFilters, err := search.TranslateAt(ast, now)
+	tr, err := search.TranslateQuery(ast, now)
 	if err != nil {
 		return nil, &definitionError{fmt.Errorf("translate query: %w", err)}
+	}
+	bleveQ, perUserFilters := tr.Query, tr.PerUser
+	// tag: terms are exact tag filters, resolved with GetBooksByTag (the lookup the
+	// tags[] parameter uses) and ANDed with the rest. The index holds a tag as
+	// words, so it cannot answer one exactly; see search.SplitTagTerms. A store that
+	// cannot list a tag's books fails the evaluation: dropping the term would widen
+	// the membership to every book that matches the rest.
+	if len(tr.Tags) > 0 {
+		lister, ok := database.AsCapability[search.TagBookLister](store)
+		if !ok {
+			return nil, fmt.Errorf("evaluate tag: terms: the store cannot list a tag's books")
+		}
+		tagIDs, tagErr := search.ResolveTagIDs(lister, tr.Tags)
+		if tagErr != nil {
+			return nil, tagErr
+		}
+		if len(tagIDs) == 0 {
+			return []string{}, nil
+		}
+		bleveQ = search.RestrictToTags(bleveQ, tagIDs)
 	}
 
 	var ids []string
