@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.7
+// version: 1.38.8
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-26
 
@@ -1230,6 +1230,9 @@ func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, 
 		// nothing in the logs said so — an investigation into wrong search
 		// results had to rule this path out by probing production instead of
 		// reading a log line.
+		if rerr := search.UnparsableRegexQuery(query, err, searchTextFieldIsKnown); rerr != nil {
+			return nil, 0, fmt.Errorf("search: %w", rerr)
+		}
 		if perr := search.UnparsablePerUserQuery(query, err); perr != nil {
 			return nil, 0, fmt.Errorf("search: %w", perr)
 		}
@@ -1394,38 +1397,80 @@ func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, 
 	return books, int(bleveTotal), nil
 }
 
+// perUserPointReadMax is the most candidate ids idsMatchingPerUser reads one state
+// row at a time. Above it the viewer's rows are listed in one scan instead.
+//
+// The scan costs the viewer's whole row count whatever the candidate count; a point
+// read costs a fixed few microseconds. Measured on a real Pebble store (2 niced
+// cores, PR #4181 review): listing 1,000 rows took 1.6 ms, 20,000 rows 30 ms
+// (7 MB) and 100,000 rows 186 ms (35 MB), while 50 point reads took 0.11 ms with a
+// small store and 0.45 ms with a large one, that is 2 to 9 microseconds each. A
+// narrow search (title:hush read_status:finished has one candidate) therefore should
+// not pay 30 ms for 20,000 rows it will not look at. 256 point reads cost at most
+// about 2.3 ms (9 microseconds each, the large-store figure), the same order as the
+// scan at 1,000 rows (1.6 ms) and far below it at 20,000 (30 ms): so at or below 256
+// ids the point reads are close to the cheaper choice for a small viewer and clearly
+// the cheaper one for a viewer with thousands of rows, and the extra cost they can
+// ever add is a millisecond or two. A broad scope (a system tag, an author, the whole
+// library) is far above 256 and takes the one scan, which is what the bulk read was
+// added for.
+const perUserPointReadMax = 256
+
 // idsMatchingPerUser keeps, in order, the ids whose per-user state for userID
-// satisfies every filter. The viewer's rows are read in ONE scan when the store can
-// list them (database.UserBookStateLister, the capability the per-viewer collection
-// evaluator reads through playlist.LoadViewerStates); a store that cannot, or a scan
-// that fails, is read by one point read per id instead. A point read that fails
-// evaluates the zero-value state, loudly (Decision 5, fail-open): the page is served
-// rather than failed for one unreadable row. Only a request that has gone away is an
-// error.
+// satisfies every filter. With perUserPointReadMax ids or fewer, or on a store that
+// cannot list a viewer's rows, it reads one state row per id; with more, it reads the
+// viewer's rows in ONE scan (database.UserBookStateLister, the capability the
+// per-viewer collection evaluator reads through playlist.LoadViewerStates). A scan
+// that fails falls back to the point reads for the same ids.
+//
+// A row that cannot be read or decoded is evaluated as the zero-value state (an
+// unstarted book), with a warning: FAIL-OPEN (Decision 5). The collection evaluator
+// is the opposite on purpose and fails closed (playlist.LoadViewerStates returns an
+// error, the collection reads as members_unavailable). A collection is a saved
+// definition other screens and the Audiobookshelf endpoints read as the truth about
+// its members, so a list built on a row nobody could read is a wrong fact that stays
+// until someone looks. A library search is an interactive filter the viewer reads at
+// once and can change: failing it would break every per-user search that viewer runs
+// until the row is repaired, while the damage of an unreadable row is one book
+// judged as unstarted, and the warning names the book. The scan's all-or-nothing
+// failure on one undecodable row is not repeated here as a permanent slow path: the
+// point reads it falls back to cost a few microseconds each, about the cost of the
+// scan itself for the broadest scope, and no book is loaded for them.
+//
+// Only a request that has gone away is an error, and it is checked before the scan
+// and between point reads, so a cancelled request stops reading.
 func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID string, ids []string, filters []search.PerUserFilter, now time.Time) ([]string, error) {
 	var rows map[string]*database.UserBookState
-	if lister, ok := database.AsCapability[database.UserBookStateLister](svc.store); ok {
-		var err error
-		rows, err = lister.ListUserBookStates(ctx, userID)
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
+	bulk := false
+	if len(ids) > perUserPointReadMax {
+		if lister, ok := database.AsCapability[database.UserBookStateLister](svc.store); ok {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
-			slog.Warn("search: bulk per-user state read failed; reading one row per book",
-				"err", err)
-			rows = nil
+			var err error
+			rows, err = lister.ListUserBookStates(ctx, userID)
+			if err != nil {
+				// A cancelled request fails the scan too; the point-read loop below
+				// returns the cancellation before it reads anything.
+				slog.Warn("search: bulk per-user state read failed; reading one row per book",
+					"err", err)
+			} else {
+				bulk = true
+			}
 		}
 	}
 	kept := make([]string, 0, len(ids))
 	for _, id := range ids {
 		var state *database.UserBookState
-		if rows != nil {
+		if bulk {
 			state = rows[id]
 		} else {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			var stateErr error
 			state, stateErr = svc.store.GetUserBookState(userID, id)
 			if stateErr != nil {
-				// FAIL-OPEN (Decision 5): evaluate the zero-value state, loudly.
 				slog.Warn("search: per-user state read failed; evaluating zero-value state",
 					"book_id", id, "err", stateErr)
 				state = nil
@@ -1436,6 +1481,12 @@ func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID stri
 		}
 	}
 	return kept, nil
+}
+
+// searchTextFieldIsKnown says whether name is a field a search term can name: one the
+// index holds or one the library filter layer knows.
+func searchTextFieldIsKnown(name string) bool {
+	return search.IsIndexedField(name) || FieldIsKnown(name)
 }
 
 // SearchPerUserProblem reports why a search string's per-user terms (read_status,
@@ -1460,7 +1511,12 @@ func SearchPerUserProblem(q string) error {
 	ast, err := search.ParseQuery(q)
 	if err != nil {
 		// Text the parser rejects takes a substring match, which shows nothing for a
-		// listening-state term and says nothing. Refuse it when it writes one.
+		// regex or a listening-state term and says nothing. Refuse it when it writes
+		// one: a /regex/ value first, since its own parentheses and pipes are what the
+		// parser choked on.
+		if rerr := search.UnparsableRegexQuery(q, err, searchTextFieldIsKnown); rerr != nil {
+			return rerr
+		}
 		return search.UnparsablePerUserQuery(q, err)
 	}
 	return search.CheckQueryTerms(ast, time.Now())

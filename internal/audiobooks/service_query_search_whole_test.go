@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query_search_whole_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b4e1f27-3a96-4c05-b7d2-6e0a9c5f1d38
 // last-edited: 2026-10-26
 
@@ -7,11 +7,14 @@ package audiobooks
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -355,10 +358,12 @@ func TestSearchPerUserProblem_JudgesUnparsableText(t *testing.T) {
 // S1: a per-user search over a scope (here the tag's books; an author or a series is
 // the same shape) used to hydrate EVERY candidate book and read one state row each
 // before it filtered anything, so a tag on most of the library cost a book and a row
-// per book on every page request. The viewer's rows are now read in one scan, the
-// candidates are filtered by id, and only the page that survives is loaded. The
-// store calls are counted: a regression to a read per hit fails here.
-func TestSearchWithBleve_APerUserSearchReadsTheViewersRowsOnceAndLoadsOnlyThePage(t *testing.T) {
+// per book on every page request. The candidates are now filtered by id first, and only
+// the page that survives is loaded. The store calls are counted: a regression to
+// hydrating every hit fails here. A scope this small is judged by one point read per
+// candidate (perUserPointReadMax); the scan branch is
+// TestIdsMatchingPerUser_AScopeAboveTheThresholdIsOneScan.
+func TestSearchWithBleve_ASmallPerUserSearchReadsOneRowPerCandidateAndLoadsOnlyThePage(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		query     string
@@ -366,15 +371,16 @@ func TestSearchWithBleve_APerUserSearchReadsTheViewersRowsOnceAndLoadsOnlyThePag
 		offset    int
 		wantTotal int
 		wantPage  int
+		wantReads int // candidates: one point read each
 	}{
 		// gotham = b1, b3; both finished.
-		{"tag scope, first page", "read_status:finished tag:gotham", 1, 0, 2, 1},
-		{"tag scope, second page", "read_status:finished tag:gotham", 1, 1, 2, 1},
-		{"tag scope, offset past the matches", "read_status:finished tag:gotham", 1, 5, 2, 0},
+		{"tag scope, first page", "read_status:finished tag:gotham", 1, 0, 2, 1, 2},
+		{"tag scope, second page", "read_status:finished tag:gotham", 1, 1, 2, 1, 2},
+		{"tag scope, offset past the matches", "read_status:finished tag:gotham", 1, 5, 2, 0, 2},
 		// no tag: every book is a candidate, three are finished.
-		{"no scope", "read_status:finished", 2, 0, 3, 2},
+		{"no scope", "read_status:finished", 2, 0, 3, 2, 6},
 		// the filter rejects some of the tag's books: noir = b1 (finished), b2 (not).
-		{"filter rejects part of the scope", "read_status:finished tag:noir", 5, 0, 1, 1},
+		{"filter rejects part of the scope", "read_status:finished tag:noir", 5, 0, 1, 1, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var cs *callCountingStore
@@ -387,8 +393,8 @@ func TestSearchWithBleve_APerUserSearchReadsTheViewersRowsOnceAndLoadsOnlyThePag
 			assert.Equal(t, tc.wantTotal, total)
 			assert.Len(t, books, tc.wantPage)
 
-			assert.Zero(t, cs.stateReads, "no state row is read per candidate when the store can list them")
-			assert.Equal(t, 1, cs.listReads, "the viewer's rows are read once")
+			assert.Equal(t, tc.wantReads, cs.stateReads, "one point read per candidate id")
+			assert.Zero(t, cs.listReads, "a scope this small does not pay for a scan of every row the viewer has")
 			pageLoads := 0
 			for _, n := range cs.hydrated {
 				pageLoads += n
@@ -425,6 +431,9 @@ func TestSearchHasPerUserFilters_IsDecidedByTheFieldNamesNotByTranslation(t *tes
 		"read_status:finished (title:Hush OR tag:noir)": true, // refused by the search, still per-user
 		"read_status:finished OR tag:noir":              true,
 		"-read_status:finished":                         true,
+		"Read_Status:finished":                          true, // the search refuses a capitalised name; it is still per-user
+		"READ_STATUS:(finished|in_progress)":            true,
+		"Progress_Pct:>50":                              true,
 		"read_status:(finished|in_progress)":            true,
 		"progress_pct:>50":                              true,
 		"last_played:>30d":                              true, // no sign: refused, still per-user
@@ -434,5 +443,226 @@ func TestSearchHasPerUserFilters_IsDecidedByTheFieldNamesNotByTranslation(t *tes
 		"title:(Hush":                                   false, // does not parse
 	} {
 		assert.Equal(t, want, SearchHasPerUserFilters(q), q)
+	}
+}
+
+// stateStub is a store that serves one viewer's rows, counts the reads and can be made
+// to fail, for the branches of idsMatchingPerUser.
+type stateStub struct {
+	database.Store
+	mu       sync.Mutex
+	points   int
+	lists    int
+	listErr  error
+	pointErr map[string]error
+	onPoint  func(id string)
+	onList   func()
+	finished map[string]bool
+}
+
+func (s *stateStub) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
+	s.mu.Lock()
+	s.points++
+	hook := s.onPoint
+	err := s.pointErr[bookID]
+	s.mu.Unlock()
+	if hook != nil {
+		hook(bookID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if userID == "alice" && s.finished[bookID] {
+		return &database.UserBookState{Status: database.UserBookStatusFinished}, nil
+	}
+	return nil, nil
+}
+
+func (s *stateStub) ListUserBookStates(_ context.Context, userID string) (map[string]*database.UserBookState, error) {
+	s.mu.Lock()
+	s.lists++
+	hook := s.onList
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	rows := map[string]*database.UserBookState{}
+	if userID == "alice" {
+		for id := range s.finished {
+			rows[id] = &database.UserBookState{Status: database.UserBookStatusFinished}
+		}
+	}
+	return rows, nil
+}
+
+// stubIDs is n book ids; every third one is finished by alice in the stub.
+func stubIDs(n int) ([]string, map[string]bool) {
+	ids := make([]string, n)
+	fin := map[string]bool{}
+	for i := range ids {
+		ids[i] = fmt.Sprintf("b%04d", i)
+		if i%3 == 0 {
+			fin[ids[i]] = true
+		}
+	}
+	return ids, fin
+}
+
+func finishedFilters(t *testing.T) []search.PerUserFilter {
+	t.Helper()
+	ast, err := search.ParseQuery("read_status:finished")
+	require.NoError(t, err)
+	tr, err := search.TranslateQuery(ast, time.Now())
+	require.NoError(t, err)
+	require.Len(t, tr.PerUser, 1)
+	return tr.PerUser
+}
+
+// N-S1a: the bulk scan costs the viewer's whole row count whatever the candidate
+// count (1.6 ms at 1,000 rows, 30 ms at 20,000), a point read a few microseconds, so
+// a narrow search must not pay for the scan. The branch is counted on both sides of
+// perUserPointReadMax, with the same answer on both.
+func TestIdsMatchingPerUser_AScopeAboveTheThresholdIsOneScan(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		n          int
+		wantPoints int
+		wantLists  int
+	}{
+		{"one candidate", 1, 1, 0},
+		{"at the threshold", perUserPointReadMax, perUserPointReadMax, 0},
+		{"one above the threshold", perUserPointReadMax + 1, 0, 1},
+		{"a broad scope", 3000, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids, fin := stubIDs(tc.n)
+			stub := &stateStub{finished: fin}
+			svc := NewAudiobookService(stub)
+			got, err := svc.idsMatchingPerUser(context.Background(), "alice", ids, finishedFilters(t), time.Now())
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPoints, stub.points, "point reads")
+			assert.Equal(t, tc.wantLists, stub.lists, "scans")
+			want := []string{}
+			for _, id := range ids {
+				if fin[id] {
+					want = append(want, id)
+				}
+			}
+			assert.Equal(t, want, got, "the same ids, in order, whichever way they were read")
+		})
+	}
+}
+
+// A scan that fails (one undecodable row fails the whole scan by design) falls back
+// to a point read per id, and the answer is the same as the scan's. The fallback is
+// loud and is not an error.
+func TestIdsMatchingPerUser_AFailedScanFallsBackToPointReads(t *testing.T) {
+	ids, fin := stubIDs(perUserPointReadMax + 50)
+	stub := &stateStub{finished: fin, listErr: errors.New("undecodable row")}
+	svc := NewAudiobookService(stub)
+	got, err := svc.idsMatchingPerUser(context.Background(), "alice", ids, finishedFilters(t), time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, 1, stub.lists, "the scan was tried once")
+	assert.Equal(t, len(ids), stub.points, "then every id was read on its own")
+	assert.Len(t, got, (len(ids)+2)/3)
+}
+
+// An unreadable point row is judged as an unstarted book, with a warning, and the
+// rest of the page is served (Decision 5; the evaluator fails closed, see
+// idsMatchingPerUser).
+func TestIdsMatchingPerUser_AnUnreadableRowIsJudgedUnstartedNotFailed(t *testing.T) {
+	ids, fin := stubIDs(9) // b0000, b0003, b0006 finished
+	stub := &stateStub{finished: fin, pointErr: map[string]error{"b0003": errors.New("undecodable row")}}
+	svc := NewAudiobookService(stub)
+	got, err := svc.idsMatchingPerUser(context.Background(), "alice", ids, finishedFilters(t), time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b0000", "b0006"}, got, "b0003 is judged as the zero-value state, so it is not finished")
+}
+
+// A request that has gone away stops the reads: before the scan, after a failed scan,
+// and between point reads (the loop used to run on to the end).
+func TestIdsMatchingPerUser_ACancelledRequestStopsReading(t *testing.T) {
+	t.Run("cancelled before the scan", func(t *testing.T) {
+		ids, fin := stubIDs(perUserPointReadMax + 1)
+		stub := &stateStub{finished: fin}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := NewAudiobookService(stub).idsMatchingPerUser(ctx, "alice", ids, finishedFilters(t), time.Now())
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Zero(t, stub.lists, "no scan for a request that is already gone")
+		assert.Zero(t, stub.points)
+	})
+	t.Run("cancelled during a failed scan", func(t *testing.T) {
+		ids, fin := stubIDs(perUserPointReadMax + 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		stub := &stateStub{finished: fin, listErr: context.Canceled}
+		stub.onList = cancel // the request goes away while the scan runs, and the scan fails
+		_, err := NewAudiobookService(stub).idsMatchingPerUser(ctx, "alice", ids, finishedFilters(t), time.Now())
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, 1, stub.lists)
+		assert.Zero(t, stub.points, "a cancelled scan does not fall back to a thousand point reads")
+	})
+	t.Run("cancelled between point reads", func(t *testing.T) {
+		ids, fin := stubIDs(100)
+		ctx, cancel := context.WithCancel(context.Background())
+		stub := &stateStub{finished: fin}
+		stub.onPoint = func(id string) {
+			if id == "b0009" {
+				cancel()
+			}
+		}
+		_, err := NewAudiobookService(stub).idsMatchingPerUser(ctx, "alice", ids, finishedFilters(t), time.Now())
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, 10, stub.points, "the loop stops at the next id after the cancellation")
+	})
+}
+
+// N-B1 (server half): a /regex/ field value that reaches search= is refused, never
+// answered as the words between the slashes (title:/hush|knight/ found Hush only) or
+// as a substring match over the whole raw text (title:/^(the|a) /, 0 rows). The
+// refusal is a search.RegexValueError, which every handler answers with a 400.
+func TestGetAudiobooks_ARegexValueInSearchIsRefusedNotAnsweredAsWords(t *testing.T) {
+	svc := wholeSendService(t)
+	for _, q := range []string{
+		"title:/hush|knight/",
+		"title:/^(the|a) /",
+		"-title:/^(?:z)/",
+		"description:/(?i)gotham/",
+		"metadata:/(audible|google)/",
+		"title:/hush/ OR title:knight",
+		"read_status:finished title:/hush|knight/",
+		"read_status:finished title:/^(the|a) /",
+	} {
+		t.Run(q, func(t *testing.T) {
+			_, err := wholeSendIDs(t, svc, q)
+			require.Error(t, err)
+			assert.True(t, search.IsRegexValueError(err), "got %v", err)
+			assert.True(t, search.IsQueryTermError(err))
+		})
+	}
+	// the substring fallback of a title that merely has punctuation in it is kept
+	_, err := wholeSendIDs(t, svc, "The (Long Halloween")
+	assert.NoError(t, err)
+}
+
+func TestSearchPerUserProblem_RefusesARegexValueBeforeTheSubstringFallback(t *testing.T) {
+	for q, refused := range map[string]bool{
+		"title:/^(the|a) /":                   true,
+		"title:/hush|knight/":                 true,
+		"read_status:finished title:/a(b)/":   true,
+		"metadata:/(audible|google)/":         true,
+		"The (Long Halloween":                 false,
+		`title:"/^(the|a) /"`:                 false,
+		"title:Batman(1989)":                  false,
+		"http://example.invalid/Batman (1989": false,
+	} {
+		err := SearchPerUserProblem(q)
+		assert.Equal(t, refused, err != nil, "%s: got %v", q, err)
+		if refused {
+			assert.True(t, search.IsRegexValueError(err), q)
+		}
 	}
 }

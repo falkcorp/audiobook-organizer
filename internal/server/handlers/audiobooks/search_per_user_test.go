@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/search_per_user_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0d6f3a92-b814-4e57-9c20-a5e18d7b3f64
 // last-edited: 2026-10-26
 
@@ -150,6 +150,17 @@ func TestListAudiobooks_SearchSentWholeByTheWebBoxMeetsTheOtherRulesOfSearch(t *
 		{`tag:"noir"^2`, http.StatusBadRequest, "takes one whole tag name"},
 		{"the tag:noir", http.StatusOK, ""},
 		{"- tag:noir", http.StatusOK, ""},
+		// a /regex/ value is a filter-layer form: the index has no regular expressions, so
+		// it is refused with a message, whether or not the text parses, never read as the
+		// words between the slashes or as a substring of the whole text
+		{"title:/hush|knight/", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"title:/^(the|a) /", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"-title:/^(?:z)/", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"description:/(?i)gotham/", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"title:/hush/ OR title:knight", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"read_status:finished title:/^(the|a) /", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"read_status:finished title:/hush|knight/", http.StatusBadRequest, "/regex/ value cannot be used"},
+		{"metadata:/(audible|google)/", http.StatusBadRequest, "/regex/ value cannot be used"},
 		{"read_status:finished OR", http.StatusBadRequest, "could not be read"},
 		{"(read_status:finished author:kyle", http.StatusBadRequest, "could not be read"},
 		{"The (Long Halloween", http.StatusOK, ""},
