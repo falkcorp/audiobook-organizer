@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.20.2 -->
+<!-- version: 1.20.3 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -264,17 +264,26 @@ same shapes and values are refused on both ways a query reaches it:
   an `OR`, `AND`, `||`, `&&` or a parenthesis other than that field's own `(a|b)` list whole as `search=`,
   with no filters of its own for it, and shows the server's message in the library page. The rest
   of such a query is then judged by the rules of `search=`: a `tag:` or `duration:` term is
-  held by the index and is answered with the query (a `tag:` term is not also sent as a tag, in
-  the list, its tag facets or a select-all), the per-user shapes get their own message first,
+  held by the index and is answered with the query (`tag:` is the index's `tags` field, matched
+  by word and case-folded, so `tag:dark` also finds a book tagged "dark knight", where the `tags[]`
+  parameter is exact; a `tag:` term is not also sent as `tags[]`, in the list, its tag facets
+  or a select-all, and the tag chips read it from the box), the per-user shapes get their
+  own message first,
   and a field the index does not hold (`metadata`, `review`, `has_duration`) is refused with the
   search parameter's message that points at `filters=`, which the box cannot act on: take that
   term out of the query.
 
 The refusal applies to every caller of the search, not only the HTTP list: the substring
 fallback the search uses while the index is not built or is rebuilding checks the query
-first too, and a background metadata operation whose saved search holds such a term fails
-resolving its filter with `resolve filter: search: <message>` (an operation has no viewer,
-and used to skip the term). Forms the old matcher accepted without a word are refused as
+first too, and a background metadata operation whose saved filter holds a per-user term
+(in its search text or in its field filters) is refused before it resolves, because an
+operation has no viewer to read the term for: it used to drop a per-user field filter and
+resolve the whole library, and the search path skipped the term. Text that the query parser
+rejects but that writes a per-user term (`read_status:finished OR`, an unclosed `(` while
+the person is still typing) is refused the same way, `400` `invalid search: this search
+could not be read (...)`, where it used to fall to a substring match over title and author
+that showed no rows and said nothing; unparsable text with no per-user term keeps that
+fallback. Forms the old matcher accepted without a word are refused as
 well: `read_status:finished*`, `read_status:*finished`, `read_status:finished~` and
 `read_status:>finished` (all matched finished books), `progress_pct:50*` and
 `progress_pct:<inf` (the second matched every book), and `last_played:2026-01-01*`

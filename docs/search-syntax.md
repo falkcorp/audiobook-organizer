@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.7.2 -->
+<!-- version: 1.7.3 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -181,6 +181,15 @@ group the web sends it as typed and shows that message; a per-user value the fil
 status that is not one of the four, a pattern) is refused the same way with
 `invalid filter value: ...`. Supporting `OR` and `NOT` over per-user terms properly, in
 the library search and in the collection evaluator, is tracked in `todo.d`.
+
+`tag:` is accepted as the name of the index's `tags` field (`tags:` works too), so a
+`tag:noir` term in a query the web box sends whole is answered with the rest of it. It
+matches by word and ignores case: `tag:dark` also finds a book tagged "dark knight". The
+`tags[]` parameter the box sends for an ordinary query is exact.
+
+Text the parser cannot read (an unclosed group, a trailing `OR`) that writes a per-user
+term is refused with `could not be read`, not matched as plain text; unreadable text with
+no per-user term still falls back to a plain match on title and author.
 
 A query that names a per-user field anywhere in its text, even where the grammar reads
 it as something else (`author:read_status`, a quoted `"read_status:finished"`), is

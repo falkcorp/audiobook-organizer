@@ -107,8 +107,19 @@ forms, which the old matcher accepted without a word, are refused: `read_status:
 `progress_pct:!=100`, `progress_pct:==50` and `last_played:2026-01-01*`. An empty list
 (`read_status:()`) and a comparison inside a list (`progress_pct:(>50|<10)`, refused with a
 message that says so) are refused, and a field name is judged with Unicode case folding.
-A background metadata operation whose saved search holds a per-user term now fails
-resolving its filter with `resolve filter: search: ...` instead of skipping the term.
+A background metadata operation whose saved filter holds a per-user term, in its
+search text or in its field filters, is now refused before it resolves, instead of
+dropping the term and targeting the whole library (an operation has no viewer to read
+it for). Text the query parser rejects that writes a per-user term (`read_status:finished OR`)
+answers 400 `invalid search: this search could not be read (...)` rather than a substring
+match that showed no rows.
+
+`tag:` now means the index's `tags` field in `search=`. The library search box sends a
+per-user query with a group, `AND` or `OR` whole, `tag:` terms included, and `tag:noir` used
+to name a field the index does not hold, so that list showed no books and no message. It
+matches by word and case-folded (`tag:dark` also finds "dark knight"; the `tags[]`
+parameter stays exact). The tag chips and Cancel read the typed `tag:` terms from the box
+in that case, so a chip shows on and a click does not add a second term.
 
 A stored smart playlist whose query does not parse, is empty or has an unusable `sort_json`
 reads as `members_unavailable` like the other refused definitions (no stacked `query:`
