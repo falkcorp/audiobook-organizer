@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 package database
 
@@ -148,9 +148,10 @@ var singleOwnerIndexContendedHook func()
 // WHO TAKES IT. commitBookFileBatchVerified (so CreateBookFile,
 // BatchCreateBookFiles, UpdateBookFile and its hash writers, UpsertBookFile and
 // BatchUpsertBookFiles, MoveBookFilesToBook(Bulk), and the retire, un-retire
-// and rehome writers), ClaimBookFilePathKey, the three book_file delete commits
-// (commitWithWindowCascadeIfPresent, commitWithWindowCascade) and the
-// AcoustID-segment wipes. NOT setBookFileRowIfPresent or PatchBookFileFields:
+// and rehome writers), ClaimBookFilePathKey, the three book_file delete paths
+// (commitDeleteWithWindowCascade, which commits through commitBookFileBatch) and
+// the AcoustID-segment sweeps (commitBookFileSweepChunk, the same). NOT
+// setBookFileRowIfUnchanged or PatchBookFileFields:
 // they write the primary row key only and never an index key (their field
 // sets exclude every indexed field). A new writer of one of these keys must
 // take it around its Commit; TestSingleOwnerIndexStagers_AreAllListed fails on
@@ -166,8 +167,7 @@ var singleOwnerIndexContendedHook func()
 // after every release), so it cannot take part in a cycle, and it inverts no
 // existing order: no code holds it while taking a book, file, version, window
 // or owner stripe. It is NOT re-entrant: a verify hook must not call a writer.
-// Hold time is one apply (NoSync) or, for the Sync-committing wipes, one
-// flush.
+// Hold time is one apply (NoSync).
 func (p *PebbleStore) lockSingleOwnerIndex() func() {
 	if !p.singleOwnerIndexMu.TryLock() {
 		if singleOwnerIndexContendedHook != nil {

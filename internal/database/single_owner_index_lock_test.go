@@ -1,7 +1,7 @@
 // file: internal/database/single_owner_index_lock_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: b4e07d19-6a3c-4825-9f71-3d8c05e2a916
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -139,7 +139,10 @@ func TestSingleOwnerIndexWriters_AreHeldOutOfARetiresVerifyCommitWindow(t *testi
 			setup: func(t *testing.T, fx *retiredFixture, other *Book, x *BookFile) func() error {
 				live := &BookFile{ID: distinctStripeID(t, fx.holder.ID, fx.shell.ID, other.ID, x.ID), BookID: other.ID, FilePath: path, FileHash: "hash-del-ids", Format: "mp3"}
 				require.NoError(t, fx.ps.CreateBookFile(live))
-				return func() error { return fx.ps.DeleteBookFilesByIDs([]string{live.ID}) }
+				return func() error {
+					_, err := fx.ps.DeleteBookFilesByIDs([]BookFileRef{{BookID: live.BookID, FileID: live.ID}})
+					return err
+				}
 			},
 		},
 	}
@@ -196,18 +199,20 @@ var singleOwnerIndexStagers = map[string]string{
 	"createBookFileAttempt":          "commitBookFileBatch",
 	"batchCreateBookFilesAttempt":    "commitBookFileBatch",
 	"stagePIDTransfer":               "its caller's commitBookFileBatch",
-	"updateBookFileLocked":           "commitBookFileBatch",
+	"updateBookFileOver":             "commitBookFileBatch",
 	"batchUpsertBookFilesStaged":     "commitBookFileBatch",
 	"moveBookFilesToBookBulkAttempt": "commitBookFileBatch",
 	"retireBookFilesAttempt":         "commitBookFileBatchVerified",
 	"unretireBookFilesAttempt":       "commitBookFileBatchVerified",
 	"rehomeRetiredVersionAttempt":    "commitBookFileBatchVerified",
-	// -> commitWithWindowCascade(IfPresent) / commitSingleOwnerIndexBatch (mutex inside)
-	"deleteBookFileAt":             "commitWithWindowCascadeIfPresent",
-	"DeleteBookFilesForBook":       "commitWithWindowCascade",
-	"DeleteBookFilesByIDs":         "commitWithWindowCascade",
-	"ClearAllAcoustIDFingerprints": "commitSingleOwnerIndexBatch",
-	"SweepBookFileSegDrop":         "commitSingleOwnerIndexBatch",
+	// -> commitDeleteWithWindowCascade, which commits through commitBookFileBatch
+	// (mutex inside): every book_file delete path (DeleteBookFile, DeleteBookFilesForBook,
+	// DeleteBookFilesByIDs) reaches it through commitBookFileDeletes.
+	"commitBookFileDeletes": "commitDeleteWithWindowCascade -> commitBookFileBatch",
+	// -> commitBookFileSweepChunk, which commits each chunk through
+	// commitBookFileBatch (mutex inside)
+	"ClearAllAcoustIDFingerprints": "commitBookFileSweepChunk -> commitBookFileBatch",
+	"SweepBookFileSegDrop":         "commitBookFileSweepChunk -> commitBookFileBatch",
 	// -> its own lockSingleOwnerIndex
 	"ClaimBookFilePathKey": "lockSingleOwnerIndex around db.Set",
 	// helpers that only stage into a caller's batch

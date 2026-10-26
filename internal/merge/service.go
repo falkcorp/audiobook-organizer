@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.63.7
+// version: 1.64.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
@@ -278,14 +278,21 @@ func IsRefusal(err error) bool {
 }
 
 // IsRetryLater reports whether err is a combine that was refused, with nothing
-// written, because the complete list of the rows holding a path is not available
-// yet (the library index is still loading). It is temporary: the same request
-// succeeds once the index serves, so a caller answers it as "retry later" (503),
-// not as a failure. A CombineIncompleteError is excluded even when it wraps the
-// same error: that combine got past its journal and may have written.
+// written, for a reason that passes by itself: the complete list of the rows
+// holding a path is not available yet (the library index is still loading), or
+// the store gave up on the bulk move of the absorbed books' files because other
+// writers kept changing the rows (database.ErrBookFileConflict: it re-staged the
+// batch the maximum number of times and wrote nothing). Either way the same
+// request succeeds once the cause is gone, so a caller answers it as "retry
+// later" (503), not as a failure. A CombineIncompleteError is excluded even when
+// it wraps the same error: that combine got past its journal and may have
+// written.
 func IsRetryLater(err error) bool {
 	var incomplete *CombineIncompleteError
-	return errors.Is(err, database.ErrOwnershipLookupIncomplete) && !errors.As(err, &incomplete)
+	if errors.As(err, &incomplete) {
+		return false
+	}
+	return errors.Is(err, database.ErrOwnershipLookupIncomplete) || errors.Is(err, database.ErrBookFileConflict)
 }
 
 // HasAudioRoute reports whether a book row can reach audio at all: it has at
@@ -1632,6 +1639,31 @@ func (e *CombineIncompleteError) Error() string {
 }
 func (e *CombineIncompleteError) Unwrap() error { return e.Err }
 
+// settleBusyCombine closes the journal of a combine whose bulk move of the
+// absorbed books' files was refused as busy (database.ErrBookFileConflict:
+// the store re-staged the batch the maximum number of times and wrote nothing).
+// Nothing of the absorbed books was touched, so the journal is rewritten to
+// name only what did run (the survivor's own-file attach, which a retry finds
+// already done) and is marked Applied, like a combine refused before its first
+// write; a revert of its operation then undoes just that attach. The returned
+// error wraps the store's, is not a *CombineIncompleteError (clearing
+// *incomplete keeps the deferred wrapper in CombineBooksWithOptions from adding
+// it), and says to try again: the same request succeeds once the rows settle.
+// If the journal cannot be rewritten, the combine stays Pending and incomplete,
+// and the error says so.
+func (ms *Service) settleBusyCombine(journal *CombineJournal, incomplete **CombineIncompleteError, survivorID string, cause error) error {
+	journal.Absorbed, journal.SurvivorOwnFiles = nil, nil
+	journal.Status = CombineJournalApplied
+	journal.Warnings = append(journal.Warnings, fmt.Sprintf("refused before moving any absorbed file: %v", cause))
+	if err := ms.putCombineJournal(journal); err != nil {
+		mlog.Error("combine busy but its pending journal was not settled journal=%s survivor=%s err=%s",
+			journal.ID, logger.SanitizeLogValue(survivorID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		return fmt.Errorf("move files -> %s: %w (journal %s could not be settled and is left %s: %v)", survivorID, cause, journal.ID, CombineJournalPending, err)
+	}
+	*incomplete = nil
+	return fmt.Errorf("combine refused: the files to move onto %s are being changed by another writer; nothing was absorbed, try again later: %w", survivorID, cause)
+}
+
 // resolveVersionGroup picks the version group a merge's books end up in, and
 // whether it is an existing group (reused) rather than a new one.
 //
@@ -2057,6 +2089,13 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	// (planned above), so no write is needed before it.
 	if len(bulk) > 0 {
 		if err := ms.db.MoveBookFilesToBookBulk(bulk, survivor.ID); err != nil {
+			if errors.Is(err, database.ErrBookFileConflict) {
+				// The store gave up because the rows kept changing under the
+				// batch; it is atomic, so nothing moved. This is busy, not
+				// broken: settle the journal and answer as a refusal the caller
+				// can retry, not as a combine stopped part-way.
+				return nil, ms.settleBusyCombine(journal, &incomplete, survivor.ID, err)
+			}
 			if !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
 				return nil, fmt.Errorf("move files -> %s: %w", survivor.ID, err)
 			}

@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.17.0
+// version: 1.19.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-13
+// last-edited: 2026-10-26
 
 package database
 
@@ -118,6 +118,13 @@ type BookFileWriter interface {
 	BookFileMover
 }
 
+// BookFileRef names a book_file row together with the book the caller found it
+// under. DeleteBookFilesByIDs refuses a row that has since moved to another book.
+type BookFileRef struct {
+	BookID string
+	FileID string
+}
+
 // BookFileDeleter removes book_file rows.
 type BookFileDeleter interface {
 	DeleteBookFile(id string) error
@@ -129,8 +136,27 @@ type BookFileDeleter interface {
 	//
 	// Fail-closed: if ANY id does not resolve to a live row, nothing is deleted
 	// and an error naming the unresolved ids is returned. Chunk large id sets so
-	// one stale id defers only its own chunk.
-	DeleteBookFilesByIDs(ids []string) error
+	// one stale id defers only its own chunk (the store itself commits 64 rows at
+	// a time, below).
+	//
+	// Each ref names the book its row was judged under. A row that now belongs
+	// to a different book (a regroup moved it after the caller decided) is
+	// refused, with ErrBookFileOwnerChanged and nothing deleted, instead of
+	// being deleted under its new book: the caller's decision was about the old
+	// one, and under the new one the row may be the only copy of its file.
+	//
+	// It returns the rows as they were deleted: the store re-reads each row at
+	// its commit, so a row a writer changed since the caller read it is returned
+	// in its changed form, which is what a caller journaling the delete must
+	// record. For a call of up to 64 rows (deleteBookFilesChunk), any error other
+	// than ErrBookFileDurabilityUnknown means NOTHING was deleted (and no rows are
+	// returned); that one means the delete was applied and only its fsync failed
+	// (the rows are returned). A larger call commits in chunks of 64: every refusal
+	// above is still decided before the first chunk commits, but a later chunk can
+	// fail after earlier ones committed, and then the error comes WITH the rows
+	// that were deleted. The caller must treat the returned rows as deleted and
+	// every other row as untouched, whatever the error.
+	DeleteBookFilesByIDs(refs []BookFileRef) ([]BookFile, error)
 	DeleteBookFilesForBook(bookID string) error
 }
 
@@ -217,11 +243,6 @@ type FingerprintWindowStore interface {
 // BookFileITunesStore covers the iTunes persistent-ID linkage.
 type BookFileITunesStore interface {
 	GetBookFileByPID(itunesPID string) (*BookFile, error)
-	// ClearITunesPID surgically clears itunes_persistent_id and itunes_path
-	// on the book_file row matching the given PID. Used by the iTunes
-	// orphan-cleanup path so that DB state converges after a successful
-	// ITL remove. Returns (false, nil) if no matching row exists.
-	ClearITunesPID(itunesPID string) (cleared bool, err error)
 }
 
 // BookFileDelugeStore covers Deluge import bookkeeping.
@@ -237,12 +258,6 @@ type BookFileDelugeStore interface {
 	// needs any of the stripped fields MUST fetch via GetBookFiles(bookID)
 	// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error)
-	// MarkFileImportedFromDeluge records that a file has been imported from a
-	// Deluge download directory. originalPath is the source (download) path,
-	// libraryPath is the destination inside the organized library, and
-	// torrentHash is the Deluge info-hash (optional). Implementations SHOULD
-	// match by originalPath first, then fall back to matching by torrentHash.
-	MarkFileImportedFromDeluge(ctx context.Context, originalPath, libraryPath, torrentHash string) error
 }
 
 // BookFileStatsStore reports aggregate hash and fingerprint coverage.

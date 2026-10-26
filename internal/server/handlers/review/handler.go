@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.17.3
+// version: 1.18.0
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -862,7 +862,8 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
 		}
 		// A combine refused, with nothing written, because the library index is still
-		// loading: the item is released and the same approve works once it has. 503,
+		// loading or other writers kept changing its files: the item is released and
+		// the same approve works once that passes. 503,
 		// so a single approve says to retry and a bulk approve skips the item
 		// instead of listing it as failed.
 		if !held && merge.IsRetryLater(applyErr) {

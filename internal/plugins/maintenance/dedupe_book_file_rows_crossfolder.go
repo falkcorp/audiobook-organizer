@@ -1,18 +1,20 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
-// last-edited: 2026-09-26
+// last-edited: 2026-10-26
 
 package maintenance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	ulid "github.com/oklog/ulid/v2"
 
@@ -201,20 +203,40 @@ func verifyCrossFolderPurge(d bookFileRowDecision, stat func(string) (os.FileInf
 // The full row goes into OldValue as JSON, not just its id: an id cannot be
 // replayed back into a row, and replay is the only rollback this path has.
 //
-// DeleteBookFilesByIDs is fail-closed on unresolvable IDs, so a partial delete
-// cannot happen here — either every row goes or none do.
+// DeleteBookFilesByIDs is fail-closed: a call of up to 64 rows (its commit chunk)
+// deletes every row or none, and a larger one decides every refusal before its
+// first chunk commits, so only a later chunk losing its compare-and-swap rounds
+// can leave the call partly done, in which case it returns the rows that are gone
+// with the error. Two things follow.
+//
+//   - A journal row whose row was NOT deleted (rows kept changing under the
+//     delete, a row moved to another book since it was judged under bookID, an
+//     id no longer resolves, a chunk after the one that failed) describes a
+//     deletion that did not happen. It is VOIDED (OperationChange.Voided: no
+//     revert, count or preflight sees it), so a re-run, which journals the same
+//     rows again under new ids, does not leave two ledger rows for one deletion
+//     and the ledger never claims a delete that did not occur. The rows the call
+//     returned as deleted keep theirs, whatever the error, and so do all of them
+//     when only the fsync failed (ErrBookFileDurabilityUnknown) on a call that
+//     fit one chunk: that delete WAS applied.
+//   - The rows journaled first are the caller's earlier read. The store
+//     re-reads each row at its commit, so a row a writer changed in between is
+//     deleted in its changed form; the rows it returns are what was actually
+//     deleted, and a journal row whose pre-image differs from them is rewritten
+//     (same id) to the bytes that were deleted, so a replay restores those.
 func journalAndDeleteBookFiles(store OpsStore, opID, bookID string, rows []database.BookFile) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(rows))
+	refs := make([]database.BookFileRef, 0, len(rows))
+	journaled := make(map[string]*database.OperationChange, len(rows))
 	for i := range rows {
 		blob, merr := json.Marshal(rows[i])
 		if merr != nil {
 			// A row we cannot serialize is a row we cannot replay: do not delete it.
-			return fmt.Errorf("serialize row %s for the undo ledger: %w", rows[i].ID, merr)
+			return errors.Join(fmt.Errorf("serialize row %s for the undo ledger: %w", rows[i].ID, merr), voidDeleteJournal(store, journaled))
 		}
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		change := &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      bookID,
@@ -222,15 +244,74 @@ func journalAndDeleteBookFiles(store OpsStore, opID, bookID string, rows []datab
 			FieldName:   rows[i].ID,
 			OldValue:    string(blob), // the ENTIRE row, so the deletion can be replayed back
 			NewValue:    "",
-		}); jerr != nil {
-			return fmt.Errorf("journal row %s: %w", rows[i].ID, jerr)
 		}
-		ids = append(ids, rows[i].ID)
+		if jerr := store.CreateOperationChange(change); jerr != nil {
+			return errors.Join(fmt.Errorf("journal row %s: %w", rows[i].ID, jerr), voidDeleteJournal(store, journaled))
+		}
+		journaled[rows[i].ID] = change
+		refs = append(refs, database.BookFileRef{BookID: bookID, FileID: rows[i].ID})
 	}
-	if derr := store.DeleteBookFilesByIDs(ids); derr != nil {
-		return fmt.Errorf("batched delete of %d rows: %w", len(ids), derr)
+	deleted, derr := store.DeleteBookFilesByIDs(refs)
+	var refreshErrs []error
+	if derr != nil {
+		// The rows it returns are deleted (a call of more than one chunk can fail
+		// in a later chunk after earlier ones committed); every other row is not,
+		// whether the error was a refusal or only an fsync failure that stopped
+		// the remaining chunks. Their journal rows describe deletions that did not
+		// happen.
+		gone := make(map[string]bool, len(deleted))
+		for i := range deleted {
+			gone[deleted[i].ID] = true
+		}
+		untouched := make(map[string]*database.OperationChange, len(journaled))
+		for id, change := range journaled {
+			if !gone[id] {
+				untouched[id] = change
+			}
+		}
+		if verr := voidDeleteJournal(store, untouched); verr != nil {
+			refreshErrs = append(refreshErrs, verr)
+		}
 	}
-	return nil
+	for i := range deleted {
+		change := journaled[deleted[i].ID]
+		if change == nil {
+			continue
+		}
+		blob, merr := json.Marshal(deleted[i])
+		if merr != nil {
+			refreshErrs = append(refreshErrs, fmt.Errorf("serialize deleted row %s: %w", deleted[i].ID, merr))
+			continue
+		}
+		if string(blob) == change.OldValue {
+			continue
+		}
+		fresh := *change
+		fresh.OldValue = string(blob)
+		if jerr := store.CreateOperationChange(&fresh); jerr != nil {
+			refreshErrs = append(refreshErrs, fmt.Errorf("rewrite journal row %s with the deleted bytes: %w", deleted[i].ID, jerr))
+		}
+	}
+	if derr != nil {
+		return errors.Join(append([]error{fmt.Errorf("batched delete of %d rows: %w", len(refs), derr)}, refreshErrs...)...)
+	}
+	return errors.Join(refreshErrs...)
+}
+
+// voidDeleteJournal takes back the ledger rows written for a delete that did not
+// happen. A void that cannot be written is returned: a live row for a deletion
+// that never occurred is worse than a failed op.
+func voidDeleteJournal(store OpsStore, journaled map[string]*database.OperationChange) error {
+	now := time.Now()
+	var errs []error
+	for _, change := range journaled {
+		v := *change
+		v.RevertedAt, v.Voided = &now, true
+		if err := store.CreateOperationChange(&v); err != nil {
+			errs = append(errs, fmt.Errorf("void journal row %s: %w", v.ID, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // decisionsReportPath derives the per-row decisions TSV from the per-book one,

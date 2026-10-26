@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
-// last-edited: 2026-10-14
+// last-edited: 2026-10-26
 
 package opswriter
 
@@ -422,6 +422,13 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 	}
 	var before, after map[string]json.RawMessage
 	written, err := w.cfg.Files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
+		// The store re-runs this callback on a fresh copy of the row when its
+		// compare-and-swap loses a round, and a later run may decline to write
+		// (database.ErrSkipBookFileWrite) or fail. Only the run that is
+		// committed may leave a diff behind: without this reset, a run that
+		// skips would journal the discarded run's changes for a write that
+		// never happened.
+		before, after = nil, nil
 		b, berr := fieldMap(f)
 		if berr != nil {
 			return berr

@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -23,6 +23,11 @@ import (
 // un-retire it are UnretireBookFiles and RehomeRetiredVersion, and nothing may
 // delete it (never delete book_file rows: repoint them).
 var ErrBookFileRetired = errors.New("book_file row is retired")
+
+// ErrBookFileOwnerChanged is returned by DeleteBookFilesByIDs when a row it was
+// asked to delete no longer belongs to the book the caller judged it under. The
+// row is not touched, and neither is any other row of the call.
+var ErrBookFileOwnerChanged = errors.New("book_file row now belongs to another book")
 
 // refuseRetiredInsert rejects a caller-built row that would be INSERTED with
 // Retired=true. Only RetireBookFiles re-keys an existing row into that state;
@@ -137,6 +142,32 @@ func (p *PebbleStore) retiredRowsOfVersion(holderID, versionID string) ([]BookFi
 		}
 	}
 	return out, nil
+}
+
+// retiredRowsOfVersionRaw is retiredRowsOfVersion plus the stored bytes of each
+// row, keyed by file ID, from the SAME scan: a writer that rewrites or moves
+// the rows hands the bytes to commitBookFileBatch (bookFileUnchanged), so they
+// must be the bytes the rows were decoded from, not a second read.
+func (p *PebbleStore) retiredRowsOfVersionRaw(holderID, versionID string) ([]BookFile, map[string][]byte, error) {
+	prefix := []byte("book_file:" + holderID + ":")
+	var rows []BookFile
+	raws := map[string][]byte{}
+	err := forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(_, value []byte) error {
+		var f BookFile
+		if err := json.Unmarshal(value, &f); err != nil {
+			return err
+		}
+		if !f.Retired || f.VersionID != versionID {
+			return nil
+		}
+		rows = append(rows, f)
+		raws[f.ID] = append([]byte(nil), value...)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return rows, raws, nil
 }
 
 // GetBookFilesIncludingRetired returns every row keyed under bookID, live and
@@ -572,20 +603,18 @@ func (p *PebbleStore) RetireBookFiles(moves []BookFileMove, holderID, versionID 
 	if err := p.requireHolderNotSoftDeleted(holderID); err != nil {
 		return fmt.Errorf("RetireBookFiles: %w", err)
 	}
-	for range maxStageRetries {
-		err = p.retireBookFilesAttempt(moves, ids, holderID, versionID)
-		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("RetireBookFiles: %w", err)
+	return restageBookFileBatch("RetireBookFiles", func(rows *bookFileRowCache) error {
+		return p.retireBookFilesAttempt(rows, moves, ids, holderID, versionID)
+	})
 }
 
-func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[string]struct{}, holderID, versionID string) error {
+func (p *PebbleStore) retireBookFilesAttempt(rows *bookFileRowCache, moves []BookFileMove, retiring map[string]struct{}, holderID, versionID string) error {
 	// Every row's stripe is held from the read below to the commit, so a
 	// concurrent UpdateBookFile (a fingerprint or transcript write) lands before
 	// the read, and is carried into the retired row, or after the commit, and is
-	// applied to the retired row; it is never overwritten by the batch.
+	// applied to the retired row; it is never overwritten by the batch. A writer
+	// that takes no file stripe is caught by the commit's compare of the stored
+	// bytes (bookFileUnchanged).
 	unlockFiles := p.lockBookFiles(setKeys(retiring))
 	filesLocked := true
 	releaseFiles := func() {
@@ -602,7 +631,7 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 	batch := p.db.NewIndexedBatch()
 
 	var moved []*BookFile
-	var oldKeys [][]byte
+	var oldKeys []bookFileRewrite
 	cas := newIndexCAS()
 	affected := []string{holderID}
 	seen := map[string]struct{}{holderID: {}}
@@ -614,7 +643,7 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 			affected = append(affected, mv.SourceBookID)
 		}
 		for _, fid := range mv.FileIDs {
-			f, err := p.getBookFileByID(mv.SourceBookID, fid)
+			f, raw, err := rows.read(p, bookFileKey(mv.SourceBookID, fid))
 			if err != nil {
 				batch.Close()
 				return fmt.Errorf("RetireBookFiles: read %s: %w", fid, err)
@@ -629,7 +658,7 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 			}
 
 			oldKey := []byte("book_file:" + mv.SourceBookID + ":" + fid)
-			oldKeys = append(oldKeys, oldKey)
+			oldKeys = append(oldKeys, bookFileUnchanged(oldKey, raw))
 			if err := batch.Delete(oldKey, nil); err != nil {
 				batch.Close()
 				return err
@@ -661,10 +690,12 @@ func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[
 					if alt != nil {
 						owner = fileRef(alt.BookID, alt.ID)
 						// The alternative was read before the owner stripes are
-						// taken: re-check its key under them (it must still
-						// exist, which oldKeys covers, and the cas hook checks
-						// that it is still live and still carries the key).
-						oldKeys = append(oldKeys, []byte("book_file:"+alt.BookID+":"+alt.ID))
+						// taken: re-check under them that it still exists. Only
+						// REFERENCED (an index key now names it), not rewritten,
+						// so its bytes are not compared (bookFileMustExist); the
+						// cas hook checks that it is still live and still
+						// carries the key.
+						oldKeys = append(oldKeys, bookFileMustExist([]byte("book_file:"+alt.BookID+":"+alt.ID)))
 						cas.alt(k, alt.BookID, alt.ID)
 					}
 				}
@@ -748,16 +779,12 @@ func (p *PebbleStore) UnretireBookFiles(moves []BookFileMove, backToBookID, reti
 	}
 	unlockVersion := p.lockBookVersion(retireVersionID)
 	defer unlockVersion()
-	for range maxStageRetries {
-		err = p.unretireBookFilesAttempt(moves, backToBookID, retireVersionID, versionIDBefore)
-		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("UnretireBookFiles: %w", err)
+	return restageBookFileBatch("UnretireBookFiles", func(rows *bookFileRowCache) error {
+		return p.unretireBookFilesAttempt(rows, moves, backToBookID, retireVersionID, versionIDBefore)
+	})
 }
 
-func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookID, retireVersionID string, versionIDBefore map[string]string) error {
+func (p *PebbleStore) unretireBookFilesAttempt(rows *bookFileRowCache, moves []BookFileMove, backToBookID, retireVersionID string, versionIDBefore map[string]string) error {
 	// Row stripes held from the first read to the commit; see
 	// retireBookFilesAttempt.
 	var fileIDs []string
@@ -775,7 +802,7 @@ func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookI
 	defer releaseFiles()
 	batch := p.db.NewIndexedBatch()
 	var moved []*BookFile
-	var oldKeys [][]byte
+	var oldKeys []bookFileRewrite
 	cas := newIndexCAS()
 	affected := []string{backToBookID}
 	seen := map[string]struct{}{backToBookID: {}}
@@ -787,7 +814,7 @@ func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookI
 			affected = append(affected, mv.SourceBookID)
 		}
 		for _, fid := range mv.FileIDs {
-			f, err := p.getBookFileByID(mv.SourceBookID, fid)
+			f, raw, err := rows.read(p, bookFileKey(mv.SourceBookID, fid))
 			if err != nil {
 				batch.Close()
 				return fmt.Errorf("UnretireBookFiles: read %s: %w", fid, err)
@@ -806,7 +833,7 @@ func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookI
 			}
 
 			oldKey := []byte("book_file:" + mv.SourceBookID + ":" + fid)
-			oldKeys = append(oldKeys, oldKey)
+			oldKeys = append(oldKeys, bookFileUnchanged(oldKey, raw))
 			if err := batch.Delete(oldKey, nil); err != nil {
 				batch.Close()
 				return err
@@ -906,14 +933,9 @@ func (p *PebbleStore) RehomeRetiredVersion(versionID, newHolderID string) error 
 	// rows that carry it changes between the reads below and the commit.
 	unlockVersion := p.lockBookVersion(versionID)
 	defer unlockVersion()
-	var err error
-	for range maxStageRetries {
-		err = p.rehomeRetiredVersionAttempt(versionID, newHolderID)
-		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("RehomeRetiredVersion: %w", err)
+	return restageBookFileBatch("RehomeRetiredVersion", func(_ *bookFileRowCache) error {
+		return p.rehomeRetiredVersionAttempt(versionID, newHolderID)
+	})
 }
 
 func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string) error {
@@ -932,7 +954,7 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 		return fmt.Errorf("RehomeRetiredVersion: version %s was retired out of %s and cannot be held by it: %w",
 			versionID, newHolderID, ErrRetiredVersionMismatch)
 	}
-	rows, err := p.retiredRowsOfVersion(oldHolder, versionID)
+	rows, rawOf, err := p.retiredRowsOfVersionRaw(oldHolder, versionID)
 	if err != nil {
 		return fmt.Errorf("RehomeRetiredVersion: read rows of %s: %w", versionID, err)
 	}
@@ -950,24 +972,25 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 		}
 	}
 	defer releaseFiles()
-	fresh, err := p.retiredRowsOfVersion(oldHolder, versionID)
+	fresh, freshRaw, err := p.retiredRowsOfVersionRaw(oldHolder, versionID)
 	if err != nil {
 		return fmt.Errorf("RehomeRetiredVersion: re-read rows of %s: %w", versionID, err)
 	}
 	if !slices.Equal(sortedFileIDs(fresh), sortedFileIDs(rows)) {
 		return fmt.Errorf("RehomeRetiredVersion: the rows of %s changed while locking them: %w", versionID, errBookFileRowVanished)
 	}
-	rows = fresh
+	// The rows the commit compares are the ones read under the stripes.
+	rows, rawOf = fresh, freshRaw
 
 	batch := p.db.NewIndexedBatch()
 	var moved []*BookFile
-	var oldKeys [][]byte
+	var oldKeys []bookFileRewrite
 	cas := newIndexCAS()
 	now := time.Now()
 	for i := range rows {
 		f := &rows[i]
 		oldKey := []byte("book_file:" + oldHolder + ":" + f.ID)
-		oldKeys = append(oldKeys, oldKey)
+		oldKeys = append(oldKeys, bookFileUnchanged(oldKey, rawOf[f.ID]))
 		if err := batch.Delete(oldKey, nil); err != nil {
 			batch.Close()
 			return err

@@ -1,7 +1,7 @@
 // file: internal/database/book_file_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b7c8d9e0-f1a2-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 package database
 
@@ -178,46 +178,6 @@ func TestGetBookFileByPID_NotFound(t *testing.T) {
 	got, err := store.GetBookFileByPID("DOESNOTEXIST")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-}
-
-// TestClearITunesPID inserts a file tagged with an iTunes PID, clears it,
-// and verifies the PID + path are wiped and the row is no longer findable
-// by PID. Covers the cleanup-orphans convergence path: after the ITL
-// remove succeeds, the DB row must be scrubbed so cleanup-orphans stops
-// re-enqueuing the same PID.
-func TestClearITunesPID(t *testing.T) {
-	store, bookID, cleanup := newTestStoreWithBook(t)
-	defer cleanup()
-
-	pid := "DEADBEEFCAFE1234"
-	f := &BookFile{
-		BookID:             bookID,
-		FilePath:           "/books/clear_test.m4b",
-		ITunesPersistentID: pid,
-		ITunesPath:         "C:\\iTunes\\clear_test.m4b",
-	}
-	require.NoError(t, store.CreateBookFile(f))
-
-	cleared, err := store.ClearITunesPID(pid)
-	require.NoError(t, err)
-	assert.True(t, cleared)
-
-	// PID lookup should now miss.
-	got, err := store.GetBookFileByPID(pid)
-	require.NoError(t, err)
-	assert.Nil(t, got)
-
-	// Row still present, just scrubbed.
-	byID, err := store.GetBookFileByID(bookID, f.ID)
-	require.NoError(t, err)
-	require.NotNil(t, byID)
-	assert.Empty(t, byID.ITunesPersistentID)
-	assert.Empty(t, byID.ITunesPath)
-
-	// Idempotent: clearing an already-cleared PID returns cleared=false.
-	cleared2, err := store.ClearITunesPID(pid)
-	require.NoError(t, err)
-	assert.False(t, cleared2)
 }
 
 // TestGetBookFileByPath creates a file and retrieves it by its path.

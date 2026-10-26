@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package repairs
 
@@ -574,7 +574,8 @@ func (w *Writer) Journaled() int { return int(w.journaled.Load()) }
 // journaled after-location also names the row that held to.Path's
 // single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write:
 // the revert hands the key back to that row and no other. A compare-and-set
-// refusal at the write voids the row it journaled.
+// refusal at the write, or the store giving up after concurrent writers kept
+// changing the row (database.ErrBookFileConflict), voids the row it journaled.
 func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.BookFileLocation) error {
 	if err := w.denyTagsOnly("RepointBookFile"); err != nil {
 		return err
@@ -623,10 +624,12 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to database.Book
 	if werr != nil {
 		// A compare-and-set refusal (or a vanished row) wrote nothing: void
 		// the row, so no revert or later reader takes it for a repoint that
-		// happened. Any other error stands with its row (JOURNAL FIRST): a
-		// commit whose durability is unknown
+		// happened. That includes the store giving up on the row after other
+		// writers kept changing it (database.ErrBookFileConflict: its retry
+		// budget ran out before any commit landed). Any other error stands
+		// with its row (JOURNAL FIRST): a commit whose durability is unknown
 		// (database.ErrBookFileDurabilityUnknown) may have been applied.
-		if errors.Is(werr, ErrChangedSincePlan) {
+		if errors.Is(werr, ErrChangedSincePlan) || errors.Is(werr, database.ErrBookFileConflict) {
 			if verr := w.voidRow(row); verr != nil {
 				return errors.Join(werr, verr)
 			}
