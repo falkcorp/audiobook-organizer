@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7830431a-11dc-4bee-97c0-82047798cb98
-// last-edited: 2026-10-15
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -175,5 +175,31 @@ func TestPlanOrphanRepoints_SkipsPathOwnerWhenAtPathIndexUnbuilt(t *testing.T) {
 	}
 	if plan.PathOwnerSkipped == "" || plan.Items[0].Class != orphanClassUnresolved {
 		t.Fatalf("plan = %+v, want path-owner skipped and the row unresolved", plan)
+	}
+}
+
+// A retired orphan (its holder book is gone) is reported by the orphan scan but
+// is not planned: no store move can repoint a retired row, so listing it as a
+// repoint would promise something that can never apply. It is counted apart.
+func TestPlanOrphanRepoints_RetiredOrphansAreExcludedAndCounted(t *testing.T) {
+	store := newPlanStore(t, true)
+	dir, err := store.CreateBook(&database.Book{Title: "Batman Incorporated", FilePath: "/lib/Gotham/R"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planOrphanRepoints(context.Background(), store, []database.BookFileCore{
+		{ID: "live-orphan", BookID: "ghost-a", FilePath: "/lib/Gotham/R/01.mp3"},
+		{ID: "retired-orphan", BookID: "ghost-b", FilePath: "/lib/Gotham/R/02.mp3", Retired: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Orphans != 1 || plan.RetiredOrphansExcluded != 1 || plan.PlannedRepoints != 1 {
+		t.Fatalf("plan = %+v, want 1 orphan, 1 retired excluded, 1 repoint onto %s", plan, dir.ID)
+	}
+	for _, it := range plan.Items {
+		if it.BookFileID == "retired-orphan" {
+			t.Fatalf("retired orphan was planned: %+v", it)
+		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/database/retired_mock_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8b4d90-6f13-4c75-a9d2-b05c71e3f482
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -40,3 +40,8 @@ func (m *MockStore) GetBookFileByPIDIncludingRetired(itunesPID string) (*BookFil
 func (m *MockStore) GetBookFileByPathIncludingRetired(path string) (*BookFile, error) {
 	return m.GetBookFileByPath(path)
 }
+
+// HasRetiredVersions is false: no version of a MockStore was ever retired. It
+// is what lets RetiredHoldersOfHash and BookFileRowsAtPathForWrite answer "none"
+// for a MockStore without its BookFilesWithHash or BookFilesAtPath stubs.
+func (m *MockStore) HasRetiredVersions() (bool, error) { return false, nil }

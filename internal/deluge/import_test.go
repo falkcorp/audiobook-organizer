@@ -1,7 +1,7 @@
 // file: internal/deluge/import_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678902
-// last-edited: 2026-10-11
+// last-edited: 2026-10-26
 //
 // Tests for ImportToLibrary in internal/deluge/import.go.
 
@@ -22,8 +22,17 @@ import (
 // fakeDelugStore is a minimal database.Store for import tests.
 type fakeDelugStore struct {
 	database.Store
+	database.RetiredBookFileReader
 	updated *database.BookFile
 	owners  map[string]*database.BookFile // GetBookFileByPath answers
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row, so its
+// plain GetBookFileByPath is the complete answer. The embedded reader (nil) only
+// makes the fake resolve as a database.RetiredBookFileReader; the import reads
+// nothing else from it.
+func (f *fakeDelugStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return f.GetBookFileByPath(path)
 }
 
 func (f *fakeDelugStore) GetBookFileByPath(path string) (*database.BookFile, error) {
@@ -186,8 +195,17 @@ func TestImportToLibrary_MoveStorageNilClient_OK(t *testing.T) {
 // failingDelugStore fails UpdateBookFile until fail is cleared.
 type failingDelugStore struct {
 	database.Store
+	database.RetiredBookFileReader
 	fail    bool
 	updated *database.BookFile
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row, so its
+// plain GetBookFileByPath is the complete answer. The embedded reader (nil) only
+// makes the fake resolve as a database.RetiredBookFileReader; the import reads
+// nothing else from it.
+func (f *failingDelugStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return f.GetBookFileByPath(path)
 }
 
 // No row claims any destination in these tests.
@@ -329,11 +347,20 @@ func TestImportToLibrary_DestinationOwnedByAnotherRowRefused(t *testing.T) {
 // book file's UpdateBookFile open, then fails it.
 type raceDelugStore struct {
 	database.Store
+	database.RetiredBookFileReader
 	mu      sync.Mutex
 	byPath  map[string]*database.BookFile
 	failID  string
 	started chan struct{} // closed when failID's update begins
 	release chan struct{} // failID's update fails once this closes, or after a timeout
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row, so its
+// plain GetBookFileByPath is the complete answer. The embedded reader (nil) only
+// makes the fake resolve as a database.RetiredBookFileReader; the import reads
+// nothing else from it.
+func (s *raceDelugStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return s.GetBookFileByPath(path)
 }
 
 func (s *raceDelugStore) GetBookFileByPath(path string) (*database.BookFile, error) {

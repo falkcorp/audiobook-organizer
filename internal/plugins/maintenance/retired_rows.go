@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_rows.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2d4e61-9c07-4f35-a1d8-3e5f60b7c249
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -19,4 +19,21 @@ func countLiveCores(cores []database.BookFileCore) int {
 		}
 	}
 	return n
+}
+
+// liveCores returns cores without its retired rows. When nothing in cores is
+// retired (every list GetAllBookFilesCore answers, which skips them) it returns
+// cores itself, so the common case copies nothing; otherwise it builds a new
+// slice and leaves cores alone, since the store may hand out a shared one.
+func liveCores(cores []database.BookFileCore) []database.BookFileCore {
+	if countLiveCores(cores) == len(cores) {
+		return cores
+	}
+	out := make([]database.BookFileCore, 0, len(cores))
+	for i := range cores {
+		if !cores[i].Retired {
+			out = append(out, cores[i])
+		}
+	}
+	return out
 }

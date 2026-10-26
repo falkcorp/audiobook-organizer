@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_round3_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: e4ed5d00-b92e-4387-91d0-1b1b72542bb2
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -29,6 +29,15 @@ type dcFailMove struct{ repairs.BookFileWriter }
 
 func (dcFailMove) MoveBookFilesToBook([]string, string, string) error {
 	return errDCInjected
+}
+
+// Unwrap opts the decorator into database.AsCapability, as a production
+// decorator does, so the writer's retired-row read (BookFileByPathIncludingRetired)
+// reaches the store underneath instead of failing closed on a store that
+// cannot say whether it hides retired rows.
+func (d dcFailMove) Unwrap() database.Store {
+	s, _ := d.BookFileWriter.(database.Store)
+	return s
 }
 
 // TestDuplicateCopies_PartialKeepsTheCause: a step failing after another

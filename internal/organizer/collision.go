@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 // Pre-flight collision resolution for RenameFiles.
 //
@@ -70,7 +70,11 @@ import (
 // row that owns an occupied target, rehydrates its own row, and writes both
 // back. Nothing else.
 type CollisionStore interface {
-	// GetBookFileByPath finds the row that claims filePath, or (nil, nil).
+	// GetBookFileByPath finds the live row that claims filePath, or (nil, nil).
+	// The resolver does not call it directly: it asks
+	// database.BookFileByPathIncludingRetired, which reaches the store's
+	// retired-aware read and fails closed (ErrRetiredReaderUnavailable) for a
+	// store without it, so a retired version's claim on the path is seen.
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	// GetBookFileByID rehydrates the FULL record. UpdateBookFile is a
 	// full-record replacement, so a partial record would wipe the
@@ -477,12 +481,24 @@ func resolveTargetCollisions(entries []FileRenameEntry, policy *CollisionPolicy,
 		}
 
 		// In-library. Look up the row that owns the target so the stored-hash
-		// rung has something to compare against.
+		// rung has something to compare against, and so the quarantine branch
+		// knows whether another row holds the path.
+		//
+		// Unfiltered: a retired version's row still names its file and still
+		// holds the path's single-slot index. The live-only getter answers nil
+		// for it, and nil here reads as "no other row holds the kept path" --
+		// the quarantine branch would then repoint our row onto the path and
+		// steal the retired row's slot, the corruption occupantIsAnotherRow
+		// exists to prevent. The lookup's error is a failure, not "no owner",
+		// for the same reason: a store that cannot say who holds the path must
+		// not be read as one where nobody does.
 		if policy.Store != nil {
-			row, lerr := policy.Store.GetBookFileByPath(entry.TargetPath)
-			if lerr == nil {
-				c.occupant = row
+			row, lerr := database.BookFileByPathIncludingRetired(policy.Store, entry.TargetPath)
+			if lerr != nil {
+				failures = append(failures, *collisionFailure(c, "cannot determine which book_file row claims the occupied target: "+lerr.Error()))
+				continue
 			}
+			c.occupant = row
 		}
 		occHash := ""
 		if c.occupant != nil {
@@ -714,7 +730,9 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 	occupantIsAnotherRow := c.occupant != nil && c.occupant.ID != prior.ID
 	if occupantIsAnotherRow {
 		updated.Missing = true
-		if c.occupant.BookID == prior.BookID {
+		if c.occupant.Retired {
+			base.Detail = fmt.Sprintf("occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because book_file %s, a retired version held under book %s, still claims the kept file — repointing onto it would take over its single-slot path index", c.occupant.ID, c.occupant.BookID)
+		} else if c.occupant.BookID == prior.BookID {
 			base.Detail = "occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because a sibling row of the same book already points at the kept file"
 		} else {
 			base.Detail = fmt.Sprintf("occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because book_file %s of a DIFFERENT book (%s) already points at the kept file — repointing across books would corrupt the single-slot path index", c.occupant.ID, c.occupant.BookID)

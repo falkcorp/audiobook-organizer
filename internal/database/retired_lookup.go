@@ -1,7 +1,7 @@
 // file: internal/database/retired_lookup.go
-// version: 1.3.0
+// version: 1.10.0
 // guid: 5c9e1f27-0a3b-4d68-b4e2-7f1a90c36d84
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -37,6 +37,61 @@ func AllBookFilesCoreIncludingRetired(s any) ([]BookFileCore, error) {
 		return nil, fmt.Errorf("all book_file rows: %w", ErrRetiredReaderUnavailable)
 	}
 	return r.GetAllBookFilesCoreIncludingRetired()
+}
+
+// BookFilesIncludingRetired is GetBookFiles with the retired rows kept, for
+// callers that hold the store as any. Like AllBookFilesCoreIncludingRetired it
+// resolves the reader through AsCapability and fails closed.
+func BookFilesIncludingRetired(s any, bookID string) ([]BookFile, error) {
+	r, ok := AsCapability[RetiredBookFileReader](s)
+	if !ok {
+		return nil, fmt.Errorf("book_files of %s: %w", bookID, ErrRetiredReaderUnavailable)
+	}
+	return r.GetBookFilesIncludingRetired(bookID)
+}
+
+// BookFileByPIDIncludingRetired is GetBookFileByPID that also answers a PID
+// held only by a retired row, with the same capability resolution and the same
+// fail-closed answer as AllBookFilesCoreIncludingRetired.
+func BookFileByPIDIncludingRetired(s any, itunesPID string) (*BookFile, error) {
+	r, ok := AsCapability[RetiredBookFileReader](s)
+	if !ok {
+		return nil, fmt.Errorf("book_file by PID %s: %w", itunesPID, ErrRetiredReaderUnavailable)
+	}
+	return r.GetBookFileByPIDIncludingRetired(itunesPID)
+}
+
+// RetiredVersionsFromBook returns the retired versions that were retired out of
+// shellID (the trashed or merged book their files used to belong to), with the
+// same capability resolution and fail-closed answer as
+// AllBookFilesCoreIncludingRetired. A non-empty answer means shellID is a
+// shell: its files live on as retired rows under another book, and a scan that
+// reaches the shell by path or by organizer ID must not read it as a book that
+// still owns them.
+func RetiredVersionsFromBook(s any, shellID string) ([]BookVersion, error) {
+	r, ok := AsCapability[RetiredBookFileReader](s)
+	if !ok {
+		return nil, fmt.Errorf("retired versions of %s: %w", shellID, ErrRetiredReaderUnavailable)
+	}
+	return r.GetRetiredVersionsFromBook(shellID)
+}
+
+// BookFilesHoldingHash is BookFilesWithHash for callers that hold a store as
+// any (the scanner's package store, narrowed to its own interface): every row,
+// live and retired, whose FileHash or OriginalFileHash is hash. It resolves the
+// method through AsCapability and keeps BookFilesWithHash's contract: a store
+// that cannot give the complete answer, or has no such method, returns
+// ErrBookFilesWithHashUnavailable and the caller must fail closed on it. It
+// never turns that refusal into an empty answer; RetiredHoldersOfHash is the
+// caller that decides what a refusal means for an import.
+func BookFilesHoldingHash(s any, hash string) ([]BookFile, error) {
+	h, ok := AsCapability[interface {
+		BookFilesWithHash(hash string) ([]BookFile, error)
+	}](s)
+	if !ok {
+		return nil, fmt.Errorf("book_files with hash: %w", ErrBookFilesWithHashUnavailable)
+	}
+	return h.BookFilesWithHash(hash)
 }
 
 // BookFileByPathIncludingRetired is GetBookFileByPath that also answers a path

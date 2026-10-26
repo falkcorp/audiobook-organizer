@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.4.1
+// version: 1.8.0
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package opswriter
 
@@ -25,6 +25,10 @@ import (
 // recStore is every store surface the Writer uses, recording the order of
 // calls in log.
 type recStore struct {
+	// The nil reader only makes the fake resolve as a RetiredBookFileReader;
+	// GetBookFileByPathIncludingRetired below is the one method the writer reads.
+	database.RetiredBookFileReader
+
 	mu      sync.Mutex
 	log     []string
 	books   map[string]*database.Book
@@ -77,6 +81,13 @@ func (s *recStore) GetBookFileByID(bookID, fileID string) (*database.BookFile, e
 	}
 	cp := *f
 	return &cp, nil
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row unless a
+// test wraps it to say otherwise (retiredPathStore), so its plain path getter is
+// the complete answer.
+func (s *recStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return s.GetBookFileByPath(path)
 }
 
 func (s *recStore) GetBookFileByPath(path string) (*database.BookFile, error) {
@@ -434,6 +445,50 @@ func TestRepointBookFile(t *testing.T) {
 	to, err := database.DecodeBookFileLocation(s.changes[0].NewValue)
 	if err != nil || to.KeyOwnerRow != "f2" || to.KeyOwnerBook != "b2" {
 		t.Fatalf("the repoint must name the key owner it took the path from: %+v %v", to, err)
+	}
+}
+
+// retiredPathStore answers like the production store: the plain path getter
+// skips a retired row, the include-retired twin does not. Only the two path
+// getters are implemented; the embedded reader is nil and never called.
+type retiredPathStore struct {
+	*recStore
+	database.RetiredBookFileReader
+}
+
+func (r retiredPathStore) GetBookFileByPath(path string) (*database.BookFile, error) {
+	f, err := r.recStore.GetBookFileByPath(path)
+	if f != nil && f.Retired {
+		return nil, err
+	}
+	return f, err
+}
+
+func (r retiredPathStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return r.recStore.GetBookFileByPath(path)
+}
+
+// A retired row holding the target path's single-owner key is journaled as the
+// key's owner: the plain path getter cannot see it, so without the
+// include-retired read the repoint's history named no owner and a revert had
+// nobody to hand the key back to. The revert that reads it back is
+// TestRevertRepoint_KeyGoesBackToARetiredOwner (plugins/maintenance).
+func TestRepointBookFile_JournalsRetiredKeyOwner(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/old.m4b"}
+	s.files["r1"] = &database.BookFile{ID: "r1", BookID: "holder", FilePath: "/lib/new.m4b", Retired: true, VersionID: "v1"}
+	w := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Files: retiredPathStore{recStore: s}, Authors: s, Journal: s,
+		History: NewBookHistory(s, "test", "bulk_update", "rp-", nil)})
+	expect := database.BookFileLocation{Path: "/lib/old.m4b"}
+	if err := w.RepointBookFile(context.Background(), "b1", "f1", expect, database.BookFileLocation{Path: "/lib/new.m4b"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.changes) != 1 {
+		t.Fatalf("history = %+v", s.changes)
+	}
+	to, err := database.DecodeBookFileLocation(s.changes[0].NewValue)
+	if err != nil || to.KeyOwnerRow != "r1" || to.KeyOwnerBook != "holder" {
+		t.Fatalf("the retired key owner must be journaled: %+v %v", to, err)
 	}
 }
 

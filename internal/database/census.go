@@ -1,7 +1,7 @@
 // file: internal/database/census.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -122,12 +122,18 @@ type RetiredCensus struct {
 	// soft-deleted and merged.
 	RetiredBooks     int `json:"retired_books"`
 	RetiredBookFiles int `json:"retired_book_files"`
+	// RetiredVersionFiles counts book_file rows flagged Retired
+	// (BookFile.Retired): files a retired book's version carries under a live
+	// holder after the retire. They left the retired book's key range, so
+	// RetiredBookFiles no longer counts them; without this figure the census
+	// would show the trash's files as reclaimed when they are only moved.
+	RetiredVersionFiles int `json:"retired_version_files"`
 }
 
 // SignalCensus counts stored fingerprints and intro transcripts. A fingerprint
 // counts when AcoustIDFingerprintDurationSec > 0 (the proxy signal_coverage.go
 // uses); a transcript counts when IntroTranscribedAt is set. Every row counts,
-// retired or not.
+// retired or not, retired-version rows included: the stored print exists.
 type SignalCensus struct {
 	FilesWithFingerprint int `json:"files_with_fingerprint"`
 	FilesWithTranscript  int `json:"files_with_transcript"`

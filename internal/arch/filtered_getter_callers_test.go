@@ -1,7 +1,7 @@
 // file: internal/arch/filtered_getter_callers_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6c2f9d04-1b8e-4a73-85d6-e0a47b31c9f2
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package arch
 
@@ -54,7 +54,6 @@ var reviewedFilteredGetterCallers = map[string]string{
 	"internal/scanner/replaced_file_probe.go|storedBookFileAt|GetBookFileByPath":            liveByIntent + "nil only skips the replaced-file probe (the safe direction); the upsert it mirrors matches live rows only (retired rows are never an upsert match).",
 
 	// --- Inside internal/database: the getter's own plumbing and live-row writers.
-	"internal/database/book_file_owners.go|BookFileRowsAtPath|GetBookFileByPath":                                    "The documented single-row fallback of the scanner variant when the complete lookup is unavailable; callers that gate a WRITE use BookFileRowsAtPathForWrite / BookFileRowsAtPathStrict instead.",
 	"internal/database/pebble_store_bookfiles.go|PebbleStore.ClearITunesPID|GetBookFileByPID":                       liveByIntent + "Clears the PID on the LIVE row that carries it; a retired row keeps its PID by design (the retire hands the key to a live row when there is one).",
 	"internal/database/pebble_store_bookfiles.go|PebbleStore.GetBookFileByAcoustIDFuzzy|GetBookFileByAcoustIDFuzzy": "The store's own delegation to the memdb implementation of the same live-only reader.",
 	"internal/database/pebble_store_mark_import.go|PebbleStore.MarkFileImportedFromDeluge|GetBookFileByPath":        liveByIntent + "Stamps the Deluge import on the live row at the path; with no live row it falls through to the torrent-hash match or a documented no-op, and no row is created from nil.",
@@ -65,27 +64,15 @@ var reviewedFilteredGetterCallers = map[string]string{
 	"pkg/ops/opstest/store.go|worldStore.GetBookFileByPath|GetBookFileByPath":                                       "Test fake delegating to its own in-memory store.",
 
 	// --- Deliberately live after the retired check.
+	"internal/scanner/scan_existing.go|scanExisting.lookupSegments|GetBookBySegmentFileHash": "The live segment vote. A nil answer only means no LIVE book matches; it is not read as free: lookupScanExisting then calls lookupRetiredContent (RetiredHoldersOfHash on every segment hash) before the book may be imported as new, and skips the import on a retired match or on a check that cannot be answered.",
+	"internal/fileops/book_file_hash_recorder.go|BookFileRowAtPath|GetBookFileByPath":        "Best-effort hash recording after the retired-inclusive read (BookFileByPathIncludingRetired) cannot be answered by a store without the reader; the live row's hashes are still recorded. Nothing that gates a write calls it.",
 
 	// --- Known soft-fail.
 	"internal/deluge/discovery.go|IsContentFingerprintTracked|GetBookFileByAcoustID":      "KNOWN SOFT-FAIL: nil reads as \"content not tracked\", so a torrent whose content a retired version holds is offered for import by discovery (the import itself is refused by the scanner's retired-content check). Open item; replace with a complete fingerprint lookup.",
 	"internal/deluge/discovery.go|IsContentFingerprintTracked|GetBookFileByAcoustIDFuzzy": "KNOWN SOFT-FAIL: same as the exact lookup above.",
-
-	// --- Converted to the IncludingRetired readers by #4139.
-	"internal/deluge/import.go|ImportToLibraryWith|GetBookFileByPath":                         pending4139,
-	"internal/deluge/importer_adapter.go|LibraryImporterAdapter.ImportPath|GetBookFileByPath": pending4139,
-	"internal/fileops/book_file_hash_recorder.go|HashOptionsForPath|GetBookFileByPath":        pending4139,
-	"internal/itunes/service/importer.go|Importer.bookIDsByTrackPIDs|GetBookFileByPID":        pending4139,
-	"internal/operations/opswriter/writer.go|Writer.RepointBookFile|GetBookFileByPath":        pending4139,
-	"internal/organizer/collision.go|resolveTargetCollisions|GetBookFileByPath":               pending4139,
-	"internal/remux/transcode.go|Transcoder.transcodeAndRecord|GetBookFileByPath":             pending4139,
-	"internal/repairs/writer_files.go|Writer.RepointBookFile|GetBookFileByPath":               pending4139,
-	"internal/scanner/scan_book_lock.go|resolveScanLockSet|GetBookFileByPath":                 pending4139,
-	"internal/scanner/scan_existing.go|scanExisting.lookupSegments|GetBookBySegmentFileHash":  pending4139,
 }
 
 const liveByIntent = "Live-only by intent. "
-
-const pending4139 = "PENDING #4139 (retired-versions callers): still the live-only reader on this branch, so a path or identity held only by a retired version answers nil here. #4139 converts the site to the IncludingRetired reader; this entry then fails as stale, so delete it in that rebase."
 
 // scanFilteredGetterCallers parses every non-test Go file of the module and
 // returns the set of "<file>|<function>|<getter>" call sites. The generated

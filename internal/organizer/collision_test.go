@@ -1,7 +1,7 @@
 // file: internal/organizer/collision_test.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: 4e07b5c9-1a26-4f83-b0d7-92c1e6438af5
-// last-edited: 2026-09-13
+// last-edited: 2026-10-26
 
 package organizer
 
@@ -22,10 +22,20 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeCollisionStore struct {
+	// The nil reader only makes the fake resolve as a RetiredBookFileReader;
+	// GetBookFileByPathIncludingRetired below is the one method the resolver reads.
+	database.RetiredBookFileReader
+
 	byPath     map[string]*database.BookFile
 	byID       map[string]*database.BookFile
 	updates    int
 	failUpdate bool
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row, so its
+// plain path lookup is the complete answer for the resolver's retired-aware read.
+func (f *fakeCollisionStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return f.GetBookFileByPath(path)
 }
 
 func newFakeCollisionStore() *fakeCollisionStore {

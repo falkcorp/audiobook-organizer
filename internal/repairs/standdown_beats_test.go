@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown_beats_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 9d3f6b21-7a4e-4c58-b1d0-2e8f5c7a3b96
-// last-edited: 2026-10-01
+// last-edited: 2026-10-26
 
 package repairs
 
@@ -21,6 +21,10 @@ import (
 
 // memFiles is a book_file store: rows by id, each on one book.
 type memFiles struct {
+	// The nil reader only makes the fake resolve as a RetiredBookFileReader;
+	// GetBookFileByPathIncludingRetired below is the one method the writer reads.
+	database.RetiredBookFileReader
+
 	mu         sync.Mutex
 	rows       map[string]*database.BookFile
 	recomputes int
@@ -50,6 +54,13 @@ func (m *memFiles) ModifyBookFile(bookID, fileID string, fn func(*database.BookF
 	}
 	*r = c
 	return &c, nil
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row unless a
+// test wraps it to say otherwise (retiredPathFiles), so its plain path getter is
+// the complete answer.
+func (m *memFiles) GetBookFileByPathIncludingRetired(filePath string) (*database.BookFile, error) {
+	return m.GetBookFileByPath(filePath)
 }
 
 // GetBookFileByPath names the row holding a path's single-owner key (the

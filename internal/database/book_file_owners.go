@@ -1,7 +1,7 @@
 // file: internal/database/book_file_owners.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f379efd-6c7f-48b0-8737-96f1cfeab991
-// last-edited: 2026-09-28
+// last-edited: 2026-10-26
 
 package database
 
@@ -21,7 +21,8 @@ type BookFilePathLookup interface {
 //
 // It prefers BookFilesAtPath, which returns every row at the path. When that
 // cannot be complete (memdb not serving: startup warmup, tests, a
-// Pebble-direct deployment) it falls back to GetBookFileByPath, whose index
+// Pebble-direct deployment) it falls back to the single-row path getter
+// (BookFileByPathIncludingRetired: retired rows count as owners), whose index
 // holds one row per path CRC. The fallback can under-report -- two rows at one
 // path leave only the last-written findable, and a CRC collision can hide a
 // path entirely -- so it is a best-effort answer, which is why it is a
@@ -54,7 +55,10 @@ func BookFileRowsAtPath(s BookFilePathLookup, path string) ([]BookFile, error) {
 	if !errors.Is(err, ErrBookFilesAtPathUnavailable) {
 		return nil, err
 	}
-	hit, err := s.GetBookFileByPath(path)
+	// The unfiltered single-row hit: GetBookFileByPath answers nil for a path
+	// only a retired row holds, which would read a retired version's file as
+	// unowned during the warmup window and let the scanner import it again.
+	hit, err := BookFileByPathIncludingRetired(s, path)
 	if err != nil {
 		return nil, err
 	}

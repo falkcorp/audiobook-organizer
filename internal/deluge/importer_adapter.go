@@ -1,7 +1,7 @@
 // file: internal/deluge/importer_adapter.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f6a7b8c9-d0e1-2345-f012-456789012345
-// last-edited: 2026-09-14
+// last-edited: 2026-10-26
 //
 // LibraryImporterAdapter implements tagger.LibraryImporter on top of
 // ImportToLibrary. It is wired into the Server at startup so
@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
@@ -61,9 +62,19 @@ func (a *LibraryImporterAdapter) ImportPath(ctx context.Context, srcPath, bookFi
 		return srcPath, fmt.Errorf("LibraryImporterAdapter: not fully initialised")
 	}
 
-	bf, err := a.store.GetBookFileByPath(srcPath)
+	// Unfiltered, so a path only a retired version's row names is told apart
+	// from a path no row names: the live-only getter answers nil for both, and
+	// the refusal below would blame a missing record for a file that a retired
+	// version claims. Either way nothing is imported: a retired row is never
+	// repointed to a library copy (that would re-import retired content as
+	// live), and this write must not go ahead in place on a protected file.
+	bf, err := database.BookFileByPathIncludingRetired(a.store, srcPath)
 	if err != nil {
 		return srcPath, fmt.Errorf("LibraryImporterAdapter: look up BookFile for %s: %w", srcPath, err)
+	}
+	if bf != nil && bf.Retired {
+		return srcPath, fmt.Errorf("LibraryImporterAdapter: protected path %s is the file of retired version row %s (held under book %s), not a live row to repoint to a library copy: %w",
+			srcPath, bf.ID, bf.BookID, tagger.ErrProtectedPathWrite)
 	}
 	if bf == nil {
 		// File is protected but has no DB record yet (scan/ingest before the

@@ -1,11 +1,13 @@
 // file: internal/fileops/book_file_hash_recorder.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 8e2d4b17-3c95-4f60-a1d8-6b7e9c2f0a43
-// last-edited: 2026-09-13
+// last-edited: 2026-10-26
 
 package fileops
 
 import (
+	"errors"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -19,14 +21,39 @@ type BookFileHashRecorder interface {
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 }
 
+// BookFileRowAtPath is the row the book_file_path index names for path (nil
+// when none does), live or retired.
+//
+// A retired version's row still names its file and still holds the path's
+// single-slot index entry, and a rewrite of that file changes the bytes the row
+// describes: the hash it carries is what recognises the content later (the
+// scanner's retired-content check reads it), so it is kept true like a live
+// row's. The live-only getter answers nil for such a path, and the rewrite would
+// leave the retired row describing bytes that are gone.
+//
+// Recording is best effort, so a store that cannot read retired rows (one that
+// does not resolve to a database.RetiredBookFileReader) falls back to the
+// live-only lookup rather than failing: the live row's hashes are still
+// recorded, as they were before retired rows existed. This is the one
+// include-retired helper that fails open, so nothing that gates a write may call
+// it.
+func BookFileRowAtPath(store BookFileHashRecorder, path string) (*database.BookFile, error) {
+	row, err := database.BookFileByPathIncludingRetired(store, path)
+	if errors.Is(err, database.ErrRetiredReaderUnavailable) {
+		return store.GetBookFileByPath(path)
+	}
+	return row, err
+}
+
 // HashOptionsForPath returns the WriteTagsSafe options that record a write's
 // hashes on the book_file row at path, or zero options when there is no row.
 //
-// The row is the one the book_file_path index names. That index holds one
-// reference per path, and GetBookFileByPath checks the row's FilePath against
-// path, so a CRC collision reads as "no row" rather than as another file's
-// row. It is also the index the scanner's upsert matches on, so the row whose
-// hash is updated here is the row the next rescan compares against.
+// The row is the one the book_file_path index names (BookFileRowAtPath: live or
+// retired). That index holds one reference per path, and the lookup checks the
+// row's FilePath against path, so a CRC collision reads as "no row" rather than
+// as another file's row. It is also the index the scanner's upsert matches on,
+// so the row whose hash is updated here is the row the next rescan compares
+// against.
 //
 // A lookup error is logged at Warn and the write goes ahead without recording:
 // the tag write is what the caller asked for, and a stale hash costs one
@@ -36,7 +63,7 @@ func HashOptionsForPath(store BookFileHashRecorder, path string) WriteTagsSafeOp
 	if store == nil || path == "" {
 		return WriteTagsSafeOptions{}
 	}
-	row, err := store.GetBookFileByPath(path)
+	row, err := BookFileRowAtPath(store, path)
 	if err != nil {
 		logger.New("fileops").Warn("book_file lookup failed; this write will not update the row's hashes: path=%s error=%v",
 			logger.SanitizeLogValue(path), err)

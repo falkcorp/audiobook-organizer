@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 package database
 
@@ -148,7 +148,8 @@ var singleOwnerIndexContendedHook func()
 // WHO TAKES IT. commitBookFileBatchVerified (so CreateBookFile,
 // BatchCreateBookFiles, UpdateBookFile and its hash writers, UpsertBookFile and
 // BatchUpsertBookFiles, MoveBookFilesToBook(Bulk), and the retire, un-retire
-// and rehome writers), ClaimBookFilePathKey, the three book_file delete commits
+// and rehome writers), ClaimBookFilePathKey and ClaimRetiredBookFilePathKey
+// (claimPathKey), the three book_file delete commits
 // (commitWithWindowCascadeIfPresent, commitWithWindowCascade) and the
 // AcoustID-segment wipes. NOT setBookFileRowIfPresent or PatchBookFileFields:
 // they write the primary row key only and never an index key (their field
