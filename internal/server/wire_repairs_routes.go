@@ -1,15 +1,23 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.7.0
+// version: 1.15.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package server
 
 import (
+	"slices"
+	"strings"
+	"time"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
+	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	repairshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/repairs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -32,7 +40,7 @@ func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 	if s.opRegistry != nil {
 		enq = s.opRegistry
 	}
-	h := repairshandler.New(s.repairFixers, enq, s.storeForWiring()).WithPermissionCheck(s.permHolds())
+	h := repairshandler.New(s.repairFixers, enq, s.storeForWiring()).WithPermissionCheck(s.permHolds()).WithOpAccess(s.repairsOpAccess())
 	protected.GET("/repairs", s.perm(auth.PermLibraryView), h.ListFixers)
 	protected.GET("/repairs/owner-status", s.perm(auth.PermLibraryView), h.GetOwnerStatus)
 	protected.POST("/repairs/:fixer/plan", s.perm(auth.PermLibraryEditMetadata), h.StartPlan)
@@ -76,12 +84,116 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 	}
 }
 
+// permHoldsLive is permHolds for a request that outlives its permission check:
+// an event stream, which stays open for hours. It answers permHolds' question
+// (the permissions the request was authenticated with, which for an API key are
+// already narrowed to the key's scopes) and then asks the account's current
+// roles, so a caller whose role was lowered, or whose account was disabled or
+// removed after the stream opened, stops holding what it lost. It can only
+// narrow: a permission granted after the stream opened is not held until the
+// caller reconnects. Auth disabled and a first run hold everything, as
+// permHolds does.
+func (s *Server) permHoldsLive() repairshandler.PermissionCheck {
+	connected := s.permHolds()
+	if !config.AppConfig.EnableAuth {
+		return connected
+	}
+	store := s.storeForWiring()
+	return func(c *gin.Context, p auth.Permission) bool {
+		// The account count is read only for a request with no user on it (a
+		// first run): an authenticated request has users by definition, and the
+		// count walks the whole user keyspace.
+		u, ok := auth.UserFromContext(c.Request.Context())
+		if !ok || u == nil {
+			return connected(c, p)
+		}
+		if !auth.Can(c.Request.Context(), p) {
+			return false
+		}
+		fresh, err := store.GetUserByID(u.ID)
+		if err != nil || fresh == nil {
+			return false
+		}
+		if status := strings.ToLower(strings.TrimSpace(fresh.Status)); status != "" && status != "active" {
+			return false
+		}
+		return slices.Contains(servermiddleware.EffectivePermissionsFor(store, fresh), p)
+	}
+}
+
+// liveRecheckTTL is the shortest time between two live questions an open event
+// stream puts to the store about its caller (opaccess.Repairs.WithLiveRecheck).
+// It is also how long a role lowered after a stream opened keeps being served,
+// and a disabled account or revoked key keeps its stream open.
+const liveRecheckTTL = 5 * time.Second
+
+// sessionStillStands reports whether the credential a request came in on still
+// stands, for a stream that outlives it: its account exists and is active, the
+// API key it came in on (if any) is not revoked, inactive or expired, and the
+// session (if any) is not revoked or expired. It fails closed, a store failure
+// included: the stream ends and the client reconnects, which re-authenticates
+// it. Auth disabled, and a first run with no accounts yet, stand.
+func (s *Server) sessionStillStands() func(c *gin.Context) bool {
+	if !config.AppConfig.EnableAuth {
+		return func(*gin.Context) bool { return true }
+	}
+	store := s.storeForWiring()
+	return func(c *gin.Context) bool {
+		u, ok := auth.UserFromContext(c.Request.Context())
+		if !ok || u == nil {
+			n, err := store.CountUsers()
+			return err == nil && n == 0
+		}
+		fresh, err := store.GetUserByID(u.ID)
+		if err != nil || fresh == nil {
+			return false
+		}
+		if status := strings.ToLower(strings.TrimSpace(fresh.Status)); status != "" && status != "active" {
+			return false
+		}
+		if key, ok := servermiddleware.CurrentAPIKey(c); ok {
+			k, err := store.GetAPIKey(key.ID)
+			if err != nil || k == nil || k.Status == "revoked" || k.Status == "inactive" {
+				return false
+			}
+			if _, _, refused := servermiddleware.APIKeyExpiryRefusal(k, time.Now()); refused {
+				return false
+			}
+		}
+		if sess, ok := servermiddleware.CurrentSession(c); ok {
+			fresh, err := store.GetSession(sess.ID)
+			if err != nil || fresh == nil || fresh.Revoked || time.Now().After(fresh.ExpiresAt) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 // repairsOpAccess is the check the generic operations routes apply to a
 // Repairs operation's data (result, logs, change journal, listings): the
 // caller must hold the op's fixer's permissions, as the Repairs routes require
 // (see opaccess.Repairs). It asks permHolds, so auth disabled and a first run
 // hold everything, as everywhere else.
+//
+// There is one instance per server (every route family asks the same one), so a
+// route family cannot be left on a stale or differently built check.
 func (s *Server) repairsOpAccess() *opaccess.Repairs {
+	s.repairsOpAccessOnce.Do(func() {
+		s.repairsOpAccessCheck = s.newRepairsOpAccess(s.permHolds()).
+			WithLiveHolds(s.permHoldsLive()).
+			WithLiveSession(s.sessionStillStands()).
+			WithLiveRecheck(liveRecheckTTL, nil)
+	})
+	return s.repairsOpAccessCheck
+}
+
+// newRepairsOpAccess builds the opaccess check over this server's fixers and
+// store for a given way of answering "does the caller hold p". repairsOpAccess
+// passes the request's own (permHolds); a job that runs after its request is
+// gone (the diagnostics export) passes the permissions of the account that
+// queued it (opActorHolds).
+func (s *Server) newRepairsOpAccess(holds func(c *gin.Context, p auth.Permission) bool) *opaccess.Repairs {
 	// A nil *repairs.Registry must not become a non-nil interface: the check
 	// then refuses every repairs op rather than calling Get on nil.
 	var fixers opaccess.FixerLookup
@@ -94,7 +206,182 @@ func (s *Server) repairsOpAccess() *opaccess.Repairs {
 	if s.store != nil {
 		ops = s.Ops()
 	}
-	return opaccess.NewRepairs(fixers, ops, s.permHolds())
+	return opaccess.NewRepairs(fixers, ops, holds)
+}
+
+// opActorPermissions is what the request that queued op row could do, for a
+// job that runs after its request is gone: the account's current roles, capped
+// at the permission set the request held (row.ActorPermissions, stamped by
+// middleware.ActorOptions: an API key's scopes already intersected with its
+// roles). A row with no stamped set (written before 2026-10-26) is capped at
+// the roles alone. An op with no actor, an actor that no longer exists or is not
+// active, or a store failure, holds nothing.
+func (s *Server) opActorPermissions(row *database.OperationV2Row) map[auth.Permission]bool {
+	held := map[auth.Permission]bool{}
+	if row == nil || row.ActorUserID == nil {
+		return held
+	}
+	store := s.storeForWiring()
+	user, err := store.GetUserByID(*row.ActorUserID)
+	if err != nil || user == nil {
+		return held
+	}
+	if status := strings.ToLower(strings.TrimSpace(user.Status)); status != "" && status != "active" {
+		return held
+	}
+	var scoped map[string]bool
+	if len(row.ActorPermissions) > 0 {
+		scoped = make(map[string]bool, len(row.ActorPermissions))
+		for _, p := range row.ActorPermissions {
+			scoped[p] = true
+		}
+	}
+	for _, p := range servermiddleware.EffectivePermissionsFor(store, user) {
+		if scoped == nil || scoped[string(p)] {
+			held[p] = true
+		}
+	}
+	return held
+}
+
+// opActorHolds is a snapshot of what the account that queued operation opID
+// may do, for a job that runs after its request is gone: the permissions
+// opActorPermissions resolves, read once, from the actor stamped on the op row,
+// never from the job's params (params can be set by any caller of the generic
+// start routes, the stamped actor cannot). It fails closed: an op with no actor
+// (started through a route that does not stamp one), an actor that no longer
+// exists, holds no role or is disabled, or a store failure, holds nothing, so
+// every Repairs op and every user-data result is refused. Auth disabled, and a
+// first run with no users yet, hold everything, as permHolds does.
+func (s *Server) opActorHolds(opID string) func(auth.Permission) bool {
+	all := func(auth.Permission) bool { return true }
+	if !config.AppConfig.EnableAuth {
+		return all
+	}
+	store := s.storeForWiring()
+	if n, err := store.CountUsers(); err == nil && n == 0 {
+		return all
+	}
+	row, err := store.GetOperationV2(opID)
+	if err != nil {
+		row = nil
+	}
+	held := s.opActorPermissions(row)
+	return func(p auth.Permission) bool { return held[p] }
+}
+
+// holdsAccess is the opaccess reader for a fixed permission set.
+func (s *Server) holdsAccess(holds func(auth.Permission) bool) *opaccess.Reader {
+	return s.newRepairsOpAccess(func(_ *gin.Context, p auth.Permission) bool { return holds(p) }).For(nil)
+}
+
+// exportNarrowingPermissions is every permission an export's contents depend
+// on: users.manage (user data) and each registered fixer's required permissions
+// (which Repairs operations a reader may see). Two accounts that hold the same
+// subset of these get the same export.
+func (s *Server) exportNarrowingPermissions() []auth.Permission {
+	set := map[auth.Permission]bool{auth.PermUsersManage: true}
+	if s.repairFixers != nil {
+		for _, f := range s.repairFixers.List() {
+			for _, p := range repairs.RequiredPermissions(f) {
+				set[p] = true
+			}
+		}
+	}
+	out := make([]auth.Permission, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// exportNarrowedTo is the part of exportNarrowingPermissions that holds
+// reports as held: the set an export built for that account is narrowed to, and
+// the one the download gate checks the caller against.
+func (s *Server) exportNarrowedTo(holds func(auth.Permission) bool) []string {
+	out := []string{}
+	for _, p := range s.exportNarrowingPermissions() {
+		if holds(p) {
+			out = append(out, string(p))
+		}
+	}
+	return out
+}
+
+// diagnosticsDownloadGate guards GET /diagnostics/export/:operationId/download.
+// The zip was narrowed, when it was built, to what the account it was built for
+// could read, and the build recorded that set on the export's result
+// (diagnostics.ExportResult.NarrowedTo). The download is served only to a
+// caller whose own request holds every permission in it: the request's set,
+// which for an API key is its scopes intersected with its account's roles
+// (permHolds), so a narrowly scoped key of the account that built an admin's
+// export is refused like any other narrow caller. There is no same-account
+// shortcut for that reason.
+//
+// It fails closed. The op must be a completed diagnostics.export (another op's
+// result is not an export, and its path is not ours to serve). A result with no
+// recorded set (an export built before the record existed) is served to
+// nobody: start a new one. An export whose account cannot be read back, no
+// longer exists or is not active is served to nobody either. The record is
+// compared as stored, never against what the account holds now, so a role
+// change after the build neither widens nor narrows it. An op that does not
+// exist falls through to the handler's 404, and one still running to its 202.
+func (s *Server) diagnosticsDownloadGate() gin.HandlerFunc {
+	holds := s.permHolds()
+	return func(c *gin.Context) {
+		opID := c.Param("operationId")
+		store := s.storeForWiring()
+		row, err := store.GetOperationV2(opID)
+		if err != nil || row == nil {
+			c.Next()
+			return
+		}
+		if row.DefID != "diagnostics.export" {
+			httputil.RespondWithNotFound(c, "operation", opID)
+			c.Abort()
+			return
+		}
+		if !config.AppConfig.EnableAuth {
+			c.Next()
+			return
+		}
+		if n, err := store.CountUsers(); err == nil && n == 0 {
+			c.Next()
+			return
+		}
+		if row.Status != "completed" || row.ResultData == nil {
+			c.Next()
+			return
+		}
+		res, err := diagnostics.ParseExportResult(*row.ResultData)
+		if err != nil || res.NarrowedTo == nil {
+			httputil.RespondWithForbidden(c, "this export records no scope it was built for; start a new export")
+			c.Abort()
+			return
+		}
+		if row.ActorUserID != nil {
+			u, err := store.GetUserByID(*row.ActorUserID)
+			if err != nil || u == nil {
+				httputil.RespondWithForbidden(c, "the account this export was built for cannot be read; start a new export")
+				c.Abort()
+				return
+			}
+			if status := strings.ToLower(strings.TrimSpace(u.Status)); status != "" && status != "active" {
+				httputil.RespondWithForbidden(c, "the account this export was built for is not active; start a new export")
+				c.Abort()
+				return
+			}
+		}
+		for _, p := range *res.NarrowedTo {
+			if !holds(c, auth.Permission(p)) {
+				httputil.RespondWithForbidden(c, "this export was built for an account that holds more than you do; start your own export")
+				c.Abort()
+				return
+			}
+		}
+		c.Next()
+	}
 }
 
 // othersUserDataAccess reports whether the request's caller may read other

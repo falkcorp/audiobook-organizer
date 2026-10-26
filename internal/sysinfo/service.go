@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.5.1
+// version: 1.7.0
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package sysinfo
 
@@ -31,6 +31,70 @@ type SystemServiceStore interface {
 	// CollectSystemLogs alone — see the comment at that call site for why
 	// repointing it to v2 would not fix anything.
 	GetRecentOperations(limit int) ([]database.Operation, error)
+}
+
+// Recent operations on the dashboard: Shown is how many are listed, Window how
+// many of the newest are read to find them, so a run of operations the caller
+// may not read does not leave a short list.
+const (
+	RecentOperationsShown  = 5
+	RecentOperationsWindow = 50
+)
+
+// OperationReadCheck reports whether the caller may see an operation row. The
+// server passes opaccess.Reader.MayRead, which hides a Repairs operation (its
+// plan params, its error text naming a target user, its actor) from a caller
+// who may not run its fixer.
+type OperationReadCheck func(row *database.OperationV2Row) bool
+
+// LogReadCheck reports whether the caller may read one log entry. The server
+// passes a check that refuses an entry naming other users' own data to a caller
+// without users.manage (activity.NamesOthersUserLog on its message and details).
+type LogReadCheck func(entry SystemLogEntry) bool
+
+// RecentOperations is the dashboard's "Recent Operations" panel, shared by
+// GET /system/status and GET /dashboard. This read the v1 `operation:` keyspace
+// until 2026-09-07, and nothing has minted a v1 row since that minter was
+// retired on 2026-08-23, so the panel had been frozen for two weeks, showing the
+// same five pre-retirement runs with nothing to indicate the list was stale.
+//
+// database.ListRecentOperationsV2 returns what ListOperationsV2Since with a zero
+// `since` (all history, started_at DESC NULLS LAST) returns, but reads a small
+// recent window instead of decoding every operation row ever written -- which
+// is what the zero-since call did on every status request (5.5-6 s on
+// production, 2026-10-06). row.DefID is the wire `type` here (unlike the fixed
+// constants the reconcile endpoints pass) because the panel displays the def
+// name in a chip rather than keying behaviour off it.
+//
+// Both routes need only library.view, so what they serve is limited to what
+// that role may know of an operation: a row mayRead refuses is left out (the
+// first RecentOperationsShown readable of the newest RecentOperationsWindow are
+// returned), and result_data is dropped for every operation -- it is a
+// per-operation payload (a plan, a row-by-row apply report) and the panel shows
+// a name, a status and a time; the operation's own result route serves it to
+// the callers who may read it. A nil mayRead serves no operations. It never
+// returns nil, and a store error serves an empty list.
+func RecentOperations(store database.OperationsV2SinceLister, now time.Time, mayRead OperationReadCheck) []database.Operation {
+	recent := []database.Operation{}
+	if mayRead == nil {
+		return recent
+	}
+	rows, err := database.ListRecentOperationsV2(store, RecentOperationsWindow, now)
+	if err != nil {
+		return recent
+	}
+	for i := range rows {
+		if len(recent) == RecentOperationsShown {
+			break
+		}
+		if !mayRead(&rows[i]) {
+			continue
+		}
+		op := rows[i].AsLegacyOperation(rows[i].DefID)
+		op.ResultData = nil
+		recent = append(recent, *op)
+	}
+	return recent
 }
 
 // LibrarySizesFn computes library and import-path disk usage.
@@ -126,8 +190,11 @@ type SystemLogEntry struct {
 	Details     *string   `json:"details,omitempty"`
 }
 
-// CollectSystemStatus gathers system status information
-func (ss *SystemService) CollectSystemStatus() (*SystemStatus, error) {
+// CollectSystemStatus gathers system status information. mayRead decides which
+// recent operations the caller may see (see OperationReadCheck): nil serves
+// none, so a caller that forgets to say who is asking gets an empty panel, not
+// every operation.
+func (ss *SystemService) CollectSystemStatus(mayRead OperationReadCheck) (*SystemStatus, error) {
 	if ss.db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -145,26 +212,9 @@ func (ss *SystemService) CollectSystemStatus() (*SystemStatus, error) {
 		dbStats = &database.LibraryStats{}
 	}
 
-	// The dashboard's "Recent Operations" panel. This read the v1 `operation:`
-	// keyspace until 2026-09-07, and nothing has minted a v1 row since that
-	// minter was retired on 2026-08-23 — so the panel had been frozen for two
-	// weeks, showing the same five pre-retirement runs to anyone who loaded the
-	// page, with nothing to indicate the list was stale.
-	//
-	// ListRecentOperationsV2 returns exactly what ListOperationsV2Since with a
-	// zero `since` (all history, started_at DESC NULLS LAST) returns for five
-	// rows, but reads a small recent window instead of decoding every
-	// operation row ever written -- which is what the zero-since call did, on
-	// every status request (5.5-6 s on production, 2026-10-06). row.DefID is
-	// the wire `type` here (unlike the fixed constants the reconcile
-	// endpoints pass) because this panel displays the def name in a chip
-	// rather than keying behaviour off it.
-	recentOps := []database.Operation{}
-	if rows, err := database.ListRecentOperationsV2(ss.db, 5, time.Now()); err == nil {
-		for i := range rows {
-			recentOps = append(recentOps, *rows[i].AsLegacyOperation(rows[i].DefID))
-		}
-	}
+	// The dashboard's "Recent Operations" panel; see RecentOperations for what
+	// it reads, why it reads a window, and what it leaves out.
+	recentOps := RecentOperations(ss.db, time.Now(), mayRead)
 
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
@@ -292,8 +342,12 @@ func (ss *SystemService) GetFormattedUptime(startTime time.Time) string {
 	return time.Since(startTime).String()
 }
 
-// CollectSystemLogs gathers logs for recent operations with filtering and pagination.
-func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset int) ([]SystemLogEntry, int, error) {
+// CollectSystemLogs gathers logs for recent operations with filtering and
+// pagination. mayRead decides which entries the caller may read: it is applied
+// before the entries are counted and sliced, so total and the page agree with
+// what the caller sees. A nil mayRead serves none, so a caller that forgets to
+// say who is asking gets an empty list, not every line.
+func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset int, mayRead LogReadCheck) ([]SystemLogEntry, int, error) {
 	if ss.db == nil {
 		return nil, 0, fmt.Errorf("database not initialized")
 	}
@@ -350,13 +404,17 @@ func (ss *SystemService) CollectSystemLogs(level, search string, limit, offset i
 				}
 			}
 
-			allLogs = append(allLogs, SystemLogEntry{
+			entry := SystemLogEntry{
 				OperationID: op.ID,
 				Timestamp:   logEntry.CreatedAt,
 				Level:       logEntry.Level,
 				Message:     logEntry.Message,
 				Details:     logEntry.Details,
-			})
+			}
+			if mayRead == nil || !mayRead(entry) {
+				continue
+			}
+			allLogs = append(allLogs, entry)
 		}
 	}
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package handlers_test
 
@@ -329,7 +329,7 @@ func TestDiagnosticsHandler_GetAIResults_ReadsTheV2Row(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions"}],"raw_responses":[{"custom_id":"c1"}]}`
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed", ResultData: new(rd)}, nil)
 	store.AssertNotCalled(t, "GetOperationByID", mock.Anything)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
@@ -349,7 +349,7 @@ func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-1").
 		Return(&database.OperationV2Row{
-			ID: "op-1", Status: "running", ProgressMessage: "Batch b-9: in_progress (poll 3/288)",
+			ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "running", ProgressMessage: "Batch b-9: in_progress (poll 3/288)",
 		}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
@@ -371,7 +371,7 @@ func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 func TestDiagnosticsHandler_GetAIResults_CompletedWithNoResult_IsEmptyNot500(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed"}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed"}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",

@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package server
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -426,7 +427,7 @@ func (s *Server) recordEmailDisplaced(newUserID string, displacedUserIDs []strin
 	if err := s.activityService.Record(database.ActivityEntry{
 		Timestamp: time.Now().UTC(),
 		Tier:      "audit",
-		Type:      "auth_email_displaced",
+		Type:      activity.TypeAuthEmailDisplaced,
 		Level:     "warn",
 		Source:    source,
 		Summary: fmt.Sprintf("%s claimed an email that %d account(s) had set without verification; their email was cleared and account %s was created",

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.3.0
+// version: 1.10.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package opsv3
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -40,15 +41,38 @@ func (h *Handler) ListRuns(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, err := rd.ListRunsV3(database.RunQuery{
-		DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit,
-	})
+	q := database.RunQuery{DefID: c.Query("def_id"), State: st, Cursor: c.Query("cursor"), Limit: limit}
+	// A Repairs run the caller may not read is left out by the store, inside the
+	// one pass that counts and pages: total is the number of runs the caller may
+	// read for the filter (the number /counts reports for it), the page is full
+	// while readable runs remain, and next_cursor never points past the last one.
+	// A def filter that names no Repairs definition has nothing to hide, so it
+	// keeps the store's key-only count; otherwise every record is judged once.
+	if q.DefID == "" || opaccess.IsRepairsOp(q.DefID) {
+		reader := h.d.RepairsAccess.For(c)
+		// The runs the caller may not read are known from the def indexes, so the
+		// store skips their keys before it reads a record: a corrupt record of a
+		// hidden run cannot fail this list. Keep still judges every record it
+		// reads (a run created since the census), and a visible record that cannot
+		// be decoded is skipped and logged rather than failing the page.
+		hidden, err := h.hiddenIDs(reader, rd, q.DefID)
+		if err != nil {
+			storeErr(c, "list runs", err)
+			return
+		}
+		q.SkipID = func(id string) bool { _, ok := hidden[id]; return ok }
+		q.Keep = reader.MayReadRun
+		q.OnUndecodable = func(id string, err error) {
+			accessLog.Warn("run %s cannot be read and is left out of this list: %v", logger.SanitizeLogValue(id), err)
+		}
+	}
+	page, err := rd.ListRunsV3(q)
 	if err != nil {
 		storeErr(c, "list runs", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"items": h.views(page.Runs), "next_cursor": page.Next, "total": page.Total,
+		"items": h.views(c, page.Runs), "next_cursor": page.Next, "total": page.Total,
 	})
 }
 
@@ -67,7 +91,10 @@ func (h *Handler) GetRun(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
 		return
 	}
-	c.JSON(http.StatusOK, toView(*rec, h.zombieSet()))
+	if !h.mayReadRun(c, rec) {
+		return
+	}
+	c.JSON(http.StatusOK, toView(*rec, h.zombieSet(), h.d.RepairsAccess.For(c).UserText))
 }
 
 // startBody is the body of POST /api/v3/ops/defs/:id/runs. Def is read only
@@ -146,6 +173,13 @@ func (h *Handler) StartRun(c *gin.Context) {
 		httputil.RespondWithValidationError(c, "params", perr)
 		return
 	}
+	// A Repairs definition carries no permission of its own beyond the generic
+	// one, so the fixer its params name decides who may start it, as on the
+	// Repairs routes (users.manage for the Audible read-status fixer).
+	if ref := h.d.RepairsAccess.For(c).CheckStart(defID, params); ref != nil {
+		ref.Respond(c)
+		return
+	}
 	if len(def.ParamsSchema) > 0 {
 		violations, err := ValidateParams(def.ParamsSchema, params)
 		if err != nil {
@@ -173,7 +207,7 @@ func (h *Handler) StartRun(c *gin.Context) {
 		return
 	}
 
-	opts := actorOptions(c)
+	opts := servermiddleware.ActorOptions(c)
 	runID, err := h.d.Enqueuer.EnqueueOp(c.Request.Context(), defID, params, opts...)
 	if err != nil {
 		httputil.InternalError(c, "enqueue failed", err)
@@ -258,20 +292,6 @@ func resolveNoPreview(defID string, params json.RawMessage, mode string) (json.R
 	return params, modeErr{}
 }
 
-// actorOptions records who started the run and how they were verified. The
-// identity is the verified session or token only; a forwarded email header is
-// never read here.
-func actorOptions(c *gin.Context) []opsregistry.EnqueueOption {
-	var opts []opsregistry.EnqueueOption
-	if u, ok := auth.UserFromContext(c.Request.Context()); ok {
-		opts = append(opts, opsregistry.WithActor(u.ID))
-		if m := servermiddleware.CurrentAuthMethod(c); m != auth.MethodNone {
-			opts = append(opts, opsregistry.WithActorAuthMethod(string(m)))
-		}
-	}
-	return opts
-}
-
 // CancelRun implements POST /api/v3/ops/runs/:id/cancel. The caller must be
 // the user who started the run, or hold scan.trigger (the start floor) and
 // the definition's permission. v1's DELETE /operations/v2/:id is stricter
@@ -292,6 +312,11 @@ func (h *Handler) CancelRun(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
+		return
+	}
+	// A Repairs run the caller may not read is refused before anything of it (its
+	// state in the 409s below) is said, except to the user who started it.
+	if !h.startedBy(c, rec) && !h.mayReadRun(c, rec) {
 		return
 	}
 	if !h.mayCancel(c, rec) {
@@ -320,10 +345,16 @@ func (h *Handler) CancelRun(c *gin.Context) {
 	accepted(c, gin.H{"run_id": rec.ID})
 }
 
+// startedBy reports whether the caller is the user who started rec.
+func (h *Handler) startedBy(c *gin.Context, rec *database.RunRecord) bool {
+	u, ok := auth.UserFromContext(c.Request.Context())
+	return ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID
+}
+
 // mayCancel: the run's starter, or scan.trigger plus the definition's
 // permissions.
 func (h *Handler) mayCancel(c *gin.Context, rec *database.RunRecord) bool {
-	if u, ok := auth.UserFromContext(c.Request.Context()); ok && rec.Actor.UserID != "" && u.ID == rec.Actor.UserID {
+	if h.startedBy(c, rec) {
 		return true
 	}
 	var def DefInfo
@@ -367,6 +398,9 @@ func (h *Handler) ApproveRun(c *gin.Context) {
 	}
 	if rec == nil {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
+		return
+	}
+	if !h.mayReadRun(c, rec) {
 		return
 	}
 	approver := auth.Permission(auth.PermSettingsManage)

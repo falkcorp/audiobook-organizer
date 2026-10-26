@@ -1,7 +1,7 @@
 // file: internal/merge/repair_user_state.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f3c1a92-8e5b-4d07-b4a1-3c9e7f2d5b18
-// last-edited: 2026-10-13
+// last-edited: 2026-10-26
 
 package merge
 
@@ -19,6 +19,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"golang.org/x/sync/errgroup"
 )
+
+// UserStateRepairOpID is the operation definition that runs RepairMergedUserState
+// (internal/plugins/maintenance). Its stored result is a UserStateRepairReport,
+// whose items name users and the books they have listening state on, which is
+// why the generic result route asks opaccess.ResultUserDataDefs about it.
+const UserStateRepairOpID = "maintenance.repair-merged-user-state"
 
 // UserStateRepairStore is what RepairMergedUserState needs: the follow's own
 // surface plus the reads that find stranded rows. Every method is on

@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service.go
-// version: 1.8.0
+// version: 1.10.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
-// last-edited: 2026-09-07
+// last-edited: 2026-10-26
 
 package diagnostics
 
@@ -128,6 +128,20 @@ type missingFieldEntry struct {
 // registry's Reporter.UpdateProgress takes. A nil ProgressFunc is allowed.
 type ProgressFunc func(current, total int, message string)
 
+// ExportOptions narrows what an export carries to what the person who asked for
+// it may read. The export runs as an operation after the request is gone, so the
+// caller's permissions are resolved by the caller of GenerateExport and handed in
+// as these two functions; the zero value keeps everything whole.
+type ExportOptions struct {
+	// Operation sees each operation row that would go into operations.json and
+	// returns the row to write (its result and params may be blanked) and
+	// whether to include it at all. nil keeps every row whole.
+	Operation func(database.OperationV2Row) (database.OperationV2Row, bool)
+	// Log sees each server log row that would go into logs.json, as Operation
+	// does for operation rows. nil keeps every row whole.
+	Log func(database.SystemActivityLog) (database.SystemActivityLog, bool)
+}
+
 // GenerateExport creates a temporary ZIP file containing diagnostic data.
 // Category must be one of: "deduplication", "error_analysis", "metadata_quality", "general".
 //
@@ -142,7 +156,7 @@ type ProgressFunc func(current, total int, message string)
 // ctx is checked between phases. It cannot interrupt a phase already in flight
 // (the write helpers take no ctx), which bounds the cancellation granularity at
 // one file rather than the whole export.
-func (ds *Service) GenerateExport(ctx context.Context, category, description string, onProgress ProgressFunc) (string, error) {
+func (ds *Service) GenerateExport(ctx context.Context, category, description string, opts ExportOptions, onProgress ProgressFunc) (string, error) {
 	if onProgress == nil {
 		onProgress = func(int, int, string) {}
 	}
@@ -181,8 +195,8 @@ func (ds *Service) GenerateExport(ctx context.Context, category, description str
 	}
 	if category == "error_analysis" || category == "general" {
 		phases = append(phases,
-			phase{"logs", func() error { return ds.writeLogs(zw) }},
-			phase{"operations.json", func() error { return ds.writeOperations(zw) }},
+			phase{"logs", func() error { return ds.writeLogs(zw, opts.Log) }},
+			phase{"operations.json", func() error { return ds.writeOperations(zw, opts.Operation) }},
 		)
 	}
 	if category == "deduplication" || category == "general" {
@@ -364,7 +378,7 @@ func (ds *Service) writeBatchJSONL(zw *zip.Writer, category, description string,
 	return WriteRaw(zw, "batch.jsonl", data)
 }
 
-func (ds *Service) writeLogs(zw *zip.Writer) error {
+func (ds *Service) writeLogs(zw *zip.Writer, redact func(database.SystemActivityLog) (database.SystemActivityLog, bool)) error {
 	logs, err := ds.db.GetSystemActivityLogs("", 10000)
 	if err != nil {
 		logs = []database.SystemActivityLog{}
@@ -373,13 +387,31 @@ func (ds *Service) writeLogs(zw *zip.Writer) error {
 	// Filter to last 24 hours
 	cutoff := time.Now().Add(-24 * time.Hour)
 	filtered := make([]database.SystemActivityLog, 0, len(logs))
+	withheld := 0
 	for _, log := range logs {
-		if log.CreatedAt.After(cutoff) {
-			filtered = append(filtered, log)
+		if !log.CreatedAt.After(cutoff) {
+			continue
 		}
+		if redact != nil {
+			var keep bool
+			if log, keep = redact(log); !keep {
+				withheld++
+				continue
+			}
+		}
+		filtered = append(filtered, log)
 	}
 
-	return WriteJSON(zw, "logs.json", filtered)
+	if err := WriteJSON(zw, "logs.json", filtered); err != nil {
+		return err
+	}
+	if withheld == 0 {
+		return nil
+	}
+	// Said, not silent, as operations_withheld.txt is: a log that quietly lacks
+	// lines reads as a quiet system.
+	return WriteRaw(zw, "logs_withheld.txt", []byte(fmt.Sprintf(
+		"%d log line(s) from the last 24 hours were left out of logs.json: they name a user or come from a user-data subsystem, and the account that requested this export may not read them.\n", withheld)))
 }
 
 // writeOperations dumps recent operations into the diagnostics bundle.
@@ -394,12 +426,36 @@ func (ds *Service) writeLogs(zw *zip.Writer) error {
 // A zero `since` means "no lower bound"; the limit does the bounding, and
 // ListOperationsV2Since sorts newest-first (started_at DESC NULLS LAST,
 // queued_at DESC), so this is genuinely the most recent 100.
-func (ds *Service) writeOperations(zw *zip.Writer) error {
+//
+// redact is ExportOptions.Operation: the rows are dumped whole (params, result
+// and error), which for a Repairs run or a user-merge names other users, so the
+// export asks it for each row before writing.
+func (ds *Service) writeOperations(zw *zip.Writer, redact func(database.OperationV2Row) (database.OperationV2Row, bool)) error {
 	ops, err := ds.db.ListOperationsV2Since(time.Time{}, 100)
 	if err != nil {
 		ops = []database.OperationV2Row{}
 	}
-	return WriteJSON(zw, "operations.json", ops)
+	withheld := 0
+	if redact != nil {
+		kept := make([]database.OperationV2Row, 0, len(ops))
+		for _, op := range ops {
+			if op, keep := redact(op); keep {
+				kept = append(kept, op)
+			} else {
+				withheld++
+			}
+		}
+		ops = kept
+	}
+	if err := WriteJSON(zw, "operations.json", ops); err != nil {
+		return err
+	}
+	if withheld == 0 {
+		return nil
+	}
+	// Said, not silent: a file that quietly lacks rows reads as a quiet system.
+	return WriteRaw(zw, "operations_withheld.txt", []byte(fmt.Sprintf(
+		"%d operation row(s) were left out of operations.json: the account that requested this export may not read them.\n", withheld)))
 }
 
 func (ds *Service) writeVersionGroups(zw *zip.Writer, allBooks []database.BookCore) error {

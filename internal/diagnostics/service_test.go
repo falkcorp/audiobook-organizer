@@ -1,7 +1,7 @@
 // file: internal/diagnostics/service_test.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: d1a9n0st-1cs0-t3st-s3rv-1c3t3st0001
-// last-edited: 2026-09-07
+// last-edited: 2026-10-26
 
 package diagnostics
 
@@ -24,6 +24,12 @@ import (
 )
 
 func setupDiagnosticsMocks(t *testing.T) *dbmocks.MockStore {
+	return setupDiagnosticsMocksWith(t, nil, nil)
+}
+
+// setupDiagnosticsMocksWith is setupDiagnosticsMocks with operation rows and
+// server log rows for the export to read.
+func setupDiagnosticsMocksWith(t *testing.T, ops []database.OperationV2Row, logs []database.SystemActivityLog) *dbmocks.MockStore {
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().GetAllBooksCore(10000, 0).Return([]database.BookCore{
 		{ID: "book1", Title: "Test Book"},
@@ -38,8 +44,8 @@ func setupDiagnosticsMocks(t *testing.T) *dbmocks.MockStore {
 	store.EXPECT().CountPrimaryBooks().Return(1, nil).Maybe()
 	store.EXPECT().CountAuthors().Return(0, nil).Maybe()
 	store.EXPECT().CountSeries().Return(0, nil).Maybe()
-	store.EXPECT().GetSystemActivityLogs("", 10000).Return(nil, nil).Maybe()
-	store.EXPECT().ListOperationsV2Since(mock.Anything, 100).Return(nil, nil).Maybe()
+	store.EXPECT().GetSystemActivityLogs("", 10000).Return(logs, nil).Maybe()
+	store.EXPECT().ListOperationsV2Since(mock.Anything, 100).Return(ops, nil).Maybe()
 	return store
 }
 
@@ -63,7 +69,7 @@ func TestService_GenerateExport_Deduplication(t *testing.T) {
 	store := setupDiagnosticsMocks(t)
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport(context.Background(), "deduplication", "test export", nil)
+	zipPath, err := svc.GenerateExport(context.Background(), "deduplication", "test export", ExportOptions{}, nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -119,7 +125,7 @@ func TestService_GenerateExport_ErrorAnalysis(t *testing.T) {
 	}, nil).Maybe()
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport(context.Background(), "error_analysis", "debug errors", nil)
+	zipPath, err := svc.GenerateExport(context.Background(), "error_analysis", "debug errors", ExportOptions{}, nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -165,7 +171,7 @@ func TestService_GenerateExport_MetadataQuality(t *testing.T) {
 	store.EXPECT().CountPrimaryBooks().Return(3, nil).Maybe()
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport(context.Background(), "metadata_quality", "check quality", nil)
+	zipPath, err := svc.GenerateExport(context.Background(), "metadata_quality", "check quality", ExportOptions{}, nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -192,7 +198,7 @@ func TestService_GenerateExport_General(t *testing.T) {
 	store := setupDiagnosticsMocks(t)
 
 	svc := NewService(store, nil, "")
-	zipPath, err := svc.GenerateExport(context.Background(), "general", "full export", nil)
+	zipPath, err := svc.GenerateExport(context.Background(), "general", "full export", ExportOptions{}, nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 
@@ -308,7 +314,7 @@ func TestService_GenerateExport_ReportsProgressEveryPhase(t *testing.T) {
 	}
 	var frames []frame
 
-	zipPath, err := svc.GenerateExport(context.Background(), "general", "progress test",
+	zipPath, err := svc.GenerateExport(context.Background(), "general", "progress test", ExportOptions{},
 		func(cur, total int, msg string) { frames = append(frames, frame{cur, total, msg}) })
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
@@ -340,9 +346,76 @@ func TestService_GenerateExport_HonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	zipPath, err := svc.GenerateExport(ctx, "general", "canceled", nil)
+	zipPath, err := svc.GenerateExport(ctx, "general", "canceled", ExportOptions{}, nil)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, zipPath, "a canceled export must not hand back a path")
+}
+
+// ExportOptions is how an export is narrowed to what its requester may read:
+// operations.json and logs.json go through the functions it carries, a row
+// they refuse is left out and counted in operations_withheld.txt (so a quiet
+// file is not mistaken for a quiet system), and the zero value changes nothing.
+func TestService_GenerateExport_AppliesExportOptions(t *testing.T) {
+	now := time.Now()
+	repairResult, repairParams := `{"items":[{"user_id":"01INVENTEDLISTENER000000A"}]}`, `{"target_user_id":"01INVENTEDLISTENER000000A"}`
+	scanResult := `{"scanned":3}`
+	ops := []database.OperationV2Row{
+		{ID: "op-hidden", DefID: "repairs.apply", Params: repairParams, ResultData: &repairResult},
+		{ID: "op-blanked", DefID: "maintenance.repair-merged-user-state", Params: repairParams, ResultData: &repairResult},
+		{ID: "op-scan", DefID: "library.scan", Params: `{}`, ResultData: &scanResult},
+	}
+	logs := []database.SystemActivityLog{
+		{ID: 1, UserID: "01INVENTEDLISTENER000000A", Source: "abs", Message: "progress patch user=01INVENTEDLISTENER000000A", CreatedAt: now},
+		{ID: 2, UserID: "01INVENTEDLISTENER000000A", Source: "scanner", Message: "scan complete count=12", CreatedAt: now},
+	}
+	opts := ExportOptions{
+		Operation: func(r database.OperationV2Row) (database.OperationV2Row, bool) {
+			switch r.ID {
+			case "op-hidden":
+				return r, false
+			case "op-blanked":
+				r.Params, r.ResultData = "", nil
+			}
+			return r, true
+		},
+		Log: func(l database.SystemActivityLog) (database.SystemActivityLog, bool) {
+			l.UserID = ""
+			return l, !strings.Contains(l.Message, "user=")
+		},
+	}
+
+	export := func(opts ExportOptions) (opsJSON, logsJSON string, names map[string]bool) {
+		svc := NewService(setupDiagnosticsMocksWith(t, ops, logs), nil, "")
+		zipPath, err := svc.GenerateExport(context.Background(), "general", "options", opts, nil)
+		require.NoError(t, err)
+		defer os.Remove(zipPath)
+		r, err := zip.OpenReader(zipPath)
+		require.NoError(t, err)
+		defer r.Close()
+		names = map[string]bool{}
+		for _, f := range r.File {
+			names[f.Name] = true
+		}
+		return string(readZipFile(t, r, "operations.json")), string(readZipFile(t, r, "logs.json")), names
+	}
+
+	opsJSON, logsJSON, names := export(opts)
+	assert.NotContains(t, opsJSON, "op-hidden", "a row the requester may not read is left out")
+	assert.NotContains(t, opsJSON, "01INVENTEDLISTENER000000A", "no user id survives in an operation row")
+	assert.Contains(t, opsJSON, "op-blanked", "a row whose result is user data stays, blanked")
+	assert.Contains(t, opsJSON, "op-scan")
+	assert.Contains(t, opsJSON, `scanned`, "an ordinary result is untouched")
+	assert.True(t, names["operations_withheld.txt"], "the omission is said")
+	assert.True(t, names["logs_withheld.txt"], "withheld log lines are counted in a note, not dropped silently")
+	assert.NotContains(t, logsJSON, "01INVENTEDLISTENER000000A", "neither the user id column nor a line naming a user")
+	assert.Contains(t, logsJSON, "scan complete")
+
+	opsJSON, logsJSON, names = export(ExportOptions{})
+	assert.Contains(t, opsJSON, "op-hidden", "the zero options keep every row whole")
+	assert.Contains(t, opsJSON, "01INVENTEDLISTENER000000A")
+	assert.Contains(t, logsJSON, "progress patch")
+	assert.False(t, names["operations_withheld.txt"])
+	assert.False(t, names["logs_withheld.txt"])
 }

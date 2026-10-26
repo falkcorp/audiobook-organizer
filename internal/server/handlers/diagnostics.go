@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.24.0
+// version: 1.29.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"log/slog"
 	"os"
 	"runtime/debug"
@@ -310,7 +311,13 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 	// Return the id EnqueueOp minted. The client polls this against
 	// GET /operations/v2/:id and passes it back to DownloadExport, so it has to
 	// be the v2 run's own id — a separately-minted legacy id resolves at neither.
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params)
+	//
+	// The caller is stamped on the op as its actor: the export runs after this
+	// request is gone and narrows its operation rows and log lines to what that
+	// account may read (server.diagnosticsExportOptionsFor), re-read from the op
+	// row rather than taken from params, which a generic start can set.
+	opts := servermiddleware.ActorOptions(c)
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params, opts...)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
 		return
@@ -378,13 +385,13 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 		return
 	}
 
-	var result map[string]string
-	if err := json.Unmarshal([]byte(*op.ResultData), &result); err != nil {
+	result, err := diagnostics.ParseExportResult(*op.ResultData)
+	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to parse result data")
 		return
 	}
 
-	zipPath := result["zip_path"]
+	zipPath := result.ZipPath
 	if zipPath == "" {
 		httputil.RespondWithInternalError(c, "zip path not found in result")
 		return
@@ -455,7 +462,10 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 	}
 
 	op, err := store.GetOperationV2(opID)
-	if err != nil || op == nil {
+	// Only a diagnostics AI run answers here. The id in the URL is any
+	// operation's, and a status, progress message and result of another one
+	// (a Repairs run the caller may not read, say) is not this route's to serve.
+	if err != nil || op == nil || op.DefID != DiagnosticsAIDefID {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}

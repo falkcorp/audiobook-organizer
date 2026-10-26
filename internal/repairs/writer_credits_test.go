@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 1b72196d-b654-4270-bd15-c54923102210
-// last-edited: 2026-10-04
+// last-edited: 2026-10-25
 
 package repairs
 
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // creditFake is a credit junction plus an op journal. journalLog records the
@@ -124,9 +125,10 @@ func TestWriter_ModifyCredits_JournalFailureWritesNothing(t *testing.T) {
 	f := &creditFake{credits: map[string][]database.BookAuthor{"b1": orig}, failJournl: true}
 	w := credWriter(s, f)
 	_, err := w.ModifyCredits("b1", func(cur []database.BookAuthor) ([]database.BookAuthor, UndoEntry, error) {
-		return nil, UndoEntry{ChangeType: "x"}, nil
+		return nil, UndoEntry{ChangeType: undo.ChangeTypeJunkAuthorCredits}, nil
 	})
 	require.ErrorIs(t, err, ErrNotJournaled)
+	require.NotErrorIs(t, err, ErrUnclassifiedChangeType, "the journal failed, not the classification")
 	require.Equal(t, orig, f.credits["b1"], "no journal row, no write")
 	require.Empty(t, f.order)
 }
@@ -152,7 +154,7 @@ func TestWriter_ModifyCredits_SkipAndRefusal(t *testing.T) {
 		return nil, UndoEntry{}, nil
 	})
 	require.Error(t, err)
-	require.ErrorIs(t, bare.RecordChange("b1", UndoEntry{ChangeType: "x"}), ErrNotJournaled)
+	require.ErrorIs(t, bare.RecordChange("b1", UndoEntry{ChangeType: undo.ChangeTypeJunkAuthorCredits}), ErrNotJournaled)
 }
 
 // SetPrimaryAuthor's history batch is marked apply_op_journaled when the

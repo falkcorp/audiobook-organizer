@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-10-08
+// last-edited: 2026-10-26
 
 package handlers
 
@@ -310,7 +310,7 @@ func (h *ITunesHandler) Import(c *gin.Context) {
 	}
 
 	params := itunesImportOpParams{Request: svcReq}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "itunes.import", params)
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), ITunesImportDefID, params)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue operation", enqErr)
 		return
@@ -426,6 +426,12 @@ func (h *ITunesHandler) ListBooks(c *gin.Context) {
 	httputil.RespondWithOK(c, resp)
 }
 
+// ITunesImportDefID is the registry id of the iTunes import operation. The
+// import status routes answer only for a run of this def: the id in the URL is
+// any operation's, and its status and progress message are served to every
+// caller of the route, including those of a Repairs run the caller may not read.
+const ITunesImportDefID = "itunes.import"
+
 // ImportStatus returns the status of an iTunes import operation.
 func (h *ITunesHandler) ImportStatus(c *gin.Context) {
 	if !h.itunesEnabledOrError(c) {
@@ -438,6 +444,9 @@ func (h *ITunesHandler) ImportStatus(c *gin.Context) {
 
 	opID := c.Param("id")
 	op, err := h.store.GetOperationV2(opID)
+	if err == nil && op != nil && op.DefID != ITunesImportDefID {
+		op = nil // not an import run: indistinguishable from an absent one
+	}
 	if err != nil || op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
@@ -484,7 +493,7 @@ func (h *ITunesHandler) ImportStatusBulk(c *gin.Context) {
 	results := make(map[string]ITunesImportStatusResponse, len(req.IDs))
 	for _, opID := range req.IDs {
 		op, err := h.store.GetOperationV2(opID)
-		if err != nil || op == nil {
+		if err != nil || op == nil || op.DefID != ITunesImportDefID {
 			continue
 		}
 		progress := calculatePercent(op.ProgressCurrent, op.ProgressTotal)

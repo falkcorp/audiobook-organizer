@@ -1,7 +1,7 @@
 // file: internal/server/handlers_unit_test.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: f8a2d1c3-4b5e-6789-abcd-ef0123456789
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 //
 // Unit tests for HTTP handlers using MockStore + httptest.
 // Focuses on handlers that directly call s.Ops() without
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -395,7 +396,7 @@ func TestHandler_GetDashboard_Success(t *testing.T) {
 	// keyspace) on 2026-09-07: nothing has minted a v1 row since the minter was
 	// retired 2026-08-23, so it was serving five rows from mid-August with
 	// nothing to mark them stale.
-	mockStore.EXPECT().ListOperationsV2Since(time.Time{}, 5).Return(nil, nil)
+	mockStore.EXPECT().ListOperationsV2Since(time.Time{}, system.RecentOperationsWindow).Return(nil, nil)
 
 	router.GET("/dashboard", newSystemHandler(srv).GetDashboard)
 

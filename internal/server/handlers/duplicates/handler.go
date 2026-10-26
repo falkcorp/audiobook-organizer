@@ -39,13 +39,13 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/gin-gonic/gin"
 )
 
@@ -375,7 +375,7 @@ func warningsWithoutUsers(ws []string) []string {
 
 // withoutUser is s, or "" when s mentions a user (see warningsWithoutUsers).
 func withoutUser(s string) string {
-	if strings.Contains(strings.ToLower(s), "user") {
+	if undo.NamesUser(s) {
 		return ""
 	}
 	return s

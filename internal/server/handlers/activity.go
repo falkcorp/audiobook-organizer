@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.13.0
+// version: 1.19.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers
 
@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -22,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
 )
@@ -29,6 +32,10 @@ import (
 // statusClientClosedRequest is nginx's 499: the client went away before the
 // response was written. Not in net/http, so it is spelled out here.
 const statusClientClosedRequest = 499
+
+// activityLog routes this file's own log lines through internal/logger, which
+// strips control characters from values; the slog guard forbids new direct calls.
+var activityLog = logger.New("activity")
 
 // abortIfClientGone reports whether err is a cancelled/expired request context
 // and, when it is, ends the request with 499 and no body.
@@ -102,6 +109,31 @@ type ActivityHandler struct {
 	// data (users.manage). nil: no caller may (activity.WithoutOthersUserData
 	// applies to everyone). See WithActivityOthersUserData.
 	othersUserData func(*gin.Context) bool
+
+	// repairsAccess and opRows decide, per operation, whether the caller may read
+	// the activity of a Repairs operation (see WithActivityRepairsAccess). opRows
+	// nil means no operation can be resolved, so nothing is hidden; repairsAccess
+	// nil with opRows set refuses every Repairs operation. opRuns is the v3 run
+	// lookup for an operation whose v2 row is missing.
+	repairsAccess *opaccess.Repairs
+	opRows        ActivityOperationReader
+	opRuns        ActivityRunReader // may be nil
+}
+
+// ActivityOperationReader is what the activity handler reads of an operation to
+// tell whether it is a Repairs one: its operations_v2 row, whose definition and
+// params say which fixer it belongs to. database.Store implements it. It is
+// separate from ActivityOpsStore, which is mocked and read only for log
+// fallbacks.
+type ActivityOperationReader interface {
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+}
+
+// ActivityRunReader is the same read through the operation's v3 run record, for
+// an operation whose v2 row is missing. The PebbleStore implements it (it is not
+// part of database.Store); nil means no v3 lookup.
+type ActivityRunReader interface {
+	GetRunV3(id string) (*database.RunRecord, error)
 }
 
 // ActivityOpDefLookup resolves an operation def ID -- canonical or a former ID
@@ -144,6 +176,322 @@ func withoutOthersUserData(entries []database.ActivityEntry, seeAll bool) {
 	for i := range entries {
 		entries[i] = activity.WithoutOthersUserData(entries[i])
 	}
+}
+
+// WithActivityRepairsAccess keeps the activity of a Repairs operation
+// (repairs.plan, repairs.apply) to callers who hold the permissions of the
+// operation's fixer, as every other read of those operations does (opaccess).
+// The engine's log lines for an owner apply carry the owner's user id, and an
+// activity row is tied to its operation by id only (the slog "system" rows carry
+// no def tag), so each read resolves the operation from its operations_v2 row
+// and, when that is gone, its v3 run record (runs may be nil: no v3 lookup):
+//
+//   - GET /operations/:id/activity answers 403 for an operation the caller may
+//     not read, before querying anything (the op-log fallback included);
+//   - POST /operations/activity/merged leaves such members out of the read and of
+//     operation_ids, and answers 403 when every member is one;
+//   - GET /activity leaves their rows (and the Summarize rows naming them) out
+//     inside the store's scan, so its page, offset and total are counted
+//     without them. A daily digest (CompactByDay folds a day's rows into one
+//     row whose Details.items copy each folded row's type, operation id,
+//     summary and tags) is not hidden: it names no operation itself, and
+//     hiding it would hide the day's other activity. Its items are redacted on
+//     the returned page instead, by the same verdicts, which leaves the page,
+//     offset and total as the store counted them. Its counts, original_count
+//     and tag_counts are aggregates over every row of the day and are not
+//     redacted: they say how many rows of a type were folded, nothing more.
+//
+// An operation with neither record is not assumed harmless: an entry of it whose
+// type or def: tag names repairs.plan or repairs.apply is hidden (an entry with
+// no operation id at all too), so a pruned record fails closed; its plain log
+// lines carry nothing to tell them apart and are shown. So is an operation whose
+// record cannot be read (a corrupt row): it falls back to the same type and tag
+// test, and the failure is logged once per operation per request, rather than
+// hiding every row of an unrelated operation from every caller.
+//
+// Without the option (not wired) no operation is resolved and nothing is hidden;
+// TestWireHandlers_ActivityRepairsAccessIsInstalled pins the server's wiring.
+func WithActivityRepairsAccess(a *opaccess.Repairs, rows ActivityOperationReader, runs ActivityRunReader) ActivityHandlerOption {
+	return func(h *ActivityHandler) { h.repairsAccess, h.opRows, h.opRuns = a, rows, runs }
+}
+
+// opVerdict is what one request learned about an operation id: known says a
+// record (v2 row or v3 run) was found, and ok whether the caller may read it.
+type opVerdict struct{ known, ok bool }
+
+// opVisibility is one request's judgement of which activity entries the caller
+// may read, remembering what it learned per operation id. The store calls it
+// from its scan and the merged read from a worker pool, so it is locked.
+type opVisibility struct {
+	h      *ActivityHandler
+	reader *opaccess.Reader
+	mu     sync.Mutex
+	seen   map[string]opVerdict
+	// failed holds the operation ids whose lookup errored this request: they are
+	// not asked again, and each is logged once.
+	failed map[string]struct{}
+	// resolve says operations can be looked up at all (the handler was given a
+	// reader); without it no operation is judged, and only user data is.
+	resolve bool
+	// seeAll is mayReadOthersUserData: without it an entry that names a user, or
+	// carries one user's own data, is hidden (activity.NamesOthersUserData).
+	seeAll bool
+}
+
+// visibility binds the check to c's request. It is never nil: without an
+// operation reader no operation is resolved (no Repairs run is hidden), but
+// other users' data still is.
+func (h *ActivityHandler) visibility(c *gin.Context) *opVisibility {
+	return &opVisibility{
+		h: h, reader: h.repairsAccess.For(c), seen: map[string]opVerdict{}, failed: map[string]struct{}{},
+		resolve: h.opRows != nil, seeAll: h.mayReadOthersUserData(c),
+	}
+}
+
+// verdict looks an operation up: its operations_v2 row first, then, when that is
+// gone, its v3 run record (the two are mirrors, and a pruned or never-mirrored
+// half must not decide for the other). known is false only when neither exists.
+// A lookup that fails is an error and is asked again next time.
+func (v *opVisibility) verdict(id string) (opVerdict, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if r, ok := v.seen[id]; ok {
+		return r, nil
+	}
+	var r opVerdict
+	row, err := v.h.opRows.GetOperationV2(id)
+	if err != nil {
+		return opVerdict{}, err
+	}
+	if row != nil {
+		r = opVerdict{known: true, ok: v.reader.MayRead(row)}
+	} else {
+		if v.h.opRuns != nil {
+			rec, err := v.h.opRuns.GetRunV3(id)
+			if err != nil {
+				return opVerdict{}, err
+			}
+			if rec != nil {
+				r = opVerdict{known: true, ok: v.reader.MayReadRun(rec)}
+			}
+		}
+	}
+	v.seen[id] = r
+	return r, nil
+}
+
+// looksRepairs reports whether an entry says it belongs to the Repairs lane: its
+// type or its def: tag names repairs.plan or repairs.apply. It is what is left to
+// go on for an operation no record exists for.
+func looksRepairs(e database.ActivityEntry) bool {
+	if opaccess.IsRepairsOp(e.Type) {
+		return true
+	}
+	for _, t := range e.Tags {
+		if def, ok := strings.CutPrefix(t, activityDefTagPrefix); ok && opaccess.IsRepairsOp(def) {
+			return true
+		}
+	}
+	return false
+}
+
+// excludes is the store's ExcludeEntry predicate: true hides the entry. An entry
+// is hidden when it belongs to an operation whose record says the caller may not
+// read it; when no record exists for an operation (pruned, never written), or it
+// cannot be read, the entry's own type and tags decide, and an entry that looks
+// like Repairs is hidden (fail closed). So is a Repairs-looking entry that names
+// no operation at all.
+//
+// It reads only the fields of e a filter reads (never Details; see
+// ActivityFilter.ExcludeEntry), because the store's filter-index path does not
+// hand it Details.
+func (v *opVisibility) excludes(e database.ActivityEntry) bool {
+	if !v.seeAll && activity.NamesOthersUserData(e) {
+		return true
+	}
+	if !v.resolve {
+		return false
+	}
+	named := false
+	hide := database.EntryOperationIDs(e, func(id string) bool {
+		named = true
+		r, err := v.lookup(id)
+		if err != nil {
+			return looksRepairs(e)
+		}
+		if r.known {
+			return !r.ok
+		}
+		return looksRepairs(e)
+	})
+	return hide || (!named && looksRepairs(e))
+}
+
+// hidesOpLog reports whether an op-log line of operation id (defID is the
+// definition the line names, "" when it names none) is withheld from the caller:
+// the operation has a record the caller may not read, or it has none (or it
+// cannot be read) and the line says it belongs to the Repairs lane. The same
+// verdict excludes gives an activity row; without a resolver nothing is hidden.
+func (v *opVisibility) hidesOpLog(id, defID string) bool {
+	if v == nil || !v.resolve {
+		return false
+	}
+	r, err := v.lookup(id)
+	if err != nil || !r.known {
+		return opaccess.IsRepairsOp(defID)
+	}
+	return !r.ok
+}
+
+// lookup is verdict for the activity listing, where a failed read must not decide
+// the whole operation: the first failure for an id is logged, remembered for the
+// request, and every later ask returns it without reading the store again. The
+// caller falls back to the entry's own type and tags.
+func (v *opVisibility) lookup(id string) (opVerdict, error) {
+	v.mu.Lock()
+	_, bad := v.failed[id]
+	v.mu.Unlock()
+	if bad {
+		return opVerdict{}, errOpLookupFailed
+	}
+	r, err := v.verdict(id)
+	if err == nil {
+		return r, nil
+	}
+	v.mu.Lock()
+	_, again := v.failed[id]
+	v.failed[id] = struct{}{}
+	v.mu.Unlock()
+	if !again {
+		activityLog.Warn("operation lookup failed; judging its rows by type and tags: operation_id=%s: %v",
+			logger.SanitizeLogValue(id), err)
+	}
+	return opVerdict{}, errOpLookupFailed
+}
+
+// errOpLookupFailed marks an operation whose record could not be read earlier in
+// this request; the underlying error was logged where it happened.
+var errOpLookupFailed = errors.New("operation lookup failed")
+
+// redactDigest removes from a daily digest's Details.items every item the caller
+// may not read, and returns e otherwise untouched. CompactByDay copies each row it
+// folds into an item (type, tier, operation id, summary, tags, and for a warn or
+// error row its error details), so the log line of a hidden Repairs run -- the
+// owner-apply line naming the owner's user id, a failed run's error naming its
+// target -- survives there after the row itself is deleted. The digest row names
+// no operation itself, so the store's predicate cannot see it (and on the
+// filter-index path has no Details to look at); the page is redacted instead.
+// Only items go: the row, its position and the count of rows stay, so the page,
+// offset and total the store computed remain right.
+//
+// An item is judged the way a row is (excludes), from its type, operation id and
+// tags. One that is not a JSON object cannot be judged and is dropped. The
+// returned entry has its own Details map and items slice; the one passed in
+// is never written to, because a store may hand out a map it keeps.
+func (v *opVisibility) redactDigest(e database.ActivityEntry) database.ActivityEntry {
+	if v == nil || (e.Tier != database.DigestTier && e.Type != database.DailyDigestType) {
+		return e
+	}
+	raw, present := e.Details["items"]
+	if !present || raw == nil {
+		return e
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		// A typed slice (an in-process store keeping DigestItem values): take
+		// its JSON form, which is what a client is sent anyway.
+		b, err := json.Marshal(raw)
+		if err == nil {
+			err = json.Unmarshal(b, &items)
+		}
+		if err != nil {
+			items = nil // unreadable: nothing in it can be shown
+		}
+	}
+	kept := make([]any, 0, len(items))
+	for _, it := range items {
+		m, isObj := it.(map[string]any)
+		if !isObj || v.excludes(digestItemEntry(m)) {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	details := maps.Clone(e.Details)
+	details["items"] = kept
+	e.Details = details
+	return e
+}
+
+// digestItemEntry is the part of a DigestItem that excludes reads, as the entry
+// the item was folded from. Source is left empty on purpose: the Summarize
+// row's op: tags are not a digest item's business, only its own operation_id.
+func digestItemEntry(m map[string]any) database.ActivityEntry {
+	e := database.ActivityEntry{}
+	e.Type, _ = m["type"].(string)
+	e.Tier, _ = m["tier"].(string)
+	e.OperationID, _ = m["operation_id"].(string)
+	// The summary and the error details of the folded row decide whether it names
+	// a user (activity.NamesOthersUserData); the Source is gone, but the item's
+	// source: tag says it.
+	e.Summary, _ = m["summary"].(string)
+	if d, _ := m["details"].(string); d != "" {
+		e.Summary += " " + d
+	}
+	switch tags := m["tags"].(type) {
+	case []any:
+		for _, t := range tags {
+			if s, ok := t.(string); ok {
+				e.Tags = append(e.Tags, s)
+			}
+		}
+	case []string:
+		e.Tags = tags
+	}
+	return e
+}
+
+// keep returns the entries the caller may read, and how many it dropped.
+func (v *opVisibility) keep(entries []database.ActivityEntry) ([]database.ActivityEntry, int) {
+	if v == nil {
+		return entries, 0
+	}
+	out := entries[:0:0]
+	for _, e := range entries {
+		if v.excludes(e) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, len(entries) - len(out)
+}
+
+// denied reports whether operation id has a record the caller may not read (an
+// error is a refusal too, with err set). An operation with no record is not
+// denied here: its entries are judged one by one (excludes).
+func (v *opVisibility) denied(id string) (bool, error) {
+	if v == nil || !v.resolve || id == "" {
+		return false, nil
+	}
+	r, err := v.verdict(id)
+	if err != nil {
+		return true, err
+	}
+	return r.known && !r.ok, nil
+}
+
+// require answers for the caller: 403 for an operation whose record they may not
+// read, 500 when it cannot be looked up. false means the response is written.
+func (v *opVisibility) require(c *gin.Context, id string) bool {
+	denied, err := v.denied(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to fetch operation", err)
+		return false
+	}
+	if denied {
+		httputil.RespondWithForbidden(c, "permission denied: this operation belongs to a Repairs fixer you may not use")
+		return false
+	}
+	return true
 }
 
 // NewActivityHandler constructs an ActivityHandler.
@@ -330,6 +678,11 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		}
 	}
 
+	// Repairs operations the caller may not read are hidden inside the store's
+	// scan, so the page and total are counted without them.
+	vis := h.visibility(c)
+	filter.ExcludeEntry = vis.excludes
+
 	var (
 		entries []database.ActivityEntry
 		total   int
@@ -360,6 +713,12 @@ func (h *ActivityHandler) ListActivity(c *gin.Context) {
 		entries = []database.ActivityEntry{}
 	}
 	withoutOthersUserData(entries, h.mayReadOthersUserData(c))
+
+	// A daily digest carries the rows it folded; take out those the caller may
+	// not read. Same count of rows, so total and paging are untouched.
+	for i := range entries {
+		entries[i] = vis.redactDigest(entries[i])
+	}
 
 	// partial: the store stopped at its scan budget before filling the page or
 	// exhausting the matches, so older matches were NOT examined and total is
@@ -442,14 +801,27 @@ func parseOperationActivityLimit(raw string) int {
 //
 // seeAll is mayReadOthersUserData: without it an entry's Details that carry
 // other users' own data are withheld (activity.WithoutOthersUserData).
-func (h *ActivityHandler) operationActivity(ctx context.Context, opID string, limit int, seeAll bool) ([]operationActivityEntry, int, error) {
+func (h *ActivityHandler) operationActivity(ctx context.Context, vis *opVisibility, opID string, limit int, seeAll bool) ([]operationActivityEntry, int, error) {
 	entries, total, err := h.svc.Query(ctx, database.ActivityFilter{OperationID: opID, Limit: limit})
 	if err != nil {
 		return nil, 0, err
 	}
+	// The op-log fallback is for an operation the activity log holds nothing
+	// for. It is decided BEFORE the visibility filter: when the log held rows
+	// and the filter dropped every one, the caller may not read them, and the
+	// op-log lines of the same operation are no more theirs (the fallback would
+	// hand back exactly what the filter just withheld).
+	loggedNothing := len(entries) == 0
 	withoutOthersUserData(entries, seeAll)
+	// The op is readable (the caller checked), but a digest row for it can also
+	// name another operation the caller may not read.
+	entries, dropped := vis.keep(entries)
+	total -= dropped
 	if len(entries) == 0 {
-		opLogEntries, opLogErr := h.operationActivityFromOpLogs(opID, limit)
+		if !loggedNothing {
+			return []operationActivityEntry{}, max(total, 0), nil
+		}
+		opLogEntries, opLogErr := h.operationActivityFromOpLogs(vis, opID, limit)
 		if opLogErr != nil {
 			return nil, 0, opLogErr
 		}
@@ -483,7 +855,11 @@ func (h *ActivityHandler) ListOperationActivity(c *gin.Context) {
 	}
 	limit := parseOperationActivityLimit(c.Query("limit"))
 
-	entries, total, err := h.operationActivity(c.Request.Context(), opID, limit, h.mayReadOthersUserData(c))
+	vis := h.visibility(c)
+	if !vis.require(c, opID) {
+		return
+	}
+	entries, total, err := h.operationActivity(c.Request.Context(), vis, opID, limit, h.mayReadOthersUserData(c))
 	if err != nil {
 		if abortIfClientGone(c, err, "ListOperationActivity") {
 			return
@@ -544,6 +920,29 @@ func (h *ActivityHandler) ListMergedOperationActivity(c *gin.Context) {
 		limit = min(req.Limit, operationActivityLimitMax)
 	}
 
+	// Members the caller may not read (Repairs operations of a fixer they may not
+	// use) are left out of the read and out of operation_ids; a request that names
+	// only such members is a 403, as for the single read.
+	vis := h.visibility(c)
+	if vis != nil {
+		readable := ids[:0:0]
+		for _, id := range ids {
+			denied, err := vis.denied(id)
+			if err != nil {
+				httputil.InternalError(c, "failed to fetch operation", err)
+				return
+			}
+			if !denied {
+				readable = append(readable, id)
+			}
+		}
+		if len(readable) == 0 {
+			httputil.RespondWithForbidden(c, "permission denied: these operations belong to a Repairs fixer you may not use")
+			return
+		}
+		ids = readable
+	}
+
 	// One indexed read per member, fanned out over a bounded pool: a group can
 	// name hundreds of members, and each read is a store round-trip. Results
 	// land in their own slot so the merge below is deterministic regardless of
@@ -556,7 +955,7 @@ func (h *ActivityHandler) ListMergedOperationActivity(c *gin.Context) {
 	g.SetLimit(runtime.NumCPU())
 	for i, id := range ids {
 		g.Go(func() error {
-			entries, total, err := h.operationActivity(ctx, id, limit, seeAll)
+			entries, total, err := h.operationActivity(ctx, vis, id, limit, seeAll)
 			if err != nil {
 				return err
 			}
@@ -620,7 +1019,7 @@ func dedupeOperationIDs(raw []string) []string {
 // operationActivityFromOpLogs fetches op-log v2 rows as a fallback when the
 // activity log has no entries for an operation. Returns nil (not an error)
 // when opsStore is nil or returns no rows.
-func (h *ActivityHandler) operationActivityFromOpLogs(opID string, limit int) ([]operationActivityEntry, error) {
+func (h *ActivityHandler) operationActivityFromOpLogs(vis *opVisibility, opID string, limit int) ([]operationActivityEntry, error) {
 	if h.opsStore == nil {
 		return nil, nil
 	}
@@ -633,15 +1032,27 @@ func (h *ActivityHandler) operationActivityFromOpLogs(opID string, limit int) ([
 	}
 	out := make([]operationActivityEntry, 0, len(logs))
 	for _, l := range logs {
+		// The op-log rows are the source of the activity rows mirrored from them,
+		// so a line that names a user is withheld here as it is there.
+		if !vis.seeAll && activity.NamesOthersUserLog("", l.Message) {
+			continue
+		}
 		attrs := opLogAttrs(l.Attrs)
 		opType, _ := attrs["def_id"].(string)
+		if vis.hidesOpLog(l.OperationID, opType) {
+			continue
+		}
+		details := l.Attrs
+		if !vis.seeAll {
+			details = activity.WithoutUserAttrs(details)
+		}
 		out = append(out, operationActivityEntry{
 			Timestamp:     l.CreatedAt,
 			Level:         l.Level,
 			OperationID:   l.OperationID,
 			OperationType: opType,
 			Message:       l.Message,
-			Details:       l.Attrs,
+			Details:       details,
 			Tags:          operationLogTags(l.OperationID, l.Level, opType, attrs),
 		})
 	}

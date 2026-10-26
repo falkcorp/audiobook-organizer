@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.16.0
+// version: 2.18.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See
@@ -439,10 +439,16 @@ type EnqueueOptions struct {
 	// ActorAuthMethod records how ActorUserID was authenticated
 	// (WithActorAuthMethod).
 	ActorAuthMethod string
-	TraceID         string
-	SpanID          string
-	ParentSpanID    string
-	Priority        *Priority
+	// ActorPermissions is the permission set the request held, stored on the op
+	// row as ActorPermissions (WithActorPermissions).
+	ActorPermissions []string
+	// OwnerApply marks the run as enqueued by the Repairs owner-apply handler
+	// (WithOwnerApply).
+	OwnerApply   bool
+	TraceID      string
+	SpanID       string
+	ParentSpanID string
+	Priority     *Priority
 }
 
 // WithParent sets the parent run ID for trigger lineage.
@@ -460,6 +466,24 @@ func WithActor(userID string) EnqueueOption {
 // ActorAuthMethod.
 func WithActorAuthMethod(method string) EnqueueOption {
 	return func(o *EnqueueOptions) { o.ActorAuthMethod = method }
+}
+
+// WithActorPermissions records the permission set the triggering request held
+// (an API key's scopes already intersected with its account's roles), stored on
+// the op row as ActorPermissions. It is set only from the verified request,
+// never from params.
+func WithActorPermissions(perms []string) EnqueueOption {
+	return func(o *EnqueueOptions) { o.ActorPermissions = append([]string(nil), perms...) }
+}
+
+// WithOwnerApply marks the run as the one the Repairs owner-apply handler
+// enqueued after the owner's own same-origin click through Cloudflare Access,
+// stored on the op row as OwnerApply. It is the only mark an owner grant is
+// honoured under (plugins/maintenance ownerRedeemer), and it is set by that one
+// handler in code: no route that takes params, and no retry, sets it, so a
+// generic start that carries an owner grant in its params cannot redeem it.
+func WithOwnerApply() EnqueueOption {
+	return func(o *EnqueueOptions) { o.OwnerApply = true }
 }
 
 // WithPriority overrides the OperationDef's DefaultPriority for this run.

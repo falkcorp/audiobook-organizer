@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c2a4e71-6b53-4d18-8f0a-2e7c1b9d3a64
-// last-edited: 2026-10-08
+// last-edited: 2026-10-26
 
 package handlers_test
 
@@ -303,7 +303,7 @@ func TestITunesHandler_ListBooks_NilStore_500(t *testing.T) {
 func TestITunesHandler_ImportStatus_Happy(t *testing.T) {
 	store := handlersmocks.NewMockITunesStore(t)
 	store.EXPECT().GetOperationV2("op1").Return(&database.OperationV2Row{
-		ID: "op1", Status: "running", ProgressCurrent: 5, ProgressTotal: 10, ProgressMessage: "working",
+		ID: "op1", DefID: handlers.ITunesImportDefID, Status: "running", ProgressCurrent: 5, ProgressTotal: 10, ProgressMessage: "working",
 	}, nil)
 
 	imp := handlersmocks.NewMockITunesImporter(t)
@@ -336,7 +336,7 @@ func TestITunesHandler_ImportStatus_NotFound(t *testing.T) {
 func TestITunesHandler_ImportStatusBulk_Happy(t *testing.T) {
 	store := handlersmocks.NewMockITunesStore(t)
 	store.EXPECT().GetOperationV2("op1").Return(&database.OperationV2Row{
-		ID: "op1", Status: "completed", ProgressCurrent: 10, ProgressTotal: 10,
+		ID: "op1", DefID: handlers.ITunesImportDefID, Status: "completed", ProgressCurrent: 10, ProgressTotal: 10,
 	}, nil)
 
 	imp := handlersmocks.NewMockITunesImporter(t)
