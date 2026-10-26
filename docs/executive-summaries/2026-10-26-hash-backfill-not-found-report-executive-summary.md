@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-26-hash-backfill-not-found-report-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: d7aaaf61-bcb5-45c2-947a-ffd1e4655e3c -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -27,8 +27,7 @@
   can be restarted by a server restart. A restarted run used to write some report
   lines a second time and restart its totals from zero. Now it picks up the
   earlier report, skips what is already listed, and its final totals cover the
-  whole run, with no line listed twice. One narrow case is not covered: a hard
-  kill part way through storing a batch (see the section on resuming).
+  whole run, with no line listed twice.
 - **What a "not found" does and does not prove.** A file outside the library
   folder, or any file when no library folder is configured, is counted separately
   as "unverified", because the check that the library drive is attached says
@@ -68,13 +67,14 @@
   behind and is simply redone. When a run resumes it reads the report it already
   wrote, skips the files it lists, and starts its totals from it, which is why the
   report now also lists files that were fingerprinted. If the earlier report is
-  missing, the summary says its totals cover only the resumed part. One gap
-  remains: a batch's fingerprints are stored first, then its report lines are
-  written. If the whole server is killed (not merely stopped) partway through
-  storing a batch, the files already fingerprinted in that batch are kept, but the
-  resumed run skips them and does not list or count them, so the totals and the
-  report can be short by up to one batch (512 files). The fingerprints themselves
-  are correct, and a preview, which stores nothing, is not affected.
+  missing, the summary says its totals cover only the resumed part.
+
+  Before a batch is stored, the job also writes a small note listing what it decided for that batch and forces it to disk, and removes
+  the note only once the batch's report lines are safely on disk. If the server
+  is killed at any point in between, the next run finds the note and finishes the
+  batch: it lists and counts the files not yet in the report, and does not
+  fingerprint again any file whose fingerprint is already stored. So even a hard
+  kill part way through a batch leaves the report and the totals exact.
 
 ## When the job refuses to start
 

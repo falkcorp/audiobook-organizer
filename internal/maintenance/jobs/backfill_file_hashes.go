@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -149,6 +149,12 @@ func (c *hashBackfillCounts) add(bucket string) bool {
 	return true
 }
 
+// valid reports whether bucket is one add accepts.
+func (c *hashBackfillCounts) valid(bucket string) bool {
+	var scratch hashBackfillCounts
+	return scratch.add(bucket)
+}
+
 // summary is the one-line result stored on the operation log. In a dry run the
 // same counts are what an apply WOULD do: no hash is stored (the report and the
 // resume checkpoint are still written). note, when set, says the counts do not
@@ -189,6 +195,7 @@ type hbFile interface {
 	io.Seeker
 	io.Closer
 	Truncate(size int64) error
+	Sync() error
 }
 
 // hbOpenFile opens the report file. A variable so a test can inject a Close
@@ -395,6 +402,7 @@ type hashBackfillRun struct {
 	dryRun   bool
 	root     string // cleaned library root; "" when none is configured
 	workers  int
+	sidecar  string // chunk journal path, "" when there is no report to keep one beside
 
 	// mu serializes reporter: maintenance.ProgressAdapter increments a plain int
 	// and is NOT concurrency-safe. The guarded calls are microseconds; hashing
@@ -472,35 +480,126 @@ func (r *hashBackfillRun) onNotFound(bf database.BookFileCore, msg string) hbOut
 	return hbOutcome{bucket: bucket, reason: reason, bf: bf}
 }
 
-// commitChunk makes a fully processed chunk real, in this order: store the
-// hashes (unless dry-run), count every outcome, write the chunk's rows to the
-// report and flush them. The caller saves the checkpoint right after, so a row
-// is on disk only for a chunk whose rows are complete, and a chunk cancelled
-// before this point has stored, counted and written nothing.
-//
-// The hash writes touch one distinct key per row, so they run on a bounded
-// pool; a failed write turns that row's outcome into a write error.
-func (r *hashBackfillRun) commitChunk(outs []hbOutcome) error {
-	if !r.dryRun {
-		var g errgroup.Group
-		g.SetLimit(r.workers)
-		for i := range outs {
-			if outs[i].bucket != hbBucketHashed {
-				continue
-			}
-			g.Go(func() error { // each goroutine owns outs[i]
-				o := &outs[i]
-				if serr := r.store.SetBookFileHash(o.bf.ID, o.hash); serr != nil {
-					msg := serr.Error()
-					o.bucket, o.reason = hbBucketWriteError, msg
-					slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
-					r.log("error", "Failed to save file hash for "+o.bf.FilePath, &msg)
-				}
-				return nil
-			})
-		}
-		_ = g.Wait() // the closures never return an error
+// hbCommitHook, when set, is called at fixed points inside commitChunk with the
+// stage name and the chunk's first row index; a non-nil error stops the commit
+// there, leaving on disk exactly what a process kill at that point would leave.
+// A test seam only; production never sets it.
+var hbCommitHook func(stage string, chunkStart int) error
+
+func hbHook(stage string, chunkStart int) error {
+	if hbCommitHook == nil {
+		return nil
 	}
+	return hbCommitHook(stage, chunkStart)
+}
+
+// hbJournalEntry is one outcome as it is kept in the chunk journal.
+type hbJournalEntry struct {
+	Bucket string `json:"bucket"`
+	Reason string `json:"reason"`
+	Hash   string `json:"hash,omitempty"`
+	FileID string `json:"file_id"`
+	BookID string `json:"book_id"`
+	Path   string `json:"path"`
+}
+
+// writeJournal durably records the chunk's counted outcomes BEFORE any hash is
+// stored: it writes a temporary file, fsyncs it, renames it into place and
+// fsyncs the directory, so the journal is either absent or complete. It exists
+// for one reason: storing the hashes and writing the report rows are two steps
+// a kill can fall between, and a row whose hash is already stored is skipped on
+// the next run, so without a record of what the chunk decided that row would be
+// neither counted nor listed. The journal is removed once the rows are on disk
+// in the report; if one is found on resume, replayJournal finishes the job.
+func (r *hashBackfillRun) writeJournal(outs []hbOutcome) (bool, error) {
+	if r.sidecar == "" {
+		return false, nil
+	}
+	var buf []byte
+	for _, o := range outs {
+		if o.bucket == "" {
+			continue
+		}
+		line, err := json.Marshal(hbJournalEntry{Bucket: o.bucket, Reason: o.reason, Hash: o.hash,
+			FileID: o.bf.ID, BookID: o.bf.BookID, Path: o.bf.FilePath})
+		if err != nil {
+			return false, err
+		}
+		buf = append(append(buf, line...), '\n')
+	}
+	if len(buf) == 0 {
+		return false, nil
+	}
+	tmp := r.sidecar + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o664)
+	if err != nil {
+		return false, err
+	}
+	_, werr := f.Write(buf)
+	serr := f.Sync()
+	cerr := f.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	if err := os.Rename(tmp, r.sidecar); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	hbSyncDir(filepath.Dir(r.sidecar))
+	return true, nil
+}
+
+// hbSyncDir fsyncs a directory so a rename or removal in it survives a crash.
+// Best effort: not every filesystem supports it, and the journal's contents are
+// already durable.
+func hbSyncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+}
+
+// removeJournal deletes the journal once its rows are durably in the report.
+func (r *hashBackfillRun) removeJournal() error {
+	if err := os.Remove(r.sidecar); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	hbSyncDir(filepath.Dir(r.sidecar))
+	return nil
+}
+
+// storeHashes stores the hash of every hashed outcome for which stored returns
+// false (nil stored = store all). The writes touch one distinct key per row, so
+// they run on a bounded pool; a failed write turns that row's outcome into a
+// write error. Does nothing in a dry run.
+func (r *hashBackfillRun) storeHashes(outs []hbOutcome, stored func(id string) bool) {
+	if r.dryRun {
+		return
+	}
+	var g errgroup.Group
+	g.SetLimit(r.workers)
+	for i := range outs {
+		if outs[i].bucket != hbBucketHashed || (stored != nil && stored(outs[i].bf.ID)) {
+			continue
+		}
+		g.Go(func() error { // each goroutine owns outs[i]
+			o := &outs[i]
+			if serr := r.store.SetBookFileHash(o.bf.ID, o.hash); serr != nil {
+				msg := serr.Error()
+				o.bucket, o.reason = hbBucketWriteError, msg
+				slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
+				r.log("error", "Failed to save file hash for "+o.bf.FilePath, &msg)
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // the closures never return an error
+}
+
+// recordOutcomes counts every outcome and writes its row to the report, then
+// flushes and fsyncs the report, so the rows are on disk when it returns.
+func (r *hashBackfillRun) recordOutcomes(outs []hbOutcome) error {
 	for _, o := range outs {
 		if o.bucket == "" {
 			continue
@@ -508,7 +607,100 @@ func (r *hashBackfillRun) commitChunk(outs []hbOutcome) error {
 		r.counts.add(o.bucket)
 		r.report.add(o.bucket, o.bf, o.reason)
 	}
-	return r.report.flush()
+	if err := r.report.flush(); err != nil {
+		return err
+	}
+	if r.report != nil {
+		if err := r.report.f.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// commitChunk makes a fully processed chunk real, in this order: journal the
+// chunk's outcomes (durably), store the hashes (unless dry-run), count every
+// outcome and write the chunk's rows to the report, flush and fsync them, then
+// remove the journal. The caller saves the checkpoint right after. So a chunk
+// cancelled before this point has stored, counted and written nothing, and a
+// process killed anywhere inside it leaves either nothing (before the journal
+// exists) or a complete journal that the next run replays, so no hash is ever
+// stored without its row being counted and listed exactly once.
+func (r *hashBackfillRun) commitChunk(chunkStart int, outs []hbOutcome) error {
+	journaled, err := r.writeJournal(outs)
+	if err != nil {
+		return fmt.Errorf("chunk journal: %w", err)
+	}
+	if err := hbHook("after-journal", chunkStart); err != nil {
+		return err
+	}
+	r.storeHashes(outs, nil)
+	if err := hbHook("after-store", chunkStart); err != nil {
+		return err
+	}
+	if err := r.recordOutcomes(outs); err != nil {
+		return err
+	}
+	if err := hbHook("after-flush", chunkStart); err != nil {
+		return err
+	}
+	if journaled {
+		return r.removeJournal()
+	}
+	return nil
+}
+
+// replayJournal finishes a chunk whose commit was cut off: it reads the journal
+// the dead run left, drops the rows the report already lists, stores the hash of
+// each remaining hashed row that does not already have one (the file is not read
+// again, the journal carries the hash), counts and lists them, and removes the
+// journal. It returns how many rows it recovered. No journal is not an error.
+func (r *hashBackfillRun) replayJournal(files []database.BookFileCore) (int, error) {
+	data, err := os.ReadFile(r.sidecar)
+	if errors.Is(err, fs.ErrNotExist) {
+		_ = os.Remove(r.sidecar + ".tmp") // a journal that never became complete
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("chunk journal %s: %w", r.sidecar, err)
+	}
+	var outs []hbOutcome
+	for n, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		var e hbJournalEntry
+		if jerr := json.Unmarshal([]byte(line), &e); jerr != nil {
+			return 0, fmt.Errorf("chunk journal %s line %d: %w", r.sidecar, n+1, jerr)
+		}
+		if r.report.has(e.FileID) {
+			continue
+		}
+		outs = append(outs, hbOutcome{bucket: e.Bucket, reason: e.Reason, hash: e.Hash,
+			bf: database.BookFileCore{ID: e.FileID, BookID: e.BookID, FilePath: e.Path}})
+	}
+	have := map[string]bool{}
+	for _, o := range outs {
+		have[o.bf.ID] = false
+	}
+	for _, f := range files {
+		if _, ok := have[f.ID]; ok && f.FileHash != "" {
+			have[f.ID] = true
+		}
+	}
+	for _, o := range outs {
+		if !r.counts.valid(o.bucket) {
+			return 0, fmt.Errorf("chunk journal %s has an unknown bucket %q", r.sidecar, o.bucket)
+		}
+	}
+	r.storeHashes(outs, func(id string) bool { return have[id] })
+	if err := r.recordOutcomes(outs); err != nil {
+		return 0, err
+	}
+	if err := r.removeJournal(); err != nil {
+		return 0, err
+	}
+	for _, o := range outs {
+		r.report.done[o.bf.ID] = struct{}{}
+	}
+	return len(outs), nil
 }
 
 // Job supports checkpoint-based resume after restart.
@@ -571,8 +763,20 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 		run.report = report
 		run.counts = seeded
+		run.sidecar = path + ".pending"
 		reportPath = path
 		run.log("info", "Per-row report: "+path, nil)
+		if report.done == nil {
+			report.done = map[string]struct{}{}
+		}
+		n, jerr := run.replayJournal(files)
+		if jerr != nil {
+			_ = report.close()
+			return fmt.Errorf("backfill-file-hashes: %w", jerr)
+		}
+		if n > 0 {
+			run.log("info", fmt.Sprintf("Recovered %d rows from a chunk the earlier run was cut off in the middle of", n), nil)
+		}
 		switch {
 		case resumeIndex > 0 && prior:
 			run.log("info", fmt.Sprintf("Resumed at row %d; the report already accounts for %d rows", resumeIndex, len(report.done)), nil)
@@ -597,7 +801,8 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	// could otherwise checkpoint an index past rows still being hashed, and
 	// resume would skip them forever. It also means a run cancelled mid-chunk
 	// leaves no report row, no counter and no stored hash behind for that chunk,
-	// so resume redoes the whole chunk exactly once.
+	// so resume redoes the whole chunk exactly once. A process KILLED inside
+	// commitChunk is covered by the chunk journal (writeJournal/replayJournal).
 	for start := resumeIndex; start < len(files); start += hashBackfillChunkSize {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -625,8 +830,8 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 		// The report is the run's deliverable: stop, with the checkpoint unmoved,
 		// rather than hash on while rows are being dropped from it.
-		if rerr := run.commitChunk(outs); rerr != nil {
-			return fmt.Errorf("backfill-file-hashes: report %s: %w", reportPath, rerr)
+		if rerr := run.commitChunk(start, outs); rerr != nil {
+			return fmt.Errorf("backfill-file-hashes: chunk at row %d (report %s): %w", start, reportPath, rerr)
 		}
 
 		// Periodic checkpoint so long runs can resume after restart.

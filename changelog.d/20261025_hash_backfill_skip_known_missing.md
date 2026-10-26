@@ -23,8 +23,8 @@ as `skipped_no_path`. The result line reports `hashed`, `not_found`,
 and names the report; a dry run reports what an apply would do without storing
 any hash (it still writes the report and its resume checkpoint).
 
-A run that is cancelled and then resumed, or interrupted at any point other than
-the one described below, now ends with exactly the report and totals an
+A run that is cancelled, killed or restarted part way (for example by a server
+restart) and then resumed now ends with exactly the report and totals an
 uninterrupted run would have. Each chunk's rows are held in memory and written to the report only
 immediately before that chunk's checkpoint is saved, so no row past the
 checkpoint reaches the file, and a chunk cut off half way stores, counts and
@@ -36,13 +36,15 @@ read back (a bad header, a line that is not a row) stops the resume with an
 error instead of guessing. If closing the report fails after the last chunk, the
 op fails, keeps its checkpoint and saves no "completed" summary.
 
-One window is not closed. A chunk's hashes are stored, then its report rows are
-written, then its checkpoint is saved. If the whole process is killed (not
-cancelled) after some of a chunk's hashes are stored and before its report rows
-are flushed, those files keep their stored hash, so the resumed run skips them
-and neither counts nor lists them: `hashed` and the report come up short by up to
-one chunk (512 files). The database itself is correct. A dry run stores nothing
-and is not affected.
+Each chunk is also journaled before anything in it is stored: its outcomes are
+written to `{report}.pending` and fsynced, the hashes are stored, the report rows
+are written and fsynced, and only then is the journal removed and the checkpoint
+saved. If the process is killed anywhere in that sequence, the next run finds the
+journal and replays it: rows the report already lists are skipped, the rest are
+counted and listed, and a hash that is already stored is not stored (or computed)
+again. So a kill between storing a chunk's hashes and writing its report rows
+loses nothing. A report that cannot be read back, or a journal that cannot be
+parsed, stops the resume with an error.
 
 When a library root is configured, the op refuses to run before hashing
 anything, a dry run included, if any of these holds:

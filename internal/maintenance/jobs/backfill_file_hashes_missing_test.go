@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 4.0.0
+// version: 5.0.0
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
 // last-edited: 2026-10-26
 
@@ -795,6 +795,91 @@ func TestBackfillFileHashes_RefusalsNameTheirCause(t *testing.T) {
 				assert.Contains(t, err.Error(), tc.want)
 			}
 			assert.Empty(t, h.hashed())
+		})
+	}
+}
+
+// A kill inside a chunk's commit, between its steps, leaves the journal behind;
+// the resumed run replays it. Whatever the kill point, the resumed run ends with
+// the report and totals of an uninterrupted run: no row twice, none lost, each
+// hash stored once. "after-store" is the window the report alone cannot cover:
+// the hashes are stored, so the rows are skipped on resume, yet none is in the
+// report.
+func TestBackfillFileHashes_KillInsideACommitThenResumeIsExact(t *testing.T) {
+	const total = 1300
+	for _, tc := range []struct {
+		name        string
+		dryRun      bool
+		stage       string
+		chunkStart  int
+		wantOnDisk  int  // report rows on disk when the process "dies"
+		wantStored  bool // whether the dead run had stored any hash
+		wantJournal bool
+	}{
+		{"apply, after the journal", false, "after-journal", 512, 512, false, true},
+		{"apply, after the hashes are stored", false, "after-store", 512, 512, true, true},
+		{"apply, after the report is flushed", false, "after-flush", 512, 1024, true, true},
+		{"apply, first chunk, after the hashes are stored", false, "after-store", 0, 0, true, true},
+		{"dry run, after the journal", true, "after-journal", 512, 512, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := hbLibrary(t)
+			h := newHBStore(t, hbMixedLibrary(t, root, total)...)
+			const opID = "01KILLINSIDECOMMIT"
+			errKill := errors.New("killed")
+			restore := jobs.SetHashBackfillCommitHook(func(stage string, start int) error {
+				if stage == tc.stage && start == tc.chunkStart {
+					return errKill
+				}
+				return nil
+			})
+			_, err := hbRunJob(t, h.store(), hbRun{opID: opID, dryRun: tc.dryRun})
+			restore()
+			require.ErrorIs(t, err, errKill)
+
+			reportFile := filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")
+			journal := reportFile + ".pending"
+			assert.Len(t, hbReadReport(t, reportFile), tc.wantOnDisk, "what the dead run left in the report")
+			storedInChunk := false
+			for id := range h.writes {
+				n, perr := strconv.Atoi(strings.TrimPrefix(id, "f"))
+				require.NoError(t, perr)
+				if n >= tc.chunkStart && n < tc.chunkStart+jobs.HashBackfillChunkSize {
+					storedInChunk = true
+				}
+			}
+			assert.Equal(t, tc.wantStored, storedInChunk, "whether the dead run had stored hashes of the chunk it was killed in")
+			_, jerr := os.Stat(journal)
+			assert.Equal(t, tc.wantJournal, jerr == nil, "journal present after the kill")
+
+			rep, c, report := runHB(t, h.store(), hbRun{opID: opID, dryRun: tc.dryRun})
+
+			want := hbCounts{}
+			for i := 0; i < total; i++ {
+				switch {
+				case i%10 == 0:
+					want["hashed"]++
+				case i%7 == 0:
+					want["skipped_no_path"]++
+				default:
+					want["not_found"]++
+				}
+			}
+			assert.Equal(t, want, c)
+			rows := hbReadReport(t, report)
+			assert.Len(t, hbDistinctIDs(t, rows), total)
+			assert.Len(t, rows, total)
+			assert.NotContains(t, rep.logs[len(rep.logs)-1], "counts cover only")
+			_, jerr = os.Stat(journal)
+			assert.True(t, errors.Is(jerr, os.ErrNotExist), "the journal is gone after the resumed run")
+			if tc.dryRun {
+				assert.Empty(t, h.hashed())
+			} else {
+				assert.Len(t, h.hashed(), want["hashed"])
+				for id, n := range h.writes {
+					assert.Equal(t, 1, n, "hash for %s stored %d times", id, n)
+				}
+			}
 		})
 	}
 }
