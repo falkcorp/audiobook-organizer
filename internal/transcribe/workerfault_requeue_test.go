@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -527,7 +527,11 @@ func TestPool_ALooperPageThatFaultsEveryEndpointConvergesOnPerClipVerdicts(t *te
 // A lone kill is a per-clip verdict naming its worker (the store counts a second
 // one only from a different worker), and a response of mostly kills is a
 // timeout-majority fault re-sent in units too small to fault, on one worker as
-// on many: it never ends the dispatch or defers the batch.
+// on many: it never ends the dispatch or defers the batch. On two workers the
+// re-sent kills are strikes from the worker that did not fault. On one, the
+// worker passes the canary clip but its fault was mostly kills, which a
+// two-second clip cannot vouch for (SF2 of review 5), so its kills are
+// deferred in that dispatch, not struck; its transcripts still stand.
 func TestPool_DecoderKilledIsAPerClipStrikeThatNeverDrainsTheBatch(t *testing.T) {
 	const killed = "decoder_killed: the decode process was killed from outside (exit code -9)"
 	for _, workers := range []int{1, 2} {
@@ -548,6 +552,12 @@ func TestPool_DecoderKilledIsAPerClipStrikeThatNeverDrainsTheBatch(t *testing.T)
 				if strings.HasPrefix(id, "chap") {
 					if r.Text != "T:"+id {
 						t.Errorf("%s = %+v, want its transcript", id, r)
+					}
+					continue
+				}
+				if workers == 1 {
+					if PathErrorCode(r.Error) != PathErrWorkerFault || !IsNoAnswer(r.Error) {
+						t.Errorf("%s = %+v, want a deferral (the lone worker's fault was kills)", id, r)
 					}
 					continue
 				}
@@ -722,6 +732,127 @@ func TestPool_ALoneSickWorkersEarlierStrikeIsWithheldWhenItFailsTheCanary(t *tes
 	}
 	if got := p.canaryLog(); len(got) != 1 {
 		t.Errorf("canaries = %v, want one", got)
+	}
+	// Nit 1 (review 5): sick, so into cooldown; the next dispatch waits at the
+	// gate instead of paying another chunk of per-clip deadlines.
+	url := p.h.eps[0].URL
+	t.Cleanup(func() { clearCooldown(url) })
+	if !endpointInCooldown(url) {
+		t.Error("the only worker failed the canary and is not in cooldown")
+	}
+}
+
+// SF2 (review 5 of #4182), the only worker: its request of 16 is decoded in
+// chunks of 4, the first chunk has one decoder kill among sound answers, the
+// second is killed wholesale (a fault that is mostly kills), and the worker
+// passes the canary clip, which loads and decodes before memory pressure
+// bites. Its kills are still no verdict: the earlier chunk's and the re-sent
+// units' are deferred, its transcripts stand.
+func TestPool_ALoneWorkersKillsAreDeferredWhenItsFaultWasKillsEvenAfterItsCanaryPasses(t *testing.T) {
+	var calls atomic.Int32
+	p := newFaultPool(t, 1, 4, func(_ string, id string) BatchResult {
+		if id == canaryJobID {
+			return BatchResult{Text: "Welcome to Gotham City."}
+		}
+		switch n := calls.Add(1); {
+		case n == 1, n > 4:
+			return BatchResult{Error: killedText}
+		default:
+			return BatchResult{Text: "T:" + id}
+		}
+	})
+	useEndpoints(t, 16, endpointURLs(p.h.eps)...) // requests of 16, decoded in chunks of 4
+	ids := loopers(16, "chap")
+	res, err := p.run(t, ids...)
+	if err != nil {
+		t.Fatalf("err = %v, want none (the worker passed the canary)", err)
+	}
+	if got := p.canaryLog(); len(got) != 1 {
+		t.Fatalf("canaries = %v, want one", got)
+	}
+	texts, deferred := 0, 0
+	for _, id := range ids {
+		r := res[id]
+		switch {
+		case IsStrikeError(r.Error):
+			t.Errorf("%s = %+v: a decoder kill from a worker whose fault was kills was believed", id, r)
+		case r.Text == "T:"+id:
+			texts++
+		case PathErrorCode(r.Error) == PathErrWorkerFault && IsNoAnswer(r.Error):
+			deferred++
+		default:
+			t.Errorf("%s = %+v, want its transcript or a deferral", id, r)
+		}
+	}
+	if texts != 3 || deferred != 13 {
+		t.Errorf("texts = %d, deferred = %d, want 3 and 13", texts, deferred)
+	}
+	// Three requests of fresh work, each ended by a chunk of four kills (16,
+	// then the 8 and the 4 left unsent), then the 12 faulted jobs once each in
+	// units of two. The earlier chunk's kill is deferred, not re-sent.
+	if n := len(p.sendLog()); n > 3+12/2 {
+		t.Errorf("sends = %d, want at most 9: the faulted requests, then each faulted job once in a unit", n)
+	}
+}
+
+// The kill hold is for a fault that was mostly kills only. A page of loopers
+// with one clip that kills the decoder faults on timeouts; the worker passes
+// the canary, and the kill it answers for that clip in a unit is a per-clip
+// strike like the timeouts (N2), not a deferral.
+func TestPool_AKillInAFaultThatWasMostlyTimeoutsIsStillAStrike(t *testing.T) {
+	p := newFaultPool(t, 1, 16, func(_ string, id string) BatchResult {
+		switch {
+		case id == canaryJobID:
+			return BatchResult{Text: "Welcome to Gotham City."}
+		case id == "killer":
+			return BatchResult{Error: killedText}
+		}
+		return BatchResult{Error: timeoutText}
+	})
+	ids := append(loopers(15, "loop"), "killer")
+	res, err := p.run(t, ids...)
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if r := res["killer"]; PathErrorCode(r.Error) != PathErrDecoderKilled || !IsStrikeError(r.Error) || r.Endpoint == "" {
+		t.Fatalf("killer = %+v, want a per-clip decoder_killed strike naming its worker", r)
+	}
+	for _, id := range loopers(15, "loop") {
+		if r := res[id]; PathErrorCode(r.Error) != PathErrTranscribeTimeout {
+			t.Errorf("%s = %+v, want its timeout strike", id, r)
+		}
+	}
+}
+
+// SF1 (review 5 of #4182), the only worker: it faulted on timeouts and its
+// canary could not get a request slot. No verdict: its strikes are withheld,
+// it is not put in cooldown, and the error is one the ops defer on without
+// counting it toward stopping the run.
+func TestPool_ALoneWorkerWhoseCanaryCannotGetASlotIsNoVerdict(t *testing.T) {
+	p := newFaultPool(t, 1, 16, func(string, string) BatchResult { return BatchResult{Error: timeoutText} })
+	jobs := map[string]string{}
+	for _, id := range loopers(16, "chap") {
+		jobs[id] = "unused"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := dispatchPool(ctx, p.h.eps, nil, jobs, poolOptions{canary: func(context.Context, gatedEndpoint) error {
+		return fmt.Errorf("%w for 1h44m0s", errCanarySlotBusy)
+	}}, p.send)
+	if !errors.Is(err, errCanarySlotBusy) {
+		t.Fatalf("err = %v, want errCanarySlotBusy", err)
+	}
+	te, ok := errors.AsType[*TransportError](err)
+	if !ok || te.Recognized || IsPoolUnavailable(err) || IsWorkerStuck(err) || IsWorkerFault(err) {
+		t.Fatalf("err = %v: want an unrecognized error the ops defer on", err)
+	}
+	for id, r := range res {
+		if IsStrikeError(r.Error) {
+			t.Errorf("%s = %+v: a strike from a worker with no canary verdict", id, r)
+		}
+	}
+	if endpointInCooldown(p.h.eps[0].URL) {
+		t.Error("a worker whose canary only lacked a slot was put in cooldown")
 	}
 }
 
