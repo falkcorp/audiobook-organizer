@@ -1,12 +1,13 @@
 // file: internal/merge/trash_restore_reconcile_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b547034-881d-4b1b-b911-df20c1e6ce56
-// last-edited: 2026-10-01
+// last-edited: 2026-10-26
 
 package merge
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestRestoreFromTrash_ReconcilePutsRedirectBackWhenHandOffDemotes(t *testing
 	f := combineUndoFixture(t)
 	loser, winner, pendingKey := trashedLoser(t, f, "nil")
 
-	res, err := RestoreFromTrash(f.S, loser, nil, setFlag(t, f.S, false))
+	res, err := RestoreFromTrash(f.S, loser, nil, nil, setFlag(t, f.S, false))
 	require.NoError(t, err)
 
 	require.True(t, res.Restored)
@@ -81,7 +82,7 @@ func TestRestoreFromTrash_ReconcileClearsRedirectLateWhenHandOffCrowns(t *testin
 	f := combineUndoFixture(t)
 	loser, winner, pendingKey := trashedLoser(t, f, "false")
 
-	res, err := RestoreFromTrash(f.S, loser, nil, setFlag(t, f.S, true))
+	res, err := RestoreFromTrash(f.S, loser, nil, nil, setFlag(t, f.S, true))
 	require.NoError(t, err)
 
 	require.True(t, res.Restored)
@@ -120,10 +121,43 @@ func TestRestoreFromTrash_RowLeftTrashBeforeWritePutsRedirectBack(t *testing.T) 
 	f := combineUndoFixture(t)
 	loser, winner, _ := trashedLoser(t, f, "nil")
 
-	res, err := RestoreFromTrash(untrashBeforeWrite{f.S, t}, loser, nil, func(_, _ *database.Book) {})
+	res, err := RestoreFromTrash(untrashBeforeWrite{f.S, t}, loser, nil, nil, func(_, _ *database.Book) {})
 	require.NoError(t, err)
 
 	require.False(t, res.Restored, "the row was already out of the trash at the write")
 	require.Empty(t, res.RedirectFrom)
 	require.Equal(t, winner, resolvesTo(t, f.S, loser), "the redirect the preview removed is back")
+}
+
+// The judge runs inside the write with the row as locked and as it would be
+// written. A refusal writes nothing, is returned wrapped, and puts back the
+// redirect the preview removed; a judge that accepts lets the restore through.
+func TestRestoreFromTrash_JudgeRefusalWritesNothingAndKeepsTheRedirect(t *testing.T) {
+	f := combineUndoFixture(t)
+	loser, winner, pendingKey := trashedLoser(t, f, "nil")
+	refused := errors.New("not allowed to restore")
+	var sawBeforeInTrash, sawAfterLive bool
+
+	res, err := RestoreFromTrash(f.S, loser, nil, func(before, after *database.Book) error {
+		sawBeforeInTrash = database.IsInTrash(before)
+		sawAfterLive = !database.IsInTrash(after)
+		return refused
+	}, nil)
+
+	require.ErrorIs(t, err, refused)
+	require.True(t, sawBeforeInTrash, "the judge sees the row as locked")
+	require.True(t, sawAfterLive, "the judge sees the row as it would be written")
+	require.False(t, res.Restored)
+	require.Empty(t, res.RedirectFrom)
+	b, err := f.S.GetBookByID(loser)
+	require.NoError(t, err)
+	require.True(t, database.IsInTrash(b), "nothing was written")
+	require.Equal(t, winner, resolvesTo(t, f.S, loser), "the redirect the preview removed is back")
+	got, err := f.S.GetRaw(pendingKey)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	res, err = RestoreFromTrash(f.S, loser, nil, func(_, _ *database.Book) error { return nil }, nil)
+	require.NoError(t, err)
+	require.True(t, res.Restored)
 }

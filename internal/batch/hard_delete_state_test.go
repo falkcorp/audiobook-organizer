@@ -1,7 +1,7 @@
 // file: internal/batch/hard_delete_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3ef207f6-91b5-4980-9272-904c924edc09
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package batch
 
@@ -26,7 +26,7 @@ func TestExecuteOperations_HardDeleteCarriesOrRefuses(t *testing.T) {
 	s.WaitForWarmup()
 	gid := "g1"
 	mk := func(id string, listed bool, group *string) {
-		b := &database.Book{ID: id, Title: id, Format: "m4b", VersionGroupID: group}
+		b := &database.Book{ID: id, Title: "The Dark Knight Returns", Format: "m4b", VersionGroupID: group}
 		if listed {
 			b.IsPrimaryVersion, b.LibraryState = new(true), new("organized")
 		} else {
@@ -39,7 +39,7 @@ func TestExecuteOperations_HardDeleteCarriesOrRefuses(t *testing.T) {
 	mk("copy", false, &gid)
 	mk("alone", false, nil)
 	mk("plain", false, nil)
-	u, err := s.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	u, err := s.CreateUser("reader", "reader@example.invalid", "argon2id", "x", []string{"user"}, "active")
 	require.NoError(t, err)
 	for _, id := range []string{"copy", "alone"} {
 		require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: id, Status: database.UserBookStatusInProgress, ProgressPct: 40, LastActivityAt: time.Now()}))
@@ -49,7 +49,7 @@ func TestExecuteOperations_HardDeleteCarriesOrRefuses(t *testing.T) {
 		{ID: "copy", Action: "delete", HardDelete: true},
 		{ID: "alone", Action: "delete", HardDelete: true},
 		{ID: "plain", Action: "delete", HardDelete: true},
-	}})
+	}, Caller: &TrashGrants{Trash: true}})
 	require.Equal(t, 2, resp.Success, "results %+v", resp.Results)
 	require.Equal(t, 1, resp.Failed)
 

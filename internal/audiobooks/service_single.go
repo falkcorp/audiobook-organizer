@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-26
 
@@ -832,7 +832,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	// flag since. A row that is not in the trash is returned unchanged.
 	// It also hands off the group's primary (EnsureSinglePrimary) before it
 	// decides the redirect, so no hand-off runs here.
-	res, err := merge.RestoreFromTrash(svc.store, id, nil, nil)
+	res, err := merge.RestoreFromTrash(svc.store, id, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}

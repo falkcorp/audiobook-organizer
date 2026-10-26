@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package merge
 
@@ -115,6 +115,15 @@ type pendingRepairScanner interface {
 // same ModifyBook after the restore (a batch update's other fields), and the
 // row is written whether or not it was in the trash.
 //
+// judge, when set, runs inside the same ModifyBook, after the restore and
+// apply, with the row as the write read it (before) and as it would be written
+// (after). A non-nil error refuses the write: nothing is changed and the error
+// is returned wrapped, so errors.As reaches it. It judges the row as locked, not
+// as the caller read it earlier, so a row another writer trashed or restored in
+// between is judged on what this write does to it. It must not modify either
+// row. It does not run when the row is not in the trash and apply is nil
+// (nothing is written then).
+//
 // handOff, when set, replaces the default hand-off and runs after every write
 // (restore or apply), with the row as the write read it and as written; a
 // batch update passes its own, which honours an is_primary_version or
@@ -133,7 +142,7 @@ type pendingRepairScanner interface {
 //
 // There is no operation journal for a trash restore (there is none for the
 // trash either); the redirect removal and every dropped record are logged.
-func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
+func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.Book), judge func(before, after *database.Book) error, handOff func(before, after *database.Book), joinGroups ...string) (TrashRestoreResult, error) {
 	var res TrashRestoreResult
 	LockMergeRMW()
 	defer UnlockMergeRMW()
@@ -281,6 +290,17 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		}
 		if apply != nil {
 			apply(row)
+		}
+		// The caller's verdict on this row as locked (before) and as it would
+		// be written (row, restore and apply included). A refusal aborts the
+		// write; the redirect the preview removed is put back below.
+		if judge != nil {
+			if err := judge(&res.Before, row); err != nil {
+				res.Restored = false
+				return err
+			}
+		}
+		if apply != nil {
 			return nil
 		}
 		if !res.Restored {

@@ -1,7 +1,7 @@
 // file: internal/batch/restore_library_state_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c054407-02a8-465f-bb5a-c509387c20b3
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package batch
 
@@ -55,7 +55,7 @@ func requireRestoredVisible(t *testing.T, f *vptest.Fixture, id string) {
 func TestBatchRestore_UsesTheSharedRestoreRule(t *testing.T) {
 	f, id := trashedLikeDeleteAudiobook(t)
 	resp := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{
-		Operations: []BatchOperationItem{{ID: id, Action: "restore"}}})
+		Operations: []BatchOperationItem{{ID: id, Action: "restore"}}, Caller: &TrashGrants{Restore: true}})
 	require.Equal(t, 1, resp.Success)
 	requireRestoredVisible(t, f, id)
 }
@@ -95,7 +95,7 @@ func TestBatchRestore_NeverTrashedPrimaryIsLeftAlone(t *testing.T) {
 	require.Nil(t, before.MarkedForDeletion, "precondition: a nil deletion flag")
 
 	resp := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{
-		Operations: []BatchOperationItem{{ID: prim, Action: "restore"}}})
+		Operations: []BatchOperationItem{{ID: prim, Action: "restore"}}, Caller: &TrashGrants{Restore: true}})
 	require.Equal(t, 1, resp.Success)
 
 	require.Equal(t, "true", f.Flag(t, prim), "a never-trashed primary keeps its flag")
@@ -141,7 +141,7 @@ func TestBatchUpdate_DeletedLabelRecordsThePreTrashState(t *testing.T) {
 	require.Equal(t, "imported", *b.PreTrashLibraryState)
 
 	resp = NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{
-		Operations: []BatchOperationItem{{ID: id, Action: "restore"}}})
+		Operations: []BatchOperationItem{{ID: id, Action: "restore"}}, Caller: &TrashGrants{Restore: true}})
 	require.Equal(t, 1, resp.Success)
 	b, err = f.S.GetBookByID(id)
 	require.NoError(t, err)

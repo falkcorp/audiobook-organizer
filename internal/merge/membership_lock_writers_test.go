@@ -1,7 +1,7 @@
 // file: internal/merge/membership_lock_writers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c7e9a41-6b3d-4f18-8e05-a9d4b1c6f372
-// last-edited: 2026-10-02
+// last-edited: 2026-10-26
 
 package merge
 
@@ -57,7 +57,7 @@ func restoreIntoH(t *testing.T, f *vptest.Fixture) (func() error, func() bool) {
 		_, err := RestoreFromTrash(f.S, r, func(b *database.Book) {
 			h := "h"
 			b.VersionGroupID = &h
-		}, func(_, _ *database.Book) {}, "h")
+		}, nil, func(_, _ *database.Book) {}, "h")
 		return err
 	}
 	return write, func() bool { return f.GroupOf(t, r) == "g" }

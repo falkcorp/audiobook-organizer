@@ -1,7 +1,7 @@
 // file: internal/batch/primary_handoff_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6a0e4d82-3f1b-4c79-b5a2-d8e3c14f7b59
-// last-edited: 2026-09-24
+// last-edited: 2026-10-26
 
 package batch
 
@@ -34,7 +34,7 @@ func TestBatchDelete_PrimaryHandsOn(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.RootDir = prev })
 	inc := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 	next := f.Book(t, vptest.Spec{ID: "next", Group: "g", Primary: "false"})
-	resp := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: inc, Action: "delete"}}})
+	resp := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: inc, Action: "delete"}}, Caller: &TrashGrants{Trash: true}})
 	require.Equal(t, 1, resp.Success)
 	f.RequireSinglePrimary(t, "g", next)
 }
