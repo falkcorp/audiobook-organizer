@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.6
+// version: 1.47.8
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -1596,7 +1596,7 @@ func (s *PebbleStore) deleteBookFileFrom(id string, found *BookFile) error {
 		}
 		found = again
 	}
-	return fmt.Errorf("DeleteBookFile %s: the row kept moving while being deleted: %w", id, errBookFileRowVanished)
+	return fmt.Errorf("DeleteBookFile %s: the row kept moving or changing while being deleted: %w: %w", id, ErrBookFileConflict, errBookFileRowVanished)
 }
 
 // deleteBookFileAt deletes the book_file row at the location found names,
@@ -1971,12 +1971,15 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 		// the row as it is under the file stripe and again on every compare-and-swap
 		// retry. Merging here, against the lookup above, would have written fields
 		// restored from a row that a concurrent batch upsert may have changed since.
-		// The guard re-checks, on that fresh row, the one thing the match was made
-		// on that a concurrent writer moves without taking this row's stripe: its
-		// iTunes ID.
-		matchedPID := existing.ITunesPersistentID
+		// The guard re-checks, on that fresh row, what the match was made on that
+		// a concurrent writer moves without taking this row's stripe: its iTunes
+		// ID (a create claiming it) and its path (a batch upsert by ID renaming
+		// it). Compared with the row the match returned, not with the incoming
+		// one: a row whose PID or path the upsert itself is about to change
+		// still matches.
+		matched := *existing
 		err = s.updateBookFile(existing.ID, file, bookFileMergeUpsert, true, func(old *BookFile) bool {
-			return old.ITunesPersistentID == matchedPID
+			return old.ITunesPersistentID == matched.ITunesPersistentID && old.FilePath == matched.FilePath
 		})
 		if !errors.Is(err, errBookFileMatchStale) {
 			return err

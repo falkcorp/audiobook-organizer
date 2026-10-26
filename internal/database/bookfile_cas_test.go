@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.6
+// version: 1.0.8
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -1106,5 +1106,63 @@ func TestCAS_UpsertBookFile_RematchesAfterAPIDTransfer(t *testing.T) {
 	}
 	if owner.Title != "Batman: Year One, Chapter 2" {
 		t.Errorf("owner title = %q, want the upsert applied to the row that holds the PID now", owner.Title)
+	}
+}
+
+// N8, by path: an upsert that matched row A by path must match again when a
+// retry finds A has been renamed. Merging the incoming path back onto the fresh
+// A would undo the rename and point book_file_path at A again.
+func TestCAS_UpsertBookFile_RematchesAfterARename(t *testing.T) {
+	f := newCASFixture(t)
+	// Matching by path only: the fixture row's PID is not part of this upsert.
+	const renamed = "/lib/Gotham/Batman-Year-One/renamed.m4b"
+	n := injectBeforeCommit(t, 1, func(int) {
+		err := f.s.BatchUpsertBookFiles([]*BookFile{{ID: f.file.ID, BookID: f.book.ID, FilePath: renamed}})
+		if err != nil {
+			t.Errorf("injected BatchUpsertBookFiles: %v", err)
+		}
+	})
+
+	if err := f.s.UpsertBookFile(&BookFile{BookID: f.book.ID, FilePath: casPath, Title: "Batman: Year One, Chapter 3"}); err != nil {
+		t.Fatalf("UpsertBookFile: %v", err)
+	}
+	if *n != 1 {
+		t.Fatalf("the concurrent rename ran %d times, want 1", *n)
+	}
+
+	a := f.row(t)
+	if a.FilePath != renamed {
+		t.Errorf("row A is at %q, want the concurrent rename to %q kept", a.FilePath, renamed)
+	}
+	if a.Title == "Batman: Year One, Chapter 3" {
+		t.Errorf("the upsert was written to row A, which no longer sits at %s", casPath)
+	}
+	at, err := f.s.GetBookFileByPath(casPath)
+	if err != nil || at == nil {
+		t.Fatalf("GetBookFileByPath(%s): row=%v err=%v", casPath, at, err)
+	}
+	if at.ID == f.file.ID || at.Title != "Batman: Year One, Chapter 3" {
+		t.Errorf("the upsert's path resolves to %s (title %q), want a new row carrying the upsert", at.ID, at.Title)
+	}
+	if byRenamed, _ := f.s.GetBookFileByPath(renamed); byRenamed == nil || byRenamed.ID != f.file.ID {
+		t.Errorf("book_file_path for %s does not resolve to row A: %+v", renamed, byRenamed)
+	}
+}
+
+// A single delete whose row changes on every attempt gives up with the same
+// typed conflict every other book_file writer returns, and deletes nothing.
+func TestCAS_DeleteBookFile_GivesUpUnderRotatingChurn(t *testing.T) {
+	f := newCASFixture(t)
+	n := injectBeforeCommit(t, 0, func(i int) { f.upsertScan(t, fmt.Sprintf("gotham-churn-%02d", i), 100+i, 1000) })
+
+	err := f.s.DeleteBookFile(f.file.ID)
+	if !errors.Is(err, ErrBookFileConflict) {
+		t.Fatalf("err = %v, want ErrBookFileConflict", err)
+	}
+	if *n != maxStageRetries {
+		t.Errorf("attempts = %d, want %d", *n, maxStageRetries)
+	}
+	if got := f.row(t); got.FilePath != casPath {
+		t.Errorf("the abandoned delete changed the row: %+v", got)
 	}
 }
