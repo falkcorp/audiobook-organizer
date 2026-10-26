@@ -1,7 +1,7 @@
 // file: internal/search/field_routing_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package search
 
@@ -80,13 +80,24 @@ func TestQueryMayUsePerUserField_ParsedQueries(t *testing.T) {
 		"read_status:(finished|in_progress)",
 		"((title:x))  last_played:>2026-01-01",
 	}
+	// Text that names a per-user field anywhere counts, even where the parser reads
+	// it as something else: guessing "not per-viewer" wrongly serves one user's
+	// state to everyone, guessing "per-viewer" wrongly only shows each viewer
+	// their own answer.
+	yes = append(yes,
+		"author:read_status",
+		"\"read_status:finished\"",
+		"read_status",
+		"title:\"PROGRESS_PCT\"",
+		"title:x last_played",
+	)
 	no := []string{
 		"title:Alpha",
 		"date_added:>-30d",
 		"date_modified:<2026-01-01",
-		"author:read_status",
-		"\"read_status:finished\"",
-		"read_status",
+		"readstatus:finished",
+		"title:my_read_status_x",
+		"title:last-played",
 	}
 	for _, q := range yes {
 		if !QueryMayUsePerUserField(q) {
@@ -136,8 +147,8 @@ func TestQueryMayUsePerUserField_FailsClosedOnUnparseableText(t *testing.T) {
 // The gate is only as good as its agreement with the evaluator: a query the
 // translator routes to the per-user pass (and so evaluates as the owner) must be
 // one QueryMayUsePerUserField reports, in every spelling the parser accepts. This
-// is the differential check: for each query that parses, the translator's own
-// per-user routing and the gate must give the same answer. A query that does not
+// is the differential check: for each query that parses, whenever the translator
+// routes a filter to the per-user pass the gate must say so. A query that does not
 // parse (or translate) is refused by EvaluateSmartPlaylist, so it never reads
 // anyone's state whatever the gate says.
 func TestQueryMayUsePerUserField_AgreesWithTranslatorRouting(t *testing.T) {
@@ -165,8 +176,11 @@ func TestQueryMayUsePerUserField_AgreesWithTranslatorRouting(t *testing.T) {
 		if err != nil {
 			continue // likewise refused at translation
 		}
-		if got, want := QueryMayUsePerUserField(q), len(perUser) > 0; got != want {
-			t.Errorf("%q: QueryMayUsePerUserField = %v but the translator routes %d per-user filter(s)", q, got, len(perUser))
+		// One direction is exact: whatever the translator routes to the per-user pass
+		// the gate reports. The other is deliberately loose (the gate also answers
+		// true for text that merely names a field, e.g. author:read_status).
+		if got := QueryMayUsePerUserField(q); !got && len(perUser) > 0 {
+			t.Errorf("%q: the translator routes %d per-user filter(s) but QueryMayUsePerUserField = false", q, len(perUser))
 		}
 		if len(perUser) > 0 {
 			routed++
