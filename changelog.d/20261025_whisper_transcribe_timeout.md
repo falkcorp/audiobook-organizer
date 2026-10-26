@@ -33,9 +33,13 @@
   faulted, for either reason, gets no more work for the rest of the dispatch
   while an endpoint that has not faulted remains, and every strike it answered
   in that dispatch (one from an earlier chunk of the faulted request included)
-  is withheld and its job re-sent to the endpoints that have not faulted. Only
-  once every endpoint has faulted are the faulted ones asked again and their
-  answers believed: the jobs of a fault made of timeouts go back in requests of
+  is withheld and its job re-sent to the endpoints that have not faulted. A
+  fault made of timeouts, crashes or kills benches every endpoint of that
+  machine (a Mac that swaps is ill on every port it serves), judged across all
+  the responses of the round before any is read; a `worker_misconfigured`
+  fault benches only its own port, and endpoints whose machine is unknown are
+  each their own machine. Only once every endpoint is benched are they asked
+  again and their answers believed: the jobs of a fault made of timeouts go back in requests of
   at most two clips, so each clip reaches its own verdict even when every
   worker faulted on the same page of looping clips, and a worker that cannot
   decode at all (`worker_misconfigured`) is never sent back the jobs it refused.
@@ -214,9 +218,11 @@ that hangs one (deferred at retry 1, see above).
   kept off it and that the jobs of a fault made of timeouts could go to any
   worker. The worker that timed out took them too, and its per-clip timeouts on
   them were believed, so a sick worker gave first strikes to healthy files (8
-  of 32 on two workers in review). A worker that faulted for any reason now gets
-  no more work in that dispatch while one that has not faulted remains, and its
-  strikes from that dispatch are withheld.
+  of 32 on two workers in review; 16 of 32 when one Mac port faulted and its
+  three sibling ports took the re-sent clips). A worker that faulted for any
+  reason now gets no more work in that dispatch while one that has not faulted
+  remains, a timeout fault benches every port of its machine, and its strikes
+  from that dispatch are withheld.
 - The different-machine entry said two server ports on one Mac never count as
   two machines. That held only once the workers report `machine_id`: two old
   ports were two machines, a worker's upgrade gave it a new identity that could

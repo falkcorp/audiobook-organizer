@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -51,7 +51,9 @@ Five things changed:
   helper is set aside for the run. While another helper is still working, a
   helper that has been set aside is not asked again in that run, and none of
   its timeouts from that run are held against a file; its files go to the
-  other helpers. Only when every helper has struggled are they asked again,
+  other helpers. When the trouble is timeouts, the other helpers on the same
+  Mac are set aside with it, because a Mac that is struggling struggles on all
+  of them. Only when every helper has struggled are they asked again,
   one or two files at a time, and believed, so each file still gets its own
   answer even when every helper struggled with the same batch. A file that two
   helpers in a row cannot listen to is left for the next run rather than
