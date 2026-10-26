@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
 # One bad audio clip can no longer freeze all the listening helpers
 
-Branch `fix/whisper-transcribe-timeout-r4`, [PR #4182](https://github.com/falkcorp/audiobook-organizer/pull/4182) (replaces PR #4176, which replaced PR #4168). No separate spec.
+Branch `fix/whisper-transcribe-timeout-r5`, [PR #4182](https://github.com/falkcorp/audiobook-organizer/pull/4182) (replaces PR #4176, which replaced PR #4168). No separate spec.
 
 ## Executive Summary
 
@@ -58,12 +58,21 @@ Five things changed:
   Mac are set aside with it, because a Mac that is struggling struggles on all
   of them. When every helper has struggled, the server cannot tell from the
   files alone whether the files are at fault or every machine is ill, so it
-  first plays each machine a two-second test recording ("Welcome to Gotham
-  City."). A machine that answers it is working, so it is asked again, one or
-  two files at a time, and believed, and each file still gets its own answer
-  even when every helper struggled with the same batch. A machine that cannot
-  answer it is ill: nothing it said that night is held against any file, and
-  if no machine answers, the batch is simply left for later. A file that two
+  first plays a two-second test recording ("Welcome to Gotham City.") to every
+  helper that struggled. The recording waits its turn behind whatever the
+  helper is already doing for other books, so a busy but healthy helper is not
+  mistaken for an ill one. A machine whose struggling helpers all answer it is
+  working, so it is asked again, one or two files at a time, and believed, and
+  each file still gets its own answer even when every helper struggled with
+  the same batch. A machine with a helper that cannot answer it is ill:
+  nothing it said that night is held against any file, it is rested for a
+  while so the next batch does not spend another hour on it, and if no
+  machine answers, the batch is simply left for later. If the recording never
+  got its turn, nothing is decided about that machine and the batch is left
+  for later without counting toward stopping the run. A machine whose trouble
+  was its listening process being killed is still not believed about kills
+  that night, even when it answers the recording: a two-second recording
+  cannot show that a long listen survives. A file that two
   helpers in a row cannot listen to is left for the next run rather than
   passed around forever. A file
   whose listening later succeeds has its earlier strikes wiped.

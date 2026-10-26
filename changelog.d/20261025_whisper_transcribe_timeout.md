@@ -43,17 +43,31 @@
   machine is first sent a canary clip (`internal/transcribe/canary_clip.wav`:
   2.2 s of synthesised speech, "Welcome to Gotham City.", 16 kHz mono PCM, made
   with eSpeak NG by `scripts/make_canary_clip.sh`) through the worker's
-  `/transcribe` route: one port per machine, a 60 s limit (one clip's floor; the
-  model reload it pays measured about 7 s), at most once per
-  machine per dispatch. A machine that answers it without an error is decoding,
-  so its timeouts are about the clips: it is asked again and its answers are
-  believed, and the jobs of a fault made of timeouts go back in requests of at
-  most two clips, so each clip reaches its own verdict even when every worker
-  faulted on the same page of looping clips. A machine that does not answer it
-  is sick: none of its strikes in that dispatch count and its jobs go to a
-  machine that passed, or, when none did, the dispatch ends as
-  `ErrPoolUnavailable` (the ops wait it out and defer the unanswered files,
-  nothing written for them). The same holds for a pool of one endpoint. A
+  `/transcribe` route: to every port of the machine that faulted, at most once
+  per machine per dispatch. Each canary first takes the port's request slot,
+  as every real request does, waiting at most one full request's ceiling (a
+  batch of 90 s clips by the worker's reported formula, about 104 min with the
+  defaults), and only then starts its 60 s limit (one clip's floor; the model
+  reload it pays measured about 7 s), so a sound worker busy with another
+  dispatch is not failed for its queue. A machine all of whose faulted ports
+  answer it without an error is decoding, so its timeouts are about the clips:
+  it is asked again and its answers are believed, and the jobs of a fault made
+  of timeouts go back in requests of at most two clips, so each clip reaches
+  its own verdict even when every worker faulted on the same page of looping
+  clips. A machine with a faulted port that does not answer it is sick: none of
+  its strikes in that dispatch count, every one of its ports goes into
+  cooldown so the next dispatch waits at the gate instead of paying another
+  chunk of per-clip deadlines, and its jobs go to a machine that passed, or,
+  when none did, the dispatch ends as `ErrPoolUnavailable` (the ops wait it
+  out and defer the unanswered files, nothing written for them). A canary that
+  could not get a slot in that time is no verdict: the machine stays benched
+  without cooldown, and a dispatch left with no machine to believe ends in an
+  error the ops defer on without counting it toward stopping the run. A
+  machine whose fault was mostly `decoder_killed` answers has its kills
+  withheld for the rest of the dispatch even after it passes (a two-second
+  clip cannot show that a decoder survives a long one under memory pressure):
+  each such job goes to another machine, or, with none, is deferred. The same
+  holds for a pool of one endpoint. A
   worker that cannot decode at all (`worker_misconfigured`) is never sent back
   the jobs it refused.
   A dispatch that failed anyway has its timeouts
@@ -256,6 +270,15 @@ that hangs one (deferred at retry 1, see above).
   first strikes, and both machines sick on two nights could make them
   permanent. A faulted machine is now believed again only after it answers the
   canary clip.
+- The canary clip skipped the endpoint's request slot, so a sound worker busy
+  with another page's chunk queued it behind that chunk and failed it, and a
+  page of genuine loopers crowded by concurrent pages ended as
+  `ErrPoolUnavailable` instead of converging. It went to the machine's first
+  port rather than the one that faulted, so one sick worker process could be
+  vouched for by its sound sibling, and a machine whose fault was kills was
+  believed about kills after a canary that cannot detect them. A machine that
+  failed the canary was not put in cooldown, so every page or try paid a fresh
+  chunk of per-clip deadlines on it before the run stopped.
 - The routing entry covered only ordinary allocation. The requests re-sent
   after a split or a worker fault took the first endpoint by priority, the
   machine that had already struck the file included.
