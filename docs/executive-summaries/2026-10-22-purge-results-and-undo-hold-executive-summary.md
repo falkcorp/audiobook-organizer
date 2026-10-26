@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.18.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -194,8 +194,8 @@ undo above. Books that own files are still never purged.
   would have read as "already gone"; nothing is removed and every note of a
   pending removal is kept. "Looks mounted" is not "the folder has something in
   it" (the program's own database and backups live inside it): the purge picks
-  up to fifty of the library's own book files, from spread-out places across the
-  whole library (not from the first few the database happens to list), and needs
+  up to fifty of the library's own book files, starting from different folders
+  across the whole library (not from the first few the database happens to list), and needs
   more than half of them to be visible. If the library has no book file inside
   the folder at all there is nothing to compare against and it counts as
   mounted. The check is per library, not per batch of fifty: a library that is

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_root_ready.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0e7b3d52-9a14-4c68-b2f7-5d1c8a4e6b93
 // last-edited: 2026-10-26
 
@@ -59,8 +59,9 @@ var rootStatTimeout = 10 * time.Second
 // a library dataset that may not have. A directory that holds the application's
 // own folders says nothing about whether the books are there. The books the
 // database names are the evidence: up to rootSampleFiles live book_file paths
-// under the root, drawn from a few random places in the library and one per
-// book (database.LiveBookFileSampler), are stat-ed, and the library is ready
+// under the root, read in five runs that each start at a different folder that
+// exists under it (in a random order) and one per book
+// (database.LiveBookFileSampler), are stat-ed, and the library is ready
 // only when more than half are present. A file that cannot be stat-ed for any
 // reason other than "not there" (EIO, ESTALE) counts as not present, and a stat
 // that does not answer within rootStatTimeout (a hung network mount) makes the
@@ -373,6 +374,18 @@ func (s *dirSet) has(dir string) bool {
 //     before its first unlink there), which is how a folder comes to be empty
 //     between the first worker finishing and a neighbour's already-gone file
 //     being decided.
+//
+// Layouts this does not catch, on purpose. A child dataset that is not mounted
+// under a library that still has a mounted grandchild shows the grandchild's
+// mount point as a folder with something in it (the child's own folder is the
+// part that is missing), and a stray file left in a mount point makes it look
+// populated: a file directly in such a folder reads as gone. Telling those apart
+// takes the device a folder lives on (st_dev), and device numbers are not
+// stable across reboots or remounts, so no stored identity may carry one;
+// comparing devices live would need a second source of truth about where each
+// dataset mounts, which the application does not have. The sample check
+// (libraryRootReady) still catches the usual case, a share that is down, because
+// most of the sampled files go missing with it.
 //
 // missing: the folder is not there. empty: it is there, holds nothing, and
 // nothing explains that.

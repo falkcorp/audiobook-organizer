@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
 // last-edited: 2026-10-26
 
@@ -47,14 +47,15 @@ var errPathUnresolvable = errors.New("path cannot be resolved")
 
 // errPathFolderMissing marks a file that is not there while the folder it would
 // be in is not there either, or is there but empty (the mount point a dataset
-// that is not mounted leaves behind; folderCheck says what exempts a folder). That is what a file that was removed together with
-// its folder looks like, and also what a file on a library that is not mounted
-// looks like (nested datasets mount apart from the root, so the root can be
-// populated and a folder under it still be absent). It cannot be told apart per
-// path, so it is "cannot tell": it always accompanies errPathLookupFailed, a
-// book stays in the trash for it (fileUndecided), and a journal record is kept
-// for as long as the folder is missing (no cap: the record is the only thing
-// that still names the file) and reported as one aggregate line per pass.
+// that is not mounted leaves behind; folderCheck says what exempts a folder).
+// That is what a file that was removed together with its folder looks like, and
+// also what a file on a library that is not mounted looks like (nested datasets
+// mount apart from the root, so the root can be populated and a folder under it
+// still be absent). It cannot be told apart per path, so it is "cannot tell": it
+// always accompanies errPathLookupFailed, a book stays in the trash for it
+// (fileUndecided), and a journal record is kept for as long as the folder is
+// missing (no cap: the record is the only thing that still names the file) and
+// reported as one aggregate line per pass.
 var errPathFolderMissing = errors.New("folder of the path is missing")
 
 // maxUnresolvableAttempts is how many passes a journal record whose path cannot

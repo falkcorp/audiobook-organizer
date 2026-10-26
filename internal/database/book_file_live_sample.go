@@ -1,5 +1,5 @@
 // file: internal/database/book_file_live_sample.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b0e6f94-71d2-4c58-9a1e-c5d7284f0b63
 // last-edited: 2026-10-26
 
@@ -25,8 +25,11 @@ type LiveBookFileSampler interface {
 	// SampleLiveBookFilePathsUnder returns up to k book_file paths that lie
 	// inside root and belong to live books: the book is not in the trash, the
 	// row is not retired, and no two paths are of the same book, so the sample
-	// spreads over books. It reads the library from a few random places in path
-	// order, each wrapping around, and stops as soon as it has k.
+	// spreads over books. It reads the library from a few places in path order,
+	// each wrapping around, and stops as soon as it has k. The places are the
+	// folders that really exist under root (their first characters are read from
+	// the index, never guessed), taken in a random order, so the reads spread over
+	// the library instead of crowding at its start.
 	//
 	// Fewer than k paths come back only when that is every such path there is:
 	// the answer is never short because of where a read happened to start, and an
@@ -52,14 +55,13 @@ var (
 )
 
 const (
-	// liveSampleChunks is how many random places the sample is drawn from. One
+	// liveSampleChunks is how many places the sample is drawn from. One
 	// contiguous run of 50 paths is a few author folders, and a nested mount
 	// that is not up under another folder would never be looked at.
 	liveSampleChunks = 5
-	// liveSampleStartAlphabet is what a chunk's random start key is drawn from:
-	// the first character of the folder under the root, where the paths of a
-	// library are spread.
-	liveSampleStartAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	// liveSampleMaxStarts bounds the hops that find the first characters under a
+	// root: a first byte has 256 values, so it is a bound that is never reached.
+	liveSampleMaxStarts = 256
 )
 
 // SampleLiveBookFilePathsUnder implements LiveBookFileSampler from memdb.
@@ -167,6 +169,50 @@ func (s *liveSample) collect(prefix, start string, quota int) (exhausted bool, e
 	return true, nil
 }
 
+// firstBytesUnder returns the distinct first bytes of the paths that lie under
+// prefix, in order, found by hopping the path index: seek to the prefix, read
+// the first path's byte after it, seek past every path that starts with that
+// byte, repeat. The cost is one index seek per distinct first byte (at most
+// liveSampleMaxStarts), not a visit of every row.
+//
+// A chunk of the sample starts at the beginning of one of these groups. The start
+// was once drawn from a fixed 62-character alphabet; a library whose folders
+// start with "G" and "W" then began 58 percent of its chunks at the beginning of
+// the library (every character below "G" seeks to the first folder at or after
+// it), and a folder that no drawn character landed on first was reached only by
+// wrapping.
+func (s *liveSample) firstBytesUnder(prefix string) ([]byte, error) {
+	var firsts []byte
+	seek := prefix
+	for range liveSampleMaxStarts {
+		it, err := s.txn.LowerBound(memTableBookFiles, memIdxFilePath, seek)
+		if err != nil {
+			return nil, fmt.Errorf("memdb book_files from %q: %w", seek, err)
+		}
+		obj := it.Next()
+		if obj == nil {
+			break
+		}
+		bf, ok := obj.(*BookFile)
+		if !ok || !strings.HasPrefix(bf.FilePath, prefix) {
+			break
+		}
+		rest := bf.FilePath[len(prefix):]
+		if rest == "" {
+			// A path that is the prefix itself has no first byte after it.
+			seek = prefix + "\x00"
+			continue
+		}
+		b := rest[0]
+		firsts = append(firsts, b)
+		if b == 0xff {
+			break
+		}
+		seek = prefix + string([]byte{b + 1})
+	}
+	return firsts, nil
+}
+
 // sampleLiveBookFilePathsUnder is the memdb body of SampleLiveBookFilePathsUnder.
 func (m *MemStore) sampleLiveBookFilePathsUnder(root string, k int) ([]string, error) {
 	prefix := filepath.Clean(root)
@@ -176,9 +222,19 @@ func (m *MemStore) sampleLiveBookFilePathsUnder(root string, k int) ([]string, e
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	s := &liveSample{txn: txn, seenPaths: map[string]struct{}{}, seenBooks: map[string]struct{}{}}
+	firsts, err := s.firstBytesUnder(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if len(firsts) == 0 {
+		return nil, nil // nothing under the root at all
+	}
+	rand.Shuffle(len(firsts), func(i, j int) { firsts[i], firsts[j] = firsts[j], firsts[i] })
 	quota := (k + liveSampleChunks - 1) / liveSampleChunks
 	for c := 0; c < liveSampleChunks && len(s.out) < k; c++ {
-		start := prefix + string(liveSampleStartAlphabet[rand.IntN(len(liveSampleStartAlphabet))])
+		// Distinct places while there are distinct first characters, then round
+		// again: further chunks continue past the paths already taken.
+		start := prefix + string([]byte{firsts[c%len(firsts)]})
 		exhausted, err := s.collect(prefix, start, min(quota, k-len(s.out)))
 		if err != nil {
 			return nil, err
