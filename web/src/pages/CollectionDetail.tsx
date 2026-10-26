@@ -1,7 +1,7 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
@@ -41,7 +41,7 @@ import { BookPicker } from '../components/collections/BookPicker';
 import { QueryHelp, SortPicker } from '../components/collections/QueryHelp';
 import {
   MANAGE_TOOLTIP,
-  memberCount,
+  memberCountLabel,
   storedMembers,
 } from '../components/collections/collectionUtils';
 import {
@@ -336,7 +336,7 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Typography variant="h6" component="h2">
-          Members ({memberCount(collection)})
+          Members ({memberCountLabel(collection)})
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
         {isDynamic ? (

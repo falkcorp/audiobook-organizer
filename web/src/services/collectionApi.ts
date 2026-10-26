@@ -1,7 +1,7 @@
 // file: web/src/services/collectionApi.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: 36e44f0d-8a86-4830-8fd9-c0a4fbabc018
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { apiFetch } from '../utils/apiFetch';
 
@@ -36,6 +36,11 @@ export interface Collection {
    * attribution only and never decides membership.
    */
   materialized_book_ids?: string[];
+  /**
+   * How many books the collection matches when that is more than the server
+   * lists (it caps a member list at 10,000). Absent when the list is complete.
+   */
+  materialized_total?: number;
   /**
    * True when the members for this viewer could not be worked out (the search
    * index is not ready, the query no longer parses, or the viewer's state could

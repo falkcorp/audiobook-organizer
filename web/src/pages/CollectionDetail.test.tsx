@@ -1,7 +1,7 @@
 // file: web/src/pages/CollectionDetail.test.tsx
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a9e1afd-e004-4591-8fe6-2cf5dcb3eef4
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -405,6 +405,32 @@ describe('dynamic collection', () => {
       )
     ).toBeInTheDocument();
     expect(screen.queryByText('No books match this query.')).toBeNull();
+  });
+
+  it('does not show a count of 0 for members that could not be worked out', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      query: 'read_status:finished',
+      materialized_book_ids: [],
+      members_unavailable: true,
+    });
+    renderPage('c2');
+    expect(
+      await screen.findByRole('heading', { name: 'Members (unavailable)' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Members (0)' })).toBeNull();
+  });
+
+  it('shows the real total when the member list was cut to the server bound', async () => {
+    m.getCollection.mockResolvedValue({
+      ...dynamicCol,
+      name: 'Hush',
+      materialized_total: 12000,
+    });
+    renderPage('c2');
+    expect(
+      await screen.findByRole('heading', { name: 'Members (1 of 12,000)' })
+    ).toBeInTheDocument();
   });
 
   it('falls back to a generic line when the server flags unavailable without a message', async () => {

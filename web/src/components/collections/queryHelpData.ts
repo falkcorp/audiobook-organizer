@@ -1,7 +1,7 @@
 // file: web/src/components/collections/queryHelpData.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7793a6b3-1c06-4470-ae92-563d9c29b9c4
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { firstSearchError } from '../../utils/queryGrammar';
 import { parseSearch } from '../../utils/searchParser';
@@ -186,9 +186,20 @@ export function applySortChoice(sortJson: string | undefined, choice: SortChoice
   return all.length > 0 ? JSON.stringify(all) : '';
 }
 
-/** True when the query text filters on a per-user field (negated or not). */
+/** A per-user field name as a whole word anywhere in the raw text. */
+const PER_USER_NAME_IN_TEXT = new RegExp(`\\b(?:${PER_USER_FIELDS.join('|')})\\b`, 'i');
+
+/**
+ * True when the query may be evaluated per viewer: it filters on a per-user field
+ * (negated or not), names one anywhere in its text, or has a parse error. The last
+ * two are the server's own fail-closed rule (search.QueryMayUsePerUserField): a
+ * query that cannot be shown to read no per-user state is treated as reading it,
+ * so the page never offers to store one viewer's members for everyone.
+ */
 export function usesPerUserField(query: string): boolean {
-  return parseSearch(query).fieldFilters.some((f) => PER_USER_FIELDS.includes(f.field));
+  if (parseSearch(query).fieldFilters.some((f) => PER_USER_FIELDS.includes(f.field))) return true;
+  if (queryError(query) !== null) return true;
+  return PER_USER_NAME_IN_TEXT.test(query);
 }
 
 /** The first certain parse error in the query, or null. The server stays the authority. */

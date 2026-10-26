@@ -1,7 +1,7 @@
 // file: web/src/components/collections/QueryHelp.test.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: d07cc1a4-a7f6-4e0f-986a-580430c3a670
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -146,6 +146,19 @@ describe('per-user note', () => {
     expect(screen.getByText(/reading state of whoever is viewing/)).toBeInTheDocument();
     expect(usesPerUserField('-last_played:>-30d')).toBe(true);
     expect(usesPerUserField('author:smith')).toBe(false);
+  });
+
+  it('is fail-closed, like the server: a parse error or a field name in the text counts', () => {
+    // Does not parse as a whole: cannot be shown to read no per-user state.
+    expect(usesPerUserField('last_played:30d')).toBe(true);
+    expect(usesPerUserField('title:/abc')).toBe(true);
+    // Names a per-user field where the grammar reads something else.
+    expect(usesPerUserField('author:read_status')).toBe(true);
+    expect(usesPerUserField('"progress_pct:>5"')).toBe(true);
+    expect(usesPerUserField('title:Hush last_played')).toBe(true);
+    // Near misses stay book-only.
+    expect(usesPerUserField('title:my_read_status_x')).toBe(false);
+    expect(usesPerUserField('title:Hush OR author:kyle')).toBe(false);
   });
 });
 
