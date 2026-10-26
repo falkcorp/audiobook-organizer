@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package registry
 
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -903,7 +904,8 @@ func attrsToJSON(attrs []slog.Attr) string {
 //
 // LogValuers are resolved first (as slog's handlers do), groups become nested
 // objects, and an error that is not itself a json.Marshaler is its Error()
-// text. Every other value keeps its previous form (Value.Any()).
+// text (see errorText for an error whose method cannot run). Every other value
+// keeps its previous form (Value.Any()).
 func attrValueForJSON(v slog.Value) any {
 	v = v.Resolve()
 	switch v.Kind() {
@@ -918,13 +920,33 @@ func attrValueForJSON(v slog.Value) any {
 		x := v.Any()
 		if _, marshals := x.(json.Marshaler); !marshals {
 			if err, ok := x.(error); ok {
-				return err.Error()
+				return errorText(err)
 			}
 		}
 		return x
 	default:
 		return v.Any()
 	}
+}
+
+// errorText is err.Error() for a log attribute, and never a panic. A log call
+// that reaches this sink is on its way out of an error path, so it must not
+// take the op down with it, and a typed nil (a nil *TransportError stored in an
+// error variable, which compares != nil) is exactly the value whose Error()
+// dereferences its receiver. It renders as "<nil>", the way slog's text
+// handler and fmt print it; any other panic in an Error method is reported in
+// fmt's own shape instead of being lost.
+func errorText(err error) (text string) {
+	defer func() {
+		if r := recover(); r != nil {
+			if v := reflect.ValueOf(err); v.Kind() == reflect.Pointer && v.IsNil() {
+				text = "<nil>"
+				return
+			}
+			text = fmt.Sprintf("%%!v(PANIC=Error method: %v)", r)
+		}
+	}()
+	return err.Error()
 }
 
 // processedItems converts one run attempt's UpdateProgress(current, total)
