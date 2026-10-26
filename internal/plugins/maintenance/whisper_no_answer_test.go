@@ -358,6 +358,47 @@ func TestBookPage_OnlyAnUnavailablePoolCountsTowardStoppingTheRun(t *testing.T) 
 	}
 }
 
+// N5 (review of #4182): the unavailable streak counts pages strictly in a
+// row. A page that failed any other way (a stuck worker, a worker fault)
+// breaks it just as an answered page does, and likewise the stuck streak.
+func TestBookPage_StreaksCountOnlyPagesInARow(t *testing.T) {
+	ep := []string{"http://192.0.2.10:8000"}
+	stuck := &transcribe.TransportError{Endpoints: ep, Err: &transcribe.WorkerStuckError{URL: ep[0]}}
+	fault := &transcribe.TransportError{Endpoints: ep, Err: &transcribe.WorkerFaultError{URL: ep[0], Reason: "worker_misconfigured"}}
+	unavailable := &transcribe.TransportError{Endpoints: ep, Err: fmt.Errorf("benched: %w", transcribe.ErrPoolUnavailable)}
+	cases := []struct {
+		name                       string
+		err                        error
+		wantUnavailable, wantStuck int64
+	}{
+		{"a stuck page resets the unavailable streak", stuck, 0, 4},
+		{"a worker fault resets both streaks", fault, 0, 0},
+		{"an unavailable page resets the stuck streak", unavailable, 4, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(serverdecode.EnvVar, "")
+			fx := newIntroFx(t)
+			b := fx.book("No Man's Land " + tc.name)
+			fx.file(b, "01.m4b", 1, "nml-1", false)
+			var calls atomic.Int32
+			swapPathSeams(t, true, "", answerEvery(&calls, transcribe.BatchResult{}, tc.err))
+			_, accum, _ := fx.bookPageAs(t, "op-streak-"+tc.name, false, func(a *transcribeStatsAccum) {
+				for range 3 {
+					a.unavailable.hit()
+					a.stuck.hit()
+				}
+			}, b)
+			if got := accum.unavailable.n.Load(); got != tc.wantUnavailable {
+				t.Errorf("unavailable streak = %d, want %d", got, tc.wantUnavailable)
+			}
+			if got := accum.stuck.n.Load(); got != tc.wantStuck {
+				t.Errorf("stuck streak = %d, want %d", got, tc.wantStuck)
+			}
+		})
+	}
+}
+
 // R1 (review of #4182): a pool refused at the gate because no endpoint's
 // /health could be read reaches the file op as an unrecognised TransportError
 // wrapping ErrPoolUnavailable. The op must treat it as the outage it is: retry

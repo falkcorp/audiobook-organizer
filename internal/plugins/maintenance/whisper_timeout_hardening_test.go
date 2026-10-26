@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/whisper_timeout_hardening_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c9d7e41-5b28-4f06-a1d3-8e2f60b4c715
 // last-edited: 2026-10-26
 
@@ -751,5 +751,78 @@ func TestBookIntroHeartbeat_StampsLivenessAndNeverWritesProgress(t *testing.T) {
 	defer rep.itemMu.Unlock()
 	if !strings.Contains(rep.item, "waiting on whisper") {
 		t.Fatalf("current item = %q", rep.item)
+	}
+}
+
+// ---- R3 (review of #4182): the retry rounds keep the run alive -------------
+
+// gapRep records when the op last showed the watchdog it was alive: a
+// liveness touch or a progress write. The watchdog cancels an op whose last
+// such sign is older than its ProgressTimeout, so the longest gap between two
+// signs over a page is what that rule judges.
+type gapRep struct {
+	fakeReporter
+	mu     sync.Mutex
+	last   time.Time
+	maxGap time.Duration
+}
+
+func (r *gapRep) sign() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if gap := now.Sub(r.last); gap > r.maxGap {
+		r.maxGap = gap
+	}
+	r.last = now
+}
+func (r *gapRep) TouchLiveness()                          { r.sign() }
+func (r *gapRep) UpdateProgress(_, _ int, _ string) error { r.sign(); return nil }
+func (r *gapRep) SetCurrentItem(string)                   {}
+
+// A book whose 90 s clip is empty goes on to the 300 s retry round. That round
+// is a dispatch of its own, and it must tick liveness while it waits exactly as
+// the first pass does: scaled down, the retry takes 40 tick intervals and the
+// watchdog's budget is 12, so a silent retry round is cancelled.
+func TestBookPage_TheRetryRoundTicksLivenessWhileItWaits(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "")
+	orig := whisperWaitTickInterval
+	whisperWaitTickInterval = 5 * time.Millisecond
+	t.Cleanup(func() { whisperWaitTickInterval = orig })
+	const retryTakes, watchdogBudget = 200 * time.Millisecond, 60 * time.Millisecond
+
+	fx := newIntroFx(t)
+	b := fx.book("The Long Halloween")
+	fx.file(b, "01.m4b", 1, "lh-1", false)
+	var round atomic.Int32
+	swapPathSeams(t, true, "", func(ctx context.Context, jobs map[string]transcribe.PathJob, _ transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+		res := silentAnswer
+		if round.Add(1) == 2 {
+			select {
+			case <-time.After(retryTakes):
+			case <-ctx.Done():
+			}
+			res = transcribe.BatchResult{Text: goodIntro}
+		}
+		out := make(map[string]transcribe.BatchResult, len(jobs))
+		for id := range jobs {
+			out[id] = res
+		}
+		return out, nil
+	})
+
+	rep := &gapRep{last: time.Now()}
+	fx.bookPageAs(t, "op-retry-tick", false, func(a *transcribeStatsAccum) {
+		a.heartbeat = bookIntroHeartbeat(rep)
+	}, b)
+	rep.sign() // the page returned: close the last gap
+	if round.Load() != 2 {
+		t.Fatalf("setup: want the first pass and the 300 s retry, got %d dispatches", round.Load())
+	}
+	rep.mu.Lock()
+	defer rep.mu.Unlock()
+	if rep.maxGap > watchdogBudget {
+		t.Fatalf("the op showed no sign of life for %s during a %s retry round (watchdog budget %s): the retry dispatch does not tick",
+			rep.maxGap.Round(time.Millisecond), retryTakes, watchdogBudget)
 	}
 }

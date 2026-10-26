@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.42.0
+// version: 3.43.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-26
 
@@ -1397,10 +1397,20 @@ func (p *Plugin) processTranscribePage(
 		}
 	}
 	answered := len(batchResults)
-	if err == nil || !transcribe.IsWorkerStuck(err) || answered > 0 {
-		accum.stuck.reset() // the pool answered (or failed some other way)
+	// Both streaks count pages strictly in a row: a page adds to a streak only
+	// when it answered nothing and failed in that streak's way, and every other
+	// page (answered, stuck, unavailable, or failed some third way) resets the
+	// streak it does not belong to. A stuck page between two unavailable ones
+	// used to leave the unavailable streak standing, so five unavailable pages
+	// spread across an afternoon of stuck ones stopped the run.
+	var streakTE *transcribe.TransportError
+	pageStuck := answered == 0 && transcribe.IsWorkerStuck(err)
+	pageUnavailable := answered == 0 && !pageStuck && errors.As(err, &streakTE) &&
+		(streakTE.Recognized || transcribe.IsPoolUnavailable(err))
+	if !pageStuck {
+		accum.stuck.reset()
 	}
-	if err == nil || answered > 0 {
+	if !pageUnavailable {
 		accum.unavailable.reset()
 	}
 	// batchErr is the detail written for a book with no answer when the whole
@@ -1417,7 +1427,7 @@ func (p *Plugin) processTranscribePage(
 			// Reachable but wedged: not an outage, and not a verdict on any book.
 			// The run loop stops the run after whisperStuckMaxBatches in a row.
 			streak := accum.stuck.n.Load()
-			if answered == 0 {
+			if pageStuck {
 				streak = accum.stuck.hit()
 			}
 			log.Warn("transcribe: whisper worker stuck, unanswered books deferred (no status written for them)",
@@ -1429,7 +1439,7 @@ func (p *Plugin) processTranscribePage(
 			// batch-level failure (a worker fault, a capability refusal) is
 			// deferred and the run goes on.
 			streak := accum.unavailable.n.Load()
-			if answered == 0 && (te.Recognized || transcribe.IsPoolUnavailable(err)) {
+			if pageUnavailable {
 				streak = accum.unavailable.hit()
 			}
 			log.Warn("transcribe: endpoints unreachable, unanswered books deferred (no status written for them)",
@@ -1545,6 +1555,21 @@ func (p *Plugin) processTranscribePage(
 				}
 			}
 		}
+		// whileWaiting runs one retry dispatch under the same liveness ticker as
+		// the first pass. A retry round is a whole second (or third) dispatch:
+		// retry 1 sends every book that came back empty as a 300 s clip, and a
+		// set that size can sit on the workers for longer than the op's 30
+		// minute ProgressTimeout with no book finishing. Without the tick the
+		// watchdog cancelled a run that was working. The ticker covers only the
+		// transport call, which supervises its own request; the local ffmpeg
+		// cuts below are not covered, so a hung ffmpeg is still the watchdog's
+		// to catch.
+		whileWaiting := func(n int, call func()) {
+			defer tickWhileWaiting(whisperWaitTickInterval, func(elapsed time.Duration) {
+				accum.beat(fmt.Sprintf("waiting on whisper (%s): %d books in flight for %s", name, n, elapsed.Round(time.Second)))
+			})()
+			call()
+		}
 		if len(srcs) == 0 {
 			return nil, failed
 		}
@@ -1553,7 +1578,9 @@ func (p *Plugin) processTranscribePage(
 			for id, src := range srcs {
 				jobs[id] = transcribe.PathJob{Path: src, Seconds: seconds}
 			}
-			res, rerr := transcribePathBatchFn(ctx, jobs, batchOpts)
+			var res map[string]transcribe.BatchResult
+			var rerr error
+			whileWaiting(len(jobs), func() { res, rerr = transcribePathBatchFn(ctx, jobs, batchOpts) })
 			if rerr != nil {
 				// Whatever the pool answered before it failed stands; collect
 				// marks every id it did not answer as failed.
@@ -1578,7 +1605,9 @@ func (p *Plugin) processTranscribePage(
 		if len(wavs) == 0 {
 			return nil, failed
 		}
-		res, rerr := transcribeBatchFn(ctx, wavs, batchOpts)
+		var res map[string]transcribe.BatchResult
+		var rerr error
+		whileWaiting(len(wavs), func() { res, rerr = transcribeBatchFn(ctx, wavs, batchOpts) })
 		if rerr != nil {
 			log.Warn("transcribe: "+name+" batch failed", "jobs", len(wavs), "answered", len(res), "err", rerr)
 		}
