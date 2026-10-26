@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.32.7
+// version: 1.32.8
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package logger
 
@@ -140,7 +140,7 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/scan_duration_mismatch.go":        2,
 	"internal/maintenance/jobs/scan_metadata_hash_dups.go":       2,
 	"internal/maintenance/jobs/sweep_pebble_metrics_ttl.go":      4,
-	"internal/merge/service.go":                                  17,
+	"internal/merge/service.go":                                  15,
 	"internal/merge/sync_follow.go":                              10,
 	"internal/metadata/audible.go":                               2,
 	"internal/metadata/audnexus.go":                              1,
