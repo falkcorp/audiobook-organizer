@@ -1,5 +1,5 @@
 // file: internal/database/retired_mock_store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8b4d90-6f13-4c75-a9d2-b05c71e3f482
 // last-edited: 2026-10-26
 
@@ -41,7 +41,25 @@ func (m *MockStore) GetBookFileByPathIncludingRetired(path string) (*BookFile, e
 	return m.GetBookFileByPath(path)
 }
 
-// HasRetiredVersions is false: no version of a MockStore was ever retired. It
-// is what lets RetiredHoldersOfHash and BookFileRowsAtPathForWrite answer "none"
-// for a MockStore without its BookFilesWithHash or BookFilesAtPath stubs.
-func (m *MockStore) HasRetiredVersions() (bool, error) { return false, nil }
+// HasRetiredVersions answers for the rows the test gave the mock. The mock
+// holds no rows of its own, so the only way it can hold a retired one is through
+// the complete reads a test stubs: BookFilesWithHashFunc and BookFilesAtPathFunc
+// are where a test puts the retired rows it wants the code under test to see.
+//
+//   - HasRetiredVersionsFunc, when set, is the answer.
+//   - Otherwise it is true exactly when one of those two reads is stubbed, so
+//     RetiredHoldersOfHash and BookFileRowsAtPathForWrite go on to that read and
+//     a stubbed retired row reaches the retired-content check instead of being
+//     short-circuited to "none".
+//   - With neither stubbed the mock holds no row at all, so it is false, which
+//     is what lets those two lookups answer "none" for a MockStore without
+//     stubs, where BookFilesWithHash would otherwise fail closed.
+//
+// It answered false unconditionally until 2026-10-26, and every MockStore
+// scanner test then skipped the retired check whatever it had stubbed.
+func (m *MockStore) HasRetiredVersions() (bool, error) {
+	if m.HasRetiredVersionsFunc != nil {
+		return m.HasRetiredVersionsFunc()
+	}
+	return m.BookFilesWithHashFunc != nil || m.BookFilesAtPathFunc != nil, nil
+}

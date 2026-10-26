@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -583,6 +583,8 @@ type MockStore struct {
 	GetBookFileByPathFunc                   func(filePath string) (*BookFile, error)
 	BookFilesAtPathFunc                     func(path string) ([]BookFile, error)
 	BookFilesWithHashFunc                   func(hash string) ([]BookFile, error)
+	// HasRetiredVersionsFunc overrides HasRetiredVersions (retired_mock_store.go).
+	HasRetiredVersionsFunc                  func() (bool, error)
 	ClaimBookFilePathKeyFunc                func(bookID, fileID, path string) (bool, error)
 	BookAtPathIndexBuiltFunc                func() (bool, error)
 	MarkFileImportedFromDelugeFunc          func(ctx context.Context, originalPath, libraryPath, torrentHash string) error

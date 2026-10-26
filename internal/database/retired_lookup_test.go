@@ -1,5 +1,5 @@
 // file: internal/database/retired_lookup_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 84b42cd5-8a89-4667-bfe1-8cb62dd1527c
 // last-edited: 2026-10-26
 
@@ -99,11 +99,56 @@ func TestBookFilesHoldingHash_MockStore(t *testing.T) {
 }
 
 // RetiredHoldersOfHash answers "none" for a MockStore without a BookFilesWithHash
-// stub: a MockStore has no retired version (HasRetiredVersions is false), so a
+// stub: such a mock holds no row at all (HasRetiredVersions is false), so a
 // scanner test that imports a hashed file reaches no retired content.
-func TestRetiredHoldersOfHash_MockStoreHasNoRetiredVersions(t *testing.T) {
-	retired, liveHolds, err := RetiredHoldersOfHash(&MockStore{}, "h")
+func TestRetiredHoldersOfHash_MockStoreWithoutStubsHasNoRetiredVersions(t *testing.T) {
+	m := &MockStore{}
+	has, err := m.HasRetiredVersions()
+	require.NoError(t, err)
+	require.False(t, has)
+	retired, liveHolds, err := RetiredHoldersOfHash(m, "h")
 	require.NoError(t, err)
 	require.Empty(t, retired)
 	require.False(t, liveHolds)
+}
+
+// A MockStore whose test stubbed the complete per-hash read can hold a retired
+// row, so HasRetiredVersions says so and RetiredHoldersOfHash reaches the
+// stub's retired row instead of short-circuiting to "none".
+func TestRetiredHoldersOfHash_MockStoreStubbedHashReadReachesTheRetiredRow(t *testing.T) {
+	m := &MockStore{BookFilesWithHashFunc: func(hash string) ([]BookFile, error) {
+		return []BookFile{{ID: "r", BookID: "holder", Retired: true, FileHash: hash}}, nil
+	}}
+	has, err := m.HasRetiredVersions()
+	require.NoError(t, err)
+	require.True(t, has)
+	retired, liveHolds, err := RetiredHoldersOfHash(m, "h")
+	require.NoError(t, err)
+	require.Len(t, retired, 1)
+	require.Equal(t, "holder", retired[0].BookID)
+	require.False(t, liveHolds)
+
+	// The stub's refusal now reaches the caller too, rather than "none".
+	m.BookFilesWithHashFunc = func(string) ([]BookFile, error) { return nil, ErrBookFilesWithHashUnavailable }
+	_, _, err = RetiredHoldersOfHash(m, "h")
+	require.Error(t, err)
+}
+
+// BookFilesAtPathFunc is the other read a retired row can come through.
+func TestMockStore_HasRetiredVersionsFollowsTheStubs(t *testing.T) {
+	m := &MockStore{BookFilesAtPathFunc: func(string) ([]BookFile, error) { return nil, nil }}
+	has, err := m.HasRetiredVersions()
+	require.NoError(t, err)
+	require.True(t, has)
+
+	// An explicit answer wins over what the stubs imply.
+	m.HasRetiredVersionsFunc = func() (bool, error) { return false, nil }
+	has, err = m.HasRetiredVersions()
+	require.NoError(t, err)
+	require.False(t, has)
+
+	boom := errors.New("boom")
+	m.HasRetiredVersionsFunc = func() (bool, error) { return false, boom }
+	_, err = m.HasRetiredVersions()
+	require.ErrorIs(t, err, boom)
 }
