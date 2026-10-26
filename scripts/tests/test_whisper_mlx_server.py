@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.12.1
+# version: 1.13.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-10-26
 #
@@ -113,14 +113,45 @@ def test_health_reports_an_opaque_machine_id(srv):
     assert mid == mod.machine_id(), "every process on one machine reports the same id"
 
 
-def test_machine_id_is_not_computed_at_import():
-    """The inference child re-imports the server module on every restart (one
-    follows each timeout kill). The machine id's macOS source runs ioreg, so it
-    is computed on the first /health call, never at import."""
+def test_machine_id_is_computed_once_off_the_event_loop(monkeypatch):
+    """The server process computes its machine id once, on a background thread
+    started at import, so /health never runs ioreg and the identity cannot
+    change mid-life. The inference child (which re-imports the module on every
+    restart) never starts it."""
+    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py", "--inference-child", "3", "4"])
+    child = _load_module()
+    assert child._machine_id_future is None, "the inference child must not compute the id"
+
+    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
     mod = _load_module()
-    assert mod._machine_id_cache == []
-    mod.reported_machine_id()
-    assert mod._machine_id_cache == [mod.machine_id()]
+    assert mod._machine_id_future is not None, "the server process starts it at import"
+    first = mod._machine_id_future.result(timeout=10)
+    calls = []
+    monkeypatch.setattr(mod, "machine_id", lambda: calls.append(1) or "ffffffffffffffff")
+    client = TestClient(mod.app)
+    for _ in range(3):
+        assert client.get("/health").json()["machine_id"] == first
+    assert calls == [], "the id is never recomputed (it would flip if a source came and went)"
+
+
+def test_health_does_not_wait_forever_for_the_machine_id(monkeypatch):
+    """If the id is not ready (ioreg hung), /health answers within
+    MACHINE_ID_WAIT_S without the field rather than blocking, and reports it
+    once it settles."""
+    import concurrent.futures
+
+    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
+    mod = _load_module()
+    pending = concurrent.futures.Future()
+    monkeypatch.setattr(mod, "_machine_id_future", pending)
+    monkeypatch.setattr(mod, "MACHINE_ID_WAIT_S", 0.2)
+    client = TestClient(mod.app)
+    start = time.monotonic()
+    body = client.get("/health").json()
+    assert time.monotonic() - start < 2
+    assert "machine_id" not in body and body["status"] == "ok"
+    pending.set_result("0123456789abcdef")
+    assert client.get("/health").json()["machine_id"] == "0123456789abcdef"
 
 
 def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypatch):

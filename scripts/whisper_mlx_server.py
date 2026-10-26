@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.12.1
+# version: 1.13.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-10-26
 #
@@ -168,6 +168,13 @@ DECODE_FINGERPRINT = hashlib.sha256(
 # because a Mac's hostname can change with the network it joins).
 
 
+# ioreg is given less time than /health waits for the id (MACHINE_ID_WAIT_S),
+# so the id is always settled, from ioreg or the hostname, by the time the
+# first /health gives up waiting; and both are inside the Go probe's 3 s.
+MACHINE_ID_IOREG_TIMEOUT_S = 2.0
+MACHINE_ID_WAIT_S = 2.5
+
+
 def _machine_source() -> str:
     override = os.environ.get("WHISPER_MACHINE_ID", "").strip()
     if override:
@@ -182,7 +189,7 @@ def _machine_source() -> str:
                 ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=MACHINE_ID_IOREG_TIMEOUT_S,
                 check=False,
             ).stdout
             for line in out.splitlines():
@@ -198,17 +205,49 @@ def machine_id() -> str:
     return hashlib.sha256(_machine_source().encode()).hexdigest()[:16]
 
 
-_machine_id_cache: list[str] = []
+_machine_id_future: concurrent.futures.Future | None = None
 
 
-def reported_machine_id() -> str:
-    """machine_id(), computed on the first /health call and then reused. Not
-    at import: the inference child re-imports this module on every restart (one
-    follows each timeout kill), and the macOS source runs ioreg, which the
-    restart path has no reason to wait on."""
-    if not _machine_id_cache:
-        _machine_id_cache.append(machine_id())
-    return _machine_id_cache[0]
+def start_machine_id() -> concurrent.futures.Future:
+    """Compute machine_id() ONCE per server process, on a background thread,
+    and return its future. Called at import by the server process (never by the
+    inference child, which re-imports this module on every restart and has no
+    use for it). Once per process, so the identity can never change mid-life
+    (an ioreg that fails once and succeeds later would otherwise flip the id
+    from the hostname to the platform UUID, and the Go side would see a new
+    machine). Off the event loop, so /health never runs ioreg itself."""
+    global _machine_id_future
+    if _machine_id_future is None:
+        fut: concurrent.futures.Future = concurrent.futures.Future()
+
+        def run() -> None:
+            try:
+                fut.set_result(machine_id())
+            except Exception:  # never leave /health waiting on a failed source
+                fut.set_result(
+                    hashlib.sha256(("hostname:" + socket.gethostname()).encode()).hexdigest()[:16]
+                )
+
+        threading.Thread(target=run, name="machine-id", daemon=True).start()
+        _machine_id_future = fut
+    return _machine_id_future
+
+
+async def reported_machine_id() -> str | None:
+    """The process's machine id for /health. Normally already computed; right
+    after start it waits for the background thread without blocking the event
+    loop, at most MACHINE_ID_WAIT_S, and answers None (the field is left out)
+    only if that passes."""
+    fut = start_machine_id()
+    if fut.done():
+        return fut.result()
+    try:
+        return await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)), MACHINE_ID_WAIT_S)
+    except asyncio.TimeoutError:
+        log.warning(
+            "machine_id not ready after %.1fs; /health leaves it out this time", MACHINE_ID_WAIT_S
+        )
+        return None
 
 
 # Inference is serialized. MLX shares the Mac's unified memory with everything
@@ -256,6 +295,8 @@ TRANSCRIBE_TIMEOUT_FACTOR = float(os.environ.get("WHISPER_TRANSCRIBE_TIMEOUT_FAC
 CHILD_READY_TIMEOUT_S = float(os.environ.get("WHISPER_CHILD_READY_TIMEOUT_S", "300"))
 CHILD_FAULT_TTL_S = float(os.environ.get("WHISPER_CHILD_FAULT_TTL_S", "300"))
 CHILD_FLAG = "--inference-child"
+if CHILD_FLAG not in sys.argv:
+    start_machine_id()
 BACKEND_FACTORY_ENV = "WHISPER_BACKEND_FACTORY"
 
 # Bytes per second of the 16 kHz mono 16-bit PCM this worker extracts; only used
@@ -1327,6 +1368,7 @@ async def health():
         }
     busy_seconds, busy_limit = _inference.busy()
     child_start_error = _inference.start_error()
+    machine = await reported_machine_id()
     return {
         "status": "ok",
         "model": MODEL_REPO,
@@ -1335,7 +1377,8 @@ async def health():
         "backend": "mlx",
         "decode_fingerprint": DECODE_FINGERPRINT,
         # Which machine this is, as an opaque hash (see WORKER IDENTITY).
-        "machine_id": reported_machine_id(),
+        # Absent only if it was not computed in time (see reported_machine_id).
+        **({"machine_id": machine} if machine else {}),
         # Inference liveness, read WITHOUT touching _inference_lock (a wedged
         # job holds it). busy_seconds is how long the current clip has been
         # running (0 when idle); busy_limit_seconds is that clip's own limit. A
