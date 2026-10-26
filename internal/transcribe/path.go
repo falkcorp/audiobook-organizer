@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package transcribe
 
@@ -53,11 +53,17 @@ const (
 	// PathErrContainerRejected: ffmpeg refused the container (not on the
 	// worker's format whitelist). The worker's policy, not a verdict on the file.
 	PathErrContainerRejected = "container_rejected"
+	// PathErrTranscribeTimeout: the decoder did not finish this clip inside the
+	// worker's per-clip deadline and its process was killed and restarted. A
+	// verdict about THIS file's audio (it sends the decoder into a loop), never
+	// an outage: the worker is healthy and answered. One strike is retried; the
+	// strike limit makes it permanent (see the maintenance ops).
+	PathErrTranscribeTimeout = "transcribe_timeout"
 	pathErrSeparator         = ": "
 )
 
 var pathErrCodes = []string{
-	PathErrUnmapped, PathErrNotFound, PathErrFFmpeg, PathErrFFmpegTimeout, PathErrBadRequest, PathErrWhisper, PathErrWorkerMisconfigured, PathErrContainerRejected,
+	PathErrUnmapped, PathErrNotFound, PathErrFFmpeg, PathErrFFmpegTimeout, PathErrBadRequest, PathErrWhisper, PathErrWorkerMisconfigured, PathErrContainerRejected, PathErrTranscribeTimeout,
 }
 
 // PathErrorCode returns the worker error code that prefixes a path job's error
@@ -251,11 +257,13 @@ func transcribePathRemote(ctx context.Context, g gatedEndpoint, jobs map[string]
 
 	results := make(map[string]BatchResult, total)
 	if len(send) > 0 {
-		sent, err := transcribePathChunks(ctx, url, g.Endpoint.Concurrency, send, sigs, sendProgress, ej)
-		if err != nil {
-			return nil, err
-		}
+		sent, err := transcribePathChunks(ctx, url, g.Health, g.Endpoint.Concurrency, send, sigs, sendProgress, ej)
+		// A failed send still carries the chunks that completed before it.
 		maps.Copy(results, sent)
+		if err != nil {
+			maps.Copy(results, served)
+			return results, err
+		}
 	}
 	maps.Copy(results, served)
 	return results, nil
@@ -268,18 +276,15 @@ type pathJobEntry struct {
 
 // transcribePathChunks sends jobs in whisperBatchSize chunks to
 // /transcribe-path-batch. Same shape as transcribeRemoteBatched: a slot is held
-// per request, each chunk is journalled before its progress is reported, and
-// a failed chunk discards this endpoint's completed work for re-queue elsewhere.
-func transcribePathChunks(ctx context.Context, remoteURL string, limit int, jobs map[string]PathJob, sigs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
+// per request and each chunk is journalled before its progress is reported. A
+// failed chunk returns the chunks that completed before it alongside the error.
+func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth, limit int, jobs map[string]PathJob, sigs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
 	ordered := make([]pathJobEntry, 0, len(jobs))
 	for id, j := range jobs {
 		ordered = append(ordered, pathJobEntry{id, j})
 	}
 	slices.SortFunc(ordered, func(a, b pathJobEntry) int { return strings.Compare(a.id, b.id) })
 
-	// Extraction plus inference both happen inside the request, so this is the
-	// same 600s ceiling the upload path uses for a full chunk.
-	client := &http.Client{Timeout: 600 * time.Second}
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
 	done := 0
@@ -294,12 +299,22 @@ func transcribePathChunks(ctx context.Context, remoteURL string, limit int, jobs
 		if err != nil {
 			return nil, err
 		}
+		// Extraction plus inference both happen inside the request, so the
+		// ceiling scales with the clips in THIS chunk (see requestTimeout).
+		secs := make([]float64, len(chunk))
+		ids := make([]string, len(chunk))
+		for i, e := range chunk {
+			secs[i], ids[i] = float64(e.job.Seconds), e.id
+		}
+		timeout := requestTimeout(h, secs)
+		client := &http.Client{Timeout: timeout}
 		batchResults, err := sendPathBatch(ctx, client, remoteURL, chunk)
 		release()
 		if err != nil {
-			pathLog.Warn("path chunk failed, discarding completed work from this endpoint: url=%s completed=%d total=%d chunk_start=%d",
-				remoteURL, done, total, start)
-			return nil, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, err)
+			err = stuckFromHTTP(ctx, err, remoteURL, timeout, ids)
+			pathLog.Warn("path chunk failed, keeping completed work from this endpoint: url=%s completed=%d total=%d chunk_start=%d stuck=%t err=%s",
+				remoteURL, done, total, start, IsWorkerStuck(err), err.Error())
+			return results, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, err)
 		}
 		ej.completePath(batchResults, sigs)
 		for id, r := range batchResults {

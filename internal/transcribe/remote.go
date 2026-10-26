@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package transcribe
 
@@ -92,6 +92,59 @@ type remoteHealth struct {
 	// ExtractFingerprint hashes the worker's clip-extraction arguments; it is
 	// part of path-job journal keys only. See endpointJournal.pathKey.
 	ExtractFingerprint string `json:"extract_fingerprint"`
+	// BusySeconds is how long the worker's current inference has been running
+	// (0 when idle). BusyLimitSeconds is that inference's own deadline (null
+	// when idle). Pointers because ABSENCE is the signal: a worker older than
+	// whisper_mlx_server.py 1.8.0 omits busy_seconds, and no stuck judgement
+	// is made for it (an idle current worker reports 0, not nothing).
+	BusySeconds      *float64 `json:"busy_seconds"`
+	BusyLimitSeconds *float64 `json:"busy_limit_seconds"`
+	// ClipTimeoutFloorS and ClipTimeoutFactor are the worker's per-clip
+	// deadline formula, max(floor, factor x audio seconds); see requestTimeout.
+	ClipTimeoutFloorS float64 `json:"clip_timeout_floor_s"`
+	ClipTimeoutFactor float64 `json:"clip_timeout_factor"`
+}
+
+// defaultRequestTimeout is the ceiling on one batch request when the worker
+// does not report its per-clip deadline (an old worker, or a failed probe). A
+// variable only so tests can shorten it; production never writes it.
+var defaultRequestTimeout = 600 * time.Second
+
+// requestSlack is added to a worker-reported ceiling so the worker's own
+// per-clip verdict always arrives before the client gives up on the request.
+const requestSlack = 60 * time.Second
+
+// requestTimeout is the HTTP ceiling for one batch request holding clips of the
+// given lengths. A current worker bounds EVERY clip by max(floor, factor x
+// seconds) and answers a clip that blows it with a per-file transcribe_timeout,
+// so the request is guaranteed to end by the sum of those limits. The client
+// must wait at least that long: a shorter ceiling would preempt the worker's
+// verdict and turn a per-file outcome into a batch-level "stuck" one. When the
+// worker reports no deadline formula the historical 600s ceiling stands.
+func requestTimeout(h remoteHealth, clipSeconds []float64) time.Duration {
+	if h.ClipTimeoutFloorS <= 0 && h.ClipTimeoutFactor <= 0 {
+		return defaultRequestTimeout
+	}
+	var worst float64
+	for _, secs := range clipSeconds {
+		worst += max(h.ClipTimeoutFloorS, h.ClipTimeoutFactor*secs)
+	}
+	return max(defaultRequestTimeout, time.Duration(worst*float64(time.Second))+requestSlack)
+}
+
+// wavBytesPerSecond is the worker's 16 kHz mono 16-bit extraction format; an
+// uploaded clip's length is estimated from its size at this rate (the worker
+// itself reads the WAV header).
+const wavBytesPerSecond = 32000
+
+// wavSeconds estimates an upload clip's length from its size. An unreadable
+// file contributes 0: sendBatch skips it too.
+func wavSeconds(path string) float64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return float64(fi.Size()) / wavBytesPerSecond
 }
 
 // pathRoot is one mapped root's /health entry.
@@ -162,14 +215,18 @@ func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteH
 			err  error
 		)
 		if probed && h.supportsBatch() {
-			sent, err = transcribeRemoteBatched(ctx, remoteURL, limit, send, sendProgress, ej)
+			sent, err = transcribeRemoteBatched(ctx, remoteURL, h, limit, send, sendProgress, ej)
 		} else {
 			sent, err = transcribeRemotePerFile(ctx, remoteURL, limit, send, sendProgress, ej)
 		}
-		if err != nil {
-			return nil, err
-		}
+		// A failed send may still carry the chunks that completed before it;
+		// they are valid results (and already journalled), so hand them up
+		// with the error and let the dispatcher keep them.
 		maps.Copy(results, sent)
+		if err != nil {
+			fanOut(results, followers)
+			return results, err
+		}
 	}
 	fanOut(results, followers)
 	maps.Copy(results, served)
@@ -187,18 +244,13 @@ func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteH
 // ej (may be nil) journals each chunk's results the moment the chunk returns,
 // before its progress is reported and before the next chunk is sent, so a kill
 // at any point loses at most the chunk in flight.
-func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, jobs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
+func transcribeRemoteBatched(ctx context.Context, remoteURL string, h remoteHealth, limit int, jobs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
 	// Stable order so progress reporting is deterministic.
 	ordered := make([]wavJob, 0, len(jobs))
 	for id, path := range jobs {
 		ordered = append(ordered, wavJob{id, path})
 	}
 
-	client := &http.Client{
-		// Each sub-batch of 16 files at ~15s/file on large-v2 ≈ 240s.
-		// 600s gives 2.5× headroom for slow GPU or large clips.
-		Timeout: 600 * time.Second,
-	}
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
 	done := 0
@@ -220,16 +272,25 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, limit int, j
 		if err != nil {
 			return nil, err
 		}
+		secs := make([]float64, len(chunk))
+		ids := make([]string, len(chunk))
+		for i, e := range chunk {
+			secs[i], ids[i] = wavSeconds(e.path), e.id
+		}
+		timeout := requestTimeout(h, secs)
+		// The ceiling is per request: it scales with the clips in THIS chunk.
+		client := &http.Client{Timeout: timeout}
 		batchResults, uploaded, err := sendBatch(ctx, client, remoteURL, chunk)
 		release()
 		if err != nil {
-			// Everything this endpoint already transcribed is discarded and
-			// re-queued elsewhere. That is correct but not free, and
-			// whisper_batch_size now lets an operator make the loss much
-			// larger by lowering the chunk size -- so say how much was lost.
-			slog.Warn("transcribe: chunk failed, discarding completed work from this endpoint",
-				"url", remoteURL, "completed", done, "total", total, "chunk_start", start)
-			return nil, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
+			err = stuckFromHTTP(ctx, err, remoteURL, timeout, ids)
+			// Chunks that completed before this one stay in results and are
+			// returned with the error: they are valid, so the dispatcher keeps
+			// them rather than re-sending them elsewhere.
+			slog.Warn("transcribe: chunk failed, keeping completed work from this endpoint",
+				"url", remoteURL, "completed", done, "total", total, "chunk_start", start,
+				"stuck", IsWorkerStuck(err), "err", err.Error())
+			return results, fmt.Errorf("transcribe-batch chunk %d-%d: %w", start, end, err)
 		}
 		ej.complete(batchResults, uploaded)
 		for id, r := range batchResults {

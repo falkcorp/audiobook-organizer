@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-08-31
+// last-edited: 2026-10-25
 
 package transcribe
 
@@ -81,6 +81,11 @@ type gpuRefusal struct {
 	URL    string
 	Label  string
 	Reason string
+	// Stuck marks a refusal because the worker is wedged on one inference past
+	// its own deadline (see stuckRefusal), as opposed to a capability or mount
+	// problem. When every refusal is Stuck the dispatcher's error wraps
+	// ErrWorkerStuck so callers do not treat the pool as unreachable.
+	Stuck bool
 }
 
 func (r gpuRefusal) String() string {
@@ -295,4 +300,29 @@ func describeRefusals(refused []gpuRefusal) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "; ")
+}
+
+// stuckGrace is how far past its own per-clip deadline a worker's current
+// inference may run before the gate calls it stuck. The worker kills a decode
+// that blows its deadline and respawns the decoder, which takes seconds; the
+// grace keeps a worker mid-recovery from being refused.
+const stuckGrace = 30.0
+
+// stuckRefusal is the reason a worker is refused because it is wedged, or "".
+// busy_seconds is how long its current inference has run and busy_limit_seconds
+// that inference's deadline; a worker that is past the deadline AND the grace
+// has lost control of its own decoder, so no request sent to it will be
+// answered. Sending one anyway is how a single bad clip parked four workers on
+// 2026-10-23. A worker that does not report the fields (older than 1.8.0, or an
+// unprobed endpoint) is never judged stuck.
+func stuckRefusal(g gatedEndpoint) string {
+	h := g.Health
+	if !g.Probed || h.BusySeconds == nil || h.BusyLimitSeconds == nil {
+		return ""
+	}
+	if *h.BusySeconds <= *h.BusyLimitSeconds+stuckGrace {
+		return ""
+	}
+	return fmt.Sprintf("stuck: current inference has run %.0fs, past its %.0fs deadline",
+		*h.BusySeconds, *h.BusyLimitSeconds)
 }

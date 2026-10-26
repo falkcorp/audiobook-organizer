@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package transcribe
 
@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 )
@@ -126,21 +128,42 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// the loop. gateEndpoints also performs the /health probe that the batch
 	// decision needs, so this adds no requests.
 	gated, refused := gateEndpoints(ctx, endpoints, requires)
-	if extraRefusal != nil {
+	{
 		kept := gated[:0:0]
 		for _, g := range gated {
-			if reason := extraRefusal(g); reason != "" {
-				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason})
+			// A wedged worker is refused for every kind of job: a request sent
+			// to it is never answered, and queueing behind it is how one bad
+			// clip parked the whole pool.
+			if reason := stuckRefusal(g); reason != "" {
+				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Stuck: true})
 				continue
+			}
+			if extraRefusal != nil {
+				if reason := extraRefusal(g); reason != "" {
+					refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason})
+					continue
+				}
 			}
 			kept = append(kept, g)
 		}
 		gated = kept
 	}
 	for _, r := range refused {
+		if r.Stuck {
+			slog.Warn("transcribe: worker stuck, skipping it", "url", r.URL, "label", r.Label, "reason", r.Reason)
+			continue
+		}
 		slog.Warn("transcribe: endpoint refused by capability requirements", "url", r.URL, "label", r.Label, "reason", r.Reason)
 	}
 	if len(gated) == 0 {
+		if allStuck(refused) {
+			// Reachable and answering /health, but wedged: not an outage, and
+			// waiting it out by re-sending is the wrong response (see
+			// ErrWorkerStuck).
+			return nil, classifyTransport(endpointURLs(endpoints), fmt.Errorf(
+				"%w: all %d whisper endpoint(s) are stuck on a decode past its deadline: %s",
+				ErrWorkerStuck, len(endpoints), describeRefusals(refused)))
+		}
 		// Distinct from "no whisper endpoints configured": that sends an
 		// operator hunting a config typo, when the real answer is that the
 		// box they configured is not on a GPU.
@@ -196,6 +219,35 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 	}
 
+	// bump advances the pool-wide count for jobs settled without a send.
+	bump := func(n int) {
+		if onProgress == nil || n == 0 {
+			return
+		}
+		progressMu.Lock()
+		poolDone += n
+		cur := poolDone
+		progressMu.Unlock()
+		onProgress(cur, total)
+	}
+
+	// Stuck-batch bookkeeping. A request that a reachable worker never answers
+	// says nothing about WHICH of its jobs is to blame, so the failed request
+	// is split and the parts retried (units). A job is only condemned when it
+	// was stuck ALONE, on soloLimit distinct endpoints: an innocent job that
+	// shared a request with the culprit is stuck in a batch, never alone, so it
+	// is never condemned for the culprit's sake.
+	stuckOn := make(map[string]map[string]bool)   // job -> endpoints it sat in a stuck request on
+	soloStuck := make(map[string]map[string]bool) // job -> endpoints it was stuck on alone
+	soloLimit := min(2, len(ordered))
+	var units [][]string
+	mark := func(m map[string]map[string]bool, id, url string) {
+		if m[id] == nil {
+			m[id] = make(map[string]bool)
+		}
+		m[id][url] = true
+	}
+
 	var lastErr error
 	for len(remaining) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -214,7 +266,47 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			return nil, classifyTransport(endpointURLs(ordered), lastErr)
 		}
 
-		assignments := allocateJobs(healthy, remaining)
+		var (
+			assignments []map[string]J
+			unitOf      = make(map[int][]string)
+		)
+		if len(units) > 0 {
+			// Split parts run before normal allocation, one part per healthy
+			// endpoint, each on an endpoint it has not already been stuck on.
+			assignments = make([]map[string]J, len(healthy))
+			var left [][]string
+			placedAny := false
+			for _, u := range units {
+				live := slices.DeleteFunc(slices.Clone(u), func(id string) bool { _, ok := remaining[id]; return !ok })
+				if len(live) == 0 {
+					continue
+				}
+				placed := false
+				for idx, ep := range healthy {
+					if assignments[idx] != nil || slices.ContainsFunc(live, func(id string) bool { return stuckOn[id][ep.URL] }) {
+						continue
+					}
+					sub := make(map[string]J, len(live))
+					for _, id := range live {
+						sub[id] = remaining[id]
+					}
+					assignments[idx], unitOf[idx], placed, placedAny = sub, live, true, true
+					break
+				}
+				if !placed {
+					left = append(left, live)
+				}
+			}
+			units = left
+			if !placedAny {
+				if lastErr == nil {
+					lastErr = fmt.Errorf("%w: no healthy endpoint is left that these split jobs have not already stuck", ErrWorkerStuck)
+				}
+				return nil, classifyTransport(endpointURLs(ordered), lastErr)
+			}
+		} else {
+			assignments = allocateJobs(healthy, remaining)
+		}
 
 		type epResult struct {
 			idx int
@@ -239,33 +331,105 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 
 		for r := range resCh {
 			ep := healthy[r.idx]
-			if r.err != nil {
-				// Bench the endpoint; its jobs stay in remaining and are
-				// re-queued to a surviving endpoint on the next round.
-				//
-				// ErrSlotWait is NOT endpoint evidence: the request was never
-				// sent, we only failed to get a slot (usually because the op
-				// was cancelled). poolHealth is process-global and its cooldown
-				// OUTLIVES the op, so benching here would make the next run
-				// report "all N endpoints in cooldown" about servers that were
-				// never contacted.
-				if !errors.Is(r.err, ErrSlotWait) {
-					markEndpointFailure(ep.URL)
+			// Work the endpoint completed is valid whether or not the call as a
+			// whole failed: a sender returns the chunks that finished before the
+			// failing one alongside its error.
+			maps.Copy(results, r.res)
+			if r.err == nil {
+				markEndpointSuccess(ep.URL)
+				// Clear the whole assigned set, not just returned IDs: the
+				// transport skips unreadable WAVs without error (same as the
+				// single-URL path), so a missing result is a skip, not a retry.
+				for id := range assignments[r.idx] {
+					delete(remaining, id)
 				}
-				lastErr = fmt.Errorf("%s: %w", ep.URL, r.err)
 				continue
 			}
-			markEndpointSuccess(ep.URL)
-			maps.Copy(results, r.res)
-			// Clear the whole assigned set, not just returned IDs: the
-			// transport skips unreadable WAVs without error (same as the
-			// single-URL path), so a missing result is a skip, not a retry.
-			for id := range assignments[r.idx] {
+			for id := range r.res {
 				delete(remaining, id)
+			}
+			// Bench the endpoint; its unfinished jobs stay in remaining and are
+			// re-queued to a surviving endpoint on the next round.
+			//
+			// ErrSlotWait is NOT endpoint evidence: the request was never
+			// sent, we only failed to get a slot (usually because the op
+			// was cancelled). poolHealth is process-global and its cooldown
+			// OUTLIVES the op, so benching here would make the next run
+			// report "all N endpoints in cooldown" about servers that were
+			// never contacted.
+			stuck, isStuck := errors.AsType[*WorkerStuckError](r.err)
+			// A worker that missed a request ceiling is benched only while it
+			// is still wedged. One that answers /health and reports it is
+			// within its own deadline is alive: benching it would leave the
+			// split parts nowhere to run, and a pool of a few workers could
+			// then never narrow a stuck batch down to the file responsible.
+			// A worker that cannot say (old, or /health hangs too) is benched:
+			// an old worker holds its inference lock until restarted.
+			if !errors.Is(r.err, ErrSlotWait) && (!isStuck || stillWedged(ctx, ep.URL)) {
+				markEndpointFailure(ep.URL)
+			}
+			lastErr = fmt.Errorf("%s: %w", ep.URL, r.err)
+
+			if !isStuck {
+				// Not a stuck request: a part that was riding on this endpoint
+				// keeps its split and goes to another one.
+				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool { _, ok := remaining[id]; return !ok }); len(u) > 0 {
+					units = append(units, u)
+				}
+				continue
+			}
+			failed := slices.DeleteFunc(slices.Clone(stuck.Jobs), func(id string) bool { _, ok := remaining[id]; return !ok })
+			slices.Sort(failed)
+			slog.Warn("transcribe: worker stuck, splitting its request and retrying the parts",
+				"url", ep.URL, "after", stuck.After.Round(time.Second).String(), "jobs", len(failed))
+			for _, id := range failed {
+				mark(stuckOn, id, ep.URL)
+			}
+			switch {
+			case len(failed) == 1:
+				id := failed[0]
+				mark(soloStuck, id, ep.URL)
+				if len(soloStuck[id]) >= soloLimit {
+					// Stuck by itself on soloLimit different workers: a verdict
+					// about this file, not about any worker.
+					results[id] = BatchResult{Error: fmt.Sprintf(
+						"%s%sno result: this file alone left %d worker(s) stuck past their deadline",
+						PathErrTranscribeTimeout, pathErrSeparator, len(soloStuck[id]))}
+					delete(remaining, id)
+					bump(1)
+					continue
+				}
+				units = append(units, failed)
+			case len(failed) > 1:
+				mid := len(failed) / 2
+				units = append(units, failed[:mid], failed[mid:])
 			}
 		}
 	}
 	return results, nil
+}
+
+// stillWedged re-probes url after one of its requests went unanswered and
+// reports whether it should still be treated as stuck: it cannot be reached,
+// does not report busy_seconds, or is running past its deadline plus grace.
+func stillWedged(ctx context.Context, url string) bool {
+	h, ok := probeRemoteHealth(ctx, url)
+	if !ok || h.BusySeconds == nil {
+		return true
+	}
+	return stuckRefusal(gatedEndpoint{Endpoint: Endpoint{URL: url}, Health: h, Probed: true}) != ""
+}
+
+func allStuck(refused []gpuRefusal) bool {
+	if len(refused) == 0 {
+		return false
+	}
+	for _, r := range refused {
+		if !r.Stuck {
+			return false
+		}
+	}
+	return true
 }
 
 // allocCursor rotates which equal-priority endpoint an allocation offers
