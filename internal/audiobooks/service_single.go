@@ -430,7 +430,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// rows passed a check made with it and was refused after the side effects).
 	if oerr := database.CheckBookOwnsNoFiles(svc.store, book.ID, "purge"); oerr != nil {
 		if errors.Is(oerr, database.ErrBookOwnsFiles) {
-			return purgeOutcome{kind: purgeOwnsFiles}
+			return purgeOutcome{kind: purgeOwnsFiles, ownsFilesErr: oerr}
 		}
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %v", book.ID, oerr)}}
 	}
@@ -602,7 +602,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		// before anything moved, so the state is where it was.
 		// Counted once, as skipped (SkippedOwnsFilesIDs), so no Errors line;
 		// the reason travels in detail for "Purge now".
-		return purgeOutcome{kind: purgeOwnsFiles, detail: fmt.Sprintf("not purged, nothing moved: %v", merge.PrecheckCause(err))}
+		return purgeOutcome{kind: purgeOwnsFiles, ownsFilesErr: fmt.Errorf("%w; nothing moved", merge.PrecheckCause(err))}
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, merge.ErrBookHasListeningState):
 		// Nothing moved; with no listed version to carry to, the book stays
 		// in the trash flagged "has progress", as when there was none.

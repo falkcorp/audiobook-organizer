@@ -1,9 +1,9 @@
 // file: web/src/components/BatchToolbar.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b5c6d7e8f9a0b
 // last-edited: 2026-10-25
 
-import { Button, Chip, Box, Stack } from '@mui/material';
+import { Button, Chip, Box, Stack, Tooltip } from '@mui/material';
 import {
   LIBRARY_DELETE_PERMISSION,
   LIBRARY_ORGANIZE_PERMISSION,
@@ -144,34 +144,45 @@ export const BatchToolbar = ({
         Rate
       </Button>
       <Box sx={{ flex: 1 }} />
-      <Button
-        size="small"
-        variant="outlined"
-        color="secondary"
-        onClick={onDeleteSelectedClick}
-        disabled={!selectedHasActive || !mayDelete}
+      {/* A disabled MUI Button has pointer-events: none, so neither a title
+          attribute on it nor a Tooltip around it ever sees the pointer; the
+          Tooltip wraps a span that does. */}
+      <Tooltip
         title={
-          mayDelete
-            ? undefined
-            : "You don't have permission to move books to the trash (library.delete)."
+          mayDelete ? '' : "You don't have permission to move books to the trash (library.delete)."
         }
       >
-        Delete Selected
-      </Button>
-      <Button
-        size="small"
-        variant="outlined"
-        color="success"
-        onClick={onRestoreSelectedClick}
-        disabled={!selectedHasDeleted || batchRestoreInProgress || !mayRestore}
+        <span>
+          <Button
+            size="small"
+            variant="outlined"
+            color="secondary"
+            onClick={onDeleteSelectedClick}
+            disabled={!selectedHasActive || !mayDelete}
+          >
+            Delete Selected
+          </Button>
+        </span>
+      </Tooltip>
+      <Tooltip
         title={
           mayRestore
-            ? undefined
+            ? ''
             : "You don't have permission to restore books from the trash (library.organize)."
         }
       >
-        {batchRestoreInProgress ? 'Restoring...' : 'Restore Selected'}
-      </Button>
+        <span>
+          <Button
+            size="small"
+            variant="outlined"
+            color="success"
+            onClick={onRestoreSelectedClick}
+            disabled={!selectedHasDeleted || batchRestoreInProgress || !mayRestore}
+          >
+            {batchRestoreInProgress ? 'Restoring...' : 'Restore Selected'}
+          </Button>
+        </span>
+      </Tooltip>
     </Stack>
   );
 };

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-25
 
@@ -56,10 +56,11 @@ type purgeOutcome struct {
 	// when nothing was moved.
 	stateMovedTo  string
 	stateMovedErr error
-	// detail is the reason for a refusal that is counted by its kind alone and
-	// so adds no Errors line (purgeOwnsFiles under the merge lock); "Purge now"
-	// shows it.
-	detail string
+	// ownsFilesErr is the owned-files check's own error for a purgeOwnsFiles
+	// outcome (it wraps database.ErrBookOwnsFiles and names live or retired
+	// rows). A refusal is counted by its kind alone and adds no Errors line, so
+	// "Purge now" shows this text.
+	ownsFilesErr error
 }
 
 // add folds one book's outcome into r. The caller serializes calls.
@@ -412,6 +413,9 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 		// already says where the state went; it wraps database.ErrBookOwnsFiles
 		// when the failure was a file row, so the handler answers 409 for that
 		// and 500 for any other cause.
+		// The state moved to another copy even though this book stayed, so
+		// any cached list showing either copy's progress is stale.
+		svc.InvalidateListCache()
 		return nil, &merge.StateMovedBookKeptError{BookID: book.ID, MovedTo: out.stateMovedTo,
 			Err: fmt.Errorf("purge %s: %w", book.ID, out.stateMovedErr)}
 	}
@@ -429,13 +433,11 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 		}
 		return res, nil
 	case purgeOwnsFiles:
-		if out.detail != "" {
-			detail = out.detail
+		if out.ownsFilesErr != nil {
+			// Already "purge <id>: <what it owns, and whether it can be moved>".
+			return nil, out.ownsFilesErr
 		}
-		if detail == "" {
-			detail = "the purge never deletes a book that owns file rows"
-		}
-		return nil, fmt.Errorf("purge %s: %w: %s", book.ID, database.ErrBookOwnsFiles, detail)
+		return nil, fmt.Errorf("purge %s: %w: the purge never deletes a book that owns file rows", book.ID, database.ErrBookOwnsFiles)
 	case purgeKeptHasProgress:
 		return nil, fmt.Errorf("purge %s: %w. Restore it, or use Discard progress and purge to delete it together with its progress", book.ID, ErrBookHasProgress)
 	case purgeCarryFailed:
@@ -586,6 +588,35 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		return svc.purgeDeleteRow(book)
 	})
 	res.UsersCleared, res.BookmarksCleared = cleared.Users, cleared.Bookmarks
+	if errors.Is(err, merge.ErrDiscardedBookKept) {
+		// Every user's state was erased (the owner asked for that) and the
+		// delete then failed, so the book stays without it. That is not
+		// "nothing changed": write the audit row the success path writes, with
+		// the failure, and return an error that says the progress is gone.
+		if aerr := rec.Record(database.ActivityEntry{
+			Timestamp: time.Now().UTC(),
+			Tier:      "audit",
+			Type:      activity.TypeTrashDiscardProgressPurge,
+			Level:     "error",
+			Source:    "trash",
+			BookID:    id,
+			Summary:   fmt.Sprintf("discarded listening progress on %q (%d user(s), %d bookmark(s)) but the book could not be purged and stays in the trash", book.Title, res.UsersCleared, res.BookmarksCleared),
+			Details: map[string]any{
+				"actor":                        actor,
+				"book_id":                      id,
+				"title":                        book.Title,
+				activity.DetailProgressSummary: res.ProgressSummary,
+				"users_cleared":                res.UsersCleared,
+				"bookmarks_cleared":            res.BookmarksCleared,
+				"purged":                       false,
+				"error":                        err.Error(),
+			},
+		}); aerr != nil {
+			trashLog.Error("discard progress and purge: audit row not written for %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(aerr.Error()))
+		}
+		svc.InvalidateListCache()
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}

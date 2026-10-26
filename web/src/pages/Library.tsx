@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.108.0
+// version: 1.109.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-25
 
@@ -74,7 +74,11 @@ import type {
   OrganizeErrorState,
 } from './libraryTypes';
 import { evictOldestOpLogKey, MAX_OPERATION_LOG_KEYS } from './libraryOperationLogs';
-import { describeDeleteBookError, isHasProgressRefusal } from '../utils/deleteBookError';
+import {
+  describeDeleteBookError,
+  isHasProgressRefusal,
+  isProgressDiscardedBookKeptRefusal,
+} from '../utils/deleteBookError';
 import { describePermissionDenied } from '../utils/permissionError';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
@@ -1620,7 +1624,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         setDiscardPrompt(book);
         await refreshSoftDeleted();
       } else {
-        toast(describeDeleteBookError(error, 'Failed to purge audiobook.'), 'error');
+        toast(
+          describeDeleteBookError(error, 'Failed to purge audiobook.', { inTrash: true }),
+          'error'
+        );
       }
     } finally {
       setPurgingBookId(null);
@@ -1644,7 +1651,15 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to discard progress and purge', error);
-      toast(describeDeleteBookError(error, 'Failed to discard progress and purge.'), 'error');
+      toast(
+        describeDeleteBookError(error, 'Failed to discard progress and purge.', { inTrash: true }),
+        'error'
+      );
+      if (isProgressDiscardedBookKeptRefusal(error)) {
+        // The progress is gone though the book stayed: its row in the trash
+        // list must stop offering the discard.
+        await refreshSoftDeleted();
+      }
     } finally {
       setDiscardingBookId(null);
     }

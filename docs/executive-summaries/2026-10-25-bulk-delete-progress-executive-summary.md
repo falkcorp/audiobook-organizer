@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-bulk-delete-progress-executive-summary.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 2d6f9b84-7a13-4c5e-b0d8-e4a1c37f5962 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -69,6 +69,21 @@ one check, so they cannot disagree about what counts as "still has files".
   looks like. A book the person may not change is reported as not changed, naming
   the missing permission, and the other books in the request are handled
   normally.
+- "Discard progress and purge" erases everyone's progress on a trashed book and
+  then deletes it. If the delete is refused at the very last moment (a file
+  slipped in), the progress is already gone, and the app used to say nothing
+  changed and keep no record. It now keeps a record of what was erased, says in
+  the message that the progress was erased and the book stayed, and the page
+  refreshes so the book stops offering the discard.
+- A bulk edit sent without any permission information is now refused when it
+  would trash or restore a book, instead of being let through unchecked. Nothing
+  in the app sends such a request today; this closes a door a future feature
+  could otherwise walk through by accident.
+- On the library page, the greyed-out bulk buttons now show their reason when you
+  hover over them (before, the reason never appeared). On a brand-new install
+  with no accounts yet, the buttons are enabled, as the server allows.
+- The purge and discard error messages no longer tell you to soft-delete a book
+  that is already in the trash.
 - Deleting a single book now does the same last-moment check. Before, it
   looked at the files once, then took the protected step without looking again,
   so a file attached in that gap could still end with the progress moved and the

@@ -1,7 +1,7 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package merge
 
@@ -16,6 +16,33 @@ import (
 // book's listening state could not all be cleared, or a pending user-state
 // repair still names the book. The delete did not run.
 var ErrDiscardIncomplete = errors.New("merge: listening state was not fully discarded")
+
+// ErrDiscardedBookKept is returned (wrapped, with the delete's own failure)
+// by DiscardUserStateThenHardDelete when every user's state WAS cleared and the
+// delete then failed, so the book was kept without it. Unlike
+// ErrDiscardIncomplete, something irreversible happened: the owner asked for
+// the state to be dropped with the book, and the book is still there. A caller
+// must record it and must not report "nothing changed".
+var ErrDiscardedBookKept = errors.New("merge: listening state was discarded but the book was kept")
+
+// DiscardedBookKeptError is DiscardUserStateThenHardDelete's error when the
+// state was cleared and del then failed. Its text says the progress is gone;
+// errors.Is reaches ErrDiscardedBookKept and whatever del returned
+// (database.ErrBookOwnsFiles, say, from a file row a non-merge writer added
+// after the precheck).
+type DiscardedBookKeptError struct {
+	BookID string
+	// Users and Bookmarks are what was cleared before the delete failed.
+	Users, Bookmarks int
+	Err              error
+}
+
+func (e *DiscardedBookKeptError) Error() string {
+	return fmt.Sprintf("the listening progress of %d user(s) and %d bookmark(s) on %s was erased and the book was kept (the delete failed: %v)",
+		e.Users, e.Bookmarks, e.BookID, e.Err)
+}
+
+func (e *DiscardedBookKeptError) Unwrap() []error { return []error{ErrDiscardedBookKept, e.Err} }
 
 // DiscardedUserState counts what DiscardUserStateThenHardDelete cleared.
 type DiscardedUserState struct {
@@ -119,7 +146,7 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("%w: %s after clearing: %w", ErrDiscardIncomplete, bookID, err)
 	}
 	if err := del(); err != nil {
-		return res, fmt.Errorf("hard delete %s after its listening state was discarded: %w", bookID, err)
+		return res, &DiscardedBookKeptError{BookID: bookID, Users: res.Users, Bookmarks: res.Bookmarks, Err: err}
 	}
 	return res, nil
 }

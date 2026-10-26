@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryPermission.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: db29634b-a04f-459a-a061-6118f40e2d87
 // last-edited: 2026-10-25
 
@@ -16,6 +16,7 @@ import {
 const signedIn = (permissions?: string[]) => ({
   initialized: true,
   authEnabled: true as boolean | null,
+  requiresAuth: true,
   user: { permissions },
 });
 
@@ -36,7 +37,7 @@ describe('holdsPermission', () => {
   it('is open when authentication is explicitly off', () => {
     expect(
       holdsPermission(
-        { initialized: true, authEnabled: false, user: null },
+        { initialized: true, authEnabled: false, requiresAuth: false, user: null },
         LIBRARY_DELETE_PERMISSION
       )
     ).toBe(true);
@@ -45,16 +46,29 @@ describe('holdsPermission', () => {
   it('fails closed when the auth setting is unknown or nobody is signed in', () => {
     expect(
       holdsPermission(
-        { initialized: true, authEnabled: null, user: null },
+        { initialized: true, authEnabled: null, requiresAuth: false, user: null },
         LIBRARY_DELETE_PERMISSION
       )
     ).toBe(false);
     expect(
       holdsPermission(
-        { initialized: true, authEnabled: true, user: null },
+        { initialized: true, authEnabled: true, requiresAuth: true, user: null },
         LIBRARY_DELETE_PERMISSION
       )
     ).toBe(false);
+  });
+
+  it('is open on a first run: authentication on but no user created yet', () => {
+    const firstRun = { initialized: true, authEnabled: true, requiresAuth: false, user: null };
+    expect(holdsPermission(firstRun, LIBRARY_DELETE_PERMISSION)).toBe(true);
+    expect(holdsPermission(firstRun, LIBRARY_ORGANIZE_PERMISSION)).toBe(true);
+    // Not before auth has initialised, and not when the setting is unknown.
+    expect(holdsPermission({ ...firstRun, initialized: false }, LIBRARY_DELETE_PERMISSION)).toBe(
+      false
+    );
+    expect(holdsPermission({ ...firstRun, authEnabled: null }, LIBRARY_DELETE_PERMISSION)).toBe(
+      false
+    );
   });
 
   it('reads the signed-in user permission list, and a missing list means none', () => {

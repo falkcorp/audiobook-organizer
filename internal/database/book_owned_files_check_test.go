@@ -1,5 +1,5 @@
 // file: internal/database/book_owned_files_check_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d52b8f6-93a1-4e7c-a4b0-1f6e8c3d7952
 // last-edited: 2026-10-25
 
@@ -24,23 +24,23 @@ func TestCheckBookOwnsNoFiles_AgreesWithDeleteBook(t *testing.T) {
 	}
 	cases := []tc{
 		{"no rows", func(t *testing.T, fx *retiredFixture) string {
-			b, err := fx.ps.CreateBook(&Book{Title: "Plain Shell", FilePath: "/lib/ret/plain"})
+			b, err := fx.ps.CreateBook(&Book{Title: "Plain Shell", FilePath: "/lib/Gotham/ret/plain"})
 			require.NoError(t, err)
 			return b.ID
 		}, false, nil},
 		{"live rows only", func(t *testing.T, fx *retiredFixture) string {
-			fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/live/01.mp3"})
+			fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/live/01.mp3"})
 			return fx.shell.ID
 		}, true, []string{"soft-delete it instead, or move its files to another book first"}},
 		{"retired rows only", func(t *testing.T, fx *retiredFixture) string {
-			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/ro/01.mp3"})
+			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/ro/01.mp3"})
 			require.NoError(t, fx.retire(t, x))
 			return fx.holder.ID
 		}, true, []string{"retired", "cannot be moved"}},
 		{"live and retired rows", func(t *testing.T, fx *retiredFixture) string {
-			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/mix/01.mp3"})
+			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/mix/01.mp3"})
 			require.NoError(t, fx.retire(t, x))
-			fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/ret/mix/live.mp3"})
+			fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/Gotham/ret/mix/live.mp3"})
 			return fx.holder.ID
 		}, true, []string{"1 live and 1 retired", "cannot be moved"}},
 	}
@@ -68,7 +68,7 @@ func TestCheckBookOwnsNoFiles_AgreesWithDeleteBook(t *testing.T) {
 
 	t.Run("the live-only reader misses what DeleteBook counts", func(t *testing.T) {
 		fx := newRetiredFixture(t)
-		x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/gap/01.mp3"})
+		x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/gap/01.mp3"})
 		require.NoError(t, fx.retire(t, x))
 		live, err := fx.ps.GetBookFiles(fx.holder.ID)
 		require.NoError(t, err)

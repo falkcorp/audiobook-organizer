@@ -1,5 +1,5 @@
 // file: internal/batch/trash_grants_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 22c685fe-e807-4213-a039-f8dece0f9456
 // last-edited: 2026-10-25
 
@@ -80,13 +80,88 @@ func TestBatchUpdate_LibraryStateOnATrashedRowIsARestore(t *testing.T) {
 		require.Equal(t, 1, resp.Success, "%+v", resp.Results)
 		require.Equal(t, "imported", libraryState(t, f, id))
 	})
-	t.Run("no caller means an in-process caller, which is not judged", func(t *testing.T) {
+	t.Run("no caller fails closed: it holds neither grant", func(t *testing.T) {
 		f, id := labelTrashed(t)
 		resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
 			IDs: []string{id}, Updates: map[string]any{"library_state": "organized"},
 		})
+		require.Equal(t, 1, resp.Failed, "%+v", resp.Results)
+		require.Contains(t, resp.Results[0].Error, "library.organize")
+		require.True(t, stillInTrash(t, f, id), "nothing is written")
+	})
+}
+
+// A request that reaches the service with no Caller at all is judged as a
+// caller holding neither permission: trash-state changes are refused in both
+// directions, and edits that leave the trash alone are not affected.
+func TestNilCallerFailsClosed(t *testing.T) {
+	t.Run("trashing", func(t *testing.T) {
+		for _, updates := range []map[string]any{
+			{"marked_for_deletion": true},
+			{"library_state": "deleted"},
+		} {
+			f := vptest.New(t)
+			id := f.Book(t, vptest.Spec{ID: "live", Primary: "nil"})
+			resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{IDs: []string{id}, Updates: updates})
+			require.Equal(t, 1, resp.Failed, "%v: %+v", updates, resp.Results)
+			require.Contains(t, resp.Results[0].Error, "library.delete")
+			require.False(t, stillInTrash(t, f, id))
+		}
+	})
+	t.Run("restoring by clearing the deletion flag", func(t *testing.T) {
+		f, id := trashedLikeDeleteAudiobook(t)
+		resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
+			IDs: []string{id}, Updates: map[string]any{"marked_for_deletion": false}})
+		require.Equal(t, 1, resp.Failed, "%+v", resp.Results)
+		require.Contains(t, resp.Results[0].Error, "library.organize")
+		require.True(t, stillInTrash(t, f, id))
+
+		resp2 := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{
+			ID: id, Action: "update", Updates: map[string]any{"marked_for_deletion": false}}}})
+		require.Equal(t, 1, resp2.Failed, "%+v", resp2.Results)
+		require.True(t, stillInTrash(t, f, id))
+	})
+	t.Run("operations route", func(t *testing.T) {
+		f, id := labelTrashed(t)
+		resp := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{
+			ID: id, Action: "update", Updates: map[string]any{"library_state": "organized"}}}})
+		require.Equal(t, 1, resp.Failed, "%+v", resp.Results)
+		require.True(t, stillInTrash(t, f, id))
+	})
+	t.Run("an edit that leaves the trash alone is unaffected", func(t *testing.T) {
+		f := vptest.New(t)
+		id := f.Book(t, vptest.Spec{ID: "live", Primary: "nil"})
+		resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
+			IDs: []string{id}, Updates: map[string]any{"title": "The Long Halloween"}})
 		require.Equal(t, 1, resp.Success, "%+v", resp.Results)
 	})
+}
+
+// Clearing the deletion flag of a book trashed by the flag alone carries no
+// library_state, so only the row's before/after comparison can see the restore.
+func TestBatchUpdate_ClearingTheDeletionFlagNeedsOrganize(t *testing.T) {
+	f, id := trashedLikeDeleteAudiobook(t)
+	b, err := f.S.GetBookByID(id)
+	require.NoError(t, err)
+	// Strip the label so the row is in the trash by its flag alone.
+	_, err = f.S.ModifyBook(id, func(b *database.Book) error { b.LibraryState = nil; return nil })
+	require.NoError(t, err)
+	b, err = f.S.GetBookByID(id)
+	require.NoError(t, err)
+	require.True(t, b.IsSoftDeleted() && database.IsInTrash(b), "fixture: in the trash by the flag alone")
+
+	resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
+		IDs: []string{id}, Updates: map[string]any{"marked_for_deletion": false},
+		Caller: &TrashGrants{Trash: true}})
+	require.Equal(t, 1, resp.Failed, "%+v", resp.Results)
+	require.Contains(t, resp.Results[0].Error, "library.organize")
+	require.True(t, stillInTrash(t, f, id))
+
+	resp = NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
+		IDs: []string{id}, Updates: map[string]any{"marked_for_deletion": false},
+		Caller: &TrashGrants{Restore: true}})
+	require.Equal(t, 1, resp.Success, "%+v", resp.Results)
+	require.False(t, stillInTrash(t, f, id))
 }
 
 // A trashed book whose deletion flag is set stays in the trash when only its

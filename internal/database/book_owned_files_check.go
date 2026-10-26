@@ -1,5 +1,5 @@
 // file: internal/database/book_owned_files_check.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a3c9e15-0b64-4d28-8f1e-c5d2a96b4e07
 // last-edited: 2026-10-25
 
@@ -32,9 +32,9 @@ import (
 //
 // action names what is being refused, for the message ("hard delete", which
 // is offered a soft delete as the alternative, or "purge" and "discard
-// progress and purge", which act on a book already in the trash); the wording tells a live row (which can be moved to another book)
-// from a retired one (which cannot: the generic moves refuse it with
-// ErrBookFileRetired).
+// progress and purge", which act on a book already in the trash). The wording
+// also tells a live row (which can be moved to another book) from a retired
+// one (which cannot: the generic moves refuse it with ErrBookFileRetired).
 func CheckBookOwnsNoFiles(store any, bookID, action string) error {
 	r, ok := AsCapability[RetiredBookFileReader](store)
 	if !ok {

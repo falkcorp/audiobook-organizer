@@ -1,7 +1,7 @@
 // file: internal/batch/restore_join_lock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0d5b8f63-2e9a-4c71-b4d6-9f1a3e7c2b58
-// last-edited: 2026-10-02
+// last-edited: 2026-10-25
 
 package batch
 
@@ -34,6 +34,7 @@ func TestBatchRestore_GroupChangeWaitsForGroupLocks(t *testing.T) {
 				func() error {
 					resp = NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
 						IDs: []string{r}, Updates: map[string]any{"marked_for_deletion": false, "version_group_id": "h"},
+						Caller: &TrashGrants{Restore: true},
 					})
 					return nil
 				},

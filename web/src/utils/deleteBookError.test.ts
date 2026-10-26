@@ -1,5 +1,5 @@
 // file: web/src/utils/deleteBookError.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2d5f9315-d0df-4666-81b5-9b5423eb3f77
 // last-edited: 2026-10-25
 
@@ -9,6 +9,7 @@ import {
   describeDeleteBookError,
   isHasProgressRefusal,
   isOwnsFilesRefusal,
+  isProgressDiscardedBookKeptRefusal,
   isStateMovedBookKeptRefusal,
 } from './deleteBookError';
 
@@ -55,6 +56,34 @@ describe('describeDeleteBookError', () => {
     const msg = describeDeleteBookError(err, 'f');
     expect(msg).toContain('already been moved to another copy');
     expect(msg).toContain('store failed');
+  });
+
+  it("shows the server's wording for a purge or discard refusal of a trashed book, never advice to soft-delete it", () => {
+    for (const action of ['purge', 'discard progress and purge']) {
+      const m = `${action} b1: book still owns book_file rows (2 row(s)); move its files to another book first`;
+      const err = new ApiError(m, 409, { code: 'OWNS_FILES' });
+      expect(describeDeleteBookError(err, 'f', { inTrash: true })).toBe(m);
+      // Without the option (a live-book delete) the canned sentence stays.
+      expect(describeDeleteBookError(err, 'f')).toContain('Soft-delete it instead');
+    }
+  });
+
+  it('says the progress was erased for PROGRESS_DISCARDED_BOOK_KEPT, even though its text wraps the owns-files text', () => {
+    const serverMsg =
+      'the listening progress of 1 user(s) and 0 bookmark(s) on b1 was erased and the book was kept (the delete failed: delete book b1: book still owns book_file rows (1 row(s)))';
+    for (const status of [409, 500]) {
+      const err = new ApiError(serverMsg, status, { code: 'PROGRESS_DISCARDED_BOOK_KEPT' });
+      const msg = describeDeleteBookError(err, 'f', { inTrash: true });
+      expect(msg).toContain('listening progress on it had already been erased');
+      expect(msg).toContain(serverMsg);
+      expect(msg).not.toContain('Soft-delete it instead');
+      expect(isProgressDiscardedBookKeptRefusal(err)).toBe(true);
+      expect(isOwnsFilesRefusal(err)).toBe(false);
+    }
+    expect(isProgressDiscardedBookKeptRefusal(new ApiError('x', 409, { code: 'OWNS_FILES' }))).toBe(
+      false
+    );
+    expect(isProgressDiscardedBookKeptRefusal(new Error('x'))).toBe(false);
   });
 
   it('shows the server wording for retired rows instead of telling the user to move them', () => {

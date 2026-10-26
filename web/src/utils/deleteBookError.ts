@@ -1,5 +1,5 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
 // last-edited: 2026-10-25
 
@@ -23,6 +23,12 @@ const GENERIC_CODE = 'CONFLICT';
 // by its code before the owns-files check.
 const STATE_MOVED_CODE = 'STATE_MOVED_BOOK_KEPT';
 
+// A discard-progress-and-purge that erased every user's listening progress and
+// whose delete then failed (code PROGRESS_DISCARDED_BOOK_KEPT: 409 when the
+// cause was file rows, 500 otherwise). Its message wraps the owns-files text,
+// so, like STATE_MOVED_BOOK_KEPT, it is recognised by its code first.
+const PROGRESS_DISCARDED_CODE = 'PROGRESS_DISCARDED_BOOK_KEPT';
+
 // A message that names retired rows (kept for another version of the book,
 // which cannot be moved) carries wording the server chose for that case.
 const RETIRED_ROWS_MARKER = 'retired row';
@@ -39,6 +45,15 @@ function errorCode(error: ApiError): string | undefined {
  */
 export function isStateMovedBookKeptRefusal(error: unknown): boolean {
   return error instanceof ApiError && errorCode(error) === STATE_MOVED_CODE;
+}
+
+/**
+ * Reports whether a discard-progress-and-purge erased every user's listening
+ * progress and was then refused, so the book stayed without it (code
+ * PROGRESS_DISCARDED_BOOK_KEPT, any status).
+ */
+export function isProgressDiscardedBookKeptRefusal(error: unknown): boolean {
+  return error instanceof ApiError && errorCode(error) === PROGRESS_DISCARDED_CODE;
 }
 
 /** Reports whether a delete or purge was refused because the book still owns file rows. */
@@ -63,17 +78,32 @@ export function isHasProgressRefusal(error: unknown): boolean {
   return data?.code === 'HAS_PROGRESS';
 }
 
+export interface DescribeDeleteBookErrorOptions {
+  /**
+   * The book is already in the trash (a purge, or discard progress and purge).
+   * The server's wording for an owns-files refusal is then shown as it is: it
+   * names what to do for a trashed book, and the canned sentence's advice to
+   * soft-delete the book would be impossible to follow.
+   */
+  inTrash?: boolean;
+}
+
 /**
  * Returns the message to show when deleting (or purging) a book failed.
  *
- * A STATE_MOVED_BOOK_KEPT error says the progress moved and shows the server's
- * message (which names where). A 409 "still owns file rows" refusal becomes a
- * plain sentence with the row count and what to do next, except when the rows
- * are retired ones: those cannot be moved, so the server's own wording is
- * shown. Any other server error shows the server's own message; anything else
- * shows the caller's fallback.
+ * A STATE_MOVED_BOOK_KEPT or PROGRESS_DISCARDED_BOOK_KEPT error says what
+ * happened to the progress and shows the server's message. A 409 "still owns
+ * file rows" refusal of a live book becomes a plain sentence with the row
+ * count and what to do next, except when the rows are retired ones, which
+ * cannot be moved, or the book is already in the trash (options.inTrash): the
+ * server's own wording is shown then. Any other server error shows the
+ * server's own message; anything else shows the caller's fallback.
  */
-export function describeDeleteBookError(error: unknown, fallback: string): string {
+export function describeDeleteBookError(
+  error: unknown,
+  fallback: string,
+  options: DescribeDeleteBookErrorOptions = {}
+): string {
   if (error instanceof ApiError) {
     if (isStateMovedBookKeptRefusal(error)) {
       return (
@@ -81,7 +111,17 @@ export function describeDeleteBookError(error: unknown, fallback: string): strin
         `moved to another copy of the book. ${error.message}`
       );
     }
-    if (isOwnsFilesRefusal(error) && !error.message.includes(RETIRED_ROWS_MARKER)) {
+    if (isProgressDiscardedBookKeptRefusal(error)) {
+      return (
+        "The book was not purged, but every user's listening progress on it had already been " +
+        `erased. ${error.message}`
+      );
+    }
+    if (
+      isOwnsFilesRefusal(error) &&
+      !options.inTrash &&
+      !error.message.includes(RETIRED_ROWS_MARKER)
+    ) {
       const m = /\((\d+) row\(s\)\)/.exec(error.message);
       const count = m ? Number(m[1]) : undefined;
       const rows = count === undefined ? 'file rows' : `${count} file row${count === 1 ? '' : 's'}`;
