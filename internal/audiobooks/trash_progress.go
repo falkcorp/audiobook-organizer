@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-26
 
@@ -597,6 +597,15 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// delete then failed, so the book stays without it. That is not
 		// "nothing changed": write the audit row the success path writes, with
 		// the failure, and return an error that says the progress is gone.
+		// records is every stored row the discard deleted, including state rows
+		// that held no progress (a reset marker, or nothing at all): a refused
+		// delete after only such a row went is still "erased", so the audit row
+		// is written and says so.
+		records := 0
+		var keptErr *merge.DiscardedBookKeptError
+		if errors.As(err, &keptErr) {
+			records = keptErr.Records
+		}
 		if aerr := rec.Record(database.ActivityEntry{
 			Timestamp: time.Now().UTC(),
 			Tier:      "audit",
@@ -604,7 +613,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 			Level:     "error",
 			Source:    "trash",
 			BookID:    id,
-			Summary:   fmt.Sprintf("discarded listening progress on %q (%d user(s), %d bookmark(s)) but the book could not be purged and stays in the trash", book.Title, res.UsersCleared, res.BookmarksCleared),
+			Summary:   fmt.Sprintf("discarded listening state on %q (%d user(s), %d bookmark(s), %d stored record(s)) but the book could not be purged and stays in the trash", book.Title, res.UsersCleared, res.BookmarksCleared, records),
 			Details: map[string]any{
 				"actor":                        actor,
 				"book_id":                      id,
@@ -612,6 +621,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 				activity.DetailProgressSummary: res.ProgressSummary,
 				"users_cleared":                res.UsersCleared,
 				"bookmarks_cleared":            res.BookmarksCleared,
+				"records_cleared":              records,
 				"purged":                       false,
 				"error":                        err.Error(),
 			},

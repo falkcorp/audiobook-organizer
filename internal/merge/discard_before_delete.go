@@ -1,5 +1,5 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
 // last-edited: 2026-10-26
 
@@ -38,8 +38,11 @@ type DiscardedBookKeptError struct {
 	Users, Bookmarks int
 	// Records is how many stored rows were deleted in all: state rows and
 	// position sets, counting ones that held nothing carryable (a row that
-	// keeps only a progress-reset marker, say). It can be nonzero when Users
-	// and Bookmarks are both zero, and then it is all that was erased.
+	// keeps only a progress-reset marker, say) and a row holding nothing at
+	// all: deleting a row is erasing it, and the safer reading of "was
+	// anything erased" is the one that writes the audit row. It can be nonzero
+	// when Users and Bookmarks are both zero, and then it is all that was
+	// erased.
 	Records int
 	Err     error
 }

@@ -1,5 +1,5 @@
 // file: internal/batch/restore_locked_judge_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f6c2b8e-4d19-4a73-9b5e-6a1d3c7e8f24
 // last-edited: 2026-10-26
 
@@ -20,8 +20,8 @@ import (
 // were live, and every later read answers with what is stored. The batch
 // service makes that first read for its early permission check; the row is
 // really in the trash by the time RestoreFromTrash reads and locks it, as it
-// would be if another writer trashed it in between. Only the judge that
-// RestoreFromTrash runs on the row as locked can then refuse the restore.
+// would be if another writer trashed it in between. Only the judge passed to
+// RestoreFromTrash can then refuse the restore; the early check cannot.
 type liveOnFirstRead struct {
 	*database.PebbleStore
 	reads atomic.Int32
@@ -38,13 +38,17 @@ func (s *liveOnFirstRead) GetBookByID(id string) (*database.Book, error) {
 	return &live, nil
 }
 
-// A row trashed between the batch's read and the restore's locked read is
-// judged on the locked row: a caller without library.organize is refused by
-// every route that restores (the "restore" action and both
-// marked_for_deletion=false payload routes), the early check having seen a
-// live book. Mutants that drop the judge argument from these calls, or the
-// restore branch of judgeRestore, leave the row restored and fail this.
-func TestRestore_RowTrashedAfterTheEarlyCheckIsJudgedOnTheLockedRow(t *testing.T) {
+// A row trashed between the batch's early check and RestoreFromTrash's own
+// read is refused for a caller without library.organize by every route that
+// restores (the "restore" action and both marked_for_deletion=false payload
+// routes), the early check having seen a live book. This proves that the judge
+// argument reaches RestoreFromTrash on each route, and that judgeRestore's
+// restore branch refuses; it is the preview call (run on the row as
+// RestoreFromTrash read it) that refuses here, not the one inside the write,
+// which TestRestorePayload_RowTrashedBeforeTheWriteIsJudgedInsideTheWrite
+// reaches. Mutants that drop the judge from these calls, or the restore
+// branch of judgeRestore, leave the row restored and fail this.
+func TestRestore_RowTrashedAfterTheEarlyCheckIsRefusedByRestoreFromTrash(t *testing.T) {
 	payload := map[string]any{"marked_for_deletion": false}
 	routes := map[string]func(s *liveOnFirstRead, id string, caller *TrashGrants) *BatchResponse{
 		"restore action": func(s *liveOnFirstRead, id string, caller *TrashGrants) *BatchResponse {
@@ -161,7 +165,11 @@ func TestRestorePayload_RowTrashedBeforeTheWriteIsJudgedInsideTheWrite(t *testin
 			resp := run(trashBeforeWrite{f.S, t}, id, &TrashGrants{Restore: true})
 			require.Equal(t, 1, resp.Failed, "library.organize held: %+v", resp.Results)
 			require.NotContains(t, resp.Results[0].Error, "library.organize")
-			require.Contains(t, resp.Results[0].Error, "put it back in the trash")
+			// The caller sent no library_state, so the refusal must not blame
+			// one: it says another change moved the book to the trash.
+			require.Contains(t, resp.Results[0].Error, "moved to the trash by another change")
+			require.NotContains(t, resp.Results[0].Error, "library_state")
+			require.NotContains(t, resp.Results[0].Error, "marked_for_deletion")
 			b, err := f.S.GetBookByID(id)
 			require.NoError(t, err)
 			require.True(t, b.IsSoftDeleted(), "the flag the other writer set is untouched")

@@ -1,7 +1,7 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { ApiError } from '../services/api';
 
@@ -113,8 +113,8 @@ export function describeDeleteBookError(
     }
     if (isProgressDiscardedBookKeptRefusal(error)) {
       return (
-        "The book was not purged, but every user's listening progress on it had already been " +
-        `erased. ${error.message}`
+        'The book was not purged, but its stored listening state (progress, bookmarks or ' +
+        `reset markers) had already been erased. ${error.message}`
       );
     }
     if (
