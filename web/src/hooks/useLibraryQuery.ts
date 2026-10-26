@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-10-06
+// last-edited: 2026-10-26
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -178,6 +178,17 @@ export function useLibraryQuery({
   const [totalPages, setTotalPages] = useState(1);
   const [softDeletedBooks, setSoftDeletedBooks] = useState<Audiobook[]>([]);
   const [softDeletedCount, setSoftDeletedCount] = useState(0);
+  // Purgeable-versus-blocked split of the trash as the last purge pass or
+  // preview measured it; null until one has run since the server started.
+  const [softDeletedBreakdown, setSoftDeletedBreakdown] = useState<api.PurgeBreakdown | null>(
+    null
+  );
+  // Files an earlier purge pass decided to remove and did not finish (the
+  // server's journal). null = unknown (the read failed, or has not happened).
+  const [pendingFileRemovals, setPendingFileRemovals] = useState<number | null>(null);
+  // Of those, the ones whose folder is missing or empty: a purge cannot decide
+  // them, so they are counted apart. null = unknown.
+  const [waitingFileRecords, setWaitingFileRecords] = useState<number | null>(null);
   const [softDeletedLoading, setSoftDeletedLoading] = useState(false);
 
   // Tracks the most recently issued loadAudiobooks call. A response is only
@@ -229,10 +240,11 @@ export function useLibraryQuery({
   const loadSoftDeleted = useCallback(async (includeItems = false) => {
     setSoftDeletedLoading(true);
     try {
-      const { items, count } = await api.getSoftDeletedBooks(
-        includeItems ? SOFT_DELETED_PAGE_SIZE : 1,
-        0
-      );
+      const { items, count, purgeBreakdown, pendingFileRemovals, waitingFileRecords } =
+        await api.getSoftDeletedBooks(includeItems ? SOFT_DELETED_PAGE_SIZE : 1, 0);
+      setSoftDeletedBreakdown(purgeBreakdown);
+      setPendingFileRemovals(pendingFileRemovals ?? null);
+      setWaitingFileRecords(waitingFileRecords ?? null);
       // Never store rows we did not ask to display. A count-only refresh that
       // left the previous page of rows in state would be fine today, but it
       // would silently re-arm the same "invisible rows in the DOM" trap the
@@ -243,6 +255,8 @@ export function useLibraryQuery({
       console.error('Failed to load soft-deleted books', e);
       setSoftDeletedBooks([]);
       setSoftDeletedCount(0);
+      setPendingFileRemovals(null);
+      setWaitingFileRecords(null);
     } finally {
       setSoftDeletedLoading(false);
     }
@@ -562,6 +576,9 @@ export function useLibraryQuery({
     totalPages,
     softDeletedBooks,
     softDeletedCount,
+    softDeletedBreakdown,
+    pendingFileRemovals,
+    waitingFileRecords,
     softDeletedLoading,
     loadAudiobooks,
     loadSoftDeleted,

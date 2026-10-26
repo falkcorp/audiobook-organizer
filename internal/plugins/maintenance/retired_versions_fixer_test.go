@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -142,12 +142,15 @@ func (rf *retiredFixture) seedEveryCategory() int {
 	b.LibraryState = retiredPtr("deleted")
 	_, err = rf.st.UpdateBook(deleted, b)
 	require.NoError(t, err)
-	// A trashed row with no soft-delete time.
+	// A trashed row with no soft-delete time: the shape older builds left. The
+	// store stamps every write that trashes a row (enforceTrashStamp), and a
+	// plain UpdateBook that clears the stamp gets the stored one written back,
+	// so only the legacy seed can leave the row unstamped.
 	unknownAge := rf.trashed("age-unknown", "g1", 30, rf.file("g1/unknown.mp3"))
-	b, err = rf.st.GetBookByID(unknownAge)
-	require.NoError(t, err)
-	b.MarkedForDeletionAt = nil
-	_, err = rf.st.UpdateBook(unknownAge, b)
+	_, err = rf.st.SeedLegacyBookRowForTest(unknownAge, func(b *database.Book) error {
+		b.MarkedForDeletionAt = nil
+		return nil
+	})
 	require.NoError(t, err)
 	// Listening state.
 	listened := rf.trashed("listening", "g1", 30, rf.file("g1/listened.mp3"))

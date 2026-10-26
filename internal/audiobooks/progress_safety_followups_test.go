@@ -1,7 +1,7 @@
 // file: internal/audiobooks/progress_safety_followups_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 47073aff-f39f-47da-8927-07cdae028edb
-// last-edited: 2026-10-07
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -105,7 +105,7 @@ func TestPurge_SiblingReadErrorIsCarryFailed(t *testing.T) {
 	u := purgeSeedProgress(t, store, "dup")
 	svc := NewAudiobookService(&siblingReadFailsStore{PebbleStore: store, sibling: "keep"})
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.CarryFailed, "result %+v", res)
 	require.Equal(t, []string{"dup"}, res.CarryFailedIDs)
@@ -223,7 +223,7 @@ func TestPurge_ITunesOnlySiblingIsNotACarryTarget(t *testing.T) {
 	groupBook(t, store, "dup", gid, true, false)
 	u := purgeSeedProgress(t, store, "dup")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.KeptHasProgress, "result %+v", res)
 	require.Zero(t, res.CarriedToSibling)

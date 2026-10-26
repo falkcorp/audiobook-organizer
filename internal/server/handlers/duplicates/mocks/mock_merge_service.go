@@ -45,80 +45,6 @@ func (_m *MockMergeService) EXPECT() *MockMergeService_Expecter {
 	return &MockMergeService_Expecter{mock: &_m.Mock}
 }
 
-// CombineBooks provides a mock function for the type MockMergeService
-func (_mock *MockMergeService) CombineBooks(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error) {
-	ret := _mock.Called(bookIDs, primaryID, override)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CombineBooks")
-	}
-
-	var r0 *merge.CombineResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string, string, *merge.CombineOverride) (*merge.CombineResult, error)); ok {
-		return returnFunc(bookIDs, primaryID, override)
-	}
-	if returnFunc, ok := ret.Get(0).(func([]string, string, *merge.CombineOverride) *merge.CombineResult); ok {
-		r0 = returnFunc(bookIDs, primaryID, override)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*merge.CombineResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func([]string, string, *merge.CombineOverride) error); ok {
-		r1 = returnFunc(bookIDs, primaryID, override)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockMergeService_CombineBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CombineBooks'
-type MockMergeService_CombineBooks_Call struct {
-	*mock.Call
-}
-
-// CombineBooks is a helper method to define mock.On call
-//   - bookIDs []string
-//   - primaryID string
-//   - override *merge.CombineOverride
-func (_e *MockMergeService_Expecter) CombineBooks(bookIDs any, primaryID any, override any) *MockMergeService_CombineBooks_Call {
-	return &MockMergeService_CombineBooks_Call{Call: _e.mock.On("CombineBooks", bookIDs, primaryID, override)}
-}
-
-func (_c *MockMergeService_CombineBooks_Call) Run(run func(bookIDs []string, primaryID string, override *merge.CombineOverride)) *MockMergeService_CombineBooks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 []string
-		if args[0] != nil {
-			arg0 = args[0].([]string)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 *merge.CombineOverride
-		if args[2] != nil {
-			arg2 = args[2].(*merge.CombineOverride)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockMergeService_CombineBooks_Call) Return(combineResult *merge.CombineResult, err error) *MockMergeService_CombineBooks_Call {
-	_c.Call.Return(combineResult, err)
-	return _c
-}
-
-func (_c *MockMergeService_CombineBooks_Call) RunAndReturn(run func(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error)) *MockMergeService_CombineBooks_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ListCombineJournals provides a mock function for the type MockMergeService
 func (_mock *MockMergeService) ListCombineJournals(limit int) ([]merge.CombineJournal, error) {
 	ret := _mock.Called(limit)
@@ -239,6 +165,120 @@ func (_c *MockMergeService_ListSiblingMoveJournals_Call) Return(siblingMoveJourn
 }
 
 func (_c *MockMergeService_ListSiblingMoveJournals_Call) RunAndReturn(run func(limit int) ([]merge.SiblingMoveJournal, error)) *MockMergeService_ListSiblingMoveJournals_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// PreflightCombine provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) PreflightCombine(keepID string, mergeIDs []string) error {
+	ret := _mock.Called(keepID, mergeIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PreflightCombine")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) error); ok {
+		r0 = returnFunc(keepID, mergeIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMergeService_PreflightCombine_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PreflightCombine'
+type MockMergeService_PreflightCombine_Call struct {
+	*mock.Call
+}
+
+// PreflightCombine is a helper method to define mock.On call
+//   - keepID string
+//   - mergeIDs []string
+func (_e *MockMergeService_Expecter) PreflightCombine(keepID any, mergeIDs any) *MockMergeService_PreflightCombine_Call {
+	return &MockMergeService_PreflightCombine_Call{Call: _e.mock.On("PreflightCombine", keepID, mergeIDs)}
+}
+
+func (_c *MockMergeService_PreflightCombine_Call) Run(run func(keepID string, mergeIDs []string)) *MockMergeService_PreflightCombine_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_PreflightCombine_Call) Return(err error) *MockMergeService_PreflightCombine_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMergeService_PreflightCombine_Call) RunAndReturn(run func(keepID string, mergeIDs []string) error) *MockMergeService_PreflightCombine_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// PreflightLink provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) PreflightLink(keepID string, mergeIDs []string) error {
+	ret := _mock.Called(keepID, mergeIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PreflightLink")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string, []string) error); ok {
+		r0 = returnFunc(keepID, mergeIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockMergeService_PreflightLink_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PreflightLink'
+type MockMergeService_PreflightLink_Call struct {
+	*mock.Call
+}
+
+// PreflightLink is a helper method to define mock.On call
+//   - keepID string
+//   - mergeIDs []string
+func (_e *MockMergeService_Expecter) PreflightLink(keepID any, mergeIDs any) *MockMergeService_PreflightLink_Call {
+	return &MockMergeService_PreflightLink_Call{Call: _e.mock.On("PreflightLink", keepID, mergeIDs)}
+}
+
+func (_c *MockMergeService_PreflightLink_Call) Run(run func(keepID string, mergeIDs []string)) *MockMergeService_PreflightLink_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_PreflightLink_Call) Return(err error) *MockMergeService_PreflightLink_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockMergeService_PreflightLink_Call) RunAndReturn(run func(keepID string, mergeIDs []string) error) *MockMergeService_PreflightLink_Call {
 	_c.Call.Return(run)
 	return _c
 }

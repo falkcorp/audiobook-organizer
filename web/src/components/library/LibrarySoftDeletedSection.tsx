@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 26804E8D-51BA-462C-9BBE-45ED69E17B9F
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 import { useState } from 'react';
 import {
@@ -25,9 +25,14 @@ import {
 } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 import type { Audiobook } from '../../types';
+import type { PurgeBreakdown } from '../../services/api';
+import { keptReasonsOfBreakdown } from '../../utils/purgeSummary';
 
 export interface LibrarySoftDeletedSectionProps {
   softDeletedCount: number;
+  // How many of the trash a purge removes now versus keeps, by reason, as the
+  // last purge pass or preview measured it (null before one has run).
+  purgeBreakdown?: PurgeBreakdown | null;
   softDeletedBooks: Audiobook[];
   softDeletedLoading: boolean;
   softDeletedExpanded: boolean;
@@ -82,8 +87,67 @@ export function progressCaption(book: Audiobook): string | null {
     : `${lead} There is no other copy of this book in the Audiobookshelf library to move it to, so the nightly purge will keep it.`;
 }
 
+/**
+ * One line saying how much of the trash a purge would remove versus keep, so
+ * the trash count is not read as "this many will be purged". Says when the
+ * figures were measured, because they are not recomputed on every load.
+ */
+export function PurgeBreakdownLine({ breakdown }: { breakdown: PurgeBreakdown | null }) {
+  if (!breakdown) {
+    return (
+      <Typography
+        variant="body2"
+        sx={{ color: 'text.secondary', mt: 1 }}
+        data-testid="purge-breakdown-none"
+      >
+        Not every soft-deleted book can be purged. Open Purge to see how many can.
+      </Typography>
+    );
+  }
+  const kept = keptReasonsOfBreakdown(breakdown);
+  const when = new Date(breakdown.computed_at);
+  const measured = Number.isNaN(when.getTime()) ? '' : ` (measured ${when.toLocaleString()})`;
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      useFlexGap
+      sx={{ mt: 1, flexWrap: 'wrap', alignItems: 'center' }}
+      data-testid="purge-breakdown"
+    >
+      <Chip
+        size="small"
+        color={breakdown.purgeable > 0 ? 'success' : 'default'}
+        label={`${breakdown.purgeable.toLocaleString()} purgeable now`}
+        data-testid="purge-breakdown-purgeable"
+      />
+      {kept.map((r) => (
+        <Tooltip key={r.key} title={`${r.count.toLocaleString()} ${r.label}`}>
+          <Chip
+            size="small"
+            variant="outlined"
+            label={`${r.count.toLocaleString()} kept: ${KEPT_SHORT[r.key]}`}
+            data-testid={`purge-breakdown-${r.key}`}
+          />
+        </Tooltip>
+      ))}
+      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+        {breakdown.from_preview ? 'From the last purge check' : 'Left after the last purge'}
+        {measured}
+      </Typography>
+    </Stack>
+  );
+}
+
+const KEPT_SHORT = {
+  owns_files: 'own files',
+  undo_possible: 'undo possible',
+  has_progress: 'listening progress',
+} as const;
+
 export function LibrarySoftDeletedSection({
   softDeletedCount,
+  purgeBreakdown = null,
   softDeletedBooks,
   softDeletedLoading,
   softDeletedExpanded,
@@ -185,6 +249,7 @@ export function LibrarySoftDeletedSection({
         With unmountOnExit the closed panel costs nothing, and the fetch that
         supplies it is now count-only until it opens (see loadSoftDeleted).
       */}
+      {softDeletedCount > 0 && <PurgeBreakdownLine breakdown={purgeBreakdown} />}
       <Collapse in={softDeletedExpanded} unmountOnExit>
         {softDeletedLoading ? (
           <Typography variant="body2" sx={{ mt: 2 }}>

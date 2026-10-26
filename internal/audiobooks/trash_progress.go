@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-26
 
@@ -23,7 +23,7 @@ import (
 // Trash books that hold users' listening state (owner decision 2026-10-05).
 //
 // The nightly purge carries such a book's state to a live version-group
-// sibling and then purges it (PurgeSoftDeletedBooks). With no live sibling it
+// sibling and then purges it (PurgeSoftDeletedUnattended). With no live sibling it
 // keeps the book; the trash listing flags it (TrashProgress) and the owner
 // can restore it or drop its progress with it (DiscardProgressAndPurge).
 
@@ -43,13 +43,32 @@ const (
 	// listing and the purge's hold of the merge lock. Nothing was done, and
 	// it is not an error.
 	purgeNotInTrash
+	// purgeKeptUndo: an undo that can still run needs the book (undoHold): the
+	// retired shell of a combine, the shell of a maintenance operation's
+	// journaled soft-delete, or an auto-merge's loser. Purging it would make
+	// that undo fail or apply only part of itself.
+	purgeKeptUndo
+	// purgeAfterBound: re-read under the merge lock, the book carries a trash
+	// stamp after the pass's bound (restored and trashed again since the
+	// preview). Nothing was done to it.
+	purgeAfterBound
+	// purgeNotInPreview: the pass is bound to a preview that did not list this
+	// book as purgeable, and re-read under the merge lock the book would be
+	// purged. Nothing was done to it: it was shown as kept, and what kept it
+	// has changed since.
+	purgeNotInPreview
 )
 
 // purgeOutcome is one book's result in a purge pass.
 type purgeOutcome struct {
 	kind         purgeKind
 	filesDeleted int
-	errs         []string
+	// wouldRemove and wouldKeepFile are a preview's account of purgeFinish for
+	// a book it says would be purged: the file or empty directory the purge
+	// would remove with delete_files, or that it would leave in place.
+	wouldRemove   string
+	wouldKeepFile bool
+	errs          []string
 	// stateMovedTo names the copy the book's users' listening state was
 	// carried to when the book was nevertheless kept (a delete that failed
 	// after a completed carry), and stateMovedErr is that failure. "" and nil
@@ -61,22 +80,66 @@ type purgeOutcome struct {
 	// rows). A refusal is counted by its kind alone and adds no Errors line, so
 	// "Purge now" shows this text.
 	ownsFilesErr error
+	// abort, when set, is a failure that will repeat for every remaining book
+	// (the by-book ledger index lost its trust mid-pass: ErrUndoLedgerNotReady;
+	// the library root stopped being ready mid-pass: ErrLibraryRootNotReady).
+	// RunPurge stops the pass with it as the StopReason instead of failing each
+	// remaining book one by one.
+	abort error
+}
+
+// purgeAbortOf returns err when it is a pass-wide failure (see
+// purgeOutcome.abort), else nil.
+func purgeAbortOf(err error) error {
+	if errors.Is(err, ErrUndoLedgerNotReady) || errors.Is(err, ErrLibraryRootNotReady) {
+		return err
+	}
+	return nil
 }
 
 // add folds one book's outcome into r. The caller serializes calls.
+//
+// On a dry run (r.DryRun) a book that WOULD be purged counts in Purgeable, not
+// Purged: nothing was deleted. Every blocker counts the same on a preview and
+// a real run, which is the point of sharing this one function.
 func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	r.FilesDeleted += o.filesDeleted
 	r.Errors = append(r.Errors, o.errs...)
+	if o.wouldRemove != "" {
+		// Two trashed rows can name one path; the purge removes it once, and
+		// only when no kept book names it (settlePreviewFiles).
+		if r.fileCands == nil {
+			r.fileCands = map[string]struct{}{}
+		}
+		r.fileCands[o.wouldRemove] = struct{}{}
+	}
+	if o.wouldKeepFile {
+		r.FilesKept++
+	}
+	purged := func() {
+		if r.DryRun {
+			r.Purgeable++
+			if r.purgeable == nil {
+				r.purgeable = map[string]struct{}{}
+			}
+			r.purgeable[bookID] = struct{}{}
+		} else {
+			r.Purged++
+		}
+	}
 	switch o.kind {
 	case purgePurged:
-		r.Purged++
+		purged()
 	case purgeCarried:
-		r.Purged++
+		purged()
 		r.CarriedToSibling++
 		r.CarriedToSiblingIDs = append(r.CarriedToSiblingIDs, bookID)
 	case purgeOwnsFiles:
 		r.SkippedOwnsFiles++
 		r.SkippedOwnsFilesIDs = append(r.SkippedOwnsFilesIDs, bookID)
+	case purgeKeptUndo:
+		r.KeptUndoPossible++
+		r.KeptUndoPossibleIDs = append(r.KeptUndoPossibleIDs, bookID)
 	case purgeKeptHasProgress:
 		r.KeptHasProgress++
 		r.KeptHasProgressIDs = append(r.KeptHasProgressIDs, bookID)
@@ -84,13 +147,18 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 		r.CarryFailed++
 		r.CarryFailedIDs = append(r.CarryFailedIDs, bookID)
 	case purgeFailed:
-		// counted by its Errors lines; a delete that failed after a carry
-		// also moved state to a sibling, which the cache refresh needs to know
+		r.Failed++
+		// A delete that failed after a carry also moved state to a sibling,
+		// which the cache refresh needs to know.
 		if o.stateMovedTo != "" {
 			r.stateMoved++
 		}
 	case purgeNotInTrash:
 		// restored or purged meanwhile: nothing to count
+	case purgeAfterBound:
+		r.TrashedAfterPreview++
+	case purgeNotInPreview:
+		r.NotInPreview++
 	}
 }
 
@@ -100,7 +168,9 @@ func (r *PurgeResult) sortIDs() {
 	slices.Sort(r.SkippedOwnsFilesIDs)
 	slices.Sort(r.CarriedToSiblingIDs)
 	slices.Sort(r.KeptHasProgressIDs)
+	slices.Sort(r.KeptUndoPossibleIDs)
 	slices.Sort(r.CarryFailedIDs)
+	slices.Sort(r.FilesToDelete)
 	slices.Sort(r.Errors)
 }
 
@@ -274,10 +344,11 @@ func (svc *AudiobookService) fillCarryOutlook(id string, info *TrashProgressInfo
 // than that) would take book at now.
 func purgeEligible(book *database.Book, now time.Time) bool {
 	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	if days <= 0 || book.MarkedForDeletionAt == nil {
+	at := book.TrashedAt()
+	if days <= 0 || at == nil {
 		return false
 	}
-	return book.MarkedForDeletionAt.Before(now.AddDate(0, 0, -days))
+	return at.Before(now.AddDate(0, 0, -days))
 }
 
 // progressSummary describes each user's state on bookID in a few words,
@@ -398,18 +469,34 @@ var ErrBookHasProgress = merge.ErrBookHasListeningState
 // The book was kept, with every user's state put back on it.
 var ErrPurgeCarryFailed = errors.New("the listening progress could not be moved to the copy in the Audiobookshelf library, so the book was kept")
 
-// purgeNow is "Purge now" for one book in the trash (DeleteAudiobook's hard
-// path for a trashed book): exactly the nightly purge's path for that book
+// purgeNowLocked is "Purge now" for one book in the trash (DeleteAudiobook's
+// hard path for a trashed book): exactly the nightly purge's path for that book
 // (purgeOne, with a fresh strict user probe and the configured
 // PurgeSoftDeletedDeleteFiles), so a book with listening state is purged
 // only after the state is carried to a version Audiobookshelf lists, and
 // is otherwise refused with ErrBookHasProgress.
-func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, error) {
-	probe, err := merge.NewUserStateProbe(svc.store)
+//
+// The caller holds the merge lock (merge.TryLockMergeRMWWithin, so a running
+// combine answers merge.ErrMergeBusy instead of hanging the request) and the
+// whole purge runs under that one hold: purgeOne is told so (purgeEnv.lockHeld)
+// and takes it nowhere itself. That includes purgeFinish, the on-disk file
+// removal, which the nightly purge runs outside the lock; for one interactive
+// book it is a single remove and its parent-directory cleanup, and doing it
+// under the hold is what keeps this to one acquisition.
+//
+// mode is what the caller decided about file deletion before taking the lock
+// (preLockRoot): the setting, and the library-root guard, so no sample or stat
+// runs under the hold. The zero mode reads the setting here and checks the root
+// itself.
+func (svc *AudiobookService) purgeNowLocked(book *database.Book, mode purgeFileMode) (map[string]any, error) {
+	mode = mode.settle()
+	env, err := svc.newPurgeEnv()
 	if err != nil {
-		return nil, fmt.Errorf("purge %s refused: cannot list users to check their listening state: %w", book.ID, err)
+		return nil, fmt.Errorf("purge %s refused: %w", book.ID, err)
 	}
-	out := svc.purgeOne(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, probe)
+	env.lockHeld = true
+	env.root = mode.root
+	out := svc.purgeOne(book, mode.deleteFiles, env)
 	detail := strings.Join(out.errs, "; ")
 	if out.stateMovedTo != "" {
 		// A delete that failed AFTER the carry: not "nothing was deleted", the
@@ -442,6 +529,8 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 			return nil, out.ownsFilesErr
 		}
 		return nil, fmt.Errorf("purge %s: %w: the purge never deletes a book that owns file rows", book.ID, database.ErrBookOwnsFiles)
+	case purgeKeptUndo:
+		return nil, fmt.Errorf("purge %s: %w", book.ID, ErrPurgeUndoPossible)
 	case purgeKeptHasProgress:
 		return nil, fmt.Errorf("purge %s: %w. Restore it, or use Discard progress and purge to delete it together with its progress", book.ID, ErrBookHasProgress)
 	case purgeCarryFailed:
@@ -452,6 +541,55 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 		return nil, fmt.Errorf("purge %s failed: %s", book.ID, detail)
 	}
 }
+
+// BeginTrashPurges is the purge path for callers outside the package that delete
+// books already in the trash one after another (the batch hard delete). It
+// returns two functions for ONE run of such deletions, which must be called from
+// one goroutine at a time:
+//
+//   - checkRoot makes the library-root check OUTSIDE the merge lock (the first
+//     call samples and stats; later calls are answered by the guard and check
+//     again only after rootGuardTTL), so the deletions under the lock do no
+//     sampling or stat. Call it before taking the lock for each book. With
+//     delete_files off it does nothing.
+//   - purgeLocked is purgeNowLocked with the result map dropped and the error
+//     kept: the same path as the single delete. The caller holds the merge lock
+//     (merge.TryLockMergeRMWWithin). The errors are the single delete's
+//     (ErrPurgeUndoPossible, ErrBookHasProgress, ErrPurgeCarryFailed,
+//     database.ErrBookOwnsFiles, ErrNotInTrash). Called without checkRoot it
+//     checks the root itself, under the lock.
+//
+// The delete-files setting is read once, by the first checkRoot.
+func (svc *AudiobookService) BeginTrashPurges() (checkRoot func() error, purgeLocked func(book *database.Book) error) {
+	var mode purgeFileMode
+	checkRoot = func() error {
+		if !mode.taken {
+			m, err := svc.preLockRoot()
+			if err != nil {
+				return err
+			}
+			mode = m
+			return nil
+		}
+		if mode.root == nil {
+			return nil
+		}
+		return mode.root.ready()
+	}
+	purgeLocked = func(book *database.Book) error {
+		_, err := svc.purgeNowLocked(book, mode)
+		return err
+	}
+	return checkRoot, purgeLocked
+}
+
+// ErrPurgeUndoPossible is returned by "Purge now" for a trashed book an undo
+// that can still run needs (undoHold): the retired shell of a combine, the
+// shell a maintenance operation soft-deleted (journaled in the operation
+// ledger), or the loser of an auto-merge. Deleting it would make that undo
+// refuse or stop part way. Undo the operation (or restore the book) instead.
+// Nothing was changed.
+var ErrPurgeUndoPossible = errors.New("this book is still needed by an undo that can run (the retired shell of a combine, a book a maintenance operation soft-deleted, or the loser of an auto-merge), and purging it would make that undo fail or apply only part of itself; undo that operation first, or restore the book")
 
 // ErrNotInTrash is returned by DiscardProgressAndPurge for a book that is
 // not soft-deleted. Nothing was changed.
@@ -518,7 +656,7 @@ func (svc *AudiobookService) recorder() activityRecorder {
 // the book is hard-deleted through the purge's own delete path
 // (purgeDeleteRow, then purgeFinish with the configured
 // PurgeSoftDeletedDeleteFiles), in one hold of the merge lock
-// (merge.DiscardUserStateThenHardDelete). actor names who asked, for the
+// (merge.DiscardUserStateThenHardDeleteLocked). actor names who asked, for the
 // audit row.
 //
 // It refuses, changing nothing, a book that is not in the trash
@@ -549,10 +687,37 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if rec == nil {
 		return nil, ErrAuditUnavailable
 	}
+	// With delete_files, the library root is checked first, outside the lock (a
+	// check samples files and stats them, and the lock is global); the decisions
+	// made under the lock reuse that answer (rootGuard).
+	mode, rootErr := svc.preLockRoot()
+	if rootErr != nil {
+		return nil, fmt.Errorf("discard progress and purge %s refused, nothing discarded: %w", id, rootErr)
+	}
+	// Discarding clears every user's state under the merge lock, which a
+	// running combine holds for its whole run: take it with a bound and answer
+	// merge.ErrMergeBusy promptly instead of hanging the request. The lock is
+	// KEPT and everything below runs under that one hold
+	// (merge.DiscardUserStateThenHardDeleteLocked), so a combine that starts
+	// after the wait cannot make the request hang either. It is released
+	// before the audit row is written.
+	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
+	if err != nil {
+		return nil, err
+	}
+	held := true
+	release := func() {
+		if held {
+			held = false
+			unlock()
+		}
+	}
+	defer release()
 	// The ownership check DeleteBook makes, retired rows included (GetBookFiles
 	// skips them, so a book holding only retired rows would pass a check made
 	// with it and have every user's progress discarded before the delete
-	// refused).
+	// refused). Made under the lock, so a merge cannot move a file row onto the
+	// book after it.
 	if oerr := database.CheckBookOwnsNoFiles(svc.store, id, "discard progress and purge"); oerr != nil {
 		return nil, fmt.Errorf("%w; the book stays in the trash", oerr)
 	}
@@ -560,6 +725,11 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if !ok {
 		return nil, fmt.Errorf("the store cannot clear listening state")
 	}
+
+	// Read once, before the lock (preLockRoot): the decision about the file
+	// below, the delete and the removal must all be about the same setting.
+	deleteFiles := mode.deleteFiles
+	var plan *filePlan
 
 	res := &DiscardProgressResult{BookID: id, Title: book.Title}
 	if info, perr := svc.TrashProgress(ctx, []string{id}); perr == nil {
@@ -585,11 +755,40 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		if oerr := database.CheckBookOwnsNoFiles(svc.store, id, "discard progress and purge"); oerr != nil {
 			return fmt.Errorf("%w; the book stays in the trash", oerr)
 		}
+		// A trashed book an undo that can still run needs (a combine's
+		// shell, an operation's journaled soft-delete, an auto-merge's loser)
+		// is not deleted by any purge, and discarding progress must not be the
+		// way around that: the undo restores rows from it. The merge lock is
+		// held here, so the answer is exact.
+		undo, uerr := svc.newUndoHold()
+		if uerr != nil {
+			return fmt.Errorf("discard progress and purge %s refused: %w", id, uerr)
+		}
+		_, held, herr := undo.Holds(cur)
+		if herr != nil {
+			return fmt.Errorf("discard progress and purge %s refused: cannot tell whether an undo still needs it: %w", id, herr)
+		}
+		if held {
+			return fmt.Errorf("discard progress and purge %s: %w", id, ErrPurgeUndoPossible)
+		}
 		book = cur
+		// With delete_files, what to do about the book's file is decided HERE,
+		// before any state is cleared and before the row goes, as a pass does
+		// (purgeOne, decideFile): the row delete is the point of no return, and a
+		// lookup that fails after it leaves the file with no row and no record. An
+		// undecidable file refuses the whole action, with nothing discarded; the
+		// removal is journaled with the row delete (purgeDeleteRow).
+		if deleteFiles {
+			p, undecided := svc.decideFile(cur, purgeEnv{root: mode.root})
+			if undecided != nil {
+				return fmt.Errorf("discard progress and purge %s refused, nothing discarded: %s", id, strings.Join(undecided.errs, "; "))
+			}
+			plan = p
+		}
 		return nil
 	}
-	cleared, err := merge.DiscardUserStateThenHardDelete(merger, id, precheck, func() error {
-		return svc.purgeDeleteRow(book)
+	cleared, err := merge.DiscardUserStateThenHardDeleteLocked(merger, id, precheck, func() error {
+		return svc.purgeDeleteRow(book, plan)
 	})
 	res.UsersCleared, res.BookmarksCleared = cleared.Users, cleared.Bookmarks
 	if errors.Is(err, merge.ErrDiscardedBookKept) {
@@ -634,8 +833,9 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if err != nil {
 		return nil, err
 	}
-	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles)
+	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, deleteFiles, nil, plan)
 	svc.InvalidateListCache()
+	release()
 
 	if aerr := rec.Record(database.ActivityEntry{
 		Timestamp: time.Now().UTC(),

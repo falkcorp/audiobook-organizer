@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -404,10 +404,15 @@ describe('Active Operations expand/collapse', () => {
     await user.click(screen.getByRole('button', { name: 'Collapse All' }));
 
     // The section headings stay — only their contents roll up.
+    // Each section is its own <Collapse unmountOnExit>, so each one leaves the
+    // DOM when its own exit transition ends. Wait for both: waiting on one and
+    // asserting the other synchronously raced the second transition.
     await waitFor(() => {
       expect(screen.queryByText('Library Scan')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('Author Duplicate Scan')
+      ).not.toBeInTheDocument();
     });
-    expect(screen.queryByText('Author Duplicate Scan')).not.toBeInTheDocument();
     expect(screen.getByText(/^Active \(1\)$/)).toBeInTheDocument();
     expect(screen.getByText(/^Completed \(1\)$/)).toBeInTheDocument();
 

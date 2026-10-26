@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package dedup
 
@@ -403,7 +403,8 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 // (merge.Service.UndoSiblingMoveForLoser), and finally handing the primary on
 // in every group the undo touched and marking the entry undone.
 //
-// It refuses, writing nothing, an entry still marked Provisional (its merge
+// It refuses, writing nothing, an entry whose loser (or, when it has a
+// pre-merge snapshot, winner) row no longer exists, an entry still marked Provisional (its merge
 // failed, or the post-merge patch could not be written, so the entry records
 // no snapshot to revert to and no siblings), an entry already undone
 // (UndoneAt; a replay would revert any later merge of the same books), and an
@@ -451,6 +452,31 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	}
 	if entry.SiblingJournalID != "" && de.mergeService == nil {
 		return fmt.Errorf("unmerge-auto: merge service not initialised; the siblings of %s cannot be restored, nothing reverted", journalKey)
+	}
+
+	// Every book a revert below writes must still exist BEFORE anything is
+	// touched. A trash purge that deleted the loser (it is kept while this
+	// entry is open: see audiobooks' undoHold) would otherwise leave the
+	// siblings moved back and then fail on the loser, a half-applied undo
+	// that a retry cannot finish.
+	for _, side := range []struct {
+		role string
+		id   string
+		need bool
+	}{
+		{"loser", entry.LoserID, true},
+		{"winner", entry.WinnerID, entry.WinnerPreMergeTS != 0},
+	} {
+		if !side.need {
+			continue
+		}
+		b, gerr := de.bookStore.GetBookByID(side.id)
+		if gerr != nil {
+			return fmt.Errorf("unmerge-auto: read %s %s: %w; nothing reverted", side.role, side.id, gerr)
+		}
+		if b == nil {
+			return fmt.Errorf("unmerge-auto: %s %s no longer exists (it was purged from the trash), so this merge cannot be undone; nothing reverted", side.role, side.id)
+		}
 	}
 
 	var errs []string

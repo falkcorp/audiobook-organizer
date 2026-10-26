@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle_boot_ops_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5b9e2a74-1c6d-4f38-8a07-3d4e6f2b9c18
-// last-edited: 2026-10-15
+// last-edited: 2026-10-26
 
 package server
 
@@ -60,6 +60,8 @@ func TestStartBackfills_EnqueuesBootOps(t *testing.T) {
 		// the reconcile mode, not the full backfill (which would be a
 		// whole-table pass on every boot).
 		{id: "maintenance.book-atpath-index-backfill", params: `{"if_needed":true}`},
+		// Every boot, like the opchange ensure; without ensure it would only preview.
+		{id: "maintenance.book-hash-index-repair", params: `{"ensure":true}`},
 		{id: "maintenance.activity-filter-index-backfill", params: `{"reconcile":true}`},
 	}
 	if len(*got) != len(want) {

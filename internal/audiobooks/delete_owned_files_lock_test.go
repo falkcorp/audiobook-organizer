@@ -1,5 +1,5 @@
 // file: internal/audiobooks/delete_owned_files_lock_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c41e7a92-6d05-4b38-8e1f-2a9d5b073c64
 // last-edited: 2026-10-26
 
@@ -253,7 +253,7 @@ func TestPurgeSoftDeletedBooks_FileGainedBeforeTheLockMovesNothing(t *testing.T)
 	u := purgeSeedProgress(t, store, "dup")
 	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 1})
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"dup"}, res.SkippedOwnsFilesIDs, "result %+v", res)
@@ -319,7 +319,7 @@ func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryIsCountedOnce(t *testing.T) 
 	purgeSeedProgress(t, store, "dup")
 	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 2})
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 
 	require.NoError(t, err)
 	require.Zero(t, res.SkippedOwnsFiles, "result %+v", res)
@@ -344,7 +344,7 @@ func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryInvalidatesTheListCache(t *t
 	_, warm := svc.listCache.Get("probe")
 	require.True(t, warm, "fixture: the probe entry is cached")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 
 	require.NoError(t, err)
 	require.Zero(t, res.Purged, "the delete refused, so nothing was purged: %+v", res)
@@ -361,7 +361,7 @@ func TestPurgeSoftDeletedBooks_RefusalUnderTheLockIsCountedOnce(t *testing.T) {
 	purgeSeedProgress(t, store, "dup")
 	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 1})
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, 1, res.SkippedOwnsFiles, "result %+v", res)
@@ -382,7 +382,7 @@ func TestPurgeSoftDeletedBooks_RetiredOnlyStatelessBookIsRefusedBeforeAnySideEff
 	require.Empty(t, live, "the holder's only row is retired: GetBookFiles does not list it")
 	svc := NewAudiobookService(store)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"holder"}, res.SkippedOwnsFilesIDs, "result %+v", res)
@@ -405,7 +405,7 @@ func TestPurgeNow_RetiredOnlyBookKeepsTheHelpersWording(t *testing.T) {
 	book, err := store.GetBookByID("holder")
 	require.NoError(t, err)
 
-	_, err = NewAudiobookService(store).purgeNow(book)
+	_, err = purgeNowUnderHold(t, NewAudiobookService(store), book)
 
 	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
 	require.Contains(t, err.Error(), "retired row(s)")

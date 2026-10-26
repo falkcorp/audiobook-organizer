@@ -447,6 +447,80 @@ func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) RunAndReturn(run 
 	return _c
 }
 
+// ForgetWaitingFileRecords provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) ForgetWaitingFileRecords(ctx context.Context, actor string, shown []string) (*audiobooks.ForgetWaitingResult, error) {
+	ret := _mock.Called(ctx, actor, shown)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ForgetWaitingFileRecords")
+	}
+
+	var r0 *audiobooks.ForgetWaitingResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string) (*audiobooks.ForgetWaitingResult, error)); ok {
+		return returnFunc(ctx, actor, shown)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string) *audiobooks.ForgetWaitingResult); ok {
+		r0 = returnFunc(ctx, actor, shown)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*audiobooks.ForgetWaitingResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []string) error); ok {
+		r1 = returnFunc(ctx, actor, shown)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_ForgetWaitingFileRecords_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ForgetWaitingFileRecords'
+type MockAudiobookService_ForgetWaitingFileRecords_Call struct {
+	*mock.Call
+}
+
+// ForgetWaitingFileRecords is a helper method to define mock.On call
+//   - ctx context.Context
+//   - actor string
+//   - shown []string
+func (_e *MockAudiobookService_Expecter) ForgetWaitingFileRecords(ctx any, actor any, shown any) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	return &MockAudiobookService_ForgetWaitingFileRecords_Call{Call: _e.mock.On("ForgetWaitingFileRecords", ctx, actor, shown)}
+}
+
+func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) Run(run func(ctx context.Context, actor string, shown []string)) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) Return(forgetWaitingResult *audiobooks.ForgetWaitingResult, err error) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	_c.Call.Return(forgetWaitingResult, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) RunAndReturn(run func(ctx context.Context, actor string, shown []string) (*audiobooks.ForgetWaitingResult, error)) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAudiobook provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) GetAudiobook(ctx context.Context, id string) (*database.Book, error) {
 	ret := _mock.Called(ctx, id)
@@ -770,6 +844,52 @@ func (_c *MockAudiobookService_InvalidateListCache_Call) RunAndReturn(run func()
 	return _c
 }
 
+// LastPurgeBreakdown provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) LastPurgeBreakdown() *audiobooks.PurgeBreakdown {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for LastPurgeBreakdown")
+	}
+
+	var r0 *audiobooks.PurgeBreakdown
+	if returnFunc, ok := ret.Get(0).(func() *audiobooks.PurgeBreakdown); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*audiobooks.PurgeBreakdown)
+		}
+	}
+	return r0
+}
+
+// MockAudiobookService_LastPurgeBreakdown_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LastPurgeBreakdown'
+type MockAudiobookService_LastPurgeBreakdown_Call struct {
+	*mock.Call
+}
+
+// LastPurgeBreakdown is a helper method to define mock.On call
+func (_e *MockAudiobookService_Expecter) LastPurgeBreakdown() *MockAudiobookService_LastPurgeBreakdown_Call {
+	return &MockAudiobookService_LastPurgeBreakdown_Call{Call: _e.mock.On("LastPurgeBreakdown")}
+}
+
+func (_c *MockAudiobookService_LastPurgeBreakdown_Call) Run(run func()) *MockAudiobookService_LastPurgeBreakdown_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_LastPurgeBreakdown_Call) Return(purgeBreakdown *audiobooks.PurgeBreakdown) *MockAudiobookService_LastPurgeBreakdown_Call {
+	_c.Call.Return(purgeBreakdown)
+	return _c
+}
+
+func (_c *MockAudiobookService_LastPurgeBreakdown_Call) RunAndReturn(run func() *audiobooks.PurgeBreakdown) *MockAudiobookService_LastPurgeBreakdown_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListAllUserTags provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) ListAllUserTags() ([]database.TagWithCount, error) {
 	ret := _mock.Called()
@@ -825,76 +945,55 @@ func (_c *MockAudiobookService_ListAllUserTags_Call) RunAndReturn(run func() ([]
 	return _c
 }
 
-// PurgeSoftDeletedBooks provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobooks.PurgeResult, error) {
-	ret := _mock.Called(ctx, deleteFiles, olderThanDays)
+// PendingFileRemovals provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) PendingFileRemovals() (audiobooks.PendingFileCounts, error) {
+	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for PurgeSoftDeletedBooks")
+		panic("no return value specified for PendingFileRemovals")
 	}
 
-	var r0 *audiobooks.PurgeResult
+	var r0 audiobooks.PendingFileCounts
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, bool, *int) (*audiobooks.PurgeResult, error)); ok {
-		return returnFunc(ctx, deleteFiles, olderThanDays)
+	if returnFunc, ok := ret.Get(0).(func() (audiobooks.PendingFileCounts, error)); ok {
+		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, bool, *int) *audiobooks.PurgeResult); ok {
-		r0 = returnFunc(ctx, deleteFiles, olderThanDays)
+	if returnFunc, ok := ret.Get(0).(func() audiobooks.PendingFileCounts); ok {
+		r0 = returnFunc()
 	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*audiobooks.PurgeResult)
-		}
+		r0 = ret.Get(0).(audiobooks.PendingFileCounts)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, bool, *int) error); ok {
-		r1 = returnFunc(ctx, deleteFiles, olderThanDays)
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockAudiobookService_PurgeSoftDeletedBooks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PurgeSoftDeletedBooks'
-type MockAudiobookService_PurgeSoftDeletedBooks_Call struct {
+// MockAudiobookService_PendingFileRemovals_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PendingFileRemovals'
+type MockAudiobookService_PendingFileRemovals_Call struct {
 	*mock.Call
 }
 
-// PurgeSoftDeletedBooks is a helper method to define mock.On call
-//   - ctx context.Context
-//   - deleteFiles bool
-//   - olderThanDays *int
-func (_e *MockAudiobookService_Expecter) PurgeSoftDeletedBooks(ctx any, deleteFiles any, olderThanDays any) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
-	return &MockAudiobookService_PurgeSoftDeletedBooks_Call{Call: _e.mock.On("PurgeSoftDeletedBooks", ctx, deleteFiles, olderThanDays)}
+// PendingFileRemovals is a helper method to define mock.On call
+func (_e *MockAudiobookService_Expecter) PendingFileRemovals() *MockAudiobookService_PendingFileRemovals_Call {
+	return &MockAudiobookService_PendingFileRemovals_Call{Call: _e.mock.On("PendingFileRemovals")}
 }
 
-func (_c *MockAudiobookService_PurgeSoftDeletedBooks_Call) Run(run func(ctx context.Context, deleteFiles bool, olderThanDays *int)) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
+func (_c *MockAudiobookService_PendingFileRemovals_Call) Run(run func()) *MockAudiobookService_PendingFileRemovals_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 bool
-		if args[1] != nil {
-			arg1 = args[1].(bool)
-		}
-		var arg2 *int
-		if args[2] != nil {
-			arg2 = args[2].(*int)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
+		run()
 	})
 	return _c
 }
 
-func (_c *MockAudiobookService_PurgeSoftDeletedBooks_Call) Return(purgeResult *audiobooks.PurgeResult, err error) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
-	_c.Call.Return(purgeResult, err)
+func (_c *MockAudiobookService_PendingFileRemovals_Call) Return(pendingFileCounts audiobooks.PendingFileCounts, err error) *MockAudiobookService_PendingFileRemovals_Call {
+	_c.Call.Return(pendingFileCounts, err)
 	return _c
 }
 
-func (_c *MockAudiobookService_PurgeSoftDeletedBooks_Call) RunAndReturn(run func(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobooks.PurgeResult, error)) *MockAudiobookService_PurgeSoftDeletedBooks_Call {
+func (_c *MockAudiobookService_PendingFileRemovals_Call) RunAndReturn(run func() (audiobooks.PendingFileCounts, error)) *MockAudiobookService_PendingFileRemovals_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1115,6 +1214,59 @@ func (_c *MockAudiobookService_TrashProgress_Call) Return(stringToTrashProgressI
 }
 
 func (_c *MockAudiobookService_TrashProgress_Call) RunAndReturn(run func(ctx context.Context, bookIDs []string) (map[string]audiobooks.TrashProgressInfo, error)) *MockAudiobookService_TrashProgress_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WaitingFileRecordPaths provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) WaitingFileRecordPaths() (audiobooks.WaitingFilePaths, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for WaitingFileRecordPaths")
+	}
+
+	var r0 audiobooks.WaitingFilePaths
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (audiobooks.WaitingFilePaths, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() audiobooks.WaitingFilePaths); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(audiobooks.WaitingFilePaths)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_WaitingFileRecordPaths_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WaitingFileRecordPaths'
+type MockAudiobookService_WaitingFileRecordPaths_Call struct {
+	*mock.Call
+}
+
+// WaitingFileRecordPaths is a helper method to define mock.On call
+func (_e *MockAudiobookService_Expecter) WaitingFileRecordPaths() *MockAudiobookService_WaitingFileRecordPaths_Call {
+	return &MockAudiobookService_WaitingFileRecordPaths_Call{Call: _e.mock.On("WaitingFileRecordPaths")}
+}
+
+func (_c *MockAudiobookService_WaitingFileRecordPaths_Call) Run(run func()) *MockAudiobookService_WaitingFileRecordPaths_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_WaitingFileRecordPaths_Call) Return(waitingFilePaths audiobooks.WaitingFilePaths, err error) *MockAudiobookService_WaitingFileRecordPaths_Call {
+	_c.Call.Return(waitingFilePaths, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_WaitingFileRecordPaths_Call) RunAndReturn(run func() (audiobooks.WaitingFilePaths, error)) *MockAudiobookService_WaitingFileRecordPaths_Call {
 	_c.Call.Return(run)
 	return _c
 }

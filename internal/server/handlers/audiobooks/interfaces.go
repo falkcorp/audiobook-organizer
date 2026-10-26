@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -146,7 +146,10 @@ type AudiobookTrashService interface {
 	// fetch-10,000-and-len() whose count saturated and whose error was
 	// swallowed into total:0 — callers must surface the error, never zero it.
 	CountSoftDeletedBooks(ctx context.Context, olderThanDays *int) (int, error)
-	PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobookspkg.PurgeResult, error)
+	// LastPurgeBreakdown is the purgeable-versus-blocked split of the most
+	// recent purge pass or preview (nil before one has run since the server
+	// started). The trash listing shows it; it is never recomputed per request.
+	LastPurgeBreakdown() *audiobookspkg.PurgeBreakdown
 	RestoreAudiobook(ctx context.Context, id string) (*database.Book, error)
 	DeleteAudiobook(ctx context.Context, id string, opts *audiobookspkg.DeleteAudiobookOptions) (map[string]any, error)
 	// TrashProgress flags the trashed books a user still has listening
@@ -155,6 +158,25 @@ type AudiobookTrashService interface {
 	// DiscardProgressAndPurge clears every user's listening state on one
 	// trashed book and purges it. It refuses a book not in the trash.
 	DiscardProgressAndPurge(ctx context.Context, id, actor string) (*audiobookspkg.DiscardProgressResult, error)
+}
+
+// AudiobookPurgeFileService AudiobookPurgeFileService is the journal of file removals an earlier purge pass decided on and did not finish: how many are waiting, and the owner's choice to forget the ones that can never finish.
+type AudiobookPurgeFileService interface {
+	// PendingFileRemovals counts the files an earlier purge pass decided to
+	// remove and did not finish (its journal of pending removals), apart from
+	// the ones waiting for a folder that is missing or empty. It is read live,
+	// not measured by a pass: the trash listing shows it so the owner can
+	// finish them even when the trash itself is empty.
+	PendingFileRemovals() (audiobookspkg.PendingFileCounts, error)
+	// ForgetWaitingFileRecords is the owner's explicit choice to delete the
+	// journal records that wait for a folder that is missing or empty. It
+	// deletes records only, never a file or a book, and refuses without an
+	// activity log to record it in.
+	// WaitingFileRecordPaths lists those files (at most the number one forget
+	// may take, with the true total) so the owner sees which they are before
+	// forgetting; ForgetWaitingFileRecords then takes only the paths it was sent.
+	WaitingFileRecordPaths() (audiobookspkg.WaitingFilePaths, error)
+	ForgetWaitingFileRecords(ctx context.Context, actor string, shown []string) (*audiobookspkg.ForgetWaitingResult, error)
 }
 
 // AudiobookUserTagService AudiobookUserTagService is the user-tag surface: enumerate, read per book, and batch add/remove.
@@ -187,6 +209,7 @@ type AudiobookViewDecorator interface {
 type AudiobookService interface {
 	AudiobookReader
 	AudiobookTrashService
+	AudiobookPurgeFileService
 	AudiobookUserTagService
 	AudiobookViewDecorator
 }

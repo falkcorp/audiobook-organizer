@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 051a1636-d299-45a5-80d2-9b72255cffcf
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
@@ -19,9 +19,9 @@ import (
 // deleted only after that state is carried to a version of the book
 // Audiobookshelf lists; with no such version the delete is refused, and the
 // owner can drop the state on purpose with "Discard progress and purge"
-// (DiscardUserStateThenHardDelete).
+// (DiscardUserStateThenHardDeleteLocked).
 
-// ErrBookHasListeningState is returned by HardDeleteKeepingUserState when
+// ErrBookHasListeningState is returned by HardDeleteKeepingUserStateLocked when
 // users have listening state on the book and no other version of it that
 // Audiobookshelf lists exists to carry the state to. Nothing was deleted or
 // moved.
@@ -91,15 +91,15 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 	}
 }
 
-// HardDeleteKeepingUserState runs del (the caller's hard delete of book)
+// HardDeleteKeepingUserStateLocked runs del (the caller's hard delete of book)
 // only where no listening state is lost:
 //
 //   - no user has state on the book (UserStateProbe.Has, bookmarks
 //     included): del runs under the merge lock after the same check is made
-//     again there (HardDeleteWithoutUserState);
+//     again there (HardDeleteWithoutUserStateLocked);
 //   - state, and a version of the book Audiobookshelf lists exists
 //     (ListedLiveSibling): the state is carried there and del runs, in one
-//     hold of the merge lock (CarryStateThenHardDelete), carriedTo naming it;
+//     hold of the merge lock (CarryStateThenHardDeleteLocked), carriedTo naming it;
 //   - state and no such version: ErrBookHasListeningState, nothing done.
 //
 // Errors: a probe that cannot be made wraps ErrUserStateCheckFailed; an
@@ -120,8 +120,12 @@ func CarryTargetPrecheck(books VersionGroupReader, targetID string) func() error
 // precheck's own error, and PrecheckCause returns that error unwrapped. With
 // no state to carry the precheck runs just before del, under the same lock.
 //
-// The caller must hold neither the merge lock nor a version-group lock.
-func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader, book *database.Book, precheck, del func() error) (carriedTo string, err error) {
+// The caller holds the merge lock (TryLockMergeRMWWithin: an interactive
+// handler bounds its wait for a running combine), so the whole probe, carry
+// and delete is ONE hold of it. The probe is made under the lock, and nothing
+// here takes the lock again (it calls only the ...Locked carry and delete). It
+// must not hold a version-group lock.
+func HardDeleteKeepingUserStateLocked(db UserProgressMerger, books VersionGroupReader, book *database.Book, precheck, del func() error) (carriedTo string, err error) {
 	if book == nil || book.ID == "" {
 		return "", fmt.Errorf("%w: no book", ErrUserStateCheckFailed)
 	}
@@ -135,9 +139,9 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 	}
 	if !has {
 		if precheck == nil {
-			return "", HardDeleteWithoutUserState(db, book.ID, del)
+			return "", HardDeleteWithoutUserStateLocked(db, book.ID, del)
 		}
-		return "", HardDeleteWithoutUserState(db, book.ID, func() error {
+		return "", HardDeleteWithoutUserStateLocked(db, book.ID, func() error {
 			if err := precheck(); err != nil {
 				return &PrecheckRefusedError{DoomedID: book.ID, Err: err}
 			}
@@ -163,7 +167,7 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 			return targetCheck()
 		}
 	}
-	if err := CarryStateThenHardDelete(db, target, book.ID, carryCheck, del); err != nil {
+	if err := CarryStateThenHardDeleteLocked(db, target, book.ID, carryCheck, del); err != nil {
 		if errors.Is(err, ErrCarryPrecheckRefused) || errors.Is(err, ErrStateCarryIncomplete) {
 			return "", err
 		}
@@ -180,7 +184,7 @@ func HardDeleteKeepingUserState(db UserProgressMerger, books VersionGroupReader,
 // a caller that maps a refusal to "nothing deleted" must test for this first.
 var ErrStateMovedBookKept = errors.New("the listening progress was moved to another copy, but the book was not deleted")
 
-// StateMovedBookKeptError is HardDeleteKeepingUserState's error when del fails
+// StateMovedBookKeptError is HardDeleteKeepingUserStateLocked's error when del fails
 // after a completed carry. Its text is Err's (which already names both books);
 // errors.Is reaches ErrStateMovedBookKept and whatever del returned
 // (database.ErrBookOwnsFiles, say, from a file row a non-merge writer added

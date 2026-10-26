@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_lock_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 511d8e1c-2f2f-49f7-a5f0-1e48bce72f0f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 // A1#10: applyBookMergeReroute used to copy the losers' iTunes stats onto the
 // keep book itself -- GetBookByID + full-row UpdateBook, outside
@@ -110,7 +110,7 @@ func TestApplyBookMergeReroute_CarryWriteFailureAbortsBeforeSoftDelete(t *testin
 	loserID := createRerouteBook(t, inner, "Loser", new(80))
 
 	store := &rerouteFaultStore{PebbleStore: inner, keepID: keepID, failKeepWrite: true}
-	_, err := applyBookMergeReroute(merge.NewService(store), "", keepID, []string{loserID})
+	_, _, err := applyBookMergeReroute(merge.NewService(store), "", keepID, []string{loserID})
 	if !errors.Is(err, errInjectedKeepWrite) {
 		t.Fatalf("applyBookMergeReroute err = %v, want the injected keep-write failure", err)
 	}
@@ -142,7 +142,7 @@ func TestApplyBookMergeReroute_ConcurrentKeepEditSurvives(t *testing.T) {
 			t.Errorf("concurrent edit: %v", err)
 		}
 	}
-	if _, err := applyBookMergeReroute(merge.NewService(store), "", keepID, []string{loserID}); err != nil {
+	if _, _, err := applyBookMergeReroute(merge.NewService(store), "", keepID, []string{loserID}); err != nil {
 		t.Fatalf("applyBookMergeReroute: %v", err)
 	}
 
@@ -167,12 +167,15 @@ func TestApplyBookMergeReroute_ConsumedLoserDoesNotCarry(t *testing.T) {
 	loserID := createRerouteBook(t, store, "Loser", new(80))
 	ms := merge.NewService(store)
 
-	if _, err := applyBookMergeReroute(ms, "", keepA, []string{loserID}); err != nil {
+	if _, _, err := applyBookMergeReroute(ms, "", keepA, []string{loserID}); err != nil {
 		t.Fatalf("first merge: %v", err)
 	}
-	_, err := applyBookMergeReroute(ms, "", keepB, []string{loserID})
-	if _, ok := errors.AsType[*merge.SoftDeletedInputError](err); !ok {
-		t.Fatalf("second merge err = %v, want SoftDeletedInputError for the consumed loser", err)
+	res, skipped, err := applyBookMergeReroute(ms, "", keepB, []string{loserID})
+	if err != nil {
+		t.Fatalf("second merge err = %v, want a no-op that skips the consumed loser", err)
+	}
+	if res != nil || len(skipped) != 1 || skipped[0].BookID != loserID {
+		t.Fatalf("second merge res=%v skipped=%v, want nil result and the consumed loser skipped", res, skipped)
 	}
 	if b := mustGetRerouteBook(t, store, keepB); b.ITunesRating != nil {
 		t.Fatalf("keep B rating = %d, want nil: a refused merge copied the consumed loser's stats onto it", *b.ITunesRating)
@@ -191,12 +194,13 @@ func TestApplyBookMergeReroute_ConcurrentMergesShareLoser(t *testing.T) {
 	ms := merge.NewService(store)
 
 	errs := make([]error, len(keepers))
+	results := make([]*merge.Result, len(keepers))
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i, k := range keepers {
 		wg.Go(func() {
 			<-start
-			_, errs[i] = applyBookMergeReroute(ms, "", k, []string{loserID})
+			results[i], _, errs[i] = applyBookMergeReroute(ms, "", k, []string{loserID})
 		})
 	}
 	close(start)
@@ -204,16 +208,18 @@ func TestApplyBookMergeReroute_ConcurrentMergesShareLoser(t *testing.T) {
 
 	succeeded, carried := 0, 0
 	for i, k := range keepers {
-		if errs[i] == nil {
+		if errs[i] == nil && results[i] != nil {
 			succeeded++
+		} else if errs[i] == nil {
+			// The race's loser found the loser already consumed: a skipped no-op.
 		} else if sd := (*merge.SoftDeletedInputError)(nil); !errors.As(errs[i], &sd) {
 			t.Fatalf("merge into %s: unexpected error %v", k, errs[i])
 		}
 		b := mustGetRerouteBook(t, store, k)
 		if b.ITunesRating != nil {
 			carried++
-			if errs[i] != nil {
-				t.Fatalf("keeper %s holds the loser's rating but its merge was refused", k)
+			if results[i] == nil {
+				t.Fatalf("keeper %s holds the loser's rating but its merge was refused or skipped", k)
 			}
 		}
 	}

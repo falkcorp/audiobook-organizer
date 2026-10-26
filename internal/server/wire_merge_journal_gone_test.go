@@ -1,7 +1,7 @@
 // file: internal/server/wire_merge_journal_gone_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f7287a40-9996-4784-8c46-4f09afcab92e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package server
 
@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	combineUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert with the combine's operation id (operation_id in the combine response; GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older combine gets one from the backfill-merge-undo-pointers job) instead"}`
+	combineUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert with the combine's operation id (the id POST /api/v1/audiobooks/combine answered with, also operation_id in its result; GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older combine gets one from the backfill-merge-undo-pointers job) instead"}`
 	siblingUndoGoneBody = `{"error":"gone","message":"this endpoint has been removed; use POST /api/v1/operations/:id/revert with the merge's operation id (GET /api/v1/audiobooks/:id/changes on the kept book lists it; an older merge gets one from the backfill-merge-undo-pointers job) instead"}`
 )
 
