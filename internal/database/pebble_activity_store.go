@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.34.2
+// version: 1.35.0
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -2394,14 +2394,54 @@ func (s *PebbleActivityStore) scanTierKVs(ctx context.Context, tier string, sinc
 //     and decodes only the requested page. Taken when pactIndexPushdownEligible
 //     says every predicate in f is either trivially true or decidable without
 //     the stored entry.
+//   - queryByIndexPrefixExcluding — taken when the ONLY thing that refuses the
+//     pushdown is a non-nil ExcludeEntry (what every handler read sets). The
+//     predicate needs the decoded row, so every live row of the id is still
+//     decoded, but it is streamed: nothing is retained but the page window and
+//     the count, and nothing is sorted.
 //   - queryByIndexPrefixFull — the historical full materialization. Taken for
 //     every other filter shape, and kept byte-for-byte as the reference
 //     implementation the differential tests compare the pushdown against.
 func (s *PebbleActivityStore) queryByIndexPrefix(ctx context.Context, prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
-	if pactIndexPushdownEligible(prefix, f) {
+	switch pactIndexPathFor(prefix, f) {
+	case pactIndexPathPaged:
 		return s.queryByIndexPrefixPaged(ctx, prefix, f)
+	case pactIndexPathExcluding:
+		return s.queryByIndexPrefixExcluding(ctx, prefix, f)
+	default:
+		return s.queryByIndexPrefixFull(ctx, prefix, f)
 	}
-	return s.queryByIndexPrefixFull(ctx, prefix, f)
+}
+
+// pactIndexPath names the implementation queryByIndexPrefix dispatches to.
+type pactIndexPath int
+
+const (
+	pactIndexPathFull pactIndexPath = iota
+	pactIndexPathPaged
+	pactIndexPathExcluding
+)
+
+// pactIndexPathFor decides the dispatch, separately from running it so a test
+// can pin which path a filter takes (a wrong choice returns the same rows and
+// differs only in cost, which no result assertion can see).
+//
+// A non-nil ExcludeEntry is the ONLY thing standing between the filter every
+// handler read builds and the pushdown, so when the filter would be eligible
+// without it the streaming path answers exactly, in constant memory, instead of
+// materializing and sorting every row of the id.
+func pactIndexPathFor(prefix string, f ActivityFilter) pactIndexPath {
+	if pactIndexPushdownEligible(prefix, f) {
+		return pactIndexPathPaged
+	}
+	if f.ExcludeEntry != nil {
+		bare := f
+		bare.ExcludeEntry = nil
+		if pactIndexPushdownEligible(prefix, bare) {
+			return pactIndexPathExcluding
+		}
+	}
+	return pactIndexPathFull
 }
 
 // pactPushdownDecidable is the ALLOW-LIST at the centre of the eligibility
@@ -2908,6 +2948,84 @@ func (s *PebbleActivityStore) fetchIndexPage(
 
 	if len(page) == 0 && total == 0 {
 		return nil, 0, nil
+	}
+	return page, total, nil
+}
+
+// queryByIndexPrefixExcluding answers an id-index read whose filter is
+// pushdown-eligible except for a non-nil ExcludeEntry.
+//
+// WHY this is not queryByIndexPrefixPaged with the predicate admitted: the
+// pushdown counts `total` from the index and decodes only the page window, so a
+// row the predicate hides would still be counted and would still take a slot in
+// the offset arithmetic. ExcludeEntry exists precisely so page, offset and total
+// are counted AFTER the hiding. A predicate that needs the decoded row can only
+// be applied by decoding every live row of the id, and this does: the cost is
+// the rows of ONE operation or book (the index bounds it; it never walks a tier),
+// the same decode count as queryByIndexPrefixFull.
+//
+// What it saves over the full path is memory and the sort. It reads the index
+// newest-first (scanIndexRefs, the order the pushdown already relies on), then
+// streams: each row is fetched, decoded and judged in turn, counted into total,
+// and kept only if it falls inside [Offset, Offset+Limit). The heap holds the
+// ref keys (one arena) and at most Limit entries, not every decoded entry for the
+// id, and a viewer repeating the read cannot make the process hold an
+// operation's whole transcript per request.
+//
+// Results are exact, never partial: there is no budget here and a cancelled ctx
+// returns the error, not a short answer. A ref whose row is gone or undecodable
+// is skipped and, like the other paths, absent from total.
+func (s *PebbleActivityStore) queryByIndexPrefixExcluding(ctx context.Context, prefix string, f ActivityFilter) ([]ActivityEntry, int, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, 0, ctxErr
+	}
+	sc, err := s.scanIndexRefs(ctx, prefix)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	tally := &pactDecodeTally{}
+	defer tally.log("queryByIndexPrefix excluding prefix=" + prefix)
+
+	var page []ActivityEntry
+	total := 0
+	for i := 0; i < sc.len(); i++ {
+		if i%activityCtxCheckInterval == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, 0, ctxErr
+			}
+		}
+		primaryKey := sc.key(int32(i))
+		val, closer, getErr := s.db.Get(primaryKey)
+		if getErr != nil {
+			// A stale index ref (pruned row): not a row, not counted.
+			continue
+		}
+		var entry ActivityEntry
+		s.entriesDecoded.Add(1)
+		jsonErr := json.Unmarshal(val, &entry)
+		closer.Close()
+		if jsonErr != nil {
+			s.decodeFailures.Add(1)
+			tally.record(primaryKey, jsonErr)
+			continue
+		}
+		if !matchesFilter(entry, f) {
+			continue
+		}
+		if total >= f.Offset && len(page) < f.Limit {
+			page = append(page, entry)
+		}
+		total++
+	}
+	if total == 0 {
+		// The full path's `all` is nil here and all[0:0] of a nil slice is nil.
+		// An offset past a NON-empty result is an empty non-nil page on that
+		// path, so the distinction is kept exactly.
+		return nil, 0, nil
+	}
+	if page == nil {
+		page = []ActivityEntry{}
 	}
 	return page, total, nil
 }

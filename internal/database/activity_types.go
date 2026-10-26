@@ -1,7 +1,7 @@
 // file: internal/database/activity_types.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package database — activity log types and helpers shared by the Pebble
 // activity store, activity.Service and their callers. Extracted from the
@@ -132,9 +132,12 @@ type ActivityFilter struct {
 	// digest's items) does so on the page after the query, not here. The function
 	// is called from the scan, so it must be cheap (memoise a lookup) and safe to
 	// call from one goroutine at a time. Only Query and QueryWithPartial honour it; GetDistinctSources does not
-	// read it. A non-nil value is a live predicate and refuses the id-index
-	// pushdown (see pactPushdownDecidable), so the scan applies it to every
-	// candidate row.
+	// read it. A non-nil value is a live predicate, so it refuses the id-index
+	// pushdown (see pactPushdownDecidable): it needs the decoded row, and the
+	// pushdown counts total from the index. A read on operation_id or book_id
+	// alone still never walks a tier: queryByIndexPrefixExcluding decodes and
+	// judges the rows of that one id as a stream, exactly and never partial.
+	// Every other read applies it to every candidate row of the scan.
 	ExcludeEntry func(e ActivityEntry) bool
 }
 

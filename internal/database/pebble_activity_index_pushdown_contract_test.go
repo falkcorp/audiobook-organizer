@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_index_pushdown_contract_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7c1a55f2-4d9e-4a21-9f31-8e0b6a2c1d40
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Contract tests for the activity index limit pushdown.
 //
@@ -651,6 +651,16 @@ func nonZeroFilterValue(t reflect.Type) reflect.Value {
 		return s
 	case reflect.Pointer:
 		return reflect.New(t.Elem())
+	case reflect.Func:
+		// A non-nil predicate (ActivityFilter.ExcludeEntry). Its results are the
+		// zero values; the gate only asks whether it is set.
+		return reflect.MakeFunc(t, func([]reflect.Value) []reflect.Value {
+			outs := make([]reflect.Value, t.NumOut())
+			for i := range outs {
+				outs[i] = reflect.Zero(t.Out(i))
+			}
+			return outs
+		})
 	case reflect.Map:
 		m := reflect.MakeMapWithSize(t, 1)
 		k, v := nonZeroFilterValue(t.Key()), nonZeroFilterValue(t.Elem())
