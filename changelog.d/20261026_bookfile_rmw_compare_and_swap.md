@@ -87,8 +87,8 @@ Second round of review fixes:
   operator the rescan was not queued (the reset endpoint queues it either way).
 - `DeleteBookFilesByIDs` commits in chunks of 64 rows, so the stored bytes it holds
   to compare at a commit stay bounded (about a gigabyte for a 2,000-row call of
-  fingerprinted rows before). Every refusal is still decided over the whole call
-  before the first chunk commits; a later chunk that fails after earlier ones
+  fingerprinted rows before). Refusals are checked once at the start of the call,
+  not held for its whole length; a later chunk that fails after earlier ones
   committed returns the rows that are gone together with the error, and the dedupe
   delete journal keeps those rows' journal and voids only the others.
 
@@ -97,8 +97,7 @@ Third round of review fixes:
 - The dedupe and cross-folder row cleanups now report a chunked delete that
   committed some chunks and then failed as partial: the rows the store reports as
   deleted are counted as deleted and their books recomputed, the rest are marked
-  failed, and the run summary says so (it used to count the whole batch as failed
-  although the earlier chunks had committed).
-- The combine toast says "the combine did not start; no files were moved from the
-  other books, try again" for a `COMBINE_RETRY_LATER` refusal, and the review
+  failed, and the run summary says so.
+- The combine toast says "the combine was refused before it moved any files from
+  the other books; try again" for a `COMBINE_RETRY_LATER` refusal, and the review
   lane's `REVIEW_RETRY_LATER` toast no longer claims the index is the only cause.

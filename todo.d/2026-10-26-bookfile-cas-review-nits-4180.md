@@ -15,6 +15,6 @@
 - [ ] **TODO-BF-ACOUSTID-SEG-KEYS-NOT-PERSISTED** `UpdateBookFile` writes `book_file_acoustid:<seg>`
       index keys for `AcoustIDSeg*` values that `marshalBookFileDropSegs` does not persist in the
       row. A later `SweepBookFileSegDrop` then sees no segment needle in the stored row and skips
-      it, so those index keys outlive any row that names them. Pre-dates PR #4177. Fix: stop
+      it, so those index keys outlive any row that names them. Pre-dates PR #4180 (which replaced #4177). Fix: stop
       writing the index keys for values the row does not store (or persist the values), and add a
       one-off repair that deletes `book_file_acoustid:` keys whose row has no matching segment.

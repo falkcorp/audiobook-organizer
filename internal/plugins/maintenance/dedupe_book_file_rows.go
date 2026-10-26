@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.5
+// version: 1.12.6
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-10-26
 
@@ -882,9 +882,11 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		// run, so the failure costs a re-run and nothing else.
 		if len(pendingDeletes) > 0 {
 			// Journal first, then one batched delete — journalAndDeleteBookFiles
-			// holds the ordering rationale. A failure leaves every queued row of
-			// this book intact; the op is idempotent, so the cost is one more
-			// run, and one book's failure must not abandon the others.
+			// holds the ordering rationale. A failure may leave some of this
+			// book's queued rows deleted (the chunks that committed) and the
+			// rest intact; gone names the former. The op is idempotent, so the
+			// cost is one more run, and one book's failure must not abandon the
+			// others.
 			gone, derr := journalAndDeleteBookFiles(store, opID, bookID, pendingRows)
 			mu.Lock()
 			if derr != nil {
