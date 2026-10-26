@@ -1,5 +1,5 @@
 // file: internal/search/tag_terms.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e6b3a91-52c8-4d7f-9a14-b8f2d5c7e613
 // last-edited: 2026-10-26
 
@@ -86,7 +86,7 @@ func IsTagTermError(err error) bool {
 // answer a refused query with a 400 use this, so a refusal added here reaches every
 // one of them.
 func IsQueryTermError(err error) bool {
-	return IsPerUserQueryError(err) || IsTagTermError(err)
+	return IsPerUserQueryError(err) || IsTagTermError(err) || IsRegexValueError(err)
 }
 
 // QueryTermReason is the text to show for an error IsQueryTermError accepted,
@@ -95,13 +95,20 @@ func QueryTermReason(err error) string {
 	if te, ok := errors.AsType[*TagTermError](err); ok {
 		return te.Reason
 	}
+	if re, ok := errors.AsType[*RegexValueError](err); ok {
+		return re.Reason
+	}
 	return PerUserQueryReason(err)
 }
 
 // CheckQueryTerms is the whole term check for a query that is about to be saved or
-// evaluated: the per-user terms (CheckPerUserTerms) and the tag: terms
-// (CheckTagTerms). now is the instant relative dates resolve against.
+// evaluated: the /regex/ values (CheckRegexTerms), the per-user terms
+// (CheckPerUserTerms) and the tag: terms (CheckTagTerms). now is the instant relative
+// dates resolve against.
 func CheckQueryTerms(n Node, now time.Time) error {
+	if err := CheckRegexTerms(n); err != nil {
+		return err
+	}
 	if err := CheckPerUserTerms(n, now); err != nil {
 		return err
 	}
@@ -220,6 +227,9 @@ type Translation struct {
 // them off (SplitTagTerms) and translates the rest. A caller that cannot must use
 // TranslateAt, which refuses a tag: term.
 func TranslateQuery(node Node, now time.Time) (Translation, error) {
+	if err := CheckRegexTerms(node); err != nil {
+		return Translation{}, err
+	}
 	rest, tags, err := SplitTagTerms(node)
 	if err != nil {
 		return Translation{}, err
