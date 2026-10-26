@@ -1,12 +1,15 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.0.2
+// version: 1.6.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -17,7 +20,7 @@ import (
 // rather than methods on Store, so the 398-method interface does not widen for
 // one op.
 //
-// Both methods are field-scoped writers in the PatchBookFileFields mould, not
+// SetBookFileIntro and ClearBookFileIntro are field-scoped writers in the PatchBookFileFields mould, not
 // UpdateBookFile callers, for three reasons the op depends on:
 //
 //   - They re-read the row under its lockBookFile stripe and write only the
@@ -33,9 +36,124 @@ import (
 //     IntroMeta, which UpdateBookFile's merge deliberately refuses (they are
 //     bfPreserveAlways: a nil there means "slim memdb round trip", never
 //     "clear").
+//
+// RecordIntroTimeout and ClearIntroTimeouts are the exception, on purpose: they
+// go through ModifyBookFile. They write a handful of rows per run (one per
+// timed-out file, not one per file in the library), so the book-aggregate
+// recompute that rules ModifyBookFile out for the bulk writers costs nothing
+// here, and in return they share the stripe-held read-modify-write every other
+// ModifyBookFile caller uses (one callback run under the row's stripe, not a
+// compare-and-swap) instead of adding one more raw read-modify-write. The
+// scanner's batch upsert takes no stripe, so the ops still wait out a running
+// scan before they write.
 type BookFileIntroStore interface {
 	SetBookFileIntro(bookID, fileID string, r BookFileIntroResult) (BookFileIntroWrite, error)
 	ClearBookFileIntro(bookID, fileID, runOpID string) (before *BookFile, cleared bool, err error)
+	// RecordIntroTimeout counts one transcribe_timeout strike against a file and,
+	// at the limit, makes it a permanent per-file result. See IntroTimeoutStrike.
+	RecordIntroTimeout(bookID, fileID string, s IntroTimeoutStrike) (IntroTimeoutOutcome, error)
+	// ClearIntroTimeouts drops a file's timeout strikes (and a transcribe_timeout
+	// verdict they produced) once the audio has been decoded after all. It does
+	// nothing unless the stored FileHash and the strikes' hash both equal
+	// sourceHash. cleared reports whether anything was written.
+	ClearIntroTimeouts(bookID, fileID, sourceHash string) (cleared bool, err error)
+}
+
+// IntroTimeoutStrike is one file whose decode ran past the worker's per-clip
+// deadline. The worker killed and restarted its decoder and reported a
+// transcribe_timeout for exactly this file: a verdict about its audio, not an
+// outage. One strike is retried next run (a transient stall also looks like
+// this); Limit strikes make the file permanently skipped, so one clip that
+// sends the decoder into an endless loop costs a bounded number of attempts
+// instead of wedging a worker every run.
+type IntroTimeoutStrike struct {
+	// SourceHash is the FileHash of the bytes that timed out. It must equal the
+	// stored FileHash and must not be empty.
+	SourceHash string
+	RunOpID    string
+	// Detail is the worker's short error text.
+	Detail string
+	At     time.Time
+	// Limit is the strike count at which the file becomes permanent (>= 1).
+	Limit int
+	// MinGap is the least time between two counted strikes on the same bytes. A
+	// run id only separates two runs of ONE op; the book op and the per-file op
+	// each have their own ids, so a single stall that both of them hit would
+	// otherwise count twice. 0 disables the check.
+	MinGap time.Duration
+	// Worker names the machine whose answer this strike is: the transcribe
+	// package's opaque worker identity (transcribe.BatchResult.Worker), never an
+	// endpoint URL, because the value is stored on the row and returned in API
+	// responses and endpoint addresses are internal. A dispatcher condemnation
+	// names every machine the file was stuck on alone, joined with
+	// IntroTimeoutWorkerSeparator.
+	//
+	// A strike after the first counts only when it brings a KNOWN machine ("m:",
+	// from the machine_id its worker reports) that has not struck these bytes
+	// before while the row already knows a machine, or is itself a
+	// condemnation by two or more distinct known machines (SameWorker
+	// otherwise): two strikes from one machine can be one sick box on two
+	// nights, not two pieces of evidence about the audio. A first strike counts
+	// from any worker, named or not. A later strike from an unknown machine (a
+	// "u:" id from a worker too old to report machine_id, whose ports look like
+	// separate machines; or no id, because /health could not be read) never
+	// counts. The first known machine after only unknown ones is recorded but
+	// not counted (IdentityRecorded), since it may be one of them under its new
+	// name. The row keeps the union of the machines that struck it, so a third
+	// machine is needed after A then B, not A again.
+	//
+	// So any pool whose routing sends the file to the same machine each time
+	// never makes a timeout permanent: the file is deferred and re-sent every
+	// run, each attempt bounded by the worker's per-clip deadline. The
+	// dispatcher routes a job carrying a strike to a different machine when one
+	// is healthy (transcribe.BatchOptions.AvoidWorkers), so in practice the
+	// price is paid by single-machine pools, and by a night on which every
+	// other machine is down.
+	Worker string
+}
+
+// IntroTimeoutOutcome is what RecordIntroTimeout did.
+type IntroTimeoutOutcome struct {
+	// Strikes is the file's strike count after this call.
+	Strikes int
+	// Permanent: Strikes reached the limit and the file now carries the
+	// transcribe_timeout status.
+	Permanent bool
+	// Skipped: nothing was written because the row already holds a transcript or
+	// result (a timeout says nothing about a file that has one), or the row is
+	// gone / no longer has the hash that timed out (Stale).
+	Skipped bool
+	Stale   bool
+	// HeldText and HeldStatus are what the row held when Skipped is true because
+	// it already carries a result: the stored transcript ("" when it has none) and
+	// the stored TranscribeStatus ("" when unset), read under the same row lock as
+	// the refusal. A caller that needs the file's real answer (the book op's retry
+	// 2) uses them instead of guessing. Empty for Stale and for every outcome that
+	// is not a held-result refusal.
+	HeldText, HeldStatus string
+	// TooSoon: the previous strike on these bytes was counted less than the
+	// caller's MinGap ago (by any run), so this one is the same stall seen again
+	// and nothing was written. Strikes/Permanent are the stored values.
+	TooSoon bool
+	// SameRun: this run already counted a strike for these bytes, so nothing was
+	// written and Strikes/Permanent are the stored values. A strike is one per
+	// (file, run); callers treat SameRun as "deferred", never as a new strike.
+	SameRun bool
+	// SameWorker: the previous counted strike on these bytes came from the same
+	// worker (or this one names no known machine), so this one is not
+	// independent evidence and was not counted. Strikes/Permanent are the
+	// stored values; callers treat it as "deferred". Nothing was written unless
+	// IdentityRecorded. See IntroTimeoutStrike.Worker.
+	SameWorker bool
+	// IdentityRecorded (with SameWorker): every counted strike came from an
+	// unknown machine (a worker too old to report machine_id, or one whose
+	// /health could not be read), and this strike named a known one. It may be
+	// the same machine under its new name, so it is not counted, but its
+	// identity is added to IntroTimeoutWorker so that only a DIFFERENT known
+	// machine can give the next strike, and IntroTimeoutAt is set to its time,
+	// so the next strike within MinGap is TooSoon. Nothing else on the row
+	// changes.
+	IdentityRecorded bool
 }
 
 // BookFileIntroWrite is what SetBookFileIntro did with a result.
@@ -100,6 +218,9 @@ const (
 	IntroStatusOK       = "ok"
 	IntroStatusUnparsed = "unparsed"
 	IntroStatusEmpty    = "empty"
+	// IntroStatusTranscribeTimeout: the decoder timed out on this file at least
+	// Limit times (see IntroTimeoutStrike). Permanent: both ops skip it.
+	IntroStatusTranscribeTimeout = "transcribe_timeout"
 )
 
 // IntroResultPresent is THE definition of "this book_file already carries a
@@ -204,6 +325,8 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 		at := r.At
 		row.IntroTranscribedAt = &at
 		row.IntroMeta = r.Meta
+		// A transcript supersedes any timeout record: the file decodes.
+		row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
 		if stampsSentinel {
 			// The sentinel was not written by this run, so the run id is not
 			// claimed: clear_run_id must never erase it.
@@ -283,11 +406,164 @@ func (s *PebbleStore) ClearBookFileIntro(bookID, fileID, runOpID string) (before
 	row.IntroSourceHash = ""
 	row.IntroRunOpID = ""
 	row.IntroMeta = nil
+	row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
 	res, err := s.writeIntroRow(bookID, fileID, row, "ClearBookFileIntro")
 	if err != nil {
 		return nil, res == IntroWriteWrote, err
 	}
 	return &prior, res == IntroWriteWrote, nil
+}
+
+// RecordIntroTimeout counts a transcribe_timeout strike. See IntroTimeoutStrike.
+//
+// Below the limit only the strike fields and the attempt time are written: the
+// file's status is left alone, so a file is not labelled a failure on the
+// strength of what may have been a transient stall. At the limit the status
+// becomes transcribe_timeout and the row names this run, so clear-by-run-id
+// removes the verdict with the rest of what the run wrote. Strikes are counted
+// against the stored FileHash and restart when the file is replaced. One strike
+// per (file, run): a second timeout recorded by the same run for the same bytes
+// writes nothing and reports SameRun.
+//
+// It goes through ModifyBookFile: under the row's stripe it reads the stored
+// row, runs the callback once on a copy and writes the result, so the decision
+// and the write are one step against every other stripe-holding writer. That is
+// NOT compare-and-swap (the commit only checks that the key still exists), and
+// the library scanner's batch upsert takes no file stripe at all, so it can
+// still race this write; the book op closes that gap by waiting out a running
+// scan before it writes (see waitWhileScanBusy), the per-file op likewise.
+func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutStrike) (IntroTimeoutOutcome, error) {
+	if st.SourceHash == "" {
+		return IntroTimeoutOutcome{Stale: true, Skipped: true}, fmt.Errorf("RecordIntroTimeout: %s: empty source hash", fileID)
+	}
+	if st.Limit < 1 {
+		return IntroTimeoutOutcome{Skipped: true}, fmt.Errorf("RecordIntroTimeout: %s: limit must be >= 1, got %d", fileID, st.Limit)
+	}
+	var out IntroTimeoutOutcome
+	row, err := s.ModifyBookFile(bookID, fileID, func(row *BookFile) error {
+		out = IntroTimeoutOutcome{}
+		if row.FileHash != st.SourceHash {
+			out = IntroTimeoutOutcome{Stale: true, Skipped: true}
+			return ErrSkipBookFileWrite
+		}
+		if row.HasIntroResult() || row.IntroTranscription != nil {
+			out = IntroTimeoutOutcome{Skipped: true}
+			if row.IntroTranscription != nil {
+				out.HeldText = *row.IntroTranscription
+			}
+			if row.TranscribeStatus != nil {
+				out.HeldStatus = *row.TranscribeStatus
+			}
+			return ErrSkipBookFileWrite
+		}
+		counted := row.IntroTimeoutHash == st.SourceHash
+		if counted && st.RunOpID != "" && row.IntroTimeoutRunID == st.RunOpID {
+			out = IntroTimeoutOutcome{
+				Strikes:   row.IntroTimeouts,
+				Permanent: row.IntroTimeouts >= st.Limit,
+				SameRun:   true,
+			}
+			return ErrSkipBookFileWrite
+		}
+		// Another run (usually the other transcribe op) counted a strike on these
+		// bytes moments ago: the same stall, not a second piece of evidence.
+		if counted && st.MinGap > 0 && row.IntroTimeoutAt != nil && st.At.Sub(*row.IntroTimeoutAt) < st.MinGap {
+			out = IntroTimeoutOutcome{
+				Strikes:   row.IntroTimeouts,
+				Permanent: row.IntroTimeouts >= st.Limit,
+				TooSoon:   true,
+			}
+			return ErrSkipBookFileWrite
+		}
+		// One machine cannot supply two strikes: a later strike must bring a
+		// machine that has not struck these bytes, or be a condemnation by two or
+		// more machines (see IntroTimeoutStrike.Worker).
+		struckBy := introTimeoutWorkers(row.IntroTimeoutWorker)
+		if !counted {
+			struckBy = nil
+		}
+		newBy := introTimeoutWorkers(st.Worker)
+		if counted && row.IntroTimeouts > 0 && !independentStrike(struckBy, newBy) {
+			out = IntroTimeoutOutcome{
+				Strikes:    row.IntroTimeouts,
+				Permanent:  row.IntroTimeouts >= st.Limit,
+				SameWorker: true,
+			}
+			if !learnsMachine(struckBy, newBy) {
+				return ErrSkipBookFileWrite
+			}
+			// The first known machine after only unknown ones: record who it is
+			// and count nothing. Its time restarts the MinGap window like a
+			// counted strike: a second known machine moments later is the
+			// "both machines sick at once" case MinGap damps, so it must wait
+			// (TooSoon) rather than make the file permanent the same night.
+			// The run id stays the counted strike's.
+			row.IntroTimeoutWorker = joinIntroTimeoutWorkers(struckBy, newBy)
+			seen := st.At
+			row.IntroTimeoutAt = &seen
+			out.IdentityRecorded = true
+			return nil
+		}
+		strikes := 1
+		if counted {
+			strikes = row.IntroTimeouts + 1
+		}
+		row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID = strikes, st.SourceHash, st.RunOpID
+		row.IntroTimeoutWorker = joinIntroTimeoutWorkers(struckBy, newBy)
+		struck := st.At
+		row.IntroTimeoutAt = &struck
+		attempted := st.At
+		row.TranscribeAttemptedAt = &attempted
+		permanent := strikes >= st.Limit
+		if permanent {
+			status := IntroStatusTranscribeTimeout
+			row.TranscribeStatus = &status
+			row.TranscribeError = optString(st.Detail)
+			row.IntroRunOpID = st.RunOpID
+		}
+		out = IntroTimeoutOutcome{Strikes: strikes, Permanent: permanent}
+		return nil
+	})
+	if err != nil {
+		// A write that was applied but not known durable still counted.
+		if bookFileApplied(err) && !out.Skipped {
+			return out, fmt.Errorf("RecordIntroTimeout: %s: %w", fileID, err)
+		}
+		return IntroTimeoutOutcome{Skipped: true}, fmt.Errorf("RecordIntroTimeout: %s: %w", fileID, err)
+	}
+	if row == nil {
+		return IntroTimeoutOutcome{Stale: true, Skipped: true}, nil
+	}
+	return out, nil
+}
+
+// ClearIntroTimeouts drops a file's strikes after its audio decoded. See
+// BookFileIntroStore. A transcribe_timeout verdict that those strikes produced
+// is dropped with them (status, error and the run that stamped it), because a
+// file that decodes is not one the decoder cannot handle; any other status is
+// left alone.
+func (s *PebbleStore) ClearIntroTimeouts(bookID, fileID, sourceHash string) (bool, error) {
+	if sourceHash == "" {
+		return false, fmt.Errorf("ClearIntroTimeouts: %s: empty source hash", fileID)
+	}
+	cleared := false
+	_, err := s.ModifyBookFile(bookID, fileID, func(row *BookFile) error {
+		cleared = false
+		if row.FileHash != sourceHash || row.IntroTimeoutHash != sourceHash || (row.IntroTimeouts == 0 && row.IntroTimeoutRunID == "" && row.IntroTimeoutWorker == "") {
+			return ErrSkipBookFileWrite
+		}
+		row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
+		if row.TranscribeStatus != nil && *row.TranscribeStatus == IntroStatusTranscribeTimeout {
+			row.TranscribeStatus, row.TranscribeError = nil, nil
+			row.IntroRunOpID = ""
+		}
+		cleared = true
+		return nil
+	})
+	if err != nil {
+		return cleared && bookFileApplied(err), fmt.Errorf("ClearIntroTimeouts: %s: %w", fileID, err)
+	}
+	return cleared, nil
 }
 
 // writeIntroRow commits an edited row: the primary key and memdb only, under
@@ -311,4 +587,96 @@ func (s *PebbleStore) writeIntroRow(bookID, fileID string, row *BookFile, who st
 		return IntroWriteWrote, fmt.Errorf("%s: %s: %w", who, fileID, err)
 	}
 	return IntroWriteWrote, nil
+}
+
+// IntroTimeoutWorkerSeparator joins several machine identities in one
+// IntroTimeoutWorker value. It is the transcribe package's WorkerSeparator;
+// the database cannot import that package, so the two literals must agree.
+const IntroTimeoutWorkerSeparator = " + "
+
+// introTimeoutWorkers is the set of machine identities in a stored or new
+// worker value.
+func introTimeoutWorkers(v string) map[string]bool {
+	out := make(map[string]bool)
+	for _, id := range strings.Split(v, IntroTimeoutWorkerSeparator) {
+		if id = strings.TrimSpace(id); id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// knownMachines is the subset of ids that name a machine by the machine_id
+// its worker reported ("m:"). Every other stored value is an unknown machine:
+// "u:" (a hash of an endpoint URL, from a worker too old to report
+// machine_id: several ports of one Mac are several "u:" ids, and the same Mac
+// becomes an "m:" id once upgraded), a raw URL written by a pre-release build,
+// or nothing at all.
+func knownMachines(set map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(set))
+	for id := range set {
+		if strings.HasPrefix(id, "m:") {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// independentStrike reports whether a strike by newBy is evidence the strikes
+// by struckBy are not. Only known machines ("m:") count:
+//   - a condemnation by two or more DISTINCT known machines (each was stuck on
+//     the file alone in that one dispatch) is independent on its own;
+//   - otherwise the strike must name a known machine the row has not recorded,
+//     AND the row must already know at least one machine. When every recorded
+//     strike came from unknown machines, the new machine may be one of them
+//     under its new name (a worker that just gained machine_id), so it is not
+//     counted; see learnsMachine.
+//
+// A strike that names no known machine is never independent, so two "u:"
+// ports of one old Mac cannot make a file permanent, alone or as a condemned
+// pair.
+func independentStrike(struckBy, newBy map[string]bool) bool {
+	known := knownMachines(newBy)
+	if len(known) >= 2 {
+		return true
+	}
+	stored := knownMachines(struckBy)
+	if len(stored) == 0 {
+		return false
+	}
+	for id := range known {
+		if !stored[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// learnsMachine reports whether a strike that does not count should still be
+// recorded: the row knows no machine yet (only unknown ones struck it) and
+// this strike names a known one. Recording it means the next counted strike
+// must come from a different known machine.
+func learnsMachine(struckBy, newBy map[string]bool) bool {
+	return len(knownMachines(struckBy)) == 0 && len(knownMachines(newBy)) > 0
+}
+
+// storableWorker matches the identities the transcribe package produces
+// ("m:" or "u:" and a short lowercase hash). Anything else (a raw endpoint URL
+// written by a pre-release build) is dropped on the next write: the field is
+// returned in API responses, and endpoint addresses are internal.
+var storableWorker = regexp.MustCompile(`^[mu]:[0-9a-z]{1,64}$`)
+
+// joinIntroTimeoutWorkers is the stored union of two identity sets, sorted,
+// with every value that is not a storable identity dropped.
+func joinIntroTimeoutWorkers(a, b map[string]bool) string {
+	var ids []string
+	for _, set := range []map[string]bool{a, b} {
+		for id := range set {
+			if storableWorker.MatchString(id) && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	slices.Sort(ids)
+	return strings.Join(ids, IntroTimeoutWorkerSeparator)
 }

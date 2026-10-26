@@ -80,6 +80,11 @@
   "transcribe_attempted_at": "2026-01-02T03:04:05Z",
   "intro_source_hash": "synthetic-IntroSourceHash",
   "intro_run_op_id": "synthetic-IntroRunOpID",
+  "intro_timeouts": 7,
+  "intro_timeout_hash": "synthetic-IntroTimeoutHash",
+  "intro_timeout_run_id": "synthetic-IntroTimeoutRunID",
+  "intro_timeout_at": "2026-01-02T03:04:05Z",
+  "intro_timeout_worker": "synthetic-IntroTimeoutWorker",
   "last_scan_mtime": 7,
   "last_scan_size": 7,
   "needs_rescan": true

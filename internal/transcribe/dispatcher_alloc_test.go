@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher_alloc_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d2e9a41-5b3c-4f68-a1d7-3c8e0b6f9254
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -175,7 +175,7 @@ func TestPool_SmallBatchesSpreadAcrossEndpoints(t *testing.T) {
 	}
 	for range 8 {
 		jobs := tempWAVJobs(t, 2)
-		res, err := transcribePool(context.Background(), eps, nil, jobs, nil, nil)
+		res, err := transcribePool(context.Background(), eps, nil, jobs, nil, nil, nil)
 		if err != nil || len(res) != len(jobs) {
 			t.Fatalf("call failed: %d results, err=%v", len(res), err)
 		}
@@ -202,7 +202,7 @@ func TestPool_FullEndpointIsSkipped(t *testing.T) {
 	defer release()
 	for range 4 {
 		jobs := tempWAVJobs(t, 2)
-		if _, err := transcribePool(context.Background(), eps, nil, jobs, nil, nil); err != nil {
+		if _, err := transcribePool(context.Background(), eps, nil, jobs, nil, nil, nil); err != nil {
 			t.Fatalf("call failed: %v", err)
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.6.1
+// version: 1.9.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -76,7 +76,12 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 func swapTranscribeBatchFn(t *testing.T, fn func(context.Context, map[string]string, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error)) {
 	t.Helper()
 	orig := transcribeBatchFn
-	transcribeBatchFn = fn
+	transcribeBatchFn = func(ctx context.Context, jobs map[string]string, opts transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+		// Name the answering worker as the dispatcher does; see stampWorkers.
+		out, err := fn(ctx, jobs, opts)
+		stampWorker(out)
+		return out, err
+	}
 	t.Cleanup(func() { transcribeBatchFn = orig })
 }
 
@@ -103,7 +108,7 @@ func TestProcessTranscribePage_TransportErrorWritesNoStatus(t *testing.T) {
 	p := New(fakeDeps{store: store})
 	accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
 	processed := p.processTranscribePage(context.Background(), store, slog.Default(),
-		books, rootDir, nil, accum, false, pageJournal{}, extractLocal)
+		books, rootDir, nil, accum, false, false, pageJournal{}, extractLocal)
 
 	if calls != 1 {
 		t.Fatalf("TranscribeBatch stub called %d times, want 1", calls)
@@ -134,7 +139,7 @@ func TestProcessTranscribePage_PerFileErrorStillWritesWhisperError(t *testing.T)
 	p := New(fakeDeps{store: store})
 	accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
 	processed := p.processTranscribePage(context.Background(), store, slog.Default(),
-		books, rootDir, nil, accum, false, pageJournal{}, extractLocal)
+		books, rootDir, nil, accum, false, false, pageJournal{}, extractLocal)
 
 	if processed != 0 {
 		t.Errorf("processed = %d, want 0 (whisper_error does not count as processed)", processed)
