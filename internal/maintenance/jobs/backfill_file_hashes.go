@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package jobs
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -78,7 +79,12 @@ func scopeToBooks(files []database.BookFileCore, bookIDs []string) []database.Bo
 	return out
 }
 func (j *backfillFileHashesJob) Description() string {
-	return "Compute and store file hashes for book_files missing them. A file that is not on disk is counted as not_found (one capped log line set and a per-row TSV report under the library's .reports directory), not warned about once per file; nothing is written to the database for it"
+	return "Compute and store file hashes for book_files missing them. A file that is not on disk is counted as " +
+		"not_found (only the first 50 paths are logged) and listed in a per-row TSV report under the library's " +
+		".reports directory, instead of being warned about once per file; nothing is written to the database for it. " +
+		"When a library root is configured the op refuses to run, a dry run included, if the root is unreadable, " +
+		"is not an absolute path, holds nothing but dot-prefixed entries (a share that is probably not mounted), " +
+		"or has a .reports directory that cannot be written"
 }
 
 // hashBackfillNotFoundLogCap bounds how many not-found paths one run writes to
@@ -103,41 +109,69 @@ func fileAbsent(err error) bool {
 //
 //	hashed                   hash computed (and, unless dry-run, stored)
 //	not_found                the hash attempt found the file absent (ENOENT/ENOTDIR)
-//	unverified_outside_root  not found, but the path is outside the library root, so
-//	                         the mount check says nothing about it (an import folder,
-//	                         an iTunes share that may simply be unmounted)
+//	unverified_outside_root  not found, but nothing vouches for the path's mount: it
+//	                         is outside the library root (an import folder, an iTunes
+//	                         share that may simply be unmounted) or no root is configured
 //	read_errors              hash failed for a reason other than not-found; retried next run
 //	write_errors             the hash was computed but could not be saved
 //	skipped_no_path          the row has an empty path; nothing to hash
 //
-// Atomics: the worker pool updates them concurrently.
+// Plain integers: they are only touched by the goroutine that commits a chunk
+// (see commitChunk), never by the worker pool.
 type hashBackfillCounts struct {
-	hashed                atomic.Int64
-	notFound              atomic.Int64
-	unverifiedOutsideRoot atomic.Int64
-	readErrors            atomic.Int64
-	writeErrors           atomic.Int64
-	skippedNoPath         atomic.Int64
+	hashed                int64
+	notFound              int64
+	unverifiedOutsideRoot int64
+	readErrors            int64
+	writeErrors           int64
+	skippedNoPath         int64
+}
+
+// add counts one row in its report bucket. It returns false for a bucket it
+// does not know.
+func (c *hashBackfillCounts) add(bucket string) bool {
+	switch bucket {
+	case hbBucketHashed:
+		c.hashed++
+	case hbBucketNotFound:
+		c.notFound++
+	case hbBucketOutside:
+		c.unverifiedOutsideRoot++
+	case hbBucketReadError:
+		c.readErrors++
+	case hbBucketWriteError:
+		c.writeErrors++
+	case hbBucketNoPath:
+		c.skippedNoPath++
+	default:
+		return false
+	}
+	return true
 }
 
 // summary is the one-line result stored on the operation log. In a dry run the
-// same counts are what an apply WOULD do and nothing is written.
-func (c *hashBackfillCounts) summary(dryRun bool, reportPath string) string {
+// same counts are what an apply WOULD do: no hash is stored (the report and the
+// resume checkpoint are still written). note, when set, says the counts do not
+// cover the whole run.
+func (c *hashBackfillCounts) summary(dryRun bool, reportPath, note string) string {
 	prefix := "Backfilled hashes"
 	if dryRun {
-		prefix = "Dry run, nothing written (counts are what an apply would do)"
+		prefix = "Dry run, no hashes stored (counts are what an apply would do)"
 	}
 	s := fmt.Sprintf("%s: hashed=%d not_found=%d unverified_outside_root=%d read_errors=%d write_errors=%d skipped_no_path=%d",
-		prefix, c.hashed.Load(), c.notFound.Load(), c.unverifiedOutsideRoot.Load(), c.readErrors.Load(),
-		c.writeErrors.Load(), c.skippedNoPath.Load())
+		prefix, c.hashed, c.notFound, c.unverifiedOutsideRoot, c.readErrors, c.writeErrors, c.skippedNoPath)
 	if reportPath != "" {
 		s += " report=" + reportPath
+	}
+	if note != "" {
+		s += " (" + note + ")"
 	}
 	return s
 }
 
-// Report buckets: every row the run did not hash.
+// Report buckets: one per outcome, and the TSV's first column.
 const (
+	hbBucketHashed     = "hashed"
 	hbBucketNotFound   = "not-found"
 	hbBucketOutside    = "not-found-outside-root"
 	hbBucketReadError  = "read-error"
@@ -145,47 +179,142 @@ const (
 	hbBucketNoPath     = "no-path"
 )
 
-// hashBackfillReport streams the run's per-row decisions to a TSV (bucket,
+const hbReportHeader = "bucket\tfile_id\tbook_id\tpath\treason\n"
+
+// hbFile is the part of *os.File the report uses. It is an interface only so a
+// test can make Close fail.
+type hbFile interface {
+	io.Reader
+	io.Writer
+	io.Seeker
+	io.Closer
+	Truncate(size int64) error
+}
+
+// hbOpenFile opens the report file. A variable so a test can inject a Close
+// failure; production always uses os.OpenFile.
+var hbOpenFile = func(name string, flag int, perm os.FileMode) (hbFile, error) {
+	return os.OpenFile(name, flag, perm)
+}
+
+// hashBackfillReport streams the run's per-row outcomes to a TSV (bucket,
 // file_id, book_id, path, reason), the way mark-missing-files does, so a person
-// can read what is missing before deciding what to do about it. It streams (a
-// run can list hundreds of thousands of rows) and is safe for the worker pool.
+// can read what is missing before deciding what to do about it. The TSV is also
+// the run's ledger: every counted row has exactly one line in it, so a resumed
+// run rebuilds its counters from it.
+//
+// Rows reach the file only in commitChunk, immediately before the chunk's
+// checkpoint is saved, so a run that is cancelled or killed mid-chunk leaves no
+// row past its checkpoint on disk. Only the goroutine that commits chunks
+// writes; workers only read done.
+//
 // A nil report discards, for a run with no library root to put it under.
 type hashBackfillReport struct {
-	mu  sync.Mutex
-	f   *os.File
-	w   *bufio.Writer
-	err error // first write error; later writes are dropped
+	f      hbFile
+	w      *bufio.Writer
+	err    error // first write error; later writes are dropped
+	closed bool
+	// done is the set of file IDs the report already listed when this run opened
+	// it (a resume). It is never modified afterwards, so workers may read it.
+	done map[string]struct{}
 }
 
 var hbTSVClean = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 
-// openHashBackfillReport opens path for writing. A resumed run appends to the
-// report its earlier part wrote; a fresh one truncates and writes the header.
-func openHashBackfillReport(path string, resumed bool) (*hashBackfillReport, error) {
-	flags := os.O_WRONLY | os.O_CREATE
-	if resumed {
-		flags |= os.O_APPEND
-	} else {
-		flags |= os.O_TRUNC
+// has reports whether the report already lists the row from an earlier part of
+// this run.
+func (r *hashBackfillReport) has(fileID string) bool {
+	if r == nil {
+		return false
 	}
-	f, err := os.OpenFile(path, flags, 0o664)
-	if err != nil {
-		return nil, err
-	}
-	r := &hashBackfillReport{f: f, w: bufio.NewWriterSize(f, 64<<10)}
-	if st, serr := f.Stat(); !resumed || serr != nil || st.Size() == 0 {
-		_, r.err = r.w.WriteString("bucket\tfile_id\tbook_id\tpath\treason\n")
-	}
-	return r, r.err
+	_, ok := r.done[fileID]
+	return ok
 }
 
-func (r *hashBackfillReport) row(bucket string, bf database.BookFileCore, reason string) {
-	if r == nil {
-		return
+// openHashBackfillReport opens path for the run. A fresh run truncates it and
+// writes the header. A resumed run reads what the earlier part wrote: it
+// returns the set of file IDs already listed (so they are not written or counted
+// again) and the counters those lines add up to, drops a trailing line the
+// earlier part was cut off in the middle of, and appends after the last
+// complete line. prior is false when a resumed run found nothing to carry over.
+func openHashBackfillReport(path string, resumed bool) (rep *hashBackfillReport, seeded hashBackfillCounts, prior bool, err error) {
+	if !resumed {
+		f, oerr := hbOpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o664)
+		if oerr != nil {
+			return nil, seeded, false, oerr
+		}
+		rep = &hashBackfillReport{f: f, w: bufio.NewWriterSize(f, 64<<10)}
+		_, rep.err = rep.w.WriteString(hbReportHeader)
+		return rep, seeded, false, rep.err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.err != nil {
+	f, oerr := hbOpenFile(path, os.O_RDWR|os.O_CREATE, 0o664)
+	if oerr != nil {
+		return nil, seeded, false, oerr
+	}
+	rep = &hashBackfillReport{f: f, w: bufio.NewWriterSize(f, 64<<10), done: map[string]struct{}{}}
+	good, total, lerr := rep.loadPrior(&seeded)
+	if lerr != nil {
+		_ = f.Close()
+		return nil, hashBackfillCounts{}, false, lerr
+	}
+	if good != total {
+		// A hard kill can cut the last line short; the rows of that chunk are
+		// reprocessed, so the fragment must not stay in the file.
+		if terr := f.Truncate(good); terr != nil {
+			_ = f.Close()
+			return nil, hashBackfillCounts{}, false, terr
+		}
+	}
+	if _, serr := f.Seek(good, io.SeekStart); serr != nil {
+		_ = f.Close()
+		return nil, hashBackfillCounts{}, false, serr
+	}
+	if good == 0 {
+		_, rep.err = rep.w.WriteString(hbReportHeader)
+		return rep, seeded, false, rep.err
+	}
+	return rep, seeded, true, nil
+}
+
+// loadPrior reads the existing report. good is the byte length of its complete
+// lines and total the file's length. A complete line that is not a valid row is
+// an error: the ledger cannot be trusted, and guessing would put wrong numbers
+// in the summary.
+func (r *hashBackfillReport) loadPrior(seeded *hashBackfillCounts) (good, total int64, err error) {
+	br := bufio.NewReaderSize(r.f, 1<<20)
+	for lineNo := 1; ; lineNo++ {
+		line, rerr := br.ReadString('\n')
+		total += int64(len(line))
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return good, total, nil // a trailing fragment without a newline is not counted in good
+			}
+			return 0, 0, rerr
+		}
+		if lineNo == 1 {
+			if line != hbReportHeader {
+				return 0, 0, fmt.Errorf("existing report has an unexpected header %q", strings.TrimRight(line, "\n"))
+			}
+			good += int64(len(line))
+			continue
+		}
+		fields := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
+		if len(fields) != 5 {
+			return 0, 0, fmt.Errorf("existing report line %d has %d fields, want 5", lineNo, len(fields))
+		}
+		if _, dup := r.done[fields[1]]; !dup {
+			if !seeded.add(fields[0]) {
+				return 0, 0, fmt.Errorf("existing report line %d has an unknown bucket %q", lineNo, fields[0])
+			}
+			r.done[fields[1]] = struct{}{}
+		}
+		good += int64(len(line))
+	}
+}
+
+// add buffers one row. Called only from commitChunk.
+func (r *hashBackfillReport) add(bucket string, bf database.BookFileCore, reason string) {
+	if r == nil || r.err != nil {
 		return
 	}
 	_, r.err = fmt.Fprintf(r.w, "%s\t%s\t%s\t%s\t%s\n", bucket, bf.ID, bf.BookID, hbTSVClean(bf.FilePath), hbTSVClean(reason))
@@ -196,18 +325,19 @@ func (r *hashBackfillReport) flush() error {
 	if r == nil {
 		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.err == nil {
 		r.err = r.w.Flush()
 	}
 	return r.err
 }
 
+// close flushes and closes the file. It is safe to call twice: the second call
+// does nothing and returns nil.
 func (r *hashBackfillReport) close() error {
-	if r == nil {
+	if r == nil || r.closed {
 		return nil
 	}
+	r.closed = true
 	ferr := r.flush()
 	cerr := r.f.Close()
 	return errors.Join(ferr, cerr)
@@ -217,7 +347,7 @@ var hbOpIDUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
 // hashBackfillReportName is the report's file name under {root}/.reports. It is
 // unique to the run: the operation ID when there is one (a resume of the same op
-// appends to it), otherwise a timestamp, so two runs that have no op ID never
+// continues it), otherwise a timestamp, so two runs that have no op ID never
 // truncate each other's report.
 func hashBackfillReportName(opID string, now time.Time) string {
 	id := hbOpIDUnsafe.ReplaceAllString(opID, "_")
@@ -246,12 +376,22 @@ func hashBackfillWorkers() int {
 // before a checkpoint is written. See the checkpoint invariant in Run.
 const hashBackfillChunkSize = 512
 
+// hbOutcome is what a worker decided for one row. It is only a decision: nothing
+// is counted, stored or reported until the whole chunk has been processed and
+// commitChunk runs, so a chunk that is cancelled half way changes nothing.
+type hbOutcome struct {
+	bucket string // "" = not counted: the row already had a hash, or an earlier part of this run reported it
+	reason string
+	hash   string // the computed hash, for a hashed row
+	bf     database.BookFileCore
+}
+
 // hashBackfillRun is one Run's state, shared by the worker pool.
 type hashBackfillRun struct {
 	store    maintenance.JobStore
 	reporter maintenance.ProgressReporter
 	report   *hashBackfillReport
-	counts   hashBackfillCounts
+	counts   hashBackfillCounts // only touched by the chunk-committing goroutine
 	dryRun   bool
 	root     string // cleaned library root; "" when none is configured
 	workers  int
@@ -270,27 +410,26 @@ func (r *hashBackfillRun) log(level, msg string, detail *string) {
 	r.mu.Unlock()
 }
 
-// outsideRoot reports whether path is outside the library root whose mount was
-// checked at the start of the run. A not-found there says nothing about that
-// mount (an import folder or an iTunes share may simply be unmounted), so it is
-// counted apart.
-func (r *hashBackfillRun) outsideRoot(path string) bool {
-	return r.root != "" && !pathutil.IsWithin(filepath.Clean(path), r.root)
+// unverifiable reports whether a not-found for path says nothing about the
+// library root's mount: the path is outside the root (an import folder or an
+// iTunes share may simply be unmounted), or no root is configured so no mount
+// was checked at all. Those are counted apart from not_found.
+func (r *hashBackfillRun) unverifiable(path string) bool {
+	return r.root == "" || !pathutil.IsWithin(filepath.Clean(path), r.root)
 }
 
-// processRow handles one row on a worker.
-func (r *hashBackfillRun) processRow(bf database.BookFileCore) {
+// processRow decides one row on a worker. It hashes the file but stores
+// nothing: see hbOutcome.
+func (r *hashBackfillRun) processRow(bf database.BookFileCore) hbOutcome {
 	r.mu.Lock()
 	r.reporter.Increment()
 	r.mu.Unlock()
 
-	if bf.FileHash != "" {
-		return
+	if bf.FileHash != "" || r.report.has(bf.ID) {
+		return hbOutcome{}
 	}
 	if strings.TrimSpace(bf.FilePath) == "" {
-		r.counts.skippedNoPath.Add(1)
-		r.report.row(hbBucketNoPath, bf, "row has no file path")
-		return
+		return hbOutcome{bucket: hbBucketNoPath, reason: "row has no file path", bf: bf}
 	}
 	// filehash.BookFileHash directly: scanner.ComputeFileHash is only a thin
 	// wrapper over it, and filehash is the single entry point for the digest.
@@ -298,46 +437,78 @@ func (r *hashBackfillRun) processRow(bf database.BookFileCore) {
 	if herr != nil {
 		msg := herr.Error()
 		if fileAbsent(herr) {
-			r.onNotFound(bf, msg)
-			return
+			return r.onNotFound(bf, msg)
 		}
-		r.counts.readErrors.Add(1)
-		r.report.row(hbBucketReadError, bf, msg)
 		slog.Warn("backfill-file-hashes hash failed", "file", bf.FilePath, "details", msg)
 		r.log("warn", "Hash computation failed for "+bf.FilePath, &msg)
-		return // one unreadable file must not abort the run
+		return hbOutcome{bucket: hbBucketReadError, reason: msg, bf: bf} // one unreadable file must not abort the run
 	}
-	if !r.dryRun {
-		if serr := r.store.SetBookFileHash(bf.ID, hash); serr != nil {
-			r.counts.writeErrors.Add(1)
-			msg := serr.Error()
-			r.report.row(hbBucketWriteError, bf, msg)
-			slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
-			r.log("error", "Failed to save file hash for "+bf.FilePath, &msg)
-			return
-		}
+	reason := "hash computed"
+	if r.dryRun {
+		reason = "hash computed, not stored (dry run)"
 	}
-	r.counts.hashed.Add(1)
+	return hbOutcome{bucket: hbBucketHashed, reason: reason, hash: hash, bf: bf}
 }
 
-// onNotFound counts a hash attempt that found the file absent. Nothing is
+// onNotFound classifies a hash attempt that found the file absent. Nothing is
 // written to the database for it: the row stays as it is, and the TSV report
 // lists it. Only the first hashBackfillNotFoundLogCap are logged.
-func (r *hashBackfillRun) onNotFound(bf database.BookFileCore, msg string) {
+func (r *hashBackfillRun) onNotFound(bf database.BookFileCore, msg string) hbOutcome {
 	bucket, reason := hbBucketNotFound, "file not found"
-	if r.outsideRoot(bf.FilePath) {
-		r.counts.unverifiedOutsideRoot.Add(1)
-		bucket, reason = hbBucketOutside, "file not found outside the library root, so its mount is unverified"
-	} else {
-		r.counts.notFound.Add(1)
+	if r.unverifiable(bf.FilePath) {
+		bucket = hbBucketOutside
+		if r.root == "" {
+			reason = "file not found, and no library root is configured, so its mount is unverified"
+		} else {
+			reason = "file not found outside the library root, so its mount is unverified"
+		}
 	}
 	if bf.Missing {
 		reason += " (row already flagged missing)"
 	}
-	r.report.row(bucket, bf, reason)
 	if r.notFoundLogged.Add(1) <= hashBackfillNotFoundLogCap {
 		r.log("warn", "File not found: "+bf.FilePath, &msg)
 	}
+	return hbOutcome{bucket: bucket, reason: reason, bf: bf}
+}
+
+// commitChunk makes a fully processed chunk real, in this order: store the
+// hashes (unless dry-run), count every outcome, write the chunk's rows to the
+// report and flush them. The caller saves the checkpoint right after, so a row
+// is on disk only for a chunk whose rows are complete, and a chunk cancelled
+// before this point has stored, counted and written nothing.
+//
+// The hash writes touch one distinct key per row, so they run on a bounded
+// pool; a failed write turns that row's outcome into a write error.
+func (r *hashBackfillRun) commitChunk(outs []hbOutcome) error {
+	if !r.dryRun {
+		var g errgroup.Group
+		g.SetLimit(r.workers)
+		for i := range outs {
+			if outs[i].bucket != hbBucketHashed {
+				continue
+			}
+			g.Go(func() error { // each goroutine owns outs[i]
+				o := &outs[i]
+				if serr := r.store.SetBookFileHash(o.bf.ID, o.hash); serr != nil {
+					msg := serr.Error()
+					o.bucket, o.reason = hbBucketWriteError, msg
+					slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
+					r.log("error", "Failed to save file hash for "+o.bf.FilePath, &msg)
+				}
+				return nil
+			})
+		}
+		_ = g.Wait() // the closures never return an error
+	}
+	for _, o := range outs {
+		if o.bucket == "" {
+			continue
+		}
+		r.counts.add(o.bucket)
+		r.report.add(o.bucket, o.bf, o.reason)
+	}
+	return r.report.flush()
 }
 
 // Job supports checkpoint-based resume after restart.
@@ -376,71 +547,85 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 
 	reportPath := ""
+	partialNote := ""
 	if root := strings.TrimSpace(config.AppConfig.RootDir); root != "" {
-		// An unmounted share leaves an empty directory, so every path under it
-		// answers not-found and the whole library would be reported as gone.
-		// Nothing is written for a not-found, so this is only a guard against a
-		// useless, misleading run; it is a coarse check (libroot.Mounted), not a
-		// proof of a healthy mount. It runs BEFORE the report is resolved because
-		// that creates {root}/.reports.
+		// Refusals, all before anything is hashed, a dry run included. The root
+		// must be readable and hold something other than dot-prefixed entries (an
+		// unmounted share leaves an empty directory, so every path under it
+		// answers not-found and the whole library would be reported as gone);
+		// that is a coarse check (libroot.Mounted), not proof of a healthy mount.
+		// It must be an absolute path, and {root}/.reports must be writable,
+		// because the report is this run's deliverable. The mount check runs
+		// BEFORE the report is resolved because that creates {root}/.reports.
 		if merr := libroot.Mounted(root); merr != nil {
 			return fmt.Errorf("backfill-file-hashes: refusing to run: %w", merr)
 		}
 		run.root = filepath.Clean(root)
 		path, rerr := libroot.ReportPath(root, "", hashBackfillReportName(opID, time.Now()))
 		if rerr != nil {
-			return fmt.Errorf("backfill-file-hashes: %w", rerr)
+			return fmt.Errorf("backfill-file-hashes: refusing to run: %w", rerr)
 		}
-		report, oerr := openHashBackfillReport(path, resumeIndex > 0)
+		report, seeded, prior, oerr := openHashBackfillReport(path, resumeIndex > 0)
 		if oerr != nil {
 			return fmt.Errorf("backfill-file-hashes: open report %s: %w", path, oerr)
 		}
 		run.report = report
+		run.counts = seeded
 		reportPath = path
 		run.log("info", "Per-row report: "+path, nil)
+		switch {
+		case resumeIndex > 0 && prior:
+			run.log("info", fmt.Sprintf("Resumed at row %d; the report already accounts for %d rows", resumeIndex, len(report.done)), nil)
+		case resumeIndex > 0:
+			partialNote = fmt.Sprintf("resumed at row %d with no earlier report to carry over: counts cover only the rows from there on", resumeIndex)
+		}
 		defer func() {
 			if cerr := report.close(); cerr != nil && retErr == nil {
 				retErr = fmt.Errorf("backfill-file-hashes: report %s: %w", path, cerr)
 			}
 		}()
+	} else if resumeIndex > 0 {
+		partialNote = fmt.Sprintf("resumed at row %d and no library root is configured, so there is no report to carry the earlier counts: counts cover only the rows from there on", resumeIndex)
 	}
 
-	// Process in ORDERED chunks. Each chunk runs through a bounded worker pool,
-	// and the checkpoint is written only AFTER the whole chunk completes. That
-	// preserves the invariant the old serial loop had for free -- every index
-	// below the checkpoint has been processed -- which a naive fan-out would
-	// break: a run killed mid-flight could otherwise checkpoint an index past
-	// rows still being hashed, and resume would skip them forever. Distinct
-	// rows are hashed concurrently; SetBookFileHash round-trips the full record
-	// (no field wipe) and writes one distinct key per row, so parallel writes
-	// across different rows do not race.
+	// Process in ORDERED chunks. Each chunk runs through a bounded worker pool
+	// that only DECIDES each row (hash, classify); nothing is stored, counted or
+	// reported until the whole chunk is done, then commitChunk does all three and
+	// the checkpoint is written right after. That preserves the invariant the old
+	// serial loop had for free -- every index below the checkpoint has been
+	// processed -- which a naive fan-out would break: a run killed mid-flight
+	// could otherwise checkpoint an index past rows still being hashed, and
+	// resume would skip them forever. It also means a run cancelled mid-chunk
+	// leaves no report row, no counter and no stored hash behind for that chunk,
+	// so resume redoes the whole chunk exactly once.
 	for start := resumeIndex; start < len(files); start += hashBackfillChunkSize {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		end := min(start+hashBackfillChunkSize, len(files))
+		outs := make([]hbOutcome, end-start)
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(run.workers)
 		for i := start; i < end; i++ {
-			bf := files[i]
 			g.Go(func() error {
 				if gctx.Err() != nil {
 					return gctx.Err()
 				}
-				run.processRow(bf)
+				outs[i-start] = run.processRow(files[i])
 				return nil
 			})
 		}
-		// Per-file failures are swallowed in processRow, so a non-nil result here
-		// means the context was cancelled. Return it: the checkpoint from the last
-		// fully-completed chunk stands, and resume restarts at that boundary.
+		// Per-file failures are folded into the outcomes, so a non-nil result here
+		// means the context was cancelled. Return it WITHOUT committing: the
+		// checkpoint from the last fully-completed chunk stands, and resume
+		// restarts at that boundary.
 		if gerr := g.Wait(); gerr != nil {
 			return gerr
 		}
 		// The report is the run's deliverable: stop, with the checkpoint unmoved,
 		// rather than hash on while rows are being dropped from it.
-		if rerr := run.report.flush(); rerr != nil {
+		if rerr := run.commitChunk(outs); rerr != nil {
 			return fmt.Errorf("backfill-file-hashes: report %s: %w", reportPath, rerr)
 		}
 
@@ -450,13 +635,21 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 	}
 
+	// Close the report BEFORE declaring the run done. Every chunk is already
+	// flushed, so only the file close itself can fail here; if it does, the run
+	// fails with its checkpoint kept and no "completed" summary is saved, so the
+	// status and the summary cannot disagree.
+	if cerr := run.report.close(); cerr != nil {
+		return fmt.Errorf("backfill-file-hashes: report %s: %w", reportPath, cerr)
+	}
+
 	// Clear any saved state on clean completion.
 	if opID != "" {
 		_ = operations.ClearState(store, opID)
 	}
 
 	// Save a lightweight operation summary for the UI and activity feed.
-	res := run.counts.summary(dryRun, reportPath)
+	res := run.counts.summary(dryRun, reportPath, partialNote)
 	run.log("info", res, nil)
 	now := time.Now()
 	opLog := &database.OperationSummaryLog{

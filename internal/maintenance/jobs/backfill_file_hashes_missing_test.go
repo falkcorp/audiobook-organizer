@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 3.1.0
+// version: 4.0.0
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package jobs_test
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,13 +119,14 @@ type hbStore struct {
 	mu        sync.Mutex
 	files     []database.BookFileCore
 	hashCalls map[string]string // id -> hash
+	writes    map[string]int    // id -> how many times SetBookFileHash stored a hash for it
 	failHash  func(id string) error
 	state     map[string][]byte
 	phases    []string
 }
 
 func newHBStore(t *testing.T, files ...database.BookFileCore) *hbStore {
-	return &hbStore{t: t, files: files, hashCalls: map[string]string{}, state: map[string][]byte{}}
+	return &hbStore{t: t, files: files, hashCalls: map[string]string{}, writes: map[string]int{}, state: map[string][]byte{}}
 }
 
 func (h *hbStore) store() *database.MockStore {
@@ -146,6 +148,12 @@ func (h *hbStore) store() *database.MockStore {
 				}
 			}
 			h.hashCalls[id] = hash
+			h.writes[id]++
+			for i := range h.files { // a later GetAllBookFilesCore sees the stored hash, as the real store does
+				if h.files[i].ID == id {
+					h.files[i].FileHash = hash
+				}
+			}
 			return nil
 		},
 		UpdateBookFileFunc: func(string, *database.BookFile) error { forbid("UpdateBookFile"); return nil },
@@ -297,6 +305,7 @@ func TestBackfillFileHashes_NotFoundIsCountedAndWritesNothing(t *testing.T) {
 
 	rows := hbReadReport(t, report)
 	assert.Equal(t, map[string][]string{
+		"hashed":                 {"f2"},
 		"not-found":              {"f1", "f3", "f7"},
 		"not-found-outside-root": {"f6"},
 		"read-error":             {"f8"},
@@ -327,8 +336,9 @@ func TestBackfillFileHashes_DryRunStoresNothing(t *testing.T) {
 
 	assert.Equal(t, hbCounts{"hashed": 1, "not_found": 1}, c)
 	assert.Empty(t, h.hashed(), "a dry run stores no hash")
-	assert.Contains(t, rep.logs[len(rep.logs)-1], "Dry run, nothing written")
-	assert.Equal(t, map[string][]string{"not-found": {"f1"}}, hbBuckets(hbReadReport(t, report)))
+	assert.Contains(t, rep.logs[len(rep.logs)-1], "Dry run, no hashes stored")
+	assert.NotContains(t, rep.logs[len(rep.logs)-1], "nothing written", "a dry run writes the report and a checkpoint")
+	assert.Equal(t, map[string][]string{"hashed": {"f2"}, "not-found": {"f1"}}, hbBuckets(hbReadReport(t, report)))
 }
 
 // Not-found paths are all counted and reported, but only the first 50 reach the
@@ -381,7 +391,7 @@ func TestBackfillFileHashes_WriteErrorIsCounted(t *testing.T) {
 
 	assert.Equal(t, hbCounts{"hashed": 1, "write_errors": 1}, c)
 	assert.Equal(t, []string{"f2"}, h.hashed())
-	assert.Equal(t, map[string][]string{"write-error": {"f1"}}, hbBuckets(hbReadReport(t, report)))
+	assert.Equal(t, map[string][]string{"hashed": {"f2"}, "write-error": {"f1"}}, hbBuckets(hbReadReport(t, report)))
 }
 
 // book_ids limits the run to those books' rows.
@@ -433,7 +443,8 @@ func TestBackfillFileHashes_RefusesAnUnmountedRoot(t *testing.T) {
 }
 
 // With no library root configured there is nothing to check and nowhere to put
-// the report: the run hashes as it always did, without one.
+// the report: the run hashes as it always did, without one. No mount was
+// checked, so a not-found is unverified, not a not_found.
 func TestBackfillFileHashes_NoRootConfiguredRunsWithoutAReport(t *testing.T) {
 	hbConfigRoot(t, "")
 	dir := t.TempDir()
@@ -446,7 +457,7 @@ func TestBackfillFileHashes_NoRootConfiguredRunsWithoutAReport(t *testing.T) {
 
 	_, c, report := runHB(t, h.store(), hbRun{})
 
-	assert.Equal(t, hbCounts{"hashed": 1, "not_found": 1}, c)
+	assert.Equal(t, hbCounts{"hashed": 1, "unverified_outside_root": 1}, c)
 	assert.Empty(t, report)
 	assert.Equal(t, []string{"f1"}, h.hashed())
 }
@@ -489,7 +500,7 @@ func TestBackfillFileHashes_ResumeAppendsToTheReport(t *testing.T) {
 
 	_, c, report := runHB(t, st, hbRun{opID: opID})
 
-	assert.Equal(t, hbCounts{"not_found": 1}, c, "only the second row is processed")
+	assert.Equal(t, hbCounts{"not_found": 2}, c, "the first row comes from the report, the second is processed now")
 	assert.Equal(t, reportFile, report)
 	assert.Equal(t, map[string][]string{"not-found": {"f1", "f2"}}, hbBuckets(hbReadReport(t, report)), "the first part's row is kept")
 	assert.Contains(t, h.phases, "scanning@2")
@@ -521,4 +532,269 @@ func TestBackfillFileHashes_ReportWriteFailureStopsTheRun(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "report")
 	assert.Less(t, len(h.phases), 3, "the run stops instead of checkpointing every chunk")
+}
+
+// cancelReporter cancels the run's context when the Nth row is reached. The job
+// serialises reporter calls, so the plain counter is safe.
+type cancelReporter struct {
+	noopReporter
+	n, at  int
+	cancel context.CancelFunc
+}
+
+func (r *cancelReporter) Increment() {
+	r.n++
+	if r.n == r.at {
+		r.cancel()
+	}
+}
+
+// hbMixedLibrary is n rows: every tenth has a real file (hashed), one row in
+// seven has an empty path, the rest are not found. IDs are f0000, f0001, ...
+func hbMixedLibrary(t *testing.T, root string, n int) []database.BookFileCore {
+	t.Helper()
+	files := make([]database.BookFileCore, n)
+	for i := range files {
+		f := database.BookFileCore{ID: fmt.Sprintf("f%04d", i), BookID: fmt.Sprintf("b%d", i%9)}
+		switch {
+		case i%10 == 0:
+			f.FilePath = hbWrite(t, root, fmt.Sprintf("Knightfall %04d.m4b", i), fmt.Sprintf("knightfall bytes %d", i))
+		case i%7 == 0:
+			f.FilePath = ""
+		default:
+			f.FilePath = hbPath(root, fmt.Sprintf("Arkham %04d.m4b", i))
+		}
+		files[i] = f
+	}
+	return files
+}
+
+// hbDistinctIDs fails on a repeated file ID and returns the report's IDs.
+func hbDistinctIDs(t *testing.T, rows []hbReportRow) map[string]bool {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, r := range rows {
+		require.Falsef(t, seen[r.fileID], "file %s is in the report twice", r.fileID)
+		seen[r.fileID] = true
+	}
+	return seen
+}
+
+// A run cancelled in the middle of a chunk (not at a checkpoint boundary) and
+// then resumed ends with exactly the report and totals an uninterrupted run
+// has: no row twice, none lost, every outcome counted once, each hash stored
+// once.
+func TestBackfillFileHashes_CancelMidChunkThenResumeIsExact(t *testing.T) {
+	const total = 1300 // chunks: [0,512) [512,1024) [1024,1300)
+	for _, tc := range []struct {
+		name     string
+		dryRun   bool
+		cancelAt int // the Nth row reached cancels; rows 512 and 1024 start new chunks
+	}{
+		{"apply, cancelled in chunk 2", false, 700},
+		{"dry run, cancelled in chunk 2", true, 700},
+		{"apply, cancelled in chunk 1, before any checkpoint", false, 100},
+		{"apply, cancelled one row into chunk 3", false, 1025},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := hbLibrary(t)
+			h := newHBStore(t, hbMixedLibrary(t, root, total)...)
+			const opID = "01CANCELMIDCHUNK"
+
+			// What an uninterrupted run reports, from the rows' shape.
+			want := hbCounts{}
+			for i := 0; i < total; i++ {
+				switch {
+				case i%10 == 0:
+					want["hashed"]++
+				case i%7 == 0:
+					want["skipped_no_path"]++
+				default:
+					want["not_found"]++
+				}
+			}
+
+			ctx, cancel := context.WithCancel(maintenance.WithOperationID(context.Background(), opID))
+			defer cancel()
+			j, err := maintenance.Get("backfill-file-hashes")
+			require.NoError(t, err)
+			first := &cancelReporter{at: tc.cancelAt, cancel: cancel}
+			err = j.Run(ctx, h.store(), first, tc.dryRun)
+			require.ErrorIs(t, err, context.Canceled)
+
+			// Whatever reached disk before the resume is whole chunks only.
+			reportFile := filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")
+			onDisk := hbReadReport(t, reportFile)
+			assert.Zero(t, len(onDisk)%jobs.HashBackfillChunkSize, "rows on disk are whole chunks, never part of one: %d", len(onDisk))
+			hbDistinctIDs(t, onDisk)
+
+			rep, c, report := runHB(t, h.store(), hbRun{opID: opID, dryRun: tc.dryRun})
+
+			assert.Equal(t, reportFile, report)
+			assert.Equal(t, want, c, "the summary counts the whole run, not just the resumed part")
+			assert.Equal(t, total, c.outcomes(), "every row is accounted for")
+			rows := hbReadReport(t, report)
+			ids := hbDistinctIDs(t, rows)
+			assert.Len(t, ids, len(rows))
+			assert.Len(t, rows, c.outcomes(), "one report row per counted outcome")
+			assert.NotContains(t, rep.logs[len(rep.logs)-1], "counts cover only")
+			if tc.dryRun {
+				assert.Empty(t, h.hashed())
+			} else {
+				assert.Len(t, h.hashed(), want["hashed"])
+				for id, n := range h.writes {
+					assert.Equal(t, 1, n, "hash for %s stored %d times", id, n)
+				}
+			}
+		})
+	}
+}
+
+// A hard kill between a chunk's flush and its checkpoint leaves that chunk's
+// rows in the report with the checkpoint one chunk behind. The resumed run must
+// skip the rows already listed (no duplicate, no double count) and still count
+// them.
+func TestBackfillFileHashes_ResumeSkipsRowsAlreadyInTheReport(t *testing.T) {
+	const total = 1300
+	root := hbLibrary(t)
+	h := newHBStore(t, hbMixedLibrary(t, root, total)...)
+	const opID = "01KILLEDAFTERFLUSH"
+	st := h.store()
+	// The checkpoint after chunk 2 is lost, as if the process died right after
+	// the flush: only the one after chunk 1 survives.
+	realSave := st.SaveOperationStateFunc
+	st.SaveOperationStateFunc = func(id string, data []byte) error {
+		var state operations.OperationState
+		if err := json.Unmarshal(data, &state); err == nil && state.PhaseIndex == 1024 {
+			return nil
+		}
+		return realSave(id, data)
+	}
+	ctx, cancel := context.WithCancel(maintenance.WithOperationID(context.Background(), opID))
+	defer cancel()
+	j, err := maintenance.Get("backfill-file-hashes")
+	require.NoError(t, err)
+	err = j.Run(ctx, st, &cancelReporter{at: 1100, cancel: cancel}, false) // dies in chunk 3
+	require.ErrorIs(t, err, context.Canceled)
+	reportFile := filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")
+	require.Greater(t, len(hbReadReport(t, reportFile)), 512, "chunk 2's rows are on disk although its checkpoint is not")
+	require.Contains(t, h.phases, "scanning@512")
+	require.NotContains(t, h.phases, "scanning@1024")
+
+	_, c, report := runHB(t, h.store(), hbRun{opID: opID})
+
+	want := hbCounts{}
+	for i := 0; i < total; i++ {
+		switch {
+		case i%10 == 0:
+			want["hashed"]++
+		case i%7 == 0:
+			want["skipped_no_path"]++
+		default:
+			want["not_found"]++
+		}
+	}
+	assert.Equal(t, want, c)
+	rows := hbReadReport(t, report)
+	assert.Len(t, hbDistinctIDs(t, rows), total)
+	assert.Len(t, rows, total)
+	for id, n := range h.writes {
+		assert.Equal(t, 1, n, "hash for %s stored %d times", id, n)
+	}
+}
+
+// A hard kill can cut the report's last line in half. The resumed run drops the
+// fragment, redoes that row, and ends with a report every line of which parses.
+func TestBackfillFileHashes_ResumeDropsAHalfWrittenLastLine(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBStore(t,
+		database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbPath(root, "Year One.m4b")},
+		database.BookFileCore{ID: "f2", BookID: "b1", FilePath: hbPath(root, "Hush.m4b")},
+		database.BookFileCore{ID: "f3", BookID: "b1", FilePath: hbPath(root, "The Court of Owls.m4b")},
+	)
+	const opID = "01CUTMIDLINE"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".reports"), 0o755))
+	reportFile := filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")
+	require.NoError(t, os.WriteFile(reportFile, []byte("bucket\tfile_id\tbook_id\tpath\treason\n"+
+		"not-found\tf1\tb1\t"+hbPath(root, "Year One.m4b")+"\tfile not found\n"+
+		"not-found\tf2\tb1\t/lib/Gotham/"+strings.Repeat("Hush ", 200)), 0o664)) // a fragment longer than the rows written after it
+	data, err := json.Marshal(operations.OperationState{OperationID: opID, Phase: "scanning", PhaseIndex: 1, PhaseTotal: 3, UpdatedAt: time.Now()})
+	require.NoError(t, err)
+	h.state[opID] = data
+
+	_, c, report := runHB(t, h.store(), hbRun{opID: opID})
+
+	assert.Equal(t, hbCounts{"not_found": 3}, c)
+	assert.Equal(t, map[string][]string{"not-found": {"f1", "f2", "f3"}}, hbBuckets(hbReadReport(t, report)))
+}
+
+// A resumed run whose report has gone says so in its summary instead of
+// presenting a segment's counts as the run's.
+func TestBackfillFileHashes_ResumeWithoutAReportSaysTheCountsArePartial(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBStore(t,
+		database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbPath(root, "Year One.m4b")},
+		database.BookFileCore{ID: "f2", BookID: "b1", FilePath: hbPath(root, "Hush.m4b")},
+	)
+	const opID = "01REPORTGONE"
+	data, err := json.Marshal(operations.OperationState{OperationID: opID, Phase: "scanning", PhaseIndex: 1, PhaseTotal: 2, UpdatedAt: time.Now()})
+	require.NoError(t, err)
+	h.state[opID] = data
+
+	rep, c, _ := runHB(t, h.store(), hbRun{opID: opID})
+
+	assert.Equal(t, hbCounts{"not_found": 1}, c)
+	assert.Contains(t, rep.logs[len(rep.logs)-1], "counts cover only the rows from there on")
+}
+
+// A report whose lines cannot be read back is refused rather than guessed at.
+func TestBackfillFileHashes_ResumeRefusesACorruptReport(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBStore(t, database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbPath(root, "Year One.m4b")},
+		database.BookFileCore{ID: "f2", BookID: "b1", FilePath: hbPath(root, "Hush.m4b")})
+	const opID = "01CORRUPT"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".reports"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv"),
+		[]byte("bucket\tfile_id\tbook_id\tpath\treason\nnot-found\tonly-three\tfields\n"), 0o664))
+	data, err := json.Marshal(operations.OperationState{OperationID: opID, Phase: "scanning", PhaseIndex: 1, PhaseTotal: 2, UpdatedAt: time.Now()})
+	require.NoError(t, err)
+	h.state[opID] = data
+
+	_, err = hbRunJob(t, h.store(), hbRun{opID: opID})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "line 2")
+}
+
+// Every refusal the op makes before hashing, a dry run included, names its
+// cause: a root that is unreadable, not absolute, or whose .reports directory
+// cannot be written (here a file squats on the name). The fourth, a root with
+// only dot entries, is TestBackfillFileHashes_RefusesAnUnmountedRoot.
+func TestBackfillFileHashes_RefusalsNameTheirCause(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) string // returns the RootDir
+		want  string
+	}{
+		{"unreadable root", func(t *testing.T) string { return filepath.Join(t.TempDir(), "no-such-share") }, "unreadable"},
+		{"relative root", func(t *testing.T) string { return "." }, "not absolute"}, // "." exists and holds the package's files
+		{"reports directory not writable", func(t *testing.T) string {
+			root := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "Gotham"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".reports"), []byte("a file, not a directory"), 0o644))
+			return root
+		}, "not writable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hbConfigRoot(t, tc.setup(t))
+			h := newHBStore(t, database.BookFileCore{ID: "f1", BookID: "b1", FilePath: "/lib/Gotham/Year One.m4b"})
+			for _, dry := range []bool{false, true} {
+				_, err := hbRunJob(t, h.store(), hbRun{dryRun: dry})
+				require.Error(t, err, "dry=%v", dry)
+				assert.Contains(t, err.Error(), "refusing to run")
+				assert.Contains(t, err.Error(), tc.want)
+			}
+			assert.Empty(t, h.hashed())
+		})
+	}
 }
