@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.7.5 -->
+<!-- version: 1.7.6 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -198,14 +198,47 @@ next to a tag term (`the tag:noir`, `- tag:noir`, `(tag:noir OR)`) is dropped, a
 next to any other term, and the tag filter applies to the rest. `tags:` is the index field
 itself and still matches by word.
 
-The Library search box sends a query with any boolean structure whole as `search=`, with no
+The Library search box sends a query with boolean structure whole as `search=`, with no
 filters or `tags[]` of its own for it, so the server judges the whole query and the page
-shows its message: an `OR`, `AND`, `||` or `&&`, a parenthesis or `|` outside quotes (other
-than a per-user field's own `(a|b)` list), a `-` or `NOT` before a `tag:` term or a group, or a
-`tag:` value that is not one whole name. `Batman -tag:"to-read"`, `-tag:noir`,
-`tag:noir OR tag:gotham` and `tag:noir*` therefore answer 400 with the tag message instead of
-quietly dropping the negation. A negated filter-only field (`-title:x`, `NOT narrator:y`,
-`-metadata:applied`) stays a filter, because the index does not hold those fields.
+shows its message. Structure is decided from the terms the box cuts the text into, never
+from the raw characters: a bare `OR`, `AND`, `NOT`, `||`, `&&` or `|`, the opening of a group
+(`(a`, `-(a`), a `-` or `NOT` before a `tag:` term, a `tag:` value that is not one whole name
+(`*`, `~` or `^` in it, a comparison, a range), or a boost after a tag (`tag:noir ^2`, with or
+without a space). A field's VALUE is never structure: the parentheses, pipes and spaces
+inside a `/regex/` (`title:/^(the|a) /`, `title:/hush|knight/`), a quoted value
+(`title:"Year (One)"`) or a plain value (`title:Batman(1989)`) are text, and such a term
+stays a filter. `Batman -tag:"to-read"`, `-tag:noir`, `tag:noir OR tag:gotham` and
+`tag:noir*` therefore answer 400 with the tag message instead of quietly dropping the
+negation.
+
+A negated field other than `tag` (`-title:x`, `NOT narrator:y`, `-metadata:applied`) stays a
+filter. The reason is the matching, not whether the index holds the field (`title`,
+`narrator` and `library_state` are indexed; `metadata`, `ident`, `codec` and about twenty
+more are not): a filter matches by substring, glob or regex, the index by whole words. Sent
+whole, `-title:bat` would stop excluding "Batman", a stop-word value would exclude nothing
+or everything, and a field only the filter layer knows would be refused in `search=`.
+
+A `/regex/` value is refused in `search=` with a 400 (`invalid search: a /regex/ value
+cannot be used in the search parameter ...`), also in a dynamic collection or smart
+playlist query, whether or not the text parses. The search index has no regular
+expressions: `title:/hush|knight/` was read as the words "hush" and "knight" and found one
+book of two, and `title:/^(the|a) /` (which the parser cannot read) fell to a substring
+match that found nothing, both without a message. A regex works as a field filter on its
+own, which is how the Library sends it; to combine it with an `OR` or a group, use plain
+words in the group and keep the regex term outside it. A quoted value that starts with a
+slash (`title:"/x/"`) is plain text.
+
+How the search reads the viewer's listening state for a `read_status`, `progress_pct` or
+`last_played` term: the candidate ids from the index are judged first and only the page that
+survives is loaded. With 256 candidates or fewer each id is one point read of the viewer's
+state row; with more, the viewer's rows are listed in one scan (measured: 1.6 ms for 1,000
+rows, 30 ms for 20,000, against a few microseconds per point read, so a narrow search does
+not pay for the scan). A row that cannot be read or decoded is judged as an unstarted book
+and logged with the book id: the search does not fail for it. The collection evaluator is
+the opposite on purpose and fails closed (the collection reads as `members_unavailable`),
+because a collection is a saved definition other screens and the Audiobookshelf endpoints
+show as the truth about its members, while a search is a filter the viewer reads at once
+and can change. A request that has gone away stops reading.
 
 Text the parser cannot read (an unclosed group, a trailing `OR`) that writes a per-user
 term is refused with `could not be read`, not matched as plain text; unreadable text with
