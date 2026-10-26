@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-25-bookfile-write-race-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 3e8f1a5c-6b72-4d09-9c4e-d2a7f0b1c853 -->
 <!-- last-edited: 2026-10-26 -->
 
 # Stopping two library jobs from silently undoing each other's changes
 
-- Pull request: to be filled in once opened (see the branch `fix/bookfile-rmw-compare-and-swap`)
+- Pull request: [#4169](https://github.com/falkcorp/audiobook-organizer/pull/4169) (merge commit to be filled in when it merges)
 
 ## Executive Summary
 
