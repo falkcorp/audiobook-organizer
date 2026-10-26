@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query_search_whole_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8b4e1f27-3a96-4c05-b7d2-6e0a9c5f1d38
 // last-edited: 2026-10-26
 
@@ -687,10 +687,14 @@ func TestGetAudiobooks_ARegexValueInSearchIsRefusedNotAnsweredAsWords(t *testing
 
 func TestSearchPerUserProblem_RefusesARegexValueBeforeTheSubstringFallback(t *testing.T) {
 	for q, refused := range map[string]bool{
-		"title:/^(the|a) /":                   true,
-		"title:/hush|knight/":                 true,
-		"read_status:finished title:/a(b)/":   true,
-		"metadata:/(audible|google)/":         true,
+		"title:/^(the|a) /":                 true,
+		"title:/hush|knight/":               true,
+		"read_status:finished title:/a(b)/": true,
+		"metadata:/(audible|google)/":       true,
+		// N8: tag is not an index field and a capitalised name is not either
+		"tag:/(noir|gotham)/":                 true,
+		"Title:/^(the|a) /":                   true,
+		"TAGS:/(a|b)/":                        true,
 		"The (Long Halloween":                 false,
 		`title:"/^(the|a) /"`:                 false,
 		"title:Batman(1989)":                  false,

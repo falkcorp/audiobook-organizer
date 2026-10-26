@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.9
+// version: 1.38.10
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-26
 
@@ -1468,13 +1468,14 @@ func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID stri
 					// Too many ids to read one at a time on every request (see the
 					// doc comment): answer the error, and say why.
 					slog.Error("search: bulk per-user state read failed and the candidate list is too long to read one row per book",
-						"candidates", len(ids), "limit", postFilterWindow(), "err", err)
+						"user_id", userID, "candidates", len(ids), "limit", postFilterWindow(),
+						"err", err) // err names the book when one row was undecodable
 					return nil, fmt.Errorf("read the viewer's book states: %w", err)
 				}
 				// A cancelled request fails the scan too; the point-read loop below
 				// returns the cancellation before it reads anything.
 				slog.Warn("search: bulk per-user state read failed; reading one row per book",
-					"err", err)
+					"user_id", userID, "err", err)
 			} else {
 				bulk = true
 			}
@@ -1505,9 +1506,10 @@ func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID stri
 }
 
 // searchTextFieldIsKnown says whether name is a field a search term can name: one the
-// index holds or one the library filter layer knows.
+// index holds, one the library filter layer knows, or one a /regex/ value is refused
+// on (search.IsRegexField: tag, and any capitalisation).
 func searchTextFieldIsKnown(name string) bool {
-	return search.IsIndexedField(name) || FieldIsKnown(name)
+	return search.IsRegexField(name) || FieldIsKnown(name)
 }
 
 // SearchPerUserProblem reports why a search string's per-user terms (read_status,

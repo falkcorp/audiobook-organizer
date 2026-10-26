@@ -1,5 +1,5 @@
 // file: internal/search/regex_terms_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 148c6695-1e57-4f30-82d5-738fbd5a4a76
 // last-edited: 2026-10-26
 
@@ -29,6 +29,16 @@ func TestCheckRegexTerms_RefusesAnUnquotedRegexValue(t *testing.T) {
 		"read_status:finished title:/hush|knight/",
 		"title:(/hush/|knight)",
 		"title:/unterminated",
+		// N8: tag: is an exact tag filter, not an index field, and the parser keeps a
+		// field name's capitals; neither may let a regex through to match nothing
+		"tag:/noir/",
+		"tags:/noir/",
+		"TAGS:/x/",
+		"Tag:/noir/",
+		"Title:/x/",
+		"-tag:/noir/",
+		"title:Hush OR tag:/noir/",
+		"tag:(/noir/|gotham)",
 	}
 	for _, q := range refused {
 		t.Run(q, func(t *testing.T) {
@@ -94,6 +104,12 @@ func TestCheckRegexTerms_AFieldTheIndexDoesNotHoldIsNotARegexTerm(t *testing.T) 
 			assert.NoError(t, CheckQueryTerms(ast, time.Now()))
 		})
 	}
+	// the capitals of a URL scheme or a title word make no difference either way
+	for _, q := range []string{"HTTPS://www.audible.com/pd/B0123", "Batman: /Year One/", "File:/lib/Gotham/Hush"} {
+		ast, err := ParseQuery(q)
+		require.NoError(t, err, q)
+		assert.NoError(t, CheckRegexTerms(ast), q)
+	}
 	// the same slash on a field the index holds is still refused
 	ast, err := ParseQuery("title:/Year One/ OR https://example.invalid/")
 	require.NoError(t, err)
@@ -106,7 +122,7 @@ func TestUnparsableRegexQuery(t *testing.T) {
 		case "title", "description", "metadata", "read_status":
 			return true
 		}
-		return false
+		return IsRegexField(f)
 	}
 	parseErr := fmt.Errorf("does not parse")
 	for _, tc := range []struct {
@@ -119,6 +135,8 @@ func TestUnparsableRegexQuery(t *testing.T) {
 		{"metadata:/(audible|google)/", true},
 		{"read_status:finished title:/^(the|a) /", true},
 		{"(title:/^(a|b)/", true},
+		{"tag:/(a|b)/", true},
+		{"Title:/^(a|b)/", true},
 		{"NOT title:/^(a|b)/", true},
 		// not regex terms: the substring fallback keeps these
 		{"The (Long Halloween", false},

@@ -1,5 +1,5 @@
 // file: web/src/hooks/libraryListOptions.test.ts
-// version: 1.0.5
+// version: 1.0.6
 // guid: 8b3e6d12-5f47-4a90-9c1d-2e7a0b4f6c35
 // last-edited: 2026-10-26
 
@@ -61,7 +61,7 @@ describe('the Library list request for a query the server must read whole', () =
 // the list is narrowed by, a click does not append a second term, and Cancel takes
 // the term out of the box and leaves text the server can read.
 describe('the tags a whole-sent query narrows by', () => {
-  const typed = 'read_status:finished AND tag:"noir"';
+  const typed = '(read_status:finished tag:"noir")';
 
   it('sends a typed tag term as tags[] (the exact match) and keeps it in search=', () => {
     const parsed = parseSearch(typed);
@@ -241,6 +241,10 @@ describe('a query with boolean structure reaches the server whole', () => {
     ['title:/^the/ NOT robin', 'title', '/^the/', 'NOT robin'],
     ['codec:aac NOT dramatized', 'codec', 'aac', 'NOT dramatized'],
     ['ident:missing NOT batman', 'ident', 'missing', 'NOT batman'],
+    // B2: AND and && are the split's own meaning
+    ['title:bat AND year', 'title', 'bat', 'AND year'],
+    ['title:/^bat/ AND year', 'title', '/^bat/', 'AND year'],
+    ['codec:aac AND year', 'codec', 'aac', 'AND year'],
   ])(
     '%s splits: the %s filter stays a filter and the rest is search=',
     (typed, field, value, rest) => {

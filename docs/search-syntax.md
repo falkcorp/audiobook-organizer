@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.7.7 -->
+<!-- version: 1.7.8 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -202,11 +202,13 @@ The Library search box sends a query with boolean structure whole as `search=`, 
 filters or `tags[]` of its own for it, so the server judges the whole query and the page
 shows its message. Structure is decided from the terms the box cuts the text into, never
 from the raw characters, and only where it binds a term the box pulls out of the text: an
-`OR`, `AND`, `||`, `&&` or `|` next to a field term (`title:bat OR robin`), a field term inside
+`OR`, `||` or `|` next to a field term (`title:bat OR robin`), a field term inside
 a group (`(robin title:bat)`), a `-` or `NOT` before a `tag:` term, a `tag:` value that is not
 one whole name (`*`, `~` or `^` in it, a comparison, a range), or a boost after a tag
 (`tag:noir ^2`, with or without a space). Structure among free words alone is not sent whole:
-`title:bat NOT robin`, `title:bat Batman (1987)` and `title:bat robin OR joker` keep `title:bat`
+`title:bat NOT robin`, `title:bat Batman (1987)`, `title:bat robin OR joker` and
+`title:bat AND year` (`AND` and `&&` are what the split already does: every filter is ANDed with
+the free text) keep `title:bat`
 as a filter and send the rest as `search=`, which the server's own parser reads, as it always
 has. Sent whole, the filter would be matched as whole words in the index and the list would
 change. A field's VALUE is never structure: the parentheses, pipes and spaces
@@ -226,7 +228,8 @@ or everything, and a field only the filter layer knows would be refused in `sear
 A `/regex/` value is refused in `search=` with a 400 (`invalid search: a /regex/ value
 cannot be used in the search parameter ...`), also in a dynamic collection or smart
 playlist query, whether or not the text parses (an unparsable one gets the same message when
-it is saved and when a stored one is read). Only a field the index holds is read as a regex
+it is saved and when a stored one is read). Only a field the index holds, or `tag`, in any
+capitals (`Title:/x/`, `tag:/noir/`), is read as a regex
 term: a pasted URL (`https://...`), a drive path (`c:/lib/Gotham/x`) or a title with a colon
 (`Batman: /Year One/`) is searched as text, as before. The search index has no regular
 expressions: `title:/hush|knight/` was read as the words "hush" and "knight" and found one

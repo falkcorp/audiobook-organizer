@@ -1,5 +1,5 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.7.4
+// version: 1.7.5
 // last-edited: 2026-10-26
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
@@ -28,7 +28,7 @@ export interface ParsedSearch {
   fieldFilters: FieldFilter[];
   /**
    * Set when the query has boolean structure the field/value split below cannot
-   * carry (see hasBooleanStructure): an OR, AND, `||`, `&&` or `|` next to a field
+   * carry (see hasBooleanStructure): an OR, `||` or `|` next to a field
    * term, a field term inside a parenthesised group, an alternation, a `tag:` term
    * under NOT or `-`, a `tag:` term that is not one whole tag name. The Library then sends this raw text as `search=` and no
    * field filters for it, so the server's own parser reads it and answers it, or
@@ -118,14 +118,16 @@ function fieldTermIsStructure(
 }
 
 /**
- * A free word that is a binary operator the server's grammar reads: OR, AND, `||`,
- * `&&`, or a lone `|`. A bare NOT is not one: the tokenizer already takes `NOT field:x`
- * as a negated term, and a NOT that touches only free words changes nothing the split
- * does. A `|` inside or on the edge of a longer word is text in free text; it is
- * an alternation only inside a field value.
+ * A free word that is an operator the split cannot carry: OR, `||`, or a lone `|`.
+ * AND and `&&` are not: the split already ANDs every field filter with the free text,
+ * so `title:bat AND year` means exactly what it says, and sent whole it would turn the
+ * filter into a whole-word match in the index. A bare NOT is not one either: the
+ * tokenizer already takes `NOT field:x` as a negated term, and a NOT that touches only
+ * free words changes nothing the split does. A `|` inside or on the edge of a longer
+ * word is text in free text; it is an alternation only inside a field value.
  */
 function freeWordIsOperator(word: string): boolean {
-  return word === 'OR' || word === 'AND' || word === '&&' || word === '||' || word === '|';
+  return word === 'OR' || word === '||' || word === '|';
 }
 
 /**
@@ -152,7 +154,7 @@ function wordGroupDelta(word: string): { opens: number; closes: number } {
  * parser reads the operators in it, exactly as it always has. What the split cannot
  * carry is an operator or a group that binds a term it pulls out of the text, because
  * the field filters then drop out of `filters=` and are matched as whole words in the
- * index instead. So an OR, AND, `||`, `&&` or `|` counts only when it sits next to an
+ * index instead. So an OR, `||` or `|` counts only when it sits next to an
  * extracted field term (`title:x OR robin`), and an extracted term counts only while a
  * group opened by a free word is still open (`(robin title:x)`).
  *

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 2.1.5
+// version: 2.1.6
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-26
 
@@ -679,7 +679,7 @@ func validateCollectionQuery(query string) error {
 	if err != nil {
 		// A /regex/ holds parentheses and pipes the grammar cannot read
 		// (title:/^(the|a) /): say what is wrong, not only that it did not parse.
-		if rerr := search.UnparsableRegexQuery(query, err, search.IsIndexedField); rerr != nil {
+		if rerr := search.UnparsableRegexQuery(query, err, search.IsRegexField); rerr != nil {
 			return rerr
 		}
 		return fmt.Errorf("parse query: %w", err)
