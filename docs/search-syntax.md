@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.7.3 -->
+<!-- version: 1.7.4 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -182,10 +182,16 @@ status that is not one of the four, a pattern) is refused the same way with
 `invalid filter value: ...`. Supporting `OR` and `NOT` over per-user terms properly, in
 the library search and in the collection evaluator, is tracked in `todo.d`.
 
-`tag:` is accepted as the name of the index's `tags` field (`tags:` works too), so a
-`tag:noir` term in a query the web box sends whole is answered with the rest of it. It
-matches by word and ignores case: `tag:dark` also finds a book tagged "dark knight". The
-`tags[]` parameter the box sends for an ordinary query is exact.
+`tag:` is an exact tag filter: it finds the books that carry that whole tag, ignoring
+case, exactly as the tag chips and the `tags[]` parameter do (`tag:"to-read"` does not find
+a book tagged only "read"; `tag:knight` does not find "dark-knight"). The search index holds
+a tag as words, so the filter is applied outside it, ANDed with the rest of the query. It
+therefore works only where it applies to the whole query: at the top level, or in a group
+that is only ANDed (`read_status:finished AND tag:noir`, `(read_status:finished tag:noir)`),
+and several `tag:` terms are all required. Inside an `OR`, inside an alternation
+(`tag:(noir|gotham)`), under `NOT` or `-`, or with `*`, `~` or `^` it is refused with a
+message; pick the tag chip, or write it at the top level. Quote a tag that contains one of
+those characters. `tags:` is the index field itself and still matches by word.
 
 Text the parser cannot read (an unclosed group, a trailing `OR`) that writes a per-user
 term is refused with `could not be read`, not matched as plain text; unreadable text with

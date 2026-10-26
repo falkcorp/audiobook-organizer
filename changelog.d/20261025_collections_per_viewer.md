@@ -114,12 +114,24 @@ it for). Text the query parser rejects that writes a per-user term (`read_status
 answers 400 `invalid search: this search could not be read (...)` rather than a substring
 match that showed no rows.
 
-`tag:` now means the index's `tags` field in `search=`. The library search box sends a
-per-user query with a group, `AND` or `OR` whole, `tag:` terms included, and `tag:noir` used
-to name a field the index does not hold, so that list showed no books and no message. It
-matches by word and case-folded (`tag:dark` also finds "dark knight"; the `tags[]`
-parameter stays exact). The tag chips and Cancel read the typed `tag:` terms from the box
-in that case, so a chip shows on and a click does not add a second term.
+`tag:` in `search=` is now an exact tag filter. The library search box sends a per-user
+query with a group, `AND` or `OR` whole, `tag:` terms included, and `tag:noir` used to name
+a field the index does not hold, so that list showed no books and no message. The index
+holds a tag as words, so matching it there would have found "hard sci-fi" for `tag:"sci-fi"`
+and every "read" book for `tag:"to-read"` (and, negated, the whole library for a tag that
+is a stop word); instead the `tag:` terms are pulled out of the query and applied as the
+same whole-tag, case-folded match the `tags[]` parameter and the chips use, ANDed with the
+rest. That works where the term is a conjunct of the whole query (the top level, or a group
+that is only ANDed), in the library list, its facets, a select-all, a background
+operation's saved search and a dynamic collection's or smart playlist's stored query.
+A `tag:` term inside an `OR`, an alternation, under `NOT` or `-`, or as a prefix, wildcard
+or fuzzy term answers 400 (`tag: cannot be used inside an OR group ...`) and is refused on
+create and update, and a stored query of that shape reads as `members_unavailable`. The
+web box sends the `tag:` terms that narrow the whole query as `tags[]` as well, so a chip
+stays exact; the chips and Cancel read only those terms (a tag inside `-( )`, `NOT ( )` or
+an `OR` is not shown as on), a tag is compared case-insensitively, removing a chip no longer
+leaves a dangling `AND`, and adding one to a query with a top-level `OR` wraps the query in
+brackets first.
 
 A stored smart playlist whose query does not parse, is empty or has an unusable `sort_json`
 reads as `members_unavailable` like the other refused definitions (no stacked `query:`

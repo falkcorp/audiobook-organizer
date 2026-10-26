@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.20.3 -->
+<!-- version: 1.20.4 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -263,15 +263,31 @@ same shapes and values are refused on both ways a query reaches it:
   a group, so the web box sends a query that names a per-user field (outside quotes) and has
   an `OR`, `AND`, `||`, `&&` or a parenthesis other than that field's own `(a|b)` list whole as `search=`,
   with no filters of its own for it, and shows the server's message in the library page. The rest
-  of such a query is then judged by the rules of `search=`: a `tag:` or `duration:` term is
-  held by the index and is answered with the query (`tag:` is the index's `tags` field, matched
-  by word and case-folded, so `tag:dark` also finds a book tagged "dark knight", where the `tags[]`
-  parameter is exact; a `tag:` term is not also sent as `tags[]`, in the list, its tag facets
-  or a select-all, and the tag chips read it from the box), the per-user shapes get their
-  own message first,
+  of such a query is then judged by the rules of `search=`: a `duration:` term is
+  held by the index and is answered with the query, a `tag:` term is an exact tag filter
+  (see below), the per-user shapes get their own message first,
   and a field the index does not hold (`metadata`, `review`, `has_duration`) is refused with the
   search parameter's message that points at `filters=`, which the box cannot act on: take that
   term out of the query.
+
+`tag:` in `search=` (and in a dynamic collection's or smart playlist's query) is an
+EXACT tag filter: the whole tag, case-folded, the same match as the `tags[]` parameter and
+the tag chips (`tag:"to-read"` does not find a book tagged only "read", `tag:knight` does
+not find "dark-knight"). It is applied outside the search index, which holds a tag as
+words, by looking up the books that carry each tag and ANDing them with the rest of the
+query. That is possible only where the term is a conjunct of the whole query: at the top
+level, or in a group that is only ANDed (`read_status:finished AND tag:noir`,
+`(read_status:finished tag:noir)`). A `tag:` term inside an `OR`, inside an alternation
+(`tag:(a|b)`), under `NOT` or `-`, or as a prefix, wildcard or fuzzy term (`tag:no*`) is
+refused with a 400 (`invalid search: tag: cannot be used inside an OR group ...`) by the
+list, and on create and update of a collection or smart playlist; a stored query of that
+shape reads as `members_unavailable` until it is edited. Several `tag:` terms are all
+required. The web box sends the `tag:` terms that narrow the whole query as `tags[]` as
+well as in `search=` (the same filter twice), so a tag chip stays exact however the rest
+of the box is written. A background operation's saved search text goes through the same
+path. Allowing `tag:` inside groups needs the index's `tags` field mapped as a keyword and
+a full reindex; it is tracked in `todo.d`. The `tags:` field name is the index field
+itself and still matches by word.
 
 The refusal applies to every caller of the search, not only the HTTP list: the substring
 fallback the search uses while the index is not built or is rebuilding checks the query
