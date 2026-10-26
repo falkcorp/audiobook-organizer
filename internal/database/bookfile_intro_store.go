@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package database
 
@@ -36,6 +36,42 @@ import (
 type BookFileIntroStore interface {
 	SetBookFileIntro(bookID, fileID string, r BookFileIntroResult) (BookFileIntroWrite, error)
 	ClearBookFileIntro(bookID, fileID, runOpID string) (before *BookFile, cleared bool, err error)
+	// RecordIntroTimeout counts one transcribe_timeout strike against a file and,
+	// at the limit, makes it a permanent per-file result. See IntroTimeoutStrike.
+	RecordIntroTimeout(bookID, fileID string, s IntroTimeoutStrike) (IntroTimeoutOutcome, error)
+}
+
+// IntroTimeoutStrike is one file whose decode ran past the worker's per-clip
+// deadline. The worker killed and restarted its decoder and reported a
+// transcribe_timeout for exactly this file: a verdict about its audio, not an
+// outage. One strike is retried next run (a transient stall also looks like
+// this); Limit strikes make the file permanently skipped, so one clip that
+// sends the decoder into an endless loop costs a bounded number of attempts
+// instead of wedging a worker every run.
+type IntroTimeoutStrike struct {
+	// SourceHash is the FileHash of the bytes that timed out. It must equal the
+	// stored FileHash and must not be empty.
+	SourceHash string
+	RunOpID    string
+	// Detail is the worker's short error text.
+	Detail string
+	At     time.Time
+	// Limit is the strike count at which the file becomes permanent (>= 1).
+	Limit int
+}
+
+// IntroTimeoutOutcome is what RecordIntroTimeout did.
+type IntroTimeoutOutcome struct {
+	// Strikes is the file's strike count after this call.
+	Strikes int
+	// Permanent: Strikes reached the limit and the file now carries the
+	// transcribe_timeout status.
+	Permanent bool
+	// Skipped: nothing was written because the row already holds a transcript or
+	// result (a timeout says nothing about a file that has one), or the row is
+	// gone / no longer has the hash that timed out (Stale).
+	Skipped bool
+	Stale   bool
 }
 
 // BookFileIntroWrite is what SetBookFileIntro did with a result.
@@ -100,6 +136,9 @@ const (
 	IntroStatusOK       = "ok"
 	IntroStatusUnparsed = "unparsed"
 	IntroStatusEmpty    = "empty"
+	// IntroStatusTranscribeTimeout: the decoder timed out on this file at least
+	// Limit times (see IntroTimeoutStrike). Permanent: both ops skip it.
+	IntroStatusTranscribeTimeout = "transcribe_timeout"
 )
 
 // IntroResultPresent is THE definition of "this book_file already carries a
@@ -204,6 +243,8 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 		at := r.At
 		row.IntroTranscribedAt = &at
 		row.IntroMeta = r.Meta
+		// A transcript supersedes any timeout record: the file decodes.
+		row.IntroTimeouts, row.IntroTimeoutHash = 0, ""
 		if stampsSentinel {
 			// The sentinel was not written by this run, so the run id is not
 			// claimed: clear_run_id must never erase it.
@@ -283,11 +324,64 @@ func (s *PebbleStore) ClearBookFileIntro(bookID, fileID, runOpID string) (before
 	row.IntroSourceHash = ""
 	row.IntroRunOpID = ""
 	row.IntroMeta = nil
+	row.IntroTimeouts, row.IntroTimeoutHash = 0, ""
 	res, err := s.writeIntroRow(bookID, fileID, row, "ClearBookFileIntro")
 	if err != nil {
 		return nil, res == IntroWriteWrote, err
 	}
 	return &prior, res == IntroWriteWrote, nil
+}
+
+// RecordIntroTimeout counts a transcribe_timeout strike. See IntroTimeoutStrike.
+//
+// Below the limit only the strike fields and the attempt time are written: the
+// file's status is left alone, so a file is not labelled a failure on the
+// strength of what may have been a transient stall. At the limit the status
+// becomes transcribe_timeout and the row names this run, so clear-by-run-id
+// removes the verdict with the rest of what the run wrote. Strikes are counted
+// against the stored FileHash and restart when the file is replaced.
+func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutStrike) (IntroTimeoutOutcome, error) {
+	if st.SourceHash == "" {
+		return IntroTimeoutOutcome{Stale: true, Skipped: true}, fmt.Errorf("RecordIntroTimeout: %s: empty source hash", fileID)
+	}
+	if st.Limit < 1 {
+		return IntroTimeoutOutcome{Skipped: true}, fmt.Errorf("RecordIntroTimeout: %s: limit must be >= 1, got %d", fileID, st.Limit)
+	}
+	unlock := s.lockBookFile(fileID)
+	defer unlock()
+
+	row, err := s.getBookFileByID(bookID, fileID)
+	if err != nil {
+		return IntroTimeoutOutcome{Skipped: true}, fmt.Errorf("RecordIntroTimeout: read %s: %w", fileID, err)
+	}
+	if row == nil || row.FileHash != st.SourceHash {
+		return IntroTimeoutOutcome{Stale: true, Skipped: true}, nil
+	}
+	if row.HasIntroResult() || row.IntroTranscription != nil {
+		return IntroTimeoutOutcome{Skipped: true}, nil
+	}
+	strikes := 1
+	if row.IntroTimeoutHash == st.SourceHash {
+		strikes = row.IntroTimeouts + 1
+	}
+	row.IntroTimeouts, row.IntroTimeoutHash = strikes, st.SourceHash
+	attempted := st.At
+	row.TranscribeAttemptedAt = &attempted
+	permanent := strikes >= st.Limit
+	if permanent {
+		status := IntroStatusTranscribeTimeout
+		row.TranscribeStatus = &status
+		row.TranscribeError = optString(st.Detail)
+		row.IntroRunOpID = st.RunOpID
+	}
+	res, err := s.writeIntroRow(bookID, fileID, row, "RecordIntroTimeout")
+	if err != nil {
+		return IntroTimeoutOutcome{Strikes: strikes, Permanent: permanent}, err
+	}
+	if res == IntroWriteStale {
+		return IntroTimeoutOutcome{Stale: true, Skipped: true}, nil
+	}
+	return IntroTimeoutOutcome{Strikes: strikes, Permanent: permanent}, nil
 }
 
 // writeIntroRow commits an edited row: the primary key and memdb only, under

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package database
 
@@ -267,8 +267,13 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	// leave a transcript with no provenance, indistinguishable from "never
 	// done".
 	"IntroSourceHash": preserveAudio,
-	"IntroRunOpID":    preserveAudio,                                    // what clear-by-run-id selects on; a rescan must not orphan the row from its run
-	"IntroMeta":       {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
+	"IntroRunOpID":    preserveAudio, // what clear-by-run-id selects on; a rescan must not orphan the row from its run
+	// Timeout strikes describe the audio's behaviour in the decoder, so like the
+	// transcript they live and die with the audio: kept across a tag rewrite,
+	// dropped when the audio changes (and IntroTimeoutHash no longer matches).
+	"IntroTimeouts":    preserveAudio,
+	"IntroTimeoutHash": preserveAudio,
+	"IntroMeta":        {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
 }
 
 // bookFileRulesByIndex is bookFileFieldClasses resolved to BookFile struct

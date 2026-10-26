@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_intro_provenance_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a2c6e-91d4-4b7a-a5e0-6d2b4c8f1e73
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package database
 
@@ -53,6 +53,8 @@ func introSeed(t *testing.T, s *PebbleStore) (*BookFile, string) {
 		TranscribeAttemptedAt:  &at,
 		IntroSourceHash:        "hash-of-the-bytes",
 		IntroRunOpID:           "op-run-1",
+		IntroTimeouts:          1,
+		IntroTimeoutHash:       "hash-of-the-bytes",
 		IntroMeta:              &IntroMeta{Model: "model-x", Language: "en", ClipStartSec: 0, ClipLengthSec: 90},
 	}
 	if err := s.CreateBookFile(seed); err != nil {
@@ -91,6 +93,10 @@ func assertIntroGroupKept(t *testing.T, want, got *BookFile) {
 	}
 	if got.IntroRunOpID != want.IntroRunOpID {
 		t.Errorf("IntroRunOpID was not kept: want %q, got %q", want.IntroRunOpID, got.IntroRunOpID)
+	}
+	if got.IntroTimeouts != want.IntroTimeouts || got.IntroTimeoutHash != want.IntroTimeoutHash {
+		t.Errorf("timeout strikes were not kept: want %d/%q, got %d/%q",
+			want.IntroTimeouts, want.IntroTimeoutHash, got.IntroTimeouts, got.IntroTimeoutHash)
 	}
 	if got.IntroMeta == nil || *got.IntroMeta != *want.IntroMeta {
 		t.Errorf("IntroMeta was not kept: want %+v, got %+v", want.IntroMeta, got.IntroMeta)
@@ -171,6 +177,9 @@ func TestRescan_ReplacedFileDropsPerFileIntroGroup(t *testing.T) {
 	if got.IntroTranscription != nil || got.IntroMeta != nil || got.IntroRunOpID != "" {
 		t.Errorf("the old file's transcript/provenance survived the replacement: transcript=%v meta=%+v run=%q",
 			got.IntroTranscription, got.IntroMeta, got.IntroRunOpID)
+	}
+	if got.IntroTimeouts != 0 || got.IntroTimeoutHash != "" {
+		t.Errorf("the old file's timeout strikes survived the replacement: %d/%q", got.IntroTimeouts, got.IntroTimeoutHash)
 	}
 }
 

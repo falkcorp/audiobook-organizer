@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package database
 
@@ -115,6 +115,10 @@ type BookFileCore struct {
 	// IntroRunOpID the op that wrote the result; see BookFile.
 	IntroSourceHash string `json:"intro_source_hash,omitempty"`
 	IntroRunOpID    string `json:"intro_run_op_id,omitempty"`
+	// IntroTimeouts / IntroTimeoutHash are the decoder-timeout strikes and the
+	// FileHash they were counted against; see BookFile.
+	IntroTimeouts    int    `json:"intro_timeouts,omitempty"`
+	IntroTimeoutHash string `json:"intro_timeout_hash,omitempty"`
 
 	// Per-file scan cache. RETAINED rather than stripped: the stripped set is the
 	// heavy fingerprint/transcript strings, and these are three small scalars that
@@ -188,6 +192,8 @@ func (f *BookFile) Core() BookFileCore {
 		TranscribeAttemptedAt:          f.TranscribeAttemptedAt,
 		IntroSourceHash:                f.IntroSourceHash,
 		IntroRunOpID:                   f.IntroRunOpID,
+		IntroTimeouts:                  f.IntroTimeouts,
+		IntroTimeoutHash:               f.IntroTimeoutHash,
 		LastScanMtime:                  f.LastScanMtime,
 		LastScanSize:                   f.LastScanSize,
 		NeedsRescan:                    f.NeedsRescan,
@@ -256,6 +262,8 @@ func (c *BookFileCore) AsBookFile() BookFile {
 		TranscribeAttemptedAt:          c.TranscribeAttemptedAt,
 		IntroSourceHash:                c.IntroSourceHash,
 		IntroRunOpID:                   c.IntroRunOpID,
+		IntroTimeouts:                  c.IntroTimeouts,
+		IntroTimeoutHash:               c.IntroTimeoutHash,
 		LastScanMtime:                  c.LastScanMtime,
 		LastScanSize:                   c.LastScanSize,
 		NeedsRescan:                    c.NeedsRescan,
