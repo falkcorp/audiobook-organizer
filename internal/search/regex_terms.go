@@ -1,5 +1,5 @@
 // file: internal/search/regex_terms.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: da97759e-e2f6-4dd3-b387-5920768c88ee
 // last-edited: 2026-10-26
 
@@ -8,6 +8,7 @@ package search
 import (
 	"errors"
 	"regexp"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
@@ -40,12 +41,25 @@ func IsRegexValueError(err error) bool {
 	return errors.As(err, &re)
 }
 
-// CheckRegexTerms refuses a query holding a /regex/ value on a field the index holds:
-// an unquoted value that starts with a slash, by the same rule the filter layer routes
-// on (querygrammar.IsRegexForm). A nil node and a query with no regex are accepted.
+// IsRegexField says whether a /regex/ value on the field called name is refused: a
+// field the index holds, or tag/tags, whatever the capitals. The index answers the
+// first as words. tag: is not an index field (it is an exact tag filter applied
+// outside the index, see TagField), but its value is one whole tag name, so
+// tag:/noir/ would look for a tag called "/noir/" and match nothing: the same silent
+// miss, refused with the same sentence. The parser keeps a field name's capitals and
+// the translator does not know Title, so Title:/x/ matched nothing either.
+func IsRegexField(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == TagField || IsIndexedField(lower)
+}
+
+// CheckRegexTerms refuses a query holding a /regex/ value on a field IsRegexField
+// names: an unquoted value that starts with a slash, by the same rule the filter layer
+// routes on (querygrammar.IsRegexForm). A nil node and a query with no regex are
+// accepted.
 //
-// Only an indexed field is refused (IsIndexedField), because that is where the index
-// answers the term as something else: as words. The parser reads any `name:` as a
+// Only those fields are refused, because that is where the term would be answered as
+// something else: as words, or as a tag name. The parser reads any `name:` as a
 // field, so a URL (https://x/y), a drive path (c:/lib/Gotham/x) or a title with a colon
 // (Batman: /Year One/) is a "field" with a slash value too, and is no regex; it is
 // searched as it always was. A field the filter layer knows but the index does not
@@ -72,11 +86,11 @@ func CheckRegexTerms(n Node) error {
 	case *NotNode:
 		return CheckRegexTerms(v.Child)
 	case *FieldNode:
-		if IsIndexedField(v.Field) && querygrammar.IsRegexForm(v.Value, v.Quoted) {
+		if IsRegexField(v.Field) && querygrammar.IsRegexForm(v.Value, v.Quoted) {
 			return &RegexValueError{Reason: regexValueReason}
 		}
 	case *ValueAltNode:
-		if !IsIndexedField(v.Field) {
+		if !IsRegexField(v.Field) {
 			return nil
 		}
 		for _, val := range v.Values {

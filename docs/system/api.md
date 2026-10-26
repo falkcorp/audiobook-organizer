@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.20.7 -->
+<!-- version: 1.20.8 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -262,10 +262,11 @@ same shapes and values are refused on both ways a query reaches it:
   works there too, as one filter that matches either status. A filter cannot carry an `OR` or
   a group, so the web box sends any query with boolean structure whole as `search=`, with no
   filters or `tags[]` of its own for it, and shows the server's message in the library page.
-  Boolean structure is an `OR`, `AND`, `||`, `&&` or `|` next to a field term, a field term
+  Boolean structure is an `OR`, `||` or `|` next to a field term, a field term
   inside a group opened by `(`, a `-` or `NOT` before a `tag:` term, or a `tag:` value that is
   not one whole name (`tag:noir*`); a per-user field's own `(a|b)` list is not. Structure among
-  free words alone (`title:bat NOT robin`, `title:bat Batman (1987)`) is not: the field term stays
+  free words alone (`title:bat NOT robin`, `title:bat Batman (1987)`), and an `AND` or `&&`
+  (which the split already means), is not: the field term stays
   in `filters=` and the rest is `search=`, which the server reads. This does not depend on the
   query naming a per-user field: `Batman -tag:"to-read"` and `tag:noir OR tag:gotham` reach
   the server whole and answer 400. Structure is read from the terms, not the raw text: the

@@ -1,5 +1,5 @@
 // file: web/src/utils/searchParser.test.ts
-// version: 1.2.5
+// version: 1.2.6
 // guid: 3c7e9a15-6d2f-4b84-a0e3-9f1b5c8d2e47
 // last-edited: 2026-10-26
 
@@ -122,8 +122,6 @@ describe('parseSearch: a per-user term the server must read whole (serverQuery)'
     'progress_pct:>50 OR title:"Year One"',
     'last_played:7d OR title:Knightfall',
     'Read_Status:finished OR title:Hush',
-    'read_status:finished AND title:Hush',
-    'read_status:finished && title:Hush',
   ])('%s is sent to the server as typed', (q) => {
     expect(parseSearch(q).serverQuery).toBe(q);
   });
@@ -197,8 +195,6 @@ describe('parseSearch: any boolean structure is sent whole (serverQuery)', () =>
     'title:(Hush|Knightfall)',
     '(title:Hush title:Knightfall)',
     'title:Hush | title:Knightfall',
-    'title:Hush AND author:kyle',
-    'title:Hush && author:kyle',
     'title:"read_status:finished" OR title:Hush',
     'read_status:finished -tag:noir',
     '(tag:noir OR title:Hush) author:kyle',
@@ -361,6 +357,50 @@ describe('parseSearch: a field value is never structure (B1)', () => {
     ['NOT Batman', [], 'NOT Batman'],
     ['Batman || Robin', [], 'Batman || Robin'],
     ['Batman && Robin', [], 'Batman && Robin'],
+    // B2: the split already ANDs every filter with the free text, so AND and && change
+    // nothing it carries. Sent whole, the filter became a whole-word index match:
+    // title:bat AND year answered nothing, title:/^bat/ AND year a regex 400.
+    [
+      'title:bat AND year',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      'AND year',
+    ],
+    [
+      'title:/^bat/ AND year',
+      [{ field: 'title', value: '/^bat/', negated: false, quoted: false }],
+      'AND year',
+    ],
+    [
+      'codec:aac AND year',
+      [{ field: 'codec', value: 'aac', negated: false, quoted: false }],
+      'AND year',
+    ],
+    [
+      'title:bat && year',
+      [{ field: 'title', value: 'bat', negated: false, quoted: false }],
+      '&& year',
+    ],
+    [
+      'read_status:finished AND title:Hush',
+      [
+        { field: 'read_status', value: 'finished', negated: false, quoted: false },
+        { field: 'title', value: 'Hush', negated: false, quoted: false },
+      ],
+      'AND',
+    ],
+    [
+      'title:Hush && author:kyle',
+      [
+        { field: 'title', value: 'Hush', negated: false, quoted: false },
+        { field: 'author', value: 'kyle', negated: false, quoted: false },
+      ],
+      '&&',
+    ],
+    [
+      'year AND title:/x/',
+      [{ field: 'title', value: '/x/', negated: false, quoted: false }],
+      'year AND',
+    ],
     ['Batman | Robin', [], 'Batman | Robin'],
     // a closed group of free words around no field term, and a pipe inside a word
     [
@@ -398,7 +438,6 @@ describe('parseSearch: a field value is never structure (B1)', () => {
     // it with a message (search.RegexValueError) instead of answering it as words
     'title:/x/ OR author:kyle',
     '(title:/^k/ author:kyle)',
-    'title:/x/ AND author:kyle',
     '-(title:/x/ author:kyle)',
     // a group or an alternation around a value is structure
     'title:(Hush|Knightfall)',
@@ -406,9 +445,7 @@ describe('parseSearch: a field value is never structure (B1)', () => {
     // an operator next to a field term, on either side of it
     'title:bat OR robin',
     'robin OR title:bat',
-    'title:bat AND robin',
     'title:bat || robin',
-    'title:bat && robin',
     'title:bat | robin',
     'title:bat OR NOT title:robin',
     'title:bat robin OR title:joker',
