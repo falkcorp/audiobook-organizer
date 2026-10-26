@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
 // last-edited: 2026-10-26
 
@@ -320,5 +320,83 @@ func TestPool_ASiblingPortsStrikeInTheSameRoundAsItsMachinesFaultIsWithheld(t *t
 		if r := res[id]; r.Text != "T:"+id {
 			t.Errorf("%s = %+v, want its transcript (a strike from a port of a machine that faulted is no verdict)", id, r)
 		}
+	}
+}
+
+// SF1 (review 4 of #4182), prod topology: the Mac's four ports (machine aaaa)
+// and llm1's two (bbbb), all at priority 50, 200 jobs. Once every endpoint has
+// faulted, each machine is sent the canary clip once: a machine that answers it
+// is believed, one that does not is not. Before the canary, "llm1 absent, Mac
+// sick" gave 200 first strikes on healthy files, and both machines sick on two
+// nights could make them permanent.
+func TestPool_TheCanaryDecidesWhichFaultedMachinesAreBelieved(t *testing.T) {
+	const mac, llm1 = "aaaa0001", "bbbb0002"
+	prod := []string{mac, mac, mac, mac, llm1, llm1}
+	sick := func(machines ...string) func(p *faultPool) func(url, id string) BatchResult {
+		return func(p *faultPool) func(url, id string) BatchResult {
+			return func(url, id string) BatchResult {
+				for i, ep := range p.h.eps {
+					if ep.URL == url && slices.Contains(machines, prod[i]) {
+						return BatchResult{Error: timeoutText} // the canary clip included
+					}
+				}
+				if strings.HasPrefix(id, "loop") {
+					return BatchResult{Error: timeoutText}
+				}
+				return BatchResult{Text: "T:" + id}
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		ports       int
+		answer      func(p *faultPool) func(url, id string) BatchResult
+		prefix      string
+		strikesBy   string // "" when no strike may be written
+		unavailable bool
+		canaries    int
+	}{
+		{"llm1 absent, Mac sick", 4, sick(mac), "chap", "", true, 1},
+		{"both machines sick", 6, sick(mac, llm1), "chap", "", true, 2},
+		{"every clip a looper", 6, sick(), "loop", "m:", false, 2},
+		{"llm1 absent, every clip a looper", 4, sick(), "loop", "m:" + mac, false, 1},
+		{"Mac sick, llm1 sound, every clip a looper", 6, sick(mac), "loop", "m:" + llm1, false, 2},
+		{"Mac sick, llm1 healthy", 6, sick(mac), "chap", "", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var p *faultPool
+			p = machineFaultPool(t, prod[:tc.ports], func(url, id string) BatchResult { return tc.answer(p)(url, id) })
+			for i := range p.h.eps {
+				p.h.eps[i].Priority = 50
+			}
+			ids := loopers(200, tc.prefix)
+			res, err := p.run(t, ids...)
+			if got := len(p.canaryLog()); got != tc.canaries {
+				t.Errorf("canaries = %d (%v), want %d: one per faulted machine, only once every endpoint faulted", got, p.canaryLog(), tc.canaries)
+			}
+			if tc.unavailable != IsPoolUnavailable(err) || (!tc.unavailable && err != nil) {
+				t.Fatalf("err = %v, want unavailable=%v", err, tc.unavailable)
+			}
+			if tc.unavailable && !strings.Contains(err.Error(), "canary clip") {
+				t.Errorf("err = %v, want it to say no machine answered the canary clip", err)
+			}
+			strikes := 0
+			for _, id := range ids {
+				r := res[id]
+				if !IsStrikeError(r.Error) {
+					if tc.prefix == "chap" && !tc.unavailable && r.Text != "T:"+id {
+						t.Errorf("%s = %+v, want its transcript", id, r)
+					}
+					continue
+				}
+				strikes++
+				if tc.strikesBy == "" || !strings.HasPrefix(r.Worker, tc.strikesBy) {
+					t.Fatalf("%s = %+v: a strike, want none or only from %q", id, r, tc.strikesBy)
+				}
+			}
+			if tc.strikesBy != "" && strikes != len(ids) {
+				t.Errorf("strikes = %d of %d loopers, want each to converge on its own verdict", strikes, len(ids))
+			}
+		})
 	}
 }

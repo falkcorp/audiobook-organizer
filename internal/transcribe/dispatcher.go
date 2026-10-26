@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -121,6 +121,9 @@ type poolOptions struct {
 	// avoid is BatchOptions.AvoidWorkers: job id -> the machines whose strike
 	// the file already carries. See steerAway.
 	avoid map[string]string
+	// canary sends the canary clip to one endpoint (see canaryFunc); nil is
+	// sendCanary. A test pool answers it like any other clip.
+	canary canaryFunc
 }
 
 // dispatchPool is the pool round loop shared by every kind of job: gate,
@@ -138,6 +141,10 @@ type poolOptions struct {
 // ErrPoolUnavailable.
 func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]J, opts poolOptions, send endpointSender[J]) (map[string]BatchResult, error) {
 	onProgress, extraRefusal := opts.onProgress, opts.extraRefusal
+	canary := opts.canary
+	if canary == nil {
+		canary = sendCanary
+	}
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -234,7 +241,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	}
 
 	if len(eligible) == 1 {
-		return dispatchSingle(ctx, probeByURL[eligible[0].URL], jobs, onProgress, send)
+		return dispatchSingle(ctx, probeByURL[eligible[0].URL], jobs, onProgress, send, canary)
 	}
 
 	ordered := make([]Endpoint, len(eligible))
@@ -381,14 +388,17 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// be believed. A worker_misconfigured fault stays with its own port (a bad
 	// environment or a broken child is usually one port's). An endpoint of
 	// unknown identity is its own machine (keyOf never groups two URLs it cannot
-	// tell are one box). Neither is cleared within the dispatch: a worker that
+	// tell are one box). portSick is every endpoint with a worker_misconfigured
+	// fault. None of them is cleared within the dispatch: a worker that
 	// answered most of a chunk with timeouts is not trusted with fresh chunks
 	// again until the next dispatch (each costs a chunk of per-clip deadlines
-	// before it faults again). See trustSick.
+	// before it faults again), unless its machine answers the canary clip once
+	// every endpoint is sick. See benched.
 	sickHere := make(map[string]bool)
 	sickMachine := make(map[string]bool)
+	portSick := make(map[string]bool)
 	sickErr := make(map[string]error)
-	isSick := func(url string) bool { return sickHere[url] || sickMachine[keyOf(url)] }
+	isSick := func(url string) bool { return portSick[url] || sickMachine[keyOf(url)] }
 	sickCount := func() int {
 		n := 0
 		for _, ep := range ordered {
@@ -398,11 +408,73 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		return n
 	}
-	// trustSick is true once every endpoint of the dispatch is sick: then
-	// there is no one better to ask, the bench is lifted, and per-clip strikes
-	// from faulted endpoints are believed (the all-loopers page).
-	trustSick := func() bool { return sickCount() == len(ordered) }
-	distrusts := func(url string) bool { return faultedHere[url] || (isSick(url) && !trustSick()) }
+	allSick := func() bool { return sickCount() == len(ordered) }
+	// canaryRan and canaryOK are the canary verdicts (SF1 of review 4 of
+	// #4182), per machine, cached for the rest of the dispatch: one canary per
+	// machine. Once every endpoint is sick there is no one better to ask, but
+	// a page of genuine loopers and every machine being sick at once look the
+	// same (every clip times out everywhere). So each sick machine is sent the
+	// canary clip (runCanaries): one that answers it is decoding, its bench is
+	// lifted and its per-clip strikes are believed, so loopers still converge;
+	// one that does not stays benched and none of its strikes count. When no
+	// machine answers, the dispatch ends as ErrPoolUnavailable and its jobs are
+	// deferred. Believing every endpoint whenever all had faulted (an earlier
+	// version) let a lone sick Mac, on a night llm1 was out of the pool, give
+	// first strikes to a page of healthy files.
+	canaryRan := make(map[string]bool)
+	canaryOK := make(map[string]bool)
+	// benched: url takes no new work and its strikes are withheld. A port with
+	// a worker_misconfigured fault is benched only while some endpoint is not
+	// sick (it is in cooldown anyway, and its jobs never go back to it: see
+	// faultedOn); a machine with a timeout fault until it answers the canary.
+	benched := func(url string) bool {
+		if k := keyOf(url); sickMachine[k] && !canaryOK[k] {
+			return true
+		}
+		return portSick[url] && !allSick()
+	}
+	distrusts := func(url string) bool { return faultedHere[url] || benched(url) }
+	// runCanaries sends the canary clip, concurrently, to one endpoint of every
+	// sick machine not yet asked: the first in priority order that is not
+	// misconfigured or in cooldown. A machine with no such endpoint fails.
+	runCanaries := func() {
+		var (
+			wg sync.WaitGroup
+			mu sync.Mutex
+		)
+		for _, key := range slices.Sorted(maps.Keys(sickMachine)) {
+			if canaryRan[key] {
+				continue
+			}
+			canaryRan[key] = true
+			port := ""
+			for _, ep := range ordered {
+				if keyOf(ep.URL) == key && !portSick[ep.URL] && !endpointInCooldown(ep.URL) {
+					port = ep.URL
+					break
+				}
+			}
+			if port == "" {
+				dispatchLog.Warn("every whisper endpoint faulted; a machine has no endpoint to send the canary clip to, so its timeouts do not count: machine=%s",
+					logger.SanitizeLogValue(key))
+				continue
+			}
+			wg.Go(func() {
+				err := canary(ctx, probeByURL[port])
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					dispatchLog.Warn("every whisper endpoint faulted and this machine did not answer the canary clip: sick, its timeouts do not count in this dispatch: url=%s err=%v",
+						logger.SanitizeLogValue(port), err)
+					return
+				}
+				canaryOK[key] = true
+				dispatchLog.Info("every whisper endpoint faulted and this machine answered the canary clip: its timeouts are about the clips and count: url=%s",
+					logger.SanitizeLogValue(port))
+			})
+		}
+		wg.Wait()
+	}
 	faultLimit := min(2, len(ordered))
 	isFaultJob := func(id string) bool { return len(faultedOn[id]) > 0 }
 	faultCandidate := func(id, url string) bool { return !faultedOn[id][url] && lastErr[url] == nil }
@@ -545,14 +617,21 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			break
 		}
 		// healthy is every endpoint that may take work this round: not in
-		// cooldown, and not soft-benched for a fault in this dispatch while an
-		// endpoint that has not faulted remains (see sickHere).
+		// cooldown, and not soft-benched for a fault in this dispatch (see
+		// benched).
 		var healthy []Endpoint
-		trusted := trustSick()
 		for _, ep := range ordered {
-			if !endpointInCooldown(ep.URL) && (trusted || !isSick(ep.URL)) {
+			if !endpointInCooldown(ep.URL) && !benched(ep.URL) {
 				healthy = append(healthy, ep)
 			}
+		}
+		if len(healthy) == 0 && allSick() && len(canaryRan) > 0 && len(canaryOK) == 0 {
+			// Every machine faulted and none answered the canary clip: no one
+			// is left whose timeouts mean anything. Waiting would not change
+			// that within the dispatch; the ops wait out ErrPoolUnavailable.
+			return results, classifyTransport(endpointURLs(ordered), fmt.Errorf(
+				"%w: every whisper endpoint faulted in this dispatch and none of the %d machine(s) answered the canary clip, so none of their timeouts count",
+				ErrPoolUnavailable, len(canaryRan)))
 		}
 		if len(healthy) == 0 {
 			if wait, ok := paceWait(ordered, lastErr, paceUntil); ok {
@@ -737,10 +816,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				if fault.timeoutMajority() {
 					sickMachine[keyOf(ep.URL)] = true
 				} else {
-					faultedHere[ep.URL] = true
+					faultedHere[ep.URL], portSick[ep.URL] = true, true
 				}
 				sickHere[ep.URL], sickErr[ep.URL] = true, r.err
 			}
+		}
+		// Once every endpoint is sick, the canary decides which machines are
+		// believed, before this round's answers are read (see canaryOK).
+		if allSick() {
+			runCanaries()
 		}
 
 		for _, r := range round {
@@ -812,7 +896,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				// Strikes it answered in earlier chunks of the same request are
 				// withheld too while it is not trusted (distrusts).
 				faultedIDs = append(faultedIDs, distrusted...)
-				dispatchLog.Warn("worker fault (mostly timeouts): benched for the rest of this dispatch unless every endpoint faults, its jobs re-sent in units too small to fault: url=%s jobs=%d",
+				dispatchLog.Warn("worker fault (mostly timeouts): benched for the rest of this dispatch unless every endpoint faults and its machine answers the canary clip, its jobs re-sent in units too small to fault: url=%s jobs=%d",
 					logger.SanitizeLogValue(ep.URL), len(faultedIDs))
 				requeueUnits(faultedIDs)
 				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool {
@@ -956,14 +1040,20 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 //     same order, forever. A timeout from the only worker can never make a
 //     file permanent by itself: the store wants the second strike from a
 //     different worker. Every pass settles at least the faulted jobs, so this
-//     ends.
+//     ends. Before that, on the first such fault, the worker is sent the
+//     canary clip (see canaryOK in dispatchPool): a worker that does not
+//     answer it is sick, not the clips, so the strikes in the faulted response
+//     are withheld and the dispatch ends as ErrPoolUnavailable (the ops wait
+//     it out and defer the unanswered jobs). Re-sending to a sick lone worker
+//     and believing it gave first strikes to whole pages of healthy files.
 //   - A worker-level fault (the decoder cannot start) defers the faulted jobs
 //     (PathErrWorkerFault, never a strike) and ends the dispatch with an error
 //     that is NOT a recognised outage: the ops defer the unanswered jobs and go
 //     on, and the gate refuses the worker while it reports the fault (pacing,
 //     see dispatchPool).
-func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string]J, onProgress ProgressFunc, send endpointSender[J]) (map[string]BatchResult, error) {
+func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string]J, onProgress ProgressFunc, send endpointSender[J], canary canaryFunc) (map[string]BatchResult, error) {
 	url := g.Endpoint.URL
+	canaryAsked := false
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
 	pending := jobs
@@ -1014,6 +1104,21 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string
 				}
 			}
 			return results, nil
+		}
+		if isFault && !canaryAsked {
+			canaryAsked = true
+			if cerr := canary(ctx, g); cerr != nil {
+				for id, br := range res {
+					if IsStrikeError(br.Error) && !br.Condemned {
+						delete(results, id)
+					}
+				}
+				dispatchLog.Warn("worker fault (mostly timeouts) on the only endpoint, and it did not answer the canary clip: sick, none of its timeouts count: url=%s err=%v",
+					logger.SanitizeLogValue(url), cerr)
+				return results, classifyTransport([]string{url}, fmt.Errorf(
+					"%w: the only whisper endpoint faulted on timeouts and did not answer the canary clip (%w), so none of its timeouts count",
+					ErrPoolUnavailable, cerr))
+			}
 		}
 		if isFault {
 			ids := slices.Sorted(maps.Keys(fault.Faulted))

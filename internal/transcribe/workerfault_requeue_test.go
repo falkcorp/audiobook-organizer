@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -44,14 +44,36 @@ func clearCooldown(url string) {
 // request is split into chunks of the batch size, each chunk is answered by
 // answer(url, id), each response is judged on its own by splitWorkerFault, and
 // the send stops at the first faulted chunk. Every send clears the cooldown of
-// every OTHER endpoint (see clearCooldown).
+// every OTHER endpoint (see clearCooldown). The canary clip is answered like
+// any other clip, as answer(url, canaryJobID): a sick worker that times out on
+// everything fails it, a page of loopers on sound workers passes it.
 type faultPool struct {
 	h      *splitHarness
 	answer func(url, id string) BatchResult
 	batch  int
 
-	mu    sync.Mutex
-	sends []sendRecord
+	mu       sync.Mutex
+	sends    []sendRecord
+	canaries []string // the endpoints sent the canary clip, in order
+}
+
+// canaryJobID is the id a faultPool's answer function sees for the canary clip.
+const canaryJobID = "canary"
+
+func (p *faultPool) canary(_ context.Context, g gatedEndpoint) error {
+	p.mu.Lock()
+	p.canaries = append(p.canaries, g.Endpoint.URL)
+	p.mu.Unlock()
+	if r := p.answer(g.Endpoint.URL, canaryJobID); r.Error != "" {
+		return fmt.Errorf("canary: %s", r.Error)
+	}
+	return nil
+}
+
+func (p *faultPool) canaryLog() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.canaries)
 }
 
 func newFaultPool(t *testing.T, workers, batch int, answer func(url, id string) BatchResult) *faultPool {
@@ -103,7 +125,7 @@ func (p *faultPool) run(t *testing.T, ids ...string) (map[string]BatchResult, er
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := dispatchPool(ctx, p.h.eps, nil, jobs, poolOptions{}, p.send)
+	res, err := dispatchPool(ctx, p.h.eps, nil, jobs, poolOptions{canary: p.canary}, p.send)
 	if ctx.Err() != nil {
 		log := p.sendLog()
 		t.Fatalf("the dispatch only ended because the test cancelled it, after %d sends (first: %v)", len(log), log[:min(len(log), 4)])
@@ -546,8 +568,9 @@ func TestPool_DecoderKilledIsAPerClipStrikeThatNeverDrainsTheBatch(t *testing.T)
 // files struck on two workers, 24 of 200 on two and 4 of 200 on six, for
 // timeouts and kills alike. Now a worker that faulted is
 // not asked again in that dispatch while a sound one remains, so no ordinary
-// file gets a strike and every one gets its transcript. Only when every
-// endpoint has faulted (the one-worker rows) are its answers believed.
+// file gets a strike and every one gets its transcript. When it is the only
+// worker (the one-worker rows) it is asked the canary clip, fails it, and the
+// dispatch ends as ErrPoolUnavailable with no strike (SF1 of review 4).
 func TestPool_ASickWorkerGivesNoStrikesToHealthyFiles(t *testing.T) {
 	const killed = PathErrDecoderKilled + pathErrSeparator + "the decode process was killed from outside (exit code -9)"
 	for _, tc := range []struct {
@@ -573,6 +596,22 @@ func TestPool_ASickWorkerGivesNoStrikesToHealthyFiles(t *testing.T) {
 			sick := p.h.eps[0].URL
 			ids := loopers(tc.jobs, "chap")
 			res, err := p.run(t, ids...)
+			if tc.workers == 1 {
+				// SF1 (review 4): the only worker faulted and did not answer
+				// the canary clip, so it is sick and none of its timeouts count.
+				if !IsPoolUnavailable(err) {
+					t.Fatalf("err = %v, want ErrPoolUnavailable", err)
+				}
+				for _, id := range ids {
+					if r, ok := res[id]; ok && IsStrikeError(r.Error) {
+						t.Errorf("%s = %+v: a strike from a worker that failed the canary", id, r)
+					}
+				}
+				if got := p.canaryLog(); len(got) != 1 {
+					t.Errorf("canaries = %v, want one", got)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("err = %v, want none", err)
 			}
@@ -589,13 +628,6 @@ func TestPool_ASickWorkerGivesNoStrikesToHealthyFiles(t *testing.T) {
 				if r.Text != "T:"+id || r.Endpoint == sick {
 					t.Errorf("%s = %+v, want the sound worker's transcript", id, r)
 				}
-			}
-			if tc.workers == 1 {
-				// Every endpoint faulted, so its answers are the only verdicts.
-				if strikes != tc.jobs {
-					t.Errorf("strikes = %d of %d, want every job struck by the only worker", strikes, tc.jobs)
-				}
-				return
 			}
 			if strikes != 0 {
 				t.Errorf("strikes = %d of %d ordinary files, want 0 while a sound worker remains", strikes, tc.jobs)
@@ -648,5 +680,46 @@ func TestPool_AStrikeASickWorkerAnsweredBeforeItFaultedIsWithheld(t *testing.T) 
 		if r := res[id]; r.Text != "T:"+id {
 			t.Errorf("%s = %+v, want its transcript (a strike from a worker that then faulted is no verdict)", id, r)
 		}
+	}
+}
+
+// SF1 (review 4 of #4182), the only worker: its request of 16 is decoded in
+// chunks of 4, the first chunk has one timeout among sound answers (a per-clip
+// strike), the second times out wholesale (a fault), and the worker then fails
+// the canary clip. It is sick, so the strike it answered before the fault is
+// withheld too; its transcripts stand and the dispatch ends as
+// ErrPoolUnavailable, so the ops defer the rest.
+func TestPool_ALoneSickWorkersEarlierStrikeIsWithheldWhenItFailsTheCanary(t *testing.T) {
+	var calls atomic.Int32
+	p := newFaultPool(t, 1, 4, func(_ string, id string) BatchResult {
+		if id == canaryJobID {
+			return BatchResult{Error: timeoutText}
+		}
+		switch n := calls.Add(1); {
+		case n == 1, n > 4:
+			return BatchResult{Error: timeoutText}
+		default:
+			return BatchResult{Text: "T:" + id}
+		}
+	})
+	useEndpoints(t, 16, endpointURLs(p.h.eps)...) // requests of 16, decoded in chunks of 4
+	res, err := p.run(t, loopers(16, "chap")...)
+	if !IsPoolUnavailable(err) {
+		t.Fatalf("err = %v, want ErrPoolUnavailable", err)
+	}
+	texts := 0
+	for id, r := range res {
+		if IsStrikeError(r.Error) {
+			t.Errorf("%s = %+v: a strike from a worker that failed the canary", id, r)
+		}
+		if r.Text == "T:"+id {
+			texts++
+		}
+	}
+	if texts != 3 {
+		t.Errorf("texts = %d, want the 3 transcripts the worker gave before it faulted", texts)
+	}
+	if got := p.canaryLog(); len(got) != 1 {
+		t.Errorf("canaries = %v, want one", got)
 	}
 }

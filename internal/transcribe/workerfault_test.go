@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4503544-1899-4765-aa15-eda9489b6832
 // last-edited: 2026-10-26
 
@@ -254,6 +254,11 @@ func TestUploadBatch_AResponseOfMostlyTimeoutsIsAWorkerFault(t *testing.T) {
 			results[fh.Filename] = map[string]any{"text": "", "error": crashText}
 		}
 		_ = json.NewEncoder(rw).Encode(map[string]any{"results": results})
+	})
+	// The worker decodes: it answers the canary clip, so its crashes are
+	// about the clips (see canaryOK).
+	mux.HandleFunc("POST /transcribe", func(rw http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(rw).Encode(map[string]any{"text": "Welcome to Gotham City.", "error": nil})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

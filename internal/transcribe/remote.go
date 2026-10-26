@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-10-26
 
@@ -604,34 +604,43 @@ func transcribeOneRemote(ctx context.Context, client *http.Client, remoteURL, wa
 		return BatchResult{}, "", fmt.Errorf("open wav: %w", err)
 	}
 	defer f.Close()
-
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	fw, err := mw.CreateFormFile("file", filepath.Base(wavPath))
+	hr := newHashingReader(f)
+	result, err = postOneWAV(ctx, client, remoteURL, filepath.Base(wavPath), hr)
 	if err != nil {
 		return BatchResult{}, "", err
 	}
-	hr := newHashingReader(f)
-	if _, err := io.Copy(fw, hr); err != nil {
-		return BatchResult{}, "", err
+	return result, hr.sum(), nil
+}
+
+// postOneWAV uploads one WAV, read from src, to the worker's /transcribe as
+// name, and returns the worker's answer: its text, or its per-file error. An
+// error return is a transport failure (or a non-200), never a verdict.
+func postOneWAV(ctx context.Context, client *http.Client, remoteURL, name string, src io.Reader) (BatchResult, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("file", name)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if _, err := io.Copy(fw, src); err != nil {
+		return BatchResult{}, err
 	}
 	mw.Close()
-	uploaded = hr.sum()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, remoteURL+"/transcribe", &body)
 	if err != nil {
-		return BatchResult{}, "", err
+		return BatchResult{}, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return BatchResult{}, "", err
+		return BatchResult{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return BatchResult{}, "", fmt.Errorf("remote returned HTTP %d", resp.StatusCode)
+		return BatchResult{}, fmt.Errorf("remote returned HTTP %d", resp.StatusCode)
 	}
 
 	var out struct {
@@ -639,10 +648,10 @@ func transcribeOneRemote(ctx context.Context, client *http.Client, remoteURL, wa
 		Error *string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return BatchResult{}, "", fmt.Errorf("decode response: %w", err)
+		return BatchResult{}, fmt.Errorf("decode response: %w", err)
 	}
 	if out.Error != nil && *out.Error != "" {
-		return BatchResult{Error: *out.Error}, uploaded, nil
+		return BatchResult{Error: *out.Error}, nil
 	}
-	return BatchResult{Text: out.Text}, uploaded, nil
+	return BatchResult{Text: out.Text}, nil
 }
