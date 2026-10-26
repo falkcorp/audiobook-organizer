@@ -1,5 +1,5 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
 // last-edited: 2026-10-26
 
@@ -7,6 +7,7 @@ package scanner
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -414,6 +415,103 @@ func TestRetiredShellOrganizerID_TaggedCopyOfRetiredContentIsRetiredHit(t *testi
 	require.NoError(t, err)
 	require.NotEqual(t, moved, got.FilePath, "the shell must not be relinked onto the retired content")
 	require.Empty(t, f.liveRowsAt(moved))
+}
+
+// retiredMultiShellAt is a trashed multi-file directory book whose files are
+// all retired into the holder: one shell row at dir, one retired row per body
+// at dir/NN.mp3. It returns the shell and the files' paths.
+func (f *retiredScanFixture) retiredMultiShellAt(dir string, bodies ...string) (*database.Book, []string) {
+	f.t.Helper()
+	paths := make([]string, len(bodies))
+	rows := make([]*database.BookFile, len(bodies))
+	ids := make([]string, len(bodies))
+	shell, err := f.store.CreateBook(&database.Book{Title: "Hush", FilePath: filepath.Join(f.root, dir), MarkedForDeletion: new(true)})
+	require.NoError(f.t, err)
+	for i, body := range bodies {
+		paths[i] = f.write(filepath.Join(dir, fmt.Sprintf("%02d.mp3", i+1)), body)
+		h, herr := ComputeFileHash(paths[i])
+		require.NoError(f.t, herr)
+		rows[i] = &database.BookFile{BookID: shell.ID, FilePath: paths[i], FileHash: h, Format: "mp3", TrackNumber: i + 1}
+		require.NoError(f.t, f.store.CreateBookFile(rows[i]))
+		ids[i] = rows[i].ID
+	}
+	v, err := f.store.CreateBookVersion(&database.BookVersion{
+		BookID: f.holder.ID, Status: database.BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-multi", RetiredAt: new(time.Now()),
+	})
+	require.NoError(f.t, err)
+	require.NoError(f.t, f.store.RetireBookFiles(
+		[]database.BookFileMove{{FileIDs: ids, SourceBookID: shell.ID}}, f.holder.ID, v.ID))
+	return shell, paths
+}
+
+// A copy of a retired MULTI-file version, still tagged with the shell's
+// organizer ID and sitting at another folder, is retired content too. A segment
+// list is judged by the segments' hashes, which only the segment hashing writes;
+// the shell branch used to skip it, so the copy read as no match, the shell was
+// relinked onto the copy and live rows were minted under it.
+func TestRetiredShellOrganizerID_MultiFileTaggedCopyOfRetiredContentIsRetiredHit(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, _ := f.retiredMultiShellAt("shellm", "seg-one-bytes", "seg-two-bytes")
+	m1 := f.write("movedm/01.mp3", "seg-one-bytes")
+	m2 := f.write("movedm/02.mp3", "seg-two-bytes")
+	dir := filepath.Dir(m1)
+	h1, err := ComputeFileHash(m1)
+	require.NoError(t, err)
+
+	e, lerr := lookupScanExisting(&Book{FilePath: dir, SegmentFiles: []string{m1, m2}, BookOrganizerID: shell.ID}, fileOwnershipVerdict{}, &h1)
+	require.NoError(t, lerr)
+	require.NotNil(t, e.byOrgID, "the shell is still named by its tag")
+	require.NotNil(t, e.retired, "but the segments are a retired version's")
+	require.Equal(t, f.holder.ID, e.retired.holder)
+	require.Equal(t, 2, e.retired.matched)
+	require.Equal(t, 2, e.retired.total)
+
+	serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: dir, SegmentFiles: []string{m1, m2}, FileHash: h1, BookOrganizerID: shell.ID})
+	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
+	got, err := f.store.GetBookByID(shell.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, dir, got.FilePath, "the shell must not be relinked onto the retired content")
+	require.Empty(t, f.liveRowsAt(m1))
+	require.Empty(t, f.liveRowsAt(m2))
+}
+
+// The multi-file twin of TestRetiredShellOrganizerID_TaggedFileWithOtherContentIsNotAHit:
+// hashing the segments for the shell branch flags nothing when no segment is a
+// retired version's, and leaves the hashes for the row minting to reuse.
+func TestRetiredShellOrganizerID_MultiFileTaggedFilesWithOtherContentAreNotAHit(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, _ := f.retiredMultiShellAt("shellm2", "seg-one-bytes", "seg-two-bytes")
+	o1 := f.write("movedm2/01.mp3", "other-one-bytes")
+	o2 := f.write("movedm2/02.mp3", "other-two-bytes")
+	h1, err := ComputeFileHash(o1)
+	require.NoError(t, err)
+
+	book := &Book{FilePath: filepath.Dir(o1), SegmentFiles: []string{o1, o2}, BookOrganizerID: shell.ID}
+	e, lerr := lookupScanExisting(book, fileOwnershipVerdict{}, &h1)
+	require.NoError(t, lerr)
+	require.Nil(t, e.retired)
+	require.NotNil(t, e.byOrgID)
+	require.Len(t, book.SegmentHashes, 2, "the segment hashes are kept for the row minting")
+}
+
+// A shell's own folder rescanned after its files changed is judged by the path
+// claims of the retired rows, not by the content hashes: the scan is skipped
+// and no live row appears on any file.
+func TestRetiredShellOwnPath_MultiFileChangedBytesAreStillSkippedByPathClaim(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, paths := f.retiredMultiShellAt("shell-multi-changed", "before-one", "before-two")
+	for i, p := range paths {
+		require.NoError(t, os.WriteFile(p, []byte(fmt.Sprintf("after-the-file-changed-%d", i)), 0o644))
+	}
+	h1, err := ComputeFileHash(paths[0])
+	require.NoError(t, err)
+
+	serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: shell.FilePath, SegmentFiles: paths, FileHash: h1})
+	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
+	for _, p := range paths {
+		require.Empty(t, f.liveRowsAt(p))
+	}
 }
 
 // A tagged file whose bytes are NOT a retired version's is unaffected: the

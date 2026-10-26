@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
 // last-edited: 2026-10-26
 //
@@ -130,6 +130,12 @@ func lookupScanExisting(book *Book, verdict fileOwnershipVerdict, fileHash *stri
 			if !shell {
 				continue
 			}
+			// A segment list is judged by the hashes kept on
+			// book.SegmentHashes, and hashSegments is their only writer
+			// besides the vote this branch skips. Without it a tagged copy of
+			// a retired multi-file version has no hashes, reads as no match,
+			// and relinks the shell onto the copy with live rows of its own.
+			hashSegments(book)
 			if err := e.lookupRetiredContent(book, fileHash); err != nil {
 				return nil, err
 			}
@@ -295,6 +301,32 @@ func (e *scanExisting) lookupHashes(book *Book, fileHash *string) error {
 	return nil
 }
 
+// hashSegments hashes every segment file of a multi-file book into
+// book.SegmentHashes, skipping files already hashed. A file that cannot be read
+// gets no entry, so it casts no vote and counts toward no retired-content match.
+// It is the only writer of SegmentHashes: the live segment vote
+// (lookupSegments) and the retired-content check (lookupRetiredContent) both
+// read what it leaves, and createBookFilesForBookWithAudio reuses it instead of
+// hashing again.
+func hashSegments(book *Book) {
+	if len(book.SegmentFiles) <= 1 {
+		return
+	}
+	for _, segFile := range book.SegmentFiles {
+		if book.SegmentHashes[segFile] != "" {
+			continue
+		}
+		h, herr := ComputeFileHash(segFile)
+		if herr != nil || h == "" {
+			continue
+		}
+		if book.SegmentHashes == nil {
+			book.SegmentHashes = make(map[string]string)
+		}
+		book.SegmentHashes[segFile] = h
+	}
+}
+
 // lookupSegments runs the multi-file vote once: every segment file is hashed
 // (the hashes are kept on book.SegmentHashes so createBookFilesForBookWithAudio does
 // not re-hash) and each match votes for its parent book. The book with the
@@ -310,17 +342,14 @@ func (e *scanExisting) lookupSegments(book *Book) {
 		return
 	}
 	store := getStore()
+	hashSegments(book)
 	bookVotes := make(map[string]int)
 	bookCandidates := make(map[string]*database.Book)
 	for _, segFile := range book.SegmentFiles {
-		h, herr := ComputeFileHash(segFile)
-		if herr != nil || h == "" {
+		h := book.SegmentHashes[segFile]
+		if h == "" {
 			continue
 		}
-		if book.SegmentHashes == nil {
-			book.SegmentHashes = make(map[string]string)
-		}
-		book.SegmentHashes[segFile] = h
 		candidate, lerr := store.GetBookBySegmentFileHash(h)
 		if lerr != nil {
 			// A failed lookup casts no vote, so it can only lower a book's count:
