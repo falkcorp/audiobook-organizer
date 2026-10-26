@@ -1,5 +1,5 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
 // last-edited: 2026-10-26
 
@@ -18,8 +18,10 @@ import (
 var ErrDiscardIncomplete = errors.New("merge: listening state was not fully discarded")
 
 // ErrDiscardedBookKept is returned (wrapped, with the delete's own failure)
-// by DiscardUserStateThenHardDelete when state WAS erased (at least one user or
-// bookmark) and the delete then failed, so the book was kept without it. Unlike
+// by DiscardUserStateThenHardDelete when state WAS erased (at least one user,
+// bookmark, or stored state row or position set, whether or not it held
+// anything a merge would carry) and the delete then failed, so the book was
+// kept without it. Unlike
 // ErrDiscardIncomplete, something irreversible happened: the owner asked for
 // the state to be dropped with the book, and the book is still there. A caller
 // must record it and must not report "nothing changed".
@@ -34,10 +36,19 @@ type DiscardedBookKeptError struct {
 	BookID string
 	// Users and Bookmarks are what was cleared before the delete failed.
 	Users, Bookmarks int
-	Err              error
+	// Records is how many stored rows were deleted in all: state rows and
+	// position sets, counting ones that held nothing carryable (a row that
+	// keeps only a progress-reset marker, say). It can be nonzero when Users
+	// and Bookmarks are both zero, and then it is all that was erased.
+	Records int
+	Err     error
 }
 
 func (e *DiscardedBookKeptError) Error() string {
+	if e.Users == 0 && e.Bookmarks == 0 {
+		return fmt.Sprintf("%d stored listening record(s) on %s (no progress, but reset markers or emptied state) were erased and the book was kept (the delete failed: %v)",
+			e.Records, e.BookID, e.Err)
+	}
 	return fmt.Sprintf("the listening progress of %d user(s) and %d bookmark(s) on %s was erased and the book was kept (the delete failed: %v)",
 		e.Users, e.Bookmarks, e.BookID, e.Err)
 }
@@ -122,11 +133,15 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 	}
 	defer database.LockUserBookStates(keys...)()
 	counted := map[string]bool{}
+	// records is every state row and position set deleted, carryable or not:
+	// it decides whether a failed delete is "nothing was erased".
+	records := 0
 	for _, u := range probe.users {
 		if u.ID == "" {
 			continue
 		}
-		had, err := discardUserState(db, deleter, canDelete, u.ID, bookID)
+		had, deleted, err := discardUserState(db, deleter, canDelete, u.ID, bookID)
+		records += deleted
 		if err != nil {
 			return res, err
 		}
@@ -146,37 +161,41 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("%w: %s after clearing: %w", ErrDiscardIncomplete, bookID, err)
 	}
 	if err := del(); err != nil {
-		if res.Users == 0 && res.Bookmarks == 0 {
-			// Nothing was erased, so this is an ordinary refused delete: the
+		if res.Users == 0 && res.Bookmarks == 0 && records == 0 {
+			// Nothing was erased (no counted user or bookmark, and no state
+			// row or position set deleted either), so this is an ordinary refused delete: the
 			// "progress was erased and the book kept" error would overstate it.
 			return res, err
 		}
-		return res, &DiscardedBookKeptError{BookID: bookID, Users: res.Users, Bookmarks: res.Bookmarks, Err: err}
+		return res, &DiscardedBookKeptError{BookID: bookID, Users: res.Users, Bookmarks: res.Bookmarks, Records: records, Err: err}
 	}
 	return res, nil
 }
 
-// discardUserState clears one user's state row and positions on bookID and
-// reports whether they held carryable state. The caller
+// discardUserState clears one user's state row and positions on bookID. had
+// reports whether they held carryable state; deleted counts the stored rows it
+// removed or emptied (the state row, and the position set when there was one),
+// carryable or not, even when it then fails part way. The caller
 // (DiscardUserStateThenHardDelete) holds the (userID, bookID) user-state
 // stripe across this and the hard delete after it.
-func discardUserState(db UserProgressMerger, deleter database.UserBookStateDeleter, canDelete bool, userID, bookID string) (had bool, err error) {
+func discardUserState(db UserProgressMerger, deleter database.UserBookStateDeleter, canDelete bool, userID, bookID string) (had bool, deleted int, err error) {
 	st, err := db.GetUserBookState(userID, bookID)
 	if err != nil {
-		return false, fmt.Errorf("%w: read state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+		return false, 0, fmt.Errorf("%w: read state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
 	}
 	pos, err := db.ListUserPositionsForBook(userID, bookID)
 	if err != nil {
-		return false, fmt.Errorf("%w: read positions user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+		return false, 0, fmt.Errorf("%w: read positions user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
 	}
 	had = hasCarryableState(st, pos)
 	if len(pos) > 0 {
 		if err := db.ClearUserPositions(userID, bookID); err != nil {
-			return had, fmt.Errorf("%w: clear positions user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+			return had, deleted, fmt.Errorf("%w: clear positions user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
 		}
+		deleted++
 	}
 	if st == nil {
-		return had, nil
+		return had, deleted, nil
 	}
 	if canDelete {
 		err = deleter.DeleteUserBookState(userID, bookID)
@@ -184,9 +203,14 @@ func discardUserState(db UserProgressMerger, deleter database.UserBookStateDelet
 		err = db.SetUserBookState(drainedUserState(*st))
 	}
 	if err != nil {
-		return had, fmt.Errorf("%w: clear state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
+		return had, deleted, fmt.Errorf("%w: clear state user=%s book=%s: %w", ErrDiscardIncomplete, userID, bookID, err)
 	}
-	return had, nil
+	// The row is gone (or, on a store that cannot delete, emptied of what it
+	// held: draining a row with only reset markers changes nothing).
+	if canDelete || hasCarryableState(st, nil) {
+		deleted++
+	}
+	return had, deleted, nil
 }
 
 // discardOwnBookmarks deletes each user's bookmarks under bookID's own sync

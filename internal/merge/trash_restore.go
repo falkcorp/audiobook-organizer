@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
 // last-edited: 2026-10-26
 
@@ -121,7 +121,19 @@ type pendingRepairScanner interface {
 // is returned wrapped, so errors.As reaches it. It judges the row as locked, not
 // as the caller read it earlier, so a row another writer trashed or restored in
 // between is judged on what this write does to it. It must not modify either
-// row. It does not run when the row is not in the trash and apply is nil
+// row.
+//
+// It runs twice for a row that is in the trash when read: first on a copy of
+// that read with the restore and apply applied, before the merge redirect is
+// removed, so a refusal there changes nothing and needs no compensating write;
+// then inside the write, which is the authority. Both calls run while
+// LockMergeRMW, the version-group locks and, for the second, the book's write
+// stripe are held, so it must be a pure function of the two rows it is given:
+// it must not call the store, take any lock, or block on anything that could
+// (a permission lookup by owner, a GetBookByID), or it deadlocks or judges a
+// row other than the one being written. apply is called with the same
+// constraint: it runs on the preview copy as well as on the locked row. The
+// judge does not run when the row is not in the trash and apply is nil
 // (nothing is written then).
 //
 // handOff, when set, replaces the default hand-off and runs after every write
@@ -268,6 +280,23 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 		// never write through the row's, so a shallow copy leaves book alone.
 		preview := *book
 		restoreRow(&preview)
+		// The judge sees the row as the write will leave it BEFORE the
+		// redirect is touched, so a refusal never depends on the best-effort
+		// put-back below. apply runs on a second copy (it is a pure function
+		// of the row, see the doc comment); the listable decision keeps
+		// reading the restore alone, as it always did. The call under the
+		// book's write lock below stays the authority: this one reads the row
+		// before that lock is taken.
+		if judge != nil {
+			judged := preview
+			if apply != nil {
+				apply(&judged)
+			}
+			if err := judge(book, &judged); err != nil {
+				unlockGroup()
+				return res, fmt.Errorf("restore %s: %w", id, err)
+			}
+		}
 		if listable(&preview) {
 			if res.RedirectFrom, err = clearRestoredRedirect(store, id); err != nil {
 				unlockGroup()

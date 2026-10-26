@@ -1,5 +1,5 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
 // last-edited: 2026-10-26
 
@@ -394,6 +394,38 @@ func TestDiscardUserState_DeleteFailureWithNothingErasedIsThePlainError(t *testi
 	require.False(t, errors.As(err, &kept))
 	require.Zero(t, res.Users)
 	require.Zero(t, res.Bookmarks)
+}
+
+// A state row that holds nothing a merge would carry (here only a progress-reset
+// marker, as an earlier carry leaves) is still deleted by a discard. When the
+// delete is then refused, that row is gone, so the error is the "erased and
+// kept" one (which makes the caller write its audit row), not the plain refusal,
+// even though no user or bookmark was counted.
+func TestDiscardUserState_DeleteFailureAfterErasingAnUncarryableRowIsDiscardedBookKept(t *testing.T) {
+	s := setupTestStore(t).(*database.PebbleStore)
+	_, doomed := seedSyncBooks(t, s)
+	u := seedSyncUser(t, s)
+	resetAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: doomed, ProgressResetAt: &resetAt}))
+	st, err := s.GetUserBookState(u.ID, doomed)
+	require.NoError(t, err)
+	require.NotNil(t, st, "fixture: the marker-only row is stored")
+	require.False(t, hasCarryableState(st, nil), "fixture: nothing in it is carryable")
+
+	cause := errors.New("delete refused")
+	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { return cause })
+
+	require.ErrorIs(t, err, ErrDiscardedBookKept)
+	require.ErrorIs(t, err, cause)
+	var kept *DiscardedBookKeptError
+	require.ErrorAs(t, err, &kept)
+	require.Equal(t, 1, kept.Records)
+	require.Zero(t, res.Users, "no user held carryable state")
+	require.Zero(t, res.Bookmarks)
+	require.Contains(t, err.Error(), "erased and the book was kept")
+	gone, err := s.GetUserBookState(u.ID, doomed)
+	require.NoError(t, err)
+	require.Nil(t, gone, "the marker row really was deleted")
 }
 
 // B: a bookmark under an alias of the book's id (an earlier merge loser
