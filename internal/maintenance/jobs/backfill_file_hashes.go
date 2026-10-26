@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.2.0
+// version: 4.3.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 func init() { maintenance.Register(&backfillFileHashesJob{}) }
@@ -213,11 +214,13 @@ type hbFile interface {
 	Stat() (os.FileInfo, error)
 }
 
-// hbReportPerm is the mode a new report file is created with: owner read and
-// write, group read, nothing for anyone else and no group write. The report sits
-// inside the library share, which other users may be able to write to, and it is
-// read back on resume (see the trust note on loadPrior).
-const hbReportPerm = 0o640
+// hbReportPerm is the mode a new report file is created with: util.FileMode,
+// the repo's standard (group write kept, because on a POSIX-ACL filesystem the
+// group bits are the ACL mask and dropping group write would silently strip the
+// write access the operator granted). Never world-writable. The report sits
+// inside the library share and is read back on resume, which is why it is vetted
+// on the open descriptor and not trusted (see the trust note on loadPrior).
+const hbReportPerm = util.FileMode
 
 // hbMaxReportBytes caps the size of a report that is read back on resume, and
 // hbMaxReportLine the length of one of its lines. The expected report is about
@@ -429,13 +432,16 @@ func (r *hashBackfillReport) loadPrior(seeded *hashBackfillCounts) (good, total 
 			}
 			return 0, 0, false, fmt.Errorf("existing report line %d has an invalid file or book ID", lineNo)
 		}
-		if _, dup := r.done[fields[1]]; !dup {
-			if !seeded.add(fields[0]) {
-				if atEOF {
-					return good, total, unterminated, nil
-				}
-				return 0, 0, false, fmt.Errorf("existing report line %d has an unknown bucket %q", lineNo, fields[0])
+		// The bucket is checked on every line, a repeated file ID included: a
+		// duplicate with a garbage bucket must not be accepted and kept.
+		if !seeded.valid(fields[0]) {
+			if atEOF {
+				return good, total, unterminated, nil
 			}
+			return 0, 0, false, fmt.Errorf("existing report line %d has an unknown bucket %q", lineNo, fields[0])
+		}
+		if _, dup := r.done[fields[1]]; !dup {
+			seeded.add(fields[0])
 			// Clone: fields[1] is a substring that would pin its whole line, so a
 			// 515k-row ledger would hold every line's bytes, not just the IDs.
 			r.done[strings.Clone(fields[1])] = struct{}{}
@@ -526,6 +532,11 @@ type hbOutcome struct {
 	reason string
 	hash   string // the computed hash, for a hashed row
 	bf     database.BookFileCore
+	// written is set by storeHash when its conditional store wrote the row (or
+	// failed in a way that may have written it), so the row's book needs an
+	// aggregate recompute. A row that already had a hash, or that changed
+	// meanwhile, wrote nothing and is not marked.
+	written bool
 }
 
 // hashBackfillRun is one Run's state, shared by the worker pool.
@@ -618,6 +629,17 @@ func (r *hashBackfillRun) onNotFound(bf database.BookFileCore, msg string) hbOut
 	return hbOutcome{bucket: bucket, reason: reason, bf: bf}
 }
 
+// hbHasNotFound reports whether any outcome is an under-root not-found, the
+// only outcome a dropped mount can forge.
+func hbHasNotFound(outs []hbOutcome) bool {
+	for _, o := range outs {
+		if o.bucket == hbBucketNotFound {
+			return true
+		}
+	}
+	return false
+}
+
 // hbCommitHook, when set, is called at fixed points inside commitChunk
 // ("after-journal", "after-store", "after-flush", "after-commit") with the stage name and the chunk's first row index; a non-nil error stops the commit
 // there, leaving on disk exactly what a process kill at that point would leave.
@@ -666,7 +688,7 @@ const hbJournalVersion = 1
 // path.
 func hbJournalStateID(opID string) string { return opID + ":params" }
 
-// writeJournal durably records the chunk's counted outcomes BEFORE any hash is
+// writeJournal durably records the chunk's hashed outcomes BEFORE any hash is
 // stored, in the operation's own state in the database (SaveOperationState syncs
 // the write), so a record either exists whole or not at all. It exists for one
 // reason: storing the hashes and writing the report rows are two steps a kill can
@@ -678,12 +700,17 @@ func hbJournalStateID(opID string) string { return opID + ":params" }
 // It is removed once the rows are on disk in the report; if one is found on
 // resume, replayJournal finishes the job.
 func (r *hashBackfillRun) writeJournal(outs []hbOutcome) (bool, error) {
-	if r.journalID == "" {
-		return false, nil
+	if r.journalID == "" || r.dryRun {
+		return false, nil // a dry run stores nothing, so it has nothing to protect
 	}
 	j := hbJournal{Version: hbJournalVersion, OpID: r.opID}
 	for _, o := range outs {
-		if o.bucket == "" {
+		// Only a hash about to be stored needs a record. Every other outcome
+		// (not-found, read error, no path) stores nothing, so after a kill it is
+		// in neither the journal nor the report, and the resume simply decides it
+		// again and counts it once. Journaling them would write about 515k
+		// entries per run, synced, for nothing.
+		if o.bucket != hbBucketHashed {
 			continue
 		}
 		j.Entries = append(j.Entries, hbJournalEntry{Bucket: o.bucket, Reason: o.reason, Hash: o.hash,
@@ -726,22 +753,31 @@ func hbSameRow(row *database.BookFile, bf database.BookFileCore) bool {
 }
 
 // storeHash stores one outcome's hash CONDITIONALLY, under the row's lock
-// (ModifyBookFile): only if the row still has no hash and still points at the
-// file that was hashed. The hash was computed from the file at bf.FilePath some
-// time ago (up to a whole chunk of reads, or a process restart for a replayed
-// journal); a row repointed to a twin or a re-encoded copy since then must not
-// receive the old file's hash, because SetBookFileHash-style writes also make it
-// the row's permanent original_file_hash. A row that changed is not an error: it
-// is counted as busy and retried next run. A row that already has a hash keeps
-// it and counts as hashed.
+// (ModifyBookFileDeferAggregates): only if the row still has no hash and still
+// points at the file that was hashed. The hash was computed from the file at
+// bf.FilePath some time ago (up to a whole chunk of reads, or a process restart
+// for a replayed journal); a row repointed to a twin or a re-encoded copy since
+// then must not receive the old file's hash, because SetBookFileHash-style writes
+// also make it the row's permanent original_file_hash. A row that changed is not
+// an error: it is counted as busy and retried next run. A row that already has a
+// hash keeps it and counts as hashed.
 //
-// TODO(#4169): once PR #4169 lands, ModifyBookFile runs this callback under
+// The store call is the variant that does NOT recompute the book's aggregates:
+// that would decode every file row of the book once per stored hash (a
+// 400-chapter book: 400 recomputes, 160k row decodes). The hash does feed the
+// stored aggregate (a missing row whose hash matches a present row is absorbed
+// into it, book_runtime.go), so the book IS recomputed, once per chunk, by
+// recomputeBooks. An outcome that may have written the row is marked written for
+// that.
+//
+// TODO(#4169): once PR #4169 lands, the store runs this callback under
 // compare-and-swap and returns database.ErrBookFileConflict when other writers
-// keep changing the row; match that here too, next to ErrBookFileChangedSince
-// (the generic changed-since error main already has).
+// keep changing the row; count that as busy here. (database.ErrBookFileChangedSince,
+// the generic changed-since error main has, comes only from PatchBookFileFields:
+// ModifyBookFile* never returns it, so it is not matched.)
 func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 	var already, changed bool
-	row, err := r.store.ModifyBookFile(o.bf.BookID, o.bf.ID, func(row *database.BookFile) error {
+	row, err := r.store.ModifyBookFileDeferAggregates(o.bf.BookID, o.bf.ID, func(row *database.BookFile) error {
 		switch {
 		case row.FileHash != "":
 			already = true
@@ -760,11 +796,10 @@ func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 		return nil
 	})
 	switch {
-	case errors.Is(err, database.ErrBookFileChangedSince):
-		o.bucket, o.reason = hbBucketBusy, hbBusyReason
-		msg := err.Error()
-		r.log("warn", "Row busy, will retry next run: "+o.bf.FilePath, &msg)
 	case err != nil:
+		// A failed write may still have been applied (an fsync that failed after
+		// the commit), so its book is recomputed too.
+		o.written = !already && !changed
 		msg := err.Error()
 		o.bucket, o.reason = hbBucketWriteError, msg
 		slog.Error("backfill-file-hashes store hash failed", "details", msg)
@@ -775,6 +810,8 @@ func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 		r.log("warn", "Row changed, will retry next run: "+o.bf.FilePath, &msg)
 	case already:
 		o.reason = "hash already stored"
+	default:
+		o.written = true
 	}
 }
 
@@ -799,6 +836,56 @@ func (r *hashBackfillRun) storeHashes(outs []hbOutcome) {
 	_ = g.Wait() // the closures never return an error
 }
 
+// recomputeBooks recomputes the stored aggregates of every distinct book that
+// had a hash written, ONCE per book however many of its rows were written (see
+// storeHash). all selects every book with a stored hash instead, whether or not
+// this call wrote it: a replayed journal cannot know whether the dead run got as
+// far as this step for a row it finds already stored, so it recomputes them all.
+// Books are independent, so they run on a bounded pool. It returns the first
+// failure after trying every book: a recompute that fails stops the chunk before
+// its rows are recorded, so the journal is kept and a resume replays and
+// recomputes again, rather than leaving a stored hash behind a stale aggregate
+// that nothing would ever revisit. Does nothing in a dry run.
+func (r *hashBackfillRun) recomputeBooks(outs []hbOutcome, all bool) error {
+	if r.dryRun {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var books []string
+	for _, o := range outs {
+		if all {
+			if o.bucket != hbBucketHashed && o.bucket != hbBucketWriteError {
+				continue
+			}
+		} else if !o.written {
+			continue
+		}
+		if _, dup := seen[o.bf.BookID]; dup {
+			continue
+		}
+		seen[o.bf.BookID] = struct{}{}
+		books = append(books, o.bf.BookID)
+	}
+	var g errgroup.Group
+	g.SetLimit(r.workers)
+	var mu sync.Mutex
+	var first error
+	for _, id := range books {
+		g.Go(func() error {
+			if err := r.store.RecomputeBookAggregates(id); err != nil {
+				mu.Lock()
+				if first == nil {
+					first = fmt.Errorf("recompute aggregates of book %s: %w", id, err)
+				}
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // the closures never return an error
+	return first
+}
+
 // recordOutcomes counts every outcome and writes its row to the report, then
 // flushes and fsyncs the report, so the rows are on disk when it returns.
 func (r *hashBackfillRun) recordOutcomes(outs []hbOutcome) error {
@@ -821,9 +908,9 @@ func (r *hashBackfillRun) recordOutcomes(outs []hbOutcome) error {
 }
 
 // commitChunk makes a fully processed chunk real, in this order: journal the
-// chunk's outcomes (durably), store the hashes (unless dry-run), count every
-// outcome and write the chunk's rows to the report, flush and fsync them, then
-// remove the journal. The caller saves the checkpoint right after. So a chunk
+// chunk's hashed outcomes (durably), store the hashes (unless dry-run), recompute
+// each affected book's aggregates once, count every outcome and write the chunk's
+// rows to the report, flush and fsync them, then remove the journal. The caller saves the checkpoint right after. So a chunk
 // cancelled before this point has stored, counted and written nothing, and a
 // process killed anywhere inside it leaves either nothing (before the journal
 // exists) or a complete journal that the next run replays, so no hash is ever
@@ -850,6 +937,11 @@ func (r *hashBackfillRun) commitChunk(chunkStart int, outs []hbOutcome) error {
 	if err := hbHook("after-store", chunkStart); err != nil {
 		return err
 	}
+	// Once per book, after every hash of the chunk is stored and BEFORE the rows
+	// are recorded: a failure here leaves the journal, and the resume recomputes.
+	if err := r.recomputeBooks(outs, false); err != nil {
+		return err
+	}
 	if err := r.recordOutcomes(outs); err != nil {
 		return err
 	}
@@ -868,8 +960,8 @@ func (r *hashBackfillRun) commitChunk(chunkStart int, outs []hbOutcome) error {
 // the dead run left in the operation's state, drops the rows the report already
 // lists, stores the journaled hash of each remaining hashed row (conditionally,
 // see storeHash: the file is not read again, and a row that already has a hash or
-// no longer matches is left alone), counts and lists them, and removes the
-// journal. It returns how many rows it recovered. No journal is not an error. A
+// no longer matches is left alone), recomputes the aggregates of their books,
+// counts and lists them, and removes the journal. It returns how many rows it recovered. No journal is not an error. A
 // journal that does not parse, belongs to another operation, or holds an invalid
 // entry is an error: it is the only source of the hashes this stores.
 func (r *hashBackfillRun) replayJournal() (int, error) {
@@ -906,6 +998,9 @@ func (r *hashBackfillRun) replayJournal() (int, error) {
 			bf: database.BookFileCore{ID: e.FileID, BookID: e.BookID, FilePath: e.Path, FileSize: e.Size, LastScanMtime: e.Mtime}})
 	}
 	r.storeHashes(outs)
+	if err := r.recomputeBooks(outs, true); err != nil {
+		return 0, err
+	}
 	if err := r.recordOutcomes(outs); err != nil {
 		return 0, err
 	}
@@ -980,8 +1075,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 		run.root = filepath.Clean(root)
 		path, rerr := libroot.ReportPathNotify(root, "", hashBackfillReportName(opID, time.Now()), func(dir string, was fs.FileMode) {
-			hbLog.Warn("tightened the report directory to %o, it was writable by group or others (mode %o) dir=%s",
-				libroot.ReportDirPerm, was, logger.SanitizeLogValue(dir))
+			hbLog.Warn("removed world write from the report directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
 		})
 		if rerr != nil {
 			return fmt.Errorf("backfill-file-hashes: refusing to run: %w", rerr)
@@ -1070,6 +1164,18 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		if gerr := g.Wait(); gerr != nil {
 			return gerr
 		}
+		// A share that drops mid-run makes every later path under it answer
+		// not-found, which would be reported (and, on a resume, skipped) as a
+		// library of missing files. So a chunk that found files absent under the
+		// root has the root's mount checked again before its rows are recorded; if
+		// it no longer looks mounted the run stops, and a resume decides the chunk
+		// again. A chunk with no under-root not-found has nothing to distrust, so
+		// the common case costs no directory read.
+		if run.root != "" && hbHasNotFound(outs) {
+			if merr := libroot.Mounted(run.root); merr != nil {
+				return fmt.Errorf("backfill-file-hashes: chunk at row %d: the library root no longer looks mounted, so its not-found rows are not recorded: %w", start, merr)
+			}
+		}
 		// The report is the run's deliverable: stop rather than hash on while rows
 		// are being dropped from it.
 		if rerr := run.commitChunk(start, outs); rerr != nil {
@@ -1115,9 +1221,13 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	return nil
 }
 
-// Policy: ResumeRestart because this job checkpoints via
-// operations.SaveCheckpoint, so a resumed run has real progress to reload.
-// PR-2 moves it to reporter.Checkpoint; the policy is unchanged by that move.
+// Policy: ResumeRestart because a restarted run resumes exactly: the progress
+// record is the per-run report (every row the run reached is listed in it) plus
+// the hashes already stored, which a rerun of the same operation reads back and
+// skips. The checkpoint (operations.SaveCheckpoint) is only a "started" marker
+// that lets the summary say a run was resumed when no earlier report survives; it
+// carries no row index. PR-2 moves the marker to reporter.Checkpoint; the policy
+// is unchanged by that move.
 func (j *backfillFileHashesJob) Policy() maintenance.ExecutionPolicy {
 	return maintenance.RestartPolicy()
 }

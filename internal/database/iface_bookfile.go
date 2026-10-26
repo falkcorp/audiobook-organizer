@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-13
+// last-edited: 2026-10-26
 
 package database
 
@@ -92,6 +92,10 @@ type BookFileUpserter interface {
 	// fn returning ErrSkipBookFileWrite writes nothing. See
 	// pebble_store_bookfile_modify.go.
 	ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	// ModifyBookFileDeferAggregates is ModifyBookFile without the per-write
+	// RecomputeBookAggregates; the caller recomputes the book once after its
+	// batch of writes to it. See pebble_store_bookfile_modify.go.
+	ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BookFileBatchUpserter
 }
 

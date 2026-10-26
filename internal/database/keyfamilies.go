@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -257,7 +257,7 @@ var keyFamilies = []KeyFamily{
 	{"opchange_undecodable:", "undecodable operation change markers", "internal/database/pebble_store_opchange_index.go"},
 	{"operation:", "v1 operation rows", "internal/database/pebble_store_operations.go"},
 	{"operationlog:", "v1 operation logs", "internal/database/pebble_store_operations.go"},
-	{"opstate:", "v1 operation state (checkpoints); :params suffix is legacy, swept by DeleteOperationState", "internal/database/pebble_store_operations.go"},
+	{"opstate:", "v1 operation state (checkpoints); the opstate:<opID>:params suffix is LIVE, not legacy: it is the backfill-file-hashes chunk journal (a crash-recovery record, internal/maintenance/jobs/backfill_file_hashes.go), so a cleanup must not sweep it; DeleteOperationState removes it with the op", "internal/database/pebble_store_operations.go"},
 	{"opsummary:", "v1 operation summaries", "internal/database/pebble_store_operations.go"},
 	{"opv2:", "operations v2", "internal/database/pebble_store_ops_v2.go"},
 	{"opv2:act:", "operations v2 active set", "internal/database/pebble_store_ops_v2.go"},

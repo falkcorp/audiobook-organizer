@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -312,6 +312,11 @@ type jobBookFileWriter interface {
 	// (bulk-deluge-import marks a file already in the library imported with
 	// it, writing ImportedFromDelugeAt only).
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	// ModifyBookFileDeferAggregates is ModifyBookFile without the per-write book
+	// aggregate recompute; the caller calls RecomputeBookAggregates once per
+	// book after its writes (backfill-file-hashes stores a chunk's hashes this
+	// way, so a 400-chapter book is recomputed once, not 400 times).
+	ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 type jobBookFileStore interface {

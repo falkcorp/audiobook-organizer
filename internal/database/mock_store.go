@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.153.0
+// version: 1.154.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -594,6 +594,7 @@ type MockStore struct {
 	UpsertBookFileFunc                      func(file *BookFile) error
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	ModifyBookFileDeferAggregatesFunc       func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	BatchUpsertBookFilesKeepPathsFunc       func(files []*BookFile) error
 	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
@@ -3549,6 +3550,16 @@ func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) err
 		return &row, nil
 	}
 	return nil, nil
+}
+
+// ModifyBookFileDeferAggregates uses ModifyBookFileDeferAggregatesFunc when set;
+// otherwise it behaves as ModifyBookFile (the mock keeps no aggregates, so there
+// is nothing to defer), so a test that only stubs ModifyBookFileFunc keeps working.
+func (m *MockStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	if m.ModifyBookFileDeferAggregatesFunc != nil {
+		return m.ModifyBookFileDeferAggregatesFunc(bookID, fileID, fn)
+	}
+	return m.ModifyBookFile(bookID, fileID, fn)
 }
 
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {

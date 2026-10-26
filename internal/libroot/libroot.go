@@ -1,12 +1,13 @@
 // file: internal/libroot/libroot.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
 // last-edited: 2026-10-26
 
 // Package libroot holds the two checks every library-wide maintenance op makes
 // against the library root before it trusts what it finds there: that the root
 // is really mounted, and that a per-row report can be written under it. It
-// imports only the standard library, so the maintenance plugin and the legacy
+// imports only the standard library and the permission constants in
+// internal/util (a layer-0 leaf), so the maintenance plugin and the legacy
 // maintenance jobs share one copy instead of each keeping their own.
 package libroot
 
@@ -17,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Mounted refuses to proceed when the library root is unset, unreadable or
@@ -64,23 +67,17 @@ func Mounted(root string) error {
 // under `go test` is the package source directory.
 const ReportDirName = ".reports"
 
-// ReportPath returns where an op writes its report: the caller's explicit path
-// when one was given, otherwise {root}/.reports/<fileName>. It proves the
+// ReportPathNotify returns where an op writes its report: the caller's explicit
+// path when one was given, otherwise {root}/.reports/<fileName>. It proves the
 // path's directory exists and is writable before returning, so an op can call
 // it BEFORE doing any work and fail with nothing done rather than apply and
 // then lose its record. It returns an error, rather than guessing, when root is
-// unset or not absolute and no explicit path was given. It is ReportPathNotify
-// without a notification; ops that have a logger call that instead, so a
-// directory the helper tightened is on the record.
-func ReportPath(root, explicit, fileName string) (string, error) {
-	return ReportPathNotify(root, explicit, fileName, nil)
-}
-
-// ReportPathNotify is ReportPath, plus a callback: when the default report
-// directory already existed with group or world write and was tightened to
-// ReportDirPerm, onTightened (when not nil) is called with the directory and the
-// mode it had. libroot imports no module package, so it cannot log itself; the
-// caller does.
+// unset or not absolute and no explicit path was given.
+//
+// onTightened, when not nil, is called when the default report directory already
+// existed with world write and that bit was removed: it gets the directory and
+// the permission bits it had. libroot imports no module package other than the
+// permission constants in internal/util, so it cannot log; the caller does.
 func ReportPathNotify(root, explicit, fileName string, onTightened func(dir string, was fs.FileMode)) (string, error) {
 	path := explicit
 	if path == "" {
@@ -111,19 +108,24 @@ func ReportPathNotify(root, explicit, fileName string, onTightened func(dir stri
 // ensureReportsDir prepares the default report directory, {root}/.reports. That
 // directory is inside the library share, which other users may be able to write,
 // so before anything is written to it, it must be what this process made: it is
-// created (0750) when absent, and when it exists it must be a real directory
-// (not a symlink somebody planted to redirect the reports) owned by the user this
-// process runs as. Lstat is used so a symlink is seen as a symlink. An owned
-// directory that group or others can write (an older build created it 0775) is
-// tightened to ReportDirPerm and reported through onTightened; it is refused only
-// when it is not ours or the chmod fails, because a directory this user owns is
-// this user's to correct. There is a small window between this check and the
-// later file open; the open itself refuses a symlink (O_NOFOLLOW) and checks the
-// file's owner.
+// created (util.DirMode) when absent, and when it exists it must be a real
+// directory (not a symlink somebody planted to redirect the reports) owned by the
+// user this process runs as. Lstat is used so a symlink is seen as a symlink.
+//
+// An owned directory that anyone can write (an older build created it 0777-ish)
+// has world write, and only world write, removed, and onTightened is told. Group
+// bits, the setgid and sticky bits, and any POSIX ACL are left exactly as they
+// are: on a POSIX-ACL filesystem the group bits ARE the ACL mask (see
+// util.DirMode), so clearing group write would silently strip the write access of
+// every named user and group the operator granted, and the setgid bit keeps new
+// files in the share's group. The directory is refused only when it is not ours,
+// is not a directory, or the chmod fails. There is a small window between this
+// check and the later file open; the open itself refuses a symlink (O_NOFOLLOW)
+// and checks the file's owner.
 func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode)) error {
 	info, err := os.Lstat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		if merr := os.Mkdir(dir, ReportDirPerm); merr != nil && !errors.Is(merr, fs.ErrExist) {
+		if merr := os.Mkdir(dir, util.DirMode); merr != nil && !errors.Is(merr, fs.ErrExist) {
 			return merr
 		}
 		info, err = os.Lstat(dir)
@@ -139,9 +141,12 @@ func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode))
 	case !OwnedByCurrentUser(info):
 		return fmt.Errorf("%s is not owned by the user this process runs as; refusing to trust it", dir)
 	}
-	if was := info.Mode().Perm(); was&0o022 != 0 {
-		if cerr := chmodDir(dir, ReportDirPerm); cerr != nil {
-			return fmt.Errorf("%s is writable by group or others (mode %o) and could not be tightened to %o: %w", dir, was, ReportDirPerm, cerr)
+	if was := info.Mode().Perm(); was&worldWrite != 0 {
+		// Perm bits plus the setuid, setgid and sticky bits, minus world write.
+		// Dropping the special bits here would be a second change nobody asked for.
+		next := info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky) &^ worldWrite
+		if cerr := chmodDir(dir, next); cerr != nil {
+			return fmt.Errorf("%s is writable by everyone (mode %o) and world write could not be removed: %w", dir, was, cerr)
 		}
 		if onTightened != nil {
 			onTightened(dir, was)
@@ -150,17 +155,11 @@ func ensureReportsDir(dir string, onTightened func(dir string, was fs.FileMode))
 	return probeWritable(dir)
 }
 
+// worldWrite is the "other" write permission bit.
+const worldWrite fs.FileMode = 0o002
+
 // chmodDir changes a directory's mode; a variable so a test can make it fail.
 var chmodDir = os.Chmod
-
-// ReportDirPerm is the mode a report directory is created with: owner full
-// access, group read and search, nothing for anyone else and no group write. The
-// directory sits inside the library share, which other users may be able to
-// write to, and some operations read their reports back, so it is not created
-// group-writable. The default directory ({root}/.reports) is checked when it
-// already exists, see ensureReportsDir; a directory behind an explicit report
-// path keeps whatever mode it has.
-const ReportDirPerm = 0o750
 
 // EnsureDirWritable creates the directory that will hold path and proves a
 // file can be created in it, by creating and removing a probe file. MkdirAll
@@ -168,7 +167,7 @@ const ReportDirPerm = 0o750
 // later write will land.
 func EnsureDirWritable(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, ReportDirPerm); err != nil {
+	if err := os.MkdirAll(dir, util.DirMode); err != nil {
 		return err
 	}
 	return probeWritable(dir)

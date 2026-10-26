@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-26-hash-backfill-not-found-report-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: d7aaaf61-bcb5-45c2-947a-ffd1e4655e3c -->
 <!-- last-edited: 2026-10-26 -->
 
 # The file-hash backfill now reports missing files instead of warning about each one
 
-- Pull request: not yet opened (replaces #4158 and #4170)
+- Pull request: #4174 (replaces #4158 and #4170)
 - Related: the earlier design that marked missing files on each book record was rejected by the owner and is not part of this change
 
 ## Executive Summary
@@ -19,7 +19,9 @@
   instead of warned about. Only the first 50 are written to the activity log.
   Every file the run looks at that had no fingerprint is written, one line each,
   to a report file kept in a hidden reports folder inside the library, so a
-  person can read what is missing and decide what to do.
+  person can read what is missing and decide what to do. A restarted run of the
+  same job skips the files already listed; a brand new run checks them again, so
+  a file that has come back is fingerprinted then.
 - **Nothing is changed on the book records.** A missing file leaves its record
   exactly as it was. The only thing the job ever stores is the fingerprint of a
   file that exists.
@@ -77,7 +79,8 @@
 - **The fix.** The job no longer relies on a bookmark to know where to restart.
   Every run starts from the first file, skips any file that already has a
   fingerprint or is already listed in the report, and starts its totals from the
-  report, so the final totals cover the whole job. A report belonging to an
+  report, so the final totals cover the whole job. This is about restarting the
+  same job: a new run starts with a new report and looks at missing files again. A report belonging to an
   earlier attempt is never started over. Each batch's report lines are written only
   after the batch is safely recorded, so a batch that is stopped half way leaves
   nothing behind and is simply redone. If the job knows it was started before but
@@ -85,8 +88,10 @@
   totals may cover only part of the job. A report whose last line is missing its
   line break, or that was saved with Windows-style line breaks, is still read.
 
-  Before a batch is stored, the job also writes a small note listing what it
-  decided for that batch and forces it to disk, and removes the note only once
+  Before a batch is stored, the job also writes a small note listing the
+  fingerprints it is about to save for that batch (nothing is noted for files that
+  are missing or unreadable, since nothing is saved for them, and a preview writes
+  no note) and forces it to disk, and removes the note only once
   the batch's report lines are safely on disk. The note is kept in the job's own
   saved record in the database, not in a file. If the server is killed at any
   point in between, the next run finds the note and finishes the batch: it lists
@@ -101,18 +106,31 @@
   takes a fingerprint, a file location or anything else from it, and a line that
   does not look like a real entry stops the job with an error. A doctored report
   can therefore make the job skip a file, but never write anything to a book
-  record. The report is also created readable by the owner and group only, and
-  the job will not write through a shortcut (symbolic link) left in its place.
+  record. The report is created with the standard file permissions the rest of the
+  application uses (owner and group can write), and the job will not write through a shortcut (symbolic link) left in its place.
   Before it reads a report back, it checks that the file is an ordinary file
   made by the same user the server runs as, that it is not unreasonably large,
   and that no line is unreasonably long. The reports folder itself is checked
   the same way before anything is written to it: if it is a shortcut to somewhere
   else or belongs to another user, the job refuses to use it, and if it belongs
-  to the server's own user but can be edited by others, the job tightens it so only
-  the owner can edit it and records that it did. This check is shared by the other
-  jobs that write reports, so the first of them to run after the next deploy will
-  tighten a reports folder that is currently editable by group members; nobody has
-  to do it by hand, but group members lose the ability to write there.
+  to the server's own user but anyone at all can edit it, the job removes only that
+  "anyone can edit" permission and records that it did. Group access and every
+  other setting on the folder are left as they were, so people who could use it
+  before still can. This check is shared by the other jobs that write reports;
+  on a folder that is not open to everyone (the production one is not) it changes
+  nothing, and nobody has to do anything by hand before the deploy.
+
+  Saving the fingerprints also updates each book's totals (such as its overall
+  size and duration). The job used to refresh a book's totals once for every file
+  it fingerprinted; it now refreshes each book once per batch, however many of its
+  files were fingerprinted in that batch. If that refresh fails the job stops and
+  the next run repeats it, and a run that was stopped after saving fingerprints but
+  before refreshing the totals still refreshes them when it is resumed.
+
+  While running, the job also checks again that the library drive is still
+  attached whenever a batch finds files missing. If the drive drops out partway
+  through, the job stops with an error and keeps the earlier part of the report,
+  instead of listing the rest of the library as missing.
 
 ## When the job refuses to start
 

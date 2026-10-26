@@ -8,7 +8,10 @@ rather than a read error.
 A hash attempt that fails with not-found (ENOENT or ENOTDIR) is now its own
 counted outcome, `not_found`, instead of a warning. Nothing is written to the
 database for such a file: no new column, no flag on the row, and `Missing` is
-untouched. Only the first 50 not-found paths go to the operation log. Every row
+untouched. Only the first 50 not-found paths go to the operation log. A not-found row is
+skipped only by a resume of the same operation (which reads its report back); a
+new run is a new operation with a new report and checks those files again, so a
+file that has reappeared is hashed then. Every row
 the run reaches that has no hash is written to a per-row TSV report at
 `{root_dir}/.reports/backfill-file-hashes-<op id>.tsv` (bucket, file_id, book_id,
 path, reason; the buckets are `hashed`, `not-found`, `not-found-outside-root`,
@@ -33,15 +36,21 @@ changed, between the hash and the store gets nothing stored: it is counted as
 `busy`, listed in the report with the reason "row changed since the file was
 hashed, retried next run", and retried by the next run. A row another writer
 hashed in the meantime keeps that hash and is counted as `hashed` with the reason
-"hash already stored". A write that fails with the store's changed-since error
-(`database.ErrBookFileChangedSince`) is also `busy`, listed with the reason "row
-was busy, retried next run", and is no longer counted as a write error. The same
-conditional store is used when a chunk journal is replayed after a restart.
-`TODO(#4169)`: once the store gains compare-and-swap and a
-`database.ErrBookFileConflict`, map that error to `busy` too. `ModifyBookFile`
-recomputes the book's aggregates once per stored hash, which costs more than the
-plain hash write did; on the prod library few rows get a hash (most files are
-missing), so the extra work is small.
+"hash already stored". The same conditional store is used when a chunk journal is replayed after a
+restart. `TODO(#4169)`: once the store gains compare-and-swap and a
+`database.ErrBookFileConflict`, map that error to `busy` too.
+
+A stored hash feeds the book's aggregates, so they must be recomputed, but not
+once per file: the job stores each hash through
+`ModifyBookFileDeferAggregates` (the same conditional write as `ModifyBookFile`,
+without its per-row recompute) and then calls `RecomputeBookAggregates` once per
+distinct book per chunk, after the chunk's hashes are stored and before its
+report rows are recorded. A book with N files hashed in the same chunk costs one
+recompute, not N. If a recompute fails, the run stops with the chunk's journal
+still in place, so the resume recomputes those books again; the journal replay
+also recomputes the books of rows it finds already stored, so a run killed after
+its stores and before its recompute still ends with correct aggregates. A dry run
+stores nothing and recomputes nothing.
 
 A run that is cancelled, killed or restarted part way (for example by a server
 restart) and then resumed now ends with exactly the report and totals an
@@ -66,7 +75,9 @@ error instead of guessing; a last row that lacks its newline, or a report with
 CRLF line endings, is accepted. If closing the report fails after the last
 chunk, the op fails and saves no "completed" summary.
 
-Each chunk is also journaled before anything in it is stored: its outcomes are
+Each chunk is also journaled before anything in it is stored: the outcomes that
+store a hash (not the not-found, read-error or no-path rows, which store nothing
+and are simply decided again after a kill; nothing at all in a dry run) are
 written to the operation's own saved state in the database (the
 `opstate:<op id>:params` key, synced to disk), the hashes are stored, the report
 rows are written and fsynced, and only then is the journal deleted. If the
@@ -94,25 +105,31 @@ descriptor is checked before anything is read: it must be a regular file owned b
 the user the server runs as and no larger than 512 MiB (about 4x the expected
 size), lines are read through a 64 KiB bounded reader, and a report that breaks
 any of this stops the resume with an error (a fresh report is vetted before it is
-emptied). A new report is created `0640`. A forged line can still make the job
+emptied). A new report file is created with the standard file mode (`util.FileMode`,
+`0664`). A forged line can still make the job
 skip a row it would have hashed, never write one.
 
 The default report directory, `{root_dir}/.reports`, is vetted by `libroot` before
-any op writes to it: it is created `0750` when absent, and when it exists it must
-be a real directory (an `Lstat` check, so a planted symlink is refused and nothing
-is written through it) and owned by the user the server runs as. If it is owned by
-that user but writable by group or others, it is tightened to `0750` and a warning
-is logged with the mode it had; it is refused only when it is owned by someone
-else or the `chmod` fails. The check is `Lstat` plus `O_NOFOLLOW` on the file, not an
-`openat` walk, so a swap between the directory check and the file open is still
-possible in principle. **Deploy impact:** a `.reports` directory that already
-exists group-writable (`0775`, which the earlier version of the helper created) is
-changed to `0750` the first time any op that writes its report to the default
-directory runs (mark-missing-files, recover-missing-files, merge-same-path-dupes,
-metadata-cache-reap, the repoint ops, book-shape-report, dedupe-book-file-rows, and
-this one), not just this op; nothing has to be done by hand before deploying, and
-group members who relied on writing there lose that access. A report directory
-behind an explicit report path is not vetted.
+any op writes to it: it is created with the standard directory mode
+(`util.DirMode`, `0775`) when absent, and when it exists it must be a real
+directory (an `Lstat` check, so a planted symlink is refused and nothing is
+written through it) and owned by the user the server runs as. The one thing the
+check changes is world write: if the directory is owned by that user and others
+can write to it, only that bit is cleared (`0777` becomes `0775`, `0757` becomes
+`0755`) and a warning is logged with the mode it had. Group bits, setgid, the
+sticky bit and POSIX ACLs are left exactly as they were (a `2775` directory stays
+`2775`), so group members keep the access they had. It is refused when it is
+owned by someone else (its mode is not touched), is a symlink or not a directory,
+or when removing world write fails. The check is `Lstat` plus `O_NOFOLLOW` on the
+file, not an `openat` walk, so a swap between the directory check and the file
+open is still possible in principle. **Deploy impact:** none is expected on a
+directory that is not world-writable, which includes a `2775` one with an ACL;
+a world-writable `.reports` is made not world-writable the first time any op that
+writes its report to the default directory runs (mark-missing-files,
+recover-missing-files, merge-same-path-dupes, metadata-cache-reap, the repoint
+ops, book-shape-report, dedupe-book-file-rows, and this one). Nothing has to be
+done by hand before deploying. A report directory behind an explicit report path
+is not vetted.
 
 The op's description now says what the op really does: it names the
 `unverified_outside_root` and `busy` outcomes, the conditional store, and the
@@ -127,6 +144,12 @@ anything, a dry run included, if any of these holds:
   share looks (an unmounted share answers not-found for every path);
 - `{root_dir}/.reports` cannot be created or written.
 
+The mount is also checked again during the run: a chunk that found files absent
+under the root has the root's mount re-checked before its rows are recorded, so a
+share that drops partway through stops the run with an error naming the chunk
+instead of recording the rest of the library as missing. The rows of the chunks
+before it stay in the report.
+
 The mount check is coarse. It rejects an empty or dot-only directory and
 nothing more: it does not prove the share is healthy, and a root that holds any
 non-dot entry passes. A run with no root configured works as before, without a
@@ -136,11 +159,16 @@ report.
 
 A new `internal/libroot` package holds the library-root checks the op shares with
 the consolidation-leftovers fixer: whether the root is mounted, and where a
-report is written (the default report directory is now created `0750`, not
-`0775`, and an existing one is refused if it is a symlink or owned by someone else,
-and tightened to `0750` if it is group- or world-writable, for every op that uses
+report is written (the default report directory is now created with the standard
+`0775` directory mode, and an existing one is refused if it is a symlink or owned
+by someone else, and has world write removed if it has it, for every op that uses
 it). Its mount check no longer counts dot-prefixed entries (the
 `.reports` directory, the wav cache) as library content, so writing a report can
 never make a bare mountpoint look mounted. The consolidation-leftovers fixer now
 also refuses a root that holds only dot-prefixed entries, which it used to
 accept.
+
+The `database.Store` file-write interface gains `ModifyBookFileDeferAggregates`,
+and the comment on the `opstate:` key family in `keyfamilies.go` now says the
+`:params` suffix is the live chunk journal of this op, not a legacy key, so a
+cleanup written from that comment cannot delete a journal a run still needs.

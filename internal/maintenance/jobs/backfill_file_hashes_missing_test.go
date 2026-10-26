@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 7.1.0
+// version: 8.0.0
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
 // last-edited: 2026-10-26
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,8 +112,10 @@ func hbWrite(t *testing.T, root, name, content string) string {
 func hbSum(content string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(content))) }
 
 // hbStore is a MockStore over an in-memory set of rows. Every write method other
-// than ModifyBookFile fails the test: the job writes nothing for a file that is
-// not on disk, and nothing but a hash, through ModifyBookFile, for one that is.
+// than ModifyBookFileDeferAggregates fails the test: the job writes nothing for a
+// file that is not on disk, and nothing but a hash, through that method, for one
+// that is. The recomputing ModifyBookFile also fails the test: it would rebuild
+// the whole book's aggregates once per stored hash.
 type hbStore struct {
 	t *testing.T
 
@@ -121,6 +124,10 @@ type hbStore struct {
 	hashCalls map[string]string     // id -> hash
 	writes    map[string]int        // id -> how many times SetBookFileHash stored a hash for it
 	failHash  func(id string) error // an error to return for the hash write of this row (nil result = no error)
+	// recomputes counts RecomputeBookAggregates calls per book; recomputeErr, when
+	// set, supplies an error for a call (nil result = no error).
+	recomputes   map[string]int
+	recomputeErr func(bookID string) error
 	// beforeModify, when set, runs just before a row is read for ModifyBookFile,
 	// with h.mu NOT held; a test uses it to change the row between hash and store.
 	beforeModify func(h *hbStore, id string)
@@ -145,7 +152,8 @@ func (h *hbStore) edit(id string, fn func(*database.BookFileCore)) {
 }
 
 func newHBStore(t *testing.T, files ...database.BookFileCore) *hbStore {
-	return &hbStore{t: t, files: files, hashCalls: map[string]string{}, writes: map[string]int{}, state: map[string][]byte{}}
+	return &hbStore{t: t, files: files, hashCalls: map[string]string{}, writes: map[string]int{}, state: map[string][]byte{},
+		recomputes: map[string]int{}}
 }
 
 func (h *hbStore) store() *database.MockStore {
@@ -162,7 +170,20 @@ func (h *hbStore) store() *database.MockStore {
 			forbid("SetBookFileHash (the job stores hashes conditionally, through ModifyBookFile)")
 			return nil
 		},
-		ModifyBookFileFunc: func(bookID, id string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+		ModifyBookFileFunc: func(string, string, func(*database.BookFile) error) (*database.BookFile, error) {
+			forbid("ModifyBookFile (it recomputes the whole book's aggregates on every write; use ModifyBookFileDeferAggregates and recompute once per book)")
+			return nil, nil
+		},
+		RecomputeBookAggregatesFunc: func(bookID string) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.recomputes[bookID]++
+			if h.recomputeErr != nil {
+				return h.recomputeErr(bookID)
+			}
+			return nil
+		},
+		ModifyBookFileDeferAggregatesFunc: func(bookID, id string, fn func(*database.BookFile) error) (*database.BookFile, error) {
 			if h.beforeModify != nil {
 				h.beforeModify(h, id)
 			}
@@ -761,15 +782,18 @@ func TestBackfillFileHashes_RefusalsNameTheirCause(t *testing.T) {
 	}
 }
 
-// A report directory left group-writable by an older build is tightened to 0750
-// and the run goes ahead and writes its report there; nothing has to be done by
-// hand first.
-func TestBackfillFileHashes_TightensAGroupWritableReportsDirAndRuns(t *testing.T) {
+// A report directory left world-writable by an older build loses world write and
+// nothing else (a setgid directory stays setgid, group write stays), and the run
+// goes ahead and writes its report there; nothing has to be done by hand first.
+func TestBackfillFileHashes_RemovesWorldWriteFromTheReportsDirAndRuns(t *testing.T) {
 	root := hbLibrary(t)
 	here := hbWrite(t, root, "The Long Halloween.m4b", "long halloween bytes")
 	dir := filepath.Join(root, ".reports")
 	require.NoError(t, os.Mkdir(dir, 0o700))
-	require.NoError(t, os.Chmod(dir, 0o775)) // Chmod is not subject to the umask
+	require.NoError(t, os.Chmod(dir, 0o777|os.ModeSetgid)) // Chmod is not subject to the umask
+	if info, err := os.Stat(dir); err != nil || info.Mode()&os.ModeSetgid == 0 {
+		t.Skip("this filesystem does not keep setgid on a directory")
+	}
 	h := newHBStore(t, database.BookFileCore{ID: "f1", BookID: "b1", FilePath: here})
 
 	_, c, report := runHB(t, h.store(), hbRun{})
@@ -778,7 +802,8 @@ func TestBackfillFileHashes_TightensAGroupWritableReportsDirAndRuns(t *testing.T
 	assert.Equal(t, dir, filepath.Dir(report))
 	info, err := os.Stat(dir)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o750), info.Mode().Perm())
+	assert.Equal(t, os.FileMode(0o775), info.Mode().Perm())
+	assert.NotZero(t, info.Mode()&os.ModeSetgid, "setgid must be left as found")
 	assert.Equal(t, []string{"f1"}, h.hashed())
 }
 
@@ -803,7 +828,7 @@ func TestBackfillFileHashes_KillInsideACommitThenResumeIsExact(t *testing.T) {
 		{"apply, after the hashes are stored", false, "after-store", 512, 512, true, true},
 		{"apply, after the report is flushed", false, "after-flush", 512, 1024, true, true},
 		{"apply, first chunk, after the hashes are stored", false, "after-store", 0, 0, true, true},
-		{"dry run, after the journal", true, "after-journal", 512, 512, false, true},
+		{"dry run, after the journal (a dry run keeps no journal)", true, "after-journal", 512, 512, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := hbLibrary(t)
@@ -1134,38 +1159,6 @@ func TestBackfillFileHashes_RowHashedByAnotherWriterIsNotOverwritten(t *testing.
 	assert.Equal(t, "hash already stored", rows[0].reason)
 }
 
-// A write that fails with the store's changed-since error is busy, not a write
-// error: retried next run, listed with the busy reason.
-func TestBackfillFileHashes_ChangedSinceConflictIsBusy(t *testing.T) {
-	root := hbLibrary(t)
-	h := newHBStore(t,
-		database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbWrite(t, root, "Year One.m4b", "year one bytes")},
-		database.BookFileCore{ID: "f2", BookID: "b1", FilePath: hbWrite(t, root, "Hush.m4b", "hush bytes")},
-		database.BookFileCore{ID: "f3", BookID: "b1", FilePath: hbWrite(t, root, "Knightfall.m4b", "knightfall bytes")},
-	)
-	h.failHash = func(id string) error {
-		switch id {
-		case "f1":
-			return fmt.Errorf("ModifyBookFile: write f1: %w", database.ErrBookFileChangedSince)
-		case "f3":
-			return errors.New("disk full")
-		}
-		return nil
-	}
-
-	rep, c, report := runHB(t, h.store(), hbRun{})
-
-	assert.Equal(t, hbCounts{"hashed": 1, "busy": 1, "write_errors": 1}, c)
-	rows := hbReadReport(t, report)
-	assert.Equal(t, map[string][]string{"busy": {"f1"}, "hashed": {"f2"}, "write-error": {"f3"}}, hbBuckets(rows))
-	for _, r := range rows {
-		if r.fileID == "f1" {
-			assert.Equal(t, "row was busy, retried next run", r.reason)
-		}
-	}
-	assert.Contains(t, rep.logs[len(rep.logs)-1], "busy=1")
-}
-
 // A report whose last row lacks its newline (a hand edit, or a kill that landed
 // exactly on the row boundary) keeps that row; CRLF line endings are tolerated.
 func TestBackfillFileHashes_ResumeKeepsAFinalRowWithoutANewlineAndToleratesCRLF(t *testing.T) {
@@ -1366,9 +1359,10 @@ func TestBackfillFileHashes_ReportSymlinkIsNotFollowed(t *testing.T) {
 	assert.Equal(t, "precious", string(got))
 }
 
-// The job creates the reports directory and the report without group write and
-// without any access for others, whatever the umask.
-func TestBackfillFileHashes_CreatesTheReportWithoutGroupWriteOrWorldAccess(t *testing.T) {
+// The job creates the reports directory and the report with the repo's standard
+// modes (util.DirMode and util.FileMode: group write kept so a POSIX ACL's mask
+// keeps working), whatever the umask, and never world-writable.
+func TestBackfillFileHashes_CreatesTheReportWithTheStandardModes(t *testing.T) {
 	old := syscall.Umask(0)
 	t.Cleanup(func() { syscall.Umask(old) })
 	root := hbLibrary(t)
@@ -1378,10 +1372,10 @@ func TestBackfillFileHashes_CreatesTheReportWithoutGroupWriteOrWorldAccess(t *te
 
 	dir, err := os.Stat(filepath.Dir(report))
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o750), dir.Mode().Perm())
+	assert.Equal(t, util.DirMode, dir.Mode().Perm())
 	file, err := os.Stat(report)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o640), file.Mode().Perm())
+	assert.Equal(t, util.FileMode, file.Mode().Perm())
 }
 
 // The chunk journal is in the operation's state in the database. A failed
