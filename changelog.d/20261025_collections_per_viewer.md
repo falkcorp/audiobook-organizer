@@ -78,9 +78,8 @@ and in the library list: `search=` answers 400 `invalid search: ...`, the `filte
 the web search box sends answers 400 `invalid filter value: ...` (checked in
 `compileFieldFilterAt`, so the list, a bulk selection and a saved filter agree), and the
 substring fallback used while the index rebuilds checks the query first. A filter cannot
-carry an `OR` or a group, so the web box sends a query that names a per-user field and has
-an `OR`, `AND`, `||`, `&&` or a parenthesis other than that field's own `(a|b)` list whole as `search=`
-and shows the server's message; `read_status:(finished|in_progress)` works in a filter as
+carry an `OR` or a group, so the web box sends a query with boolean structure (see the whole-send
+paragraph below) whole as `search=` and shows the server's message; `read_status:(finished|in_progress)` works in a filter as
 one term that matches either status. `read_status:finished OR author:kyle` no longer
 answers as an `AND` there either. A stored row refused this way reads as `members_unavailable` with
 the same guidance, and a stored smart playlist drops its cached list so the
@@ -146,12 +145,20 @@ Audiobookshelf surface the collection mutation routes answer with the committed 
 no books when the members cannot be worked out, a 499 after the write means the change was
 kept, and a refused smart playlist is an empty one with no signal.
 
-A query typed in the Library with any boolean structure (an `OR`, `AND`, `||`, `&&`, a
-parenthesis or `|`, a `-` or `NOT` before a `tag:` term or a group, or a `tag:` value that is
-not one whole name) is now sent to the server whole, with or without a per-user field, and the
-server's message is shown. Before, `Batman -tag:"to-read"` was split into filters and the
+A query typed in the Library with boolean structure (a bare `OR`, `AND`, `NOT`, `||`, `&&` or
+`|`, the opening of a group, a `-` or `NOT` before a `tag:` term, a `tag:` value that is not
+one whole name, or a boost after a tag) is now sent to the server whole, with or without a
+per-user field, and the server's message is shown. Structure is read from the terms the box
+cuts the text into: a field's value is never structure, so `title:/^(the|a) /`,
+`title:/hush|knight/`, `description:/(?i)gotham/` and `title:Batman(1989)` stay filters, as
+before. A `/regex/` value that does reach `search=` (inside an `OR` or a group, or in a
+collection or smart playlist query) is refused with a 400 instead of being read as the words
+between the slashes or falling to a substring match. Before, `Batman -tag:"to-read"` was split into filters and the
 negation was dropped without a word. A stop word or punctuation left next to a tag term
 (`the tag:noir`, `- tag:noir`, `(tag:noir OR)`) is dropped instead of silently emptying the
 result, and the tag chips agree with the server on the boosted and dangling shapes. A search
-that carries a per-user term now reads the listening state in one scan and filters the
-matching ids before loading any book, instead of a point read per hit.
+that carries a per-user term now filters the matching ids before loading any book: one point
+read per id up to 256 candidates, one scan of the viewer's rows above that, instead of a book
+and a state row per hit. An unreadable state row is judged as an unstarted book (the search
+does not fail for it), a cancelled request stops reading, and a per-user name in capitals
+(`Read_Status:finished`) is still treated as per-user by the cache gate.

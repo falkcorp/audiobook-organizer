@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.20.5 -->
+<!-- version: 1.20.6 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -262,12 +262,17 @@ same shapes and values are refused on both ways a query reaches it:
   works there too, as one filter that matches either status. A filter cannot carry an `OR` or
   a group, so the web box sends any query with boolean structure whole as `search=`, with no
   filters or `tags[]` of its own for it, and shows the server's message in the library page.
-  Boolean structure is an `OR`, `AND`, `||` or `&&`, a parenthesis or `|` outside quotes (other
-  than a per-user field's own `(a|b)` list), a `-` or `NOT` before a `tag:` term or a group,
-  or a `tag:` value that is not one whole name (`tag:noir*`). This does not depend on the
+  Boolean structure is a bare `OR`, `AND`, `NOT`, `||`, `&&` or `|`, the opening of a group
+  (`(a`, `-(a`), a `-` or `NOT` before a `tag:` term, or a `tag:` value that is not one whole
+  name (`tag:noir*`); a per-user field's own `(a|b)` list is not. This does not depend on the
   query naming a per-user field: `Batman -tag:"to-read"` and `tag:noir OR tag:gotham` reach
-  the server whole and answer 400. A negated filter-only field (`-title:x`, `NOT narrator:y`,
-  `-metadata:applied`) stays in `filters=`. The rest
+  the server whole and answer 400. Structure is read from the terms, not the raw text: the
+  parentheses, pipes and spaces inside a `/regex/`, a quoted value or a plain value
+  (`title:/^(the|a) /`, `title:"Year (One)"`, `title:Batman(1989)`) are not structure, and that
+  term stays in `filters=`. A boost after a tag (`tag:noir ^2`) is structure. A negated field
+  other than `tag` (`-title:x`, `NOT narrator:y`, `-metadata:applied`) stays in `filters=`,
+  because a filter matches by substring, glob or regex and the index by whole words, not because
+  of which fields the index holds. The rest
   of such a query is then judged by the rules of `search=`: a `duration:` term is
   held by the index and is answered with the query, a `tag:` term is an exact tag filter
   (see below), the per-user shapes get their own message first,
@@ -287,7 +292,13 @@ level, or in a group that is only ANDed (`read_status:finished AND tag:noir`,
 `tag:noir~1`, `tag:noir^2`, or a boost or fuzzy marker after a quoted value, `tag:"noir"^2`) is
 refused with a 400 (`invalid search: tag: cannot be used inside an OR group ...`) by the
 list, and on create and update of a collection or smart playlist; a stored query of that
-shape reads as `members_unavailable` until it is edited. A quoted value is a literal name, so `tag:"c++*"` is accepted. A stop word or punctuation
+shape reads as `members_unavailable` until it is edited. A `/regex/` field value in `search=` (or in a collection or smart playlist query) answers 400
+(`invalid search: a /regex/ value cannot be used in the search parameter ...`), whether the text
+parses or not: the index has no regular expressions, and the value used to be read as the words
+between the slashes or fall to a substring match. A regex is a `filters=` term. See
+`docs/search-syntax.md` for how the per-user pass reads the viewer's state (point reads up to 256
+candidates, one scan above, an unreadable row judged unstarted).
+A quoted value is a literal name, so `tag:"c++*"` is accepted. A stop word or punctuation
 left next to a tag term (`the tag:noir`, `- tag:noir`) is dropped as next to any term. Several `tag:` terms are all
 required. The web box sends the `tag:` terms that narrow the whole query as `tags[]` as
 well as in `search=` (the same filter twice), so a tag chip stays exact however the rest
