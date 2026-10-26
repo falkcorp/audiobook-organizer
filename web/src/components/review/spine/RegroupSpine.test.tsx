@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f7c9e21-5a4b-4d8e-9c1f-2b6a7d0e4c53
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 /**
  * Task 6 fix round: RegroupSpine wired PathLinks into MemberRow (commit
@@ -99,6 +99,7 @@ describe('SkipsAlert report panel', () => {
       skipsByKind: {},
       failedByKind: {},
       unrecordedByKind: {},
+      notesByKind: {},
       dismissSkips: vi.fn(),
       ...lane,
     } as unknown as RegroupLane;
@@ -111,7 +112,24 @@ describe('SkipsAlert report panel', () => {
     return full;
   }
 
-  it('renders nothing when the kind has no skips, failures or unrecorded items', () => {
+  it('lists the notes of items that applied, as plain ids, outliving the toast', () => {
+    renderAlert({
+      notesByKind: {
+        [KIND]: [
+          { id: 'n1', note: 'combine of /lib/Gotham/Arkham/year-one.m4b: left a file unattached' },
+        ],
+      },
+    });
+
+    const notes = screen.getByTestId(`regroup-notes-${KIND}`);
+    expect(notes).toHaveTextContent('1 applied with a note to read');
+    expect(notes).toHaveTextContent('left a file unattached');
+    // The item applied, so it left the pending list: no row to open.
+    expect(screen.getByTestId('regroup-report-id-n1')).toBeInTheDocument();
+    expect(screen.queryByTestId('regroup-report-open-n1')).toBeNull();
+  });
+
+  it('renders nothing when the kind has no skips, failures, unrecorded items or notes', () => {
     renderAlert({});
     expect(screen.queryByTestId(`regroup-skips-${KIND}`)).toBeNull();
   });
@@ -209,6 +227,7 @@ describe('SkipsAlert held-versus-pending skip codes', () => {
       },
       failedByKind: {},
       unrecordedByKind: {},
+      notesByKind: {},
       dismissSkips: vi.fn(),
     } as unknown as RegroupLane;
     render(
@@ -252,6 +271,7 @@ describe('SkipsAlert held-versus-pending skip codes', () => {
       },
       failedByKind: {},
       unrecordedByKind: {},
+      notesByKind: {},
       dismissSkips: vi.fn(),
     } as unknown as RegroupLane;
     render(
@@ -292,6 +312,22 @@ describe('ApplyingAlert', () => {
     // updated_at goes with it.
     expect(api.approveReviewItem).toHaveBeenCalledWith('h1', undefined, HELD_STAMP);
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows the note of a finished apply instead of dropping it', async () => {
+    vi.mocked(api.getReviewItems).mockResolvedValue(heldPage([heldItem('h1', 'applying')]));
+    vi.mocked(api.approveReviewItem).mockResolvedValue({
+      item: heldItem('h1', 'applied'),
+      note: 'combine of /lib/Gotham/Arkham/hush.m4b: left a file unattached',
+    });
+    render(<ApplyingAlert count={1} onChanged={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId('regroup-applying-show'));
+    await userEvent.click(await screen.findByTestId('regroup-applying-finish-h1'));
+
+    expect(await screen.findByTestId('regroup-held-notice')).toHaveTextContent(
+      'Approved, with a note: combine of /lib/Gotham/Arkham/hush.m4b: left a file unattached'
+    );
   });
 
   it('abandons an interrupted hold and reloads the list', async () => {

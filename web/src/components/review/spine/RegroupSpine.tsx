@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8c14d7e2-6b03-4a95-9f28-5e7a1c0b3d64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 /**
  * The regroup lane's renderer -- the THIRD comparison shape in this workspace.
@@ -684,7 +684,8 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
   const skippedDone = allSkipped.filter((sk) => NOT_PENDING_SKIP_CODES.has(sk.code ?? ''));
   const failed = lane.failedByKind[kind] ?? [];
   const unrecorded = lane.unrecordedByKind[kind] ?? [];
-  if (allSkipped.length + failed.length + unrecorded.length === 0) return null;
+  const notes = lane.notesByKind[kind] ?? [];
+  if (allSkipped.length + failed.length + unrecorded.length + notes.length === 0) return null;
   const severity = failed.length || unrecorded.length ? 'error' : 'warning';
   return (
     <Alert
@@ -693,6 +694,22 @@ export function SkipsAlert({ kind, lane }: { kind: string; lane: RegroupLane }) 
       data-testid={`regroup-skips-${kind}`}
       onClose={() => lane.dismissSkips(kind)}
     >
+      {notes.length > 0 && (
+        <Box data-testid={`regroup-notes-${kind}`} sx={{ mb: 1 }}>
+          <AlertTitle>{notes.length} applied with a note to read</AlertTitle>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            The apply ran. Each note says what it left for someone to check, for example a file that
+            was not reattached.
+          </Typography>
+          <Stack spacing={0.5}>
+            {notes.map((n) => (
+              <Typography key={n.id} variant="caption" sx={{ display: 'block' }}>
+                <ReportIdText id={n.id} /> — {n.note}
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
+      )}
       {unrecorded.length > 0 && (
         <Box data-testid={`regroup-unrecorded-${kind}`} sx={{ mb: 1 }}>
           <AlertTitle>{unrecorded.length} applied but not recorded</AlertTitle>
@@ -778,6 +795,8 @@ const HELD_LIST_LIMIT = 100;
 function useHeldList(status: string, count: number) {
   const [items, setItems] = useState<ReviewItem[] | null>(null);
   const [message, setMessage] = useState('');
+  // What a SUCCESSFUL approve asked the reviewer to read (see ReviewApproveResult).
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   // Leaves `message` alone on success: after a refused action the list reloads, and
   // the refusal is what the operator needs to read.
@@ -791,6 +810,7 @@ function useHeldList(status: string, count: number) {
   }, [status]);
   const show = () => {
     setMessage('');
+    setNotice('');
     void load();
   };
   const shown = items !== null;
@@ -817,17 +837,21 @@ function useHeldList(status: string, count: number) {
   const run = async (id: string, fn: () => Promise<unknown>, onChanged: () => void) => {
     setBusy(id);
     try {
-      await fn();
+      const result = await fn();
       setMessage('');
+      // Only approveReviewItem's result has a note; rejects and abandons return an item.
+      const note = (result as { note?: unknown } | null | undefined)?.note;
+      setNotice(typeof note === 'string' ? note : '');
       onChanged();
     } catch (err) {
+      setNotice('');
       setMessage(err instanceof Error ? err.message : 'failed');
     } finally {
       setBusy(null);
       await load();
     }
   };
-  return { items, message, busy, show, run };
+  return { items, message, notice, busy, show, run };
 }
 
 /** "Showing the first 100 of N" when the list is capped below the count. */
@@ -854,7 +878,7 @@ function HeldListCap({ shown, count }: { shown: number; count: number }) {
  * be finished; it undoes nothing.
  */
 export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: () => void }) {
-  const { items, message, busy, show, run } = useHeldList('applying', count);
+  const { items, message, notice, busy, show, run } = useHeldList('applying', count);
   if (count <= 0) return null;
   return (
     <Alert severity="warning" data-testid="regroup-applying" sx={{ mb: 1 }}>
@@ -863,11 +887,12 @@ export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: 
       </AlertTitle>
       <Typography variant="body2" sx={{ mb: 1 }}>
         An apply is running, ran but could not be recorded, or was interrupted (by a server restart,
-        a failure after it may have changed the library, or a failed re-run). These holds are not in the list below and accept no other decision
-        until the apply is finished. Finish runs an interrupted apply again: it skips work already
-        done, but it does not redo an incomplete multidisc renumbering, and a duplicate-of re-run
-        can fail after a partial merge. If it cannot be finished, Abandon moves the hold to needs
-        attention. Abandoning undoes nothing, so check what the apply changed in the library.
+        a failure after it may have changed the library, or a failed re-run). These holds are not in
+        the list below and accept no other decision until the apply is finished. Finish runs an
+        interrupted apply again: it skips work already done, but it does not redo an incomplete
+        multidisc renumbering, and a duplicate-of re-run can fail after a partial merge. If it
+        cannot be finished, Abandon moves the hold to needs attention. Abandoning undoes nothing, so
+        check what the apply changed in the library.
       </Typography>
       {items === null ? (
         <Button size="small" data-testid="regroup-applying-show" onClick={show}>
@@ -907,6 +932,16 @@ export function ApplyingAlert({ count, onChanged }: { count: number; onChanged: 
           ))}
         </Stack>
       )}
+      {notice && (
+        <Typography
+          variant="caption"
+          color="warning.main"
+          data-testid="regroup-held-notice"
+          sx={{ display: 'block', mt: 1 }}
+        >
+          Approved, with a note: {notice}
+        </Typography>
+      )}
       {message && (
         <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
           {message}
@@ -929,7 +964,7 @@ export function NeedsAttentionAlert({
   count: number;
   onChanged: () => void;
 }) {
-  const { items, message, busy, show, run } = useHeldList('needs_attention', count);
+  const { items, message, notice, busy, show, run } = useHeldList('needs_attention', count);
   if (count <= 0) return null;
   return (
     <Alert severity="error" data-testid="regroup-needs-attention" sx={{ mb: 1 }}>
@@ -983,6 +1018,16 @@ export function NeedsAttentionAlert({
             );
           })}
         </Stack>
+      )}
+      {notice && (
+        <Typography
+          variant="caption"
+          color="warning.main"
+          data-testid="regroup-held-notice"
+          sx={{ display: 'block', mt: 1 }}
+        >
+          Approved, with a note: {notice}
+        </Typography>
       )}
       {message && (
         <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>

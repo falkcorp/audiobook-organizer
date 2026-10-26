@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.202.0
+// version: 2.203.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -7815,6 +7815,14 @@ export interface ReviewBulkFail {
   reason: string;
 }
 
+/** One bulk-approved item that applied and carries a note to read. */
+export interface ReviewBulkNote {
+  id: string;
+  /** What a reviewer should check on an item that DID apply: a combine that left a
+   *  file unattached, an approve recorded without applying, and so on. */
+  note: string;
+}
+
 /** POST /review/bulk → data.{action, processed, ...id buckets}. Note: the
  *  backend reports `processed`, NOT an `affected` count.
  *
@@ -7838,6 +7846,10 @@ export interface ReviewBulkResult {
   /** True on an approve while review_apply_enabled is off: approvals were recorded
    *  but nothing was applied. */
   apply_disabled?: boolean;
+  /** Items that applied and carry a note to read (a combine warning, for example). Only
+   *  items that ended applied are listed. MUST be surfaced: the apply ran, but part of
+   *  it may need a person to look. */
+  notes?: ReviewBulkNote[];
   processed: number;
 }
 
@@ -7908,6 +7920,16 @@ export async function getReviewItems(
   };
 }
 
+/** POST /review/items/:id/approve → data.{item, note?}. `note` is present when the
+ *  approve needs reading even though it succeeded: the apply is off so nothing ran, a
+ *  restart-interrupted apply was finished, or the apply ran and reported warnings (a
+ *  combine that left a file unattached). It is the same text the bulk result carries
+ *  per item in `notes`, and the caller MUST show it. */
+export interface ReviewApproveResult {
+  item: ReviewItem;
+  note?: string;
+}
+
 /** approveReviewItem approves a hold, optionally OVERRIDING its recommended action.
  *
  *  Omitting `action` means "do what the hold recommends" — but the backend refuses to
@@ -7925,7 +7947,7 @@ export async function approveReviewItem(
   id: string,
   action?: string,
   ifUpdatedAt?: string
-): Promise<ReviewItem> {
+): Promise<ReviewApproveResult> {
   const request = {
     ...(action ? { action } : {}),
     ...(ifUpdatedAt ? { if_updated_at: ifUpdatedAt } : {}),
@@ -7940,7 +7962,7 @@ export async function approveReviewItem(
     throw await buildApiError(response, 'Failed to approve review item');
   }
   const body = await response.json();
-  return body.data?.item;
+  return { item: body.data?.item, note: body.data?.note || undefined };
 }
 
 /** rejectReviewItem rejects a hold. `ifUpdatedAt` works as in approveReviewItem. */

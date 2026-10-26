@@ -1,7 +1,7 @@
 // file: web/src/components/review/RegroupPanel.test.tsx
-// version: 1.5.1
+// version: 1.5.2
 // guid: 4a0f9595-7a40-4662-abfa-be27845db5fd
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 /**
  * Tests for the regroup lane's SURFACE -- the filter rail and the states the
@@ -102,6 +102,7 @@ function makeLane(over: Partial<RegroupLane> = {}): RegroupLane {
     skipsByKind: {},
     failedByKind: {},
     unrecordedByKind: {},
+    notesByKind: {},
     dismissSkips: vi.fn(),
     refresh,
     ...over,
