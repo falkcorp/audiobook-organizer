@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-13
+// last-edited: 2026-10-26
 
 package database
 
@@ -217,11 +217,6 @@ type FingerprintWindowStore interface {
 // BookFileITunesStore covers the iTunes persistent-ID linkage.
 type BookFileITunesStore interface {
 	GetBookFileByPID(itunesPID string) (*BookFile, error)
-	// ClearITunesPID surgically clears itunes_persistent_id and itunes_path
-	// on the book_file row matching the given PID. Used by the iTunes
-	// orphan-cleanup path so that DB state converges after a successful
-	// ITL remove. Returns (false, nil) if no matching row exists.
-	ClearITunesPID(itunesPID string) (cleared bool, err error)
 }
 
 // BookFileDelugeStore covers Deluge import bookkeeping.
@@ -237,12 +232,6 @@ type BookFileDelugeStore interface {
 	// needs any of the stripped fields MUST fetch via GetBookFiles(bookID)
 	// (full Pebble). See docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 	GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error)
-	// MarkFileImportedFromDeluge records that a file has been imported from a
-	// Deluge download directory. originalPath is the source (download) path,
-	// libraryPath is the destination inside the organized library, and
-	// torrentHash is the Deluge info-hash (optional). Implementations SHOULD
-	// match by originalPath first, then fall back to matching by torrentHash.
-	MarkFileImportedFromDeluge(ctx context.Context, originalPath, libraryPath, torrentHash string) error
 }
 
 // BookFileStatsStore reports aggregate hash and fingerprint coverage.

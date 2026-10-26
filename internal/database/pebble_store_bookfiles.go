@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.3
+// version: 1.47.4
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -1324,28 +1324,6 @@ func (s *PebbleStore) getBookFileByPIDRaw(itunesPID string) (*BookFile, []byte, 
 		return nil, nil, fmt.Errorf("corrupt book_file_pid index value: %q", ref)
 	}
 	return s.readBookFileRow(parts[0], parts[1])
-}
-
-// ClearITunesPID clears itunes_persistent_id and itunes_path on the
-// book_file with the given PID. Returns (true, nil) if a row was
-// updated, (false, nil) if no row with that PID exists.
-func (s *PebbleStore) ClearITunesPID(itunesPID string) (bool, error) {
-	if itunesPID == "" {
-		return false, nil
-	}
-	f, err := s.GetBookFileByPID(itunesPID)
-	if err != nil {
-		return false, err
-	}
-	if f == nil {
-		return false, nil
-	}
-	f.ITunesPersistentID = ""
-	f.ITunesPath = ""
-	if err := s.UpdateBookFile(f.ID, f); err != nil {
-		return false, fmt.Errorf("ClearITunesPID: %w", err)
-	}
-	return true, nil
 }
 
 // GetBookFileByPath looks up a BookFile by file path using the

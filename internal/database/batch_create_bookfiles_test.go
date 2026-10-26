@@ -1,7 +1,7 @@
 // file: internal/database/batch_create_bookfiles_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c81f0a3-6b47-4d29-9e15-7a3f82c6b04d
-// last-edited: 2026-08-24
+// last-edited: 2026-10-26
 
 package database
 
@@ -167,8 +167,8 @@ func TestBatchCreateBookFilesRejectsDuplicatePIDInOneBatch(t *testing.T) {
 // row 1 legitimately takes PID-MOVE from a committed owner, and rows 2 and 3 trip
 // the in-batch duplicate check. Everything must roll back, transfer included.
 //
-// MUTATION CHECK: point stagePIDTransfer's prior-owner rewrite back at
-// s.ClearITunesPID and this fails on the ownerAfter assertion while every other
+// MUTATION CHECK: point stagePIDTransfer's prior-owner rewrite back at a
+// per-row s.UpdateBookFile (a batch of its own) and this fails on the ownerAfter assertion while every other
 // test in this file stays green.
 func TestBatchCreateBookFilesRefusalDoesNotStripAPriorPIDOwner(t *testing.T) {
 	store, cleanup := setupTestDB(t)
