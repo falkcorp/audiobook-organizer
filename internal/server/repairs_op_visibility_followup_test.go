@@ -1,5 +1,5 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
 // last-edited: 2026-10-25
 
@@ -925,5 +925,50 @@ func TestGenericStartRoutes_ApplyTheFixersPermissions(t *testing.T) {
 	for name, start := range routes {
 		w := start(f.admin, repairs.PlanOpID, `{"fixer_id":"`+ars+`"}`)
 		require.Equal(t, http.StatusAccepted, w.Code, name+" admin, Audible read-status: "+w.Body.String())
+	}
+}
+
+// TestPlanResultParams_NamingATargetUserNeedsUsersManage: a plan whose params
+// name a target user (repairs.PlanResult.Params carries target_user_id into the
+// op's result_data and its params) is read only by a caller who holds users.manage,
+// on every generic route that serves the op's result: the Audible read-status
+// and master-list-import fixers are scoped to users.manage, so an editor, a
+// viewer and a custom role with settings.manage but not users.manage are refused
+// and the refusal names no user, while the admin reads the same body. The
+// admin's read is the oracle that the ops are really the ones the roles are
+// refused.
+// Not parallel: it swaps the process-wide config.
+func TestPlanResultParams_NamingATargetUserNeedsUsersManage(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	mgr := opsManagerToken(t, f)
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+
+	now := time.Now().UTC()
+	for _, fixer := range []string{"maintenance.audible-read-status", "master-list-import"} {
+		plan, err := json.Marshal(repairs.PlanResult{
+			FixerID: fixer, Params: json.RawMessage(`{"target_user_id":"` + secondaryUserID + `"}`),
+			PlannedAt: now, Total: 3, Applicable: 2, SkippedByKind: map[string]int{},
+		})
+		require.NoError(t, err)
+		res := string(plan)
+		id := "op-plan-" + strings.ReplaceAll(fixer, ".", "-")
+		require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+			ID: id, DefID: repairs.PlanOpID, Plugin: "test", Status: "completed",
+			Params: `{"fixer_id":"` + fixer + `"}`, ResultData: &res,
+			QueuedAt: now, CompletedAt: &now,
+		}))
+		for _, route := range []string{"result", "v2 op"} {
+			path := opReadPaths(id)[route]
+			for who, token := range map[string]string{"viewer": f.viewer, "editor": f.editor, "ops manager": mgr} {
+				w := getAs(f.srv, token, path)
+				require.Equal(t, http.StatusForbidden, w.Code, "%s %s %s: %s", who, fixer, route, w.Body.String())
+				require.NotContains(t, w.Body.String(), secondaryUserID, "%s %s %s", who, fixer, route)
+				require.NotContains(t, w.Body.String(), "target_user_id", "%s %s %s", who, fixer, route)
+			}
+		}
+		w := getAs(f.srv, f.admin, opReadPaths(id)["result"])
+		require.Equal(t, http.StatusOK, w.Code, "%s admin: %s", fixer, w.Body.String())
+		require.Contains(t, w.Body.String(), secondaryUserID, "%s: the admin reads the plan's target user", fixer)
 	}
 }
