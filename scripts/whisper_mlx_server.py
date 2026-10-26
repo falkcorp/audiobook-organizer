@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.12.0
+# version: 1.12.1
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-10-26
 #
@@ -198,7 +198,18 @@ def machine_id() -> str:
     return hashlib.sha256(_machine_source().encode()).hexdigest()[:16]
 
 
-MACHINE_ID = machine_id()
+_machine_id_cache: list[str] = []
+
+
+def reported_machine_id() -> str:
+    """machine_id(), computed on the first /health call and then reused. Not
+    at import: the inference child re-imports this module on every restart (one
+    follows each timeout kill), and the macOS source runs ioreg, which the
+    restart path has no reason to wait on."""
+    if not _machine_id_cache:
+        _machine_id_cache.append(machine_id())
+    return _machine_id_cache[0]
+
 
 # Inference is serialized. MLX shares the Mac's unified memory with everything
 # else the desktop is doing, so two concurrent transcriptions do not run twice
@@ -1324,7 +1335,7 @@ async def health():
         "backend": "mlx",
         "decode_fingerprint": DECODE_FINGERPRINT,
         # Which machine this is, as an opaque hash (see WORKER IDENTITY).
-        "machine_id": MACHINE_ID,
+        "machine_id": reported_machine_id(),
         # Inference liveness, read WITHOUT touching _inference_lock (a wedged
         # job holds it). busy_seconds is how long the current clip has been
         # running (0 when idle); busy_limit_seconds is that clip's own limit. A

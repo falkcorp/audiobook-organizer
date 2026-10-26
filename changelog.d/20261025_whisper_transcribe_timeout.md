@@ -105,9 +105,11 @@
   two server ports on that one Mac. A worker is identified by the
   `machine_id` its `/health` reports (`whisper_mlx_server.py` 1.12.0: a hash of
   `WHISPER_MACHINE_ID`, `/etc/machine-id`, the macOS platform UUID, or the
-  hostname), or by a hash of its URL for an older worker, and an endpoint whose
-  `/health` could not be read names no machine, so its strike never counts as
-  the second. What is stored, and returned in API responses, is that opaque
+  hostname), or by a hash of its URL for a worker that does not report one (an
+  MLX worker older than 1.12.0, or the faster-whisper `whisper_server.py`,
+  which does not report it, so its ports count as separate machines), and an
+  endpoint whose `/health` could not be read names no machine, so its strike
+  never counts as the second. What is stored, and returned in API responses, is that opaque
   identity, never an endpoint address. A condemnation by the dispatcher needs a
   lone clip stuck on two different machines; it counts as a strike even when
   the same pair condemned the file before. A file that carries a strike is

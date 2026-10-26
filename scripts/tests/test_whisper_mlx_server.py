@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.12.0
+# version: 1.12.1
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-10-26
 #
@@ -111,6 +111,16 @@ def test_health_reports_an_opaque_machine_id(srv):
     int(mid, 16)  # hex
     assert socket.gethostname() not in mid
     assert mid == mod.machine_id(), "every process on one machine reports the same id"
+
+
+def test_machine_id_is_not_computed_at_import():
+    """The inference child re-imports the server module on every restart (one
+    follows each timeout kill). The machine id's macOS source runs ioreg, so it
+    is computed on the first /health call, never at import."""
+    mod = _load_module()
+    assert mod._machine_id_cache == []
+    mod.reported_machine_id()
+    assert mod._machine_id_cache == [mod.machine_id()]
 
 
 def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypatch):
