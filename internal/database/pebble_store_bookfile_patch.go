@@ -1,17 +1,14 @@
 // file: internal/database/pebble_store_bookfile_patch.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c4e71a93-5b28-4f0d-8e6a-2d9f7b1c3a54
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 package database
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 // ErrBookFileChangedSince is returned by PatchBookFileFields when a
@@ -50,9 +47,15 @@ type BookFileFieldPatch struct {
 // time, so a concurrent writer's field, such as enrich-book-files' Duration,
 // was reverted. Here the read and the write are one step under the row's
 // lockBookFile stripe, which UpdateBookFile and UpdateBookFileHashes also hold
-// across their own read and commit. The window left is a caller that read the
-// row itself, earlier, and hands the whole stale row to UpdateBookFile or an
-// upsert: the stripe orders the two writes but cannot make the stale one fresh.
+// across their own read and commit. The stripe does not order this against
+// the writers that take none (batch upserts, a create claiming an iTunes ID,
+// the fingerprint sweeps), so the commit is a compare-and-swap on the bytes
+// read (setBookFileRowIfUnchanged): a row that changed meanwhile is re-read and
+// the patch (and its If* preconditions) re-applied to it, up to
+// maxStageRetries times, then ErrBookFileConflict. The window left is a caller
+// that read the row itself, earlier, and hands the whole stale row to
+// UpdateBookFile or an upsert: the stripe orders the two writes but cannot make
+// the stale one fresh.
 //
 // before is the row as read, after as written (equal when nothing changed, in
 // which case nothing is written). Both are nil when the row does not exist.
@@ -78,28 +81,46 @@ func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileF
 		}
 	}()
 
-	key := []byte(fmt.Sprintf("book_file:%s:%s", bookID, fileID))
-	value, closer, err := s.db.Get(key)
-	if errors.Is(err, pebble.ErrNotFound) {
-		return nil, nil, nil
+	book := bookID
+	got, err := rmwBookFile(&book, fileID, func() (bookFilePatched, error) {
+		return s.patchBookFileFieldsOnce(bookID, fileID, patch)
+	})
+	notify = got.notify
+	if errors.Is(err, ErrBookFileConflict) {
+		err = fmt.Errorf("PatchBookFileFields: write %s: %w", fileID, err)
 	}
+	return got.before, got.after, err
+}
+
+// bookFilePatched is one pass of PatchBookFileFields' result.
+type bookFilePatched struct {
+	before, after *BookFile
+	notify        bool
+}
+
+// patchBookFileFieldsOnce is one read-apply-commit pass of PatchBookFileFields.
+// It returns an error wrapping errBookFileRowVanished when the commit found the
+// row changed since the read (nothing was written; the caller re-reads).
+func (s *PebbleStore) patchBookFileFieldsOnce(bookID, fileID string, patch BookFileFieldPatch) (res bookFilePatched, err error) {
+	key := bookFileKey(bookID, fileID)
+	row0, raw, err := s.readBookFileRowAt(key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("PatchBookFileFields: read %s: %w", fileID, err)
+		return res, fmt.Errorf("PatchBookFileFields: read %s: %w", fileID, err)
 	}
-	var row BookFile
-	decErr := json.Unmarshal(value, &row)
-	closer.Close()
-	if decErr != nil {
-		return nil, nil, fmt.Errorf("PatchBookFileFields: decode %s: %w", fileID, decErr)
+	if row0 == nil {
+		return res, nil
 	}
+	row := *row0
 	orig := row
 
 	if patch.IfTrackNumber != nil && row.TrackNumber != *patch.IfTrackNumber {
-		return &orig, &orig, fmt.Errorf("book file %s track_number is %d, expected %d: %w",
+		res.before, res.after = &orig, &orig
+		return res, fmt.Errorf("book file %s track_number is %d, expected %d: %w",
 			fileID, row.TrackNumber, *patch.IfTrackNumber, ErrBookFileChangedSince)
 	}
 	if patch.IfDiscNumber != nil && row.DiscNumber != *patch.IfDiscNumber {
-		return &orig, &orig, fmt.Errorf("book file %s disc_number is %d, expected %d: %w",
+		res.before, res.after = &orig, &orig
+		return res, fmt.Errorf("book file %s disc_number is %d, expected %d: %w",
 			fileID, row.DiscNumber, *patch.IfDiscNumber, ErrBookFileChangedSince)
 	}
 
@@ -132,31 +153,35 @@ func (s *PebbleStore) PatchBookFileFields(bookID, fileID string, patch BookFileF
 		row.TrackCount, changed = *patch.TrackCount, true
 	}
 	if !changed {
-		return &orig, &orig, nil
+		res.before, res.after = &orig, &orig
+		return res, nil
 	}
 
 	row.UpdatedAt = time.Now()
 	data, err := marshalBookFileDropSegs(&row)
 	if err != nil {
-		return nil, nil, fmt.Errorf("PatchBookFileFields: encode %s: %w", fileID, err)
+		return res, fmt.Errorf("PatchBookFileFields: encode %s: %w", fileID, err)
 	}
-	// Under the book's owner stripe and only while the row is still
-	// committed (book_delete_owns_files.go).
-	wrote, err := s.setBookFileRowIfPresent(bookID, key, data)
+	// Under the book's owner stripe and only while the row is still committed
+	// AND still holds the bytes read (book_delete_owns_files.go).
+	wrote, err := s.setBookFileRowIfUnchanged(bookID, key, raw, data)
 	if !bookFileApplied(err) {
-		return nil, nil, fmt.Errorf("PatchBookFileFields: write %s: %w", fileID, err)
+		return res, fmt.Errorf("PatchBookFileFields: write %s: %w", fileID, err)
 	}
-	if !wrote {
-		return nil, nil, fmt.Errorf("PatchBookFileFields: %s was deleted while being patched", fileID)
+	switch wrote {
+	case bookFileRowGone:
+		return res, fmt.Errorf("PatchBookFileFields: %s was deleted while being patched", fileID)
+	case bookFileRowChanged:
+		return res, errBookFileRowVanished
 	}
 	s.UpsertBookFileToMemDB(&row)
+	// Same post-commit notification as UpdateBookFile, so every listener that
+	// saw the whole-row write sees this one (sent by the caller's deferred
+	// unlock).
+	res.before, res.after, res.notify = &orig, &row, true
 	if err != nil {
 		// Applied but not known durable: memdb already mirrors it; say so.
-		notify = true
-		return &orig, &row, fmt.Errorf("PatchBookFileFields: %s: %w", fileID, err)
+		return res, fmt.Errorf("PatchBookFileFields: %s: %w", fileID, err)
 	}
-	// Same post-commit notification as UpdateBookFile, so every listener that
-	// saw the whole-row write sees this one (sent by the deferred unlock).
-	notify = true
-	return &orig, &row, nil
+	return res, nil
 }
