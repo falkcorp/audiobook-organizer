@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-24-repairs-visibility-followup-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5b9d3e71-c4a2-4f08-8e16-2a7f0d6c9b34 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Repairs runs and their activity are private to the people who may use them
 
@@ -48,6 +48,23 @@ need the permission to manage users (which administrators hold).
   so a new kind cannot become readable by everyone by default.
 - A run record that is damaged no longer breaks the whole list of runs; it is
   skipped and logged.
+- A review of this change found more places that still showed other people's
+  data, and they are closed too. Account audit entries (an email address taken
+  over by another account, a user merge, guest access tokens) and log lines that
+  name a user only by account id are now kept from everyone who may not manage
+  users. The results page of the user-merge and merged-user-repair operations,
+  the diagnostics download, every operation log screen and download, and the
+  live feeds follow the same rule.
+- Undoing a change that carries one user's data now needs the permission to
+  manage users, the same as reading it. Editors who could undo such an
+  operation before can no longer do so; undoing library-only operations is
+  unchanged.
+- Both live feeds re-check a person's permissions for every message, so lowering
+  someone's role or disabling their account takes effect on the next message
+  instead of when they reconnect.
+- Reading the Activity log for one operation or one book no longer builds the
+  whole history of that operation in memory before choosing a page, which any
+  viewer could previously make the server do over and over.
 - Everything else, including every other kind of operation, looks the same as
   before to a person who only has view access.
 
