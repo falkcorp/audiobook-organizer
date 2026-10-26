@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package batch
 
@@ -143,6 +143,7 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 			// row's merge redirect, so it is not repeated below.
 			var res merge.TrashRestoreResult
 			res, err = merge.RestoreFromTrash(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
+				req.Caller.judgeRestore,
 				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) }, joinGroups(req.Updates)...)
 			pre, updated = res.Before, res.Book
 		} else {
@@ -227,6 +228,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				}
 				var res merge.TrashRestoreResult
 				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
+					req.Caller.judgeRestore,
 					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
 				updated = res.Book
 			} else {
@@ -257,6 +259,16 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			resp.addSuccess(op.ID)
 
 		case "delete":
+			// Judged before the book is read: a soft or hard delete moves the
+			// book into the trash or removes it, and needs library.delete.
+			action := "move the book to the trash"
+			if op.HardDelete {
+				action = "permanently delete the book"
+			}
+			if gerr := req.Caller.checkTrash(action); gerr != nil {
+				resp.addError(op.ID, gerr.Error())
+				continue
+			}
 			book, err := bs.db.GetBookByID(op.ID)
 			if err != nil || book == nil {
 				resp.addError(op.ID, "not found")
@@ -308,7 +320,11 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			// primary went through the restore and yielded its flag.
 			// It hands off the group's primary itself, before it decides the
 			// restored row's merge redirect.
-			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil, nil)
+			if gerr := req.Caller.checkRestore(book); gerr != nil {
+				resp.addError(op.ID, gerr.Error())
+				continue
+			}
+			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil, req.Caller.judgeRestore, nil)
 			switch {
 			case err != nil:
 				resp.addError(op.ID, err.Error())

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-10-26
 
@@ -41,7 +41,7 @@ type PurgeResult struct {
 	// that were then kept because the delete refused (purgeFailed with
 	// stateMovedTo). They add no Purged, but a sibling's progress changed, so
 	// cached lists are stale. Unexported: it only drives the cache refresh.
-	stateMoved int
+	stateMoved   int
 	Attempted    int `json:"attempted"`
 	Purged       int `json:"purged"`
 	FilesDeleted int `json:"files_deleted"`

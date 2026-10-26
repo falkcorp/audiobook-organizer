@@ -1,7 +1,7 @@
 // file: internal/batch/trash_grants.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e7d5df1-473b-4136-b691-2798b1df7c12
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package batch
 
@@ -30,8 +30,9 @@ import (
 // that appears must say what it may do (&TrashGrants{Trash: true, Restore: true})
 // rather than inherit an unjudged bypass. This covers update payloads (the
 // two ways a payload moves a row into or out of the trash: library_state and
-// marked_for_deletion). The "delete" and "restore" actions of ExecuteOperations
-// are judged only by the handler, from TrashEffects.
+// marked_for_deletion) and the "delete" (soft and hard) and "restore" actions
+// of ExecuteOperations: a soft or hard delete needs Trash, and a restore of a
+// book in the trash needs Restore.
 type TrashGrants struct {
 	// Trash: the caller holds library.delete.
 	Trash bool
@@ -88,19 +89,49 @@ func (g *TrashGrants) checkRow(before, after *database.Book, updates map[string]
 }
 
 // checkRestore judges an update payload that sets marked_for_deletion=false for
-// one row: that payload is a restore (merge.RestoreFromTrash), so a book in the
-// trash needs library.organize, and a book that is not in it is a plain edit.
-// It reads the row the caller read just before taking the restore's locks, so a
-// row trashed by someone else in between is not judged. The handlers have
-// already asked for library.organize from the request's shape; this is the
-// service refusing for a caller that holds nothing (a nil receiver) rather than
-// trusting every caller to have asked.
+// one row, and the "restore" action: both are a restore
+// (merge.RestoreFromTrash), so a book in the trash needs library.organize, and
+// a book that is not in it is a plain edit. This is the early refusal, on the
+// row the caller read before taking the restore's locks; judgeRestore repeats
+// the decision on the row as locked. A nil receiver is a caller holding
+// nothing, so the service refuses rather than trusting every caller to have
+// asked.
 func (g *TrashGrants) checkRestore(book *database.Book) error {
 	if g == nil {
 		g = &TrashGrants{}
 	}
 	if book != nil && database.IsInTrash(book) && !g.Restore {
 		return &TrashDeniedError{Permission: "library.organize", Action: "restore the book from the trash"}
+	}
+	return nil
+}
+
+// judgeRestore is the verdict merge.RestoreFromTrash asks for inside its write:
+// before is the row as locked, after the row as it would be written (the
+// restore and the payload applied). A book in the trash needs library.organize
+// to come back, and a book that was not in the trash and is after the write
+// (library_state "deleted" next to marked_for_deletion=false) needs
+// library.delete, so both directions are judged on both branches. A nil
+// receiver holds neither.
+func (g *TrashGrants) judgeRestore(before, after *database.Book) error {
+	if g == nil {
+		g = &TrashGrants{}
+	}
+	if database.IsInTrash(before) && !g.Restore {
+		return &TrashDeniedError{Permission: "library.organize", Action: "restore the book from the trash"}
+	}
+	if !database.IsInTrash(before) && database.IsInTrash(after) && !g.Trash {
+		return &TrashDeniedError{Permission: "library.delete", Action: "move the book to the trash"}
+	}
+	return nil
+}
+
+// checkTrash judges the "delete" action, soft or hard: both need
+// library.delete. action says what the edit would do, for the message. A nil
+// receiver holds nothing.
+func (g *TrashGrants) checkTrash(action string) error {
+	if g == nil || !g.Trash {
+		return &TrashDeniedError{Permission: "library.delete", Action: action}
 	}
 	return nil
 }

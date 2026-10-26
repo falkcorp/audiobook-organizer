@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.10.0
-// last-edited: 2026-10-05
+// version: 1.11.0
+// last-edited: 2026-10-26
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -385,6 +385,7 @@ func TestExecuteOperations_MixedActions(t *testing.T) {
 	bs := NewBatchService(store)
 
 	req := &BatchOperationsRequest{
+		Caller: &TrashGrants{Trash: true, Restore: true},
 		Operations: []BatchOperationItem{
 			{
 				ID:      "book1",
@@ -447,6 +448,7 @@ func TestExecuteOperations_HardDelete(t *testing.T) {
 	bs := NewBatchService(store)
 
 	req := &BatchOperationsRequest{
+		Caller: &TrashGrants{Trash: true, Restore: true},
 		Operations: []BatchOperationItem{
 			{
 				ID:         "book1",
@@ -573,6 +575,7 @@ func TestExecuteOperations_DeleteError(t *testing.T) {
 	bs := NewBatchService(store)
 
 	req := &BatchOperationsRequest{
+		Caller: &TrashGrants{Trash: true, Restore: true},
 		Operations: []BatchOperationItem{
 			{
 				ID:         "book1",
@@ -626,6 +629,7 @@ func TestExecuteOperations_SoftDeleteTimestamp(t *testing.T) {
 
 	beforeTime := time.Now()
 	req := &BatchOperationsRequest{
+		Caller: &TrashGrants{Trash: true, Restore: true},
 		Operations: []BatchOperationItem{
 			{
 				ID:     "book1",

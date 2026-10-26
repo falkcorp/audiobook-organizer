@@ -1,5 +1,5 @@
 // file: internal/batch/hard_delete_owned_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b8e2d71-3c94-4a06-9f1d-7e2a60c4b839
 // last-edited: 2026-10-26
 
@@ -81,7 +81,7 @@ func (f *ownedFilesFixture) exists(bookID string) bool {
 }
 
 func hardDeleteOps(ids ...string) *BatchOperationsRequest {
-	req := &BatchOperationsRequest{}
+	req := &BatchOperationsRequest{Caller: &TrashGrants{Trash: true}}
 	for _, id := range ids {
 		req.Operations = append(req.Operations, BatchOperationItem{ID: id, Action: "delete", HardDelete: true})
 	}
