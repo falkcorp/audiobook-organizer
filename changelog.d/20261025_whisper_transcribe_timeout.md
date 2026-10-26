@@ -29,8 +29,12 @@
   worker's own batch: a response in which at least two clips timed out or
   crashed and more than half did (or in which any clip says the worker cannot
   decode) is a worker fault. Its verdicts are withheld, the worker is benched
-  for the run, its jobs are re-queued on other workers, and the sound results
-  that came with it are kept. A dispatch that failed anyway has its timeouts
+  for the run, and the sound results that came with it are kept. Only a worker
+  that cannot decode at all (`worker_misconfigured`) has its jobs kept off it
+  and its later timeouts distrusted for the rest of the dispatch; the jobs of a
+  fault made of timeouts go back in requests of at most two clips that any
+  worker may take, so each clip reaches its own verdict even when every
+  worker faulted on the same page of looping clips. A dispatch that failed anyway has its timeouts
   and crashes read as no answer (deferred, no strike) unless the dispatcher
   itself condemned the file by sending it alone to several workers. A lone job
   on a worker that is still answering `/health` is no longer blamed on the
@@ -72,8 +76,9 @@
   an abandoned request no longer keeps a worker busy for the length of the
   batch. A path batch that hits a start fault answers its remaining clips
   without waiting on extraction.
-- Both ops report progress while a whisper request is outstanding, so a long
-  but live request is not killed by the progress watchdog. The per-book op
+- Both ops report progress while a whisper request is outstanding, the
+  per-book op's silence retry rounds included, so a long but live request is
+  not killed by the progress watchdog. The per-book op
   stamps liveness only (it no longer writes a progress number that could step
   the bar backwards), and the ticker stops even if the request panics.
 - Operation logs now record an error attribute as its text; it was written as
@@ -88,12 +93,31 @@
   worker's decoder is restarting, the dispatcher waits and re-checks every 30 s
   for up to 6 minutes before reporting the pool unavailable
   (`ErrPoolUnavailable`); the per-book op stops after five unavailable pages in
-  a row (`errWhisperUnavailable`).
-- A second `transcribe_timeout` strike only counts when a different worker gave
-  it (`IntroTimeoutWorker`, stored with each counted strike). One sick Mac can
-  no longer make a clip's timeout permanent by itself. Trade-off: on a pool of
-  one worker a timeout never becomes permanent; the clip stays at one strike
-  and is re-sent each run.
+  a row (`errWhisperUnavailable`), and any other page (answered, stuck, or
+  failed some third way) starts the count again. Under `require_gpu` an
+  endpoint whose `/health` cannot be read is waited for the same way, so a pool
+  whose tunnels are all down ends as `ErrPoolUnavailable`: the per-book op
+  counts it toward the five-page stop and the per-file op retries the batch and
+  then stops the run, instead of both deferring every page in under a second.
+- A second `transcribe_timeout` strike only counts when a different machine
+  gave it (`IntroTimeoutWorker`, the machines that struck the file). One sick
+  Mac can no longer make a clip's timeout permanent by itself, and neither can
+  two server ports on that one Mac. A worker is identified by the
+  `machine_id` its `/health` reports (`whisper_mlx_server.py` 1.12.0: a hash of
+  `WHISPER_MACHINE_ID`, `/etc/machine-id`, the macOS platform UUID, or the
+  hostname), or by a hash of its URL for an older worker, and an endpoint whose
+  `/health` could not be read names no machine, so its strike never counts as
+  the second. What is stored, and returned in API responses, is that opaque
+  identity, never an endpoint address. A condemnation by the dispatcher needs a
+  lone clip stuck on two different machines; it counts as a strike even when
+  the same pair condemned the file before. A file that carries a strike is
+  sent to a healthy endpoint on another machine when there is one, even at a
+  lower priority, and to the same machine when there is not. Trade-off: on any
+  pool whose routing sends the file to the same machine each time (a pool of
+  one machine, or a night on which every other machine is down) a timeout does
+  not become permanent; the clip stays at its strikes and is re-sent each run.
+  Rollout: a worker that starts reporting `machine_id` changes identity once,
+  so a file it struck before the upgrade can take one more strike from it.
 - A one-file book whose 300 s clip timed out, or was condemned by the
   dispatcher (which is what a worker older than the per-clip deadline
   produces), is deferred rather than sealed as `[SILENCE]`: nothing listened
@@ -101,11 +125,14 @@
   either, at either retry stage; words from the second file are still its
   answer. Cost: such a book (typically a long music intro) is re-sent on every
   nightly run until its 300 s clip gets a verdict.
-- New worker codes, never verdicts (deferred, no strike, no status):
-  `decoder_killed` (the decoder child died from SIGKILL or SIGTERM, or was
-  never reaped: the worker's fault, not the clip's) and `request_abandoned`
-  (the request outlived the client's deadline). A child that crashes by itself
-  is still `decoder_crashed`. The deadline header is rounded up to whole
+- New worker codes: `decoder_killed` (the decoder child died from SIGKILL or
+  SIGTERM, or was never reaped) and `request_abandoned` (the request outlived
+  the client's deadline). `request_abandoned` is never a verdict (deferred, no
+  strike, no status). `decoder_killed` is a strike like a timeout: one kill
+  could be the machine's (macOS jetsam, an operator), so it turns permanent
+  only when a second machine also fails on the clip, and a decode that grows
+  until it is killed settles instead of being re-sent forever. A child that
+  crashes by itself is still `decoder_crashed`. The deadline header is rounded up to whole
   seconds, so the worker never gives up before the client.
 - A first-pass timeout on a first file the per-file op already heard as silence
   goes on to the 300 s retry instead of deferring the book on every run.
@@ -117,8 +144,8 @@
   results (transcripts or timeout verdicts)".
 - A liveness probe that cancels a request in the instant after the request
   already failed (an HTTP 500, say) no longer relabels that failure as a stuck
-  or unreachable worker: the cause is read only when the request's own error
-  is `context.Canceled`.
+  or unreachable worker: the cause is read only when the request's error wraps
+  that cause or is `context.Canceled`.
 
 #### Deployment order
 
@@ -126,8 +153,8 @@ Deploy the Go server **before** updating the Mac workers. A server older than
 this change does not know the new worker codes (`transcribe_timeout`,
 `decoder_crashed`, `decoder_killed`, `request_abandoned`) and stores each as a
 per-file and per-book `whisper_error`: not durable, but wrong. The new server
-reads `decoder_killed` and `request_abandoned` as "no answer" and counts the
-other two as strikes. Old workers keep working against the
+reads `request_abandoned` as "no answer" and counts the other three as
+strikes. Old workers keep working against the
 new server: they never send the new codes, and the dispatcher condemns a clip
 that hangs one (deferred at retry 1, see above).
 
@@ -139,6 +166,25 @@ that hangs one (deferred at retry 1, see above).
 - The strike entry said the second strike makes a timeout permanent; it must
   also come from a different worker.
 - The `decoder_crashed` entry said a clip that deterministically kills the
-  decoder ends as a verdict; it does once it has crashed two different workers.
-  On a one-worker pool it stays at one strike and is re-sent each run, like a
-  timeout.
+  decoder ends as a verdict; it does once it has crashed two different
+  machines. On a one-machine pool it stays at one strike and is re-sent each
+  run, like a timeout.
+- The different-worker entry said a "worker" was an endpoint and that only a
+  single-worker setup never makes a timeout permanent. A worker is a machine
+  (two ports on one box are one), and the price is paid by any pool whose
+  routing sends the file to the same machine; a struck file is now routed to
+  another machine when one is healthy.
+- The worker-fault entry said a faulted worker's jobs are kept off it; that now
+  holds only for `worker_misconfigured`. A fault made of timeouts re-queues its
+  jobs in requests of at most two clips that any worker may take.
+- `decoder_killed` was listed as a worker code that is never a verdict; it is a
+  strike that only a second machine can make permanent (owner decision).
+- An unreachable `require_gpu` pool was not waited for: every endpoint was
+  refused at once as a capability problem. It is now paced and reported as
+  `ErrPoolUnavailable`.
+- The liveness entry said the cause is read only when the request's own error
+  is `context.Canceled`; it is also read when the error wraps the cause.
+- The unavailable-page streak was not strictly "in a row": a stuck page did not
+  reset it. Any page that is not unavailable now does.
+- The progress entry did not cover the per-book op's silence retry rounds,
+  which ran without the liveness tick.

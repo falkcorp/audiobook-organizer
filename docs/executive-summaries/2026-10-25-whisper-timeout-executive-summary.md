@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
 # One bad audio clip can no longer freeze all the listening helpers
 
-Branch `fix/whisper-transcribe-timeout-r3`, [PR #4176](https://github.com/falkcorp/audiobook-organizer/pull/4176) (replaces PR #4168). No separate spec.
+Branch `fix/whisper-transcribe-timeout-r4`, [PR #4182](https://github.com/falkcorp/audiobook-organizer/pull/4182) (replaces PR #4176, which replaced PR #4168). No separate spec.
 
 ## Executive Summary
 
@@ -30,19 +30,26 @@ Five things changed:
   a stuck helper it splits the batch in half and tries the pieces elsewhere,
   which pins the problem down to one file without re-sending everything. Files
   that were already done are kept.
-- A file that times out on two different helpers is set aside for good, so
-  neither listening tool keeps trying it. Two timeouts from the same helper
-  count once, because that helper may be the one that is ill. With only one
-  helper running, a file is never set aside this way; it is simply tried again
-  next run. It stays set aside until someone asks for a retry or the file
+- A file that times out on two different machines is set aside for good, so
+  neither listening tool keeps trying it. Two timeouts from the same machine
+  count once, because that machine may be the one that is ill, and two helpers
+  running on one Mac count as one machine. Each helper now reports which
+  machine it runs on, as a code that does not reveal the machine's name or
+  address. A file that has timed out once is sent to a different machine next
+  time whenever one is available, even if that machine is normally used less.
+  With only one machine available, a file is never set aside this way; it is
+  simply tried again next run. It stays set aside until someone asks for a retry or the file
   itself is replaced. A file that timed out only once is tried again next time.
 - A file is blamed at most once per run and at most once every twelve hours, so
   the two listening tools cannot count the same stall twice. A helper that
   answers a request with mostly timeouts (or says it cannot listen at all) is
-  treated as the problem, not the files: nothing is held against them, the
-  helper is set aside for the run and its files go to another helper. A file
-  that two helpers in a row answer this way is left for the next run rather
-  than passed around forever. A file
+  treated as the problem, not the files: nothing is held against them and the
+  helper is set aside for the run. A helper that cannot listen at all has its
+  files sent elsewhere; files from a helper that answered with timeouts are
+  sent again one or two at a time, to any helper, so each file gets its own
+  answer even when every helper struggled with the same batch. A file that two
+  helpers in a row cannot listen to is left for the next run rather than
+  passed around forever. A file
   whose listening later succeeds has its earlier strikes wiped.
 - When a request fails part-way, the files the helpers had already finished are
   kept and saved, and only the unfinished ones are tried again. Before, a single
@@ -54,7 +61,8 @@ Five things changed:
   how long it has been working on the current clip. A helper past its limit is
   treated as unhealthy.
 - Both listening tools keep reporting progress while they wait on a long
-  request, so a slow-but-alive request is not mistaken for a hung tool.
+  request, including the book tool's second and third tries at a quiet book,
+  so a slow-but-alive request is not mistaken for a hung tool.
 - The tool now watches a long request by asking the helper how long it has been
   working, rather than waiting a fixed ten minutes. A helper running the older
   script cannot report that, so for it the old fixed wait still applies.
@@ -68,15 +76,19 @@ Five things changed:
   a helper stops working through a request the server has already given up on.
 - If every helper stays stuck for three batches in a row, the tool stops and
   says so, instead of marking the whole library "not done" one batch at a time.
-  If every helper is set aside or restarting, the tool waits up to six minutes
-  for one to come back, and the book tool stops after five batches in a row
-  with no helper available.
+  If every helper is set aside, restarting, or cannot be reached at all, the
+  tool waits up to six minutes for one to come back. The book tool stops after
+  five batches in a row with no helper available, and the file tool stops
+  after five tries of one batch.
 - A book whose longer 300-second listen could not finish is no longer recorded
   as "silent". Nothing listened past the first 90 seconds, so it is left for
   the next run. Books with a long music opening may be retried each night until
   that listen succeeds.
-- A helper that was killed from outside, or a request the server had already
-  given up on, is reported as "no answer" and never counted against the file.
+- A request the server had already given up on is reported as "no answer"
+  and never counted against the file. A helper whose listening process was
+  killed from outside counts like a timeout: once is not enough to blame the
+  file, but a kill on a second machine sets it aside, so a file whose listening
+  grows until the Mac kills it does not come back every night.
 - Rolling back a book-listening run now also clears the "timed out" label that
   run put on the book, so the book is tried again.
 - The new "timed out" count appears next to the other outcomes in the listening
@@ -86,9 +98,11 @@ Five things changed:
 
 ## Rolling it out
 
-Update the server first, then the helpers. The new helpers can send two new
-"no answer" replies, and an older server would wrongly record those as
-failures for the files. The new server works with old and new helpers alike:
+Update the server first, then the helpers. The new helpers can send new
+replies an older server does not know, and it would wrongly record those as
+failures for the files. A helper that is updated starts reporting which machine
+it runs on, so a file it timed out on before the update can be counted against
+it once more. The new server works with old and new helpers alike:
 an older helper simply does not report how long it has been busy. Then restart
 the helpers one at a time and check that each one reports itself idle.
 

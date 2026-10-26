@@ -1,7 +1,7 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
-<!-- last-edited: 2026-09-01 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Metal Whisper worker (Mac)
 
@@ -49,6 +49,7 @@ Environment:
 | `WHISPER_MLX_MODEL` | `mlx-community/whisper-small.en-mlx` | model repo |
 | `WHISPER_BIND` | `127.0.0.1` | bind address |
 | `WHISPER_PORT` | `19848` | port |
+| `WHISPER_MACHINE_ID` | unset | names this machine for `/health`'s `machine_id` (hashed before it is reported). Unset, the id comes from `/etc/machine-id`, the macOS platform UUID, or the hostname. Set it only when two machines would otherwise report the same id (cloned from one image). Every server process on one machine must report the same id: a file's decoder timeout becomes permanent only when two different machines fail on it |
 
 ## Verify it before exposing it
 
