@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.127.0
+// version: 2.128.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-26
 
@@ -1239,9 +1239,11 @@ type BookFile struct {
 	// piece of evidence about the audio, so a repeat from the same run is
 	// refused rather than counted.
 	IntroTimeoutRunID string `json:"intro_timeout_run_id,omitempty"`
-	// IntroTimeoutAt is when the latest strike was counted. A run id cannot say
-	// that two different ops saw ONE stall (each op has its own id), so a strike
-	// is also refused while the previous one is closer than the caller's MinGap.
+	// IntroTimeoutAt is when the latest strike was counted, or when a strike that
+	// was not counted recorded the file's first known machine
+	// (IntroTimeoutOutcome.IdentityRecorded). A run id cannot say that two
+	// different ops saw ONE stall (each op has its own id), so a strike is also
+	// refused while that moment is closer than the caller's MinGap.
 	// Travels with the strikes; zero (never recorded) means "long ago".
 	IntroTimeoutAt *time.Time `json:"intro_timeout_at,omitempty"`
 	// IntroTimeoutWorker names the machines whose answers were the counted

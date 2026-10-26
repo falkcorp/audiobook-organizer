@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_timeout_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3a7d1f58-c2e6-4b09-8d41-6f0b9e2a7c35
 // last-edited: 2026-10-26
 
@@ -166,6 +166,41 @@ func TestRecordIntroTimeout_AnUpgradedWorkersNewIdentityIsNotASecondMachine(t *t
 				t.Fatalf("status=%v worker=%q, want no verdict, the new machine recorded and no address kept", got.TranscribeStatus, got.IntroTimeoutWorker)
 			}
 		})
+	}
+}
+
+// N1 (review 4 of #4182): recording the first known machine restarts the
+// MinGap window like a counted strike. The reviewer's sequence: an old worker's
+// strike, the Mac recorded by the book op 13 h later, then llm1 through the
+// file op an hour after that. Two machines failing within the hour is the
+// "both sick at once" case MinGap damps, so llm1 is too soon, not a permanent
+// verdict; it counts once the window has passed.
+func TestRecordIntroTimeout_RecordingANewMachineStartsTheMinGap(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	old := strike("hash-a", "run-book-1", 2)
+	old.Worker, old.MinGap = "u:0123456789ab", 12*time.Hour
+	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, old); err != nil || out.Strikes != 1 {
+		t.Fatalf("old worker: out=%+v err=%v", out, err)
+	}
+	mac := strike("hash-a", "run-book-2", 2)
+	mac.Worker, mac.MinGap, mac.At = "m:aaaaaaaaaaaaaaaa", 12*time.Hour, old.At.Add(13*time.Hour)
+	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, mac); err != nil || !out.IdentityRecorded || out.Strikes != 1 {
+		t.Fatalf("Mac: out=%+v err=%v, want its identity recorded and still one strike", out, err)
+	}
+	if got := reread(t, s, f); got.IntroTimeoutAt == nil || !got.IntroTimeoutAt.Equal(mac.At) || got.IntroTimeoutRunID != old.RunOpID {
+		t.Fatalf("at=%v run=%q, want the recorded identity's time and the counted strike's run", got.IntroTimeoutAt, got.IntroTimeoutRunID)
+	}
+	llm1 := strike("hash-a", "run-file-2", 2)
+	llm1.Worker, llm1.MinGap, llm1.At = "m:bbbbbbbbbbbbbbbb", 12*time.Hour, mac.At.Add(time.Hour)
+	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, llm1); err != nil || !out.TooSoon || out.Permanent || out.Strikes != 1 {
+		t.Fatalf("llm1 an hour later: out=%+v err=%v, want TooSoon and no verdict", out, err)
+	}
+	if got := reread(t, s, f); got.TranscribeStatus != nil || got.IntroTimeouts != 1 {
+		t.Fatalf("status=%v strikes=%d, want nothing written", got.TranscribeStatus, got.IntroTimeouts)
+	}
+	llm1.RunOpID, llm1.At = "run-file-3", mac.At.Add(13*time.Hour)
+	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, llm1); err != nil || out.Strikes != 2 || !out.Permanent {
+		t.Fatalf("llm1 after the window: out=%+v err=%v, want the second strike and the verdict", out, err)
 	}
 }
 

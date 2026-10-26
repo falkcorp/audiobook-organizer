@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
 // last-edited: 2026-10-26
 
@@ -150,7 +150,9 @@ type IntroTimeoutOutcome struct {
 	// /health could not be read), and this strike named a known one. It may be
 	// the same machine under its new name, so it is not counted, but its
 	// identity is added to IntroTimeoutWorker so that only a DIFFERENT known
-	// machine can give the next strike. Nothing else on the row changes.
+	// machine can give the next strike, and IntroTimeoutAt is set to its time,
+	// so the next strike within MinGap is TooSoon. Nothing else on the row
+	// changes.
 	IdentityRecorded bool
 }
 
@@ -490,9 +492,15 @@ func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutS
 			if !learnsMachine(struckBy, newBy) {
 				return ErrSkipBookFileWrite
 			}
-			// The first known machine after only unknown ones: record who it is,
-			// count nothing, leave the strike's time and run alone.
+			// The first known machine after only unknown ones: record who it is
+			// and count nothing. Its time restarts the MinGap window like a
+			// counted strike: a second known machine moments later is the
+			// "both machines sick at once" case MinGap damps, so it must wait
+			// (TooSoon) rather than make the file permanent the same night.
+			// The run id stays the counted strike's.
 			row.IntroTimeoutWorker = joinIntroTimeoutWorkers(struckBy, newBy)
+			seen := st.At
+			row.IntroTimeoutAt = &seen
 			out.IdentityRecorded = true
 			return nil
 		}

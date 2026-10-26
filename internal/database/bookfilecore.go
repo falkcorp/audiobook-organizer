@@ -1,5 +1,5 @@
 // file: internal/database/bookfilecore.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
 // last-edited: 2026-10-26
 
@@ -120,7 +120,8 @@ type BookFileCore struct {
 	IntroTimeouts     int    `json:"intro_timeouts,omitempty"`
 	IntroTimeoutHash  string `json:"intro_timeout_hash,omitempty"`
 	IntroTimeoutRunID string `json:"intro_timeout_run_id,omitempty"`
-	// IntroTimeoutAt is when the latest strike was counted; see BookFile.
+	// IntroTimeoutAt is when the latest strike was counted or a first known
+	// machine recorded; see BookFile.
 	IntroTimeoutAt *time.Time `json:"intro_timeout_at,omitempty"`
 	// IntroTimeoutWorker is the opaque identity of the machines that gave the
 	// counted strikes (never an endpoint address); see BookFile.
