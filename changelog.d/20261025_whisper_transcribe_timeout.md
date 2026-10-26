@@ -55,13 +55,14 @@
   of timeouts go back in requests of at most two clips, so each clip reaches
   its own verdict even when every worker faulted on the same page of looping
   clips. A machine with a faulted port that does not answer it is sick: none of
-  its strikes in that dispatch count, every one of its ports goes into
-  cooldown so the next dispatch waits at the gate instead of paying another
-  chunk of per-clip deadlines, and its jobs go to a machine that passed, or,
+  its strikes in that dispatch count, it is remembered for the life of the
+  process so every later dispatch sends it the canary on every port before
+  giving it any work (one clip instead of a chunk of per-clip deadlines) and
+  forgets it once it answers, and its jobs go to a machine that passed, or,
   when none did, the dispatch ends as `ErrPoolUnavailable` (the ops wait it
   out and defer the unanswered files, nothing written for them). A canary that
   could not get a slot in that time is no verdict: the machine stays benched
-  without cooldown, and a dispatch left with no machine to believe ends in an
+  and is not remembered as sick, and a dispatch left with no machine to believe ends in an
   error the ops defer on without counting it toward stopping the run. A
   machine whose fault was mostly `decoder_killed` answers has its kills
   withheld for the rest of the dispatch even after it passes (a two-second
@@ -276,9 +277,11 @@ that hangs one (deferred at retry 1, see above).
   `ErrPoolUnavailable` instead of converging. It went to the machine's first
   port rather than the one that faulted, so one sick worker process could be
   vouched for by its sound sibling, and a machine whose fault was kills was
-  believed about kills after a canary that cannot detect them. A machine that
-  failed the canary was not put in cooldown, so every page or try paid a fresh
-  chunk of per-clip deadlines on it before the run stopped.
+  believed about kills after a canary that cannot detect them. Each dispatch
+  started with no memory of a machine that had failed the canary, so every
+  page or try paid a fresh chunk of per-clip deadlines on it before the run
+  stopped (a cooldown would not have helped: the dispatcher waits one out and
+  then sends the chunk).
 - The routing entry covered only ordinary allocation. The requests re-sent
   after a split or a worker fault took the first endpoint by priority, the
   machine that had already struck the file included.

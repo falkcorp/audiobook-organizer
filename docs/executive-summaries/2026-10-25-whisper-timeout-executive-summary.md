@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -65,9 +65,11 @@ Five things changed:
   working, so it is asked again, one or two files at a time, and believed, and
   each file still gets its own answer even when every helper struggled with
   the same batch. A machine with a helper that cannot answer it is ill:
-  nothing it said that night is held against any file, it is rested for a
-  while so the next batch does not spend another hour on it, and if no
-  machine answers, the batch is simply left for later. If the recording never
+  nothing it said that night is held against any file, every later batch
+  plays it the recording first and gives it work only once it answers, so an
+  ill machine costs a two-second test per batch instead of up to an hour and
+  a half of waiting, and if no machine answers, the batch is simply left for
+  later. If the recording never
   got its turn, nothing is decided about that machine and the batch is left
   for later without counting toward stopping the run. A machine whose trouble
   was its listening process being killed is still not believed about kills
@@ -113,7 +115,11 @@ Five things changed:
   and never counted against the file. A helper whose listening process was
   killed from outside counts like a timeout: once is not enough to blame the
   file, but a kill on a second machine sets it aside, so a file whose listening
-  grows until the Mac kills it does not come back every night.
+  grows until the Mac kills it does not come back every night. The exception
+  is a batch in which a machine's listening was mostly killed: its kills that
+  night are not held against any file, because they are as likely the machine
+  running out of memory as the files. A file that only ever lands in such
+  batches is left for later each night rather than set aside.
 - Rolling back a book-listening run now also clears the "timed out" label that
   run put on the book, so the book is tried again.
 - The new "timed out" count appears next to the other outcomes in the listening
