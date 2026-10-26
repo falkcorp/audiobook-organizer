@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.6 -->
+<!-- version: 10.78.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-24 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,55 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-RETIRED-FPIDX-SHELL-ID** after `RetireBookFiles` re-keys a row
+      under the holder, its `fpidx:` LSH value (the near-duplicate fingerprint
+      index) still names the shell book id. A fingerprint hit on a retired row
+      therefore reports the shell, not the holder, until the index is rebuilt.
+      Rewrite the `fpidx:` value in the retire and un-retire batch (or have the
+      LSH readers resolve the owner through the file id), and add a test that a
+      retire followed by an `LSHProbe` hit resolves to the holder. Callers of
+      `LookupAcoustIDCandidates` and `LSHProbe` must skip a retired row until
+      then (follow-up PR 3b, dedup collectors).
+
+- [ ] **TODO-JUNK-TITLE-SLIPS** The junk-title fixer's string rules (v2, evidence ranking) still let 146 of the 261 reviewer-rejected transcription rows, 85 of 134 filename rows and 14 of 57 folder rows through, measured by replaying the 2026-10-23 plan offline. Classes left as they are because a string rule cannot tell them from a title: a misheard transcription (needs a corroborating folder, filename or candidate before it is applicable, the same ask as the garbled-transcription entry above), a plain series prefix with no "Book N", a bare leading or trailing year, "a novel" without a comma, a trailing "... Stories", a number-and-year prefix. Decide which of these the owner wants refused outright and which need a second source, then add them to `junk_title_filters.go` with invented fixtures. Also still refused although they can be real titles: an opening "Welcome to ...", a sentence-case "It ends ..." and a trailing "..." in a transcription (`junk_title_filters.go`), and `junkStoredAuthor` still uses `authorjunk.ClassifyName` with its relink-only rules; each is a refusal, so a title is listed for a person, never mis-proposed.
+
+- [ ] **TODO-MLIST-REQUIREADMIN-AUTHOFF** `servermiddleware.RequireAdmin` itself
+      still answers 401 with `EnableAuth=false` for its other users (retired wipe
+      stub, cache introspection, admin debug API, `/system` wipe routes). Decide
+      per route whether auth-off should open it, then give each the same
+      pass-through the master-list routes now have through `Server.adminRole()`.
+      Do not change `RequireAdmin` globally: it also guards destructive routes.
+- [ ] **TODO-MLIST-AUDIBLE-CUTOVER** Cut over `maintenance.audible-read-status`
+      to the `master-list-import` fixer (its Audible-specific input becomes a
+      list upload) and retire the old op.
+- [ ] **TODO-MLIST-PLANROWS-4148** Plan rows of a Repairs fixer are readable by
+      any `library.view` holder, including the master-list plan rows (list titles
+      and authors, the target user's read status). PR #4148 gates that read and
+      must merge BEFORE the master-list apply PR (`feat/master-list-import-apply-r2`,
+      which supersedes #4147). Once #4148 is on main, rewrite the "reads are not
+      gated yet" comments in `master_list_import_fixer.go` and
+      `wire_master_list_routes.go`, the changelog's last line and the executive
+      summary's "Not covered yet" paragraph, then tick this task.
+
+- [ ] **TODO-OWNED-FILES-CHECKS** Make every "does this book own book_file rows" check ask what `DeleteBook` asks, and close the carry windows the batch/single hard-delete fix (the owned-files precheck PR) did not touch. `DeleteBook` counts every key under `book_file:<id>:` including retired rows (`countBookFileRows`); `GetBookFiles` skips retired rows. `database.CheckBookOwnsNoFiles` (new in the owned-files precheck PR) is the shared helper that reads `GetBookFilesIncludingRetired`, so a check that still uses `GetBookFiles` passes a book that holds only retired rows and `DeleteBook` then refuses. Purge `purgeOne` step 0 and both discard-progress-and-purge checks now use the helper (the owned-files precheck PR). Sites still on `GetBookFiles`: version-group cleanup in `internal/reconcile/reconcile.go` (around line 984, which also decides whether to `os.Remove` the duplicate's file); the iTunes regroup delete pass in `internal/plugins/maintenance/itunes_regroup.go` (around line 839). Each needs the helper plus a test where the book holds only retired rows. The wording should also stop telling users to "move files" that cannot be moved (retired rows refuse every move with `ErrBookFileRetired`).
+- [ ] **TODO-RECONCILE-CARRY-WINDOW** Version-group cleanup (`internal/reconcile/reconcile.go`) runs its owned-files check outside the merge lock, its carry precheck (around lines 1151-1160) only checks that the kept book is still listed (not that the duplicate still owns no files), and its `del` runs `os.Remove(dup.FilePath)` (around line 1141) BEFORE `DeleteBook`. A file row that lands between the check and the delete moves the duplicate's listening state to the kept book, deletes the audio, then has `DeleteBook` refuse. Put the owned-files check in the precheck (under the lock, via `CheckBookOwnsNoFiles`) and reorder so the row-deleting call comes before any file removal, with a test that gains a file row before the lock.
+- [ ] **TODO-REGROUP-CARRY-WINDOW** The iTunes regroup delete pass (`internal/plugins/maintenance/itunes_regroup.go`, check around line 839, precheck around lines 919-933, carry at `CarryStateThenHardDelete` around line 938) has the same shape: the files/external-ID check is outside the lock and the precheck does not repeat the files check. Add `CheckBookOwnsNoFiles` to the precheck and a test where a file row appears before the lock.
+- [ ] **TODO-BATCH-HARD-DELETE-HANDOFF** Batch hard delete (`internal/batch/service.go` `hardDelete`) never calls `handOffPrimary`, unlike the single `DeleteAudiobook` (`internal/audiobooks/service_mutation.go`, "A hard-deleted primary hands its group's flag on too"). A batch-deleted primary leaves its version group with no primary. Also check whether the single delete does other post-delete bookkeeping (purge or external-ID tombstones) that the batch path skips, and give both paths one shared post-delete step.
+
+- [ ] **TODO-SCANNER-SUSPICIOUS-UNTRASHES** A book in the trash by its `"deleted"` library_state label alone (no deletion flag; the batch `library_state: "deleted"` path makes these) can leave the trash with no `library.organize` permission involved: `applyScannerFields` (`internal/scanner/scanner.go`, around lines 4644-4647) lets a state the scan derived (`"suspicious"`, for a file under `MinBookSizeBytes`) overwrite `LibraryState`, and nothing in `scanner.go` checks `database.IsInTrash`. System-driven and needs a tiny file, and the nightly purge ignores label-only rows anyway, so low urgency. Medium confidence: whether such a row reaches `applyScannerFields` on a rescan was not traced. Candidate fix, the owner's call: guard the label overwrite with `!database.IsInTrash(dst)`, with a test that rescans a label-only trashed book whose file is under the size floor and asserts it stays trashed. Found in the re-review of the batch hard-delete owned-files precheck PR (pre-existing, not introduced by it).
+
+- [ ] **RETIRED-VERSIONS-4139-REBASE** When #4139 rebases onto the round-4 fixes
+      of #4136: drop #4139's own copies of `HasRetiredVersions`,
+      `retiredVersionFromPrefix` and `retiredVersionProbe` in
+      `retired_hash_lookup.go` (the same probe now lives in
+      `internal/database/retired_version_probe.go`); dedupe its `mustPlan*`
+      helpers in `plan_virtual_file_lookup_error_test.go` against
+      `plan_virtual_retired_test.go`; resolve the `planVirtualFile` conflict
+      (use `BookFileRowsAtPathForWrite`, keep its error return); and delete the
+      `pending4139` entries from `reviewedFilteredGetterCallers` in
+      `internal/arch/filtered_getter_callers_test.go` for every call site #4139
+      converts (the ratchet fails on a stale entry).
 
 - [ ] **TODO-FILE-INTRO-RUN** Once `feat/whisper-remote-extract` and the per-file intro PR are both merged and deployed, run `maintenance.transcribe-file-intros` as a dry run, record the real per-file time on the Mac workers, and replace the unmeasured 5.3 s/file estimate.
 - [ ] **TODO-FILE-INTRO-META** `transcribe.BatchResult` carries no model or language, so `IntroMeta.Model` and `.Language` are empty on every per-file result; have the path transport report the worker's model (from `/health`) so "same model for every track" is checkable per file.
