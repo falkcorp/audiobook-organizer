@@ -1,7 +1,7 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
@@ -18,8 +18,8 @@ import (
 var ErrDiscardIncomplete = errors.New("merge: listening state was not fully discarded")
 
 // ErrDiscardedBookKept is returned (wrapped, with the delete's own failure)
-// by DiscardUserStateThenHardDelete when every user's state WAS cleared and the
-// delete then failed, so the book was kept without it. Unlike
+// by DiscardUserStateThenHardDelete when state WAS erased (at least one user or
+// bookmark) and the delete then failed, so the book was kept without it. Unlike
 // ErrDiscardIncomplete, something irreversible happened: the owner asked for
 // the state to be dropped with the book, and the book is still there. A caller
 // must record it and must not report "nothing changed".
@@ -146,6 +146,11 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("%w: %s after clearing: %w", ErrDiscardIncomplete, bookID, err)
 	}
 	if err := del(); err != nil {
+		if res.Users == 0 && res.Bookmarks == 0 {
+			// Nothing was erased, so this is an ordinary refused delete: the
+			// "progress was erased and the book kept" error would overstate it.
+			return res, err
+		}
 		return res, &DiscardedBookKeptError{BookID: bookID, Users: res.Users, Bookmarks: res.Bookmarks, Err: err}
 	}
 	return res, nil

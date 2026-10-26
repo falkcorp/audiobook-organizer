@@ -1,7 +1,7 @@
 // file: internal/merge/hard_delete_keeping_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c4e7b2-5a38-4d60-b7f1-3e8a0d9c2b64
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
@@ -51,13 +51,13 @@ func newHDFixture(t *testing.T, withState bool) *hdFixture {
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
 	g := "g1"
-	_, err = s.CreateBook(&database.Book{ID: "keep", Title: "keep", Format: "m4b", VersionGroupID: &g,
+	_, err = s.CreateBook(&database.Book{ID: "keep", Title: "Year One", Format: "m4b", VersionGroupID: &g,
 		IsPrimaryVersion: new(true), LibraryState: new("organized")})
 	require.NoError(t, err)
-	_, err = s.CreateBook(&database.Book{ID: "doomed", Title: "doomed", Format: "m4b", VersionGroupID: &g,
+	_, err = s.CreateBook(&database.Book{ID: "doomed", Title: "Knightfall", Format: "m4b", VersionGroupID: &g,
 		IsPrimaryVersion: new(false), LibraryState: new("imported")})
 	require.NoError(t, err)
-	u, err := s.CreateUser("listener", "listener@example.com", "argon2id", "x", []string{"user"}, "active")
+	u, err := s.CreateUser("listener", "listener@example.invalid", "argon2id", "x", []string{"user"}, "active")
 	require.NoError(t, err)
 	if withState {
 		require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: "doomed",

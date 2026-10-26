@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 98427cba-9b8a-4313-ace0-44b5115e8d6c
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -23,7 +23,7 @@ import (
 // listed makes it a book Audiobookshelf lists (organized primary).
 func groupBook(t *testing.T, store database.Store, id, gid string, trashed, listed bool) {
 	t.Helper()
-	b := &database.Book{ID: id, Title: id, Format: "m4b", VersionGroupID: &gid}
+	b := &database.Book{ID: id, Title: "The Dark Knight Returns", Format: "m4b", VersionGroupID: &gid}
 	if trashed {
 		yes := true
 		now := time.Now().Add(-time.Hour)
@@ -158,7 +158,7 @@ func TestPurge_CarryFailureKeepsBook(t *testing.T) {
 // on its own group's live version, and nothing crosses groups.
 func TestPurge_CarryAcrossManyGroups(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	u, err := store.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	u, err := store.CreateUser("reader", "reader@example.invalid", "argon2id", "x", []string{"user"}, "active")
 	require.NoError(t, err)
 	const groups = 12
 	for g := range groups {

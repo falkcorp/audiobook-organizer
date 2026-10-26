@@ -1,7 +1,7 @@
 // file: internal/batch/hard_delete_owned_files_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b8e2d71-3c94-4a06-9f1d-7e2a60c4b839
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package batch
 
@@ -31,7 +31,7 @@ func newOwnedFilesFixture(t *testing.T) *ownedFilesFixture {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
-	u, err := s.CreateUser("listener", "listener@example.com", "argon2id", "x", []string{"user"}, "active")
+	u, err := s.CreateUser("listener", "listener@example.invalid", "argon2id", "x", []string{"user"}, "active")
 	require.NoError(t, err)
 	return &ownedFilesFixture{s: s, user: u}
 }
@@ -40,7 +40,7 @@ func newOwnedFilesFixture(t *testing.T) *ownedFilesFixture {
 // lists, group puts it in a version group.
 func (f *ownedFilesFixture) book(t *testing.T, id string, listed bool, group string) {
 	t.Helper()
-	b := &database.Book{ID: id, Title: id, Format: "m4b"}
+	b := &database.Book{ID: id, Title: "The Dark Knight Returns", Format: "m4b"}
 	if group != "" {
 		b.VersionGroupID = &group
 	}
@@ -56,7 +56,7 @@ func (f *ownedFilesFixture) book(t *testing.T, id string, listed bool, group str
 func (f *ownedFilesFixture) ownFile(t *testing.T, bookID string) {
 	t.Helper()
 	require.NoError(t, f.s.CreateBookFile(&database.BookFile{
-		ID: ulid.Make().String(), BookID: bookID, FilePath: "/tmp/owned/" + bookID + ".m4b", Format: "m4b",
+		ID: ulid.Make().String(), BookID: bookID, FilePath: "/lib/Gotham/owned/" + bookID + ".m4b", Format: "m4b",
 	}))
 }
 
@@ -190,7 +190,7 @@ func (g *gainsFileStore) GetBookFilesIncludingRetired(id string) ([]database.Boo
 		g.mu.Unlock()
 		if gain {
 			require.NoError(g.t, g.PebbleStore.CreateBookFile(&database.BookFile{
-				ID: ulid.Make().String(), BookID: id, FilePath: "/tmp/owned/gained.m4b", Format: "m4b",
+				ID: ulid.Make().String(), BookID: id, FilePath: "/lib/Gotham/owned/gained.m4b", Format: "m4b",
 			}))
 		}
 	}
@@ -267,11 +267,11 @@ func TestExecuteOperations_HardDeleteLateRefusalAfterCarrySaysStateMoved(t *test
 func (f *ownedFilesFixture) retire(t *testing.T, holderID string) {
 	t.Helper()
 	f.book(t, "shell-"+holderID, false, "")
-	row := &database.BookFile{ID: ulid.Make().String(), BookID: "shell-" + holderID, FilePath: "/tmp/owned/" + holderID + "-retired.m4b", Format: "m4b"}
+	row := &database.BookFile{ID: ulid.Make().String(), BookID: "shell-" + holderID, FilePath: "/lib/Gotham/owned/" + holderID + "-retired.m4b", Format: "m4b"}
 	require.NoError(t, f.s.CreateBookFile(row))
 	v, err := f.s.CreateBookVersion(&database.BookVersion{
 		BookID: holderID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
-		RetiredFromBookID: "shell-" + holderID, RetireOpID: "op-1",
+		RetiredFromBookID: "shell-" + holderID, RetireOpID: "op-1", RetiredAt: new(time.Now()),
 	})
 	require.NoError(t, err)
 	require.NoError(t, f.s.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: "shell-" + holderID}}, holderID, v.ID))

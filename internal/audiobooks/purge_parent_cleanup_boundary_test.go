@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -49,7 +49,7 @@ func softDeleted(t *testing.T, store *database.PebbleStore, id, path string) {
 	t.Helper()
 	yes := true
 	now := time.Now().Add(-time.Hour)
-	if _, err := store.CreateBook(&database.Book{ID: id, Title: id, FilePath: path, MarkedForDeletion: &yes, MarkedForDeletionAt: &now}); err != nil {
+	if _, err := store.CreateBook(&database.Book{ID: id, Title: "The Dark Knight Returns", FilePath: path, MarkedForDeletion: &yes, MarkedForDeletionAt: &now}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/batch/trash_effects_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f183a58d-743d-4d9b-86cd-7f26999abaab
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package batch
 
@@ -63,7 +63,7 @@ func TestTrashEffects_AgreesWithApplyUpdates(t *testing.T) {
 		{"marked_for_deletion": nil},
 		{"title": "x"},
 	} {
-		b := &database.Book{ID: "x", Title: "t"}
+		b := &database.Book{ID: "x", Title: "Hush"}
 		applyUpdates(b, updates)
 		touched := b.MarkedForDeletion != nil || (b.LibraryState != nil && strings.EqualFold(*b.LibraryState, "deleted"))
 		e := updateEffects(updates)
