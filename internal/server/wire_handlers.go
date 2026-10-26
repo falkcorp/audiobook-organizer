@@ -1,17 +1,21 @@
 // file: internal/server/wire_handlers.go
-// version: 2.62.1
+// version: 2.64.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-26
 
 package server
 
 import (
+	"context"
+	"fmt"
+
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -445,10 +449,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.metadataFetchService != nil {
 		dupMetadataSvc = s.metadataFetchService
 	}
-	var dupDedupEng duplicates.DedupEngine
-	if s.dedupEngine != nil {
-		dupDedupEng = s.dedupEngine
-	}
 	duplicatesH := duplicates.New(
 		s.Ops(),
 		s.dedupCache,
@@ -460,7 +460,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			}
 			return merge.NewService(s.storeForWiring())
 		},
-		dupDedupEng,
 		func() (any, error) {
 			store := s.storeForWiring()
 			if store == nil {
@@ -614,6 +613,16 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// (same semantics as s.perm: no-op with auth off, first-run bypass).
 	audiobooksH.SetPermissionCheck(audiobookshandler.PermissionCheck(s.permCheck()))
 	audiobooksH.SetPermissionHolds(audiobookshandler.PermissionHolds(s.permHolds()))
+	audiobooksH.SetPurgeEnqueuer(func(ctx context.Context, actorUserID string, params any) (string, error) {
+		if s.opRegistry == nil {
+			return "", fmt.Errorf("operation registry not initialized")
+		}
+		var opts []opsregistry.EnqueueOption
+		if actorUserID != "" {
+			opts = append(opts, opsregistry.WithActor(actorUserID))
+		}
+		return s.opRegistry.EnqueueOp(ctx, purgeSoftDeletedOpID, params, opts...)
+	})
 	audiobooksH.SetSearchResultCached(func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool {
 		return s.audiobookService != nil && s.audiobookService.SearchIsCached(search, authorID, seriesID, f)
 	})

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_user_state_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b9a844a-321a-4f77-9487-2f6311409ef2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -40,7 +40,7 @@ func TestPurge_RefusesBookHoldingUserState(t *testing.T) {
 	softDeleted(t, store, "held", "")
 	purgeSeedProgress(t, store, "held")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, res.Purged)
 	require.Equal(t, 1, res.KeptHasProgress)
@@ -68,7 +68,7 @@ func TestPurge_MergedLoserWithMovedStateStillPurges(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, st, "fixture: the loser keeps a drained state row")
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Purged, "result %+v", res)
 	require.Zero(t, res.KeptHasProgress)
@@ -133,7 +133,7 @@ func TestPurge_PermanentBookmarkCheckFailuresHaveDistinctReasons(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, store.DeleteRaw("sync_item:"+winnerSync))
 
-		res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+		res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 		require.NoError(t, err)
 		msg := purgeErrFor(t, res, "loser")
 		require.Contains(t, msg, brokenReason)
@@ -149,7 +149,7 @@ func TestPurge_PermanentBookmarkCheckFailuresHaveDistinctReasons(t *testing.T) {
 		require.NoError(t, err)
 		fs := &purgeSyncGraphFault{PebbleStore: store, aliasErr: fmt.Errorf("%w: starting at x", database.ErrSyncAliasLimit)}
 
-		res, err := NewAudiobookService(fs).PurgeSoftDeletedBooks(context.Background(), false, nil)
+		res, err := NewAudiobookService(fs).PurgeSoftDeletedUnattended(context.Background(), false, nil)
 		require.NoError(t, err)
 		msg := purgeErrFor(t, res, "aliased")
 		require.Contains(t, msg, aliasReason)
@@ -163,7 +163,7 @@ func TestPurge_PermanentBookmarkCheckFailuresHaveDistinctReasons(t *testing.T) {
 		require.NoError(t, err)
 		fs := &purgeSyncGraphFault{PebbleStore: store, resolveErr: errors.New("injected read error")}
 
-		res, err := NewAudiobookService(fs).PurgeSoftDeletedBooks(context.Background(), false, nil)
+		res, err := NewAudiobookService(fs).PurgeSoftDeletedUnattended(context.Background(), false, nil)
 		require.NoError(t, err)
 		msg := purgeErrFor(t, res, "io")
 		require.Contains(t, msg, genericReason)

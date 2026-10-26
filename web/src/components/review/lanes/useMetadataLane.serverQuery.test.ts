@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 //
 // The Review > Metadata lane's server-side query (view=page), the only way the
 // lane loads its queue since 02-PR19 retired the full-index mode.
@@ -516,6 +516,17 @@ describe('the lane requests', () => {
     );
     // Listed again for the current queue, with the current pins...
     await waitFor(() => expect(api.getReviewMatchingIds).toHaveBeenCalledTimes(2));
+    // The ids request is issued synchronously by the refused click, but its
+    // answer lands later; until it does the lane answers "still being listed
+    // again" to the next click. The selection size cannot tell the two apart
+    // (narrowing 3 to 3 changes nothing), so wait for the one thing the lane
+    // does when the list lands: it reports what left and joined the queue.
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/^The matching books were listed again/),
+        'info'
+      )
+    );
     await waitFor(() => expect(result.current.selectedIds.size).toBe(3));
     // ...and the next click goes through with them.
     await act(async () =>

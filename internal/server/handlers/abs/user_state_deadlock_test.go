@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/user_state_deadlock_test.go
-// version: 2.0.2
+// version: 2.1.0
 // guid: 0630076b-d80b-4cf5-b741-2fcc6a0bf393
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package abs_test
 
@@ -67,7 +67,8 @@ func (quietReporter) Log(string, string, *string) {}
 //   - merge.FollowAbsorbedJournaled under merge.LockMergeRMW;
 //   - merge.RestoreFollowedProgress under merge.LockMergeRMW and
 //     merge.FollowMerge in both directions under merge.LockMergeRMW;
-//   - merge.DiscardUserStateThenHardDelete (takes the merge lock itself);
+//   - merge.DiscardUserStateThenHardDeleteLocked under merge.LockMergeRMW (the
+//     caller's hold, as the interactive discard takes it);
 //   - the backfill-itunes-positions maintenance job (a NumCPU pool, one
 //     stripe per book);
 //   - readstatus.SetManualStatus and readstatus.RebuildUserBookState.
@@ -244,7 +245,9 @@ func TestUserStateLock_ProgressAllWritersNoDeadlock(t *testing.T) {
 	// lock surface is the merge lock plus every user's stripe on x, held from
 	// the first read through del, which this exercises in full.
 	run("discard x", func(i int) error {
-		if _, err := merge.DiscardUserStateThenHardDelete(store, x, nil, func() error { return nil }); err != nil {
+		merge.LockMergeRMW()
+		defer merge.UnlockMergeRMW()
+		if _, err := merge.DiscardUserStateThenHardDeleteLocked(store, x, nil, func() error { return nil }); err != nil {
 			soft("discard", i, err)
 			return nil
 		}

@@ -1,13 +1,14 @@
 // file: web/src/pages/Library.savedFilterPresets.test.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: e7f8a9b0-c1d2-4e3f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-08-06
+// last-edited: 2026-10-26
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import type { SavedFilterPreset } from '../services/api';
 
@@ -76,7 +77,9 @@ describe('Library saved filter presets', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -96,7 +99,9 @@ describe('Library saved filter presets', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 
@@ -126,7 +131,9 @@ describe('Library saved filter presets', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
 

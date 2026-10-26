@@ -1,11 +1,12 @@
 // file: internal/itunes/pid_integrity_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c9a3e714-0d62-4b58-9f21-6e4a2c8b1d70
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package itunes
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -17,6 +18,18 @@ type pidCensusMock struct {
 	noRetiredRows
 	files []database.BookFileCore
 	books map[string]*database.Book
+}
+
+// GetBooksByVersionGroup returns the mock's books carrying groupID, soft-deleted
+// ones included (the store method does too).
+func (m *pidCensusMock) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	var out []database.Book
+	for _, b := range m.books {
+		if b != nil && b.VersionGroupID != nil && *b.VersionGroupID == groupID {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
 }
 
 func (m *pidCensusMock) GetAllBookFilesCore() ([]database.BookFileCore, error) {
@@ -140,6 +153,68 @@ func TestComputeMergeOrphanCensus(t *testing.T) {
 	}
 	if c.ResidualDuplicatePIDs != 0 {
 		t.Errorf("ResidualDuplicatePIDs = %d, want 0", c.ResidualDuplicatePIDs)
+	}
+}
+
+// A PID on a live non-primary version is a leftover only when no live primary
+// holds its version group. A merge that crowns an organized member over an
+// iTunes-linked survivor leaves the survivor non-primary but grouped, and the
+// audit used to file its track as a stale owner.
+func TestComputeMergeOrphanCensus_GroupedVersionUnderLivePrimaryIsHealthy(t *testing.T) {
+	primary, notPrimary, del := true, false, true
+	store := &pidCensusMock{
+		files: []database.BookFileCore{
+			bf("f_crowned", "b_crowned", "/lib/crowned.m4b", "AAAA0001"),
+			bf("f_demoted", "b_demoted", "/lib/Gotham/itunes/demoted.m4b", "BBBB0002"), // grouped under the crowned member
+			bf("f_orph", "b_orph", "/lib/Gotham/itunes/orph.m4b", "CCCC0003"),          // grouped, but its group has no live primary
+			bf("f_trashed", "b_trashed", "/lib/Gotham/itunes/trashed.m4b", "DDDD0004"), // soft-deleted member of a live group
+			bf("f_solo", "b_solo", "/lib/Gotham/itunes/solo.m4b", "EEEE0005"),          // non-primary, no group at all
+		},
+		books: map[string]*database.Book{
+			"b_crowned": {ID: "b_crowned", IsPrimaryVersion: &primary, VersionGroupID: new("g1")},
+			"b_demoted": {ID: "b_demoted", IsPrimaryVersion: &notPrimary, VersionGroupID: new("g1")},
+			"b_orph":    {ID: "b_orph", IsPrimaryVersion: &notPrimary, VersionGroupID: new("g2")},
+			"b_gone":    {ID: "b_gone", IsPrimaryVersion: &primary, MarkedForDeletion: &del, VersionGroupID: new("g2")},
+			"b_trashed": {ID: "b_trashed", IsPrimaryVersion: &notPrimary, MarkedForDeletion: &del, VersionGroupID: new("g1")},
+			"b_solo":    {ID: "b_solo", IsPrimaryVersion: &notPrimary},
+		},
+	}
+	c, err := computeMergeOrphanCensus(store, []string{"AAAA0001", "BBBB0002", "CCCC0003", "DDDD0004", "EEEE0005"}, nil)
+	if err != nil {
+		t.Fatalf("computeMergeOrphanCensus: %v", err)
+	}
+	if c.Healthy != 2 {
+		t.Errorf("Healthy = %d, want 2 (the crowned primary and the grouped version under it)", c.Healthy)
+	}
+	if c.StaleOwner != 3 {
+		t.Errorf("StaleOwner = %d, want 3 (a group with no live primary, a trashed member, a groupless non-primary)", c.StaleOwner)
+	}
+	if c.Healthy+c.StaleOwner+c.NoLiveOwner != c.TracksInITL {
+		t.Errorf("buckets must partition tracks: %d+%d+%d != %d", c.Healthy, c.StaleOwner, c.NoLiveOwner, c.TracksInITL)
+	}
+	for _, sm := range c.Samples {
+		if sm.PID == "BBBB0002" {
+			t.Errorf("the grouped version must not be sampled as an orphan: %+v", sm)
+		}
+	}
+}
+
+// A group that cannot be read fails the census rather than filing its tracks
+// as leftovers on a guess.
+type pidCensusGroupErrMock struct{ *pidCensusMock }
+
+func (pidCensusGroupErrMock) GetBooksByVersionGroup(string) ([]database.Book, error) {
+	return nil, errors.New("group read failed")
+}
+
+func TestComputeMergeOrphanCensus_GroupReadErrorFailsTheCensus(t *testing.T) {
+	notPrimary := false
+	store := pidCensusGroupErrMock{&pidCensusMock{
+		files: []database.BookFileCore{bf("f", "b", "/p.m4b", "AAAA0001")},
+		books: map[string]*database.Book{"b": {ID: "b", IsPrimaryVersion: &notPrimary, VersionGroupID: new("g")}},
+	}}
+	if _, err := computeMergeOrphanCensus(store, []string{"AAAA0001"}, nil); err == nil {
+		t.Fatal("want an error when a version group cannot be read")
 	}
 }
 

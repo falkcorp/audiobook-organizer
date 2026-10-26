@@ -1,7 +1,7 @@
 // file: internal/dedup/engine_filehash_stale_owner_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e7c1b9a-3d2f-4a86-b5e0-8c9d1f2a3b4c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 
 package dedup
 
@@ -13,10 +13,10 @@ import (
 )
 
 // TestCheckExactFileHash_SoftDeletedIndexOwner_IsNotADuplicate pins dedup bug
-// hunt F2 at the engine layer. The book:hash: index is single-valued and does
-// not filter soft-deleted rows, so after a merge whose winner did not own the
-// index entry, the live winner's next scan finds its own soft-deleted loser
-// as the "other" book. That is a stale pointer, not a duplicate: no merge, no
+// hunt F2 at the engine layer. GetBookByFileHash does not filter soft-deleted
+// rows (the single-valued book:hash: index it used to read also let a merge's
+// soft-deleted loser own the entry), so the live winner's next scan can find
+// its own soft-deleted loser as the "other" book. That is a stale pointer, not a duplicate: no merge, no
 // candidate, no error.
 func TestCheckExactFileHash_SoftDeletedIndexOwner_IsNotADuplicate(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)

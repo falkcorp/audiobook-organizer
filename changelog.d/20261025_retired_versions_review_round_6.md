@@ -39,10 +39,13 @@ included audio it never had. A row taken for the survivor's own file stays on th
 survivor.
 
 A combine refused while the library index is still loading now says so where the
-user sees it: the manual combine answers 503 `COMBINE_RETRY_LATER` with a
-`Retry-After` header, and a single review approve answers 503 `REVIEW_RETRY_LATER`
-(the hold stays pending; a bulk approve lists it under `skipped`). Both carry the
-reason, which used to reach only the server log behind a generic 500. The message
+user sees it: the queued manual combine operation now ends completed with a
+recorded `retry_later` outcome (the toast is a warning, "The library is still
+loading; try the combine again shortly", with no Undo, because nothing was
+journaled or changed), and a single review approve answers 503
+`REVIEW_RETRY_LATER` (the hold stays pending; a bulk approve lists it under
+`skipped`). Both carry the reason, which used to reach only the server log behind
+a generic 500. The message
 no longer promises "a minute": it says to try again once the index has finished
 loading, and that a server restart is needed if it never does.
 

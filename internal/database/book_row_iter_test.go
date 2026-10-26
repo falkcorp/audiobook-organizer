@@ -1,7 +1,7 @@
 // file: internal/database/book_row_iter_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 015f80b3-e8e2-4b00-a6a5-629db0835655
-// last-edited: 2026-09-12
+// last-edited: 2026-10-26
 
 package database
 
@@ -104,6 +104,14 @@ func buildBookRowRangeFixture(t *testing.T, p *PebbleStore, upsertMem bool) book
 	// Several scans fail the whole scan on a decode error, so a leak is loud.
 	require.NoError(t, p.db.Set([]byte("book:lower:sidecar"), []byte("not json"), nil))
 	require.NoError(t, p.db.Set([]byte("book:"), []byte("not json"), nil))
+	// The retired single-valued hash indexes. The store no longer writes them
+	// (the file-hash indexes are book_hash: and friends, outside this range),
+	// but every database that predates that change keeps them until the
+	// book-hash-index repair deletes them, so the iterator must still skip
+	// them. Bare book ids as values, as the old writer stored.
+	require.NoError(t, p.db.Set([]byte("book:hash:legacy"), []byte("lower"), nil))
+	require.NoError(t, p.db.Set([]byte("book:originalhash:legacy"), []byte("lower"), nil))
+	require.NoError(t, p.db.Set([]byte("book:organizedhash:legacy"), []byte("lower"), nil))
 
 	// Non-vacuity: the index families the iterator must skip really exist.
 	raw := map[string]bool{}

@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_journal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4377415-6df2-417a-99f1-a4bdef8080f0
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package merge
 
@@ -51,11 +51,13 @@ func requireNoSiblingJournal(t *testing.T, svc *Service) {
 	require.Empty(t, js, "a refused merge must leave no sibling-move journal")
 }
 
-// A sibling whose file is under a protected iTunes root is a book the merge
-// would rewrite, so the merge is refused before anything is written -- the
-// organizer puts an iTunes organized_source original in the same group as
-// its organized copy, and that copy is a routine loser.
-func TestMergeBooks_RefusesITunesSibling(t *testing.T) {
+// A sibling whose file is under a protected iTunes root is re-homed like any
+// other: the merge writes its version_group_id and primary flag and nothing
+// else (owner decision 2026-10-22; see itunes_database_only_test.go for the
+// full no-file-touched assertions). The organizer puts an iTunes
+// organized_source original in the same group as its organized copy, and that
+// copy is a routine loser, so refusing here blocked every such merge.
+func TestMergeBooks_MovesITunesSiblingDatabaseOnly(t *testing.T) {
 	f := siblingFixture(t)
 	withITunesConfig(t, func(c *config.ITunesConfig) {
 		c.LibraryReadPath = testITunesLibFolder + "/iTunes Library.itl"
@@ -71,14 +73,15 @@ func TestMergeBooks_RefusesITunesSibling(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	before := snapshotBooks(t, f, k, l, src)
 	svc := NewService(f.S)
 	res, err := svc.MergeBooks([]string{l, k}, k)
-	require.Nil(t, res)
-	var prot *ITunesProtectedError
-	require.True(t, errors.As(err, &prot), "want ITunesProtectedError, got %v", err)
-	require.Equal(t, before, snapshotBooks(t, f, k, l, src), "a refused merge must write nothing")
-	requireNoSiblingJournal(t, svc)
+	require.NoError(t, err)
+	require.Len(t, res.MovedSiblings, 1)
+	require.Equal(t, src, res.MovedSiblings[0].BookID)
+	require.Equal(t, "H", f.GroupOf(t, src))
+	got, err := f.S.GetBookByID(src)
+	require.NoError(t, err)
+	require.Equal(t, testITunesMedia+"/Author/Book/src.m4b", got.FilePath)
 }
 
 // A sibling with an unscanned (provisional) file is refused like a

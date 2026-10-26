@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -68,19 +68,23 @@ type fataler interface {
 func checkAgainstOracle(t fataler, s *PebbleStore, paths []string) {
 	t.Helper()
 	for _, p := range paths {
-		want, err := s.liveBookIDsAtPathScan(p)
-		if err != nil {
-			t.Fatalf("scan(%q): %v", p, err)
-		}
-		got, err := s.liveBookIDsAtPathIndex(p)
-		if err != nil {
-			t.Fatalf("index(%q): %v", p, err)
-		}
-		if len(want) == 0 && len(got) == 0 {
-			continue
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("path %q: index = %v, scan = %v", p, got, want)
+		// Both readers: the live-only one, and the one that keeps trashed rows
+		// (BookIDsAtPath, which the purge trusts before it removes a file).
+		for _, includeTrashed := range []bool{false, true} {
+			want, err := s.bookIDsAtPathScan(p, includeTrashed)
+			if err != nil {
+				t.Fatalf("scan(%q, trashed=%t): %v", p, includeTrashed, err)
+			}
+			got, err := s.bookIDsAtPathIndex(p, includeTrashed)
+			if err != nil {
+				t.Fatalf("index(%q, trashed=%t): %v", p, includeTrashed, err)
+			}
+			if len(want) == 0 && len(got) == 0 {
+				continue
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("path %q (trashed=%t): index = %v, scan = %v", p, includeTrashed, got, want)
+			}
 		}
 	}
 	rep, err := s.VerifyBookAtPathIndex(context.Background())

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.91.1
+// version: 1.92.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -236,6 +236,10 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.bookAtPathIndexBackfillDef(),
 		// opchange_by_book: index: rollback-runbook rebuild.
 		p.opChangeBookIndexRebuildDef(),
+		// book:hash:/originalhash:/organizedhash: indexes: check + repair.
+		p.bookHashIndexRepairDef(),
+		// combine-journal rows the purge's undo hold cannot decode: read-only list.
+		p.combineJournalCheckDef(),
 		p.identIndexRebuildDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),

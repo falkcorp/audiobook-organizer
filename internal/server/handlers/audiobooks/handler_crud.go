@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -231,6 +231,13 @@ const (
 	// failed (merge.ErrDiscardedBookKept), so the book is still in the trash
 	// without it. Unlike OWNS_FILES, something irreversible happened.
 	CodeProgressDiscardedBookKept = "PROGRESS_DISCARDED_BOOK_KEPT"
+	// CodeUndoPossible: 409, the book is the retired shell of a combine that
+	// can still be undone; purging it would make that undo impossible.
+	CodeUndoPossible = "UNDO_POSSIBLE"
+	// CodeMergeBusy: 409, a merge or combine is running and holds the merge
+	// lock; the action (restore, purge now, discard progress and purge, hard
+	// delete) was not started. Try again once it finishes.
+	CodeMergeBusy = "MERGE_BUSY"
 )
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.
@@ -277,10 +284,18 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), "HAS_PROGRESS")
 			return
 		}
+		if errors.Is(err, audiobookspkg.ErrPurgeUndoPossible) {
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
+			return
+		}
+		if errors.Is(err, merge.ErrMergeBusy) {
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
+			return
+		}
 		// A carry of the listening state that did not complete (the state is
 		// back on the book, which was kept). "Purge now" reports it as
 		// ErrPurgeCarryFailed; the hard delete of a live book returns the
-		// merge errors themselves (merge.HardDeleteKeepingUserState): an
+		// merge errors themselves (merge.HardDeleteKeepingUserStateLocked): an
 		// incomplete carry, or a target whose listing could not be re-read.
 		// Until 2026-10-06 those two answered DELETE_FAILED.
 		if errors.Is(err, audiobookspkg.ErrPurgeCarryFailed) || errors.Is(err, merge.ErrStateCarryIncomplete) ||
@@ -290,6 +305,14 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		}
 		if err.Error() == "audiobook not found" {
 			httputil.RespondWithNotFound(c, "audiobook", id)
+			return
+		}
+		// A hard delete of a trashed book is a purge with the setting's file
+		// mode, and refuses while the library root is not mounted or not
+		// answering: not a failure of this book, and one that goes away when the
+		// mount is back. A typed 503 lets the UI say so instead of "failed".
+		if errors.Is(err, audiobookspkg.ErrLibraryRootNotReady) {
+			httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), CodeRootNotReady)
 			return
 		}
 		// Anything else is a failure, not a missing book: until 2026-10-05
