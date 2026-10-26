@@ -1,7 +1,7 @@
 // file: web/src/utils/deleteBookError.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2d5f9315-d0df-4666-81b5-9b5423eb3f77
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../services/api';
@@ -68,13 +68,23 @@ describe('describeDeleteBookError', () => {
     }
   });
 
+  it('does not claim progress was erased when only reset markers were (records-only wording)', () => {
+    const serverMsg =
+      '1 stored listening record(s) on b1 (no progress, but reset markers or emptied state) were erased and the book was kept (the delete failed: boom)';
+    const err = new ApiError(serverMsg, 500, { code: 'PROGRESS_DISCARDED_BOOK_KEPT' });
+    const msg = describeDeleteBookError(err, 'f', { inTrash: true });
+    expect(msg).not.toContain("every user's listening progress");
+    expect(msg).toContain('had already been erased');
+    expect(msg).toContain(serverMsg);
+  });
+
   it('says the progress was erased for PROGRESS_DISCARDED_BOOK_KEPT, even though its text wraps the owns-files text', () => {
     const serverMsg =
       'the listening progress of 1 user(s) and 0 bookmark(s) on b1 was erased and the book was kept (the delete failed: delete book b1: book still owns book_file rows (1 row(s)))';
     for (const status of [409, 500]) {
       const err = new ApiError(serverMsg, status, { code: 'PROGRESS_DISCARDED_BOOK_KEPT' });
       const msg = describeDeleteBookError(err, 'f', { inTrash: true });
-      expect(msg).toContain('listening progress on it had already been erased');
+      expect(msg).toContain('listening state (progress, bookmarks or reset markers) had already been erased');
       expect(msg).toContain(serverMsg);
       expect(msg).not.toContain('Soft-delete it instead');
       expect(isProgressDiscardedBookKeptRefusal(err)).toBe(true);

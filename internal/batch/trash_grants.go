@@ -1,5 +1,5 @@
 // file: internal/batch/trash_grants.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e7d5df1-473b-4136-b691-2798b1df7c12
 // last-edited: 2026-10-26
 
@@ -107,6 +107,13 @@ func (g *TrashGrants) checkRestore(book *database.Book) error {
 	return nil
 }
 
+// restoreJudge is the judge for merge.RestoreFromTrash for a restore carrying
+// updates (nil for the "restore" action): judgeRestore with the payload in hand,
+// so a refusal can say which of its causes applies.
+func (g *TrashGrants) restoreJudge(updates map[string]any) func(before, after *database.Book) error {
+	return func(before, after *database.Book) error { return g.judgeRestore(before, after, updates) }
+}
+
 // judgeRestore is the verdict merge.RestoreFromTrash asks for, before it
 // touches the row's merge redirect and again inside its write: before is the
 // row as read (as locked, the second time), after the row as it would be
@@ -115,18 +122,26 @@ func (g *TrashGrants) checkRestore(book *database.Book) error {
 // after the write (library_state "deleted" next to marked_for_deletion=false)
 // needs library.delete, so both directions are judged on both branches.
 //
-// A restore that leaves the book in the trash is refused whatever the caller
-// holds: {marked_for_deletion: false, library_state: "deleted"} on a trashed
-// book would clear the deletion flag and the merge link and then re-label the
-// row "deleted", a book in the trash by label alone (IsSoftDeleted false) that
-// the purge precheck reads as "restored meanwhile". The handler already asks
-// for library.delete for the "deleted" label; this is the same payload seen by
-// the service, which cannot honour both halves and so honours neither.
+// A restore of a book that was in the trash and would still be in it after the
+// write is refused whatever the caller holds, because the write would leave a
+// book in the trash by its label alone: deletion flag cleared (IsSoftDeleted
+// false), merge link cleared, which the purge precheck reads as "restored
+// meanwhile". Two inputs reach it. A payload that sets library_state "deleted"
+// while restoring (the handler already asks for library.delete for that label,
+// but cannot make the service honour both halves). And a row another writer
+// trashed between RestoreFromTrash's read and its write: the restore rule ran
+// on the live row it read, so only the payload's flag change lands on a row
+// that still carries the label. updates tells them apart for the message.
+//
+// A book that was NOT in the trash is not covered by that refusal: the same
+// payload on a live book moves it to the trash by label (flag false) when the
+// caller holds library.delete, as a plain {library_state: "deleted"} edit does
+// (checkRow); nothing is lost on a live row, and it predates this check.
 //
 // It runs under the merge lock, the version-group locks and the book's stripe:
 // it reads only the two rows and calls nothing else. A nil receiver holds
 // neither permission.
-func (g *TrashGrants) judgeRestore(before, after *database.Book) error {
+func (g *TrashGrants) judgeRestore(before, after *database.Book, updates map[string]any) error {
 	if g == nil {
 		g = &TrashGrants{}
 	}
@@ -135,7 +150,10 @@ func (g *TrashGrants) judgeRestore(before, after *database.Book) error {
 			return &TrashDeniedError{Permission: "library.organize", Action: "restore the book from the trash"}
 		}
 		if database.IsInTrash(after) {
-			return errRestoreStaysTrashed
+			if isTrash(updates) {
+				return errRestoreAndTrashInOneEdit
+			}
+			return errMovedToTrashMeanwhile
 		}
 	}
 	if !database.IsInTrash(before) && database.IsInTrash(after) && !g.Trash {
@@ -144,9 +162,12 @@ func (g *TrashGrants) judgeRestore(before, after *database.Book) error {
 	return nil
 }
 
-// errRestoreStaysTrashed refuses a restore that would leave the book in the
-// trash (see judgeRestore). Nothing was written.
-var errRestoreStaysTrashed = errors.New(`not changed: this edit would restore the book from the trash and put it back in the trash in one write (marked_for_deletion=false with library_state "deleted"); send one or the other`)
+// The refusals of a restore that would leave the book in the trash (see
+// judgeRestore). Nothing was written.
+var (
+	errRestoreAndTrashInOneEdit = errors.New(`not changed: this edit would restore the book from the trash and put it back in the trash in one write (marked_for_deletion=false with library_state "deleted"); send one or the other`)
+	errMovedToTrashMeanwhile    = errors.New("not changed: the book was moved to the trash by another change while this edit was being applied, so it was not restored; reload the book and try again")
+)
 
 // checkTrash judges the "delete" action, soft or hard: both need
 // library.delete. action says what the edit would do, for the message. A nil

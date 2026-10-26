@@ -1,5 +1,5 @@
 // file: internal/audiobooks/delete_owned_files_lock_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c41e7a92-6d05-4b38-8e1f-2a9d5b073c64
 // last-edited: 2026-10-26
 
@@ -468,6 +468,32 @@ func TestDiscardProgressAndPurge_FileRowAfterClearingIsAuditedAsKept(t *testing.
 	require.Equal(t, false, e.Details["purged"])
 	require.Equal(t, 1, e.Details["users_cleared"])
 	require.Contains(t, e.Details["error"], "was erased and the book was kept")
+}
+
+// A state row holding only a progress-reset marker counts no user, yet the
+// discard deletes it, so a delete refused afterwards is audited as an erase,
+// and the audit row carries the record count (a row with nothing in it at all
+// counts the same: the safer side of "was anything erased").
+func TestDiscardProgressAndPurge_ErasedMarkerRowIsAuditedWithItsRecordCount(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "held", "")
+	u, err := store.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	resetAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: "held", ProgressResetAt: &resetAt}))
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "held", afterInclRetCall: 2})
+	rec := &fakeRecorder{}
+	svc.auditOverride = rec
+
+	_, err = svc.DiscardProgressAndPurge(context.Background(), "held", "owner")
+
+	require.ErrorIs(t, err, merge.ErrDiscardedBookKept)
+	require.Len(t, rec.entries, 1, "the erased marker row is audited")
+	e := rec.entries[0]
+	require.Equal(t, 0, e.Details["users_cleared"])
+	require.Equal(t, 0, e.Details["bookmarks_cleared"])
+	require.Equal(t, 1, e.Details["records_cleared"])
+	require.Contains(t, e.Summary, "1 stored record(s)")
 }
 
 // N6: the state-moved refusal of "Purge now" returns before the success arms'

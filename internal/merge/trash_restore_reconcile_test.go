@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore_reconcile_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b547034-881d-4b1b-b911-df20c1e6ce56
 // last-edited: 2026-10-26
 
@@ -130,23 +130,37 @@ func TestRestoreFromTrash_RowLeftTrashBeforeWritePutsRedirectBack(t *testing.T) 
 }
 
 // The judge runs inside the write with the row as locked and as it would be
-// written. A refusal writes nothing, is returned wrapped, and puts back the
-// redirect the preview removed; a judge that accepts lets the restore through.
+// written. This one passes on the preview (the first call, which runs before
+// the redirect is touched) and refuses inside the write (the second), the case
+// of a row that changed between the read and the lock. The refusal writes
+// nothing, is returned wrapped, and puts back the redirect the preview removed
+// (restoreRedirect after the failed ModifyBook); a judge that accepts both
+// calls lets the restore through. Dropping the in-lock judge call or the
+// put-back fails this.
 func TestRestoreFromTrash_JudgeRefusalWritesNothingAndKeepsTheRedirect(t *testing.T) {
 	f := combineUndoFixture(t)
 	loser, winner, pendingKey := trashedLoser(t, f, "nil")
 	refused := errors.New("not allowed to restore")
+	calls := 0
 	var sawBeforeInTrash, sawAfterLive bool
+	var redirectAtSecondCall string
 
 	res, err := RestoreFromTrash(f.S, loser, nil, func(before, after *database.Book) error {
+		calls++
+		if calls == 1 {
+			return nil
+		}
 		sawBeforeInTrash = database.IsInTrash(before)
 		sawAfterLive = !database.IsInTrash(after)
+		redirectAtSecondCall = resolvesTo(t, f.S, loser)
 		return refused
 	}, nil)
 
 	require.ErrorIs(t, err, refused)
+	require.Equal(t, 2, calls, "the preview passed and the write was judged too")
 	require.True(t, sawBeforeInTrash, "the judge sees the row as locked")
 	require.True(t, sawAfterLive, "the judge sees the row as it would be written")
+	require.Equal(t, loser, redirectAtSecondCall, "fixture: the preview had removed the redirect before the write")
 	require.False(t, res.Restored)
 	require.Empty(t, res.RedirectFrom)
 	b, err := f.S.GetBookByID(loser)
@@ -160,6 +174,38 @@ func TestRestoreFromTrash_JudgeRefusalWritesNothingAndKeepsTheRedirect(t *testin
 	res, err = RestoreFromTrash(f.S, loser, nil, func(_, _ *database.Book) error { return nil }, nil)
 	require.NoError(t, err)
 	require.True(t, res.Restored)
+}
+
+// failingModify is a store whose ModifyBook always fails, as a membership
+// change or a store error does after the preview cleared the redirect.
+type failingModify struct {
+	*database.PebbleStore
+	err error
+}
+
+func (f failingModify) ModifyBook(string, func(*database.Book) error) (*database.Book, error) {
+	return nil, f.err
+}
+
+// A write that fails for any reason after the preview cleared the redirect
+// puts the redirect back, with no judge involved.
+func TestRestoreFromTrash_FailedWritePutsTheRedirectBack(t *testing.T) {
+	f := combineUndoFixture(t)
+	loser, winner, pendingKey := trashedLoser(t, f, "nil")
+	boom := errors.New("synthetic store failure")
+
+	res, err := RestoreFromTrash(failingModify{f.S, boom}, loser, nil, nil, nil)
+
+	require.ErrorIs(t, err, boom)
+	require.False(t, res.Restored)
+	require.Empty(t, res.RedirectFrom)
+	b, err := f.S.GetBookByID(loser)
+	require.NoError(t, err)
+	require.True(t, database.IsInTrash(b), "nothing was written")
+	require.Equal(t, winner, resolvesTo(t, f.S, loser), "the redirect the preview removed is back")
+	got, err := f.S.GetRaw(pendingKey)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 }
 
 // A judge that refuses is asked on the preview, before the merge redirect is
