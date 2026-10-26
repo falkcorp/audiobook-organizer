@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -1007,17 +1007,50 @@ func TestCAS_DeleteBookFilesForBook_GivesUpUnderRotatingChurn(t *testing.T) {
 	}
 }
 
+// bytesPerCall is the least TotalAlloc per call of fn over several runs (other
+// goroutines only add to it).
+func bytesPerCall(t *testing.T, fn func()) uint64 {
+	t.Helper()
+	const calls = 20
+	best := ^uint64(0)
+	for range 5 {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for range calls {
+			fn()
+		}
+		runtime.ReadMemStats(&after)
+		best = min(best, (after.TotalAlloc-before.TotalAlloc)/calls)
+	}
+	return best
+}
+
 // N1: a pure reader decodes straight from the Pebble buffer. The compare-and-swap
 // writers need a copy of the stored bytes to compare at commit, but GetBookFileByID,
 // GetBookFileByPath and GetBookFileByPID throw it away, and a fingerprinted row
 // runs to hundreds of kilobytes: a copy per read is a second allocation of the
-// whole row for nothing. The decode itself keeps one copy of the fingerprint
-// (decoded from base64), so a reader that also copies the raw bytes allocates
-// over twice the fingerprint, one that does not about once.
+// whole row for nothing. Measured against the two read modes of the same row, so
+// the check holds under -race, whose instrumentation changes the absolute
+// allocations of the decode.
 func TestReaders_DoNotCopyTheStoredRow(t *testing.T) {
 	f := newCASFixture(t)
 	fp := bytes.Repeat([]byte("A"), 200<<10)
 	rewriteRaw(t, f.s, f.book.ID, f.file.ID, func(r *BookFile) { r.AcoustIDFingerprint = fp })
+
+	key := bookFileKey(f.book.ID, f.file.ID)
+	_, raw, err := f.s.readBookFileRowAt(key)
+	if err != nil || len(raw) < len(fp) {
+		t.Fatalf("readBookFileRowAt: %d raw bytes, err %v", len(raw), err)
+	}
+	noCopy := bytesPerCall(t, func() { _, _, _ = f.s.loadBookFileRowAt(key, false) })
+	withCopy := bytesPerCall(t, func() { _, _, _ = f.s.loadBookFileRowAt(key, true) })
+	if withCopy < noCopy+uint64(len(raw))/2 {
+		t.Fatalf("the measurement cannot tell the modes apart: %d bytes per call without the copy, %d with it, row is %d bytes", noCopy, withCopy, len(raw))
+	}
+	// A reader may allocate a little more than the bare decode (the index
+	// lookup), never as much as the extra copy.
+	limit := noCopy + uint64(len(raw))/2
 
 	readers := map[string]func() (*BookFile, error){
 		"GetBookFileByID":   func() (*BookFile, error) { return f.s.GetBookFileByID(f.book.ID, f.file.ID) },
@@ -1030,22 +1063,8 @@ func TestReaders_DoNotCopyTheStoredRow(t *testing.T) {
 			if err != nil || got == nil || !bytes.Equal(got.AcoustIDFingerprint, fp) {
 				t.Fatalf("read: row=%v err=%v", got != nil, err)
 			}
-			const reads = 20
-			best := ^uint64(0)
-			for range 5 { // the least of several runs: other goroutines only add
-				var before, after runtime.MemStats
-				runtime.GC()
-				runtime.ReadMemStats(&before)
-				for range reads {
-					if _, err := read(); err != nil {
-						t.Fatal(err)
-					}
-				}
-				runtime.ReadMemStats(&after)
-				best = min(best, (after.TotalAlloc-before.TotalAlloc)/reads)
-			}
-			if limit := uint64(len(fp)) * 3 / 2; best > limit {
-				t.Errorf("%s allocates %d bytes per read of a %d-byte fingerprint, want under %d: it is copying the stored row", name, best, len(fp), limit)
+			if used := bytesPerCall(t, func() { _, _ = read() }); used > limit {
+				t.Errorf("%s allocates %d bytes per read, want under %d (bare decode %d, decode plus raw copy %d): it is copying the stored row", name, used, limit, noCopy, withCopy)
 			}
 		})
 	}
