@@ -37,3 +37,19 @@ purged now gives the row to the absorbed book whose file it is, with a warning,
 instead of leaving it on the survivor, whose duration and track list then
 included audio it never had. A row taken for the survivor's own file stays on the
 survivor.
+
+A combine refused while the library index is still loading now says so where the
+user sees it: the manual combine answers 503 `COMBINE_RETRY_LATER` with a
+`Retry-After` header, and a single review approve answers 503 `REVIEW_RETRY_LATER`
+(the hold stays pending; a bulk approve lists it under `skipped`). Both carry the
+reason, which used to reach only the server log behind a generic 500. The message
+no longer promises "a minute": it says to try again once the index has finished
+loading, and that a server restart is needed if it never does.
+
+A file row written during a combine whose fsync failed (applied, durability
+unknown) is now treated as attached, like the bulk move already was: the journal
+keeps its record so undo puts the row back, and the result carries a "durability
+unknown" warning instead of "nothing changed". The review page no longer toasts the
+routine "needs no apply step" note of a `separate` approve. A junk-titled book whose
+only file is held by a retired version is now listed as needing a person, not as a
+fragment for the consolidation fixer, which does not act on retired rows.

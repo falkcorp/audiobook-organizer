@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_claims_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c41f7a0e-2b95-4d63-8e1a-5f90d3b7a264
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -95,10 +95,12 @@ func TestFsRegroupApply_CompleteLookupErrorSkipsGroup(t *testing.T) {
 }
 
 // A junk-titled book whose only file is held by a retired version of another
-// book is a fragment (occupied), not a book to retitle. GetBookFileByPath
+// book is occupied, so it is not retitled, and it is not a live book's fragment
+// either: the consolidation fixer does not act on retired rows, so it is left for
+// a person rather than pointed at that fixer. GetBookFileByPath
 // answered nil for it, so the book was not classified and the fixer went on to
 // act on it.
-func TestJunkTitleFixer_FileHeldOnlyByRetiredVersionIsAFragment(t *testing.T) {
+func TestJunkTitleFixer_FileHeldOnlyByRetiredVersionNeedsAPerson(t *testing.T) {
 	lib := newJunkLib(t)
 	holder, err := lib.store.CreateBook(&database.Book{Title: "Retire Holder", FilePath: "/lib/Retire/Holder"})
 	require.NoError(t, err)
@@ -113,8 +115,9 @@ func TestJunkTitleFixer_FileHeldOnlyByRetiredVersionIsAFragment(t *testing.T) {
 	_, _, rows := lib.plan(t)
 	r, ok := rows["retired-held"]
 	require.True(t, ok, "no plan row for the book")
-	require.Equal(t, junkSkipFragment, r.Skipped, "skip reason: %s", r.SkipReason)
+	require.Equal(t, junkSkipNeedsManual, r.Skipped, "skip reason: %s", r.SkipReason)
 	require.Contains(t, r.SkipReason, "held as a retired version of book "+holder.ID)
+	require.NotContains(t, r.SkipReason, "use the consolidation fixer")
 	require.Equal(t, holder.ID, retired.BookID)
 }
 

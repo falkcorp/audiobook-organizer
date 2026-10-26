@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-25
 
@@ -48,14 +48,18 @@ const junkTitlesFixerID = "maintenance.repair-junk-titles"
 const (
 	// junkSkipFragment: PROVEN to be a piece of another book — another live
 	// book has a book_file row at one of this book's paths. The
-	// fragment-consolidation fixer folds it back in; it is never retitled.
+	// fragment-consolidation fixer folds it back in; it is never retitled. (A path
+	// held only by a RETIRED version is not this: that fixer does not act on
+	// retired rows, so it is junkSkipNeedsManual.)
 	junkSkipFragment = "skipped_fragment"
 	// junkSkipPossibleFragment: the shape of a chapter file of a bigger book
 	// (a folder shared with other books, a lone chapter-titled file, the
 	// author named like the folder, a proposal that duplicates another book),
 	// but no parent is proven. Left for a person to decide.
 	junkSkipPossibleFragment = "skipped_possible_fragment"
-	// junkSkipNeedsManual: no trustworthy replacement title was found.
+	// junkSkipNeedsManual: no trustworthy replacement title was found, or the
+	// book's file is held only as a retired version of another book (nothing
+	// automatic can act on that).
 	junkSkipNeedsManual = "skipped_needs_manual"
 	// junkSkipUserLocked: the title carries a user override; never touched.
 	junkSkipUserLocked = "skipped_user_locked"
@@ -1808,7 +1812,8 @@ func (pc junkProposalCheck) isPathRoot(c string) bool {
 
 // fragmentReason decides whether a junk-titled book is (or may be) a chapter
 // file of a bigger book. It returns junkSkipFragment only when another live
-// book owns one of its paths; junkSkipPossibleFragment for the shapes that
+// book owns one of its paths (junkSkipNeedsManual when only a retired version
+// of another book holds it); junkSkipPossibleFragment for the shapes that
 // suggest it; junkSkipNeedsManual for a bare unpadded number, which is as
 // likely a real title ("13", "300"); "" when the book stands on its own.
 func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kind metadata.JunkTitleKind, author string, paths []string) (skip, why string, err error) {
@@ -1832,9 +1837,10 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 		}
 		if row != nil && row.BookID != "" && row.BookID != b.ID {
 			if row.Retired {
-				// Held only as a retired version: occupied, but not a live book that
-				// owns the file, so name it as what it is.
-				return junkSkipFragment, fmt.Sprintf("its file %s is held as a retired version of book %s", p, row.BookID), nil
+				// Held only as a retired version: occupied, so the book is not retitled,
+				// but it is not a live book's fragment either, and the consolidation
+				// fixer does not act on retired rows. Needs a person, not that fixer.
+				return junkSkipNeedsManual, fmt.Sprintf("its file %s is held as a retired version of book %s, which the consolidation fixer does not act on", p, row.BookID), nil
 			}
 			return junkSkipFragment, fmt.Sprintf("its file %s is also a file of book %s", p, row.BookID), nil
 		}

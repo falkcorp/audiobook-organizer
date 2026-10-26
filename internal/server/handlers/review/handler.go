@@ -1,5 +1,5 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
 // last-edited: 2026-10-25
 
@@ -860,6 +860,13 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 		// before any write, and a handler marks only such a refusal NothingWritten.
 		if errors.Is(applyErr, merge.ErrITunesProtected) {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
+		}
+		// A combine refused, with nothing written, because the library index is still
+		// loading: the item is released and the same approve works once it has. 503,
+		// so a single approve says to retry and a bulk approve skips the item
+		// instead of listing it as failed.
+		if !held && merge.IsRetryLater(applyErr) {
+			return nil, chosen, "", rejectf(http.StatusServiceUnavailable, "REVIEW_RETRY_LATER", reason.Error())
 		}
 		return nil, "", "", reason
 	}

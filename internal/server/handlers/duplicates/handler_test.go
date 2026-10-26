@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // metadata-fetch-service / operations-registry deps are generated mocks; the
@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -293,6 +294,40 @@ func TestCombineBooks_UntypedNotFoundTextIs500(t *testing.T) {
 		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A combine refused, with nothing written, because the library index is still
+// loading is temporary: 503 with Retry-After and the service's own message, not the
+// generic 500 that kept the reason in the server log.
+func TestCombineBooks_LookupIncompleteIs503RetryLater(t *testing.T) {
+	h, d := newHandler(t)
+	refusal := fmt.Errorf("combine refused: the complete list of the rows holding the path is not available yet, so the row of book Hush was not taken: %w",
+		database.ErrOwnershipLookupIncomplete)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, refusal)
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "COMBINE_RETRY_LATER") || !strings.Contains(w.Body.String(), "was not taken") {
+		t.Fatalf("503 must carry the code and the service's reason, got %s", w.Body.String())
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatalf("503 must say when to retry")
+	}
+}
+
+// The same error AFTER the journal is a CombineIncompleteError: that combine may
+// have written, so it is not "retry later" and keeps its own answer.
+func TestCombineBooks_IncompleteCombineWrappingLookupIncompleteIsNot503(t *testing.T) {
+	h, d := newHandler(t)
+	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil,
+		&merge.CombineIncompleteError{JournalID: "journal-1", Err: database.ErrOwnershipLookupIncomplete})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+	if w.Code == http.StatusServiceUnavailable {
+		t.Fatalf("a combine that got past its journal must not be answered as retry-later: %s", w.Body.String())
 	}
 }
 

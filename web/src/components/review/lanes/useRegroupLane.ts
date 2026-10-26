@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.14.0
+// version: 1.14.1
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
 // last-edited: 2026-10-25
 
@@ -807,15 +807,14 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           // updated_at is the version of the hold the row rendered: if a re-scan or
           // another reviewer changed it since, the server refuses (409
           // REVIEW_ITEM_CHANGED) instead of deciding a hold nobody here has seen.
-          const approved = await api.approveReviewItem(
-            item.id,
-            actionForRef.current(item),
-            item.updated_at
-          );
+          const chosen = actionForRef.current(item);
+          const approved = await api.approveReviewItem(item.id, chosen, item.updated_at);
           // A note means the approve succeeded but needs reading: the apply is off
           // so nothing ran, or it ran and reported something (a combine that left a
           // file unattached). Without this the reviewer sees only the row vanish.
-          if (approved?.note) {
+          // `separate` always carries the same routine note (nothing to apply, the
+          // decision is only recorded); that is not something to read.
+          if (approved?.note && chosen !== 'separate') {
             toast(`Approved, with a note: ${approved.note}`, 'warning');
           }
         } else {
@@ -849,9 +848,11 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
             ? `Applied, but the result was not recorded: ${message}`
             : code === 'REVIEW_ITEM_CHANGED'
               ? `This hold changed since it was shown, so nothing was done. It has been reloaded: check it and decide again.`
-              : code === 'REVIEW_APPLY_PARTIAL'
-                ? `The apply changed part of the library before it failed; the item is held mid-apply. Retry or abandon it from the held list. (${message})`
-                : `Failed to ${action} item: ${message}`,
+              : code === 'REVIEW_RETRY_LATER'
+                ? `Nothing was changed: the library index is still loading. Approve again once it has finished. (${message})`
+                : code === 'REVIEW_APPLY_PARTIAL'
+                  ? `The apply changed part of the library before it failed; the item is held mid-apply. Retry or abandon it from the held list. (${message})`
+                  : `Failed to ${action} item: ${message}`,
           'error'
         );
         // All of these mean the row on screen is no longer the hold: an unrecorded

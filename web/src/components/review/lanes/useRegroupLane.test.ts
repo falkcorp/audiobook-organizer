@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.14.0
+// version: 1.14.1
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
 // last-edited: 2026-10-25
 
@@ -369,6 +369,46 @@ describe('actionFor', () => {
         'Approved, with a note: combine of /lib/Gotham/Wayne/year-one.m4b: left a file unattached',
         'warning'
       )
+    );
+  });
+
+  it('does not toast the routine note of a separate approve', async () => {
+    // `separate` has nothing to apply: the server always answers with the same
+    // "needs no apply step" note, which is not a warning for the reviewer.
+    mockItems([makeItem('a1', 'regroup.multidisc', { recommendedAction: 'separate' })]);
+    vi.mocked(api.approveReviewItem).mockResolvedValue({
+      item: makeItem('a1', 'regroup.multidisc'),
+      note: "action 'separate' needs no apply step: every member is already its own book",
+    });
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(api.approveReviewItem).toHaveBeenCalledWith('a1', 'separate', '2026-01-01T00:00:00Z');
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('tells the reviewer a warmup refusal changed nothing and to approve again', async () => {
+    mockItems([makeItem('a1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
+    vi.mocked(api.approveReviewItem).mockRejectedValue(
+      Object.assign(new Error('the row of book Hush was not taken'), {
+        status: 503,
+        data: { code: 'REVIEW_RETRY_LATER' },
+      })
+    );
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^Nothing was changed: the library index is still loading\..*was not taken/
+      ),
+      'error'
     );
   });
 
