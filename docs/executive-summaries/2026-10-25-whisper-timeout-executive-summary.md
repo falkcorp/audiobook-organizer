@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -56,9 +56,14 @@ Five things changed:
   its timeouts from that run are held against a file; its files go to the
   other helpers. When the trouble is timeouts, the other helpers on the same
   Mac are set aside with it, because a Mac that is struggling struggles on all
-  of them. Only when every helper has struggled are they asked again,
-  one or two files at a time, and believed, so each file still gets its own
-  answer even when every helper struggled with the same batch. A file that two
+  of them. When every helper has struggled, the server cannot tell from the
+  files alone whether the files are at fault or every machine is ill, so it
+  first plays each machine a two-second test recording ("Welcome to Gotham
+  City."). A machine that answers it is working, so it is asked again, one or
+  two files at a time, and believed, and each file still gets its own answer
+  even when every helper struggled with the same batch. A machine that cannot
+  answer it is ill: nothing it said that night is held against any file, and
+  if no machine answers, the batch is simply left for later. A file that two
   helpers in a row cannot listen to is left for the next run rather than
   passed around forever. A file
   whose listening later succeeds has its earlier strikes wiped.

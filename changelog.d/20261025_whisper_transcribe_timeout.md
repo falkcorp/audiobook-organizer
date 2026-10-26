@@ -38,11 +38,23 @@
   machine (a Mac that swaps is ill on every port it serves), judged across all
   the responses of the round before any is read; a `worker_misconfigured`
   fault benches only its own port, and endpoints whose machine is unknown are
-  each their own machine. Only once every endpoint is benched are they asked
-  again and their answers believed: the jobs of a fault made of timeouts go back in requests of
-  at most two clips, so each clip reaches its own verdict even when every
-  worker faulted on the same page of looping clips, and a worker that cannot
-  decode at all (`worker_misconfigured`) is never sent back the jobs it refused.
+  each their own machine. Once every endpoint is benched, a page of genuine
+  loopers and every machine being sick at once look the same, so each benched
+  machine is first sent a canary clip (`internal/transcribe/canary_clip.wav`:
+  2.2 s of synthesised speech, "Welcome to Gotham City.", 16 kHz mono PCM, made
+  with eSpeak NG by `scripts/make_canary_clip.sh`) through the worker's
+  `/transcribe` route: one port per machine, a 30 s limit, at most once per
+  machine per dispatch. A machine that answers it without an error is decoding,
+  so its timeouts are about the clips: it is asked again and its answers are
+  believed, and the jobs of a fault made of timeouts go back in requests of at
+  most two clips, so each clip reaches its own verdict even when every worker
+  faulted on the same page of looping clips. A machine that does not answer it
+  is sick: none of its strikes in that dispatch count and its jobs go to a
+  machine that passed, or, when none did, the dispatch ends as
+  `ErrPoolUnavailable` (the ops wait it out and defer the unanswered files,
+  nothing written for them). The same holds for a pool of one endpoint. A
+  worker that cannot decode at all (`worker_misconfigured`) is never sent back
+  the jobs it refused.
   A dispatch that failed anyway has its timeouts
   and crashes read as no answer (deferred, no strike) unless the dispatcher
   itself condemned the file by sending it alone to several workers. A lone job
@@ -238,6 +250,11 @@ that hangs one (deferred at retry 1, see above).
   worker with no stable source reports no id.
 - Recording the first known machine on a file did not start the minimum gap, so
   a second known machine an hour later made the file permanent the same night.
+- Once every endpoint had faulted, every one was believed again, so a lone
+  sick Mac (on a night llm1 was out of the pool) gave a page of healthy files
+  first strikes, and both machines sick on two nights could make them
+  permanent. A faulted machine is now believed again only after it answers the
+  canary clip.
 - The routing entry covered only ordinary allocation. The requests re-sent
   after a split or a worker fault took the first endpoint by priority, the
   machine that had already struck the file included.
