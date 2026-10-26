@@ -1,5 +1,5 @@
 // file: internal/search/per_user_shape.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: eb623c78-1b62-4ff8-9a50-e192e62ee16b
 // last-edited: 2026-10-26
 
@@ -39,14 +39,27 @@ var ErrPerUserBoolean = errors.New(
 //
 // A nil node and a query with no per-user term are always accepted.
 func CheckPerUserBoolean(n Node) error {
+	return checkPerUserShape(n, false)
+}
+
+// checkPerUserShape walks the tree carrying whether an odd number of NOTs sits
+// above n. The translator cancels two negations of a group, so -(-(a b)) is a
+// plain group and only an odd count makes a per-user term inside it unevaluable.
+func checkPerUserShape(n Node, negated bool) error {
 	switch v := n.(type) {
 	case *AndNode:
+		if negated && containsPerUserTerm(v) {
+			return ErrPerUserBoolean
+		}
 		for _, c := range v.Children {
-			if err := CheckPerUserBoolean(c); err != nil {
+			if err := checkPerUserShape(c, negated); err != nil {
 				return err
 			}
 		}
 	case *OrNode:
+		if negated && containsPerUserTerm(v) {
+			return ErrPerUserBoolean
+		}
 		if len(v.Children) > 1 {
 			for _, c := range v.Children {
 				if containsPerUserTerm(c) {
@@ -55,18 +68,12 @@ func CheckPerUserBoolean(n Node) error {
 			}
 		}
 		for _, c := range v.Children {
-			if err := CheckPerUserBoolean(c); err != nil {
+			if err := checkPerUserShape(c, negated); err != nil {
 				return err
 			}
 		}
 	case *NotNode:
-		switch v.Child.(type) {
-		case *AndNode, *OrNode:
-			if containsPerUserTerm(v.Child) {
-				return ErrPerUserBoolean
-			}
-		}
-		return CheckPerUserBoolean(v.Child)
+		return checkPerUserShape(v.Child, !negated)
 	}
 	return nil
 }

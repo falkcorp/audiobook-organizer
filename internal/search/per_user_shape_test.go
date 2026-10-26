@@ -1,5 +1,5 @@
 // file: internal/search/per_user_shape_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c7a2e5f8-31d6-4b94-8e07-6f1b3a9d5c42
 // last-edited: 2026-10-26
 
@@ -26,7 +26,7 @@ func TestCheckPerUserBoolean_RefusesTheShapesTheFlatPassGetsWrong(t *testing.T) 
 		"NOT (read_status:finished OR title:Hush)",
 		"NOT (title:Hush (title:Knightfall OR last_played:*))",
 		"title:Hush -(progress_pct:>1 title:Knightfall)",
-		"NOT NOT (read_status:finished title:Hush)",
+		"NOT NOT NOT (read_status:finished title:Hush)",
 	}
 	for _, q := range refused {
 		ast, err := ParseQuery(q)
@@ -45,6 +45,9 @@ func TestCheckPerUserBoolean_AcceptsTheShapesTheFlatPassGetsRight(t *testing.T) 
 		"-read_status:finished",
 		"NOT read_status:unstarted",
 		"NOT NOT read_status:finished",
+		// two negations of a group cancel in the translator, so the group is plain
+		"NOT NOT (read_status:finished title:Hush)",
+		"-(-(read_status:finished title:Hush))",
 		"read_status:finished title:Hush",
 		"read_status:finished AND -progress_pct:>50 AND title:Hush",
 		"(title:Hush OR title:Knightfall) read_status:finished",
