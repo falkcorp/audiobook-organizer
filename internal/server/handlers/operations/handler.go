@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -446,7 +446,11 @@ func (h *Handler) GetOperationResult(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "operation", id)
 		return
 	}
-	if !h.repairsAccess.For(c).Require(row) {
+	// RequireResult adds the second scope to the Repairs read check: an op whose
+	// result names users (opaccess.ResultUserDataDefs: the merged-user-state
+	// repair's items[], the user merge's account ids and row counts) is
+	// served only to a caller who holds users.manage.
+	if !h.repairsAccess.For(c).RequireResult(row) {
 		return
 	}
 	h.respondWithResult(c, row.ResultData)

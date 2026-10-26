@@ -1,11 +1,13 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package opaccess holds the read-access checks the generic operations routes
 // apply to operations whose data is scoped to something narrower than
-// library.view. Today that is the Repairs lane's operations (Repairs).
+// library.view. There are two scopes: the Repairs lane's operations (Repairs),
+// and the operations whose stored result carries other users' own data
+// (ResultUserDataDefs, Reader.MayReadResult).
 package opaccess
 
 import (
