@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -7,9 +7,12 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // The compare-and-swap in commitBookFileBatch. Every test here injects a
@@ -651,5 +654,263 @@ func TestCAS_SweepBookFileSegDrop_CountsReReadCleanRowAsSkipped(t *testing.T) {
 	}
 	if got := res.Rewrite + res.Skipped + res.Errors + res.Conflicts; got != res.Total {
 		t.Errorf("result = %+v: Rewrite+Skipped+Errors+Conflicts = %d, want Total (%d)", res, got, res.Total)
+	}
+}
+
+// rewriteRaw rewrites a row in place from the store's own bytes: a concurrent
+// writer that bypasses every stripe, usable on retired rows (which the generic
+// primitives refuse). Only fields that carry no index may be changed with it.
+func rewriteRaw(t *testing.T, s *PebbleStore, bookID, fileID string, mutate func(*BookFile)) {
+	t.Helper()
+	row, _, err := s.readBookFileRow(bookID, fileID)
+	if err != nil || row == nil {
+		t.Errorf("rewriteRaw: read %s/%s: row=%v err=%v", bookID, fileID, row, err)
+		return
+	}
+	mutate(row)
+	data, err := json.Marshal(row)
+	if err != nil {
+		t.Errorf("rewriteRaw: marshal: %v", err)
+		return
+	}
+	if err := s.db.Set(bookFileKey(bookID, fileID), data, pebble.NoSync); err != nil {
+		t.Errorf("rewriteRaw: set: %v", err)
+	}
+}
+
+// N7: RetireBookFiles compares each shell row with the bytes it read, so a scan
+// that changed the row (its hash, which is indexed) first is kept, and the
+// index keys follow the fresh row.
+func TestCAS_RetireBookFiles_KeepsConcurrentScanWrite(t *testing.T) {
+	fx := newRetiredFixture(t)
+	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Retire/01.m4b", FileHash: "gotham-hash-old", Duration: 100})
+	injectBeforeCommit(t, 1, func(int) {
+		err := fx.ps.BatchUpsertBookFiles([]*BookFile{{BookID: fx.shell.ID, FilePath: row.FilePath, FileHash: "gotham-hash-scan", Duration: 250}})
+		if err != nil {
+			t.Errorf("injected BatchUpsertBookFiles: %v", err)
+		}
+	})
+
+	if err := fx.retire(t, row); err != nil {
+		t.Fatalf("RetireBookFiles: %v", err)
+	}
+	got, err := fx.ps.GetBookFileByID(fx.holder.ID, row.ID)
+	if err != nil || got == nil || !got.Retired {
+		t.Fatalf("retired row = %+v err %v", got, err)
+	}
+	if got.FileHash != "gotham-hash-scan" || got.Duration != 250 {
+		t.Errorf("retired row = hash %q duration %d, want the scan's gotham-hash-scan/250 kept", got.FileHash, got.Duration)
+	}
+	if o := indexOwner(t, fx.ps, "book_file_hash:gotham-hash-scan"); o != fx.holder.ID+":"+row.ID {
+		t.Errorf("hash index = %q, want it under the holder", o)
+	}
+	if o := indexOwner(t, fx.ps, "book_file_hash:gotham-hash-old"); o != "" {
+		t.Errorf("stale hash index key still points at %q", o)
+	}
+}
+
+func TestCAS_UnretireBookFiles_KeepsConcurrentRowWrite(t *testing.T) {
+	fx := newRetiredFixture(t)
+	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Unretire/01.m4b", FileHash: "gotham-hash-old"})
+	if err := fx.retire(t, row); err != nil {
+		t.Fatal(err)
+	}
+	injectBeforeCommit(t, 1, func(int) {
+		rewriteRaw(t, fx.ps, fx.holder.ID, row.ID, func(r *BookFile) { r.Title = "Batman: Year Two" })
+	})
+
+	mv := []BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: fx.holder.ID}}
+	if err := fx.ps.UnretireBookFiles(mv, fx.shell.ID, fx.version.ID, nil); err != nil {
+		t.Fatalf("UnretireBookFiles: %v", err)
+	}
+	got, _ := fx.ps.GetBookFileByID(fx.shell.ID, row.ID)
+	if got == nil || got.Retired || got.Title != "Batman: Year Two" {
+		t.Errorf("un-retired row = %+v, want the concurrent write kept", got)
+	}
+}
+
+func TestCAS_RehomeRetiredVersion_KeepsConcurrentRowWrite(t *testing.T) {
+	fx := newRetiredFixture(t)
+	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Rehome/01.m4b", FileHash: "gotham-hash-old"})
+	if err := fx.retire(t, row); err != nil {
+		t.Fatal(err)
+	}
+	newHolder, err := fx.ps.CreateBook(&Book{Title: "Batman: Year Three", FilePath: "/lib/Gotham/Year-Three"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectBeforeCommit(t, 1, func(int) {
+		rewriteRaw(t, fx.ps, fx.holder.ID, row.ID, func(r *BookFile) { r.Title = "Batman: Year Two" })
+	})
+
+	if err := fx.ps.RehomeRetiredVersion(fx.version.ID, newHolder.ID); err != nil {
+		t.Fatalf("RehomeRetiredVersion: %v", err)
+	}
+	rows, _ := fx.ps.GetRetiredBookFiles(newHolder.ID)
+	if len(rows) != 1 || rows[0].Title != "Batman: Year Two" {
+		t.Errorf("rehomed rows = %+v, want the concurrent write kept", rows)
+	}
+	if o := indexOwner(t, fx.ps, "book_file_hash:gotham-hash-old"); o != newHolder.ID+":"+row.ID {
+		t.Errorf("hash index = %q, want it under the new holder", o)
+	}
+}
+
+// S4: ErrBookFileConflict means "busy, try again". An input or holder error is
+// not that.
+func TestCAS_NonConflictErrorsAreNotConflicts(t *testing.T) {
+	fx := newRetiredFixture(t)
+	row := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/Refuse/01.m4b"})
+	if err := fx.retire(t, row); err != nil {
+		t.Fatal(err)
+	}
+	twice := []BookFileMove{{FileIDs: []string{row.ID, row.ID}, SourceBookID: fx.holder.ID}}
+	if err := fx.ps.UnretireBookFiles(twice, fx.shell.ID, fx.version.ID, nil); err == nil || errors.Is(err, ErrBookFileConflict) {
+		t.Errorf("UnretireBookFiles with a file named twice = %v, want an input error that is not ErrBookFileConflict", err)
+	}
+	if err := fx.ps.RehomeRetiredVersion(fx.version.ID, "no-such-batman-book"); err == nil || errors.Is(err, ErrBookFileConflict) {
+		t.Errorf("RehomeRetiredVersion into a missing book = %v, want a holder error that is not ErrBookFileConflict", err)
+	}
+}
+
+// N7: a create claiming a PID rewrites the prior owner; the batch form compares
+// the prior owner's bytes too.
+func TestCAS_BatchCreateBookFiles_PriorPIDOwnerKeepsConcurrentWrite(t *testing.T) {
+	f := newCASFixture(t)
+	const newPath = "/lib/Gotham/Batman-Year-One/02.m4b"
+	injectBeforeCommit(t, 1, func(int) { f.upsertScan(t, "gotham-hash-scan", 250, 2500) })
+
+	if err := f.s.BatchCreateBookFiles([]*BookFile{{BookID: f.book.ID, FilePath: newPath, ITunesPersistentID: casPID}}); err != nil {
+		t.Fatalf("BatchCreateBookFiles: %v", err)
+	}
+	row := f.row(t)
+	if row.FileHash != "gotham-hash-scan" || row.Duration != 250 || row.ITunesPersistentID != "" {
+		t.Errorf("prior owner = hash %q duration %d pid %q, want the scan's change kept and the PID released",
+			row.FileHash, row.Duration, row.ITunesPersistentID)
+	}
+	if ref := f.indexRef(t, "book_file_hash:gotham-hash-scan"); ref != f.ref() {
+		t.Errorf("scan's hash index key = %q, want %q", ref, f.ref())
+	}
+	if owner, _ := f.s.GetBookFileByPID(casPID); owner == nil || owner.FilePath != newPath {
+		t.Errorf("PID owner = %+v, want the new row", owner)
+	}
+}
+
+// N7: the upsert's match-by-ID path (a row naming an existing ID, whose path
+// matches nothing) compares the matched row too.
+func TestCAS_BatchUpsert_MatchByIDKeepsConcurrentWrite(t *testing.T) {
+	f := newCASFixture(t)
+	injectBeforeCommit(t, 1, func(int) {
+		if _, err := f.s.ModifyBookFile(f.book.ID, f.file.ID, func(r *BookFile) error { r.Title = "Batman: Year One, Chapter 5"; return nil }); err != nil {
+			t.Errorf("injected ModifyBookFile: %v", err)
+		}
+	})
+
+	const movedPath = "/lib/Gotham/Batman-Year-One/renamed.m4b"
+	err := f.s.BatchUpsertBookFiles([]*BookFile{{ID: f.file.ID, BookID: f.book.ID, FilePath: movedPath, Duration: 400}})
+	if err != nil {
+		t.Fatalf("BatchUpsertBookFiles: %v", err)
+	}
+	row := f.row(t)
+	if row.Title != "Batman: Year One, Chapter 5" || row.FilePath != movedPath || row.Duration != 400 {
+		t.Errorf("row = title %q path %q duration %d, want the concurrent title kept and the upsert's path/duration", row.Title, row.FilePath, row.Duration)
+	}
+}
+
+// N7: ClearBookFileIntro re-decides on the fresh row.
+func TestCAS_ClearBookFileIntro_KeepsConcurrentWrite(t *testing.T) {
+	f := newCASFixture(t)
+	text := "This is Gotham."
+	if res, err := f.s.SetBookFileIntro(f.book.ID, f.file.ID, BookFileIntroResult{
+		SourceHash: "gotham-hash-old", RunOpID: "op-batman", Status: IntroStatusOK, Transcript: &text, Done: true,
+	}); err != nil || res == IntroWriteStale {
+		t.Fatalf("seeding the intro: res=%v err=%v", res, err)
+	}
+	injectBeforeCommit(t, 1, func(int) { f.upsertScan(t, "gotham-hash-old", 250, 1000) })
+
+	_, cleared, err := f.s.ClearBookFileIntro(f.book.ID, f.file.ID, "op-batman")
+	if err != nil || !cleared {
+		t.Fatalf("ClearBookFileIntro: cleared=%v err=%v", cleared, err)
+	}
+	if row := f.row(t); row.IntroTranscription != nil || row.Duration != 250 {
+		t.Errorf("row = transcript %v duration %d, want the intro cleared and the concurrent upsert's 250 kept", row.IntroTranscription, row.Duration)
+	}
+}
+
+// S7: the whole-batch writers have a documented budget of maxBatchStageRounds
+// rounds. Eight lost rounds (more than the old five) still succeed ...
+func TestCAS_MoveBookFiles_SurvivesMoreLostRoundsThanASingleRowWrite(t *testing.T) {
+	f := newCASFixture(t)
+	dst, err := f.s.CreateBook(&Book{Title: "Batman: The Dark Knight Returns", FilePath: "/lib/Gotham/Dark-Knight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := maxBatchStageRounds - 1
+	n := injectBeforeCommit(t, lost, func(i int) { f.upsertScan(t, fmt.Sprintf("gotham-hash-%d", i), 100+i, 1000) })
+
+	if err := f.s.MoveBookFilesToBook([]string{f.file.ID}, f.book.ID, dst.ID); err != nil {
+		t.Fatalf("MoveBookFilesToBook after %d lost rounds: %v", *n, err)
+	}
+	moved, _ := f.s.GetBookFileByID(dst.ID, f.file.ID)
+	if moved == nil || moved.Duration != 100+lost {
+		t.Errorf("moved row = %+v, want the last concurrent write (duration %d) carried", moved, 100+lost)
+	}
+}
+
+// ... and a writer that wins every round exhausts the budget exactly: the move
+// gives up with ErrBookFileConflict and writes nothing.
+func TestCAS_MoveBookFiles_GivesUpAfterTheBudget(t *testing.T) {
+	f := newCASFixture(t)
+	dst, err := f.s.CreateBook(&Book{Title: "Batman: The Dark Knight Returns", FilePath: "/lib/Gotham/Dark-Knight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := injectBeforeCommit(t, 0, func(i int) { f.upsertScan(t, fmt.Sprintf("gotham-hash-%d", i), 100+i, 1000) })
+
+	err = f.s.MoveBookFilesToBook([]string{f.file.ID}, f.book.ID, dst.ID)
+	if !errors.Is(err, ErrBookFileConflict) {
+		t.Fatalf("err = %v, want ErrBookFileConflict", err)
+	}
+	if *n != maxBatchStageRounds {
+		t.Errorf("staging rounds = %d, want the budget of %d", *n, maxBatchStageRounds)
+	}
+	if got, _ := f.s.GetBookFileByID(dst.ID, f.file.ID); got != nil {
+		t.Errorf("a refused move wrote the row under the target: %+v", got)
+	}
+	if f.row(t).Duration != 100+maxBatchStageRounds {
+		t.Errorf("source row = %+v, want it left as the concurrent writer stored it", f.row(t))
+	}
+}
+
+// S8: a writer that changes a DIFFERENT row of a batch each round must not make
+// the batch re-stage once per row: it is abandoned after maxBatchStageRounds.
+func TestCAS_BatchUpsert_BoundsRestagingUnderRotatingChurn(t *testing.T) {
+	f := newCASFixture(t)
+	const rows = 3 * maxBatchStageRounds
+	batch := make([]*BookFile, 0, rows)
+	paths := make([]string, 0, rows)
+	for i := range rows {
+		p := fmt.Sprintf("/lib/Gotham/Batman-Year-One/rot-%02d.m4b", i)
+		paths = append(paths, p)
+		if err := f.s.CreateBookFile(&BookFile{BookID: f.book.ID, FilePath: p, FileHash: fmt.Sprintf("gotham-rot-%02d", i)}); err != nil {
+			t.Fatal(err)
+		}
+		batch = append(batch, &BookFile{BookID: f.book.ID, FilePath: p, Title: "Batman: Rotation"})
+	}
+	n := injectBeforeCommit(t, 0, func(i int) {
+		err := f.s.BatchUpsertBookFiles([]*BookFile{{BookID: f.book.ID, FilePath: paths[i-1], Duration: 100 + i}})
+		if err != nil {
+			t.Errorf("injected BatchUpsertBookFiles: %v", err)
+		}
+	})
+
+	err := f.s.BatchUpsertBookFiles(batch)
+	if !errors.Is(err, ErrBookFileConflict) {
+		t.Fatalf("err = %v, want ErrBookFileConflict", err)
+	}
+	if *n != maxBatchStageRounds {
+		t.Errorf("staging rounds = %d, want the budget of %d, not one per row (%d)", *n, maxBatchStageRounds, rows)
+	}
+	if got, _ := f.s.GetBookFileByPath(paths[rows-1]); got == nil || got.Title != "" {
+		t.Errorf("the abandoned batch wrote a row: %+v", got)
 	}
 }

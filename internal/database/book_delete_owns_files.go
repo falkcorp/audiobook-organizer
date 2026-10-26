@@ -1,5 +1,5 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
 // last-edited: 2026-10-26
 
@@ -257,6 +257,14 @@ func (e *BookFileRowsRefusedError) churned() bool {
 	}
 	return false
 }
+
+// maxBatchStageRounds is how many times a whole-batch book_file writer
+// re-stages its batch because rows it rewrites vanished or changed before it
+// could commit (2*maxStageRetries). partitionedBookFileWrite refuses, on its
+// own, a row that lost twice once maxStageRetries rounds have passed without a
+// refusal, and abandons the batch when it reaches this budget;
+// restageBookFileBatch (moves, retire, unretire, rehome) gives up at it.
+const maxBatchStageRounds = 2 * maxStageRetries
 
 // ErrBookFileDurabilityUnknown means a book_file write was APPLIED — its rows
 // are visible to every reader and were published to memdb — but the WAL fsync
@@ -556,10 +564,15 @@ func (p *PebbleStore) partitionedBookFileWrite(files []*BookFile, present []bool
 							}
 						}
 					}
-					// Bounded: rows are finite and every idle round adds a
-					// vanish to some row, so a row reaches 2 within
-					// len(files)+1 rounds past the limit.
-					if newlyRefused == 0 && idleRounds >= maxStageRetries+len(files)+1 {
+					// Bounded by a fixed budget, not by the row count: a writer
+					// sweeping the library changes a DIFFERENT row of the batch each
+					// round, so no row reaches 2 vanishes, and waiting for one to
+					// would re-stage the whole batch (reading and re-encoding every
+					// row, fingerprinted rows included) once per row. Past
+					// maxBatchStageRounds rounds the batch is abandoned with
+					// ErrBookFileConflict and nothing is written; the caller tries
+					// the books again later.
+					if newlyRefused == 0 && idleRounds >= maxBatchStageRounds {
 						return fmt.Errorf("book_file batch: rows kept changing under the write: %w: %w", ErrBookFileConflict, err)
 					}
 				}

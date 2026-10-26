@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b991179-c549-4086-9050-022c32b0cfce
 // last-edited: 2026-10-26
 
@@ -84,6 +84,35 @@ func rmwBookFile[T any](bookID *string, fileID string, attempt func() (T, error)
 	}
 	var zero T
 	return zero, &BookFileConflictError{BookID: *bookID, FileID: fileID, Attempts: maxStageRetries}
+}
+
+// restageBookFileBatch runs a whole-batch book_file writer (a move, retire,
+// unretire or rehome: all rows or none) to completion. attempt reads every row
+// afresh and stages and commits them; it is re-run, from new reads, when the
+// commit was refused because a row it rewrites vanished or changed since it was
+// read (errBookFileRowVanished).
+//
+// The budget is maxBatchStageRounds, not maxStageRetries, because the writer
+// that wins the compare-and-swap against a long batch is whichever one changes
+// ANY of its rows (a hash backfill, an intro transcription, the scanner), and
+// each lost round re-reads and re-encodes every row. A batch of a few
+// thousand rows has a window of seconds, so five rounds are not much against a
+// writer that walks the same books. After the budget it gives up with an error
+// wrapping ErrBookFileConflict and writes nothing; the caller retries the whole
+// move later. Taking the rows' file stripes for the staging window would remove
+// most of these losses but not those to the writers that take no file stripe,
+// and the attempt functions run their post-commit aggregate recompute (which
+// takes a book stripe) before returning, which the lock rules on lockBookFile
+// forbid under a file stripe.
+func restageBookFileBatch(who string, attempt func() error) error {
+	var err error
+	for range maxBatchStageRounds {
+		err = attempt()
+		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
+			return err
+		}
+	}
+	return fmt.Errorf("%s: gave up after %d staging rounds: %w: %w", who, maxBatchStageRounds, ErrBookFileConflict, err)
 }
 
 // readBookFileRow reads a book_file row and the exact stored bytes it was

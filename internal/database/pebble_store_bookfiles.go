@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.1
+// version: 1.47.2
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -2440,13 +2440,9 @@ type BookFileMove struct {
 func (s *PebbleStore) MoveBookFilesToBookBulk(moves []BookFileMove, targetBookID string) error {
 	// Re-read and re-stage when a source row changed after it was read; the
 	// re-read then reports a row that is gone as "file not found".
-	var err error
-	for range maxStageRetries {
-		if err = s.moveBookFilesToBookBulkAttempt(moves, targetBookID); !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("MoveBookFilesToBookBulk: %w: %w", ErrBookFileConflict, err)
+	return restageBookFileBatch("MoveBookFilesToBookBulk", func() error {
+		return s.moveBookFilesToBookBulkAttempt(moves, targetBookID)
+	})
 }
 
 func (s *PebbleStore) moveBookFilesToBookBulkAttempt(moves []BookFileMove, targetBookID string) error {

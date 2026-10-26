@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
 // last-edited: 2026-10-26
 
@@ -413,13 +413,9 @@ func (p *PebbleStore) RetireBookFiles(moves []BookFileMove, holderID, versionID 
 	if err := p.requireHolderNotSoftDeleted(holderID); err != nil {
 		return fmt.Errorf("RetireBookFiles: %w", err)
 	}
-	for range maxStageRetries {
-		err = p.retireBookFilesAttempt(moves, ids, holderID, versionID)
-		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("RetireBookFiles: %w: %w", ErrBookFileConflict, err)
+	return restageBookFileBatch("RetireBookFiles", func() error {
+		return p.retireBookFilesAttempt(moves, ids, holderID, versionID)
+	})
 }
 
 func (p *PebbleStore) retireBookFilesAttempt(moves []BookFileMove, retiring map[string]struct{}, holderID, versionID string) error {
@@ -553,7 +549,7 @@ func (p *PebbleStore) UnretireBookFiles(moves []BookFileMove, backToBookID, reti
 	}
 	ids, err := moveFileIDs(moves)
 	if err != nil {
-		return fmt.Errorf("UnretireBookFiles: %w: %w", ErrBookFileConflict, err)
+		return fmt.Errorf("UnretireBookFiles: %w", err)
 	}
 	if len(ids) == 0 {
 		return nil
@@ -563,13 +559,9 @@ func (p *PebbleStore) UnretireBookFiles(moves []BookFileMove, backToBookID, reti
 			return fmt.Errorf("UnretireBookFiles: rows are already under book %s", backToBookID)
 		}
 	}
-	for range maxStageRetries {
-		err = p.unretireBookFilesAttempt(moves, backToBookID, retireVersionID, versionIDBefore)
-		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("UnretireBookFiles: %w: %w", ErrBookFileConflict, err)
+	return restageBookFileBatch("UnretireBookFiles", func() error {
+		return p.unretireBookFilesAttempt(moves, backToBookID, retireVersionID, versionIDBefore)
+	})
 }
 
 func (p *PebbleStore) unretireBookFilesAttempt(moves []BookFileMove, backToBookID, retireVersionID string, versionIDBefore map[string]string) error {
@@ -692,16 +684,11 @@ func (p *PebbleStore) RehomeRetiredVersion(versionID, newHolderID string) error 
 		return errors.New("RehomeRetiredVersion: version and new holder are required")
 	}
 	if err := p.requireHolderNotSoftDeleted(newHolderID); err != nil {
-		return fmt.Errorf("RehomeRetiredVersion: %w: %w", ErrBookFileConflict, err)
+		return fmt.Errorf("RehomeRetiredVersion: %w", err)
 	}
-	var err error
-	for range maxStageRetries {
-		err = p.rehomeRetiredVersionAttempt(versionID, newHolderID)
-		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
-			return err
-		}
-	}
-	return fmt.Errorf("RehomeRetiredVersion: %w: %w", ErrBookFileConflict, err)
+	return restageBookFileBatch("RehomeRetiredVersion", func() error {
+		return p.rehomeRetiredVersionAttempt(versionID, newHolderID)
+	})
 }
 
 func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string) error {
