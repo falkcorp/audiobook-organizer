@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers
 
@@ -1034,7 +1034,7 @@ func (h *ActivityHandler) operationActivityFromOpLogs(vis *opVisibility, opID st
 	for _, l := range logs {
 		// The op-log rows are the source of the activity rows mirrored from them,
 		// so a line that names a user is withheld here as it is there.
-		if !vis.seeAll && activity.NamesUserText(l.Message) {
+		if !vis.seeAll && activity.NamesOthersUserLog("", l.Message) {
 			continue
 		}
 		attrs := opLogAttrs(l.Attrs)

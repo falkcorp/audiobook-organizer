@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -440,6 +441,7 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 		// Non-fatal: return the op without logs.
 		logs = nil
 	}
+	logs = h.readableLogs(c, logs)
 
 	logResp := make([]OpLogV2Response, 0, len(logs))
 	for _, l := range logs {
@@ -477,6 +479,7 @@ func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
 		httputil.InternalError(c, "failed to fetch operation logs", err)
 		return
 	}
+	logs = h.readableLogs(c, logs)
 
 	filename := "operation-" + id + ".log.gz"
 	c.Header("Content-Type", "application/gzip")
@@ -534,6 +537,7 @@ func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
 		httputil.InternalError(c, "failed to fetch operation logs", err)
 		return
 	}
+	logs = h.readableLogs(c, logs)
 	resp := make([]OpLogV2Response, 0, len(logs))
 	for _, l := range logs {
 		resp = append(resp, logRowToResponse(l))
@@ -555,6 +559,25 @@ func (h *OperationsV2Handler) mayReadLogsOf(c *gin.Context, id string) bool {
 		return false
 	}
 	return h.repairsAccess.For(c).Require(row)
+}
+
+// readableLogs is logs without the lines that carry other users' own data
+// (activity.NamesOthersUserLog) when the caller may not read it (users.manage).
+// It applies to the log of every operation, not only a Repairs one: the engine
+// writes "owner apply by user <id>" to its own run's log, and any other op may
+// log an account the same way. A line the caller may not read is dropped, not
+// blanked, so a withheld line leaves no row to count.
+func (h *OperationsV2Handler) readableLogs(c *gin.Context, logs []database.OpLogV2Row) []database.OpLogV2Row {
+	if len(logs) == 0 || h.repairsAccess.For(c).MayReadUserData() {
+		return logs
+	}
+	out := make([]database.OpLogV2Row, 0, len(logs))
+	for _, l := range logs {
+		if !activity.NamesOthersUserLog("", l.Message) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // CancelOperationV2 implements DELETE /api/v1/operations/v2/:id.
@@ -983,6 +1006,14 @@ func (f *opEventFilter) mayReceive(ev opsregistry.Event) bool {
 	m, ok := ev.Payload.(map[string]any)
 	if !ok {
 		return true
+	}
+	// An op.log line that carries other users' own data goes to a stream whose
+	// caller may read it. This is the line's verdict, not its op's, so it is not
+	// cached in seen and it covers the log of every operation.
+	if ev.Name == "op.log" {
+		if msg, _ := m["message"].(string); activity.NamesOthersUserLog("", msg) && !f.reader.MayReadUserData() {
+			return false
+		}
 	}
 	id, _ := m["op_id"].(string)
 	if id == "" {

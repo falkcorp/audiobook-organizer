@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -37,6 +37,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -426,6 +427,21 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 	if err != nil {
 		httputil.InternalError(c, "failed to get activity log", err)
 		return
+	}
+	// settings.manage reads this route, and the table holds the abs, merge,
+	// invite and auth subsystems' lines: other users' listening state and
+	// accounts. Without users.manage those lines and the user-id column are left
+	// out, by the predicate the diagnostics export and the activity filter use.
+	if !h.repairsAccess.For(c).MayReadUserData() {
+		readable := make([]database.SystemActivityLog, 0, len(logs))
+		for _, l := range logs {
+			if activity.NamesOthersUserLog(l.Source, l.Message) {
+				continue
+			}
+			l.UserID = ""
+			readable = append(readable, l)
+		}
+		logs = readable
 	}
 	httputil.RespondWithOK(c, gin.H{"items": logs, "count": len(logs)})
 }
