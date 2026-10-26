@@ -1,10 +1,10 @@
 // file: web/src/utils/tagQuery.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3c9e1f-4b6d-4e82-9f05-1d8b3e6a2c97
-// last-edited: 2026-10-06
+// last-edited: 2026-10-26
 
 import { describe, expect, it } from 'vitest';
-import { appendTagTerm, removeTagTerm, tagTerm } from './tagQuery';
+import { appendTagTerm, removeTagTerm, tagTerm, tagTermValues } from './tagQuery';
 import { parseSearch } from './searchParser';
 
 describe('tagQuery', () => {
@@ -33,5 +33,24 @@ describe('tagQuery', () => {
       '-tag:fantasy tag:fantasy-epic'
     );
     expect(removeTagTerm('NOT tag:fantasy', 'fantasy')).toBe('NOT tag:fantasy');
+  });
+
+  it('finds and removes a term inside a group, and drops a group it empties', () => {
+    expect(removeTagTerm('(tag:"noir")', 'noir')).toBe('');
+    expect(removeTagTerm('x (tag:noir)', 'noir')).toBe('x');
+    expect(removeTagTerm('(a:b tag:noir) c:d', 'noir')).toBe('(a:b) c:d');
+    expect(appendTagTerm('(a:b tag:noir)', 'noir')).toBe('(a:b tag:noir)');
+  });
+
+  it('reads tag terms the way the server grammar does, groups and quotes included', () => {
+    expect(tagTermValues('read_status:finished AND tag:"noir"')).toEqual(['noir']);
+    expect(tagTermValues('(read_status:finished tag:noir)')).toEqual(['noir']);
+    expect(tagTermValues('(tag:noir read_status:finished) tag:"dark knight"')).toEqual([
+      'noir',
+      'dark knight',
+    ]);
+    // negated, glued to a word, or inside another term's quotes: not a term
+    expect(tagTermValues('-tag:noir NOT tag:gotham xtag:camelot title:"a tag:b"')).toEqual([]);
+    expect(tagTermValues('tag:"unterminated')).toEqual([]);
   });
 });

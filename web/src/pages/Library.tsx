@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.109.1
+// version: 1.109.2
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-26
 
@@ -32,7 +32,7 @@ import { FilterTagBar } from '../components/common/FilterTagBar';
 import {
   useLibraryQuery,
   buildLibraryListOptions,
-  libraryTagsParam,
+  narrowingTags,
   type BooksChangedEvent,
 } from '../hooks/useLibraryQuery';
 import { useScopedTagFacets } from '../hooks/useScopedTagFacets';
@@ -968,7 +968,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // A chip is "on" when its tag narrows the current request — selected via
   // the sidebar, or a `tag:` term in the search box.
   const tagCloudSelected = useMemo(
-    () => libraryTagsParam(selectedTags, parsedSearch) ?? [],
+    () => narrowingTags(selectedTags, parsedSearch),
     [selectedTags, parsedSearch]
   );
   // Chip click: an added tag is appended to the search text as `tag:"x"`
@@ -1012,7 +1012,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     cancelLoad();
     handleTagFilterChange([]);
     setSearchQuery((q) => {
-      const parsedTags = libraryTagsParam([], parseSearch(q)) ?? [];
+      const parsedTags = narrowingTags([], parseSearch(q));
       return parsedTags.reduce((acc, t) => removeTagTerm(acc, t), q);
     });
   }, [cancelLoad, handleTagFilterChange]);

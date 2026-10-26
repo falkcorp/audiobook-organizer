@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibrarySelection.ts
-// version: 1.1.2
+// version: 1.1.3
 // guid: e5f6a7b8-c9d0-1234-ef01-234567890104
 // last-edited: 2026-10-26
 
@@ -72,6 +72,13 @@ function writeStoredSelection(books: Audiobook[]) {
  * books the person sees. Search text and tags come from the helpers the list
  * request uses (listSearchText, libraryTagsParam), so a query the server reads
  * whole carries its tag: terms in `search=` and no tag is applied a second time.
+ *
+ * The filter can carry a per-user term (`read_status:finished` in `search=` or in
+ * `field_filters`). Nothing sends it to the server today (crossPageFilter is read as
+ * a flag), but whatever resolves it later has no viewer to read that term for: the
+ * server's resolveFilterToBookIDs REFUSES such a filter
+ * (refuseUnscopedPerUserTerms), so a bulk action built on this fails with a message
+ * instead of acting on every book. Do not strip the term here to avoid that.
  */
 export function buildSelectAllFilter(args: {
   fieldFilters: Array<{ field: string; value: string; negated: boolean }>;
