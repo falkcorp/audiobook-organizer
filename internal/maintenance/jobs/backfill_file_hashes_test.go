@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.6.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-25
+// last-edited: 2026-10-20
 
 package jobs_test
 
@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -41,7 +40,6 @@ func TestBackfillFileHashesJob_Metadata(t *testing.T) {
 // those books' rows (the Bible's 3,541 rows on prod, not the library's
 // 700k), and the total reported is the scoped count.
 func TestBackfillFileHashesJob_BookIDsScope(t *testing.T) {
-	hbLibrary(t) // the run refuses to start without a mounted library root
 	dir := t.TempDir()
 	mk := func(name string) string {
 		p := filepath.Join(dir, name)
@@ -81,9 +79,8 @@ type countingReporter struct {
 func (r *countingReporter) SetTotal(n int) { r.total = n }
 
 func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
-	hbLibrary(t) // the run refuses to start without a mounted library root
 	hash := "existinghash"
-	files := []database.BookFileCore{{ID: "f1", FilePath: "/lib/Gotham/Arkham/audio.m4b", FileHash: hash}}
+	files := []database.BookFileCore{{ID: "f1", FilePath: "/tmp/audio.m4b", FileHash: hash}}
 	var setCalled bool
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
@@ -97,7 +94,6 @@ func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
 }
 
 func TestBackfillFileHashesJob_HashesNewFile(t *testing.T) {
-	hbLibrary(t) // the run refuses to start without a mounted library root
 	// Write a temp file with known content so we can verify the hash.
 	f, err := os.CreateTemp(t.TempDir(), "audio*.m4b")
 	require.NoError(t, err)
@@ -123,7 +119,6 @@ func TestBackfillFileHashesJob_HashesNewFile(t *testing.T) {
 }
 
 func TestBackfillFileHashesJob_DryRun_SkipsWrite(t *testing.T) {
-	hbLibrary(t) // the run refuses to start without a mounted library root
 	f, err := os.CreateTemp(t.TempDir(), "audio*.m4b")
 	require.NoError(t, err)
 	_, _ = f.WriteString("audio")
@@ -143,8 +138,7 @@ func TestBackfillFileHashesJob_DryRun_SkipsWrite(t *testing.T) {
 }
 
 func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
-	root := hbLibrary(t)
-	files := []database.BookFileCore{{ID: "f4", FilePath: hbPath(root, "The Dark Knight Returns.m4b"), FileHash: ""}}
+	files := []database.BookFileCore{{ID: "f4", FilePath: "/nonexistent/path/audio.m4b", FileHash: ""}}
 	var setCalled bool
 	rep := &noopReporter{}
 	store := &database.MockStore{
@@ -156,11 +150,7 @@ func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, j.Run(context.Background(), store, rep, false))
 	assert.False(t, setCalled, "SetBookFileHash must not be called when file does not exist")
-	warned := false
-	for _, l := range rep.logs {
-		warned = warned || strings.Contains(l, "File not found")
-	}
-	assert.True(t, warned, "expected a warning log for the missing file")
+	assert.NotEmpty(t, rep.logs, "expected a warning log for the missing file")
 }
 
 // TestBackfillFileHashesJob_ParallelHashesAll hashes many real files at once and
@@ -168,7 +158,6 @@ func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
 // -race it is the guard for the concurrent reporter/counter access the parallel
 // pool introduced (a plain int++ in ProgressAdapter would trip the detector).
 func TestBackfillFileHashesJob_ParallelHashesAll(t *testing.T) {
-	hbLibrary(t) // the run refuses to start without a mounted library root
 	const n = 60 // > hashBackfillChunkSize is not needed; > worker count is enough
 	dir := t.TempDir()
 	files := make([]database.BookFileCore, n)
@@ -209,10 +198,9 @@ func TestBackfillFileHashesJob_ParallelHashesAll(t *testing.T) {
 }
 
 func TestBackfillFileHashesJob_Cancellation(t *testing.T) {
-	hbLibrary(t) // the run refuses to start without a mounted library root
 	files := make([]database.BookFileCore, 10)
 	for i := range files {
-		files[i] = database.BookFileCore{ID: fmt.Sprintf("f%d", i), FilePath: "/lib/Gotham/Arkham/x.m4b", FileHash: ""}
+		files[i] = database.BookFileCore{ID: fmt.Sprintf("f%d", i), FilePath: "/tmp/x.m4b", FileHash: ""}
 	}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },

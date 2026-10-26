@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.20.3
+// version: 1.20.2
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-10-25
+// last-edited: 2026-10-21
 
 package jobs
 
@@ -691,7 +691,7 @@ func refuseDuringLibraryScan(store maintenance.JobStore, opName string) error {
 				logger.SanitizeLogValue(op.ID), now.Sub(last).Round(time.Second))
 			continue
 		}
-		return fmt.Errorf("%s: library.scan is running (op %s); refusing to write during a scan", opName, op.ID)
+		return fmt.Errorf("merge-chapter-groups: library.scan is running (op %s); refusing to merge during a scan", op.ID)
 	}
 	return nil
 }

@@ -1,5 +1,5 @@
-// file: internal/server/maintenance_backfill_hashes_params_test.go
-// version: 1.0.0
+// file: internal/server/maintenance_backfill_hashes_test.go
+// version: 2.0.0
 // guid: 7c3e9a15-4d28-4b60-9f17-e2a8d05b6c43
 // last-edited: 2026-10-25
 
@@ -22,7 +22,7 @@ import (
 // waits for its operation to reach a terminal state, failing unless it completed.
 // Waiting for completion is what makes a "nothing was recorded" assertion mean
 // something: without it, a job that never ran would satisfy it.
-func postBackfillHashes(t *testing.T, s *Server, body string) {
+func postBackfillHashes(t *testing.T, s *Server, body string) string {
 	t.Helper()
 	w := postMaintenanceJob(t, s, "backfill-file-hashes", body)
 	require.Equal(t, http.StatusAccepted, w.Code, "body = %s", w.Body.String())
@@ -46,7 +46,7 @@ func postBackfillHashes(t *testing.T, s *Server, body string) {
 		if row != nil {
 			switch row.Status {
 			case "completed":
-				return
+				return opID
 			case "failed", "canceled", "cancelled", "interrupted":
 				msg := ""
 				if row.ErrorMessage != nil {
@@ -58,21 +58,14 @@ func postBackfillHashes(t *testing.T, s *Server, body string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("operation %s did not finish within 30s", opID)
+	return ""
 }
 
-// The parameters the Manual Fixes card and the Fingerprint button send reach the
-// real job through the real handler, and each does what the owner approved:
-//
-//   - no body is a preview, so nothing is recorded;
-//   - {"dry_run":false,"mark_absent":false} (the Fingerprint button) hashes but
-//     records no absence;
-//   - {"dry_run":false} (the card's Apply) records it;
-//   - {"dry_run":false,"clear_markers":true} undoes it.
-//
-// The job-level tests drive Run with hand-built params; only this path proves
-// the dispatcher keeps mark_absent and clear_markers, including a literal false,
-// on their way to RawParamsFromCtx.
-func TestRunMaintenanceJob_BackfillFileHashesParamsReachTheRealJob(t *testing.T) {
+// Through the real handler and the real job: no body is a preview that hashes
+// and stores nothing, an apply stores the hash of a file that exists, and a file
+// that does not exist is reported, counted, and written nowhere (no hash, and
+// not Missing).
+func TestRunMaintenanceJob_BackfillFileHashesReportsNotFoundAndWritesNothingForIt(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
@@ -82,29 +75,32 @@ func TestRunMaintenanceJob_BackfillFileHashesParamsReachTheRealJob(t *testing.T)
 	config.Mutate(func(c *config.Config) { c.RootDir = root })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.RootDir = prev }) })
 
-	gone := filepath.Join(root, "Gotham", "Batman Year One.m4b") // never created: absent on disk
+	gone := filepath.Join(root, "Gotham", "Batman Year One.m4b") // never created
+	here := filepath.Join(root, "Gotham", "Batman The Long Halloween.m4b")
+	require.NoError(t, os.WriteFile(here, []byte("long halloween bytes"), 0o644))
 	book, err := server.store.CreateBook(&database.Book{Title: "Batman: Year One", Format: "m4b", FilePath: gone})
 	require.NoError(t, err)
-	file := &database.BookFile{BookID: book.ID, FilePath: gone, Format: "m4b"}
-	require.NoError(t, server.store.CreateBookFile(file))
-	marked := func() bool {
+	goneFile := &database.BookFile{BookID: book.ID, FilePath: gone, Format: "m4b"}
+	hereFile := &database.BookFile{BookID: book.ID, FilePath: here, Format: "m4b"}
+	require.NoError(t, server.store.CreateBookFile(goneFile))
+	require.NoError(t, server.store.CreateBookFile(hereFile))
+	row := func(id string) *database.BookFile {
 		t.Helper()
-		got, gerr := server.store.GetBookFileByID(book.ID, file.ID)
+		got, gerr := server.store.GetBookFileByID(book.ID, id)
 		require.NoError(t, gerr)
 		require.NotNil(t, got)
-		require.False(t, got.Missing, "this job must never write Missing")
-		return got.HashAbsentAt != nil
+		return got
 	}
 
-	postBackfillHashes(t, server, "")
-	require.False(t, marked(), "no body is a preview: nothing may be recorded")
-
-	postBackfillHashes(t, server, `{"dry_run":false,"mark_absent":false}`)
-	require.False(t, marked(), "mark_absent=false must reach the job and record nothing")
+	opID := postBackfillHashes(t, server, "")
+	require.Empty(t, row(hereFile.ID).FileHash, "no body is a preview: nothing is stored")
+	report := filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")
+	b, err := os.ReadFile(report)
+	require.NoError(t, err, "a preview writes the report too")
+	require.Contains(t, string(b), "not-found\t"+goneFile.ID+"\t"+book.ID+"\t"+gone)
 
 	postBackfillHashes(t, server, `{"dry_run":false}`)
-	require.True(t, marked(), "an apply with default params records the absence")
-
-	postBackfillHashes(t, server, `{"dry_run":false,"clear_markers":true}`)
-	require.False(t, marked(), "clear_markers must reach the job and undo the recording")
+	require.NotEmpty(t, row(hereFile.ID).FileHash, "an apply stores the hash of the file that exists")
+	require.Empty(t, row(goneFile.ID).FileHash, "nothing is stored for the file that is gone")
+	require.False(t, row(goneFile.ID).Missing, "this job never flags a row missing")
 }

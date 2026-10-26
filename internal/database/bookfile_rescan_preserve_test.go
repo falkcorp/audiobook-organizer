@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_preserve_test.go
-// version: 1.4.1
+// version: 1.4.0
 // guid: 65fa9323-39c2-4f89-a480-e74c18c02036
-// last-edited: 2026-10-25
+// last-edited: 2026-10-23
 
 package database
 
@@ -293,7 +293,6 @@ func TestUpdateBookFile_IntentionalClearsLand(t *testing.T) {
 	before, bookID := seedFullyPopulatedBookFile(t, s)
 	row := *before
 	row.Missing = false
-	row.HashAbsentAt = nil
 	row.SkipScan = false
 	row.DownloadHash = ""
 	row.TranscribeStatus = nil
@@ -313,7 +312,6 @@ func TestUpdateBookFile_IntentionalClearsLand(t *testing.T) {
 	got := after[0]
 	for name, cleared := range map[string]bool{
 		"Missing":                  !got.Missing,
-		"HashAbsentAt":             got.HashAbsentAt == nil,
 		"SkipScan":                 !got.SkipScan,
 		"DownloadHash":             got.DownloadHash == "",
 		"TranscribeStatus":         got.TranscribeStatus == nil,

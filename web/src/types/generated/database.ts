@@ -349,7 +349,6 @@ export interface BookFileCore {
   acoustid_online_looked_up_at?: string;
   organize_method?: string;
   missing: boolean;
-  hash_absent_at?: string; // see BookFile.HashAbsentAt
   skip_scan: boolean;
   created_at: string;
   updated_at: string;

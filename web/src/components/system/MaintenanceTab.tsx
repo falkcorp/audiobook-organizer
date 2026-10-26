@@ -1,7 +1,7 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.18.2
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-10-25
+// last-edited: 2026-09-19
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import {
@@ -1022,9 +1022,7 @@ function AcoustIDFingerprintCard() {
     setTriggering(true);
     setError(null);
     try {
-      await api.runMaintenanceJob('backfill-file-hashes', false, {
-        ...api.HASH_ONLY_BACKFILL_PARAMS,
-      });
+      await api.runMaintenanceJob('backfill-file-hashes', false);
       await loadStats();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to trigger fingerprint job');

@@ -1,5 +1,5 @@
 // file: internal/libroot/libroot.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
 // last-edited: 2026-10-25
 
@@ -27,11 +27,17 @@ import (
 //
 // Dot-prefixed entries do not count as content. They are app- or OS-owned
 // state (the ReportDirName directory, the default {root}/.wav-cache, a
-// .DS_Store), and anything the app creates under a bare mountpoint would
-// otherwise make that mountpoint read as populated for good: a report
-// directory created on an unmounted root would defeat this check on every
-// later run. Library content is never dot-prefixed at the top level (the
-// scanners skip such directories, see pathutil.ShouldSkipDir).
+// .DS_Store), and a report directory created on an unmounted root would
+// otherwise make that mountpoint read as populated on every later run.
+//
+// This is a coarse guard, not proof of a healthy mount. Some app-created
+// directories under the root are not dot-prefixed (a cover apply makes
+// {root}/covers/..., the default OpenLibraryDumpDir is {root}/openlibrary-dumps,
+// and config.yaml falls back to {root}), so one of those created while the share
+// was unmounted makes the bare mountpoint pass, and a nested dataset that failed
+// to mount is an empty directory under a root that passes. A caller that acts on
+// a not-found must treat this as one safeguard among others, never as the only
+// one.
 func Mounted(root string) error {
 	if root == "" {
 		return errors.New("library root is not configured")

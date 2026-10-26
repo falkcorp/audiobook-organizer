@@ -1,12 +1,13 @@
 // file: internal/database/pebble_store_bookfile_modify.go
-// version: 1.1.0
+// version: 1.0.1
 // guid: 6d3a9e27-b4c1-4f58-8a02-e7c5d1b9f463
-// last-edited: 2026-10-25
+// last-edited: 2026-09-19
 
 package database
 
 import (
 	"errors"
+	"fmt"
 )
 
 // ErrSkipBookFileWrite, returned by a ModifyBookFile callback, means "nothing
@@ -24,18 +25,42 @@ var ErrSkipBookFileWrite = errors.New("skip book file write")
 // (nil, nil) when the row does not exist. fn must not change ID or BookID and
 // must not write any book_file itself.
 func (s *PebbleStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
-	// The read-modify-write is shared with ModifyBookFiles (modifyBookFileNoNotify).
-	// It has released the row's stripe by the time it returns, so the aggregate
-	// recompute, which takes the book's stripe, runs with no file stripe held.
-	// It runs before the error return: a write whose fsync failed
-	// (ErrBookFileDurabilityUnknown) was still applied, so the book's aggregates
-	// must follow it (bookFileApplied's contract).
-	row, _, recompute, err := s.modifyBookFileNoNotify("ModifyBookFile", bookID, fileID, fn)
-	if recompute {
-		s.notifyBookFileChange(bookID)
-	}
+	unlock := s.lockBookFile(fileID)
+	notify := false
+	defer func() {
+		unlock()
+		// After the unlock, as in updateBookFile: the aggregate recompute
+		// takes the book's stripe, and no file stripe is held while one is.
+		if notify {
+			s.notifyBookFileChange(bookID)
+		}
+	}()
+
+	stored, err := s.getBookFileByID(bookID, fileID)
 	if err != nil {
+		return nil, fmt.Errorf("ModifyBookFile: read %s: %w", fileID, err)
+	}
+	if stored == nil {
+		return nil, nil
+	}
+	row := *stored
+	if err := fn(&row); err != nil {
+		if errors.Is(err, ErrSkipBookFileWrite) {
+			return stored, nil
+		}
 		return nil, err
 	}
-	return row, nil
+	if row.ID != stored.ID || row.BookID != stored.BookID {
+		return nil, fmt.Errorf("ModifyBookFile: callback changed the identity of %s (id %q→%q, book %q→%q)",
+			fileID, stored.ID, row.ID, stored.BookID, row.BookID)
+	}
+	n, err := s.updateBookFileLocked(fileID, &row, true, true)
+	// Set before the error return: a write whose fsync failed
+	// (ErrBookFileDurabilityUnknown) was still applied, so the book's
+	// aggregates must follow it (bookFileApplied's contract).
+	notify = n && bookFileApplied(err)
+	if err != nil {
+		return nil, fmt.Errorf("ModifyBookFile: write %s: %w", fileID, err)
+	}
+	return &row, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.6.3
+// version: 1.6.2
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-10-25
+// last-edited: 2026-10-23
 
 package database
 
@@ -236,7 +236,6 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	"AcoustIDOnlineLookedUpAt":       preserveAudio,
 	"OrganizeMethod":                 preserve,
 	"Missing":                        {class: bfScanObserved}, // cleared by a successful scanner stat, or on purpose via UpdateBookFile
-	"HashAbsentAt":                   {class: bfScanObserved}, // set by backfill-file-hashes via ModifyBookFiles; cleared by a successful scanner stat, or on purpose via ModifyBookFiles
 	"SkipScan":                       preserve,                // cleared on purpose via PatchBookFileFields (the PATCH handler)
 	"CreatedAt":                      {class: bfIdentity},
 	"UpdatedAt":                      {class: bfIdentity},
