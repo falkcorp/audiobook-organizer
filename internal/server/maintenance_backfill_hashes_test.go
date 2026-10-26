@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_backfill_hashes_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 7c3e9a15-4d28-4b60-9f17-e2a8d05b6c43
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package server
 
@@ -110,8 +110,8 @@ func TestRunMaintenanceJob_BackfillFileHashesReportsNotFoundAndWritesNothingForI
 	require.False(t, row(goneFile.ID).Missing, "this job never flags a row missing")
 }
 
-// Through the real handler and the server's real store (whatever decorators wrap
-// it), the job reaches the store's deferred hash writer: a book with several files
+// Through the real handler and the server's real store (resolved with
+// database.AsCapability, which would also see through an Unwrap decorator), the job reaches the store's deferred hash writer: a book with several files
 // is recomputed once for the whole run, not once per stored hash. If the capability
 // were not resolved through the server's store, the job would silently take the
 // slow per-row path and this count would be the number of files.
