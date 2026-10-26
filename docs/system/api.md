@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.19.1 -->
+<!-- version: 1.20.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -191,17 +191,46 @@ The caller's listening state is read once per request and shared by every per-vi
 collection on the page, and the evaluation has no result window: a library of any size
 is evaluated in full, but a list is then cut to 10,000 members (see below). A request
 that is cancelled while it waits for an evaluation slot is dropped (`499`), not
-reported as an unavailable collection and not logged. A per-user term that cannot be
-evaluated as written (under an `OR` with another term, or under a `NOT` over a group)
-is refused with a `400` on create and update (and for a smart playlist), and a stored
-query of that shape reads as unavailable; see `docs/search-syntax.md`. The failure log
-line names the class of the failure and never a user id, a book id or store text.
-On the Audiobookshelf surface such a collection has no flag to carry, so it shows no
-books when its members could not be worked out (the failure is logged), and its
-`lastUpdate` is the time of the request (its members move with the viewer's state and
-the library, none of which touches the row), which makes a client that caches by
-`lastUpdate` refetch it every time, and also when its evaluation failed, so a client
-cannot use `lastUpdate` to tell a failed evaluation from an empty one.
+reported as an unavailable collection and not logged; the same holds for a refresh or a
+search whose request is cancelled, which stops at its next check and is neither a failure
+nor a log line. A per-user term that cannot be evaluated as written is refused with a
+`400` on create and update (and for a smart playlist, and for the library search, see
+below): under an `OR` with another term, under a `NOT` over a group (a double `NOT` of a
+group is fine), a `read_status` that is not one of its four statuses, a pattern on any
+per-user field, a `progress_pct` or `last_played` value that does not parse, or a field
+name written with capitals. The message names what is valid, and a stored query of such a
+shape reads as unavailable with that same message; see `docs/search-syntax.md`. A
+changed `sort_json` is checked too (create, and update when it changed): it must be a
+JSON array of `{"field", "direction"}` objects, or the request is a `400`. Only a failure
+to read the viewer's own state is logged by class alone (its text names the user and a
+book, and the activity log is readable with `library.view`); every other failure is
+logged with its text, which names neither.
+On the Audiobookshelf surface such a collection has no flag to carry, so on the list
+routes it shows no books when its members could not be worked out (the failure is
+logged), and `GET /api/collections/:id` answers `503` for it instead of an empty
+collection, so a client can retry and does not cache an empty list as the answer. A
+request whose client has gone away answers `499` on every collection route, not a page
+of empty collections. The `lastUpdate` of a collection that evaluated is the time of the
+request (its members move with the viewer's state and the library, none of which touches
+the row), which makes a client that caches by `lastUpdate` refetch it every time; on a
+list, an unavailable collection carries the same `lastUpdate`, so a list client cannot
+tell a failed evaluation from an empty one, which is why the detail route does.
+
+A smart playlist follows the same rules. `GET /playlists/:id` of a smart playlist whose
+stored query is refused (saved before the check) answers `200` with `book_ids: []`,
+`members_unavailable: true` and a `members_unavailable_message` (it is not a `400`: the
+playlist is fine, its answer is not available), and drops the member list the last
+evaluation cached, so the Audiobookshelf surface, which serves that cache, stops
+answering the old way. A query that does not parse at all is still a `400` there.
+`POST /playlists/:id/materialize` cuts the snapshot at 10,000 books like every other
+member list: the new static playlist carries `materialized_total` with the real count and
+a description that says so. `PUT /playlists/:id` checks the query only when it changed,
+so a rename that resends the stored query is not refused for it.
+
+The library search (`GET /audiobooks?search=`) applies a per-user term as one flat `AND`
+after the index answers, so the same shapes and values are refused there: `400` with
+`invalid search: <message>`, instead of the answer to a different question that it used
+to give. The refusal applies to every caller of the search, not only the HTTP list.
 
 A dynamic collection or smart playlist carries at most 10,000 member ids: in the
 stored `materialized_book_ids`, in every native response, and in the library items the
@@ -210,6 +239,9 @@ Audiobookshelf surface expands. When the query matches more, `materialized_total
 first 10,000 in sort order; on the Audiobookshelf collection row `numBooks` stays the
 number of books served and `totalBooks` (present only when the list was cut) is the
 real count. The stored row is rewritten only when the cut list or the total changes.
+With no sort, the list is in ascending book id, oldest first (ids are ULIDs). The server
+logs a collection's cut once a minute per collection; a smart playlist's cut is reported
+in its answer and is not logged.
 A static collection's list is not cut. A background or
 system evaluation with no viewer matches nothing for a per-user rule, and never falls
 back to the creator or an admin. With authentication off the one viewer is the

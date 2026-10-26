@@ -65,3 +65,31 @@ the store's error text, which can name a user and a book. A query that names a p
 field anywhere in its text is treated as per-viewer, in the web page as well as on the
 server. The collections list and detail pages say "members unavailable" instead of
 "0 books" when a viewer's members could not be worked out.
+
+A per-user term whose value the matcher cannot evaluate is refused like the boolean
+shapes (`search.CheckPerUserTerms`, which runs the shape check and then
+`search.CheckPerUserValues`): a `read_status` that is not `unstarted`, `in_progress`,
+`finished` or `abandoned` (`read_status:completed` matched nothing and
+`-read_status:completed` matched every book, for every viewer), a comparison or a
+pattern on `read_status`, a `progress_pct` or `last_played` value that does not parse,
+a pattern on any per-user field (`last_played:*` stays), and a field name written with
+capitals. It runs in the evaluator, on collection and smart-playlist create and update,
+and in the library search (`searchWithBleve` and the list handler answer 400
+`invalid search: ...`), so `read_status:finished OR author:kyle` no longer answers as an
+`AND` there either. A stored row refused this way reads as `members_unavailable` with
+the same guidance, and a stored smart playlist drops its cached list so the
+Audiobookshelf surface stops serving it; `NOT NOT (group)` is no longer over-refused, and
+the evaluator checks the query before the index state.
+
+A smart playlist's materialized snapshot is cut at 10,000 books with the real count in
+`materialized_total` and in its description. The playlist page shows `N of TOTAL` from
+`book_ids_total` and a warning for `members_unavailable`. `sort_json` is validated on
+create and on a changed update for collections and smart playlists
+(`playlist.ValidateSortJSON`), and a playlist update checks the query only when it
+changed. Only a failure to read the viewer's own state is withheld from the log; every
+other evaluation failure is logged with its text. The search index query and the
+evaluator take the request context, a cancelled request or refresh is neither a failure
+nor a log line, and the Audiobookshelf collection routes answer 499 for a client that
+went away and 503 on `GET /api/collections/:id` for a collection whose members could not
+be worked out. A per-viewer collection's capped log line no longer carries one viewer's
+match count.

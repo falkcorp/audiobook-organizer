@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-collections-per-viewer-executive-summary.md -->
-<!-- version: 1.3.1 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 5b8e2d71-3c4a-4f06-9a17-d2e6c0b94f83 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -30,8 +30,20 @@ Pull request: https://github.com/falkcorp/audiobook-organizer/pull/4164 (merge c
   at most, and the page says how many books really match.
 - A search that put a listening term on one side of an "or" (for example "finished or
   by this author") was quietly worked out as an "and", so it showed far fewer books than
-  it said. Such a search is now refused when it is saved, with a message that shows the
-  spelling that works, and a saved one shows "members unavailable" until it is edited.
+  it said. Such a collection or smart playlist is now refused when it is saved, with a
+  message that shows the spelling that works, and a saved one shows "members unavailable"
+  until it is edited. The main library search box had the same flaw and now refuses it
+  too, with the same message, instead of showing the wrong books. Making these searches
+  actually work, rather than refusing them, is still to do.
+- A listening term with a value that cannot mean anything (for example "completed" as a
+  reading status, which is not one of the four) used to show no books, and its "not"
+  form used to show every book, for everyone and without a word. These are now refused
+  the same way, with a message that lists the four statuses, in collections, smart
+  playlists and the library search.
+- A smart playlist is cut at 10,000 books like a collection, including the static copy
+  made when it is "materialized", and the playlist page says "10,000 of N". A smart
+  playlist whose saved search is no longer valid says its books are unavailable, and
+  the phone app stops showing the old answer.
 - If a collection's members cannot be worked out for someone (the search index is
   still starting, the saved search no longer makes sense, or their listening history
   could not be read), the page now says so instead of showing an empty list that looks

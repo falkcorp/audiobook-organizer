@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.6.1 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -129,6 +129,29 @@ A stored collection whose query has since stopped parsing is treated as per-view
 it shows no members to anyone, with a message saying its query can no longer be
 evaluated, and never the list it may have held. Fix its query to bring it back.
 
+### What a per-user term may say
+
+A per-user term is compared against a viewer's listening state one book at a time, so
+its value has to be something that comparison can read. These are refused, everywhere
+a query is saved or run, with a message that names what is valid:
+
+| Field | Accepted | Refused |
+|---|---|---|
+| `read_status` | exactly `unstarted`, `in_progress`, `finished` or `abandoned`, alone or in a list: `read_status:(finished\|in_progress)` | any other word (`completed`, `in-progress`), a comparison (`read_status:>a`), a pattern (`read_status:fin*`) |
+| `progress_pct` | a number: `progress_pct:>50`, `progress_pct:[10 TO 90]` | text (`progress_pct:>half`), a pattern |
+| `last_played` | a date as under Dates, or `*` (has been played at all) | a date that does not parse (`last_played:>30d` needs a sign), any other pattern |
+
+The names are lowercase: `READ_STATUS:finished` is refused (write `read_status:finished`),
+because the matcher compares field names as written. Each of these used to be answered
+silently and wrongly: `read_status:completed` matched nothing, and
+`-read_status:completed` matched every book, for every viewer.
+
+A stored collection or smart playlist saved before this check, whose query is one of
+these, reads as having no members available, with the reason in the message, until it
+is edited. A smart playlist also drops the member list its last evaluation cached, so
+the Audiobookshelf app stops serving the old answer too. A rename that sends the stored
+query back unchanged is not refused for a query it did not touch.
+
 A per-user term is always required together with the rest of the query: the index
 answers the other terms and the per-user part is applied afterwards to the books it
 returned. That is right for a plain search, for a term negated on its own
@@ -143,8 +166,10 @@ playlist is created or its query is changed, with a message that points at the
 `read_status:(finished|in_progress)` spelling, and a stored query of that shape
 shows no members, with a message saying its query can no longer be evaluated, until
 it is edited. The same shapes over indexed terms only (`title:Alpha OR title:Bravo`)
-are unaffected. The library search box still evaluates them as an `AND`; making it
-and the collection evaluator support them properly is tracked in `todo.d`.
+are unaffected. The library search refuses them too: a search with one of these shapes
+or values answers 400 `invalid search: ...` with the same message, instead of the `AND`
+answer it used to give. Supporting `OR` and `NOT` over per-user terms properly, in the
+library search and in the collection evaluator, is tracked in `todo.d`.
 
 A query that names a per-user field anywhere in its text, even where the grammar reads
 it as something else (`author:read_status`, a quoted `"read_status:finished"`), is
@@ -155,5 +180,18 @@ A collection or smart playlist lists at most 10,000 books. A query that matches 
 (`read_status:unstarted` on a large library) is cut to the first 10,000 in its sort
 order and says how many it really matches (`materialized_total` on a collection,
 `book_ids_total` on a smart playlist, `totalBooks` on the Audiobookshelf collection
-row), and the server logs it once a minute. Add a sort and a limit to choose which
-books those are.
+row). With no sort the order is ascending book id, which is oldest first because ids
+are ULIDs, so a broad unsorted query keeps the oldest 10,000 books. Add a sort and a
+limit to choose which books those are. For a collection the server also logs the cut,
+once a minute per collection (and, for a per-viewer collection, without the count, which
+is one viewer's listening); a smart playlist's cut is reported in its answer and is not
+logged.
+
+Materializing a smart playlist makes a static copy, and that copy is cut the same way:
+it holds the first 10,000 books, `materialized_total` on the new playlist says how many
+the query matched, and its description says so.
+
+Two more things are checked when a collection or smart playlist is saved: `sort_json`
+must be a JSON array of `{"field", "direction"}` objects (a spec that does not parse
+fails every evaluation of two or more books, for every viewer), and a changed query is
+checked as above.

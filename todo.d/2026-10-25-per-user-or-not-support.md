@@ -7,5 +7,9 @@
       evaluate the boolean tree itself: have the translator return the tree with the per-user
       leaves left as callbacks (or evaluate each leaf to a per-viewer id set and combine the sets
       with the index's id set per node), then delete `CheckPerUserBoolean`. The library list search
-      (`internal/audiobooks/service_query.go`, `service_search_cache.go`) still takes the flat AND
-      reading for these shapes and needs the same change. Left from the PR 4164 re-review (B-1).
+      (`internal/audiobooks/service_query.go`, `service_search_cache.go`) no longer answers these
+      shapes as an AND: it refuses them with a 400 (`searchPerUserProblem` in the list handler, and
+      `search.CheckPerUserTerms` in `searchWithBleve` for every other caller), so it needs the same
+      change and the refusals there go with `CheckPerUserBoolean`. The value checks
+      (`search.CheckPerUserValues`: statuses, numbers, dates, no patterns, lowercase names) stay.
+      Left from the PR 4164 re-review (B-1, S-D).
