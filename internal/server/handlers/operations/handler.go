@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
 // last-edited: 2026-10-26
 
@@ -494,10 +494,11 @@ func (h *Handler) GetOperationChanges(c *gin.Context) {
 
 // mayUndoChanges is the per-row undo check shared by the preflight and the
 // revert: every journal row must be one the caller may undo
-// (opaccess.Reader.MayUndoChange), which needs no op row and so still refuses
-// the rows of a discarded Repairs op. False means the response is written: 500
-// when a row was refused because its op row could not be read (a store
-// failure, not the caller's permissions), 403 otherwise.
+// (opaccess.Reader.MayUndoChange: the row's fixer's permissions, plus
+// users.manage for a row that carries one user's own data). It needs no op row
+// and so still refuses the rows of a discarded Repairs op. False means the
+// response is written: 500 when a row was refused because its op row could not
+// be read (a store failure, not the caller's permissions), 403 otherwise.
 func (h *Handler) mayUndoChanges(c *gin.Context, r *opaccess.Reader, changes []*database.OperationChange) bool {
 	for _, ch := range changes {
 		if r.MayUndoChange(ch) {
@@ -516,15 +517,13 @@ func (h *Handler) mayUndoChanges(c *gin.Context, r *opaccess.Reader, changes []*
 // UndoPreflightHandler checks for conflicts before executing an undo.
 // Implements GET /operations/:id/undo/preflight. The report is built from
 // every row of the operation's journal, so it is refused (403) when the caller
-// may not read the op row or may not use the fixer of any one of those rows
+// may not read the op row or may not undo any one of those rows
 // (opaccess.Reader.MayUndoChange): a discarded Repairs op has no op row left
-// to refuse on. A user-data row the caller may not read
-// (opaccess.Reader.MayReadChange) does not refuse the report: it carries each
-// row's id, book, change type and refusal reason, never a row's values, so an
-// editor keeps Undo on the fixers he may run. The rows read here are the ones
-// the report is built from (one journal scan per request). When a row is
-// refused because its op row could not be read, the answer is 500, still
-// without the report.
+// to refuse on, and a row that carries one user's own data needs users.manage,
+// the same gate as the revert, so the report never offers an undo the revert
+// would refuse. The rows read here are the ones the report is built from (one
+// journal scan per request). When a row is refused because its op row could
+// not be read, the answer is 500, still without the report.
 func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 	id := c.Param("id")
 	r := h.repairsAccess.For(c)
@@ -556,7 +555,8 @@ func (h *Handler) UndoPreflightHandler(c *gin.Context) {
 //   - 409: the operation has no restorable row at all (a purge op's ledger is
 //     a record only); nothing was changed.
 //   - 403: the operation (or one of its journal rows) belongs to a Repairs
-//     fixer the caller may not use; nothing was changed.
+//     fixer the caller may not use, or a journal row carries one user's own
+//     data and the caller does not hold users.manage; nothing was changed.
 //   - 500: a restore failed, or the store failed. When restores were
 //     attempted the message carries the counts, never the per-row errors
 //     (those hold file paths).

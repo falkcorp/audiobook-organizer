@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package opaccess
 
@@ -247,8 +247,11 @@ func TestReader_MayReadChange(t *testing.T) {
 	}
 }
 
-// MayUndoChange is MayReadChange without the user-data leg: the undo report
-// names rows, never their values, so a caller who may run the fixer keeps it.
+// MayUndoChange is the predicate the undo report and the revert both apply, and
+// MayReadChange is the same one: a row that carries one user's own data needs
+// users.manage on top of the fixer's permissions, because undoing it writes
+// another user's listening state back. An editor who may run the fixer is
+// refused its user-data rows (the revert used to let him undo them).
 func TestReader_MayUndoChange(t *testing.T) {
 	reg := fixers{"plain": scopedFixer{}}
 	ops := &opRows{rows: map[string]*database.OperationV2Row{
@@ -256,14 +259,19 @@ func TestReader_MayUndoChange(t *testing.T) {
 	}}
 	view := []auth.Permission{auth.PermLibraryView}
 	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	editUsers := append([]auth.Permission{auth.PermUsersManage}, edit...)
 	for name, tc := range map[string]struct {
 		ch   *database.OperationChange
 		held []auth.Permission
 		want bool
 	}{
-		"stamped follow, editor":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, edit, true},
+		"stamped follow, editor":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, edit, false},
+		"stamped follow, editor+users":      {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, editUsers, true},
+		"stamped content follow, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserContentFollow, Source: "plain"}, edit, false},
+		"stamped file move, editor":         {&database.OperationChange{ChangeType: undo.ChangeTypeBookFileMove, Source: "plain"}, edit, true},
 		"stamped follow, viewer":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, view, false},
-		"unstamped follow of op, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, edit, true},
+		"unstamped follow of op, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, edit, false},
+		"unstamped follow of op, ed+users":  {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, editUsers, true},
 		"unstamped follow of op, viewer":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, view, false},
 		"unstamped follow, no op, editor":   {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-gone"}, edit, false},
 		"removed fixer's follow, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "gone"}, edit, false},

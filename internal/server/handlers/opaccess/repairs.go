@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-26
 
@@ -57,7 +57,8 @@ import (
 // Journal rows that carry one user's own data (undo.IsUserDataChangeType:
 // listening state and positions, private playlist membership, an account's
 // identity) are other users' data, which only a caller who may manage users
-// reads (owner decision, 2026-10-24), on top of the fixer's permissions.
+// reads and undoes (owner decision, 2026-10-24), on top of the fixer's
+// permissions.
 //
 // Unwired (a nil *Repairs, or one missing its fixer registry, op lookup or
 // permission check), every repairs op is refused, and so is every journal row
@@ -188,12 +189,12 @@ func (r *Reader) MayReadFixer(defID, fixerID string) bool {
 // It holds after the row's operation has been discarded (registry.Discard
 // keeps the journal).
 //
-// A row is readable when the caller may use the fixer it belongs to
-// (MayUndoChange) and, for a row that carries one user's own data
-// (undo.IsUserDataChangeType), also holds users.manage: other users'
-// listening state, playlists and identity are admin data whoever ran the
-// fixer, so an editor who may run fragment-consolidation still does not read
-// its user_state_follow rows.
+// A row is readable exactly when it may be undone (MayUndoChange): the caller
+// uses the fixer it belongs to and, for a row that carries one user's own data
+// (undo.IsUserDataChangeType), also holds users.manage. Other users' listening
+// state, playlists and identity are admin data whoever ran the fixer, so an
+// editor who may run fragment-consolidation does not read its
+// user_state_follow rows and cannot undo them either.
 //
 // Unwired (nil *Repairs, or no fixer registry, op lookup or permission
 // check), user-data rows are refused and so is every row with a Source, since
@@ -202,21 +203,19 @@ func (r *Reader) MayReadChange(ch *database.OperationChange) bool {
 	if ch == nil {
 		return true
 	}
-	userData := undo.IsUserDataChangeType(ch.ChangeType)
-	if !r.wired() {
-		return !userData && ch.Source == ""
-	}
-	if userData && !r.mayReadUserData() {
-		return false
-	}
 	return r.MayUndoChange(ch)
 }
 
-// MayUndoChange reports whether the caller may use the fixer a journal row
-// belongs to, which is what the operation's undo report needs: the report
-// carries a row's id, book, change type and refusal reason, never its values,
-// so a user-data row in it is no reason to refuse a caller who may run (and
-// so undo) the fixer. MayReadChange adds the user-data leg.
+// MayUndoChange reports whether the caller may undo one change-journal row:
+// the operation's undo report and its revert accept a row only when this
+// holds. The caller must use the fixer the row belongs to and, for a row that
+// carries one user's own data (undo.IsUserDataChangeType), also hold
+// users.manage: undoing such a row writes another user's listening state or
+// playlist position back, which no caller may do to an account they could not
+// read (owner decision, 2026-10-24). An editor who may run fragment
+// consolidation therefore gets neither the undo report nor the revert of an
+// operation whose journal holds user_state_follow or user_content_follow
+// rows.
 //
 // The fixer a row belongs to:
 //
@@ -244,6 +243,9 @@ func (r *Reader) MayUndoChange(ch *database.OperationChange) bool {
 	userData := undo.IsUserDataChangeType(ch.ChangeType)
 	if !r.wired() {
 		return !userData && ch.Source == ""
+	}
+	if userData && !r.mayReadUserData() {
+		return false
 	}
 	if ch.Source != "" {
 		if _, ok := r.a.fixers.Get(ch.Source); ok || userData {

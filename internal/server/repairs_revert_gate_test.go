@@ -1,7 +1,7 @@
 // file: internal/server/repairs_revert_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d1c8e2a-7b43-4f96-8a10-c3e9f2b6d704
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package server
 
@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	opArsApply          = "op-ars-apply-revert"
-	opArsApplyDiscarded = "op-ars-apply-discarded-revert"
-	opArsApplyEmpty     = "op-ars-apply-empty-revert"
-	arsFixerID          = "maintenance.audible-read-status" // users.manage
-	revertBookID        = "book-invented-revert"
+	opArsApply           = "op-ars-apply-revert"
+	opArsApplyDiscarded  = "op-ars-apply-discarded-revert"
+	opArsApplyEmpty      = "op-ars-apply-empty-revert"
+	opDefaultLibraryOnly = "op-default-fixer-library-only-revert"
+	opDefaultUserRow     = "op-default-fixer-user-row-revert"
+	arsFixerID           = "maintenance.audible-read-status" // users.manage
+	revertBookID         = "book-invented-revert"
 )
 
 func postAs(srv *Server, token, path string) *httptest.ResponseRecorder {
@@ -111,9 +113,64 @@ func TestRevertOperation_RepairsFixerOpsNeedTheFixersPermissions(t *testing.T) {
 	}
 
 	// Not a blanket refusal: the editor reverts an op that is not a Repairs
-	// op, and the default-permission fixer's op.
-	w := postAs(f.srv, f.editor, "/api/v1/operations/"+f.defaultApply+"/revert")
-	require.NotEqual(t, http.StatusForbidden, w.Code, "the editor holds the default fixer's permission: %s", w.Body.String())
-	w = postAs(f.srv, f.editor, "/api/v1/operations/"+f.plainScan+"/revert")
+	// op, and a default-permission fixer's op that holds no user data.
+	w := postAs(f.srv, f.editor, "/api/v1/operations/"+f.plainScan+"/revert")
 	require.NotEqual(t, http.StatusForbidden, w.Code, "a plain op is not a repairs op: %s", w.Body.String())
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: opDefaultLibraryOnly, DefID: repairs.ApplyOpID, Plugin: "test", Status: "completed",
+		Params: `{"fixer_id":"` + f.defaultFixerID + `"}`, QueuedAt: now, CompletedAt: &now,
+	}))
+	require.NoError(t, store.CreateOperationChange(&database.OperationChange{
+		ID: "chg-" + opDefaultLibraryOnly, OperationID: opDefaultLibraryOnly, BookID: revertBookID + "-c",
+		ChangeType: undo.ChangeTypeBookFileMove, FieldName: "book_file:file-invented-2",
+		OldValue: "/lib/Gotham/year-one.m4b", NewValue: "/lib/Gotham/hush.m4b", Source: f.defaultFixerID, CreatedAt: now,
+	}))
+	w = postAs(f.srv, f.editor, "/api/v1/operations/"+opDefaultLibraryOnly+"/revert")
+	require.NotEqual(t, http.StatusForbidden, w.Code, "the editor holds the default fixer's permission and the op has no user row: %s", w.Body.String())
+}
+
+// Undoing a user-state row writes another user's listening state back, so the
+// revert and the undo report both need users.manage on top of the fixer's
+// permissions: an editor who may run the default fixer is refused an op whose
+// journal holds one of its user_state_follow rows (the review's S4), with
+// nothing reverted, and the admin reverts it. Before this MayUndoChange had no
+// user-data leg and the editor could revert it.
+// Not parallel: it swaps the process-wide config.
+func TestRevertOperation_UserStateRowsNeedUsersManage(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+	now := time.Now().UTC()
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: opDefaultUserRow, DefID: repairs.ApplyOpID, Plugin: "test", Status: "completed",
+		Params: `{"fixer_id":"` + f.defaultFixerID + `"}`, QueuedAt: now, CompletedAt: &now,
+	}))
+	follow := `{"sync_redirected":false,"progress":[{"user_id":"user-invented-selina","absorbed_state":{"user_id":"user-invented-selina","status":"finished"}}]}`
+	for _, ch := range []*database.OperationChange{
+		{ID: "chg-ur-move", OperationID: opDefaultUserRow, BookID: revertBookID + "-d", ChangeType: undo.ChangeTypeBookFileMove,
+			FieldName: "book_file:file-invented-3", OldValue: "/lib/Gotham/a.m4b", NewValue: "/lib/Gotham/b.m4b", Source: f.defaultFixerID, CreatedAt: now},
+		{ID: "chg-ur-follow", OperationID: opDefaultUserRow, BookID: revertBookID + "-d", ChangeType: undo.ChangeTypeUserStateFollow,
+			FieldName: undo.SurvivorField("book-invented-survivor"), OldValue: "", NewValue: follow, Source: f.defaultFixerID, CreatedAt: now},
+	} {
+		require.NoError(t, store.CreateOperationChange(ch))
+	}
+	untouched := func() {
+		rows, err := store.GetOperationChanges(opDefaultUserRow)
+		require.NoError(t, err)
+		require.Len(t, rows, 2)
+		for _, r := range rows {
+			require.Nil(t, r.RevertedAt, "%s must not have been reverted", r.ID)
+		}
+	}
+
+	w := postAs(f.srv, f.editor, "/api/v1/operations/"+opDefaultUserRow+"/revert")
+	require.Equal(t, http.StatusForbidden, w.Code, "the editor reverting a user-state row: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), "user-invented-selina")
+	untouched()
+	w = getAs(f.srv, f.editor, "/api/v1/operations/"+opDefaultUserRow+"/undo/preflight")
+	require.Equal(t, http.StatusForbidden, w.Code, "the undo report offers nothing the revert refuses: %s", w.Body.String())
+	untouched()
+
+	w = getAs(f.srv, f.admin, "/api/v1/operations/"+opDefaultUserRow+"/undo/preflight")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
