@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-10-25
 
@@ -83,7 +83,7 @@ func (r *countingReporter) SetTotal(n int) { r.total = n }
 func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
 	hbLibrary(t) // the run refuses to start without a mounted library root
 	hash := "existinghash"
-	files := []database.BookFileCore{{ID: "f1", FilePath: "/tmp/audio.m4b", FileHash: hash}}
+	files := []database.BookFileCore{{ID: "f1", FilePath: "/lib/Gotham/Arkham/audio.m4b", FileHash: hash}}
 	var setCalled bool
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
@@ -212,7 +212,7 @@ func TestBackfillFileHashesJob_Cancellation(t *testing.T) {
 	hbLibrary(t) // the run refuses to start without a mounted library root
 	files := make([]database.BookFileCore, 10)
 	for i := range files {
-		files[i] = database.BookFileCore{ID: fmt.Sprintf("f%d", i), FilePath: "/tmp/x.m4b", FileHash: ""}
+		files[i] = database.BookFileCore{ID: fmt.Sprintf("f%d", i), FilePath: "/lib/Gotham/Arkham/x.m4b", FileHash: ""}
 	}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },

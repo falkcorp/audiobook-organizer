@@ -17,7 +17,10 @@ hashed and its marker cleared. Read errors of any other kind are still retried
 every run and never recorded, and no `book_file` row is ever deleted.
 
 Recording is guarded. The op refuses to start while the library root is unset,
-unreadable or empty (an unmounted share answers not-found for every path),
+unreadable or holds no library content (an unmounted share answers not-found for
+every path; entries starting with a dot, such as the report directory and the
+wav cache, do not count as content, so writing a report can never make a bare
+mountpoint look mounted),
 checks again before each chunk's writes, never records an absence for a path
 outside the library root, skips rows with no path, and refuses to start a
 marker write while a library scan runs. Each row is also re-checked under its own
@@ -35,8 +38,9 @@ reports `hashed`, `skipped_known_missing`, `newly_missing`, `read_errors`,
 run reports what an apply would do without writing anything.
 
 New params: `mark_absent` (default true; false makes a pure hash run that counts
-absences but records none) and `clear_markers` (clears every in-scope marker,
-the undo for a recording pass). The one-click Fingerprint and metadata-hash
+absences and writes no marker of any kind) and `clear_markers` (clears every
+in-scope marker, the undo for a recording pass; it also refuses an unmounted
+root, because its report is written under it). The one-click Fingerprint and metadata-hash
 buttons now send `mark_absent: false`, so no click records absences without the
 preview-then-apply flow. The checkpoint phase was renamed to `scanning-by-book`
 because the run order changed to (book, file), so an older checkpoint is ignored.

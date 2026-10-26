@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-25
 
@@ -63,7 +63,9 @@ func (j *backfillFileHashesJob) DefaultParams() any {
 //     hash) must not have to hash the whole library first. Empty means every row.
 //   - MarkAbsent (default true) lets the run record, on a row, that hashing it
 //     found its file absent (book_file.hash_absent_at). false makes it a pure
-//     hash run: absences are still counted, nothing about them is written. The
+//     hash run: absences are still counted, and no marker is written, set or
+//     cleared (a stale marker on a row that now hashes stays for a run that
+//     records markers, or for the scanner's stat to clear). The
 //     Fingerprint and metadata-hash buttons send false so that no click records
 //     absences without the preview-then-apply flow having been through it.
 //   - ClearMarkers runs the inverse instead of hashing: every in-scope row's
@@ -141,7 +143,7 @@ func fileAbsent(err error) bool {
 // Operation counters. These count writes, not rows, and a row can appear in one
 // of them as well as in an outcome above: a hashed row whose stale marker was
 // then cleared is one hashed and one markers_cleared; a clear that failed is one
-// hashed and one clear_errors. recompute_errors counts books whose aggregates
+// hashed and one clear_errors. (A mark_absent=false run clears nothing.) recompute_errors counts books whose aggregates
 // did not follow a marker write that DID land (those rows are already in
 // newly_missing or markers_cleared).
 //
@@ -160,14 +162,6 @@ type hashBackfillCounts struct {
 	markersCleared  atomic.Int64
 	clearErrors     atomic.Int64
 	recomputeErrors atomic.Int64
-}
-
-// outcomes is the sum of the nine row-outcome counters: the number of un-hashed
-// rows the run reached.
-func (c *hashBackfillCounts) outcomes() int64 {
-	return c.hashed.Load() + c.skippedKnownMissing.Load() + c.newlyMissing.Load() + c.readErrors.Load() +
-		c.writeErrors.Load() + c.skippedNoPath.Load() + c.unverifiedAbsent.Load() + c.skippedChanged.Load() +
-		c.markerErrors.Load()
 }
 
 // summary is the one-line result stored on the operation log. In a dry run the
@@ -189,7 +183,7 @@ func (c *hashBackfillCounts) summary(dryRun, markAbsent, clearMode bool, reportP
 		c.writeErrors.Load(), c.skippedNoPath.Load(), c.unverifiedAbsent.Load(), c.skippedChanged.Load(),
 		c.markerErrors.Load(), c.markersCleared.Load(), c.clearErrors.Load(), c.recomputeErrors.Load())
 	if !markAbsent && !clearMode {
-		s += " (mark_absent=false: absences are counted in newly_missing but not recorded)"
+		s += " (mark_absent=false: absences are counted in newly_missing; no marker was written or cleared)"
 	}
 	if reportPath != "" {
 		s += " report=" + reportPath
@@ -218,11 +212,10 @@ const (
 // It streams (a first apply can list hundreds of thousands of rows) and is safe
 // for the worker pool. A nil report discards, for runs that record nothing.
 type hashBackfillReport struct {
-	mu   sync.Mutex
-	f    *os.File
-	w    *bufio.Writer
-	path string
-	err  error // first write error; later writes are dropped
+	mu  sync.Mutex
+	f   *os.File
+	w   *bufio.Writer
+	err error // first write error; later writes are dropped
 }
 
 var hbTSVClean = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
@@ -240,7 +233,7 @@ func openHashBackfillReport(path string, resumed bool) (*hashBackfillReport, err
 	if err != nil {
 		return nil, err
 	}
-	r := &hashBackfillReport{f: f, w: bufio.NewWriterSize(f, 64<<10), path: path}
+	r := &hashBackfillReport{f: f, w: bufio.NewWriterSize(f, 64<<10)}
 	if st, serr := f.Stat(); !resumed || serr != nil || st.Size() == 0 {
 		_, r.err = r.w.WriteString("bucket\tfile_id\tbook_id\tpath\treason\n")
 	}
@@ -447,8 +440,10 @@ func (r *hashBackfillRun) processRow(bf database.BookFileCore) {
 		}
 	}
 	r.counts.hashed.Add(1)
-	if bf.HashAbsentAt != nil {
-		// The file exists after all: queue the stale marker's clear.
+	if bf.HashAbsentAt != nil && r.markAbsent {
+		// The file exists after all: queue the stale marker's clear. A pure hash
+		// run (mark_absent=false) writes no marker of any kind, so it leaves the
+		// stale marker for a run that records markers, or for the scanner's stat.
 		r.mu.Lock()
 		r.clears = append(r.clears, bf)
 		r.mu.Unlock()
@@ -594,10 +589,13 @@ func (r *hashBackfillRun) flushAbsent(ctx context.Context, rows []database.BookF
 				case res.ran[bf.ID]:
 					r.counts.markerErrors.Add(1)
 					r.report.row(hbBucketMarkerError, bf, "marker write failed")
-				default:
+				case gctx.Err() == nil:
 					r.counts.skippedChanged.Add(1)
 					r.report.row(hbBucketSkippedChange, bf, "row no longer present or unreadable; not marked")
 				}
+				// A cancelled flush leaves rows that never ran; they are neither
+				// changed nor changed-under-us, and the checkpoint was not written,
+				// so a resume reconsiders them.
 			}
 			if _, _, other := batchErrors(res.err); other > 0 && gctx.Err() == nil {
 				r.logBatchFailure("Failed to record absent markers of book "+group[0].BookID, res.err)
@@ -714,20 +712,39 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	if run.markAbsent {
 		// An unmounted share leaves an empty directory, so every path under it
 		// answers not-found and a hash attempt would read the whole library as
-		// gone. Refuse before anything is recorded. This runs BEFORE the report
-		// is resolved: creating {root}/.reports would itself make an empty,
-		// unmounted root look populated (libroot.Mounted).
+		// gone. Refuse before anything is recorded.
 		if merr := libroot.Mounted(root); merr != nil {
 			return fmt.Errorf("backfill-file-hashes: refusing to record absent files: %w", merr)
 		}
 		run.root = filepath.Clean(root)
+	} else if run.clearMode {
+		// Clearing trusts no not-found, but the report goes under the same root:
+		// resolving it on an unmounted mountpoint would create {root}/.reports
+		// there. libroot.Mounted ignores that directory, so it would not be
+		// fooled by it later, but nothing should be written to a bare mountpoint.
+		if merr := libroot.Mounted(root); merr != nil {
+			return fmt.Errorf("backfill-file-hashes: refusing to write the clear report: %w", merr)
+		}
 	}
 	if !dryRun && recordsMarkers {
-		// The scanner stat-clears the same marker. The op registry cannot give this
-		// job library.scan's ConcurrencyKey (a shared key would break per-job
-		// self-exclusion, see repoint_version_primary.go), so, as there: refuse to
-		// START a marker write while a scan runs, and rely on the under-lock
-		// precondition on every row for a scan that starts mid-run.
+		// The scanner stat-clears the same marker, and a marker write races a scan
+		// that rewrites the same row. What stands between them, exactly:
+		//   - this check refuses to START a marker write while a scan runs (the op
+		//     registry cannot give this job library.scan's ConcurrencyKey: a shared
+		//     key would break per-job self-exclusion, see repoint_version_primary.go,
+		//     and the legacy Job.Run has no ScanController, so holding the scan
+		//     stand-down around the writes would mean plumbing one through
+		//     maintenance.JobStore for every legacy job);
+		//   - every row write re-checks, under the row's lock, that the row still
+		//     has the same path, no hash, and no marker.
+		// That does NOT cover a scan that starts after this check and commits
+		// between the read of a row and its commit on a path that takes no file
+		// stripe (a batch upsert, a repoint): the job writes back its full row
+		// copy, so such a write can be overwritten with the row as it was read. The
+		// damage is bounded by design: the marker is its own field (never Missing),
+		// the skip it licenses is always re-decided by a fresh stat, and a stale or
+		// lost marker costs one extra stat or one extra hash attempt on the next
+		// run, never a wrong answer.
 		if serr := refuseDuringLibraryScan(store, "backfill-file-hashes"); serr != nil {
 			return serr
 		}

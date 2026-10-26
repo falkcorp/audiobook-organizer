@@ -1,5 +1,5 @@
 // file: internal/libroot/libroot.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d8b2f61-a3c7-4e90-b512-9e6f0c1d7a38
 // last-edited: 2026-10-25
 
@@ -19,13 +19,19 @@ import (
 )
 
 // Mounted refuses to proceed when the library root is unset, unreadable or
-// empty. An unmounted share (a ZFS dataset, an NFS or autofs mount) leaves an
-// empty directory behind, so every path under it answers ENOENT; an op that
-// reads "not found" as "the file is gone" would then conclude the whole library
-// is gone. Call it before acting on any not-found, not only before a write.
+// holds no library content. An unmounted share (a ZFS dataset, an NFS or autofs
+// mount) leaves an empty directory behind, so every path under it answers
+// ENOENT; an op that reads "not found" as "the file is gone" would then
+// conclude the whole library is gone. Call it before acting on any not-found,
+// not only before a write.
 //
-// Call it BEFORE ReportPath: ReportPath creates {root}/.reports, and that one
-// directory is enough to make an empty, unmounted root read as populated here.
+// Dot-prefixed entries do not count as content. They are app- or OS-owned
+// state (the ReportDirName directory, the default {root}/.wav-cache, a
+// .DS_Store), and anything the app creates under a bare mountpoint would
+// otherwise make that mountpoint read as populated for good: a report
+// directory created on an unmounted root would defeat this check on every
+// later run. Library content is never dot-prefixed at the top level (the
+// scanners skip such directories, see pathutil.ShouldSkipDir).
 func Mounted(root string) error {
 	if root == "" {
 		return errors.New("library root is not configured")
@@ -34,10 +40,12 @@ func Mounted(root string) error {
 	if err != nil {
 		return fmt.Errorf("library root %s unreadable: %w", root, err)
 	}
-	if len(ents) == 0 {
-		return fmt.Errorf("library root %s is empty (share not mounted?)", root)
+	for _, e := range ents {
+		if !strings.HasPrefix(e.Name(), ".") {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("library root %s has no library content (share not mounted?)", root)
 }
 
 // ReportDirName is the directory, under the library root, where a maintenance

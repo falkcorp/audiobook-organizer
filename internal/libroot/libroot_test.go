@@ -1,5 +1,5 @@
 // file: internal/libroot/libroot_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e1c5a73-d2b4-4f69-a0e8-3b7f9d1c6a25
 // last-edited: 2026-10-25
 
@@ -24,7 +24,7 @@ func TestMounted(t *testing.T) {
 	}{
 		{"unset", "", "not configured"},
 		{"missing directory", filepath.Join(t.TempDir(), "nope"), "unreadable"},
-		{"empty directory (unmounted share)", t.TempDir(), "is empty"},
+		{"empty directory (unmounted share)", t.TempDir(), "no library content"},
 		{"populated directory", populated, ""},
 	}
 	for _, tc := range cases {
@@ -40,10 +40,11 @@ func TestMounted(t *testing.T) {
 	}
 }
 
-// ReportPath creates the report directory, and that alone makes an unmounted
-// (empty) root look populated. Callers must therefore run Mounted first; this
-// pins the hazard so the ordering rule in the doc comments has a test behind it.
-func TestReportPathMakesAnEmptyRootLookMounted(t *testing.T) {
+// ReportPath creates the report directory under the root. That directory, and
+// the default {root}/.wav-cache, are app-owned and must not make a bare
+// (unmounted) mountpoint read as populated, or the first report written to an
+// unmounted root would defeat the mount check on every later run.
+func TestAppOwnedDotEntriesDoNotMakeARootLookMounted(t *testing.T) {
 	root := t.TempDir()
 	if err := Mounted(root); err == nil {
 		t.Fatal("empty root must read as unmounted before any report dir exists")
@@ -51,8 +52,21 @@ func TestReportPathMakesAnEmptyRootLookMounted(t *testing.T) {
 	if _, err := ReportPath(root, "", "x.tsv"); err != nil {
 		t.Fatalf("ReportPath: %v", err)
 	}
+	if err := os.Mkdir(filepath.Join(root, ".wav-cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".DS_Store"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Mounted(root)
+	if err == nil || !strings.Contains(err.Error(), "no library content") {
+		t.Fatalf("a root holding only %s, .wav-cache and .DS_Store must be refused, got %v", ReportDirName, err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "Gotham"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := Mounted(root); err != nil {
-		t.Fatalf("expected the created %s dir to make the root non-empty: %v", ReportDirName, err)
+		t.Fatalf("a root with real content must pass: %v", err)
 	}
 }
 

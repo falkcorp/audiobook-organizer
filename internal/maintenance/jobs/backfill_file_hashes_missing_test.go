@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
 // last-edited: 2026-10-25
 
@@ -821,13 +821,91 @@ func TestBackfillFileHashes_RefusesAnUnmountedRoot(t *testing.T) {
 	for _, dry := range []bool{false, true} {
 		_, err := hbRunJob(t, h.store(), hbRun{dryRun: dry})
 		require.Error(t, err, "dry=%v", dry)
-		assert.Contains(t, err.Error(), "empty")
+		assert.Contains(t, err.Error(), "no library content")
 	}
 	assert.Zero(t, h.batchCount())
 	assert.Nil(t, h.get("f1").HashAbsentAt)
 	ents, err := os.ReadDir(root)
 	require.NoError(t, err)
 	assert.Empty(t, ents, "the refusal must not create .reports in the unmounted root")
+}
+
+// A flush that is cancelled leaves rows whose marker write never ran. They are
+// not "changed since read" (the row did not change), so they are neither counted
+// nor reported as skipped-changed; the checkpoint was not written, so a resume
+// reconsiders them.
+func TestBackfillFileHashes_CancelledFlushDoesNotReportSkippedChanged(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBRows(
+		database.BookFile{ID: "f1", BookID: "b1", FilePath: hbPath(root, "gone1.m4b")},
+		database.BookFile{ID: "f2", BookID: "b2", FilePath: hbPath(root, "gone2.m4b")},
+		database.BookFile{ID: "f3", BookID: "b3", FilePath: hbPath(root, "gone3.m4b")},
+	)
+	store := h.store()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.ModifyBookFilesFunc = func(ctx context.Context, bookID string, ids []string, fn func(*database.BookFile) error) ([]string, error) {
+		cancel() // the store sees a cancelled context and writes nothing
+		return nil, context.Canceled
+	}
+
+	j, err := maintenance.Get("backfill-file-hashes")
+	require.NoError(t, err)
+	err = j.Run(ctx, store, &noopReporter{}, false)
+
+	require.ErrorIs(t, err, context.Canceled)
+	rows := hbReadReport(t, filepath.Join(root, ".reports", "backfill-file-hashes-unknown-op.tsv"))
+	for _, r := range rows {
+		assert.NotEqual(t, "skipped-changed", r.bucket, "row %s never ran, it did not change", r.fileID)
+	}
+	for _, id := range []string{"f1", "f2", "f3"} {
+		assert.Nil(t, h.get(id).HashAbsentAt)
+	}
+}
+
+// clear_markers resolves a report under the root too, so it is refused on an
+// unmounted root as well, and creates nothing there. A root holding only
+// app-owned dot entries (a report directory from an earlier run, the wav cache)
+// is the same bare mountpoint and is refused in every mode.
+func TestBackfillFileHashes_ClearMarkersRefusesAnUnmountedRoot(t *testing.T) {
+	when := hbMarked(time.Now().Add(-time.Hour))
+	for _, tc := range []struct {
+		name  string
+		dots  []string
+		param string
+	}{
+		{"clear on an empty root", nil, `{"clear_markers":true}`},
+		{"clear on a root with only dot entries", []string{".reports", ".wav-cache"}, `{"clear_markers":true}`},
+		{"record on a root with only dot entries", []string{".reports", ".wav-cache"}, ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, d := range tc.dots {
+				require.NoError(t, os.Mkdir(filepath.Join(root, d), 0o755))
+			}
+			prev := config.AppConfig.RootDir
+			config.AppConfig.RootDir = root
+			t.Cleanup(func() { config.AppConfig.RootDir = prev })
+			h := newHBRows(database.BookFile{ID: "f1", BookID: "b1", HashAbsentAt: when, FilePath: filepath.Join(root, "Gotham", "gone.m4b")})
+
+			for _, dry := range []bool{false, true} {
+				_, err := hbRunJob(t, h.store(), hbRun{dryRun: dry, params: tc.param})
+				require.Error(t, err, "dry=%v", dry)
+				assert.Contains(t, err.Error(), "no library content")
+			}
+			assert.Zero(t, h.batchCount())
+			assert.NotNil(t, h.get("f1").HashAbsentAt, "nothing was cleared")
+			ents, err := os.ReadDir(root)
+			require.NoError(t, err)
+			assert.Len(t, ents, len(tc.dots), "the refusal must create nothing in the bare root")
+			if len(tc.dots) > 0 {
+				rents, err := os.ReadDir(filepath.Join(root, ".reports"))
+				if err == nil {
+					assert.Empty(t, rents, "no report file written")
+				}
+			}
+		})
+	}
 }
 
 // The mount can drop mid-run: the check runs again right before each chunk's
@@ -881,10 +959,10 @@ func TestBackfillFileHashes_AbsentOutsideTheRootIsUnverified(t *testing.T) {
 	assert.Equal(t, map[string][]string{"unverified-absent": {"f1"}, "marked-absent": {"f2"}}, hbBuckets(hbReadReport(t, report)))
 }
 
-// mark_absent=false makes the run a pure hash run: absences are counted, no
-// marker is written, and no report is produced. A file that DID come back is
-// still hashed and its stale marker cleared (that is a correction from evidence,
-// not a recorded absence).
+// mark_absent=false makes the run a pure hash run: absences are counted, and no
+// marker is written, set or cleared, and no report is produced. A file that DID
+// come back is hashed, and its stale marker is left alone (a run that records
+// markers, or the scanner's stat, clears it).
 func TestBackfillFileHashes_MarkAbsentFalseRecordsNothing(t *testing.T) {
 	root := hbLibrary(t)
 	when := time.Now().Add(-time.Hour)
@@ -894,16 +972,18 @@ func TestBackfillFileHashes_MarkAbsentFalseRecordsNothing(t *testing.T) {
 		database.BookFile{ID: "f3", BookID: "b1", HashAbsentAt: &when, FilePath: hbWrite(t, root, "back.m4b", "back bytes")},
 	)
 
-	rep, c, report := runHB(t, h.store(), hbRun{params: `{"dry_run":false,"mark_absent":false}`})
+	for _, dry := range []bool{true, false} {
+		rep, c, report := runHB(t, h.store(), hbRun{dryRun: dry, params: `{"mark_absent":false}`})
 
-	assert.Equal(t, hbCounts{"hashed": 2, "newly_missing": 1, "markers_cleared": 1}, c)
-	assert.Nil(t, h.get("f1").HashAbsentAt, "no absence is recorded")
-	assert.Nil(t, h.get("f3").HashAbsentAt, "a stale marker is cleared once the file is hashed")
-	assert.Empty(t, report, "a run that records nothing writes no report")
-	assert.Contains(t, rep.logs[len(rep.logs)-1], "mark_absent=false")
-	for _, b := range h.batches {
-		assert.Equal(t, []string{"f3"}, b.ids, "the only write is the clear")
+		assert.Equal(t, hbCounts{"hashed": 2, "newly_missing": 1}, c, "dry=%v", dry)
+		assert.Nil(t, h.get("f1").HashAbsentAt, "no absence is recorded")
+		assert.NotNil(t, h.get("f3").HashAbsentAt, "a stale marker is not touched by a pure hash run")
+		assert.Empty(t, report, "a run that records nothing writes no report")
+		assert.Contains(t, rep.logs[len(rep.logs)-1], "no marker was written or cleared")
+		assert.Zero(t, h.batchCount(), "no marker write of any kind, so no batch")
+		assert.Zero(t, h.modifyCalls)
 	}
+	assert.NotEmpty(t, h.get("f3").FileHash, "the reappeared file is hashed")
 	_, err := os.Stat(filepath.Join(root, ".reports"))
 	assert.True(t, os.IsNotExist(err))
 }
