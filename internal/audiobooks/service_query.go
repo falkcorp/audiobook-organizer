@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.10
+// version: 1.38.11
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-26
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -1398,6 +1399,11 @@ func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, 
 	return books, int(bleveTotal), nil
 }
 
+// perUserSearchLog is the logger for the per-user state reads of a search. It goes
+// through internal/logger so the user id and the error, which can carry a book id or
+// text from the store, pass the log-injection barrier (see logger.SanitizeLogValue).
+var perUserSearchLog = logger.New("audiobooks.search")
+
 // perUserPointReadMax is the most candidate ids idsMatchingPerUser reads one state
 // row at a time. Above it the viewer's rows are listed in one scan instead.
 //
@@ -1467,15 +1473,15 @@ func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID stri
 				if len(ids) > postFilterWindow() {
 					// Too many ids to read one at a time on every request (see the
 					// doc comment): answer the error, and say why.
-					slog.Error("search: bulk per-user state read failed and the candidate list is too long to read one row per book",
-						"user_id", userID, "candidates", len(ids), "limit", postFilterWindow(),
-						"err", err) // err names the book when one row was undecodable
+					// err names the book when one row was undecodable.
+					perUserSearchLog.Error("bulk per-user state read failed and the candidate list is too long to read one row per book: user_id=%s candidates=%d limit=%d err=%s",
+						logger.SanitizeLogValue(userID), len(ids), postFilterWindow(), logger.SanitizeLogValue(err.Error()))
 					return nil, fmt.Errorf("read the viewer's book states: %w", err)
 				}
 				// A cancelled request fails the scan too; the point-read loop below
 				// returns the cancellation before it reads anything.
-				slog.Warn("search: bulk per-user state read failed; reading one row per book",
-					"user_id", userID, "err", err)
+				perUserSearchLog.Warn("bulk per-user state read failed; reading one row per book: user_id=%s err=%s",
+					logger.SanitizeLogValue(userID), logger.SanitizeLogValue(err.Error()))
 			} else {
 				bulk = true
 			}
