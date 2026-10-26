@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -262,6 +262,9 @@ func TestCAS_ModifyBookFileDeferAggregates_KeepsConcurrentWriteAndDefersTheRecom
 	got, err := f.s.ModifyBookFileDeferAggregates(f.book.ID, f.file.ID, func(r *BookFile) error {
 		seenHashes = append(seenHashes, r.FileHash)
 		r.Title = "Batman: Year One, Chapter 1"
+		// A Duration the book aggregates read: without the deferral guard the
+		// commit reports "aggregates need a recompute" and the notify would fire.
+		r.Duration = 300
 		return nil
 	})
 	if err != nil {
@@ -272,17 +275,22 @@ func TestCAS_ModifyBookFileDeferAggregates_KeepsConcurrentWriteAndDefersTheRecom
 		t.Errorf("fn saw hashes %v, want it re-run once on the fresh row: [gotham-hash-old gotham-hash-scan]", seenHashes)
 	}
 	row := f.row(t)
-	if row.FileHash != "gotham-hash-scan" || row.Duration != 250 || row.FileSize != 2500 {
-		t.Errorf("row = hash %q duration %d size %d, want the concurrent upsert's gotham-hash-scan/250/2500 kept",
+	if row.FileHash != "gotham-hash-scan" || row.Duration != 300 || row.FileSize != 2500 {
+		t.Errorf("row = hash %q duration %d size %d, want the concurrent upsert's gotham-hash-scan and size 2500 kept, and the callback's duration 300",
 			row.FileHash, row.Duration, row.FileSize)
 	}
 	if row.Title != "Batman: Year One, Chapter 1" || got.Title != row.Title {
 		t.Errorf("title = %q (returned %q), want the caller's change applied", row.Title, got.Title)
 	}
+	if ref := f.indexRef(t, "book_file_hash:gotham-hash-scan"); ref != f.ref() {
+		t.Errorf("the concurrent writer's hash index key = %q, want %q (it was stranded)", ref, f.ref())
+	}
 	if ref := f.indexRef(t, "book_file_hash:gotham-hash-old"); ref != "" {
 		t.Errorf("the stale hash index key still points at %q", ref)
 	}
-	// strayScan writes through updateBookFileOver, which does not recompute.
+	// The stray scan and the callback both change Duration, which makes the commit
+	// report that the aggregates are stale; the deferral guard (modifyBookFile's
+	// notify) is what keeps the recompute with the caller.
 	if n := countAggregateInvocations(readLogs(), f.book.ID); n != 0 {
 		t.Errorf("the book's aggregates were recomputed %d times, want none: the caller owns the recompute", n)
 	}

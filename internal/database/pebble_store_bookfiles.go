@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.1
+// version: 1.52.2
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -810,18 +810,6 @@ func (s *PebbleStore) updateBookFile(id string, file *BookFile, merge bookFileMe
 // re-read that row would write the upsert over a row the match no longer
 // describes (see UpsertBookFile).
 func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge bookFileMerge, recomputeAggregates bool, stillMatches func(old *BookFile) bool) (bool, error) {
-	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
-	// last write path that did not, while CreateBookFile, UpsertBookFile and
-	// BatchUpsertBookFiles all did, which meant an update could reintroduce the
-	// millisecond corruption those three exist to prevent. Every write now agrees on
-	// the unit, so the invariant holds at the store rather than at each caller.
-	//
-	// Safe to apply unconditionally: DurationLooksLikeMillis only fires when reading
-	// the value as seconds implies an impossible sub-4 kbps file AND dividing by 1000
-	// lands back in a plausible audio band, so a correct row is never touched and a
-	// corrected row is never divided twice.
-	normalizeBookFileDuration(file)
-
 	// Every attempt starts from this copy: the merge below mutates file, and a
 	// retry that began from the previous attempt's merge would keep fields it
 	// restored from a row that has since changed (a fingerprint a concurrent
@@ -856,6 +844,22 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge book
 func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFile, merge bookFileMerge, recomputeAggregates bool) (bool, error) {
 	id := old.ID
 	var err error
+	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
+	// last write path that did not, while CreateBookFile, UpsertBookFile and
+	// BatchUpsertBookFiles all did, which meant an update could reintroduce the
+	// millisecond corruption those three exist to prevent. Every write now agrees on
+	// the unit, so the invariant holds at the store rather than at each caller.
+	//
+	// It runs here, in the one attempt every row-rewriting path commits through
+	// (updateBookFileLocked, modifyBookFile, SetBookFileHash, UpdateBookFileHashes),
+	// so a retry normalises its own fresh copy and no caller does it twice. It is
+	// before the merge, which never touches Duration.
+	//
+	// Safe to apply unconditionally: DurationLooksLikeMillis only fires when reading
+	// the value as seconds implies an impossible sub-4 kbps file AND dividing by 1000
+	// lands back in a plausible audio band, so a correct row is never touched and a
+	// corrected row is never divided twice.
+	normalizeBookFileDuration(file)
 	file.ID = id
 	file.CreatedAt = old.CreatedAt
 	file.UpdatedAt = time.Now()

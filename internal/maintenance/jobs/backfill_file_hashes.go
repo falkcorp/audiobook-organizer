@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.5.0
+// version: 4.5.1
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -853,9 +853,12 @@ func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 		msg := err.Error()
 		r.log("warn", "Row kept changing, will retry next run: "+o.bf.FilePath, &msg)
 	case err != nil:
-		// A failed write may still have been applied (an fsync that failed after
-		// the commit), so its book is recomputed too.
-		o.written = deferred && !already && !changed
+		// A write whose fsync failed after the commit
+		// (database.ErrBookFileDurabilityUnknown) WAS applied, so its book is
+		// recomputed too. Any other error (a read error, a vanished row, a deleted
+		// owner book, a refused commit) wrote nothing, so there is nothing to
+		// recompute for. The success path below marks written for a stored hash.
+		o.written = deferred && errors.Is(err, database.ErrBookFileDurabilityUnknown)
 		msg := err.Error()
 		o.bucket, o.reason = hbBucketWriteError, msg
 		slog.Error("backfill-file-hashes store hash failed", "details", msg)

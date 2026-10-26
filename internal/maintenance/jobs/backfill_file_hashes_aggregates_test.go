@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_aggregates_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 3f6a1c84-b2d7-4e95-8a13-d90e5b7c4f26
 // last-edited: 2026-10-26
 
@@ -130,6 +130,44 @@ func TestBackfillFileHashes_ACompareAndSwapConflictIsBusyNotAWriteError(t *testi
 			assert.Contains(t, rep.logs[len(rep.logs)-1], "busy=1")
 		})
 	}
+}
+
+// Only a write the store reports as applied-but-unconfirmed
+// (database.ErrBookFileDurabilityUnknown) marks its book for a recompute. A read
+// error, a vanished row or a deleted owner book wrote nothing: they are write
+// errors in the report, but recomputing a book nothing was written to is wasted
+// work and, for a deleted book, would put it in the summary's "aggregates could
+// not be recomputed" warning.
+func TestBackfillFileHashes_OnlyAnAppliedWriteMarksItsBookForRecompute(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBStore(t,
+		database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbWrite(t, root, "Year One.m4b", "year one bytes")},
+		database.BookFileCore{ID: "f2", BookID: "b2", FilePath: hbWrite(t, root, "Hush.m4b", "hush bytes")},
+		database.BookFileCore{ID: "f3", BookID: "b3", FilePath: hbWrite(t, root, "Knightfall.m4b", "knightfall bytes")},
+		database.BookFileCore{ID: "f4", BookID: "b4", FilePath: hbWrite(t, root, "The Long Halloween.m4b", "long halloween bytes")},
+	)
+	h.failHash = func(id string) error {
+		switch id {
+		case "f1":
+			return fmt.Errorf("ModifyBookFile: read %s: %w", id, errors.New("pebble: closed"))
+		case "f2":
+			return fmt.Errorf("ModifyBookFile: write %s: %w", id, database.ErrBookFileOwnerMissing)
+		}
+		return nil
+	}
+	h.failAfterApply = func(id string) error {
+		if id == "f3" {
+			return fmt.Errorf("ModifyBookFile: write %s: %w", id, database.ErrBookFileDurabilityUnknown)
+		}
+		return nil
+	}
+
+	rep, c, _ := runHB(t, h.store(), hbRun{opID: "01ONLYAPPLIED"})
+
+	assert.Equal(t, hbCounts{"hashed": 1, "write_errors": 3}, c)
+	assert.Equal(t, map[string]int{"b3": 1, "b4": 1}, h.recomputes,
+		"only the applied-but-unconfirmed write (b3) and the stored hash (b4) are recomputed; the read error (b1) and the deleted owner (b2) are not")
+	assert.False(t, hbAnyLogContains(rep, "could not recompute"), "no book is named as failing a recompute")
 }
 
 // The real store: N hashes of one book, stored through the job, cost exactly one
@@ -391,7 +429,7 @@ func TestBackfillFileHashes_AStoreThatFailedAfterApplyingStillRecomputesItsBook(
 	)
 	h.failAfterApply = func(id string) error {
 		if id == "f1" {
-			return errors.New("fsync failed after the commit")
+			return fmt.Errorf("ModifyBookFile: write %s: %w", id, database.ErrBookFileDurabilityUnknown)
 		}
 		return nil
 	}
@@ -428,7 +466,7 @@ func TestBackfillFileHashes_ReplayRecomputesTheBookOfAStoreThatFailedAfterApplyi
 	require.Empty(t, h.writes, "the dead run stored nothing")
 	h.failAfterApply = func(id string) error {
 		if id == "f1" {
-			return errors.New("fsync failed after the commit")
+			return fmt.Errorf("ModifyBookFile: write %s: %w", id, database.ErrBookFileDurabilityUnknown)
 		}
 		return nil
 	}
