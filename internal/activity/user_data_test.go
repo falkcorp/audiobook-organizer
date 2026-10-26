@@ -1,5 +1,5 @@
 // file: internal/activity/user_data_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
 // last-edited: 2026-10-26
 
@@ -7,6 +7,7 @@ package activity
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -273,4 +274,28 @@ func TestNamesOthersUserLog(t *testing.T) {
 			assert.Equal(t, tc.want, NamesOthersUserLog(tc.source, tc.message))
 		})
 	}
+}
+
+// WithoutUserAttrs: a log line's message can be clean while its attributes name
+// a user. Keys that name one go, at any depth and in lists, and so does a value
+// whose text does; the rest is kept, and an empty or non-JSON input is safe.
+func TestWithoutUserAttrs(t *testing.T) {
+	cleaned := WithoutUserAttrs(`{"user_id":"01INVENTEDUSER0000000000A","target_user_id":"x","Username":"bruce_wayne",` +
+		`"email":"bruce.wayne@example.invalid","actor":"selina_kyle","account":"a","book":"Year One",` +
+		`"note":"progress for user 01INVENTEDUSER0000000000B","count":3,` +
+		`"nested":{"owner_email":"b@example.invalid","title":"Hush"},` +
+		`"list":[{"login":"x","title":"Knightfall"},"user 01INVENTEDUSER0000000000C","plain"]}`)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(cleaned), &got))
+	assert.Equal(t, map[string]any{
+		"book":   "Year One",
+		"count":  float64(3),
+		"nested": map[string]any{"title": "Hush"},
+		"list":   []any{map[string]any{"title": "Knightfall"}, "plain"},
+	}, got)
+
+	assert.Equal(t, "", WithoutUserAttrs(""))
+	assert.Equal(t, "{}", WithoutUserAttrs("{}"))
+	assert.Equal(t, "{}", WithoutUserAttrs("not json, email bruce.wayne@example.invalid"))
+	assert.Equal(t, "plain text", WithoutUserAttrs("plain text"))
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_user_data_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8a4c71-9d35-4b60-a1f4-6c0b7d9e2a58
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers
 
@@ -33,16 +33,18 @@ import (
 // Repairs operation, and the op-log fallback that reads the same lines.
 
 const (
-	absLine      = "USERDATA-ABS-LINE progress patch: user=01INVENTEDUSER0000000000A currentTime=3600.5"
-	taggedLine   = "USERDATA-TAGGED-LINE something with no recognisable shape"
-	guardLine    = "USERDATA-GUARD-LINE owner action allowed: user=01INVENTEDUSER0000000000A access_email=bruce.wayne@example.invalid"
-	mergeLine    = "USERDATA-MERGE-LINE survivor reconciled"
-	ownerApply   = "USERDATA-OWNER-APPLY-LINE repairs.apply plain.fixer: owner apply by user 01INVENTEDUSER0000000000A (cookie): 1 of 1 owner row(s) written"
-	plainLine    = "PLAIN-SCHEDULER-LINE Next sync in 28m"
-	opLogFallbck = "USERDATA-OPLOG-LINE owner apply by user 01INVENTEDUSER0000000000A (cookie)"
-	opLogPlain   = "PLAIN-OPLOG-LINE row ran"
-	ownerApplyOp = "op-owner-apply"
-	fallbackOp   = "op-fallback"
+	absLine       = "USERDATA-ABS-LINE progress patch: user=01INVENTEDUSER0000000000A currentTime=3600.5"
+	taggedLine    = "USERDATA-TAGGED-LINE something with no recognisable shape"
+	guardLine     = "USERDATA-GUARD-LINE owner action allowed: user=01INVENTEDUSER0000000000A access_email=bruce.wayne@example.invalid"
+	mergeLine     = "USERDATA-MERGE-LINE survivor reconciled"
+	ownerApply    = "USERDATA-OWNER-APPLY-LINE repairs.apply plain.fixer: owner apply by user 01INVENTEDUSER0000000000A (cookie): 1 of 1 owner row(s) written"
+	plainLine     = "PLAIN-SCHEDULER-LINE Next sync in 28m"
+	opLogFallbck  = "USERDATA-OPLOG-LINE owner apply by user 01INVENTEDUSER0000000000A (cookie)"
+	opLogPlain    = "PLAIN-OPLOG-LINE row ran"
+	opLogAttrLine = "ATTR-OPLOG-LINE clean message"
+	attrUserID    = "01INVENTEDATTRUSER000000A"
+	ownerApplyOp  = "op-owner-apply"
+	fallbackOp    = "op-fallback"
 )
 
 type opLogs map[string][]database.OpLogV2Row
@@ -87,6 +89,7 @@ func userDataRouter() *gin.Engine {
 		opLogs{fallbackOp: {
 			{OperationID: fallbackOp, Level: "info", Message: opLogFallbck, CreatedAt: time.Now()},
 			{OperationID: fallbackOp, Level: "info", Message: opLogPlain, CreatedAt: time.Now()},
+			{OperationID: fallbackOp, Level: "info", Message: opLogAttrLine, Attrs: `{"user_id":"` + attrUserID + `","book":"Hush"}`, CreatedAt: time.Now()},
 		}},
 		WithActivityRepairsAccess(opaccess.NewRepairs(activityFixers{"plain.fixer": plainFixer{}}, rows, holds), rows, nil),
 		WithActivityOthersUserData(func(c *gin.Context) bool { return auth.Can(c.Request.Context(), auth.PermUsersManage) }),
@@ -156,6 +159,7 @@ func TestActivity_LinesThatNameAUserNeedUsersManage(t *testing.T) {
 				assert.NotContains(t, w.Body.String(), strings.Fields(line)[0], "%s as %s serves a line that names a user", name, perms)
 			}
 			assert.NotContains(t, w.Body.String(), "01INVENTEDUSER0000000000A", "%s as %s", name, perms)
+			assert.NotContains(t, w.Body.String(), attrUserID, "%s as %s serves an attribute that names a user", name, perms)
 		}
 	}
 
@@ -167,6 +171,8 @@ func TestActivity_LinesThatNameAUserNeedUsersManage(t *testing.T) {
 	}
 	assert.Contains(t, reads["GET /operations/:id (fallbck)"](adminUsers).Body.String(), "USERDATA-OPLOG-LINE")
 	assert.Contains(t, reads["POST merged"](adminUsers).Body.String(), "USERDATA-OPLOG-LINE")
+	assert.Contains(t, reads["GET /operations/:id (fallbck)"](adminUsers).Body.String(), attrUserID, "the admin reads the attributes whole")
+	assert.Contains(t, reads["GET /operations/:id (fallbck)"](editorPerms).Body.String(), "ATTR-OPLOG-LINE", "the clean line stays for the editor")
 	assert.Contains(t, reads["GET /operations/:id/activity ("+ownerApplyOpRead+")"](adminUsers).Body.String(), "USERDATA-OWNER-APPLY-LINE")
 
 	// Ordinary lines are untouched for everyone.

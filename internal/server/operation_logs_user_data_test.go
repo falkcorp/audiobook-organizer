@@ -1,5 +1,5 @@
 // file: internal/server/operation_logs_user_data_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e2c47-91d3-4f60-a7c2-3e9d1b6f0a85
 // last-edited: 2026-10-26
 
@@ -31,7 +31,13 @@ const (
 	engineOwnerApplyLine = "repairs.apply maintenance.audible-read-status: owner apply by user 01INVENTEDOWNER0000000000A (cf-access): 1 of 1 owner row(s) written"
 	ownerApplyMarker     = "01INVENTEDOWNER0000000000A"
 	ordinaryLogLine      = "scanned Year One and Hush"
+
+	// A line whose message is clean but whose attributes name a user.
+	attrLogLine  = "applied Knightfall to the book"
+	attrLogAttrs = `{"user_id":"01INVENTEDATTRUSER000000A","username":"bruce_wayne_attr","book":"Knightfall","detail":{"owner_email":"bruce.wayne@example.invalid","kept":"Year Two"},"note":"progress for user 01INVENTEDATTRUSER000000B"}`
 )
+
+var attrMarkers = []string{"01INVENTEDATTRUSER000000A", "01INVENTEDATTRUSER000000B", "bruce_wayne_attr", "bruce.wayne@example.invalid"}
 
 // streamOpLogEvents opens /operations/events as token, publishes one op.log
 // event per message for op opID, and returns what the stream carried.
@@ -74,6 +80,7 @@ func TestOperationLogs_UserLinesNeedUsersManage(t *testing.T) {
 		require.NoError(t, store.AppendOpLogsV2([]database.OpLogV2Row{
 			{OperationID: id, Level: "info", Message: engineOwnerApplyLine, CreatedAt: now.Add(time.Second)},
 			{OperationID: id, Level: "info", Message: ordinaryLogLine, CreatedAt: now.Add(2 * time.Second)},
+			{OperationID: id, Level: "info", Message: attrLogLine, Attrs: attrLogAttrs, CreatedAt: now.Add(3 * time.Second)},
 		}))
 	}
 	require.NoError(t, store.AddSystemActivityLog("abs", "info", "seek to Year One chapter 3"))
@@ -98,6 +105,11 @@ func TestOperationLogs_UserLinesNeedUsersManage(t *testing.T) {
 			require.Contains(t, body, "Year One", "%s %s: the ordinary line stays", id, route)
 			require.NotContains(t, body, ownerApplyMarker, "%s %s: the owner-apply line names an account", id, route)
 			require.NotContains(t, body, "owner apply by user", "%s %s", id, route)
+			require.Contains(t, body, "Knightfall", "%s %s: the clean line stays", id, route)
+			require.Contains(t, body, "Year Two", "%s %s: and its attributes that name no user", id, route)
+			for _, m := range attrMarkers {
+				require.NotContains(t, body, m, "%s %s: an attribute names a user", id, route)
+			}
 		}
 		admin := map[string]string{
 			"single-op read": getAs(f.srv, f.admin, "/api/v1/operations/v2/"+id).Body.String(),
@@ -106,6 +118,9 @@ func TestOperationLogs_UserLinesNeedUsersManage(t *testing.T) {
 		for route, body := range admin {
 			require.Contains(t, body, ownerApplyMarker, "%s %s: the admin reads the owner-apply line", id, route)
 			require.Contains(t, body, "Year One", "%s %s", id, route)
+			for _, m := range attrMarkers {
+				require.Contains(t, body, m, "%s %s: the admin reads the attributes whole", id, route)
+			}
 		}
 
 		stream := streamOpLogEvents(t, f, mgr, id, engineOwnerApplyLine, ordinaryLogLine)

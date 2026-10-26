@@ -1,11 +1,12 @@
 // file: internal/activity/user_data.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8f75db40-9f7a-4cb3-ad7f-757dd64ea827
 // last-edited: 2026-10-26
 
 package activity
 
 import (
+	"encoding/json"
 	"maps"
 	"regexp"
 	"strings"
@@ -193,6 +194,78 @@ func summarySubsystem(summary string) string {
 // caller without users.manage may read.
 func NamesOthersUserLog(source, message string) bool {
 	return userDataSource(source) || userDataSource(summarySubsystem(message)) || NamesUserText(message)
+}
+
+// userAttrKeyParts are the fragments of a log attribute key that name a user:
+// "user_id", "username", "target_user_id", "email", "owner_email", "account",
+// "actor", "listener", "login". A key is matched case-insensitively on any of
+// them, so a new "<something>_user" attribute is covered without being listed.
+var userAttrKeyParts = []string{"user", "email", "account", "actor", "owner", "listener", "login"}
+
+func userAttrKey(k string) bool {
+	k = strings.ToLower(k)
+	for _, part := range userAttrKeyParts {
+		if strings.Contains(k, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutUserAttrValue returns v with every attribute that names a user left
+// out of the maps it holds, and keep=false when v itself is text that names a
+// user (NamesUserText).
+func withoutUserAttrValue(v any) (out any, keep bool) {
+	switch t := v.(type) {
+	case string:
+		return t, !NamesOthersUserLog("", t)
+	case map[string]any:
+		m := make(map[string]any, len(t))
+		for k, e := range t {
+			if userAttrKey(k) {
+				continue
+			}
+			if cleaned, ok := withoutUserAttrValue(e); ok {
+				m[k] = cleaned
+			}
+		}
+		return m, true
+	case []any:
+		list := make([]any, 0, len(t))
+		for _, e := range t {
+			if cleaned, ok := withoutUserAttrValue(e); ok {
+				list = append(list, cleaned)
+			}
+		}
+		return list, true
+	}
+	return v, true
+}
+
+// WithoutUserAttrs returns raw, the JSON attributes of one operation log line
+// ("{}" when there are none), without what names a user: every attribute whose
+// key names one (userAttrKey) and every value whose text does (NamesUserText),
+// at any depth. A line's message can be clean while "user_id", "username" or
+// "email" ride along as attributes, so a caller who may not read other users'
+// data (users.manage) is served the line through this. Attributes that are not
+// a JSON object are kept only when their text names no user.
+func WithoutUserAttrs(raw string) string {
+	if raw == "" || raw == "{}" {
+		return raw
+	}
+	var attrs map[string]any
+	if err := json.Unmarshal([]byte(raw), &attrs); err != nil {
+		if NamesOthersUserLog("", raw) {
+			return "{}"
+		}
+		return raw
+	}
+	cleaned, _ := withoutUserAttrValue(attrs)
+	b, err := json.Marshal(cleaned)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 // NamesOthersUserData reports whether entry e carries other users' own data, so

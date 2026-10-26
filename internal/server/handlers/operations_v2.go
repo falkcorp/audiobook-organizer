@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-26
 
@@ -566,16 +566,20 @@ func (h *OperationsV2Handler) mayReadLogsOf(c *gin.Context, id string) bool {
 // It applies to the log of every operation, not only a Repairs one: the engine
 // writes "owner apply by user <id>" to its own run's log, and any other op may
 // log an account the same way. A line the caller may not read is dropped, not
-// blanked, so a withheld line leaves no row to count.
+// blanked, so a withheld line leaves no row to count; a line that is kept is
+// served without the attributes that name a user (activity.WithoutUserAttrs).
 func (h *OperationsV2Handler) readableLogs(c *gin.Context, logs []database.OpLogV2Row) []database.OpLogV2Row {
 	if len(logs) == 0 || h.repairsAccess.For(c).MayReadUserData() {
 		return logs
 	}
 	out := make([]database.OpLogV2Row, 0, len(logs))
 	for _, l := range logs {
-		if !activity.NamesOthersUserLog("", l.Message) {
-			out = append(out, l)
+		if activity.NamesOthersUserLog("", l.Message) {
+			continue
 		}
+		// A clean message can carry user_id, username or email as attributes.
+		l.Attrs = activity.WithoutUserAttrs(l.Attrs)
+		out = append(out, l)
 	}
 	return out
 }

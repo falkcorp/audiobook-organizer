@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-26
 
@@ -1042,13 +1042,17 @@ func (h *ActivityHandler) operationActivityFromOpLogs(vis *opVisibility, opID st
 		if vis.hidesOpLog(l.OperationID, opType) {
 			continue
 		}
+		details := l.Attrs
+		if !vis.seeAll {
+			details = activity.WithoutUserAttrs(details)
+		}
 		out = append(out, operationActivityEntry{
 			Timestamp:     l.CreatedAt,
 			Level:         l.Level,
 			OperationID:   l.OperationID,
 			OperationType: opType,
 			Message:       l.Message,
-			Details:       l.Attrs,
+			Details:       details,
 			Tags:          operationLogTags(l.OperationID, l.Level, opType, attrs),
 		})
 	}
