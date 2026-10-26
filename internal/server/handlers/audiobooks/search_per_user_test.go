@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/search_per_user_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0d6f3a92-b814-4e57-9c20-a5e18d7b3f64
 // last-edited: 2026-10-26
 
@@ -118,10 +118,15 @@ func TestListAudiobooks_FiltersAcceptTheWorkingPerUserSpellings(t *testing.T) {
 
 // The web search box sends a query with a per-user term and an OR or a group whole as
 // search=, so what the list answers for the other terms in it is what the person
-// sees. A tag: term is held by the index and is judged with the rest of the query; a
+// sees. A tag: term is answered by the index's tags field (the ROWS it returns are
+// pinned against a real index in internal/audiobooks,
+// TestGetAudiobooks_WholeSentQueryWithATagTermAnswersItsRows; this handler runs over
+// a stub service, so here only the status and the refusal text can be checked); a
 // field the index does not hold (metadata, review, has_duration) is refused with the
 // search parameter's own message, which points at filters= and so cannot be acted on
-// from the box; the per-user shapes are refused with their own message first.
+// from the box; the per-user shapes are refused with their own message first; and a
+// query that writes a per-user term but does not parse is refused rather than
+// answered by a substring match that shows nothing.
 func TestListAudiobooks_SearchSentWholeByTheWebBoxMeetsTheOtherRulesOfSearch(t *testing.T) {
 	for _, tc := range []struct {
 		search string
@@ -131,6 +136,10 @@ func TestListAudiobooks_SearchSentWholeByTheWebBoxMeetsTheOtherRulesOfSearch(t *
 		{"read_status:finished OR tag:noir", http.StatusBadRequest, "cannot be combined"},
 		{"read_status:finished OR duration:>20m", http.StatusBadRequest, "cannot be combined"},
 		{"(read_status:finished tag:noir)", http.StatusOK, ""},
+		{"read_status:finished AND tag:noir", http.StatusOK, ""},
+		{"read_status:finished OR", http.StatusBadRequest, "could not be read"},
+		{"(read_status:finished author:kyle", http.StatusBadRequest, "could not be read"},
+		{"The (Long Halloween", http.StatusOK, ""},
 		{"read_status:finished OR metadata:applied", http.StatusBadRequest, "filters parameter"},
 		{"(read_status:finished metadata:applied)", http.StatusBadRequest, "filters parameter"},
 	} {

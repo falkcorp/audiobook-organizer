@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.4
+// version: 1.38.5
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-26
 
@@ -1230,6 +1230,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		// nothing in the logs said so — an investigation into wrong search
 		// results had to rule this path out by probing production instead of
 		// reading a log line.
+		if perr := search.UnparsablePerUserQuery(query, err); perr != nil {
+			return nil, 0, fmt.Errorf("search: %w", perr)
+		}
 		slog.Warn("search: DSL parse failed; falling back to substring SearchBooks",
 			"query", query, "err", err, "fallback", "store.SearchBooks")
 		if restrictIDs != nil {
@@ -1383,16 +1386,18 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 //
 // It is the one check every entry to the search runs, the index path
 // (searchWithBleve) and the two substring fallbacks that take over while the
-// index is nil or rebuilding (a query the DSL parser rejects is not judged: it
-// takes the substring fallback, as it always has). A string that does not parse,
-// or has no field term at all, is not a problem.
+// index is nil or rebuilding. A string with no field term at all is not a problem;
+// one the DSL parser rejects is a problem only when it writes a per-user term
+// (search.UnparsablePerUserQuery), and otherwise keeps the substring fallback.
 func SearchPerUserProblem(q string) error {
 	if strings.TrimSpace(q) == "" || !strings.Contains(q, ":") {
 		return nil
 	}
 	ast, err := search.ParseQuery(q)
 	if err != nil {
-		return nil
+		// Text the parser rejects takes a substring match, which shows nothing for a
+		// listening-state term and says nothing. Refuse it when it writes one.
+		return search.UnparsablePerUserQuery(q, err)
 	}
 	return search.CheckPerUserTerms(ast, time.Now())
 }
