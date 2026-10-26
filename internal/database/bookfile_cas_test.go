@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -547,19 +547,109 @@ func TestCAS_ClearAllAcoustIDFingerprints_KeepsConcurrentWrite(t *testing.T) {
 }
 
 func TestCAS_ClearAllAcoustIDFingerprints_ChurnIsCountableAndKeepsTheIndex(t *testing.T) {
-	f := newCASFixture(t)
-	row := f.row(t)
-	row.AcoustIDFingerprint = []byte{9, 8, 7, 6}
-	if err := f.s.UpdateBookFile(f.file.ID, row); err != nil {
+	store := newPebbleStoreForLSH(t)
+	mustInsertBookFile(t, store, "batman-a", synthRaw(1, 57600))
+	if !store.HasLSHIndex("batman-a") {
+		t.Fatal("fixture: the LSH index must hold the fingerprinted row before the sweep")
+	}
+	injectBeforeCommit(t, 0, func(i int) { setDuration2(t, store, "book-batman-a", "batman-a", 100+i) })
+
+	cleared, _, err := store.ClearAllAcoustIDFingerprints(context.Background(), 100, nil)
+	busy, ok := errors.AsType[*BookFileSweepConflictError](err)
+	if !ok || !errors.Is(err, ErrBookFileConflict) || busy.Rows != 1 || cleared != 0 {
+		t.Fatalf("cleared=%d err=%v, want 0 and a *BookFileSweepConflictError for 1 row", cleared, err)
+	}
+	got, _ := store.GetBookFileByID("book-batman-a", "batman-a")
+	if got == nil || len(got.AcoustIDFingerprint) == 0 {
+		t.Error("a row the sweep gave up on must keep its fingerprint")
+	}
+	if !store.HasLSHIndex("batman-a") {
+		t.Error("the LSH index entries of a row left fingerprinted must survive: the wipe may only run when no row is left unswept")
+	}
+}
+
+// setDuration2 is ModifyBookFile as the concurrent writer, for a store that
+// is not a casFixture.
+func setDuration2(t *testing.T, s *PebbleStore, bookID, fileID string, d int) {
+	t.Helper()
+	if _, err := s.ModifyBookFile(bookID, fileID, func(r *BookFile) error { r.Duration = d; return nil }); err != nil {
+		t.Errorf("injected ModifyBookFile: %v", err)
+	}
+}
+
+// S1: a row that MOVED to another book between the sweep's read and its commit
+// is found at its new key and swept there, never dropped as "deleted".
+func TestCAS_ClearAllAcoustIDFingerprints_FollowsAMovedRow(t *testing.T) {
+	store := newPebbleStoreForLSH(t)
+	mustInsertBookFile(t, store, "batman-b", synthRaw(2, 57600))
+	dst, err := store.CreateBook(&Book{Title: "Batman: The Long Halloween", FilePath: "/lib/Gotham/Long-Halloween"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	injectBeforeCommit(t, 0, func(i int) { f.upsertScan(t, "gotham-hash-old", 100+i, 1000) })
+	injectBeforeCommit(t, 1, func(int) {
+		if err := store.MoveBookFilesToBook([]string{"batman-b"}, "book-batman-b", dst.ID); err != nil {
+			t.Errorf("injected MoveBookFilesToBook: %v", err)
+		}
+	})
 
-	cleared, _, err := f.s.ClearAllAcoustIDFingerprints(context.Background(), 100, nil)
-	if !errors.Is(err, ErrBookFileConflict) || cleared != 0 {
-		t.Fatalf("cleared=%d err=%v, want 0 and ErrBookFileConflict", cleared, err)
+	cleared, total, err := store.ClearAllAcoustIDFingerprints(context.Background(), 100, nil)
+	if err != nil || cleared != 1 || total != 1 {
+		t.Fatalf("cleared=%d total=%d err=%v, want 1/1 and no error: the moved row must be swept at its new key", cleared, total, err)
 	}
-	if got := f.row(t); len(got.AcoustIDFingerprint) == 0 {
-		t.Error("a row the sweep gave up on must keep its fingerprint")
+	got, _ := store.GetBookFileByID(dst.ID, "batman-b")
+	if got == nil || len(got.AcoustIDFingerprint) != 0 {
+		t.Errorf("moved row = %+v, want it present under the new book with its fingerprint cleared", got)
+	}
+	if old, _ := store.GetBookFileByID("book-batman-b", "batman-b"); old != nil {
+		t.Errorf("a ghost row was written back at the old key: %+v", old)
+	}
+	if store.HasLSHIndex("batman-b") {
+		t.Error("every row was swept, so the LSH index must have been wiped")
+	}
+}
+
+func TestCAS_SweepBookFileSegDrop_FollowsAMovedRow(t *testing.T) {
+	s, book, row := newSegSweepFixture(t, "01HUSH0000000000000000000C", "03.m4b", "AQADtAcSRW")
+	dst, err := s.CreateBook(&Book{Title: "Batman: The Long Halloween", FilePath: "/lib/Gotham/Long-Halloween"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectBeforeCommit(t, 1, func(int) {
+		if err := s.MoveBookFilesToBook([]string{row.ID}, book.ID, dst.ID); err != nil {
+			t.Errorf("injected MoveBookFilesToBook: %v", err)
+		}
+	})
+
+	res, err := s.SweepBookFileSegDrop(context.Background(), false, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Rewrite != 1 || res.Conflicts != 0 {
+		t.Errorf("result = %+v, want the moved row rewritten (1) and nothing left unswept", res)
+	}
+	if got, _ := s.GetBookFileByID(dst.ID, row.ID); got == nil || got.AcoustIDSeg0 != "" {
+		t.Errorf("moved row = %+v, want it under the new book with its segs dropped", got)
+	}
+	if old, _ := s.GetBookFileByID(book.ID, row.ID); old != nil {
+		t.Errorf("a ghost row was written back at the old key: %+v", old)
+	}
+}
+
+// N5: a row the sweep re-reads and finds no longer needs a rewrite is counted
+// as skipped, so the counts add up to Total.
+func TestCAS_SweepBookFileSegDrop_CountsReReadCleanRowAsSkipped(t *testing.T) {
+	s, book, row := newSegSweepFixture(t, "01HUSH0000000000000000000D", "04.m4b", "AQADtAcSRV")
+	injectBeforeCommit(t, 1, func(int) {
+		// A scan rewrites the row through the segs-dropping encoder.
+		if _, err := s.ModifyBookFile(book.ID, row.ID, func(r *BookFile) error { r.Duration = 250; return nil }); err != nil {
+			t.Errorf("injected ModifyBookFile: %v", err)
+		}
+	})
+	res, err := s.SweepBookFileSegDrop(context.Background(), false, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Rewrite + res.Skipped + res.Errors + res.Conflicts; got != res.Total {
+		t.Errorf("result = %+v: Rewrite+Skipped+Errors+Conflicts = %d, want Total (%d)", res, got, res.Total)
 	}
 }

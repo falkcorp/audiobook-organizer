@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.0
+// version: 1.47.1
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -2764,9 +2764,8 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 	total := len(refs)
 	cleared := 0
 	processed := 0
-	conflicts := 0
 	chunkRows := min(batchSize, sweepChunkRows)
-	var chunk []sweepRowRef
+	var chunk, busy []sweepRowRef
 
 	// Pre-check needles: a row whose JSON contains none of these is
 	// guaranteed to have no fingerprint data and can be skipped without
@@ -2885,8 +2884,8 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 		}, true, nil
 	}
 	flush := func() error {
-		c, err := s.commitBookFileSweepChunk(chunk, stage)
-		conflicts += c
+		b, err := s.commitBookFileSweepChunk(chunk, stage)
+		busy = append(busy, b...)
 		chunk = chunk[:0]
 		return err
 	}
@@ -2921,13 +2920,19 @@ func (s *PebbleStore) ClearAllAcoustIDFingerprints(ctx context.Context, batchSiz
 	if err := flush(); err != nil {
 		return cleared, total, err
 	}
-	if conflicts > 0 {
+	// Rows other writers kept changing get one more full budget now that the
+	// rest of the library is done (the writers have often moved on).
+	busy, err = s.retrySweepRows(busy, stage)
+	if err != nil {
+		return cleared, total, err
+	}
+	if len(busy) > 0 {
 		// The LSH index is wiped below as if every fingerprint were gone. A row
 		// that kept changing under the sweep still carries its fingerprint, so
-		// wiping now would orphan it from the index. Nothing else is left
-		// half-done: re-running the reset clears the remainder.
-		return cleared, total, fmt.Errorf("ClearAllAcoustIDFingerprints: %d row(s) kept changing under the sweep and were NOT cleared; the LSH index was left in place, run the reset again: %w",
-			conflicts, ErrBookFileConflict)
+		// wiping now would orphan it from the index. The wipe runs only when no
+		// row is left unswept; the caller reports the busy rows, and re-running
+		// the reset clears them and then wipes the index.
+		return cleared, total, &BookFileSweepConflictError{Op: "ClearAllAcoustIDFingerprints", Rows: len(busy)}
 	}
 
 	// Wipe the LSH index in one prefix-delete pass — every per-row meta
@@ -3062,7 +3067,10 @@ func (s *PebbleStore) SweepBookFileSegDrop(
 	chunkRows := min(batchSize, sweepChunkRows)
 	stage := func(b *GatedBatch, r sweepRowRef) (func(), bool, error) {
 		if !hasSegNeedle(r.raw) {
-			return nil, false, nil
+			// Only rows that carried segs when read are queued, so this is a row
+			// re-read after a refused commit that no longer needs a rewrite.
+			// Counted, so Rewrite+Skipped+Errors+Conflicts adds up to Total.
+			return func() { result.Skipped++ }, false, nil
 		}
 		var f BookFile
 		if err := json.Unmarshal(r.raw, &f); err != nil {
@@ -3095,9 +3103,10 @@ func (s *PebbleStore) SweepBookFileSegDrop(
 		}
 		return func() { result.Rewrite++ }, true, nil
 	}
+	var busy []sweepRowRef
 	flush := func() error {
-		c, err := s.commitBookFileSweepChunk(chunk, stage)
-		result.Conflicts += c
+		b, err := s.commitBookFileSweepChunk(chunk, stage)
+		busy = append(busy, b...)
 		chunk = chunk[:0]
 		return err
 	}
@@ -3126,6 +3135,13 @@ func (s *PebbleStore) SweepBookFileSegDrop(
 
 	// Commit any remaining work.
 	if err := flush(); err != nil {
+		return result, err
+	}
+	// Rows other writers kept changing get one more full budget now that the
+	// rest of the library is done.
+	busy, err = s.retrySweepRows(busy, stage)
+	result.Conflicts = len(busy)
+	if err != nil {
 		return result, err
 	}
 

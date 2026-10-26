@@ -1,11 +1,12 @@
 // file: internal/database/bookfile_cas.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b991179-c549-4086-9050-022c32b0cfce
 // last-edited: 2026-10-26
 
 package database
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,23 @@ func (e *BookFileConflictError) Error() string {
 
 // Is makes errors.Is(err, ErrBookFileConflict) true.
 func (e *BookFileConflictError) Is(target error) bool { return target == ErrBookFileConflict }
+
+// BookFileSweepConflictError is returned by a library sweep that finished but
+// had to leave Rows rows as stored because other writers kept changing them.
+// errors.Is(err, ErrBookFileConflict) matches it. The rest of the sweep was
+// applied, and re-running it finishes the remainder.
+type BookFileSweepConflictError struct {
+	Op   string
+	Rows int
+}
+
+func (e *BookFileSweepConflictError) Error() string {
+	return fmt.Sprintf("%s: %d row(s) kept changing under the sweep and were left as stored; run it again: %v",
+		e.Op, e.Rows, ErrBookFileConflict)
+}
+
+// Is makes errors.Is(err, ErrBookFileConflict) true.
+func (e *BookFileSweepConflictError) Is(target error) bool { return target == ErrBookFileConflict }
 
 // rmwBookFile runs one read-modify-write of a single book_file row to
 // completion. attempt reads the row afresh, applies the caller's change to
@@ -131,15 +149,19 @@ const (
 )
 
 // sweepChunkRows caps how many rows one sweep commit rewrites. A commit holds
-// the owner stripe of every book it touches (commitBookFileBatch), so a chunk
-// that spanned a whole 2,000-row batch would pin most stripes against every
-// other book_file writer for the memtable apply.
-const sweepChunkRows = 256
+// the owner stripe of every book it touches (commitBookFileBatch). The owner
+// stripes number 256, so a chunk of N rows spread over N books pins roughly
+// 256*(1-exp(-N/256)) distinct stripes against every other book_file writer for
+// the memtable apply: 256 rows would pin about 160 of them, close to a global
+// book_file write lock. 64 pins about 56 (under a quarter).
+const sweepChunkRows = 64
 
 // sweepRowRef is a book_file row a library sweep read: its primary key and
-// exactly the bytes it read.
+// exactly the bytes it read. tries counts how many times a commit of the row
+// was refused because it had changed; the retry budget is per row.
 type sweepRowRef struct {
 	key, raw []byte
+	tries    int
 }
 
 // sweepRowStager stages the rewrite of one row into b, judging it from ref.raw
@@ -150,83 +172,156 @@ type sweepRowRef struct {
 // was refused.
 type sweepRowStager func(b *GatedBatch, ref sweepRowRef) (applied func(), wrote bool, err error)
 
+// reloadSweepRow re-reads a row a sweep staged and found changed or missing at
+// its key. ok is false only when the row is really gone: deleted, which leaves
+// a tombstone, or absent from an authoritative scan of every book_file key.
+//
+// A row missing at its OLD key has not necessarily been deleted: a move, retire,
+// unretire or rehome deletes the old key and writes the row, with its legacy
+// segment columns and fingerprint, under a new owner. Treating that as a delete
+// would leave the moved row unswept (and its fingerprint indexed or its legacy
+// segments in place) while the sweep reports no trouble, so the row is looked up
+// by its file ID, which is the last segment of the key.
+func (s *PebbleStore) reloadSweepRow(key []byte) (ref sweepRowRef, ok bool, err error) {
+	id := string(key[bytes.LastIndexByte(key, ':')+1:])
+	for range maxStageRetries {
+		row, raw, err := s.readBookFileRowAt(key)
+		if err != nil {
+			return sweepRowRef{}, false, err
+		}
+		if row != nil {
+			return sweepRowRef{key: key, raw: raw}, true, nil
+		}
+		live, _, gone, err := s.bookFileIDStateRaw(id)
+		if err != nil {
+			return sweepRowRef{}, false, err
+		}
+		if gone {
+			return sweepRowRef{}, false, nil
+		}
+		if live == nil {
+			// No index entry and no tombstone: a row written before the id
+			// index, or deleted without a tombstone. The scan is authoritative.
+			if live, err = s.scanForBookFileByID(id); err != nil {
+				return sweepRowRef{}, false, err
+			}
+			if live == nil {
+				return sweepRowRef{}, false, nil
+			}
+		}
+		// Follow the row; if it moved again before it could be read, go round.
+		key = bookFileKey(live.BookID, live.ID)
+	}
+	// Still moving: ok with no bytes. The caller counts it as busy.
+	return sweepRowRef{key: key}, true, nil
+}
+
 // commitBookFileSweepChunk stages and commits one chunk of a sweep's rewrites
 // under the owner stripes, compared with the bytes each row was read as. The
 // sweeps read the whole library up front and write minutes later, so a row's
-// snapshot is routinely stale: a row that vanished is dropped, a row that
-// changed is re-read and re-judged by stage (it may no longer need a rewrite),
-// and the chunk is re-staged. After maxStageRetries refusals a still-changing
-// row is given up on and counted in conflicts (it is left exactly as stored;
-// the sweep is resumable); the rest of the chunk commits.
+// snapshot is routinely stale: a row that changed is re-read and re-judged by
+// stage (it may no longer need a rewrite), a row that moved is followed to its
+// new key (reloadSweepRow), a row that is really gone is dropped, and the chunk
+// is re-staged. A row refused maxStageRetries times is given up on and returned
+// in busy (left exactly as stored; the sweep is resumable); the rest of the
+// chunk commits.
 //
 // The sweeps used to commit through a raw batch that took no stripe at all, so
 // they could land between another writer's compare and its commit, and could
 // put back a row as it was minutes ago.
-func (s *PebbleStore) commitBookFileSweepChunk(chunk []sweepRowRef, stage sweepRowStager) (conflicts int, err error) {
+func (s *PebbleStore) commitBookFileSweepChunk(chunk []sweepRowRef, stage sweepRowStager) (busy []sweepRowRef, err error) {
 	rows := append([]sweepRowRef(nil), chunk...)
-	for round := 1; len(rows) > 0; round++ {
+	for len(rows) > 0 {
 		batch := s.db.NewBatch()
 		var (
 			rewrites []bookFileRewrite
 			applied  []func()
-			written  []sweepRowRef
+			written  int
 		)
 		for _, r := range rows {
 			fn, wrote, serr := stage(batch, r)
 			if serr != nil {
 				_ = batch.Close()
-				return conflicts, serr
+				return busy, serr
 			}
 			if fn != nil {
 				applied = append(applied, fn)
 			}
 			if wrote {
-				written = append(written, r)
+				written++
 				rewrites = append(rewrites, bookFileUnchanged(r.key, r.raw))
 			}
 		}
-		if len(written) == 0 {
+		if written == 0 {
 			_ = batch.Close()
 			for _, fn := range applied {
 				fn()
 			}
-			return conflicts, nil
+			return busy, nil
 		}
 		cerr := s.commitBookFileBatch(batch, nil, nil, rewrites)
-		if stale, ok := errors.AsType[*staleStageError](cerr); ok {
-			isStale := map[string]bool{}
-			for _, k := range stale.staleKeys() {
-				isStale[string(k)] = true
+		stale, isStale := errors.AsType[*staleStageError](cerr)
+		if !isStale {
+			if !bookFileApplied(cerr) {
+				return busy, cerr
 			}
-			var next []sweepRowRef
-			for _, r := range rows {
-				if !isStale[string(r.key)] {
-					next = append(next, r)
-					continue
-				}
-				if round >= maxStageRetries {
-					conflicts++
-					continue
-				}
-				fresh, raw, rerr := s.readBookFileRowAt(r.key)
-				if rerr != nil {
-					return conflicts, rerr
-				}
-				if fresh == nil {
-					continue // deleted: nothing left to rewrite
-				}
-				next = append(next, sweepRowRef{key: r.key, raw: raw})
+			for _, fn := range applied {
+				fn()
 			}
-			rows = next
-			continue
+			return busy, cerr
 		}
-		if !bookFileApplied(cerr) {
-			return conflicts, cerr
+		staleKey := map[string]bool{}
+		for _, k := range stale.staleKeys() {
+			staleKey[string(k)] = true
 		}
-		for _, fn := range applied {
-			fn()
+		var next []sweepRowRef
+		for _, r := range rows {
+			if !staleKey[string(r.key)] {
+				next = append(next, r)
+				continue
+			}
+			fresh, ok, rerr := s.reloadSweepRow(r.key)
+			if rerr != nil {
+				return busy, rerr
+			}
+			if !ok {
+				continue // really deleted: nothing left to rewrite
+			}
+			fresh.tries = r.tries + 1
+			if fresh.raw == nil || fresh.tries >= maxStageRetries {
+				busy = append(busy, fresh)
+				continue
+			}
+			next = append(next, fresh)
 		}
-		return conflicts, cerr
+		rows = next
 	}
-	return conflicts, nil
+	return busy, nil
+}
+
+// retrySweepRows gives rows a commit returned as busy one more full budget,
+// after the rest of the sweep has finished (the writers that kept changing them
+// have often moved on by then). It returns the rows that are still busy.
+func (s *PebbleStore) retrySweepRows(busy []sweepRowRef, stage sweepRowStager) ([]sweepRowRef, error) {
+	var still []sweepRowRef
+	for start := 0; start < len(busy); start += sweepChunkRows {
+		var chunk []sweepRowRef
+		for _, r := range busy[start:min(start+sweepChunkRows, len(busy))] {
+			fresh, ok, err := s.reloadSweepRow(r.key)
+			if err != nil {
+				return still, err
+			}
+			if ok && fresh.raw == nil {
+				still = append(still, fresh)
+			} else if ok {
+				chunk = append(chunk, fresh)
+			}
+		}
+		left, err := s.commitBookFileSweepChunk(chunk, stage)
+		still = append(still, left...)
+		if err != nil {
+			return still, err
+		}
+	}
+	return still, nil
 }

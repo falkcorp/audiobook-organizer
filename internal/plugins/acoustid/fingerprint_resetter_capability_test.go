@@ -1,12 +1,13 @@
 // file: internal/plugins/acoustid/fingerprint_resetter_capability_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a7f5e91-8b26-4c04-97d1-5e8a2b4f6c73
-// last-edited: 2026-08-19
+// last-edited: 2026-10-26
 
 package acoustid
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -46,5 +47,35 @@ func TestResolveFingerprintResetterOnUncapableBackend(t *testing.T) {
 	type plain struct{ database.Store }
 	if got := resolveFingerprintResetter(plain{}); got != nil {
 		t.Fatalf("resolveFingerprintResetter = %v without the batched wipe, want nil", got)
+	}
+}
+
+// busyResetStore reports a bulk clear that finished except for two rows other
+// writers kept changing.
+type busyResetStore struct{ database.Store }
+
+func (busyResetStore) ClearAllAcoustIDFingerprints(context.Context, int, func(int, int, int)) (int, int, error) {
+	return 7, 9, &database.BookFileSweepConflictError{Op: "ClearAllAcoustIDFingerprints", Rows: 2}
+}
+
+// TestResetAll_BusyRowsAreReportedNotFatal pins N4: a bulk clear that left rows
+// busy (and so kept the LSH index) must not fail the op after it did almost all
+// of its work. The run reports it as incomplete and does not tell the operator
+// to enqueue the rescan.
+func TestResetAll_BusyRowsAreReportedNotFatal(t *testing.T) {
+	p := &Plugin{store: busyResetStore{}}
+	r := &resetAllTestReporter{}
+	if err := p.runResetAll(context.Background(), nil, r); err != nil {
+		t.Fatalf("runResetAll = %v, want nil: busy rows are reported, not fatal", err)
+	}
+	var last string
+	for _, f := range r.frames {
+		last = f.message
+	}
+	if !strings.Contains(last, "INCOMPLETE") || !strings.Contains(last, "2 files kept changing") {
+		t.Errorf("final message = %q, want an INCOMPLETE summary naming the 2 busy files", last)
+	}
+	if strings.Contains(last, "Now enqueue") {
+		t.Errorf("final message = %q: must not tell the operator to enqueue the rescan while rows are uncleared", last)
 	}
 }
