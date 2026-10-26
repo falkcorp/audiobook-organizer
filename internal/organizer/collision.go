@@ -1,5 +1,5 @@
 // file: internal/organizer/collision.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
 // last-edited: 2026-10-26
 
@@ -657,6 +657,24 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 		return collisionDecision{entry: c.entry, resolution: base}, true, nil
 	}
 
+	// --- Identical, occupant is a RETIRED version's row. Refuse. ---
+	//
+	// The retired row names the occupant file as its own, and it is the only
+	// row that does. Quarantining our source would tombstone our live row
+	// (Missing=true) while the live book's only present copy of that audio
+	// is a file a retired version holds: the live book then shows a Missing
+	// file, and a later purge of the retired version finds no row naming the
+	// target and deletes it, leaving the bytes only in quarantine. Repointing
+	// onto the path instead would take the retired row's single-slot path
+	// index. Neither is a state this resolver may create, so the collision is
+	// unresolved: the source stays where it is, nothing is journaled, and the
+	// failure names the retired row so the record says why.
+	if c.occupant != nil && c.occupant.Retired {
+		return collisionDecision{}, false, collisionFailure(c, fmt.Sprintf(
+			"occupant is byte-identical but book_file %s, a retired version held under book %s, claims the kept file; refusing to quarantine the live source or repoint onto a retired version's file",
+			c.occupant.ID, c.occupant.BookID))
+	}
+
 	// --- Identical, occupant in-library. The occupant is ALREADY at the
 	// organized target, so it is by definition the better-organized copy; our
 	// source is the loser. Quarantine it (never unlink) and make the rows
@@ -730,9 +748,7 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 	occupantIsAnotherRow := c.occupant != nil && c.occupant.ID != prior.ID
 	if occupantIsAnotherRow {
 		updated.Missing = true
-		if c.occupant.Retired {
-			base.Detail = fmt.Sprintf("occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because book_file %s, a retired version held under book %s, still claims the kept file — repointing onto it would take over its single-slot path index", c.occupant.ID, c.occupant.BookID)
-		} else if c.occupant.BookID == prior.BookID {
+		if c.occupant.BookID == prior.BookID {
 			base.Detail = "occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because a sibling row of the same book already points at the kept file"
 		} else {
 			base.Detail = fmt.Sprintf("occupant is byte-identical and already organized; source quarantined, this row tombstoned (Missing=true) because book_file %s of a DIFFERENT book (%s) already points at the kept file — repointing across books would corrupt the single-slot path index", c.occupant.ID, c.occupant.BookID)

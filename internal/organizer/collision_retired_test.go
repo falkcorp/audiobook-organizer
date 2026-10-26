@@ -1,5 +1,5 @@
 // file: internal/organizer/collision_retired_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d2c5e90-31b7-4a6f-9c14-e07a5b3d2f68
 // last-edited: 2026-10-26
 
@@ -17,10 +17,13 @@ import (
 )
 
 // A byte-identical occupant that is a RETIRED version's row still claims the
-// path (its single-slot index entry is the only one). The resolver must read it
-// as another row holding the kept file and tombstone ours, never repoint onto
-// the path: that takes the slot from the retired row, and nothing rebuilds it.
-func TestRenameFiles_RetiredOccupantBlocksTheRepoint(t *testing.T) {
+// path (its single-slot index entry is the only one), and it is the only row
+// that names that file. The resolver refuses the collision: quarantining our
+// source would tombstone the live row while the live book's only present copy
+// of the audio is a file a retired version holds (a later purge of that version
+// then deletes it), and repointing onto the path would take the retired row's
+// slot, which nothing rebuilds. Nothing moves and no row changes.
+func TestRenameFiles_RetiredOccupantRefusesTheCollision(t *testing.T) {
 	root := t.TempDir()
 	src := writeCollisionFile(t, filepath.Join(root, "incoming", "book.m4b"), "identical-bytes")
 	dst := writeCollisionFile(t, filepath.Join(root, "Author", "Title.m4b"), "identical-bytes")
@@ -58,14 +61,22 @@ func TestRenameFiles_RetiredOccupantBlocksTheRepoint(t *testing.T) {
 		[]FileRenameEntry{{SegmentID: live.ID, SourcePath: src, TargetPath: dst, ExpectedSize: 15}},
 		&CollisionPolicy{RootDir: root, BookID: mine.ID, Store: store},
 	)
-	require.NoError(t, err)
+	var ce *CollisionError
+	require.True(t, errors.As(err, &ce), "got %v", err)
+	require.Len(t, ce.Failures, 1)
+	require.Contains(t, ce.Failures[0].Reason, "book_file "+retired.ID)
+	require.Contains(t, ce.Failures[0].Reason, "retired version held under book "+holder.ID)
+
+	// The source is where it was, not in quarantine, and the destination is
+	// untouched.
+	mustCollisionExist(t, src)
+	mustCollisionExist(t, dst)
 
 	got, err := store.GetBookFileByID(mine.ID, live.ID)
 	require.NoError(t, err)
-	require.NotNil(t, got, "the losing row is tombstoned, never deleted")
-	require.NotEqual(t, dst, got.FilePath, "our row must not be repointed onto a path a retired row holds")
-	require.Equal(t, src, got.FilePath)
-	require.True(t, got.Missing, "its bytes were just quarantined")
+	require.NotNil(t, got)
+	require.Equal(t, src, got.FilePath, "our row stays on its own file")
+	require.False(t, got.Missing, "the live book keeps its present copy")
 
 	still, err := database.BookFileByPathIncludingRetired(store, dst)
 	require.NoError(t, err)
