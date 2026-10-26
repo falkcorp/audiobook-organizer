@@ -1,5 +1,5 @@
 // file: web/src/utils/tagQuery.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a3c9e1f-4b6d-4e82-9f05-1d8b3e6a2c97
 // last-edited: 2026-10-26
 
@@ -52,5 +52,73 @@ describe('tagQuery', () => {
     // negated, glued to a word, or inside another term's quotes: not a term
     expect(tagTermValues('-tag:noir NOT tag:gotham xtag:camelot title:"a tag:b"')).toEqual([]);
     expect(tagTermValues('tag:"unterminated')).toEqual([]);
+  });
+
+  it('folds a tag the way the server does, so a chip for "noir" is on for tag:Noir', () => {
+    expect(tagTermValues('tag:Noir')).toEqual(['noir']);
+    expect(tagTermValues('tag:" Dark-Knight "')).toEqual(['dark-knight']);
+    expect(removeTagTerm('a:b tag:Noir', 'noir')).toBe('a:b');
+    expect(appendTagTerm('a:b tag:Noir', 'noir')).toBe('a:b tag:Noir');
+  });
+
+  // R-B1 / NIT 2: only a term that narrows the whole query is "active" (the server
+  // refuses the others). A chip shows on for an active term and for nothing else.
+  it('lists only the tag terms that narrow the whole query', () => {
+    for (const q of [
+      'read_status:finished -(tag:"noir")',
+      'read_status:finished NOT (tag:noir author:kyle)',
+      '-(a:b (tag:noir))',
+      '(tag:noir OR a:b)',
+      'tag:noir OR a:b',
+      'a:b || tag:noir',
+      'tag:(noir|gotham)',
+      'tag:noir* tag:noir~ tag:>a',
+      '-tag:noir',
+    ]) {
+      expect(tagTermValues(q), q).toEqual([]);
+    }
+    // an OR inside a child group does not reach the parent's terms
+    expect(tagTermValues('a:b (tag:noir OR c:d) tag:gotham')).toEqual(['gotham']);
+    expect(tagTermValues('tag:noir (a:b OR c:d)')).toEqual(['noir']);
+    expect(tagTermValues('x (y (tag:noir))')).toEqual(['noir']);
+  });
+
+  // NIT 1: a removed term takes its connective with it, so the box never holds text
+  // the server cannot read ("a AND", "AND b", "( OR b)").
+  it('removes a term without leaving a dangling AND or OR', () => {
+    for (const [q, want] of [
+      ['read_status:finished AND tag:"noir"', 'read_status:finished'],
+      ['tag:"noir" AND read_status:finished', 'read_status:finished'],
+      ['a:b AND tag:noir AND c:d', 'a:b AND c:d'],
+      ['a:b tag:noir AND c:d', 'a:b AND c:d'],
+      ['a:b && tag:noir', 'a:b'],
+      ['tag:noir && a:b', 'a:b'],
+      ['read_status:finished AND (tag:noir)', 'read_status:finished'],
+      ['a:b AND (c:d tag:noir)', 'a:b AND (c:d)'],
+      ['(tag:noir AND c:d) AND e:f', '(c:d) AND e:f'],
+      ['tag:noir', ''],
+    ] as const) {
+      expect(removeTagTerm(q, 'noir'), q).toBe(want);
+    }
+  });
+
+  it('leaves a term that is not active alone, so a click does not delete an exclusion', () => {
+    for (const q of [
+      'a:b -(tag:"noir")',
+      'a:b AND NOT (tag:noir c:d)',
+      '(tag:noir OR c:d)',
+      'a:b -tag:noir',
+      'a:b AND -tag:noir',
+    ]) {
+      expect(removeTagTerm(q, 'noir'), q).toBe(q);
+    }
+    // and a second, active term is added beside an excluded one
+    expect(appendTagTerm('a:b -(tag:"noir")', 'noir')).toBe('a:b -(tag:"noir") tag:"noir"');
+  });
+
+  it('wraps a query that has an OR on its top level before adding a tag', () => {
+    expect(appendTagTerm('a:b OR c:d', 'noir')).toBe('(a:b OR c:d) tag:"noir"');
+    expect(appendTagTerm('a:b (c:d OR e:f)', 'noir')).toBe('a:b (c:d OR e:f) tag:"noir"');
+    expect(appendTagTerm('a:b AND c:d', 'noir')).toBe('a:b AND c:d tag:"noir"');
   });
 });

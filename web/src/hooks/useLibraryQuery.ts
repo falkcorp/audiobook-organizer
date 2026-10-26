@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.13.2
+// version: 1.13.3
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
 // last-edited: 2026-10-26
 
@@ -10,7 +10,7 @@ import { buildCacheKey, useLibraryCache } from '../stores/useLibraryCache';
 import { SortField, SortOrder } from '../types';
 import type { Audiobook } from '../types';
 import { listSearchText, type ParsedSearch } from '../utils/searchParser';
-import { tagTermValues } from '../utils/tagQuery';
+import { foldTag, tagTermValues } from '../utils/tagQuery';
 import type { ImportPath } from '../pages/libraryTypes';
 
 /** Payload of the server's `books.changed` SSE event (internal/realtime/book_changes.go). */
@@ -61,17 +61,17 @@ export interface UseLibraryQueryFilters {
 }
 
 /**
- * Every non-negated `tag:` term typed in the search box. Whether those terms travel
- * as tags[] or inside `search=` is libraryTagsParam's call; this is only what the
- * box says. A query sent whole is read from its text (tagTermValues), because the
- * flat parser's field filters miss a term right after "(" and keep a ")" in the
- * value of one right before it.
+ * Every `tag:` term typed in the search box that narrows the request. A query
+ * sent whole is read from its text (tagTermValues: the flat parser's field filters
+ * miss a term right after "(" and keep a ")" in the value of one right before it,
+ * and know nothing of OR or NOT groups); any other query from the parser's field
+ * filters.
  */
 function typedTags(parsedSearch: ParsedSearch | null): string[] {
   if (parsedSearch?.serverQuery) return tagTermValues(parsedSearch.serverQuery);
   return (parsedSearch?.fieldFilters ?? [])
     .filter((ff) => ff.field === 'tag' && !ff.negated)
-    .map((ff) => ff.value);
+    .map((ff) => foldTag(ff.value));
 }
 
 function dedupe(tags: Iterable<string>): string[] {
@@ -88,39 +88,26 @@ function dedupe(tags: Iterable<string>): string[] {
 
 /**
  * The tags[] a Library request narrows by: every selected tag AND every
- * non-negated `tag:` term in the search box, deduplicated (the server ANDs
- * them). Until 2026-10-06 only the FIRST parsed `tag:` term was sent, and
- * none at all once a tag was selected, so a second tag chip (or a second
- * typed `tag:`) silently did not narrow.
+ * `tag:` term in the search box that narrows the whole query (a conjunct: on the top
+ * level or in a group that is only ANDed, not negated and not under an OR),
+ * deduplicated (the server ANDs them). tags[] is the exact match (the whole tag,
+ * case folded), the one the tag chips mean, so a chip stays exact however the rest of
+ * the box is written. Until 2026-10-06 only the FIRST parsed `tag:` term was sent,
+ * and none at all once a tag was selected, so a second tag chip (or a second typed
+ * `tag:`) silently did not narrow.
  *
- * A query the server reads whole (serverQuery) carries its typed `tag:` terms in
- * `search=` instead, where the index answers them with the rest of the query
- * (sending them again as tags[] would AND a term the query may OR); only the
- * sidebar selection is sent here then.
+ * A query the server reads whole (serverQuery) still carries its `tag:` terms in
+ * `search=`, where the server applies them as the same exact filter; sending them
+ * again as tags[] ANDs the same tag a second time, which changes nothing. A tag
+ * term anywhere else (under OR, under NOT, in an alternation) is not sent: the
+ * server refuses it with a message the Library shows.
  */
 export function libraryTagsParam(
   selectedTags: string[] | undefined,
   parsedSearch: ParsedSearch | null
 ): string[] | undefined {
-  const out = dedupe([
-    ...(selectedTags ?? []),
-    ...(parsedSearch?.serverQuery ? [] : typedTags(parsedSearch)),
-  ]);
+  const out = dedupe([...(selectedTags ?? []), ...typedTags(parsedSearch)]);
   return out.length > 0 ? out : undefined;
-}
-
-/**
- * The tags the current request narrows by, wherever they travel: libraryTagsParam
- * plus the typed `tag:` terms a whole-sent query carries in `search=`. The tag chips
- * read this to know which are on, and Cancel reads it to know which terms to take
- * out of the box; libraryTagsParam alone would show a chip off (and let a click
- * append a second `tag:` term) for a tag the request is in fact narrowed by.
- */
-export function narrowingTags(
-  selectedTags: string[] | undefined,
-  parsedSearch: ParsedSearch | null
-): string[] {
-  return dedupe([...(selectedTags ?? []), ...typedTags(parsedSearch)]);
 }
 
 /**
