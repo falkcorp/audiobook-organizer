@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/RegroupSpine.memo.test.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: b7e34d19-05c2-4f8a-9d16-2a63c8fb4071
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 //
 // One regroup hold going busy must re-render ONE row, not the whole page --
 // and the memo that achieves that must not serve stale rows.
@@ -185,6 +185,7 @@ function laneBase(): Omit<
     skipsByKind: {},
     failedByKind: {},
     unrecordedByKind: {},
+    notesByKind: {},
     dismissSkips: () => {},
     refresh: () => {},
   };

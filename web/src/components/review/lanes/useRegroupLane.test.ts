@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 /**
  * Tests for the regroup lane's data layer.
@@ -263,6 +263,27 @@ describe('bulk skips are kept per kind', () => {
     await waitFor(() => expect(result.current.skipsByKind['regroup.ambiguous']).toBeUndefined());
   });
 
+  it('keeps the notes of applied items per kind, names them in the toast, and clears them on dismiss', async () => {
+    const { result } = await renderLane();
+    vi.mocked(api.bulkReviewAction).mockResolvedValueOnce({
+      action: 'approve',
+      processed: 2,
+      applied: ['a1', 'a2'],
+      notes: [{ id: 'a2', note: 'combine of /lib/Gotham/Arkham/hush.m4b: left a file unattached' }],
+    } as api.ReviewBulkResult);
+    await act(async () => result.current.bulkAction('regroup.multidisc', 'approve'));
+
+    await waitFor(() => expect(result.current.notesByKind['regroup.multidisc']).toHaveLength(1));
+    expect(result.current.notesByKind['regroup.multidisc'][0].id).toBe('a2');
+    expect(toast).toHaveBeenCalledWith(
+      expect.stringMatching(/1 applied with a note to read, listed below/),
+      'warning'
+    );
+
+    act(() => result.current.dismissSkips('regroup.multidisc'));
+    expect(result.current.notesByKind['regroup.multidisc']).toBeUndefined();
+  });
+
   it('keeps failed and applied-but-unrecorded items per kind until dismissed', async () => {
     const { result } = await renderLane();
     vi.mocked(api.bulkReviewAction).mockResolvedValueOnce({
@@ -329,6 +350,41 @@ describe('actionFor', () => {
     // was displayed cannot then disagree. The rendered updated_at goes with it so
     // the server can refuse a hold that changed since.
     expect(api.approveReviewItem).toHaveBeenCalledWith('a1', 'combine', '2026-01-01T00:00:00Z');
+  });
+
+  it('shows the note of an approve that applied, instead of only dropping the row', async () => {
+    mockItems([makeItem('a1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
+    vi.mocked(api.approveReviewItem).mockResolvedValue({
+      item: makeItem('a1', 'regroup.multidisc'),
+      note: 'combine of /lib/Gotham/Wayne/year-one.m4b: left a file unattached',
+    });
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Approved, with a note: combine of /lib/Gotham/Wayne/year-one.m4b: left a file unattached',
+        'warning'
+      )
+    );
+  });
+
+  it('says nothing extra when an approve comes back with no note', async () => {
+    mockItems([makeItem('a1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
+    vi.mocked(api.approveReviewItem).mockResolvedValue({
+      item: makeItem('a1', 'regroup.multidisc'),
+    });
+    const { result } = await renderLane();
+
+    await act(async () => {
+      result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+
+    expect(api.approveReviewItem).toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
   });
 
   it('sends the rendered updated_at on reject', async () => {
@@ -423,10 +479,13 @@ describe('actionFor', () => {
   it('does not call a partially applied approve a failure and says it is held', async () => {
     mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
     vi.mocked(api.approveReviewItem).mockRejectedValue(
-      Object.assign(new Error('the apply failed and may already have changed part of the library'), {
-        status: 409,
-        data: { code: 'REVIEW_APPLY_PARTIAL' },
-      })
+      Object.assign(
+        new Error('the apply failed and may already have changed part of the library'),
+        {
+          status: 409,
+          data: { code: 'REVIEW_APPLY_PARTIAL' },
+        }
+      )
     );
     const { result } = await renderLane();
 

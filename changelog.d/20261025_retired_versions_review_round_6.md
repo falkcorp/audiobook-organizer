@@ -19,6 +19,14 @@ logged, instead of only reaching the undo journal. A review-apply function adds
 such lines with `database.AddApplyNotice`; the item is still recorded as applied,
 because the combine committed.
 
+The review page now shows that note. A single approve toasts it as a warning, and a
+bulk approve lists each item's note in the kind's report panel until it is
+dismissed. The held-holds lists (applying, needs attention) show it under the list
+after a Finish or an Approve. The same note also carries the existing "apply is
+off, nothing ran" and "finished an interrupted apply" texts, which the page used
+to drop on a single approve. The web client's `approveReviewItem` now returns
+`{item, note}` instead of the item alone.
+
 A file row that fails to write during a combine (a failed move of another book's
 row, a failed create) is now a warning on the combine's result and its undo
 journal, not a log line only, and the journal no longer keeps the "took the row

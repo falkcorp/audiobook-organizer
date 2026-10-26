@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 /**
  * The regroup lane's data layer.
@@ -83,6 +83,7 @@ import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDeboun
 import * as api from '../../../services/api';
 import type {
   ReviewBulkFail,
+  ReviewBulkNote,
   ReviewBulkSkip,
   ReviewItem,
   ReviewItemsPage,
@@ -286,7 +287,11 @@ export interface RegroupLane {
   /** Items whose apply SUCCEEDED but whose status write failed. They are held
    *  "applying" (not in the list); approving one again records it. */
   unrecordedByKind: Record<string, ReviewBulkFail[]>;
-  /** Clears the kind's whole report: skips, failures and unrecorded applies. */
+  /** Items that APPLIED but came back with a note to read (a combine that left a file
+   *  unattached, for example), keyed by kind. The apply ran; this is what a reviewer
+   *  should check afterwards. */
+  notesByKind: Record<string, ReviewBulkNote[]>;
+  /** Clears the kind's whole report: skips, failures, unrecorded applies and notes. */
   dismissSkips: (kind: string) => void;
 
   refresh: () => void;
@@ -377,6 +382,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
   const [skipsByKind, setSkipsByKind] = useState<Record<string, ReviewBulkSkip[]>>({});
   const [failedByKind, setFailedByKind] = useState<Record<string, ReviewBulkFail[]>>({});
   const [unrecordedByKind, setUnrecordedByKind] = useState<Record<string, ReviewBulkFail[]>>({});
+  const [notesByKind, setNotesByKind] = useState<Record<string, ReviewBulkNote[]>>({});
   const [reloadToken, setReloadToken] = useState(0);
   const [filters, setFiltersState] = useState<RegroupFilters>(REGROUP_INITIAL_FILTERS);
   // The debounced twin of filters.search. The raw value drives the text field so
@@ -801,7 +807,17 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           // updated_at is the version of the hold the row rendered: if a re-scan or
           // another reviewer changed it since, the server refuses (409
           // REVIEW_ITEM_CHANGED) instead of deciding a hold nobody here has seen.
-          await api.approveReviewItem(item.id, actionForRef.current(item), item.updated_at);
+          const approved = await api.approveReviewItem(
+            item.id,
+            actionForRef.current(item),
+            item.updated_at
+          );
+          // A note means the approve succeeded but needs reading: the apply is off
+          // so nothing ran, or it ran and reported something (a combine that left a
+          // file unattached). Without this the reviewer sees only the row vanish.
+          if (approved?.note) {
+            toast(`Approved, with a note: ${approved.note}`, 'warning');
+          }
         } else {
           await api.rejectReviewItem(item.id, item.updated_at);
         }
@@ -880,6 +896,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           const skipped = result.skipped ?? [];
           const failed = result.failed ?? [];
           const unrecorded = result.applied_unrecorded ?? [];
+          const itemNotes = result.notes ?? [];
           // Report the skips in the same breath as the successes. Bulk approve
           // runs each hold's OWN recommendation and refuses the undecidable
           // ones; a message quoting only `processed` would let a reviewer
@@ -896,6 +913,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
             unrecorded.length
               ? `${unrecorded.length} applied but not recorded, approve again to record (${unrecorded[0].reason})`
               : '',
+            itemNotes.length ? `${itemNotes.length} applied with a note to read, listed below` : '',
             action === 'approve' && result.apply_disabled
               ? 'apply is off, so nothing was applied'
               : '',
@@ -918,6 +936,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
           setSkipsByKind((prev) => keep(prev, skipped));
           setFailedByKind((prev) => keep(prev, failed));
           setUnrecordedByKind((prev) => keep(prev, unrecorded));
+          setNotesByKind((prev) => keep(prev, itemNotes));
           await reload();
         } catch (err) {
           toast(
@@ -945,6 +964,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     setSkipsByKind(drop);
     setFailedByKind(drop);
     setUnrecordedByKind(drop);
+    setNotesByKind(drop);
   }, []);
 
   return {
@@ -988,6 +1008,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
     skipsByKind,
     failedByKind,
     unrecordedByKind,
+    notesByKind,
     dismissSkips,
     refresh,
   };
