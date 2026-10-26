@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4812f1f-05db-470a-939d-c8a0a264f017
 // last-edited: 2026-10-26
 
@@ -224,4 +224,11 @@ func TestCanarySlotWait_OutlastsAFullFirstPassRequest(t *testing.T) {
 	if got, want := canarySlotWait(gatedEndpoint{Health: h}), (16*360+60+300+120)*time.Second; got != want {
 		t.Fatalf("canarySlotWait = %s, want %s (16 x 360 s + slack + model load + ffmpeg)", got, want)
 	}
+}
+
+// resetCanaryFailed forgets every machine remembered as failing the canary.
+func resetCanaryFailed() {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	clear(canaryFailed.m)
 }

@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
 // last-edited: 2026-10-26
 
@@ -561,39 +561,59 @@ func TestPool_AKillWithheldFromAKilledMachineIsAnsweredByTheOtherMachine(t *test
 	}
 }
 
-// Nit 1 (review 5 of #4182): a machine that fails the canary goes into cooldown
-// on every port, not only the one that faulted, so the next dispatch (the next
-// page, or the per-file op's next try) waits at the gate instead of paying a
-// fresh chunk of per-clip deadlines on a sibling port before it faults again.
-func TestPool_AMachineThatFailsTheCanaryIsCooledDownOnEveryPort(t *testing.T) {
-	shortenPacing(t, 10*time.Millisecond, 100*time.Millisecond)
-	p := machineFaultPool(t, []string{"aaaa0001", "aaaa0001", "aaaa0001", "aaaa0001"}, func(string, string) BatchResult {
-		return BatchResult{Error: timeoutText} // swapping: nothing, the canary clip included, answers in time
-	})
-	t.Cleanup(func() {
-		for _, ep := range p.h.eps {
-			clearCooldown(ep.URL)
+// Nit 1 (review 5 of #4182): a machine that fails the canary is remembered, and
+// the next dispatch (the next page, or the per-file op's next try) asks it the
+// canary on every port before giving it any work, instead of paying a fresh
+// chunk of per-clip deadlines (48 to 96 minutes on prod) before it faults
+// again. Putting its ports in cooldown did not do this: the dispatcher waits a
+// cooldown out (poolPaceMax is longer than the longest one) and then sends the
+// chunk anyway. The pacing here is as long as production's, so a cooldown
+// would be waited out. Once the machine answers, it takes work again.
+func TestPool_AMachineThatFailedTheCanaryMustAnswerItBeforeItGetsWorkAgain(t *testing.T) {
+	var sick atomic.Bool
+	sick.Store(true)
+	p := machineFaultPool(t, []string{"aaaa0001", "aaaa0001", "aaaa0001", "aaaa0001"}, func(_ string, id string) BatchResult {
+		if sick.Load() {
+			return BatchResult{Error: timeoutText} // swapping: nothing, the canary clip included, answers in time
 		}
+		return BatchResult{Text: "T:" + id}
 	})
 	// One request on one port, as the per-file op sends.
 	if _, err := p.run(t, loopers(8, "chap")...); !IsPoolUnavailable(err) {
 		t.Fatalf("first dispatch: err = %v, want ErrPoolUnavailable", err)
 	}
-	first := len(p.sendLog())
-	if first != 1 {
-		t.Fatalf("first dispatch sent %d requests, want the one that faulted (the per-file shape)", first)
+	sends, canaries := len(p.sendLog()), len(p.canaryLog())
+	if sends != 1 || canaries != 1 {
+		t.Fatalf("first dispatch: sends = %d, canaries = %d, want the one request that faulted and its port's canary", sends, canaries)
 	}
-	for _, ep := range p.h.eps {
-		if !endpointInCooldown(ep.URL) {
-			t.Errorf("%s is not in cooldown after its machine failed the canary", ep.URL)
-		}
-	}
+
 	_, err := p.run(t, loopers(8, "chap")...)
 	if !IsPoolUnavailable(err) {
 		t.Fatalf("second dispatch: err = %v, want ErrPoolUnavailable", err)
 	}
-	if n := len(p.sendLog()) - first; n != 0 {
+	if n := len(p.sendLog()) - sends; n != 0 {
 		t.Errorf("second dispatch sent %d requests to the machine that failed the canary, want 0", n)
+	}
+	if n := len(p.canaryLog()) - canaries; n != len(p.h.eps) {
+		t.Errorf("second dispatch sent %d canaries, want one to every port (%d)", n, len(p.h.eps))
+	}
+
+	sick.Store(false)
+	sends, canaries = len(p.sendLog()), len(p.canaryLog())
+	res, err := p.run(t, loopers(8, "chap")...)
+	if err != nil {
+		t.Fatalf("third dispatch, the machine recovered: err = %v", err)
+	}
+	if len(p.canaryLog())-canaries != len(p.h.eps) || len(p.sendLog()) == sends {
+		t.Errorf("third dispatch: canaries = %d, sends = %d, want the canary on every port and then work", len(p.canaryLog())-canaries, len(p.sendLog())-sends)
+	}
+	for _, id := range loopers(8, "chap") {
+		if res[id].Text != "T:"+id {
+			t.Errorf("%s = %+v, want its transcript", id, res[id])
+		}
+	}
+	if _, err := p.run(t, loopers(8, "chap")...); err != nil || len(p.canaryLog())-canaries != len(p.h.eps) {
+		t.Errorf("fourth dispatch: err = %v, canaries = %d: a machine that answered is not asked again", err, len(p.canaryLog())-canaries)
 	}
 }
 
@@ -644,9 +664,13 @@ func TestPool_ACanaryThatCannotGetASlotDefersWithoutAVerdict(t *testing.T) {
 					t.Errorf("%s = %+v: a strike from a machine with no canary verdict", id, r)
 				}
 			}
-			for _, ep := range p.h.eps {
-				if got, want := endpointInCooldown(ep.URL), failMac && macPort[ep.URL]; got != want {
-					t.Errorf("%s in cooldown = %v, want %v (only a machine that failed the canary is cooled)", ep.URL, got, want)
+			for i, m := range []string{mac, mac, llm1, llm1} {
+				ep := p.h.eps[i]
+				if endpointInCooldown(ep.URL) {
+					t.Errorf("%s is in cooldown: no canary verdict puts a port in cooldown", ep.URL)
+				}
+				if got, want := failedCanaryBefore("m:"+m), failMac && m == mac; got != want {
+					t.Errorf("machine %s remembered as failing the canary = %v, want %v (only one that failed is)", m, got, want)
 				}
 			}
 		})

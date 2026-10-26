@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -733,12 +733,17 @@ func TestPool_ALoneSickWorkersEarlierStrikeIsWithheldWhenItFailsTheCanary(t *tes
 	if got := p.canaryLog(); len(got) != 1 {
 		t.Errorf("canaries = %v, want one", got)
 	}
-	// Nit 1 (review 5): sick, so into cooldown; the next dispatch waits at the
-	// gate instead of paying another chunk of per-clip deadlines.
-	url := p.h.eps[0].URL
-	t.Cleanup(func() { clearCooldown(url) })
-	if !endpointInCooldown(url) {
-		t.Error("the only worker failed the canary and is not in cooldown")
+	// Nit 1 (review 5): sick, so remembered; the next dispatch asks it the
+	// canary first and sends it nothing while it still fails.
+	sends := len(p.sendLog())
+	if _, err := p.run(t, loopers(16, "chap")...); !IsPoolUnavailable(err) {
+		t.Fatalf("second dispatch: err = %v, want ErrPoolUnavailable", err)
+	}
+	if n := len(p.sendLog()) - sends; n != 0 {
+		t.Errorf("second dispatch sent %d requests to the worker that failed the canary, want 0", n)
+	}
+	if got := p.canaryLog(); len(got) != 2 {
+		t.Errorf("canaries = %v, want one per dispatch", got)
 	}
 }
 
@@ -851,8 +856,8 @@ func TestPool_ALoneWorkerWhoseCanaryCannotGetASlotIsNoVerdict(t *testing.T) {
 			t.Errorf("%s = %+v: a strike from a worker with no canary verdict", id, r)
 		}
 	}
-	if endpointInCooldown(p.h.eps[0].URL) {
-		t.Error("a worker whose canary only lacked a slot was put in cooldown")
+	if endpointInCooldown(p.h.eps[0].URL) || rememberedCanaryFailures() != 0 {
+		t.Error("a worker whose canary only lacked a slot was put in cooldown or remembered as sick")
 	}
 }
 
@@ -879,4 +884,11 @@ func TestPool_ACancelDuringTheCanaryIsACancellationNotAnUnavailablePool(t *testi
 	if !errors.Is(err, context.Canceled) || IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want the cancellation and not ErrPoolUnavailable", err)
 	}
+}
+
+// rememberedCanaryFailures counts the machines remembered as failing the canary.
+func rememberedCanaryFailures() int {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	return len(canaryFailed.m)
 }
