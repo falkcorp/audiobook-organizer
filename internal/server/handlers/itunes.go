@@ -1,5 +1,5 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
 // last-edited: 2026-10-26
 
@@ -21,6 +21,7 @@ import (
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )
 
 // ITunesValidateRequest represents a validation request for an iTunes library.
@@ -168,6 +169,16 @@ type ITunesHandler struct {
 	importer ITunesImporter
 	registry OperationsRegistry
 	store    ITunesStore
+	// access reads an operation's free text the way the operation routes serve
+	// it. Nil (not wired) withholds it, which UserText does for a nil receiver.
+	access *opaccess.Repairs
+}
+
+// WithOpAccess installs the check that decides whether a caller may read the
+// free text of an operation (its progress message), as the operation routes do.
+func (h *ITunesHandler) WithOpAccess(a *opaccess.Repairs) *ITunesHandler {
+	h.access = a
+	return h
 }
 
 // NewITunesHandler constructs an ITunesHandler.
@@ -459,7 +470,7 @@ func (h *ITunesHandler) ImportStatus(c *gin.Context) {
 		OperationID: op.ID,
 		Status:      op.Status,
 		Progress:    progress,
-		Message:     op.ProgressMessage,
+		Message:     h.access.For(c).UserText(op.ProgressMessage),
 		TotalBooks:  snapshot.Total,
 		Processed:   snapshot.Processed,
 		Imported:    snapshot.Imported,
@@ -490,6 +501,7 @@ func (h *ITunesHandler) ImportStatusBulk(c *gin.Context) {
 
 	snapshots := h.importer.GetStatusBulk(req.IDs)
 
+	access := h.access.For(c)
 	results := make(map[string]ITunesImportStatusResponse, len(req.IDs))
 	for _, opID := range req.IDs {
 		op, err := h.store.GetOperationV2(opID)
@@ -505,7 +517,7 @@ func (h *ITunesHandler) ImportStatusBulk(c *gin.Context) {
 			OperationID: op.ID,
 			Status:      op.Status,
 			Progress:    progress,
-			Message:     op.ProgressMessage,
+			Message:     access.UserText(op.ProgressMessage),
 			TotalBooks:  snapshot.Total,
 			Processed:   snapshot.Processed,
 			Imported:    snapshot.Imported,

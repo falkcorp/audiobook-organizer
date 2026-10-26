@@ -1,5 +1,5 @@
 // file: internal/operations/registry/types.go
-// version: 2.19.0
+// version: 2.20.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-26
 
@@ -106,6 +106,18 @@ type OperationDef struct {
 	// alone without setting this — see EnqueueOp. Set this only for a def whose
 	// params legitimately vary between runs that must NOT both happen.
 	DedupeQueuedRuns bool
+
+	// DedupeSameActorOnly makes the ConcurrencyKey dedupe reuse an active op only
+	// when it was started by the same account with the same permission set as
+	// the new request (ActorUserID and ActorPermissions); a request from anyone
+	// else queues its own run, which Gate 3 serializes behind the first. Set it
+	// for a def whose run is capped to the identity that started it (the
+	// diagnostics export, narrowed to what its requester may read), where
+	// handing one requester another's run gives the wider caller a narrowed
+	// result or the narrower one a refusal. Default false: every other def keeps
+	// the dedupe described above. It does not widen what is folded: the params
+	// rule (or DedupeQueuedRuns, or Schedule) still has to match as well.
+	DedupeSameActorOnly bool
 
 	// MergeQueuedParams may merge a new request into an existing QUEUED run of
 	// this definition. It is never called for a running or dispatcher-claimed

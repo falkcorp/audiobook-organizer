@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-10-26
 
@@ -83,7 +83,7 @@ const DiagnosticsAIDefID = "diagnostics.ai-analyze"
 
 // DiagnosticsExportDefID is the registry id of the diagnostics export
 // OperationDef: the only operation whose result DownloadExport serves.
-const DiagnosticsExportDefID = "diagnostics.export"
+const DiagnosticsExportDefID = diagnostics.ExportOpID
 
 // ExportDownloadCheck decides whether the caller may be served the archive of
 // the export row, whose parsed result is res. DownloadExport calls it on the
@@ -356,7 +356,7 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 	// account may read (server.diagnosticsExportOptionsFor), re-read from the op
 	// row rather than taken from params, which a generic start can set.
 	opts := servermiddleware.ActorOptions(c)
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params, opts...)
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), DiagnosticsExportDefID, params, opts...)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
 		return
@@ -447,7 +447,7 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 			httputil.RespondWithForbidden(c, refusal)
 			return
 		}
-	} else if config.AppConfig.EnableAuth {
+	} else if config.Snapshot().EnableAuth {
 		httputil.RespondWithForbidden(c, "diagnostics export downloads are not available: no scope check is wired")
 		return
 	}
@@ -523,10 +523,16 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 	}
 
 	op, err := store.GetOperationV2(opID)
+	if err != nil {
+		// A store failure is not "no such analysis": reporting it as a 404 tells
+		// the caller their analysis never existed and logs nothing.
+		httputil.InternalError(c, "failed to load analysis operation", err)
+		return
+	}
 	// Only a diagnostics AI run answers here. The id in the URL is any
 	// operation's, and a status, progress message and result of another one
 	// (a Repairs run the caller may not read, say) is not this route's to serve.
-	if err != nil || op == nil || op.DefID != DiagnosticsAIDefID {
+	if op == nil || op.DefID != DiagnosticsAIDefID {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
@@ -539,7 +545,7 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 		httputil.RespondWithOK(c, gin.H{
 			"operation_id": opID,
 			"status":       op.Status,
-			"message":      op.ProgressMessage,
+			"message":      h.access.For(c).UserText(op.ProgressMessage),
 		})
 		return
 	}
@@ -592,10 +598,14 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 	}
 
 	op, err := store.GetOperationV2(req.OperationID)
+	if err != nil {
+		httputil.InternalError(c, "failed to load analysis operation", err)
+		return
+	}
 	// Only a diagnostics AI run answers here, as GetAIResults does: the id in
 	// the body is any operation's, and another one's result (a Repairs run's
 	// rows, say) is not a list of suggestions to read or apply.
-	if err != nil || op == nil || op.DefID != DiagnosticsAIDefID {
+	if op == nil || op.DefID != DiagnosticsAIDefID {
 		httputil.RespondWithNotFound(c, "operation", req.OperationID)
 		return
 	}

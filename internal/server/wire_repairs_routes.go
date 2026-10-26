@@ -1,5 +1,5 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
 // last-edited: 2026-10-26
 
@@ -96,7 +96,7 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // permHolds does.
 func (s *Server) permHoldsLive() repairshandler.PermissionCheck {
 	connected := s.permHolds()
-	if !config.AppConfig.EnableAuth {
+	if !config.Snapshot().EnableAuth {
 		return connected
 	}
 	store := s.storeForWiring()
@@ -135,7 +135,7 @@ const liveRecheckTTL = 5 * time.Second
 // included: the stream ends and the client reconnects, which re-authenticates
 // it. Auth disabled, and a first run with no accounts yet, stand.
 func (s *Server) sessionStillStands() func(c *gin.Context) bool {
-	if !config.AppConfig.EnableAuth {
+	if !config.Snapshot().EnableAuth {
 		return func(*gin.Context) bool { return true }
 	}
 	store := s.storeForWiring()
@@ -257,7 +257,7 @@ func (s *Server) opActorPermissions(row *database.OperationV2Row) map[auth.Permi
 // first run with no users yet, hold everything, as permHolds does.
 func (s *Server) opActorHolds(opID string) func(auth.Permission) bool {
 	all := func(auth.Permission) bool { return true }
-	if !config.AppConfig.EnableAuth {
+	if !config.Snapshot().EnableAuth {
 		return all
 	}
 	store := s.storeForWiring()
@@ -338,7 +338,7 @@ func (s *Server) exportNarrowedTo(holds func(auth.Permission) bool) []string {
 func (s *Server) diagnosticsDownloadCheck() handlers.ExportDownloadCheck {
 	holds := s.permHolds()
 	return func(c *gin.Context, row *database.OperationV2Row, res diagnostics.ExportResult) (string, error) {
-		if !config.AppConfig.EnableAuth {
+		if !config.Snapshot().EnableAuth {
 			return "", nil
 		}
 		store := s.storeForWiring()

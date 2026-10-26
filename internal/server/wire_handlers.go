@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.63.0
+// version: 2.64.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-10-26
 
@@ -490,7 +490,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		itSvc = s.itunesSvc
 		itImporter = s.itunesSvc.Importer
 	}
-	itunesH := handlers.NewITunesHandler(itSvc, itImporter, opReg, s.storeForWiring())
+	itunesH := handlers.NewITunesHandler(itSvc, itImporter, opReg, s.storeForWiring()).WithOpAccess(s.repairsOpAccess())
 
 	// AI handlers. Guard each concrete dependency so a typed-nil pointer is not
 	// boxed into the handler's interface fields — that would defeat the

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.58.0
+// version: 3.59.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-26
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -974,6 +975,13 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 		}
 	}
 
+	// Apply options. Read before the dedupe below, which compares the request's
+	// actor with the active run's (DedupeSameActorOnly).
+	eopts := &EnqueueOptions{}
+	for _, opt := range opts {
+		opt(eopts)
+	}
+
 	// Admission: from the dedupe read of the active set below to the insert
 	// that adds this run to it, hold the def's admission lock, so a concurrent
 	// RetryInterrupted of the same def cannot fall between the two (and vice
@@ -1019,6 +1027,17 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				if op.Status == "running" && r.isZombie(op.ID) {
 					r.logger.Info("registry: enqueue dedupe skipping a stopping run (goroutine has not returned)",
 						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID))
+					continue
+				}
+				// A def that runs under its requester's identity must not hand one
+				// requester another's run (DedupeSameActorOnly): the run keeps the
+				// account and permission set it was first started with, so folding
+				// would give the second requester a run capped to the first (or
+				// refuse them a run they believe they started). A new run is queued
+				// instead and Gate 3 serializes the two.
+				if def.DedupeSameActorOnly && !sameActorAndPermissions(op, eopts) {
+					r.logger.Info("registry: active op was started by a different actor or permission set — queueing a second run",
+						"op_id", op.ID, "def_id", logger.SanitizeLogValue(defID), "status", op.Status)
 					continue
 				}
 				// ConcurrencyKey serializes RUNS (dispatcher Gate 3); it was never
@@ -1072,12 +1091,6 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 				return op.ID, nil
 			}
 		}
-	}
-
-	// Apply options.
-	eopts := &EnqueueOptions{}
-	for _, opt := range opts {
-		opt(eopts)
 	}
 
 	// Priority: option overrides def default.
@@ -2412,4 +2425,27 @@ func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]opsmetrics.Infligh
 		out[k] = st
 	}
 	return out
+}
+
+// sameActorAndPermissions reports whether the request described by eopts comes
+// from the account, with the permission set, that started the active row op: the
+// same actor id (none counts as none) and the same set of permissions (order
+// ignored; a set that was never recorded is not the same as an empty one). It is
+// what DedupeSameActorOnly compares.
+func sameActorAndPermissions(op database.OperationV2Row, eopts *EnqueueOptions) bool {
+	rowActor := ""
+	if op.ActorUserID != nil {
+		rowActor = *op.ActorUserID
+	}
+	if rowActor != eopts.ActorUserID {
+		return false
+	}
+	if (op.ActorPermissions == nil) != (eopts.ActorPermissions == nil) {
+		return false
+	}
+	a := slices.Clone(op.ActorPermissions)
+	b := slices.Clone(eopts.ActorPermissions)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }

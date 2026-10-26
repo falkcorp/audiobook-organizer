@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
 // last-edited: 2026-10-26
 
@@ -312,7 +312,9 @@ func TestDiagnosticsHandler_SubmitAI_EnqueueFailureIs500(t *testing.T) {
 
 func TestDiagnosticsHandler_GetAIResults_NotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
+	// A row that does not exist is a 404; a store failure is a 500
+	// (TestAIRoutes_AStoreFailureIsA500AndAMissingRowA404).
+	store.EXPECT().GetOperationV2("missing").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/missing", "",
@@ -396,7 +398,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MissingFields_400(t *testing.T) {
 
 func TestDiagnosticsHandler_ApplySuggestions_OperationNotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationV2("op-x").Return(nil, assert.AnError)
+	store.EXPECT().GetOperationV2("op-x").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",

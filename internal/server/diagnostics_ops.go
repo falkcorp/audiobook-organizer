@@ -1,5 +1,5 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-10-26
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
 type diagnosticsExportOpParams struct {
@@ -29,7 +30,7 @@ type diagnosticsExportOpParams struct {
 // RegisterDiagnosticsExportOp registers the "diagnostics.export" v2 OperationDef.
 func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "diagnostics.export",
+		ID:              handlers.DiagnosticsExportDefID,
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "diagnostics",
 		DisplayName:     "Export Diagnostics",
@@ -46,9 +47,13 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 		// away from silent death again.
 		ProgressTimeout: 30 * time.Minute,
 		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "diagnostics.export",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
+		ConcurrencyKey:  handlers.DiagnosticsExportDefID,
+		// The run is narrowed to the account that started it (opActorHolds), so
+		// one account's export must never be handed to another: a wider caller
+		// would download a narrowed archive, a narrower one a refusal.
+		DedupeSameActorOnly: true,
+		Permissions:         []auth.Permission{auth.PermSettingsManage},
+		Capabilities:        []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p diagnosticsExportOpParams
 			if len(rawParams) > 0 {
@@ -112,6 +117,12 @@ func (s *Server) diagnosticsExportOptionsFor(holds func(auth.Permission) bool) d
 				return row, false
 			}
 			row = reader.WithoutResult(row)
+			// The permission set the operation's requester held is that
+			// account's credential scope, not something another account's
+			// export reader needs to see: kept only for users.manage.
+			if !seesUsers {
+				row.ActorPermissions = nil
+			}
 			// The row's error and progress message are free text that can name
 			// a user; a caller without users.manage gets them withheld, as the
 			// operation routes serve them.

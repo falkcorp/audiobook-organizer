@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/user_data_results.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c7f2a91-5d84-4e06-9b1a-e2d4f6a80c73
 // last-edited: 2026-10-26
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -73,12 +74,6 @@ func (r *Reader) RequireResult(row *database.OperationV2Row) bool {
 	return false
 }
 
-// diagnosticsExportDefID is the definition of the diagnostics export, whose
-// result names the archive's path on the server's disk (zip_path). It is the
-// id server.RegisterDiagnosticsExportOp registers; handlers.DiagnosticsExportDefID,
-// which the download route compares against, is the same string.
-const diagnosticsExportDefID = "diagnostics.export"
-
 // mayHold is held for a permission outside the Repairs lane, false for an
 // unwired check (nil reader, no access, no holds function).
 func (r *Reader) mayHold(p auth.Permission) bool {
@@ -96,10 +91,16 @@ func (r *Reader) mayHold(p auth.Permission) bool {
 //     on the server's disk the archive sits, which a library.view caller has no
 //     use for and no right to; narrowed_to and the rest of the record stay.
 //   - a Repairs apply (repairs.ApplyOpID): unless the caller may read other
-//     users' own data (users.manage), the user the owner rows ran under
-//     (owner_user_id, on the result and on each rows[] entry) is removed and the
-//     free text a fixer wrote into it (follow_up_error, aborted and each row's
-//     error) is read through UserText, as the run's own error is.
+//     users' own data (users.manage), the free text a fixer wrote into it
+//     (follow_up_error, aborted and each row's error) is read through UserText,
+//     as the run's own error is. That is the protection. The owner_user_id on
+//     the result and on each rows[] entry is also removed, but that hides
+//     nothing from this caller: it is the operation's own actor id, which every
+//     operation read still serves (actor_user_id on the v2 row and list, and on
+//     the row an export writes to operations.json; started_by on a v3 run).
+//     TODO-V1SHAPE-OP-ACTOR-ID tracks withholding actor ids from a caller
+//     without users.manage; until it lands, do not read this removal as
+//     keeping the account's id from them.
 //
 // It fails closed: a result of either kind that cannot be parsed is withheld
 // whole (nil), and an unwired check holds nothing. Call it after RequireResult,
@@ -109,7 +110,7 @@ func (r *Reader) ServedResult(row *database.OperationV2Row) *string {
 		return nil
 	}
 	switch row.DefID {
-	case diagnosticsExportDefID:
+	case diagnostics.ExportOpID:
 		if r.mayHold(auth.PermSettingsManage) {
 			return row.ResultData
 		}
@@ -145,8 +146,9 @@ func redactResult(data string, edit func(map[string]json.RawMessage) bool) *stri
 	return &out
 }
 
-// redactApplyResult removes the owner's user id and passes the free text of a
-// repairs.apply result through UserText. It reports false when a field it has to
+// redactApplyResult removes the owner's user id (which the op's actor id still
+// serves; see ServedResult) and passes the free text of a repairs.apply result
+// through UserText. It reports false when a field it has to
 // rewrite is not the shape it expects, which withholds the whole result.
 func (r *Reader) redactApplyResult(rec map[string]json.RawMessage) bool {
 	delete(rec, "owner_user_id")
@@ -199,7 +201,7 @@ func (r *Reader) redactText(rec map[string]json.RawMessage, key string) bool {
 // WithoutResult returns row as a route that serves rows in bulk (the diagnostics
 // export) may carry it to this caller: without the stored result and params when
 // the caller may not read them (MayReadResult), and otherwise with the result as
-// ServedResult serves it (a Repairs apply's owner user id and free text, a
+// ServedResult serves it (a Repairs apply's free text, a
 // diagnostics export's archive path). row is not modified: it is passed by value
 // and a changed result is a new string.
 func (r *Reader) WithoutResult(row database.OperationV2Row) database.OperationV2Row {

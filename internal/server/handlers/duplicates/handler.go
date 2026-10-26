@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series

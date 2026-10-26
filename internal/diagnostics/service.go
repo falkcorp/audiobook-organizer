@@ -1,5 +1,5 @@
 // file: internal/diagnostics/service.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d1a9n0st-1cs0-s3rv-1c3z-1pexp0rt001
 // last-edited: 2026-10-26
 
@@ -17,6 +17,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 )
+
+// ExportOpID is the registry id of the diagnostics export operation
+// (server.RegisterDiagnosticsExportOp registers it). The handler that serves the
+// archive and the code that withholds its path from a caller without
+// settings.manage compare against this one constant, so the two cannot drift
+// from the id the operation is registered under.
+const ExportOpID = "diagnostics.export"
 
 // Service generates diagnostic ZIP exports for troubleshooting and AI analysis.
 type Service struct {
