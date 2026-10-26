@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-25
 
@@ -325,6 +325,22 @@ func (v *opVisibility) excludes(e database.ActivityEntry) bool {
 		return looksRepairs(e)
 	})
 	return hide || (!named && looksRepairs(e))
+}
+
+// hidesOpLog reports whether an op-log line of operation id (defID is the
+// definition the line names, "" when it names none) is withheld from the caller:
+// the operation has a record the caller may not read, or it has none (or it
+// cannot be read) and the line says it belongs to the Repairs lane. The same
+// verdict excludes gives an activity row; without a resolver nothing is hidden.
+func (v *opVisibility) hidesOpLog(id, defID string) bool {
+	if v == nil || !v.resolve {
+		return false
+	}
+	r, err := v.lookup(id)
+	if err != nil || !r.known {
+		return opaccess.IsRepairsOp(defID)
+	}
+	return !r.ok
 }
 
 // lookup is verdict for the activity listing, where a failed read must not decide
@@ -790,12 +806,21 @@ func (h *ActivityHandler) operationActivity(ctx context.Context, vis *opVisibili
 	if err != nil {
 		return nil, 0, err
 	}
+	// The op-log fallback is for an operation the activity log holds nothing
+	// for. It is decided BEFORE the visibility filter: when the log held rows
+	// and the filter dropped every one, the caller may not read them, and the
+	// op-log lines of the same operation are no more theirs (the fallback would
+	// hand back exactly what the filter just withheld).
+	loggedNothing := len(entries) == 0
 	withoutOthersUserData(entries, seeAll)
 	// The op is readable (the caller checked), but a digest row for it can also
 	// name another operation the caller may not read.
 	entries, dropped := vis.keep(entries)
 	total -= dropped
 	if len(entries) == 0 {
+		if !loggedNothing {
+			return []operationActivityEntry{}, max(total, 0), nil
+		}
 		opLogEntries, opLogErr := h.operationActivityFromOpLogs(vis, opID, limit)
 		if opLogErr != nil {
 			return nil, 0, opLogErr
@@ -1014,6 +1039,9 @@ func (h *ActivityHandler) operationActivityFromOpLogs(vis *opVisibility, opID st
 		}
 		attrs := opLogAttrs(l.Attrs)
 		opType, _ := attrs["def_id"].(string)
+		if vis.hidesOpLog(l.OperationID, opType) {
+			continue
+		}
 		out = append(out, operationActivityEntry{
 			Timestamp:     l.CreatedAt,
 			Level:         l.Level,
