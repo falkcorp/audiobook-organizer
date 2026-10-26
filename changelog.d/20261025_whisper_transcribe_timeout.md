@@ -29,12 +29,17 @@
   worker's own batch: a response in which at least two clips timed out or
   crashed and more than half did (or in which any clip says the worker cannot
   decode) is a worker fault. Its verdicts are withheld, the worker is benched
-  for the run, and the sound results that came with it are kept. Only a worker
-  that cannot decode at all (`worker_misconfigured`) has its jobs kept off it
-  and its later timeouts distrusted for the rest of the dispatch; the jobs of a
-  fault made of timeouts go back in requests of at most two clips that any
-  worker may take, so each clip reaches its own verdict even when every
-  worker faulted on the same page of looping clips. A dispatch that failed anyway has its timeouts
+  for the run, and the sound results that came with it are kept. A worker that
+  faulted, for either reason, gets no more work for the rest of the dispatch
+  while an endpoint that has not faulted remains, and every strike it answered
+  in that dispatch (one from an earlier chunk of the faulted request included)
+  is withheld and its job re-sent to the endpoints that have not faulted. Only
+  once every endpoint has faulted are the faulted ones asked again and their
+  answers believed: the jobs of a fault made of timeouts go back in requests of
+  at most two clips, so each clip reaches its own verdict even when every
+  worker faulted on the same page of looping clips, and a worker that cannot
+  decode at all (`worker_misconfigured`) is never sent back the jobs it refused.
+  A dispatch that failed anyway has its timeouts
   and crashes read as no answer (deferred, no strike) unless the dispatcher
   itself condemned the file by sending it alone to several workers. A lone job
   on a worker that is still answering `/health` is no longer blamed on the
@@ -88,8 +93,8 @@
   remembers the workers that faulted on it; after two (or every worker, in a
   smaller pool) it is deferred with the dispatcher's `worker_fault` code, never
   struck. A fault from a one-worker pool defers the jobs instead of stopping
-  the run, and a worker that faulted in a dispatch has its later lone timeouts
-  withheld and re-sent elsewhere. When every endpoint is benched, or every
+  the run, and a worker that faulted in a dispatch is not asked again in it
+  while a worker that has not faulted remains. When every endpoint is benched, or every
   worker's decoder is restarting, the dispatcher waits and re-checks every 30 s
   for up to 6 minutes before reporting the pool unavailable
   (`ErrPoolUnavailable`); the per-book op stops after five unavailable pages in
@@ -101,25 +106,40 @@
   then stops the run, instead of both deferring every page in under a second.
 - A second `transcribe_timeout` strike only counts when a different machine
   gave it (`IntroTimeoutWorker`, the machines that struck the file). One sick
-  Mac can no longer make a clip's timeout permanent by itself, and neither can
-  two server ports on that one Mac. A worker is identified by the
-  `machine_id` its `/health` reports (`whisper_mlx_server.py` 1.12.0: a hash of
-  `WHISPER_MACHINE_ID`, `/etc/machine-id`, the macOS platform UUID, or the
-  hostname), or by a hash of its URL for a worker that does not report one (an
-  MLX worker older than 1.12.0, or the faster-whisper `whisper_server.py`,
-  which does not report it, so its ports count as separate machines), and an
-  endpoint whose `/health` could not be read names no machine, so its strike
-  never counts as the second. What is stored, and returned in API responses, is that opaque
-  identity, never an endpoint address. A condemnation by the dispatcher needs a
-  lone clip stuck on two different machines; it counts as a strike even when
-  the same pair condemned the file before. A file that carries a strike is
-  sent to a healthy endpoint on another machine when there is one, even at a
-  lower priority, and to the same machine when there is not. Trade-off: on any
-  pool whose routing sends the file to the same machine each time (a pool of
-  one machine, or a night on which every other machine is down) a timeout does
-  not become permanent; the clip stays at its strikes and is re-sent each run.
-  Rollout: a worker that starts reporting `machine_id` changes identity once,
-  so a file it struck before the upgrade can take one more strike from it.
+  Mac can no longer make a clip's timeout permanent by itself. A worker is
+  identified by the `machine_id` its `/health` reports (`whisper_mlx_server.py`
+  1.12.0: a hash of `WHISPER_MACHINE_ID`, `/etc/machine-id`, the macOS platform
+  UUID, or the hostname, computed once on a background thread at start-up so
+  `/health` never runs `ioreg` on the event loop), stored as `m:<hash>`, a known
+  machine. A worker that does not report one (an MLX worker older than 1.12.0,
+  or the faster-whisper `whisper_server.py`, which does not report it) is
+  identified by a hash of its URL, `u:<hash>`: an unknown machine, since two
+  such ports may be one box. An endpoint whose `/health` could not be read
+  names no machine. A strike from an unknown or unnamed machine can only be a
+  file's first: a later strike counts only when it names a known machine that
+  is not among the known machines already stored, so two ports on one Mac count
+  as one machine once the workers report `machine_id`, and before that their
+  second strike does not count. The first known machine to strike a file
+  struck only by unknown ones is recorded, not counted, because it may be one of
+  them under its new identity. A condemnation by the dispatcher needs a lone
+  clip stuck on two different machines; it counts as two machines, and as a
+  strike even when the same pair condemned the file before, only when it names
+  two distinct known machines. What is stored, and returned in API responses,
+  is that opaque identity, never an endpoint address; a raw endpoint URL
+  stored by a pre-release build is dropped on the file's next strike write. A
+  file that carries a strike is sent to a healthy endpoint on another machine
+  when there is one, even at a lower priority, and to the same machine when
+  there is not; that holds both for ordinary allocation and for the small
+  requests the dispatcher re-sends after a split or a worker fault.
+  Trade-off: on any pool whose routing sends the file to the same machine each
+  time (a pool of one machine, or a night on which every other machine is
+  down), and on any pool in which no worker reports `machine_id` (faster-whisper
+  workers only), a timeout does not become permanent; the clip stays at its
+  strikes and is re-sent each run. Rollout: a worker that starts reporting
+  `machine_id` changes identity once; that first known identity is recorded
+  without a strike, so the upgrade cannot give a file a second strike from the
+  machine that gave the first. A file struck before the upgrade then needs
+  strikes from two different known machines to become permanent.
 - A one-file book whose 300 s clip timed out, or was condemned by the
   dispatcher (which is what a worker older than the per-clip deadline
   produces), is deferred rather than sealed as `[SILENCE]`: nothing listened
@@ -190,3 +210,20 @@ that hangs one (deferred at retry 1, see above).
   reset it. Any page that is not unavailable now does.
 - The progress entry did not cover the per-book op's silence retry rounds,
   which ran without the liveness tick.
+- The worker-fault entry said only a `worker_misconfigured` worker had its jobs
+  kept off it and that the jobs of a fault made of timeouts could go to any
+  worker. The worker that timed out took them too, and its per-clip timeouts on
+  them were believed, so a sick worker gave first strikes to healthy files (8
+  of 32 on two workers in review). A worker that faulted for any reason now gets
+  no more work in that dispatch while one that has not faulted remains, and its
+  strikes from that dispatch are withheld.
+- The different-machine entry said two server ports on one Mac never count as
+  two machines. That held only once the workers report `machine_id`: two old
+  ports were two machines, a worker's upgrade gave it a new identity that could
+  strike the same file again, and a condemnation by two old ports counted as
+  two machines. Identities that are not `m:` now never give a counted later
+  strike, the first known one after them is recorded only, and a condemnation
+  counts as two machines only with two distinct known ones.
+- The routing entry covered only ordinary allocation. The requests re-sent
+  after a split or a worker fault took the first endpoint by priority, the
+  machine that had already struck the file included.

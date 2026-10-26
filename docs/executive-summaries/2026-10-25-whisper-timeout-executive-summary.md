@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -32,11 +32,15 @@ Five things changed:
   that were already done are kept.
 - A file that times out on two different machines is set aside for good, so
   neither listening tool keeps trying it. Two timeouts from the same machine
-  count once, because that machine may be the one that is ill, and two helpers
-  running on one Mac count as one machine. Each helper now reports which
-  machine it runs on, as a code that does not reveal the machine's name or
-  address. A file that has timed out once is sent to a different machine next
-  time whenever one is available, even if that machine is normally used less.
+  count once, because that machine may be the one that is ill. Each updated
+  helper now reports which machine it runs on, as a code that does not reveal
+  the machine's name or address, so two helpers running on one Mac count as one
+  machine. A helper that cannot report this (an older helper, or the other kind
+  of listening program) is an unknown machine: its timeout can be a file's
+  first, but never the second. A file that has timed out once is sent to a
+  different machine next time whenever one is available, even if that machine
+  is normally used less, and the same holds when the server re-sends a file on
+  its own.
   With only one machine available, a file is never set aside this way; it is
   simply tried again next run. It stays set aside until someone asks for a retry or the file
   itself is replaced. A file that timed out only once is tried again next time.
@@ -44,9 +48,11 @@ Five things changed:
   the two listening tools cannot count the same stall twice. A helper that
   answers a request with mostly timeouts (or says it cannot listen at all) is
   treated as the problem, not the files: nothing is held against them and the
-  helper is set aside for the run. A helper that cannot listen at all has its
-  files sent elsewhere; files from a helper that answered with timeouts are
-  sent again one or two at a time, to any helper, so each file gets its own
+  helper is set aside for the run. While another helper is still working, a
+  helper that has been set aside is not asked again in that run, and none of
+  its timeouts from that run are held against a file; its files go to the
+  other helpers. Only when every helper has struggled are they asked again,
+  one or two files at a time, and believed, so each file still gets its own
   answer even when every helper struggled with the same batch. A file that two
   helpers in a row cannot listen to is left for the next run rather than
   passed around forever. A file
@@ -101,8 +107,9 @@ Five things changed:
 Update the server first, then the helpers. The new helpers can send new
 replies an older server does not know, and it would wrongly record those as
 failures for the files. A helper that is updated starts reporting which machine
-it runs on, so a file it timed out on before the update can be counted against
-it once more. The new server works with old and new helpers alike:
+it runs on. The first time the server sees that new code on a file it only
+notes it and counts nothing, so the update cannot count a file against the same
+machine twice. The new server works with old and new helpers alike:
 an older helper simply does not report how long it has been busy. Then restart
 the helpers one at a time and check that each one reports itself idle.
 
