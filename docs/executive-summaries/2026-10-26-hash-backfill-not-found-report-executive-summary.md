@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-26-hash-backfill-not-found-report-executive-summary.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: d7aaaf61-bcb5-45c2-947a-ffd1e4655e3c -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -123,9 +123,14 @@
   Saving the fingerprints also updates each book's totals (such as its overall
   size and duration). The job used to refresh a book's totals once for every file
   it fingerprinted; it now refreshes each book once per batch, however many of its
-  files were fingerprinted in that batch. If that refresh fails the job stops and
-  the next run repeats it, and a run that was stopped after saving fingerprints but
-  before refreshing the totals still refreshes them when it is resumed.
+  files were fingerprinted in that batch. A run that was stopped after saving
+  fingerprints but before refreshing the totals still refreshes them when it is
+  resumed. If a book's totals cannot be refreshed, the job does not stop: the
+  fingerprints stay saved, the failure is logged once for the batch, and the final
+  summary carries a warning naming how many books and which ones, so someone can
+  look at them. A job started without an operation number, or with no library
+  folder configured, has no crash-recovery note, so it refreshes a book's totals
+  right after each file it fingerprints, as it did before this change.
 
   While running, the job also checks again that the library drive is still
   attached whenever a batch finds files missing. If the drive drops out partway

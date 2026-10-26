@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_missing_test.go
-// version: 8.0.0
+// version: 9.0.0
 // guid: 5e1c7a42-93b8-4d06-a7f1-2c84e0b9d315
 // last-edited: 2026-10-26
 
@@ -112,10 +112,12 @@ func hbWrite(t *testing.T, root, name, content string) string {
 func hbSum(content string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(content))) }
 
 // hbStore is a MockStore over an in-memory set of rows. Every write method other
-// than ModifyBookFileDeferAggregates fails the test: the job writes nothing for a
-// file that is not on disk, and nothing but a hash, through that method, for one
-// that is. The recomputing ModifyBookFile also fails the test: it would rebuild
-// the whole book's aggregates once per stored hash.
+// than the two conditional hash stores fails the test: the job writes nothing for
+// a file that is not on disk, and nothing but a hash for one that is. A run with a
+// journal stores through ModifyBookFileDeferAggregates and recomputes each book
+// once per chunk; a run with no journal (no operation ID or no library root)
+// stores through the recomputing ModifyBookFile, which this fixture counts per
+// written row in perRowRecomputes, as the real store recomputes on every write.
 type hbStore struct {
 	t *testing.T
 
@@ -128,6 +130,12 @@ type hbStore struct {
 	// set, supplies an error for a call (nil result = no error).
 	recomputes   map[string]int
 	recomputeErr func(bookID string) error
+	// perRowRecomputes counts the rows ModifyBookFile (the variant that
+	// recomputes its book on every write) stored, per book.
+	perRowRecomputes map[string]int
+	// failAfterApply, when set, makes the conditional store APPLY the write and
+	// then return an error for the row (the commit landed, its fsync failed).
+	failAfterApply func(id string) error
 	// beforeModify, when set, runs just before a row is read for ModifyBookFile,
 	// with h.mu NOT held; a test uses it to change the row between hash and store.
 	beforeModify func(h *hbStore, id string)
@@ -153,7 +161,7 @@ func (h *hbStore) edit(id string, fn func(*database.BookFileCore)) {
 
 func newHBStore(t *testing.T, files ...database.BookFileCore) *hbStore {
 	return &hbStore{t: t, files: files, hashCalls: map[string]string{}, writes: map[string]int{}, state: map[string][]byte{},
-		recomputes: map[string]int{}}
+		recomputes: map[string]int{}, perRowRecomputes: map[string]int{}}
 }
 
 func (h *hbStore) store() *database.MockStore {
@@ -170,9 +178,14 @@ func (h *hbStore) store() *database.MockStore {
 			forbid("SetBookFileHash (the job stores hashes conditionally, through ModifyBookFile)")
 			return nil
 		},
-		ModifyBookFileFunc: func(string, string, func(*database.BookFile) error) (*database.BookFile, error) {
-			forbid("ModifyBookFile (it recomputes the whole book's aggregates on every write; use ModifyBookFileDeferAggregates and recompute once per book)")
-			return nil, nil
+		ModifyBookFileFunc: func(bookID, id string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+			row, wrote, err := h.modify(bookID, id, fn)
+			if wrote {
+				h.mu.Lock()
+				h.perRowRecomputes[bookID]++
+				h.mu.Unlock()
+			}
+			return row, err
 		},
 		RecomputeBookAggregatesFunc: func(bookID string) error {
 			h.mu.Lock()
@@ -184,35 +197,8 @@ func (h *hbStore) store() *database.MockStore {
 			return nil
 		},
 		ModifyBookFileDeferAggregatesFunc: func(bookID, id string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-			if h.beforeModify != nil {
-				h.beforeModify(h, id)
-			}
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			for i := range h.files {
-				c := &h.files[i]
-				if c.ID != id || c.BookID != bookID {
-					continue
-				}
-				row := database.BookFile{ID: c.ID, BookID: c.BookID, FilePath: c.FilePath, FileSize: c.FileSize,
-					LastScanMtime: c.LastScanMtime, FileHash: c.FileHash}
-				if err := fn(&row); err != nil {
-					if errors.Is(err, database.ErrSkipBookFileWrite) {
-						return &row, nil
-					}
-					return nil, err
-				}
-				if h.failHash != nil {
-					if err := h.failHash(id); err != nil {
-						return nil, err
-					}
-				}
-				c.FileHash = row.FileHash // a later GetAllBookFilesCore sees the stored hash, as the real store does
-				h.hashCalls[id] = row.FileHash
-				h.writes[id]++
-				return &row, nil
-			}
-			return nil, nil
+			row, _, err := h.modify(bookID, id, fn)
+			return row, err
 		},
 		UpdateBookFileFunc: func(string, *database.BookFile) error { forbid("UpdateBookFile"); return nil },
 		DeleteBookFileFunc: func(string) error { forbid("DeleteBookFile"); return nil },
@@ -267,6 +253,46 @@ func (h *hbStore) store() *database.MockStore {
 			return nil
 		},
 	}
+}
+
+// modify is the conditional per-row store both ModifyBookFile variants share. wrote
+// reports that the hash was applied (also when failAfterApply then returns an
+// error for the row, the way a commit whose fsync failed does).
+func (h *hbStore) modify(bookID, id string, fn func(*database.BookFile) error) (row *database.BookFile, wrote bool, err error) {
+	if h.beforeModify != nil {
+		h.beforeModify(h, id)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := range h.files {
+		c := &h.files[i]
+		if c.ID != id || c.BookID != bookID {
+			continue
+		}
+		r := database.BookFile{ID: c.ID, BookID: c.BookID, FilePath: c.FilePath, FileSize: c.FileSize,
+			LastScanMtime: c.LastScanMtime, FileHash: c.FileHash}
+		if err := fn(&r); err != nil {
+			if errors.Is(err, database.ErrSkipBookFileWrite) {
+				return &r, false, nil
+			}
+			return nil, false, err
+		}
+		if h.failHash != nil {
+			if err := h.failHash(id); err != nil {
+				return nil, false, err
+			}
+		}
+		c.FileHash = r.FileHash // a later GetAllBookFilesCore sees the stored hash, as the real store does
+		h.hashCalls[id] = r.FileHash
+		h.writes[id]++
+		if h.failAfterApply != nil {
+			if err := h.failAfterApply(id); err != nil {
+				return nil, true, err
+			}
+		}
+		return &r, true, nil
+	}
+	return nil, false, nil
 }
 
 func (h *hbStore) hashed() []string {

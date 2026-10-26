@@ -46,11 +46,25 @@ once per file: the job stores each hash through
 without its per-row recompute) and then calls `RecomputeBookAggregates` once per
 distinct book per chunk, after the chunk's hashes are stored and before its
 report rows are recorded. A book with N files hashed in the same chunk costs one
-recompute, not N. If a recompute fails, the run stops with the chunk's journal
-still in place, so the resume recomputes those books again; the journal replay
-also recomputes the books of rows it finds already stored, so a run killed after
-its stores and before its recompute still ends with correct aggregates. A dry run
-stores nothing and recomputes nothing.
+recompute, not N. The journal replay also recomputes the books of rows it finds
+already stored, and the books of a store that failed after it had been applied (an
+fsync failure), so a run killed after its stores and before its recompute still
+ends with correct aggregates. A dry run stores nothing and recomputes nothing.
+
+A recompute that fails does not stop the run. The aggregate is derived data and
+the hashes are stored, so the books that failed are collected, their hashes are
+kept, one aggregated error line is logged through the job's logger for the chunk,
+the chunk's journal is cleared as normal, and the run finishes. The result line
+ends with a warning that names the count and the book ids (the first 50, then a
+count of the rest), for example `WARNING: the aggregates of 1 books could not be
+recomputed after their hashes were stored, so they may be stale until the next
+edit or recompute: books b0`. A failed book is not retried by a resume or a later
+run, because its rows now have a hash.
+
+A run with no journal (no operation id, or no library root configured) has
+nothing to resume a missed recompute from, so it stores each row through
+`ModifyBookFile`, which recomputes the row's book as part of the write, instead of
+batching the recompute per chunk.
 
 A run that is cancelled, killed or restarted part way (for example by a server
 restart) and then resumed now ends with exactly the report and totals an

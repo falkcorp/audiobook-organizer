@@ -81,7 +81,7 @@ var layerOf = map[string]int{
 	"internal/franchise":               0, // computed: imports no module package
 	"internal/httputil":                0, // table: leaf
 	"internal/keyedmutex":              0, // computed: imports no module package
-	"internal/libroot":                 0, // reclassified from domain: imports only internal/util (permission constants)
+	"internal/libroot":                 3, // computed: max of imports=0, floored at 3
 	"internal/lifecycle":               0, // computed: imports no module package
 	"internal/linkintegrity":           0, // computed: imports no module package
 	"internal/logger":                  0, // table: leaf
@@ -542,8 +542,6 @@ var layerOverride = map[string]int{
 	"internal/matcher": 0,
 	// fingerprint imports only internal/audioutil (no module imports, layer 0).
 	"internal/fingerprint": 0,
-	// libroot imports only internal/util (layer 0) for the permission constants.
-	"internal/libroot": 0,
 }
 
 // familyLayer returns the layer of a directory family, or false.

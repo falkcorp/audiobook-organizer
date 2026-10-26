@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_aggregates_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 3f6a1c84-b2d7-4e95-8a13-d90e5b7c4f26
 // last-edited: 2026-10-26
 
@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,15 +49,16 @@ func TestBackfillFileHashes_RecomputesEachBookOncePerChunk(t *testing.T) {
 	root := hbLibrary(t)
 	h := newHBStore(t, hbMixedLibrary(t, root, total)...)
 
-	_, c, _ := runHB(t, h.store(), hbRun{})
+	_, c, _ := runHB(t, h.store(), hbRun{opID: "01RECOMPUTEONCE"})
 
 	assert.Equal(t, hbWant(total), c)
+	assert.Empty(t, h.perRowRecomputes, "a run with a journal never uses the per-row recomputing store")
 	require.Greater(t, h.writes["f0000"]+len(h.writes), 100, "the fixture must store many hashes across few books")
 	assert.Equal(t, hbChunkedWant(total), h.recomputes,
 		"each book is recomputed once per chunk that stored one of its hashes, however many it stored")
 
 	dry := newHBStore(t, hbMixedLibrary(t, root, total)...)
-	runHB(t, dry.store(), hbRun{dryRun: true})
+	runHB(t, dry.store(), hbRun{dryRun: true, opID: "01RECOMPUTEDRY"})
 	assert.Empty(t, dry.recomputes, "a dry run stores nothing, so it recomputes nothing")
 }
 
@@ -80,7 +80,7 @@ func TestBackfillFileHashes_DoesNotRecomputeABookThatWroteNothing(t *testing.T) 
 		}
 	}
 
-	_, c, _ := runHB(t, h.store(), hbRun{})
+	_, c, _ := runHB(t, h.store(), hbRun{opID: "01WROTENOTHING"})
 
 	assert.Equal(t, hbCounts{"hashed": 2, "busy": 1}, c)
 	assert.Equal(t, map[string]int{"b1": 1}, h.recomputes, "only the book whose hash was written is recomputed")
@@ -112,7 +112,7 @@ func TestBackfillFileHashes_RealStoreRecomputesEachBookOnce(t *testing.T) {
 	}
 	readLogs := aggtest.Capture(t)
 
-	_, c, _ := runHB(t, ps, hbRun{})
+	_, c, _ := runHB(t, ps, hbRun{opID: "01REALSTOREONCE"})
 
 	assert.Equal(t, hbCounts{"hashed": 12}, c)
 	for title, b := range books {
@@ -126,47 +126,67 @@ func TestBackfillFileHashes_RealStoreRecomputesEachBookOnce(t *testing.T) {
 	}
 }
 
-// A recompute that fails stops the chunk before its rows are recorded: the hashes
-// are stored but the report has none of the chunk's rows, and the journal stays.
-// A resume replays the journal, recomputes the books again, and ends with the
-// report and totals of an uninterrupted run, each hash stored once.
-func TestBackfillFileHashes_RecomputeFailureKeepsTheJournalAndTheResumeRecomputes(t *testing.T) {
+// A book whose aggregate recompute fails persistently does not stop the run (D45).
+// Its hashes are stored and its rows recorded, every other book is still
+// recomputed, the failure is logged once per chunk (not once per book or row), the
+// chunk journals are cleared as normal, and the result line names the count and
+// the failed book id.
+func TestBackfillFileHashes_APersistentlyFailingRecomputeDoesNotStopTheRun(t *testing.T) {
 	const total, opID = 1300, "01RECOMPUTEFAILS"
 	root := hbLibrary(t)
 	h := newHBStore(t, hbMixedLibrary(t, root, total)...)
-	var mu sync.Mutex
-	failed := false
 	h.recomputeErr = func(book string) error {
-		mu.Lock()
-		defer mu.Unlock()
-		if book == "b0" && !failed {
-			failed = true
+		if book == "b0" {
 			return errors.New("pebble is on fire")
 		}
 		return nil
 	}
 
-	_, err := hbRunJob(t, h.store(), hbRun{opID: opID})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "recompute aggregates of book b0")
-	reportFile := filepath.Join(root, ".reports", "backfill-file-hashes-"+opID+".tsv")
-	assert.Empty(t, hbReadReport(t, reportFile), "no row of the failed chunk may be recorded")
-	assert.NotEmpty(t, h.writes, "the hashes of the chunk were stored before the recompute")
-	_, hasJournal := h.state[opID+":params"]
-	assert.True(t, hasJournal, "the journal must stay so the resume recomputes")
-
 	rep, c, report := runHB(t, h.store(), hbRun{opID: opID})
 
-	assert.Equal(t, hbWant(total), c)
-	assert.Len(t, hbDistinctIDs(t, hbReadReport(t, report)), total)
-	assert.NotContains(t, rep.logs[len(rep.logs)-1], "counts cover only")
+	assert.Equal(t, hbWant(total), c, "the run finishes with the totals of an uninterrupted one")
+	assert.Len(t, hbDistinctIDs(t, hbReadReport(t, report)), total, "every row is recorded")
 	for id, n := range h.writes {
-		assert.Equal(t, 1, n, "hash for %s stored %d times", id, n)
+		assert.Equal(t, 1, n, "hash for %s stored %d times: the failed book's hashes are kept, not redone", id, n)
 	}
-	assert.GreaterOrEqual(t, h.recomputes["b0"], 2, "the resume must recompute the book the dead run failed on")
-	_, hasJournal = h.state[opID+":params"]
-	assert.False(t, hasJournal)
+	want := hbChunkedWant(total)
+	assert.Equal(t, want, h.recomputes, "every book, the failing one included, is attempted once per chunk that wrote it")
+	assert.Greater(t, len(want), 1, "the fixture must have other books to recompute")
+	_, hasJournal := h.state[opID+":params"]
+	assert.False(t, hasJournal, "the chunk journal is cleared as normal")
+
+	summary := rep.logs[len(rep.logs)-1]
+	assert.Contains(t, summary, "WARNING: the aggregates of 1 books could not be recomputed")
+	assert.Contains(t, summary, "books b0)")
+	assert.NotContains(t, summary, "b1,", "only the failed book is named")
+	n := 0
+	for _, l := range rep.logs {
+		if strings.Contains(l, "Could not recompute the aggregates of 1 books") {
+			n++
+		}
+	}
+	assert.Equal(t, want["b0"], n, "one error per chunk that hit the failing book")
+}
+
+// Several failing books are one logged error per chunk, all named in the result.
+func TestBackfillFileHashes_FailedRecomputesAreOneLogLineAndAllNamedInTheResult(t *testing.T) {
+	const total, opID = 20, "01SEVERALFAIL"
+	root := hbLibrary(t)
+	h := newHBStore(t, hbMixedLibrary(t, root, total)...) // one chunk; rows 0 and 10 hash, books b0 and b1
+	h.recomputeErr = func(string) error { return errors.New("pebble is on fire") }
+
+	rep, c, _ := runHB(t, h.store(), hbRun{opID: opID})
+
+	assert.Equal(t, hbWant(total), c)
+	assert.Contains(t, rep.logs[len(rep.logs)-1], "WARNING: the aggregates of 2 books could not be recomputed")
+	assert.Contains(t, rep.logs[len(rep.logs)-1], "books b0,b1)")
+	n := 0
+	for _, l := range rep.logs {
+		if strings.Contains(l, "Could not recompute the aggregates of 2 books") {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "one aggregated line for the chunk, not one per book")
 }
 
 // A run killed after its hashes are stored but before the recompute leaves
@@ -311,4 +331,107 @@ func TestBackfillFileHashes_ResumeRefusesAGarbageBucketOnADuplicateFileID(t *tes
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "line 3")
 	assert.Contains(t, err.Error(), "unknown bucket")
+}
+
+// A store that applied the write and then failed (the commit landed, its fsync
+// did not) is recorded as a write error, but its hash IS stored, so its book is
+// still recomputed: nothing would revisit it later, because every later run skips
+// a row that has a hash.
+func TestBackfillFileHashes_AStoreThatFailedAfterApplyingStillRecomputesItsBook(t *testing.T) {
+	root := hbLibrary(t)
+	h := newHBStore(t,
+		database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbWrite(t, root, "Year One.m4b", "year one bytes")},
+		database.BookFileCore{ID: "f2", BookID: "b2", FilePath: hbWrite(t, root, "Hush.m4b", "hush bytes")},
+	)
+	h.failAfterApply = func(id string) error {
+		if id == "f1" {
+			return errors.New("fsync failed after the commit")
+		}
+		return nil
+	}
+
+	_, c, report := runHB(t, h.store(), hbRun{opID: "01FSYNCFAILS"})
+
+	assert.Equal(t, hbCounts{"hashed": 1, "write_errors": 1}, c)
+	assert.Equal(t, map[string][]string{"write-error": {"f1"}, "hashed": {"f2"}}, hbBuckets(hbReadReport(t, report)))
+	assert.Equal(t, 1, h.writes["f1"], "the write did land")
+	assert.Equal(t, map[string]int{"b1": 1, "b2": 1}, h.recomputes, "the book of the failed-after-apply row is recomputed too")
+}
+
+// The same on the replay path: a run killed before it stored anything, resumed,
+// replays the journal; a journaled hash whose store then fails after applying
+// still gets its book recomputed.
+func TestBackfillFileHashes_ReplayRecomputesTheBookOfAStoreThatFailedAfterApplying(t *testing.T) {
+	const opID = "01REPLAYFSYNC"
+	root := hbLibrary(t)
+	files := []database.BookFileCore{
+		{ID: "f1", BookID: "b1", FilePath: hbWrite(t, root, "Year One.m4b", "year one bytes")},
+		{ID: "f2", BookID: "b2", FilePath: hbWrite(t, root, "Hush.m4b", "hush bytes")},
+	}
+	h := newHBStore(t, files...)
+	errKill := errors.New("killed")
+	restore := jobs.SetHashBackfillCommitHook(func(stage string, start int) error {
+		if stage == "after-journal" {
+			return errKill
+		}
+		return nil
+	})
+	_, err := hbRunJob(t, h.store(), hbRun{opID: opID})
+	restore()
+	require.ErrorIs(t, err, errKill)
+	require.Empty(t, h.writes, "the dead run stored nothing")
+	h.failAfterApply = func(id string) error {
+		if id == "f1" {
+			return errors.New("fsync failed after the commit")
+		}
+		return nil
+	}
+
+	_, c, _ := runHB(t, h.store(), hbRun{opID: opID})
+
+	assert.Equal(t, hbCounts{"hashed": 1, "write_errors": 1}, c)
+	assert.Equal(t, map[string]int{"b1": 1, "b2": 1}, h.recomputes, "the replay recomputes the book of the failed-after-apply row")
+}
+
+// With no journal there is nothing for a resume to repair a missed recompute
+// from, and a later run skips every row that has a hash. So a run with no
+// operation ID, or with no library root, stores each row through the recomputing
+// ModifyBookFile, which recomputes the book as part of the write, and never takes
+// the deferred path.
+func TestBackfillFileHashes_WithoutAJournalEachRowIsStoredWithItsRecompute(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		opID   string
+		noRoot bool
+	}{
+		{"no operation id", "", false},
+		{"no library root", "01NOROOT", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := hbLibrary(t)
+			h := newHBStore(t,
+				database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbWrite(t, root, "Year One.m4b", "year one bytes")},
+				database.BookFileCore{ID: "f2", BookID: "b1", FilePath: hbWrite(t, root, "Year Two.m4b", "year two bytes")},
+				database.BookFileCore{ID: "f3", BookID: "b2", FilePath: hbWrite(t, root, "Hush.m4b", "hush bytes")},
+			)
+			if tc.noRoot {
+				hbConfigRoot(t, "")
+			}
+			st := h.store()
+			deferredCalls := 0
+			deferred := st.ModifyBookFileDeferAggregatesFunc
+			st.ModifyBookFileDeferAggregatesFunc = func(b, f string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+				deferredCalls++
+				return deferred(b, f, fn)
+			}
+
+			_, c, _ := runHB(t, st, hbRun{opID: tc.opID})
+
+			assert.Equal(t, hbCounts{"hashed": 3}, c)
+			assert.Zero(t, deferredCalls, "no journal: the deferred store is not used")
+			assert.Equal(t, map[string]int{"b1": 2, "b2": 1}, h.perRowRecomputes, "each stored row recomputed its book as part of the write")
+			assert.Empty(t, h.recomputes, "no chunk-level recompute: it would be a second one")
+			assert.Equal(t, map[string]int{"f1": 1, "f2": 1, "f3": 1}, h.writes)
+		})
+	}
 }

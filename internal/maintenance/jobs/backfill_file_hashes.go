@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.3.0
+// version: 4.4.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -217,9 +218,12 @@ type hbFile interface {
 // hbReportPerm is the mode a new report file is created with: util.FileMode,
 // the repo's standard (group write kept, because on a POSIX-ACL filesystem the
 // group bits are the ACL mask and dropping group write would silently strip the
-// write access the operator granted). Never world-writable. The report sits
-// inside the library share and is read back on resume, which is why it is vetted
-// on the open descriptor and not trusted (see the trust note on loadPrior).
+// write access the operator granted). Never world-writable. The report is
+// group-writable by design (D43), so a user in the share's group, or on its ACL,
+// can edit a live run's report. That can make a resume skip rows and inflate its
+// counts, and can never cause a hash write (see the trust note on loadPrior). The
+// checks on the open descriptor (hbCheckReportFile) turn away files other
+// accounts made, not the share's group or ACL users.
 const hbReportPerm = util.FileMode
 
 // hbMaxReportBytes caps the size of a report that is read back on resume, and
@@ -236,8 +240,10 @@ var (
 // hbCheckReportFile vets the opened report file, using the open descriptor (so
 // the answer cannot be swapped between check and use): it must be a regular
 // file, owned by the user this process runs as, and no larger than
-// hbMaxReportBytes. The report is inside the library share, which other users
-// may be able to write, so a file somebody else made is not trusted.
+// hbMaxReportBytes. The report is inside the library share, so a file another
+// account made (a different owner, a symlink, a device) is not trusted. Users in
+// the share's group or on its ACL can write a report this process made; that is
+// accepted (D43), because a report only ever decides what a resume skips.
 func hbCheckReportFile(f hbFile) error {
 	info, err := f.Stat()
 	if err != nil {
@@ -383,9 +389,10 @@ func hbParseRow(line string) []string {
 // an error: the ledger cannot be trusted, and guessing would put wrong numbers
 // in the summary. unterminated reports that the last kept line had no newline.
 //
-// TRUST. The report lives under {root}/.reports, inside the library share, so
-// whoever can write the library can write it. Its content is therefore treated
-// as untrusted input: it only ever decides which rows to SKIP and what to COUNT.
+// TRUST. The report lives under {root}/.reports, inside the library share, and
+// its files are group-writable by design (D43), so whoever is in the share's
+// group or on its ACL can write it. Its content is therefore treated as
+// untrusted input: it only ever decides which rows to SKIP and what to COUNT.
 // Nothing read from it is ever stored, hashed or used as a path; the only things
 // taken from a line are its bucket (an enum) and its file ID, and both are
 // validated here (hbValidID). What a resume STORES comes from the file on disk
@@ -559,6 +566,11 @@ type hashBackfillRun struct {
 	mu sync.Mutex
 
 	notFoundLogged atomic.Int64
+
+	// failedBooks maps a book whose aggregate recompute failed to the failure
+	// text. Its hashes are stored; the run does not stop for it (D45) and the
+	// summary names these books. Only touched by the chunk-committing goroutine.
+	failedBooks map[string]string
 }
 
 func (r *hashBackfillRun) log(level, msg string, detail *string) {
@@ -762,8 +774,9 @@ func hbSameRow(row *database.BookFile, bf database.BookFileCore) bool {
 // an error: it is counted as busy and retried next run. A row that already has a
 // hash keeps it and counts as hashed.
 //
-// The store call is the variant that does NOT recompute the book's aggregates:
-// that would decode every file row of the book once per stored hash (a
+// When the run has a journal, the store call is the variant that does NOT
+// recompute the book's aggregates (a run with no journal uses ModifyBookFile, see
+// below): that would decode every file row of the book once per stored hash (a
 // 400-chapter book: 400 recomputes, 160k row decodes). The hash does feed the
 // stored aggregate (a missing row whose hash matches a present row is absorbed
 // into it, book_runtime.go), so the book IS recomputed, once per chunk, by
@@ -777,7 +790,7 @@ func hbSameRow(row *database.BookFile, bf database.BookFileCore) bool {
 // ModifyBookFile* never returns it, so it is not matched.)
 func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 	var already, changed bool
-	row, err := r.store.ModifyBookFileDeferAggregates(o.bf.BookID, o.bf.ID, func(row *database.BookFile) error {
+	apply := func(row *database.BookFile) error {
 		switch {
 		case row.FileHash != "":
 			already = true
@@ -794,12 +807,24 @@ func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 			row.OriginalFileHashKind = database.FileHashKindSampled
 		}
 		return nil
-	})
+	}
+	// With a journal the aggregates are recomputed once per book per chunk
+	// (recomputeBooks), after the stores. Without one (no operation ID, or no
+	// library root) a kill between the stores and that recompute would leave the
+	// stored hashes behind stale aggregates and nothing would ever revisit them
+	// (a later run skips rows that have a hash), so each row is stored through
+	// ModifyBookFile, which recomputes its book as part of the write.
+	modify := r.store.ModifyBookFileDeferAggregates
+	deferred := r.journalID != ""
+	if !deferred {
+		modify = r.store.ModifyBookFile
+	}
+	row, err := modify(o.bf.BookID, o.bf.ID, apply)
 	switch {
 	case err != nil:
 		// A failed write may still have been applied (an fsync that failed after
 		// the commit), so its book is recomputed too.
-		o.written = !already && !changed
+		o.written = deferred && !already && !changed
 		msg := err.Error()
 		o.bucket, o.reason = hbBucketWriteError, msg
 		slog.Error("backfill-file-hashes store hash failed", "details", msg)
@@ -811,7 +836,7 @@ func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 	case already:
 		o.reason = "hash already stored"
 	default:
-		o.written = true
+		o.written = deferred
 	}
 }
 
@@ -841,12 +866,14 @@ func (r *hashBackfillRun) storeHashes(outs []hbOutcome) {
 // storeHash). all selects every book with a stored hash instead, whether or not
 // this call wrote it: a replayed journal cannot know whether the dead run got as
 // far as this step for a row it finds already stored, so it recomputes them all.
-// Books are independent, so they run on a bounded pool. It returns the first
-// failure after trying every book: a recompute that fails stops the chunk before
-// its rows are recorded, so the journal is kept and a resume replays and
-// recomputes again, rather than leaving a stored hash behind a stale aggregate
-// that nothing would ever revisit. Does nothing in a dry run.
-func (r *hashBackfillRun) recomputeBooks(outs []hbOutcome, all bool) error {
+// Books are independent, so they run on a bounded pool. A recompute that fails
+// does not stop the run (D45): the book's hashes are stored and the aggregate is
+// derived data, so the failures are returned (book ID to error text), sorted by
+// the caller, and noteRecomputeFailures logs them once and keeps them for the
+// summary. The chunk's journal is cleared as normal, so a failed book is not
+// retried by a resume; the summary names it so it can be repaired. Does nothing in
+// a dry run.
+func (r *hashBackfillRun) recomputeBooks(outs []hbOutcome, all bool) map[string]string {
 	if r.dryRun {
 		return nil
 	}
@@ -869,21 +896,73 @@ func (r *hashBackfillRun) recomputeBooks(outs []hbOutcome, all bool) error {
 	var g errgroup.Group
 	g.SetLimit(r.workers)
 	var mu sync.Mutex
-	var first error
+	var failed map[string]string
 	for _, id := range books {
 		g.Go(func() error {
 			if err := r.store.RecomputeBookAggregates(id); err != nil {
 				mu.Lock()
-				if first == nil {
-					first = fmt.Errorf("recompute aggregates of book %s: %w", id, err)
+				if failed == nil {
+					failed = map[string]string{}
 				}
+				failed[id] = err.Error()
 				mu.Unlock()
 			}
 			return nil
 		})
 	}
 	_ = g.Wait() // the closures never return an error
-	return first
+	return failed
+}
+
+// hbMaxFailedBooksListed caps how many failed book IDs the summary and the log
+// line spell out; the rest are counted.
+const hbMaxFailedBooksListed = 50
+
+// noteRecomputeFailures keeps the books whose recompute failed for the summary
+// and logs them as ONE error line, however many failed (a persistently failing
+// book is hit again by every later chunk that writes one of its rows, so a line
+// per failure would repeat it).
+func (r *hashBackfillRun) noteRecomputeFailures(failed map[string]string) {
+	if len(failed) == 0 {
+		return
+	}
+	if r.failedBooks == nil {
+		r.failedBooks = map[string]string{}
+	}
+	ids := make([]string, 0, len(failed))
+	for id, msg := range failed {
+		ids = append(ids, id)
+		r.failedBooks[id] = msg
+	}
+	sort.Strings(ids)
+	first := failed[ids[0]]
+	hbLog.Error("could not recompute the aggregates of %d books after storing their hashes, the hashes are kept, books=%s first_error=%s",
+		len(ids), logger.SanitizeLogValue(hbListIDs(ids)), logger.SanitizeLogValue(first))
+	msg := first
+	r.log("error", fmt.Sprintf("Could not recompute the aggregates of %d books after storing their hashes: %s", len(ids), hbListIDs(ids)), &msg)
+}
+
+// hbListIDs joins ids for a message, spelling out at most hbMaxFailedBooksListed.
+func hbListIDs(ids []string) string {
+	if len(ids) <= hbMaxFailedBooksListed {
+		return strings.Join(ids, ",")
+	}
+	return strings.Join(ids[:hbMaxFailedBooksListed], ",") + fmt.Sprintf(" and %d more", len(ids)-hbMaxFailedBooksListed)
+}
+
+// failedBooksNote is the summary's warning for the books whose aggregate
+// recompute failed, "" when none did.
+func (r *hashBackfillRun) failedBooksNote() string {
+	if len(r.failedBooks) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(r.failedBooks))
+	for id := range r.failedBooks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return fmt.Sprintf("WARNING: the aggregates of %d books could not be recomputed after their hashes were stored, so they may be stale until the next edit or recompute: books %s",
+		len(ids), hbListIDs(ids))
 }
 
 // recordOutcomes counts every outcome and writes its row to the report, then
@@ -938,10 +1017,9 @@ func (r *hashBackfillRun) commitChunk(chunkStart int, outs []hbOutcome) error {
 		return err
 	}
 	// Once per book, after every hash of the chunk is stored and BEFORE the rows
-	// are recorded: a failure here leaves the journal, and the resume recomputes.
-	if err := r.recomputeBooks(outs, false); err != nil {
-		return err
-	}
+	// are recorded. A failure does not stop the run (D45): the hashes are kept and
+	// the failed books are named in the summary.
+	r.noteRecomputeFailures(r.recomputeBooks(outs, false))
 	if err := r.recordOutcomes(outs); err != nil {
 		return err
 	}
@@ -998,9 +1076,7 @@ func (r *hashBackfillRun) replayJournal() (int, error) {
 			bf: database.BookFileCore{ID: e.FileID, BookID: e.BookID, FilePath: e.Path, FileSize: e.Size, LastScanMtime: e.Mtime}})
 	}
 	r.storeHashes(outs)
-	if err := r.recomputeBooks(outs, true); err != nil {
-		return 0, err
-	}
+	r.noteRecomputeFailures(r.recomputeBooks(outs, true))
 	if err := r.recordOutcomes(outs); err != nil {
 		return 0, err
 	}
@@ -1202,6 +1278,13 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 
 	// Save a lightweight operation summary for the UI and activity feed.
+	if w := run.failedBooksNote(); w != "" {
+		run.log("warn", w, nil)
+		if partialNote != "" {
+			partialNote += "; "
+		}
+		partialNote += w
+	}
 	res := run.counts.summary(dryRun, reportPath, partialNote)
 	run.log("info", res, nil)
 	now := time.Now()
