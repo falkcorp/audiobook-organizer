@@ -1,7 +1,7 @@
 // file: internal/versions/ingest_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4f2a3b0c-5d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-26
 
 package versions
 
@@ -12,7 +12,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
@@ -590,6 +592,51 @@ func TestCreateIngestVersion_ForeignVersionIDDoesNotTakeLiveTorrent(t *testing.T
 	}
 	if got := storedRow(t, store, keeper.ID, "f1"); got.DelugeHash != "" {
 		t.Errorf("row must not claim the torrent: DelugeHash = %q", got.DelugeHash)
+	}
+}
+
+// Content the library already holds as a RETIRED version of another book must
+// not get a second, active version minted for it: the refusal names the reason
+// (ErrHeldAsRetiredVersion, wrapped with ErrTorrentLinkedElsewhere so callers
+// that only test the latter behave as before), and the torrent index stays on
+// the retired version, so the undo that restores it is not broken.
+func TestCreateIngestVersion_RetiredHolderRefusesWithItsOwnReason(t *testing.T) {
+	const torrent = "89abcdef0123456789abcdef0123456789abcdef"
+	store, keeper, filePath := ingestFixture(t, database.BookFile{})
+
+	holder, err := store.CreateBook(&database.Book{Title: "Year One", FilePath: filePath + ".holder", Format: "m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	retiredAt := time.Now()
+	retired, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: holder.ID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
+		TorrentHash: torrent, RetiredFromBookID: keeper.ID, RetireOpID: "op-1", RetiredAt: &retiredAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateBookVersion: %v", err)
+	}
+
+	_, linked, err := CreateIngestVersion(store, IngestVersionParams{
+		BookID: keeper.ID, BookFileID: "f1", FilePath: filePath, Format: "m4b", Source: "deluge", TorrentHash: torrent,
+	})
+	if !errors.Is(err, ErrHeldAsRetiredVersion) {
+		t.Errorf("err = %v, want ErrHeldAsRetiredVersion", err)
+	}
+	if !errors.Is(err, ErrTorrentLinkedElsewhere) {
+		t.Errorf("err = %v, want it to also match ErrTorrentLinkedElsewhere", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), retired.ID) {
+		t.Errorf("the error must name the retired version %q: %v", retired.ID, err)
+	}
+	if linked {
+		t.Error("reported linked")
+	}
+	if idx, _ := store.GetBookVersionByTorrentHash(torrent); idx == nil || idx.ID != retired.ID {
+		t.Errorf("torrent index must still name the retired version %q, got %+v", retired.ID, idx)
+	}
+	if vers, _ := store.GetBookVersionsByBookID(keeper.ID); len(vers) != 0 {
+		t.Errorf("no version may be created for the keeper, got %d", len(vers))
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-26
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -108,6 +108,19 @@ type IngestVersionParams struct {
 // writing it onto the row would make the row claim a torrent another version
 // owns. Nothing is created or written.
 var ErrTorrentLinkedElsewhere = errors.New("torrent already linked to another live version")
+
+// ErrHeldAsRetiredVersion is wrapped, together with ErrTorrentLinkedElsewhere,
+// when the live holder of TorrentHash is a RETIRED version: content the
+// library already holds as a retired version of another book (the
+// retire-versions repair moved the version's files onto that book and kept the
+// version, torrent index included). Callers that only test
+// ErrTorrentLinkedElsewhere keep their behaviour; this one names the reason so
+// a report says "already held as a retired version of H" instead of a bare
+// "linked elsewhere". LiveTorrentHolder deliberately still returns a retired
+// version as the holder: CreateBookVersion overwrites the torrent index
+// unconditionally, so treating it as unheld would move the torrent off the
+// retired version and break the undo that restores it.
+var ErrHeldAsRetiredVersion = errors.New("torrent content is already held as a retired version")
 
 // ErrVersionNotAdoptable is returned by an adopt-only CreateIngestVersion
 // (IngestVersionParams.AdoptVersionID) when the version it names is not the
@@ -346,6 +359,10 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 	}
 
 	if holder != nil && (ver == nil || holder.ID != ver.ID) {
+		if holder.Status == database.BookVersionStatusRetired {
+			return nil, false, fmt.Errorf("%w: %w: torrent %s is already held as retired version %s of book %s; not minting a second version for it",
+				ErrTorrentLinkedElsewhere, ErrHeldAsRetiredVersion, params.TorrentHash, holder.ID, holder.BookID)
+		}
 		return nil, false, fmt.Errorf("%w: torrent %s is held by version %s of book %s",
 			ErrTorrentLinkedElsewhere, params.TorrentHash, holder.ID, holder.BookID)
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/single_owner_index_lock_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: b4e07d19-6a3c-4825-9f71-3d8c05e2a916
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -209,7 +209,8 @@ var singleOwnerIndexStagers = map[string]string{
 	"ClearAllAcoustIDFingerprints": "commitSingleOwnerIndexBatch",
 	"SweepBookFileSegDrop":         "commitSingleOwnerIndexBatch",
 	// -> its own lockSingleOwnerIndex
-	"ClaimBookFilePathKey": "lockSingleOwnerIndex around db.Set",
+	// (the shared body of ClaimBookFilePathKey and ClaimRetiredBookFilePathKey)
+	"claimPathKey": "lockSingleOwnerIndex around db.Set",
 	// helpers that only stage into a caller's batch
 	"deleteBookFileSecondaryIndexes":   "its caller's commit",
 	"writeBookFileSecondaryIndexes":    "its caller's commit",

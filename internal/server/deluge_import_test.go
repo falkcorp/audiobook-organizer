@@ -1,7 +1,7 @@
 // file: internal/server/deluge_import_test.go
-// version: 2.2.0
+// version: 2.2.2
 // guid: e1b5d8f2-3c7a-4091-a2e9-6f4d0c8b3a15
-// last-edited: 2026-09-14
+// last-edited: 2026-10-26
 //
 // Tests for ImportToLibrary — delegates to internal/deluge/import.go.
 
@@ -22,7 +22,17 @@ import (
 // over an otherwise nil database.Store: any other method panics.
 type fakeStore struct {
 	database.Store // embed the interface so we don't need to implement all methods
-	updated        *database.BookFile
+	database.RetiredBookFileReader
+	updated *database.BookFile
+}
+
+// GetBookFileByPathIncludingRetired: this fake never holds a retired row, so its
+// plain GetBookFileByPath is the complete answer. The embedded reader (nil) only
+// makes the fake resolve as a database.RetiredBookFileReader, which
+// database.BookFileByPathIncludingRetired requires (it fails closed otherwise);
+// the import reads nothing else from it.
+func (f *fakeStore) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	return f.GetBookFileByPath(path)
 }
 
 // GetBookFileByPath matches PebbleStore's contract: (nil, nil) for a path no

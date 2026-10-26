@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 // Package dedup — acoustic-ID collector family (fable5 T013).
 //
@@ -133,7 +133,11 @@ func CollectExactAcoustID(
 				"file_id", queryFile.ID, "err", err)
 			continue
 		}
-		if hit == nil || hit.BookID == queryBookID || seen[hit.BookID] {
+		// A retired row is a version that left the library; GetBookFileByAcoustID
+		// already answers nil for a retired-only identity, and the Retired test
+		// keeps this site correct on a store that does not filter. Its BookID is
+		// the holder, so a hit would pair the holder with its own merged content.
+		if hit == nil || hit.Retired || hit.BookID == queryBookID || seen[hit.BookID] {
 			continue
 		}
 		if knownShortFingerprintFile(*hit) {
@@ -309,6 +313,12 @@ func CollectLSHAcoustID(
 			continue
 		}
 		if candFile == nil {
+			continue
+		}
+		// LSHProbe resolves an fpidx: entry by file id and returns retired rows
+		// too (the entry still names the shell the row was retired out of); a
+		// retired row is not a candidate source, and its BookID is the holder.
+		if candFile.Retired {
 			continue
 		}
 		if candFile.BookID == queryBookID || seen[candFile.BookID] {

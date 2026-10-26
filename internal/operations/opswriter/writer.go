@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer.go
-// version: 1.8.0
+// version: 1.11.0
 // guid: 52ea77b5-ab1a-4c42-b133-c362543494c0
-// last-edited: 2026-10-14
+// last-edited: 2026-10-26
 
 package opswriter
 
@@ -56,7 +56,12 @@ type BookStore interface {
 type BookFileStore interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
 	// GetBookFileByPath names the row holding a path's single-owner key, so a
-	// repoint's history can hand the key back on revert.
+	// repoint's history can hand the key back on revert. The holder is read
+	// with database.BookFileByPathIncludingRetired, so a retired row holding
+	// the key is journaled as its owner. That helper resolves
+	// database.RetiredBookFileReader through decorators; a store that does not
+	// resolve to it (this method is no fallback) makes RepointBookFile fail
+	// with database.ErrRetiredReaderUnavailable.
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
@@ -462,8 +467,9 @@ func (w *Writer) ModifyBookFile(ctx context.Context, bookID, fileID string, fn f
 // (database.SameFileLocation). Nothing on disk moves and no row is deleted. The
 // write is a compare-and-set against the location read here; the history row
 // (after the write) carries the whole location before and after, plus the row
-// that held to.Path's single-owner key, in the change type the operation
-// revert reverses (database.ChangeTypeBookFileRepoint).
+// that held to.Path's single-owner key (a retired row included: the revert
+// hands the key back to it unless a live row has the path), in the change type
+// the operation revert reverses (database.ChangeTypeBookFileRepoint).
 func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, expect, to database.BookFileLocation) error {
 	if w.cfg.Files == nil {
 		return errors.New("opswriter: no book_file store")
@@ -484,7 +490,7 @@ func (w *Writer) RepointBookFile(ctx context.Context, bookID, fileID string, exp
 		return fmt.Errorf("%w: book_file %s is at %q, not %q", ops.ErrChangedSincePlan, fileID, was.Path, expect.Path)
 	}
 	to.KeyOwnerBook, to.KeyOwnerRow = "", ""
-	owner, err := w.cfg.Files.GetBookFileByPath(to.Path)
+	owner, err := database.BookFileByPathIncludingRetired(w.cfg.Files, to.Path)
 	if err != nil {
 		return fmt.Errorf("read the row at %s: %w", to.Path, err)
 	}

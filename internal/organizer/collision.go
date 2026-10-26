@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.6.2
+// version: 1.9.0
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 // Pre-flight collision resolution for RenameFiles.
 //
@@ -70,7 +70,11 @@ import (
 // row that owns an occupied target, rehydrates its own row, and writes both
 // back. Nothing else.
 type CollisionStore interface {
-	// GetBookFileByPath finds the row that claims filePath, or (nil, nil).
+	// GetBookFileByPath finds the live row that claims filePath, or (nil, nil).
+	// The resolver does not call it directly: it asks
+	// database.BookFileByPathIncludingRetired, which reaches the store's
+	// retired-aware read and fails closed (ErrRetiredReaderUnavailable) for a
+	// store without it, so a retired version's claim on the path is seen.
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	// GetBookFileByID rehydrates the FULL record. UpdateBookFile is a
 	// full-record replacement, so a partial record would wipe the
@@ -477,12 +481,24 @@ func resolveTargetCollisions(entries []FileRenameEntry, policy *CollisionPolicy,
 		}
 
 		// In-library. Look up the row that owns the target so the stored-hash
-		// rung has something to compare against.
+		// rung has something to compare against, and so the quarantine branch
+		// knows whether another row holds the path.
+		//
+		// Unfiltered: a retired version's row still names its file and still
+		// holds the path's single-slot index. The live-only getter answers nil
+		// for it, and nil here reads as "no other row holds the kept path" --
+		// the quarantine branch would then repoint our row onto the path and
+		// steal the retired row's slot, the corruption occupantIsAnotherRow
+		// exists to prevent. The lookup's error is a failure, not "no owner",
+		// for the same reason: a store that cannot say who holds the path must
+		// not be read as one where nobody does.
 		if policy.Store != nil {
-			row, lerr := policy.Store.GetBookFileByPath(entry.TargetPath)
-			if lerr == nil {
-				c.occupant = row
+			row, lerr := database.BookFileByPathIncludingRetired(policy.Store, entry.TargetPath)
+			if lerr != nil {
+				failures = append(failures, *collisionFailure(c, "cannot determine which book_file row claims the occupied target: "+lerr.Error()))
+				continue
 			}
+			c.occupant = row
 		}
 		occHash := ""
 		if c.occupant != nil {
@@ -513,6 +529,26 @@ func resolveTargetCollisions(entries []FileRenameEntry, policy *CollisionPolicy,
 	if err := hashUndecided(candidates, policy); err != nil {
 		journal.rollback(result)
 		return nil, journal, err
+	}
+
+	// --- Between pass 2 and pass 3: refuse what is known to be unresolvable.
+	// A byte-identical occupant that is a retired version's row is refused (see
+	// retiredOccupantFailure), and that is decided from pass 1's lookup and
+	// pass 2's verdict alone. Deciding it in pass 3 would let the siblings
+	// ahead of it in the batch be quarantined and tombstoned first, and the
+	// rollback that undoes them is best effort: one that fails leaves a
+	// sibling's bytes in quarantine under a row restored to a path that no
+	// longer holds them. So the batch is refused here, with the journal still
+	// empty and nothing touched, through the same CollisionError. ---
+	for _, c := range candidates {
+		if f := retiredOccupantFailure(c); f != nil {
+			failures = append(failures, *f)
+		}
+	}
+	if len(failures) > 0 {
+		result.Collisions = append(result.Collisions, failures...)
+		journal.rollback(result)
+		return nil, journal, &CollisionError{Failures: failures}
 	}
 
 	// --- Pass 3: act. ---
@@ -641,6 +677,13 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 		return collisionDecision{entry: c.entry, resolution: base}, true, nil
 	}
 
+	// --- Identical, occupant is a RETIRED version's row. Refuse. Collision
+	// already refused this before pass 3 (retiredOccupantFailure); the check
+	// stays so this function is safe on its own. ---
+	if f := retiredOccupantFailure(c); f != nil {
+		return collisionDecision{}, false, f
+	}
+
 	// --- Identical, occupant in-library. The occupant is ALREADY at the
 	// organized target, so it is by definition the better-organized copy; our
 	// source is the loser. Quarantine it (never unlink) and make the rows
@@ -735,6 +778,32 @@ func applyCollisionDecision(c collisionCandidate, policy *CollisionPolicy, journ
 	base.Action = CollisionQuarantinedSource
 	base.QuarantinePath = qPath
 	return collisionDecision{entry: c.entry, resolution: base}, true, nil
+}
+
+// retiredOccupantFailure is the refusal for a byte-identical occupant that is a
+// RETIRED version's row, or nil when the candidate is not that.
+//
+// The retired row names the occupant file as its own, and it is the only row
+// that does. Quarantining our source would tombstone our live row
+// (Missing=true) while the live book's only present copy of that audio is a
+// file a retired version holds: the live book then shows a Missing file, and a
+// later purge of the retired version finds no row naming the target and deletes
+// it, leaving the bytes only in quarantine. Repointing onto the path instead
+// would take the retired row's single-slot path index. Neither is a state this
+// resolver may create, so the collision is unresolved: the source stays where
+// it is, nothing is journaled, and the failure names the retired row so the
+// record says why.
+//
+// It applies to the branches that would act on identical content in-library; a
+// different-content occupant takes the _copyN ladder and an occupant outside
+// the library root is left as it is, neither touching the retired row.
+func retiredOccupantFailure(c collisionCandidate) *CollisionFailure {
+	if c.verdict == identityDifferent || c.outside || c.occupant == nil || !c.occupant.Retired {
+		return nil
+	}
+	return collisionFailure(c, fmt.Sprintf(
+		"occupant is byte-identical but book_file %s, a retired version held under book %s, claims the kept file; refusing to quarantine the live source or repoint onto a retired version's file",
+		c.occupant.ID, c.occupant.BookID))
 }
 
 func collisionFailure(c collisionCandidate, reason string) *CollisionFailure {
