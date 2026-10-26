@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_date.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 953a0b92-fcf9-4757-8f95-5c6463dfc016
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -77,7 +77,10 @@ func HasRelativeDateFilter(filtersets ...[]FieldFilter) bool {
 			if !dateFilterFields[f.Field] && f.Field != "last_played" {
 				continue
 			}
-			node, err := search.FieldNodeForTerm(f.Field, f.Value, f.Quoted)
+			// NodeForTerm, not FieldNodeForTerm: last_played:(-30d|-60d) is an
+			// alternation, and a cache that skipped it would store a result
+			// that is different tomorrow.
+			node, err := search.NodeForTerm(f.Field, f.Value, f.Quoted)
 			if err != nil {
 				continue
 			}
@@ -101,15 +104,18 @@ type perUserMatcher struct {
 
 // newPerUserMatcher builds the matcher. A filter that does not parse is an
 // error, not a silent no-match: the entry points validate first, so reaching one
-// here is a bypassed boundary.
+// here is a bypassed boundary. Each filter is built by
+// search.PerUserFilterForTerm, the call the validation in compileFieldFilterAt
+// makes, so what the entry points accept is what is judged here, including the
+// alternation read_status:(a|b).
 func newPerUserMatcher(filters []FieldFilter) (*perUserMatcher, error) {
 	m := &perUserMatcher{now: time.Now(), filters: make([]search.PerUserFilter, 0, len(filters))}
 	for _, f := range filters {
-		node, err := search.FieldNodeForTerm(f.Field, f.Value, f.Quoted)
+		pf, err := search.PerUserFilterForTerm(f.Field, f.Value, f.Quoted, f.Negated, m.now)
 		if err != nil {
 			return nil, err
 		}
-		m.filters = append(m.filters, search.PerUserFilter{Node: node, Negated: f.Negated})
+		m.filters = append(m.filters, pf)
 	}
 	return m, nil
 }

@@ -1,7 +1,7 @@
 // file: web/src/services/playlistApi.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8d6e7f2a-9b0c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-26
 
 import { apiFetch } from '../utils/apiFetch';
 
@@ -32,7 +32,9 @@ async function jsonFetch(url: string, opts?: RequestInit) {
   });
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
-    throw Object.assign(new Error(body.error || resp.statusText), { response: { data: body, status: resp.status } });
+    throw Object.assign(new Error(body.error || resp.statusText), {
+      response: { data: body, status: resp.status },
+    });
   }
   const body = await resp.json();
   return body.data || body;
@@ -49,7 +51,26 @@ export async function listPlaylists(
   return { playlists: data.items || [], count: data.count };
 }
 
-export async function getPlaylist(id: string): Promise<{ playlist: UserPlaylist; book_ids: string[] }> {
+/** GET /playlists/:id: the playlist and its members as the viewer sees them. */
+export interface PlaylistDetailResponse {
+  playlist: UserPlaylist;
+  book_ids: string[];
+  /**
+   * How many books a smart playlist matches when that is more than the server
+   * lists (it caps a member list at 10,000). Absent when the list is complete.
+   */
+  book_ids_total?: number;
+  /**
+   * True when a smart playlist's members cannot be worked out because its saved
+   * query is no longer one the server evaluates. book_ids is then empty, and that
+   * emptiness means "unavailable", not "nothing matches".
+   */
+  members_unavailable?: boolean;
+  /** Why, and what to change; present with members_unavailable. */
+  members_unavailable_message?: string;
+}
+
+export async function getPlaylist(id: string): Promise<PlaylistDetailResponse> {
   return jsonFetch(`${API_BASE}/playlists/${id}`);
 }
 
@@ -71,7 +92,9 @@ export async function createPlaylist(data: {
 
 export async function updatePlaylist(
   id: string,
-  data: Partial<Pick<UserPlaylist, 'name' | 'description' | 'book_ids' | 'query' | 'sort_json' | 'limit'>>
+  data: Partial<
+    Pick<UserPlaylist, 'name' | 'description' | 'book_ids' | 'query' | 'sort_json' | 'limit'>
+  >
 ): Promise<UserPlaylist> {
   const resp = await jsonFetch(`${API_BASE}/playlists/${id}`, {
     method: 'PUT',

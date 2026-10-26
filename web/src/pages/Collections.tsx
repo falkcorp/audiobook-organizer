@@ -1,7 +1,7 @@
 // file: web/src/pages/Collections.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: f3330351-d6f6-4583-a859-a262bcee0c4c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -37,7 +37,11 @@ import {
   type CollectionType,
 } from '../services/collectionApi';
 import { BookPicker } from '../components/collections/BookPicker';
-import { MANAGE_TOOLTIP, memberCount } from '../components/collections/collectionUtils';
+import {
+  MANAGE_TOOLTIP,
+  memberCountLabel,
+  membersUnavailable,
+} from '../components/collections/collectionUtils';
 import { QueryHelp, SortPicker } from '../components/collections/QueryHelp';
 import { type SortChoice, encodeSort, queryError } from '../components/collections/queryHelpData';
 
@@ -131,10 +135,17 @@ export default function Collections() {
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <Button
                           size="small"
-                          aria-label={`Open the ${memberCount(col)} books in ${col.name}`}
+                          aria-label={
+                            membersUnavailable(col)
+                              ? `Open ${col.name}; its members could not be worked out for you`
+                              : `Open the ${memberCountLabel(col)} books in ${col.name}`
+                          }
+                          color={membersUnavailable(col) ? 'warning' : 'primary'}
                           onClick={() => navigate(`/collections/${col.id}`)}
                         >
-                          {memberCount(col)} books
+                          {membersUnavailable(col)
+                            ? 'members unavailable'
+                            : `${memberCountLabel(col)} books`}
                         </Button>
                         {canManage && (
                           <IconButton

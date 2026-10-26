@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.109.0
+// version: 1.109.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -50,7 +50,7 @@ import {
 import type { Audiobook } from '../types';
 import { runOrganizeRollback } from './organizeRollback';
 import { SortField, SortOrder } from '../types';
-import { parseSearch, type ParsedSearch } from '../utils/searchParser';
+import { listFieldFilters, parseSearch, type ParsedSearch } from '../utils/searchParser';
 import * as api from '../services/api';
 import type { SavedFilterPreset } from '../services/api';
 import {
@@ -890,19 +890,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         negated: false,
         quoted: true,
       });
-    if (parsedSearch) {
-      for (const ff of parsedSearch.fieldFilters) {
-        // quoted travels to the server: title:"a*" is literal text, while
-        // title:a* is a wildcard (see internal/querygrammar).
-        if (ff.field !== 'tag')
-          fieldFilters.push({
-            field: ff.field,
-            value: ff.value,
-            negated: ff.negated,
-            ...(ff.quoted ? { quoted: true } : {}),
-          });
-      }
-    }
+    // A query the server must read whole travels as `search=`: listFieldFilters
+    // then adds nothing, so its terms are not applied a second time.
+    fieldFilters.push(...listFieldFilters(parsedSearch));
     return fieldFilters;
   }, [filters, parsedSearch]);
 

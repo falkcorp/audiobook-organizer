@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_refresh_cas_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 8c41e0b9-6d27-4a53-b1f8-2e9d7a35c640
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package handlers_test
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,18 +20,21 @@ import (
 )
 
 // newRefreshHandler is a handler over store with an open index holding b1 to b3
-// and the refresh fixtures' listening states.
+// and the viewer fixtures' listening states.
 func newRefreshHandler(t *testing.T, store handlers.CollectionStore) *handlers.CollectionHandler {
 	t.Helper()
 	idx, err := search.Open(filepath.Join(t.TempDir(), "bleve"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = idx.Close() })
 	require.NoError(t, idx.MarkRebuilt())
+	added := func(days int) *time.Time { d := time.Now().AddDate(0, 0, -days); return &d }
 	require.NoError(t, idx.IndexBookBatch([]search.BookDocument{
-		{BookID: "b1", Title: "Alpha"}, {BookID: "b2", Title: "Bravo"}, {BookID: "b3", Title: "Charlie"},
+		{BookID: "b1", Title: "Alpha", DateAdded: added(2)},
+		{BookID: "b2", Title: "Bravo", DateAdded: added(20)},
+		{BookID: "b3", Title: "Charlie", DateAdded: added(60)},
 	}))
-	return handlers.NewCollectionHandler(store, nil, &colFakeUsers{list: ownerUsers()},
-		&colFakeBooks{states: refreshStates()}, func() *search.BleveIndex { return idx })
+	return handlers.NewCollectionHandler(store, nil,
+		&colFakeBooks{states: viewerStates()}, func() *search.BleveIndex { return idx })
 }
 
 // editedAfterListFake edits every collection (a new query and the Version bump a
@@ -44,7 +48,7 @@ func (e editedAfterListFake) ListCollections(ct string, l, o int) ([]database.Co
 	out := append([]database.Collection(nil), cols...)
 	e.colFakeStore.mu.Lock()
 	for i := range e.colFakeStore.cols {
-		e.colFakeStore.cols[i].Query = "last_played:>-1d title:UserEdited"
+		e.colFakeStore.cols[i].Query = "date_added:>-1d title:UserEdited"
 		e.colFakeStore.cols[i].Version++
 	}
 	e.colFakeStore.mu.Unlock()
@@ -67,7 +71,7 @@ func TestRefreshRelativeDynamic_NeverOverwritesAConcurrentEdit(t *testing.T) {
 		if c.Type != database.CollectionTypeDynamic {
 			continue
 		}
-		assert.Equal(t, "last_played:>-1d title:UserEdited", c.Query, "%s: the user's edit survived", c.ID)
+		assert.Equal(t, "date_added:>-1d title:UserEdited", c.Query, "%s: the user's edit survived", c.ID)
 		assert.Equal(t, []string{"b9"}, c.MaterializedBookIDs, "%s: members computed from the old query were not stored", c.ID)
 	}
 }
@@ -83,7 +87,7 @@ func (e editingPebble) ListCollections(ct string, l, o int) ([]database.Collecti
 	for i := range cols {
 		cur, gerr := e.PebbleStore.GetCollection(cols[i].ID)
 		require.NoError(e.t, gerr)
-		cur.Query = "last_played:>-1d title:UserEdited"
+		cur.Query = "date_added:>-1d title:UserEdited"
 		require.NoError(e.t, e.PebbleStore.UpdateCollection(cur))
 	}
 	return cols, n, err
@@ -94,7 +98,7 @@ func TestRefreshRelativeDynamic_RealStoreKeepsAConcurrentEdit(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
 	_, err = ps.CreateCollection(&database.Collection{Name: "rel", Type: database.CollectionTypeDynamic,
-		Query: "last_played:>-30d", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b9"}})
+		Query: "date_added:>-30d", CreatedByUserID: "alice", MaterializedBookIDs: []string{"b9"}})
 	require.NoError(t, err)
 
 	h := newRefreshHandler(t, editingPebble{ps, t})
@@ -104,6 +108,6 @@ func TestRefreshRelativeDynamic_RealStoreKeepsAConcurrentEdit(t *testing.T) {
 	cols, _, err := ps.ListCollections("", 0, 0)
 	require.NoError(t, err)
 	require.Len(t, cols, 1)
-	assert.Equal(t, "last_played:>-1d title:UserEdited", cols[0].Query, "the user's edit was clobbered")
+	assert.Equal(t, "date_added:>-1d title:UserEdited", cols[0].Query, "the user's edit was clobbered")
 	assert.Equal(t, 1, res.Conflicts)
 }

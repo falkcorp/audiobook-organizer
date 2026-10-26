@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -438,22 +438,15 @@ func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Q
 		// nothing, and the date alternation disagreed with date_added's OR.
 		// Negation applies to the whole group: -f:(a|b) is "none of them", which
 		// is what ANDing the negated alternatives meant, so it is unchanged.
-		alts := make([]*FieldNode, 0, len(n.Values))
-		for _, v := range n.Values {
-			node := &FieldNode{Field: n.Field, Value: v}
-			if IsDateField(n.Field) {
-				if err := CheckDateNode(node, tc.now); err != nil {
+		if IsDateField(n.Field) {
+			for _, v := range n.Values {
+				if err := CheckDateNode(&FieldNode{Field: n.Field, Value: v}, tc.now); err != nil {
 					return nil, err
 				}
 			}
-			alts = append(alts, node)
 		}
-		switch len(alts) {
-		case 0:
-		case 1:
-			tc.perUser = append(tc.perUser, PerUserFilter{Node: alts[0], Negated: negated})
-		default:
-			tc.perUser = append(tc.perUser, PerUserFilter{Alternatives: alts, Negated: negated})
+		if f, ok := perUserAltFilter(n, negated); ok {
+			tc.perUser = append(tc.perUser, f)
 		}
 		return nil, nil
 	}
@@ -607,4 +600,24 @@ func buildNumericRange(field, minS, maxS string, minInclusive, maxInclusive bool
 	nrq := bleve.NewNumericRangeInclusiveQuery(minPtr, maxPtr, &minInc, &maxInc)
 	nrq.SetField(field)
 	return nrq, nil
+}
+
+// perUserAltFilter is the filter for a per-user alternation: one term when it
+// lists a single value, one filter holding every alternative otherwise, and no
+// filter (ok false) when it lists none. The translator (a query string) and
+// PerUserFilterForTerm (the Library list's filters=) both build it here, so the
+// two entry points cannot disagree on what read_status:(a|b) means.
+func perUserAltFilter(n *ValueAltNode, negated bool) (PerUserFilter, bool) {
+	alts := make([]*FieldNode, 0, len(n.Values))
+	for _, v := range n.Values {
+		alts = append(alts, &FieldNode{Field: n.Field, Value: v})
+	}
+	switch len(alts) {
+	case 0:
+		return PerUserFilter{}, false
+	case 1:
+		return PerUserFilter{Node: alts[0], Negated: negated}, true
+	default:
+		return PerUserFilter{Alternatives: alts, Negated: negated}, true
+	}
 }

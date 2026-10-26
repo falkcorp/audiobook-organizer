@@ -1,14 +1,17 @@
 // file: internal/search/field_routing_test.go
-// version: 1.2.0
+// version: 1.4.1
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package search
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // duration: used to go to Bleve under its own name, which is not indexed
@@ -61,10 +64,10 @@ func TestIsIndexedField(t *testing.T) {
 	}
 }
 
-// The collections handler refuses a per-user field from anyone but the
-// collection's evaluator, and it decides with this helper. It must read the same
-// set the translator routes on and see through every shape a term can take.
-func TestQueryUsesPerUserField(t *testing.T) {
+// The collection handlers decide "is this evaluated per viewer" with this helper.
+// It must read the same set the translator routes on and see through every shape a
+// term can take.
+func TestQueryMayUsePerUserField_ParsedQueries(t *testing.T) {
 	yes := []string{
 		"read_status:finished",
 		"progress_pct:>5",
@@ -77,36 +80,41 @@ func TestQueryUsesPerUserField(t *testing.T) {
 		"read_status:(finished|in_progress)",
 		"((title:x))  last_played:>2026-01-01",
 	}
+	// Text that names a per-user field anywhere counts, even where the parser reads
+	// it as something else: guessing "not per-viewer" wrongly serves one user's
+	// state to everyone, guessing "per-viewer" wrongly only shows each viewer
+	// their own answer.
+	yes = append(yes,
+		"author:read_status",
+		"\"read_status:finished\"",
+		"read_status",
+		"title:\"PROGRESS_PCT\"",
+		"title:x last_played",
+	)
 	no := []string{
-		"",
 		"title:Alpha",
 		"date_added:>-30d",
 		"date_modified:<2026-01-01",
-		"author:read_status",
-		"\"read_status:finished\"",
-		"title:(unclosed",
-		"read_status",
+		"readstatus:finished",
+		"title:my_read_status_x",
+		"title:last-played",
 	}
 	for _, q := range yes {
-		if !QueryUsesPerUserField(q) {
-			t.Errorf("QueryUsesPerUserField(%q) = false, want true", q)
+		if !QueryMayUsePerUserField(q) {
+			t.Errorf("QueryMayUsePerUserField(%q) = false, want true", q)
 		}
 	}
 	for _, q := range no {
-		if QueryUsesPerUserField(q) {
-			t.Errorf("QueryUsesPerUserField(%q) = true, want false", q)
+		if QueryMayUsePerUserField(q) {
+			t.Errorf("QueryMayUsePerUserField(%q) = true, want false", q)
 		}
 	}
 }
 
-func TestPerUserFieldNames_MatchesTheRoutingSet(t *testing.T) {
-	names := PerUserFieldNames()
-	if got, want := strings.Join(names, ","), "last_played,progress_pct,read_status"; got != want {
-		t.Fatalf("PerUserFieldNames() = %s, want %s", got, want)
-	}
-	for _, n := range names {
+func TestIsPerUserField_MatchesTheRoutingSet(t *testing.T) {
+	for _, n := range []string{"last_played", "progress_pct", "read_status"} {
 		if !IsPerUserField(n) {
-			t.Errorf("IsPerUserField(%q) = false for a listed name", n)
+			t.Errorf("IsPerUserField(%q) = false for a per-user field", n)
 		}
 	}
 	for _, n := range []string{"title", "date_added", "duration", ""} {
@@ -116,14 +124,34 @@ func TestPerUserFieldNames_MatchesTheRoutingSet(t *testing.T) {
 	}
 }
 
+// Text that does not parse cannot be shown to reference no per-user field, so a
+// stored list guarded by it is never served or kept.
+func TestQueryMayUsePerUserField_FailsClosedOnUnparseableText(t *testing.T) {
+	unparseable := []string{
+		`read_status:finished "unterminated`,
+		`title:"unterminated`,
+		`read_status:(finished`,
+		"title:(unclosed",
+		"", // no query at all cannot be shown to read nothing either
+	}
+	for _, q := range unparseable {
+		if _, err := ParseQuery(q); err == nil {
+			t.Fatalf("fixture %q parses; the test needs text that does not", q)
+		}
+		if !QueryMayUsePerUserField(q) {
+			t.Errorf("QueryMayUsePerUserField(%q) = false, want true (fail closed)", q)
+		}
+	}
+}
+
 // The gate is only as good as its agreement with the evaluator: a query the
 // translator routes to the per-user pass (and so evaluates as the owner) must be
-// one QueryUsesPerUserField reports, in every spelling the parser accepts. This
-// is the differential check: for each query that parses, the translator's own
-// per-user routing and the gate must give the same answer. A query that does not
+// one QueryMayUsePerUserField reports, in every spelling the parser accepts. This
+// is the differential check: for each query that parses, whenever the translator
+// routes a filter to the per-user pass the gate must say so. A query that does not
 // parse (or translate) is refused by EvaluateSmartPlaylist, so it never reads
 // anyone's state whatever the gate says.
-func TestQueryUsesPerUserField_AgreesWithTranslatorRouting(t *testing.T) {
+func TestQueryMayUsePerUserField_AgreesWithTranslatorRouting(t *testing.T) {
 	queries := []string{
 		"read_status:finished", "READ_STATUS:finished", "Read_Status:finished",
 		"read_status:\"finished\"", "read_status:'finished'", "read_status:Finished",
@@ -148,8 +176,11 @@ func TestQueryUsesPerUserField_AgreesWithTranslatorRouting(t *testing.T) {
 		if err != nil {
 			continue // likewise refused at translation
 		}
-		if got, want := QueryUsesPerUserField(q), len(perUser) > 0; got != want {
-			t.Errorf("%q: QueryUsesPerUserField = %v but the translator routes %d per-user filter(s)", q, got, len(perUser))
+		// One direction is exact: whatever the translator routes to the per-user pass
+		// the gate reports. The other is deliberately loose (the gate also answers
+		// true for text that merely names a field, e.g. author:read_status).
+		if got := QueryMayUsePerUserField(q); !got && len(perUser) > 0 {
+			t.Errorf("%q: the translator routes %d per-user filter(s) but QueryMayUsePerUserField = false", q, len(perUser))
 		}
 		if len(perUser) > 0 {
 			routed++
@@ -158,5 +189,36 @@ func TestQueryUsesPerUserField_AgreesWithTranslatorRouting(t *testing.T) {
 	// Not vacuous: most of the list really is routed to the per-user pass.
 	if routed < 15 {
 		t.Errorf("only %d of the probe queries were routed per-user; the probe list no longer exercises the gate", routed)
+	}
+}
+
+// The store drops a per-viewer collection's stored member list only because this
+// package registers its detector with it at init. An unregistered store keeps the
+// list, which is a silent fail-open, so the registration is tested through the
+// store itself, on both write paths.
+func TestInit_RegistersThePerViewerClassifierWithTheStore(t *testing.T) {
+	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "c.pebble"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	created, err := store.CreateCollection(&database.Collection{
+		Name: "Hush", Type: database.CollectionTypeDynamic, Query: "read_status:finished",
+		MaterializedBookIDs: []string{"b1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.GetCollection(created.ID)
+	if len(got.MaterializedBookIDs) != 0 {
+		t.Fatalf("create kept %v: importing internal/search did not install the store's per-viewer classifier", got.MaterializedBookIDs)
+	}
+	got.MaterializedBookIDs = []string{"b1"}
+	if err := store.UpdateCollection(got); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = store.GetCollection(created.ID)
+	if len(got.MaterializedBookIDs) != 0 {
+		t.Fatalf("update kept %v", got.MaterializedBookIDs)
 	}
 }

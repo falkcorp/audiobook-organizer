@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.6.0
+// version: 1.9.2
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package abs
 
@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -64,6 +66,52 @@ import (
 // "admins, plus anyone granted the collections permission" without an
 // admin-OR-permission special case.
 
+// 🔴 A DYNAMIC COLLECTION WITH A PER-USER RULE IS EVALUATED FOR THE VIEWER (owner
+// decision 2026-10-25). A query that uses read_status, progress_pct or last_played
+// answers "for whom?", and the answer is the signed-in user: two readers of the same
+// collection see different books, and nobody can learn another user's listening
+// state from its members. Such a collection stores no member list (the stored
+// MaterializedBookIDs is empty by construction and is never served here even if a
+// pre-change row still holds one), so this surface asks the injected
+// CollectionViewerMembers for the caller's own members. With none injected, or no
+// resolvable viewer, or an evaluation that cannot run (index closed), the
+// collection shows no books: it fails closed, never to the creator's list.
+// Collections without a per-user rule keep serving their stored list, as before.
+//
+// "Per-user rule" includes a query that does not parse (search.QueryMayUsePerUserField):
+// "cannot tell" is never "serve the stored list".
+//
+// lastUpdate of such a collection is the time of the request, not UpdatedAt: its
+// members change on every position heartbeat and whenever the library gains a
+// matching book, none of which touches the row, so a stored timestamp would tell a
+// client that caches by lastUpdate that a stale list is current. A client therefore
+// refetches it each time, which is the price of a list that depends on who is
+// asking and on state that moves; it is also what a viewer who just finished a book
+// needs to see the collection change.
+
+// CollectionViewerMembers evaluates the per-viewer dynamic collections in cols for
+// viewerID: collection id to ordered book ids. A collection absent from the map is
+// not per-viewer; one present with an empty list shows nothing. Implemented by the
+// native collection handler so the two surfaces share one definition. ctx is the
+// request's; the error is only ever its cancellation, in which case the answer is
+// partial and the caller drops the page.
+type CollectionViewerMembers func(ctx context.Context, cols []database.Collection, viewerID string) (ViewerMembers, error)
+
+// ViewerMembers is what CollectionViewerMembers answers: the members, and which of
+// the per-viewer collections could not be worked out at all.
+type ViewerMembers struct {
+	// Sets maps a per-viewer collection id to the caller's ordered book ids. A
+	// collection absent from it is not per-viewer.
+	Sets map[string][]string
+	// Unavailable holds the ids of per-viewer collections whose members could not be
+	// worked out (the search index is closed or rebuilding, the query is refused, the
+	// caller's state could not be read). Their Sets entry is empty, and that emptiness
+	// means "unknown". The list routes still show them with no books, because a page
+	// of collections cannot fail for one of its rows; the detail route answers 503
+	// rather than serve an empty collection as the truth.
+	Unavailable map[string]struct{}
+}
+
 // CollectionStore is the narrow slice of the store this surface needs.
 //
 // Optional, exactly like PlaylistStore: with a nil store the list route keeps
@@ -109,11 +157,15 @@ func (h *Handler) LibraryCollections(c *gin.Context) {
 	// One batched expansion for the whole page rather than one per collection —
 	// membership is user-controlled and can reach library scale, which is the
 	// loop shape CLAUDE.md's concurrency section exists to prevent.
-	byCollection := h.collectionsPageBooks(c.Request.Context(), cols)
+	byCollection := h.collectionsPageBooks(c, cols)
+	if byCollection.gone {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
 
 	results := make([]any, 0, len(cols))
 	for i := range cols {
-		results = append(results, h.collectionDTO(&cols[i], byCollection[cols[i].ID]))
+		results = append(results, h.collectionDTO(&cols[i], byCollection))
 	}
 	// Total is what was RETURNED. A total larger than results would tell the
 	// client there are pages it has no parameter to fetch.
@@ -132,8 +184,21 @@ func (h *Handler) CollectionDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	page := h.collectionsPageBooks(c, []database.Collection{*col})
+	if page.gone {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
+	// A read of one collection whose members could not be worked out is an error,
+	// not an empty collection: the list routes have to show such a row with no books
+	// (one row cannot fail a page), but a client that asked for this one collection
+	// can be told to try again, and does not cache an empty list as the answer.
+	if _, failed := page.unavailable[col.ID]; failed {
+		respondError(c, http.StatusServiceUnavailable,
+			"this collection's members could not be worked out right now; try again shortly")
+		return
+	}
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, page))
 }
 
 // ── POST /api/collections ───────────────────────────────────────────────────
@@ -203,8 +268,7 @@ func (h *Handler) CreateCollection(c *gin.Context) {
 		return
 	}
 
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*created})
-	respondJSON(c, http.StatusOK, h.collectionDTO(created, books[created.ID]))
+	h.respondCollection(c, created)
 }
 
 // ── PATCH /api/collections/:id ──────────────────────────────────────────────
@@ -275,6 +339,10 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 		col.BookIDs = database.MergeMemberListNoLoss(col.BookIDs, ids)
 	}
 
+	// col was read from the store and still carries whatever list the row held. For
+	// a per-viewer collection the store itself drops that list on write
+	// (database.SetCollectionPerViewerClassifier), so this edit of the name or
+	// description cannot write a creator's list back with a fresh Version.
 	if err := h.collections.UpdateCollection(col); err != nil {
 		if errors.Is(err, database.ErrCollectionVersionConflict) || errors.Is(err, database.ErrCollectionNameInUse) {
 			respondError(c, http.StatusConflict, err.Error())
@@ -284,8 +352,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 		return
 	}
 
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+	h.respondCollection(c, col)
 }
 
 // ── DELETE /api/collections/:id ─────────────────────────────────────────────
@@ -351,8 +418,7 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+	h.respondCollection(c, updated)
 }
 
 // RemoveBookFromCollection handles DELETE /api/collections/:id/book/:bookId.
@@ -379,8 +445,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		// The sync id does not resolve. The collection cannot contain it, so the
 		// requested end state already holds; report the collection unchanged
 		// rather than an error the user cannot act on.
-		books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*col})
-		respondJSON(c, http.StatusOK, h.collectionDTO(col, books[col.ID]))
+		h.respondCollection(c, col)
 		return
 	}
 
@@ -396,8 +461,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+	h.respondCollection(c, updated)
 }
 
 // ── POST /api/collections/:id/batch/add, /batch/remove ──────────────────────
@@ -466,8 +530,7 @@ func (h *Handler) batchEditCollection(c *gin.Context, apply func(current, ids []
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c.Request.Context(), []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books[updated.ID]))
+	h.respondCollection(c, updated)
 }
 
 // respondMembershipError maps a locked membership operation's error onto the
@@ -547,18 +610,39 @@ func (h *Handler) lookupCollection(c *gin.Context) (*database.Collection, bool) 
 	return col, true
 }
 
-// collectionBookIDs returns the ids whose books this collection currently shows.
+// collectionBookIDs returns the ids whose books this collection currently shows
+// to the caller. viewerSets is ViewerMembers' answer for the page.
 //
 // A dynamic collection's membership is its LAST EVALUATION, not its query —
 // exactly as playlistDTO treats smart playlists. Evaluating the query here would
 // make a read path depend on the Bleve index being open, and an unevaluated
 // dynamic collection would then fail the whole library tab instead of rendering
-// as empty.
-func collectionBookIDs(col *database.Collection) []string {
-	if col.Type == database.CollectionTypeDynamic {
-		return col.MaterializedBookIDs
+// as empty. The exception is a per-viewer collection (a per-user rule): it has no
+// stored list to serve, and the caller's own members come from viewerSets, empty
+// when there are none.
+func collectionBookIDs(col *database.Collection, viewerSets map[string][]string) []string {
+	if col.Type != database.CollectionTypeDynamic {
+		return col.BookIDs
 	}
-	return col.BookIDs
+	if search.QueryMayUsePerUserField(col.Query) {
+		return viewerSets[col.ID]
+	}
+	return col.MaterializedBookIDs
+}
+
+// collectionIsPerViewer reports whether who is asking decides col's members (see
+// collectionBookIDs).
+func collectionIsPerViewer(col *database.Collection) bool {
+	return col.Type == database.CollectionTypeDynamic && search.QueryMayUsePerUserField(col.Query)
+}
+
+// callerID is the signed-in user's id, or "" when there is none. It is the viewer
+// a per-viewer collection is evaluated for: an empty one matches nothing.
+func callerID(c *gin.Context) string {
+	if u, found := servermiddleware.CurrentUser(c); found && u != nil {
+		return u.ID
+	}
+	return ""
 }
 
 // collectionsPageBooks expands every collection on the page in ONE batched load.
@@ -574,12 +658,24 @@ func collectionBookIDs(col *database.Collection) []string {
 // "No Series Found". A book that fails to resolve is dropped rather than emitted
 // as a partial object.
 func (h *Handler) collectionsPageBooks(
-	ctx context.Context,
+	c *gin.Context,
 	cols []database.Collection,
-) map[string][]any {
-	out := make(map[string][]any, len(cols))
+) collectionPage {
+	ctx := c.Request.Context()
+	out := collectionPage{books: make(map[string][]any, len(cols))}
 	if len(cols) == 0 {
 		return out
+	}
+	// The caller's own members for every per-viewer collection on the page, in one
+	// bounded pass. Nil (nothing injected) leaves them empty: fail closed.
+	var viewerSets map[string][]string
+	if h.collectionViewerMembers != nil {
+		viewer, err := h.collectionViewerMembers(ctx, cols, callerID(c))
+		if err != nil {
+			out.gone = true
+			return out // the client went away mid-evaluation; nobody reads this page
+		}
+		viewerSets, out.unavailable = viewer.Sets, viewer.Unavailable
 	}
 
 	var ids []string
@@ -588,7 +684,25 @@ func (h *Handler) collectionsPageBooks(
 	for i := range cols {
 		// Merge losers are shown as their survivor (canonicalMembers), so a
 		// member merged away stays visible and removable instead of vanishing.
-		members[i] = h.canonicalMembers(collectionBookIDs(&cols[i]))
+		listed := collectionBookIDs(&cols[i], viewerSets)
+		if cols[i].Type == database.CollectionTypeDynamic {
+			// A dynamic collection can match the whole library; expanding every
+			// member into a full library item is paid per member. The cut is the
+			// same one the native API and the stored row use, and the real count
+			// is reported (collectionDTO). A static collection is the user's own
+			// list and is served whole.
+			var total int
+			if listed, total = database.CapMembers(listed); total == 0 {
+				total = cols[i].MaterializedTotal // a stored list that was cut when it was saved
+			}
+			if total > 0 {
+				if out.total == nil {
+					out.total = make(map[string]int)
+				}
+				out.total[cols[i].ID] = total
+			}
+		}
+		members[i] = h.canonicalMembers(listed)
 		for _, id := range members[i] {
 			if _, dup := seen[id]; dup {
 				continue
@@ -603,6 +717,7 @@ func (h *Handler) collectionsPageBooks(
 
 	views, err := h.memberViews(ctx, ids)
 	if err != nil {
+		out.gone = ctx.Err() != nil
 		return out
 	}
 	byID := make(map[string]libraryItemDTO, len(views))
@@ -621,9 +736,38 @@ func (h *Handler) collectionsPageBooks(
 			}
 			items = append(items, dto)
 		}
-		out[cols[i].ID] = items
+		out.books[cols[i].ID] = items
 	}
 	return out
+}
+
+// collectionPage is the expansion of the collections on one page: the served
+// books of each, and for a dynamic collection that has more members than are
+// served (see database.MaxMaterializedMembers), how many it has.
+type collectionPage struct {
+	books map[string][]any
+	total map[string]int
+	// gone is set when the request's context ended during the expansion: the page
+	// is empty because the client went away, not because the collections are.
+	gone bool
+	// unavailable is the per-viewer collections whose members could not be worked
+	// out (ViewerMembers.Unavailable). Nil when none, or when no evaluator is injected.
+	unavailable map[string]struct{}
+}
+
+// statusClientClosedRequest is nginx's 499: the client went away before the
+// response was written. It is what the native handlers answer too.
+const statusClientClosedRequest = 499
+
+// respondCollection answers with one collection and its served members, or 499
+// when the client went away while they were being worked out.
+func (h *Handler) respondCollection(c *gin.Context, col *database.Collection) {
+	page := h.collectionsPageBooks(c, []database.Collection{*col})
+	if page.gone {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, page))
 }
 
 // memberViews builds the item views for canonical member ids, keyed by book id.
@@ -828,7 +972,8 @@ func respondResolveError(c *gin.Context) {
 // carrying books: [], because members are dropped after the count would be
 // taken. A row that reports a count it cannot list forces the client to guess
 // which half to believe.
-func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
+func (h *Handler) collectionDTO(col *database.Collection, page collectionPage) gin.H {
+	books := page.books[col.ID]
 	if books == nil {
 		books = []any{}
 	}
@@ -838,7 +983,15 @@ func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
 		description = col.Description
 	}
 
-	return gin.H{
+	// A per-viewer collection's members move with the viewer's state and the
+	// library, neither of which touches the row, so its lastUpdate is now: see
+	// the file header.
+	lastUpdate := col.UpdatedAt
+	if collectionIsPerViewer(col) {
+		lastUpdate = time.Now()
+	}
+
+	dto := gin.H{
 		"id":        col.ID,
 		"libraryId": h.libraryID(),
 		// Attribution only — never an access decision. See the file header.
@@ -849,7 +1002,14 @@ func (h *Handler) collectionDTO(col *database.Collection, books []any) gin.H {
 		"coverFullPath": nil,
 		"books":         books,
 		"numBooks":      len(books),
-		"lastUpdate":    msEpoch(col.UpdatedAt),
+		"lastUpdate":    msEpoch(lastUpdate),
 		"createdAt":     msEpoch(col.CreatedAt),
 	}
+	// numBooks stays the served count (see above). A dynamic collection that
+	// matches more books than are served says how many it has under a key the
+	// upstream shape does not use, which a decoder ignores and a person can read.
+	if total := page.total[col.ID]; total > len(books) {
+		dto["totalBooks"] = total
+	}
+	return dto
 }

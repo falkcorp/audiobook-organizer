@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.20.2 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-26 -->
 
 # HTTP API
 
@@ -154,20 +154,147 @@ Reads need `library.view`; every write needs `collections.manage`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/collections` · `/collections/:id` | List collections / get one. A dynamic collection's members are `materialized_book_ids` (a static one's are `book_ids`); `GET /collections/:id` re-evaluates a dynamic collection first and stores the result when it changed, the list does not |
-| `POST` | `/api/v1/collections` | Create a static or dynamic collection; the caller is stored as its owner (`created_by_user_id`) |
+| `GET` | `/api/v1/collections` · `/collections/:id` | List collections / get one. A dynamic collection's members are `materialized_book_ids` (a static one's are `book_ids`); `GET /collections/:id` re-evaluates a dynamic collection first and stores the result when it changed, the list does not. A collection whose query uses a per-user field is evaluated for the caller on every read and nothing is stored (see below) |
+| `POST` | `/api/v1/collections` | Create a static or dynamic collection; the caller is stored as its creator (`created_by_user_id`, attribution only) |
 | `PUT` | `/api/v1/collections/:id` | Update name, description, query (dynamic) or the whole book list (static; `book_ids` requires the `version` you read, see below) |
 | `DELETE` | `/api/v1/collections/:id` | Delete a collection |
-| `POST` | `/api/v1/collections/:id/materialize` | Re-evaluate a dynamic collection and store the members |
+| `POST` | `/api/v1/collections/:id/materialize` | Re-evaluate a dynamic collection and store the members (a per-user collection stores nothing: the response is the caller's own members) |
 | `POST` | `/api/v1/collections/:id/books` `{"book_ids":[...]}` | Add books to a static collection (atomic; duplicates ignored; `404` unknown collection, `409` not static) |
 | `DELETE` | `/api/v1/collections/:id/books/:bookId` | Remove one book from a static collection (`404` when it is not a member) |
 
-A dynamic collection is evaluated as its owner: the user who created it, or the
-first active admin when that user no longer exists (`503` when there is neither).
-The result is stored and served to everyone. With authentication off the evaluator
-and owner is the synthetic `_local` user. The evaluator is only resolved when the
-query uses a per-user field, so a query without one is evaluated with no user at all
-and never answers `503`.
+A dynamic collection whose query uses a per-user field (`read_status`,
+`progress_pct`, `last_played`) is evaluated for the VIEWER: the signed-in caller on
+the native API and on the Audiobookshelf surface. Two users see different members of
+the same collection, a collection's creator never decides what anyone else sees, and
+nobody can infer another user's listening state from a collection's membership. This
+holds for admins too; reading another user's listening state needs `users.manage` and
+its own tooling, and no collection route takes an "as user" parameter. The members
+are returned in the response (`materialized_book_ids` on `GET /collections/:id`, on
+each row of `GET /collections`, and on the create, update and materialize responses)
+and are never stored: the stored row's `materialized_book_ids` is empty. Rows written
+before 2026-10-25 held the creator's answer; they are cleared at start (the
+`collection-peruser-purge` step, logged to the system activity log) and the read
+paths never serve a leftover list, and the store itself drops the list of such a
+collection on every create and update, whichever route writes it. A query that no
+longer parses counts as per-viewer (nobody can say it reads no per-user state), so a
+list it holds is never served either; that includes a collection that never used a
+per-user field but whose query has since stopped parsing, whose stored list the start-up
+step and the store's writes drop along with the rest. An evaluation that cannot run (the search index
+is closed or rebuilding, the query no longer parses, or the caller's state could not
+be read) answers no members, never the stored list, and says so: the collection in the
+response carries `members_unavailable: true` and a `members_unavailable_message`
+(`GET /collections/:id`, each row of `GET /collections`, and the create, update and
+materialize responses), so "could not be worked out" is told apart from "nothing
+matches". The cause is logged once per kind per minute. A `PUT` on a per-viewer
+collection always answers with the caller's own members, including a rename-only one.
+The caller's listening state is read once per request and shared by every per-viewer
+collection on the page, and the evaluation has no result window: a library of any size
+is evaluated in full, but a list is then cut to 10,000 members (see below). A request
+that is cancelled while it waits for an evaluation slot is dropped (`499`), not
+reported as an unavailable collection and not logged; the same holds for a refresh or a
+search whose request is cancelled, which stops at its next check and is neither a failure
+nor a log line. A per-user term that cannot be evaluated as written is refused with a
+`400` on create and update (and for a smart playlist, and for the library search, see
+below): under an `OR` with another term, under a `NOT` over a group (a double `NOT` of a
+group is fine), a `read_status` that is not one of its four statuses, a pattern on any
+per-user field, a `progress_pct` or `last_played` value that does not parse, or a field
+name written with capitals. The message names what is valid, and a stored query of such a
+shape reads as unavailable with that same message; see `docs/search-syntax.md`. A
+changed `sort_json` is checked too (create, and update when it changed): it must be a
+JSON array of `{"field", "direction"}` objects, or the request is a `400`. Only a failure
+to read the viewer's own state is logged by class alone (its text names the user and a
+book, and the activity log is readable with `library.view`); every other failure is
+logged with its text, which names neither.
+On the Audiobookshelf surface such a collection has no flag to carry, so on the list
+routes it shows no books when its members could not be worked out (the failure is
+logged), and `GET /api/collections/:id` answers `503` for it instead of an empty
+collection, so a client can retry and does not cache an empty list as the answer. A
+request whose client has gone away answers `499` on every collection route, not a page
+of empty collections. The `lastUpdate` of a collection that evaluated is the time of the
+request (its members move with the viewer's state and the library, none of which touches
+the row), which makes a client that caches by `lastUpdate` refetch it every time; on a
+list, an unavailable collection carries the same `lastUpdate`, so a list client cannot
+tell a failed evaluation from an empty one, which is why the detail route does. The `503`
+has precedent on this surface (`play`, `progress` and the playlist writes answer it with
+`{"error": ...}`), but no real client has been checked against it: one that treats any
+non-2xx answer as fatal shows an error instead of an empty shelf, and it is reachable only
+for a per-viewer collection while the index rebuilds or with a stored query that is now
+refused (there is a manual AudioBooth check in `todo.d`). The collection mutation routes
+(create, rename, add and remove books) answer with the change that was committed and no
+books when the members could not be worked out, where the detail route answers `503`, and
+a `499` on them means the client went away after the write: the change was kept.
+
+A smart playlist follows the same rules. `GET /playlists/:id` of a smart playlist whose
+stored query is refused (saved before the check) answers `200` with `book_ids: []`,
+`members_unavailable: true` and a `members_unavailable_message` (it is not a `400`: the
+playlist is fine, its answer is not available), and drops the member list the last
+evaluation cached, so the Audiobookshelf surface, which serves that cache, stops
+answering the old way. A query that does not parse at all, an empty query and an unusable `sort_json` read the
+same way, because each is the stored definition's fault; a failure that is the server's
+(the viewer's listening state could not be read) is a `500` with a generic message and is
+logged, the search index not being ready is a `503`, and a client that went away is
+dropped, so only a problem the person can fix is shown as "unavailable". On
+`POST /playlists/:id/materialize` a definition problem is a `400` and a server failure a
+`500`.
+`POST /playlists/:id/materialize` cuts the snapshot at 10,000 books like every other
+member list: the new static playlist carries `materialized_total` with the real count and
+a description that says so. `GET /playlists/:id` of that static copy reports the count as
+`book_ids_total` only while its list is still the cut one (10,000 ids and a larger total).
+The store drops the total when the books the snapshot holds change, whichever route writes
+it (an add followed by a remove, which brings the length back to 10,000, drops it too; a
+reorder keeps it), so the page then shows the real length of the list, and the description
+keeps saying the snapshot was cut.
+On the Audiobookshelf surface a smart playlist that is refused or whose members could not
+be worked out has no books and no signal that says why (a list row has nowhere to carry
+the reason), the same as the collection list routes. `PUT /playlists/:id` checks the query only when it changed,
+so a rename that resends the stored query is not refused for it.
+
+The library list applies a per-user term as one flat `AND` after the index answers, so the
+same shapes and values are refused on both ways a query reaches it:
+
+- `GET /audiobooks?search=` answers `400` `invalid search: <message>` for the shapes (an
+  `OR`, a group, or a `NOT` over a group, alongside a per-user term) and for the values.
+- The `filters=` JSON, which is what the web search box sends for `field:value` terms,
+  answers `400` `invalid filter value: <message>` for a value the matcher cannot evaluate:
+  a `read_status` that is not one of its four statuses, a pattern on any per-user field, a
+  `progress_pct` value with `!=`, `==` or an open end such as `[* TO 50]`, an alternation
+  that lists nothing (`()`) or holds a comparison (`(>50|<10)`). `read_status:(finished|in_progress)`
+  works there too, as one filter that matches either status. A filter cannot carry an `OR` or
+  a group, so the web box sends a query that names a per-user field (outside quotes) and has
+  an `OR`, `AND`, `||`, `&&` or a parenthesis other than that field's own `(a|b)` list whole as `search=`,
+  with no filters of its own for it, and shows the server's message in the library page. The rest
+  of such a query is then judged by the rules of `search=`: a `tag:` or `duration:` term is
+  held by the index and is answered with the query (a `tag:` term is not also sent as a tag, in
+  the list, its tag facets or a select-all), the per-user shapes get their own message first,
+  and a field the index does not hold (`metadata`, `review`, `has_duration`) is refused with the
+  search parameter's message that points at `filters=`, which the box cannot act on: take that
+  term out of the query.
+
+The refusal applies to every caller of the search, not only the HTTP list: the substring
+fallback the search uses while the index is not built or is rebuilding checks the query
+first too, and a background metadata operation whose saved search holds such a term fails
+resolving its filter with `resolve filter: search: <message>` (an operation has no viewer,
+and used to skip the term). Forms the old matcher accepted without a word are refused as
+well: `read_status:finished*`, `read_status:*finished`, `read_status:finished~` and
+`read_status:>finished` (all matched finished books), `progress_pct:50*` and
+`progress_pct:<inf` (the second matched every book), and `last_played:2026-01-01*`
+(matched that day).
+
+A dynamic collection or smart playlist carries at most 10,000 member ids: in the
+stored `materialized_book_ids`, in every native response, and in the library items the
+Audiobookshelf surface expands. When the query matches more, `materialized_total`
+(`book_ids_total` on `GET /playlists/:id`) holds the real count and the list is the
+first 10,000 in sort order; on the Audiobookshelf collection row `numBooks` stays the
+number of books served and `totalBooks` (present only when the list was cut) is the
+real count. The stored row is rewritten only when the cut list or the total changes.
+With no sort, the list is in ascending book id, oldest first (ids are ULIDs). The server
+logs a collection's cut once a minute per collection; a smart playlist's cut is reported
+in its answer and is not logged.
+A static collection's list is not cut. A background or
+system evaluation with no viewer matches nothing for a per-user rule, and never falls
+back to the creator or an admin. With authentication off the one viewer is the
+synthetic `_local` user. A query with no per-user field is unchanged: evaluated with
+no user, stored, and the same for everyone.
 
 A static collection's whole-list replace (`PUT` with `book_ids`) requires `version`,
 the `version` of the collection you read: a missing one is `400` (`version is required
@@ -176,58 +303,28 @@ atomically through `POST /collections/:id/books` since your read is never silent
 dropped. The web UI does not call this route; the Audiobookshelf-compatible routes
 use the atomic add and remove.
 
-Dynamic collections whose query has a relative date (`last_played:>-30d`,
-`date_added:>-7d`) are refreshed hourly by the scheduled op
+Dynamic collections whose query has a relative date and no per-user field
+(`date_added:>-7d`) are refreshed hourly by the scheduled op
 `collections.refresh-relative-dynamic`, so the members the Audiobookshelf surface
-serves follow the clock without anyone opening the collection. It evaluates each as
-its owner, skips and counts a per-user query whose owner is gone, skips a collection
-edited while the run was in flight (picked up next hour), and stores a member list
-only when it changed. The hourly task enqueues the op only when such a collection
-exists and the search index is open (there is no collections-disabled config switch),
-and a run that still finds the index closed finishes as a clean no-op with one log
-line. Launched by hand (`POST /operations/v2`) it is a preview unless
-`dry_run` is `false`; the hourly run sends `dry_run: false`.
+serves follow the clock without anyone opening the collection. A collection with a
+per-user field (`last_played:>-30d`) is not refreshed: it stores no member list and
+the job has no viewer. The job skips a collection edited while the run was in flight
+(picked up next hour), and stores a member list only when it changed. The hourly task
+enqueues the op only when such a collection exists and the search index is open
+(there is no collections-disabled config switch), and a run that still finds the index
+closed finishes as a clean no-op with one log line. Launched by hand
+(`POST /operations/v2`) it is a preview unless `dry_run` is `false`; the hourly run
+sends `dry_run: false`.
 
-Per-user fields in a query (`read_status`, `progress_pct`, `last_played`) read the
-evaluating user's own listening state. A query that cannot be parsed or
-translated, such as a malformed date on one of them (`last_played:>30d`, missing the
-sign), is a `400` at create time and when the query is changed (the message names the
-parse or translate error and nothing is stored), not a collection that silently
-matches nothing; a closed search index does not block saving a good query. To stop anyone with `collections.manage`
-from reading the owner's state back out of the members, only the evaluating user
-may write one into a query. `POST /collections` (dynamic) and `PUT
-/collections/:id` answer `403` with code `COLLECTION_PER_USER_QUERY_OWNER_ONLY`
-(`only the collection's owner can use per-user fields (last_played, progress_pct,
-read_status) in its query`) when anyone else sends a query that uses one. The query and the stored members
-are left unchanged. A query with no per-user field, a rename, or re-sending the
-unchanged query is allowed to any caller with the permission. A collection that
-falls back to the first admin can have per-user fields set only by that admin. The
-Audiobookshelf-compatible routes cannot set a query (their create is static only
-and their PATCH touches name, description and books), so they have no path to it.
-
-A stand-in admin never evaluates a per-user query. When the owner row is gone (or
-the stored owner is empty or `_local`) the collection falls back to the first
-active admin only if its query has no per-user field. With one, the collection is
-not evaluated at all and keeps its stored members: `POST /collections/:id/materialize`
-answers `409` with code `COLLECTION_OWNER_MISSING_PER_USER_QUERY`, and `GET
-/collections/:id` answers `200` with the stored collection plus
-`evaluation_blocked` (the same code) and `evaluation_blocked_message` (a read has
-always served the last known members rather than failing). The first active admin
-takes such a collection over by saving its query again with `"adopt_owner": true`
-(`PUT /collections/:id` with `query` and `adopt_owner`), which records that admin as
-`created_by_user_id`. The flag is required: re-sending a query without it never
-adopts, whatever the query, so an admin who edits for another reason cannot become
-the evaluator of per-user state they did not mean to claim. `adopt_owner` is a
-constraint on any client (07-F5b's UI included): it must be sent explicitly, by the
-first active admin, with a query that uses a per-user field, on a collection that has
-no owner; anything else is `400`, `403` or `409` and nothing is stored. A `PUT` that
-changes only `sort_json` or `limit` on a blocked collection answers `200` with the
-same `evaluation_blocked` flag as the read. The
-startup owner backfill leaves these collections ownerless and lists their ids and
-names in one warning, written to the system activity log under the source
-`collection-owner-backfill`, on every start until they are resolved. Queries
-written before the 403 gate existed by someone other than the owner cannot be
-detected (there is no authorship history); the gate prevents new ones.
+Because every viewer is evaluated as themselves, anyone with `collections.manage` may
+write a per-user field into a query: it can only ever read their own state. A query
+that cannot be parsed or translated, such as a malformed date on one of them
+(`last_played:>30d`, missing the sign), is a `400` at create time and when the query is
+changed (the message names the parse or translate error and nothing is stored), not a
+collection that silently matches nothing; a closed search index does not block saving a
+good query. The earlier owner gate (`403 COLLECTION_PER_USER_QUERY_OWNER_ONLY`), the
+`adopt_owner` flag and the `evaluation_blocked` / `409 COLLECTION_OWNER_MISSING_PER_USER_QUERY`
+answers are gone: they existed only to protect owner evaluation.
 
 ### Authentication
 

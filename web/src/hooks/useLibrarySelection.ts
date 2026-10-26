@@ -1,13 +1,14 @@
 // file: web/src/hooks/useLibrarySelection.ts
-// version: 1.1.0
+// version: 1.1.2
 // guid: e5f6a7b8-c9d0-1234-ef01-234567890104
-// last-edited: 2026-09-27
+// last-edited: 2026-10-26
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import React from 'react';
 import * as api from '../services/api';
 import type { Audiobook } from '../types';
-import type { ParsedSearch } from '../utils/searchParser';
+import { listSearchText, type ParsedSearch } from '../utils/searchParser';
+import { libraryTagsParam } from './useLibraryQuery';
 
 interface UseLibrarySelectionFilters {
   author?: string;
@@ -65,6 +66,38 @@ function writeStoredSelection(books: Audiobook[]) {
   }
 }
 
+/**
+ * The filter a cross-page "select all" sends: the same predicate the list on
+ * screen was built from, so the selection (which feeds bulk actions) holds the
+ * books the person sees. Search text and tags come from the helpers the list
+ * request uses (listSearchText, libraryTagsParam), so a query the server reads
+ * whole carries its tag: terms in `search=` and no tag is applied a second time.
+ */
+export function buildSelectAllFilter(args: {
+  fieldFilters: Array<{ field: string; value: string; negated: boolean }>;
+  parsedSearch: ParsedSearch | null;
+  debouncedSearch: string;
+  selectedTags: string[] | undefined;
+  libraryState: string | undefined;
+}): api.SelectionSpec['filter'] {
+  const { fieldFilters, parsedSearch, debouncedSearch, selectedTags, libraryState } = args;
+  const searchText = listSearchText(parsedSearch, debouncedSearch);
+  const tagsForFilter = libraryTagsParam(selectedTags, parsedSearch);
+  // 'deleted' is a client-side concept (marked_for_deletion flag); send no library_state to server
+  const serverLibraryState = libraryState === 'deleted' ? undefined : libraryState;
+
+  const filterSpec: api.SelectionSpec['filter'] = {};
+  if (searchText) filterSpec.search = searchText;
+  if (tagsForFilter && tagsForFilter.length > 0) {
+    filterSpec.tags = tagsForFilter;
+    // back-compat single-tag field
+    filterSpec.tag = tagsForFilter[0];
+  }
+  if (serverLibraryState) filterSpec.library_state = serverLibraryState;
+  if (fieldFilters.length > 0) filterSpec.field_filters = fieldFilters;
+  return filterSpec;
+}
+
 export function useLibrarySelection({
   audiobooks,
   totalCount,
@@ -102,7 +135,10 @@ export function useLibrarySelection({
   const selectedHasActive = selectedAudiobooks.some((book) => !book.marked_for_deletion);
   const selectedHasImport = selectedAudiobooks.some((book) => book.library_state === 'imported');
   const showSelectAllBanner =
-    allOnPageSelected && crossPageFilter === null && selectedAudiobooks.length < totalCount && totalCount > audiobooks.length;
+    allOnPageSelected &&
+    crossPageFilter === null &&
+    selectedAudiobooks.length < totalCount &&
+    totalCount > audiobooks.length;
 
   const handleToggleSelect = (audiobook: Audiobook, event?: React.MouseEvent) => {
     // Any individual toggle exits cross-page-select-all mode.
@@ -174,26 +210,13 @@ export function useLibrarySelection({
   }, []);
 
   const handleSelectAllItems = useCallback(() => {
-    const fieldFilters = buildFieldFilters();
-    const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
-    let tagsForFilter: string[] | undefined;
-    if (selectedTags && selectedTags.length > 0) {
-      tagsForFilter = selectedTags;
-    } else {
-      const parsedTag = parsedSearch?.fieldFilters.find((f) => f.field === 'tag' && !f.negated)?.value;
-      if (parsedTag) tagsForFilter = [parsedTag];
-    }
-    const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
-
-    const filterSpec: api.SelectionSpec['filter'] = {};
-    if (searchText) filterSpec.search = searchText;
-    if (tagsForFilter && tagsForFilter.length > 0) {
-      filterSpec.tags = tagsForFilter;
-      // back-compat single-tag field
-      filterSpec.tag = tagsForFilter[0];
-    }
-    if (libraryState) filterSpec.library_state = libraryState;
-    if (fieldFilters.length > 0) filterSpec.field_filters = fieldFilters;
+    const filterSpec = buildSelectAllFilter({
+      fieldFilters: buildFieldFilters(),
+      parsedSearch,
+      debouncedSearch,
+      selectedTags,
+      libraryState: filters.libraryState,
+    });
 
     setCrossPageFilter(filterSpec);
   }, [buildFieldFilters, debouncedSearch, filters, parsedSearch, selectedTags]);

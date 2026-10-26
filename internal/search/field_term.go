@@ -1,7 +1,7 @@
 // file: internal/search/field_term.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8787a505-24bd-4ccd-a676-dea643446c7e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package search
 
@@ -19,6 +19,21 @@ import (
 // as in a dynamic collection or a smart playlist. A quoted value is literal:
 // no operator, no wildcard, no range.
 func FieldNodeForTerm(field, value string, quoted bool) (*FieldNode, error) {
+	n, err := NodeForTerm(field, value, quoted)
+	if err != nil {
+		return nil, err
+	}
+	fn, ok := n.(*FieldNode)
+	if !ok {
+		return nil, fmt.Errorf("%s: %q is not a single value", field, value)
+	}
+	return fn, nil
+}
+
+// NodeForTerm is FieldNodeForTerm for a caller that also accepts the
+// alternation field:(a|b), which the parser reads as a ValueAltNode rather than
+// as a FieldNode.
+func NodeForTerm(field, value string, quoted bool) (Node, error) {
 	if quoted {
 		return &FieldNode{Field: field, Value: value, Quoted: true}, nil
 	}
@@ -31,11 +46,37 @@ func FieldNodeForTerm(field, value string, quoted bool) (*FieldNode, error) {
 	if p.pos < len(p.input) {
 		return nil, fmt.Errorf("%s: unexpected trailing input in %q", field, value)
 	}
-	fn, ok := n.(*FieldNode)
-	if !ok {
-		return nil, fmt.Errorf("%s: %q is not a single value", field, value)
+	return n, nil
+}
+
+// PerUserFilterForTerm builds the PerUserFilter for one per-user term the Library
+// list sends as a field/value pair (read_status, progress_pct, last_played), and
+// refuses what CheckPerUserValues refuses in a query string. It is the one rule
+// for the filters= parameter: the validation at the request boundary and the
+// matcher that later judges each book both come through here, so a value the
+// list accepts is a value the matcher can evaluate. Before this, filters= was
+// checked only for patterns, and -read_status:completed returned the whole
+// library while progress_pct:[* TO 50] matched nothing.
+//
+// The alternation read_status:(a|b) is one filter that ORs inside itself, as the
+// translator builds it for a query string.
+func PerUserFilterForTerm(field, value string, quoted, negated bool, now time.Time) (PerUserFilter, error) {
+	n, err := NodeForTerm(field, value, quoted)
+	if err != nil {
+		return PerUserFilter{}, err
 	}
-	return fn, nil
+	if err := CheckPerUserValues(n, now); err != nil {
+		return PerUserFilter{}, err
+	}
+	switch v := n.(type) {
+	case *FieldNode:
+		return PerUserFilter{Node: v, Negated: negated}, nil
+	case *ValueAltNode:
+		if f, ok := perUserAltFilter(v, negated); ok {
+			return f, nil
+		}
+	}
+	return PerUserFilter{}, fmt.Errorf("%s: %q is not a term the per-user pass can evaluate", field, value)
 }
 
 // CheckDateNode reports why a date term on a date field is refused, or nil. It

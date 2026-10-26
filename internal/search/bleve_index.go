@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 //
 // BleveIndex is the single-package wrapper around a Bleve v2 scorch
 // index backing library search (spec DES-1 / backlog §4.7). The
@@ -19,6 +19,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -519,17 +520,25 @@ func (b *BleveIndex) Search(queryString string, from, size int) ([]SearchResult,
 // highlighting every hit of a 10,000-hit post-filter window is pure cost.
 // Ordering is identical to SearchNative's.
 func (b *BleveIndex) SearchNativeIDs(q query.Query, from, size int) ([]SearchResult, uint64, error) {
-	return b.searchNative(q, from, size, false)
+	return b.searchNative(context.Background(), q, from, size, false)
+}
+
+// SearchNativeIDsContext is SearchNativeIDs that stops when ctx is done: an
+// uncapped search over a library-sized index is the longest step of a collection
+// evaluation, and the caller (a request whose client went away) should not have to
+// wait for it. The error is then ctx.Err().
+func (b *BleveIndex) SearchNativeIDsContext(ctx context.Context, q query.Query, from, size int) ([]SearchResult, uint64, error) {
+	return b.searchNative(ctx, q, from, size, false)
 }
 
 // SearchNative runs a pre-built query.Query (typically produced by
 // the AST → Bleve translator) against the index. Used by smart
 // playlists and the library search path after DSL translation.
 func (b *BleveIndex) SearchNative(q query.Query, from, size int) ([]SearchResult, uint64, error) {
-	return b.searchNative(q, from, size, true)
+	return b.searchNative(context.Background(), q, from, size, true)
 }
 
-func (b *BleveIndex) searchNative(q query.Query, from, size int, highlight bool) ([]SearchResult, uint64, error) {
+func (b *BleveIndex) searchNative(ctx context.Context, q query.Query, from, size int, highlight bool) ([]SearchResult, uint64, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.idx == nil {
@@ -552,7 +561,7 @@ func (b *BleveIndex) searchNative(q query.Query, from, size int, highlight bool)
 	if highlight {
 		req.Highlight = bleve.NewHighlight()
 	}
-	res, err := b.idx.Search(req)
+	res, err := b.idx.SearchInContext(ctx, req)
 	if err != nil {
 		return nil, 0, err
 	}

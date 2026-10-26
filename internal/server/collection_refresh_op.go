@@ -1,7 +1,7 @@
 // file: internal/server/collection_refresh_op.go
-// version: 1.2.1
+// version: 2.0.0
 // guid: 0c8d3b61-7e94-4a25-b3f0-9d1a6e2c5b47
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package server
 
@@ -47,7 +47,10 @@ func init() {
 // stored answer that nothing refreshes goes stale: an ABS reader would see
 // "played in the last 30 days" frozen at the last native read or materialize.
 // This op re-evaluates exactly those collections, through the handler's evaluate
-// (owner rules apply), and stores a changed member list.
+// with no viewer, and stores a changed member list. A collection whose query uses
+// a per-user field (last_played:>-30d) is not one of them: its members are
+// evaluated for each viewer on every read and never stored, so there is nothing to
+// refresh and this op has no viewer to evaluate it for.
 func (s *Server) RegisterCollectionRefreshOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:          collectionRefreshOpID,
@@ -55,7 +58,7 @@ func (s *Server) RegisterCollectionRefreshOp(reg *opsregistry.Registry) error {
 		Liveness:    opsregistry.LivenessManual,
 		Plugin:      "collections",
 		DisplayName: "Refresh Relative-Date Collections",
-		Description: "Re-evaluates every dynamic collection whose query has a relative date (for example last_played:>-30d or date_added:>-7d) so the members the Audiobookshelf surface serves slide with the clock. Each is evaluated as its owner; a per-user query whose owner no longer exists is skipped and counted, never evaluated as the first admin. A collection edited while the run is in flight is skipped and picked up next run. Dry run by default: counts how many would change and stores nothing.",
+		Description: "Re-evaluates every dynamic collection whose query has a relative date (for example date_added:>-7d) so the members the Audiobookshelf surface serves slide with the clock. A collection whose query uses a per-user field (read_status, progress_pct, last_played) is not refreshed: its members are evaluated for each viewer on every read and nothing is stored for it. A collection edited while the run is in flight is skipped and picked up next run. Dry run by default: counts how many would change and stores nothing.",
 		// Low: the work is a handful of searches and anything a person started goes first.
 		DefaultPriority: opsregistry.PriorityLow,
 		Cancellable:     true,
@@ -112,8 +115,8 @@ func (s *Server) runCollectionRefreshOp(ctx context.Context, raw json.RawMessage
 	if dryRun {
 		mode = "dry run: "
 	}
-	msg := fmt.Sprintf("%s%d relative-date dynamic collection(s) considered: %d refreshed, %d unchanged, %d skipped (owner missing, per-user query), %d skipped (edited during the run), %d failed",
-		mode, res.Considered, res.Refreshed, res.Unchanged, res.Blocked, res.Conflicts, res.Failed)
+	msg := fmt.Sprintf("%s%d relative-date dynamic collection(s) considered: %d refreshed, %d unchanged, %d skipped (edited during the run), %d failed",
+		mode, res.Considered, res.Refreshed, res.Unchanged, res.Conflicts, res.Failed)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	collectionRefreshLog.Info("%s opID=%s", msg, logger.SanitizeLogValue(opsregistry.ReporterOpID(reporter)))
 	if res.Considered == 0 {

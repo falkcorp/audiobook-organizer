@@ -1,7 +1,7 @@
 // file: web/src/components/collections/QueryHelp.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: ba818f08-1260-44b3-99c2-11db1dd24fab
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 import { Alert, Box, Button, Chip, Paper, Stack, TextField, Typography } from '@mui/material';
 import {
@@ -21,14 +21,12 @@ interface QueryHelpProps {
   value: string;
   onChange: (next: string) => void;
   disabled?: boolean;
-  /** Shown beside the per-user note (the collection's owner). */
-  creatorId?: string;
   /** A server-side message for the query (a 400 body), shown verbatim. */
   serverError?: string | null;
 }
 
 /** The dynamic-collection query box: field autocomplete, validation, help, examples. */
-export function QueryHelp({ value, onChange, disabled, creatorId, serverError }: QueryHelpProps) {
+export function QueryHelp({ value, onChange, disabled, serverError }: QueryHelpProps) {
   const parseError = queryError(value);
   const suggestions = suggestFields(value);
   const perUser = usesPerUserField(value);
@@ -69,7 +67,6 @@ export function QueryHelp({ value, onChange, disabled, creatorId, serverError }:
       {perUser && (
         <Alert severity="info" role="status" sx={{ mb: 1 }}>
           {PER_USER_NOTE}
-          {creatorId ? ` Creator: ${creatorId}.` : ''}
         </Alert>
       )}
       <Paper variant="outlined" sx={{ p: 1.5, mb: 1 }} aria-label="Query help">

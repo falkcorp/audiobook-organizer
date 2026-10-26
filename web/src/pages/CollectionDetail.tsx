@@ -1,7 +1,7 @@
 // file: web/src/pages/CollectionDetail.tsx
-// version: 1.1.0
+// version: 1.3.1
 // guid: c80c9391-2049-4abe-bedf-926fc3e9d2ed
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
@@ -9,14 +9,12 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
-  FormControlLabel,
   IconButton,
   Link,
   Paper,
@@ -43,7 +41,7 @@ import { BookPicker } from '../components/collections/BookPicker';
 import { QueryHelp, SortPicker } from '../components/collections/QueryHelp';
 import {
   MANAGE_TOOLTIP,
-  memberCount,
+  memberCountLabel,
   storedMembers,
 } from '../components/collections/collectionUtils';
 import {
@@ -52,6 +50,7 @@ import {
   queryError,
   sameSortChoice,
   type SortChoice,
+  usesPerUserField,
 } from '../components/collections/queryHelpData';
 
 const PAGE_SIZE = 50;
@@ -125,7 +124,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
   const [query, setQuery] = useState(seed.query ?? '');
   const [sort, setSort] = useState<SortChoice>(decodeSort(seed.sort_json));
   const [limit, setLimit] = useState(seed.limit ? String(seed.limit) : '');
-  const [adopt, setAdopt] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [queryServerError, setQueryServerError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -171,6 +169,11 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
   const booksError = lookupDone ? lookup.error : null;
 
   const isDynamic = collection.type === 'dynamic';
+  // A query on a per-user field is evaluated for whoever is looking and stores no
+  // member list, so there is nothing to materialize (the server clears any list).
+  // The SAVED query decides, like Preview, not the text in the box.
+  const perViewer = isDynamic && usesPerUserField(collection.query ?? '');
+  const membersUnavailable = isDynamic && collection.members_unavailable === true;
   const limitNum = limit.trim() === '' ? 0 : Number(limit);
   const limitInvalid = !Number.isInteger(limitNum) || limitNum < 0;
   const queryInvalid = isDynamic && (query.trim() === '' || queryError(query) !== null);
@@ -203,11 +206,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
       patch.sort_json = applySortChoice(seed.sort_json, sort);
     }
     if (limitNum !== (seed.limit ?? 0)) patch.limit = limitNum;
-    // adopt_owner only ever rides with a query that is being saved.
-    if (adopt) {
-      if (patch.query === undefined) patch.query = query.trim();
-      patch.adopt_owner = true;
-    }
   }
   const dirty = Object.keys(patch).length > 0;
   const queryDirty = isDynamic && query.trim() !== (seed.query ?? '');
@@ -237,7 +235,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
     }
   };
 
-  const blocked = collection.evaluation_blocked;
   const titleOf = (bid: string, book: Book | undefined) =>
     book?.title ?? (lookupDone ? bid : 'Loading...');
 
@@ -264,12 +261,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
       {!canManage && (
         <Alert severity="info" sx={{ mb: 2 }}>
           You can view this collection but not change it ({MANAGE_TOOLTIP}).
-        </Alert>
-      )}
-      {blocked && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {collection.evaluation_blocked_message ??
-            'This collection was not re-evaluated; the stored members are shown.'}
         </Alert>
       )}
       {error && (
@@ -316,7 +307,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
                 setQueryServerError(null);
               }}
               disabled={!canManage}
-              creatorId={collection.created_by_user_id}
               serverError={queryServerError}
             />
             <SortPicker value={sort} onChange={setSort} disabled={!canManage} />
@@ -331,12 +321,6 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
               helperText={limitInvalid ? 'A whole number, 0 or more' : 'Blank means no limit'}
               slotProps={{ htmlInput: { min: 0 } }}
             />
-            {blocked && canManage && (
-              <FormControlLabel
-                control={<Checkbox checked={adopt} onChange={(e) => setAdopt(e.target.checked)} />}
-                label="Take ownership when saving (first active admin only)"
-              />
-            )}
           </>
         )}
         <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
@@ -352,7 +336,7 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
         <Typography variant="h6" component="h2">
-          Members ({memberCount(collection)})
+          Members ({memberCountLabel(collection)})
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
         {isDynamic ? (
@@ -361,17 +345,19 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
             <Button disabled={saving || loading} onClick={() => void run(refresh)}>
               {queryDirty ? 'Preview saved query' : 'Preview'}
             </Button>
-            <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
-              <span>
-                <Button
-                  variant="outlined"
-                  disabled={!canManage || saving}
-                  onClick={() => void run(materialize, 'Members refreshed and stored.')}
-                >
-                  Materialize
-                </Button>
-              </span>
-            </Tooltip>
+            {!perViewer && (
+              <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
+                <span>
+                  <Button
+                    variant="outlined"
+                    disabled={!canManage || saving}
+                    onClick={() => void run(materialize, 'Members refreshed and stored.')}
+                  >
+                    Materialize
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </>
         ) : (
           <Tooltip title={canManage ? '' : MANAGE_TOOLTIP}>
@@ -390,7 +376,14 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
           </Tooltip>
         )}
       </Box>
-      {isDynamic && (
+      {isDynamic && perViewer && (
+        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
+          These members are worked out for each person who views the collection, from their own
+          listening state, on every view. They are never stored, so there is nothing to materialize;
+          Preview re-runs the saved query for you.
+        </Typography>
+      )}
+      {isDynamic && !perViewer && (
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
           Preview re-runs the saved query for anyone who can view the collection. It also refreshes
           the stored members that the Audiobookshelf app serves, but only as a best effort: if the
@@ -399,10 +392,16 @@ function CollectionEditor({ collection, ctl, notice, onNotice, onSaved }: Editor
           failed save or a conflict.
         </Typography>
       )}
+      {membersUnavailable && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          {collection.members_unavailable_message ??
+            "This collection's members could not be worked out right now."}
+        </Alert>
+      )}
 
       {booksError ? (
         <Alert severity="error">{booksError}</Alert>
-      ) : members.length === 0 ? (
+      ) : members.length === 0 && membersUnavailable ? null : members.length === 0 ? (
         <Typography sx={{ color: 'text.secondary' }}>
           {isDynamic ? 'No books match this query.' : 'No books in this collection yet.'}
         </Typography>

@@ -1,10 +1,12 @@
 // file: internal/playlist/evaluator_test.go
-// version: 1.0.1
+// version: 1.0.3
 // guid: 9d3e5f2a-7b4a-4a70-b8c5-3d7e0f1b9a69
+// last-edited: 2026-10-26
 
 package playlist
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -43,9 +45,9 @@ func buildEvalFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex, 
 		format string
 	}
 	rows := []seed{
-		{"b1", "The Way of Kings", "Brandon Sanderson", "Stormlight Archive", 2010, "m4b"},
-		{"b2", "Words of Radiance", "Brandon Sanderson", "Stormlight Archive", 2014, "m4b"},
-		{"b3", "The Fifth Season", "N. K. Jemisin", "Broken Earth", 2015, "mp3"},
+		{"b1", "The Long Halloween", "Selina Kyle", "Gotham Saga", 2010, "m4b"},
+		{"b2", "Year One", "Selina Kyle", "Gotham Saga", 2014, "m4b"},
+		{"b3", "Hush", "Bruce Wayne", "Knightfall", 2015, "mp3"},
 	}
 	ids := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -70,19 +72,19 @@ func buildEvalFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex, 
 func TestEvaluate_BasicAuthorQuery(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
-	got, err := EvaluateSmartPlaylist(store, idx, "author:sanderson", "", 0, "_local")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:kyle", "", 0, "_local")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
 	if len(got) != 2 {
-		t.Errorf("got %d, want 2 (both Sanderson)", len(got))
+		t.Errorf("got %d, want 2 (both Kyle)", len(got))
 	}
 }
 
 func TestEvaluate_NilIndexErrors(t *testing.T) {
 	store, _, _ := buildEvalFixture(t)
 
-	_, err := EvaluateSmartPlaylist(store, nil, "author:sanderson", "", 0, "_local")
+	_, err := EvaluateSmartPlaylist(context.Background(), store, nil, "author:kyle", "", 0, "_local")
 	if err != ErrSearchIndexUnavailable {
 		t.Errorf("want ErrSearchIndexUnavailable, got: %v", err)
 	}
@@ -91,7 +93,7 @@ func TestEvaluate_NilIndexErrors(t *testing.T) {
 func TestEvaluate_EmptyQueryErrors(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
-	if _, err := EvaluateSmartPlaylist(store, idx, "   ", "", 0, "_local"); err == nil {
+	if _, err := EvaluateSmartPlaylist(context.Background(), store, idx, "   ", "", 0, "_local"); err == nil {
 		t.Error("empty query should error")
 	}
 }
@@ -99,7 +101,7 @@ func TestEvaluate_EmptyQueryErrors(t *testing.T) {
 func TestEvaluate_LimitTruncates(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
-	got, err := EvaluateSmartPlaylist(store, idx, "format:m4b", "", 1, "_local")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "format:m4b", "", 1, "_local")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -112,11 +114,11 @@ func TestEvaluate_SortByYearDesc(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
 	sortJSON := `[{"field":"year","direction":"desc"}]`
-	got, err := EvaluateSmartPlaylist(store, idx, "author:sanderson", sortJSON, 0, "_local")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:kyle", sortJSON, 0, "_local")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	// Sanderson books: b2 (2014) should come before b1 (2010) on desc.
+	// Kyle books: b2 (2014) should come before b1 (2010) on desc.
 	if len(got) != 2 || got[0] != "b2" || got[1] != "b1" {
 		t.Errorf("sorted = %v, want [b2 b1]", got)
 	}
@@ -126,11 +128,11 @@ func TestEvaluate_SortByTitleAsc(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
 	sortJSON := `[{"field":"title","direction":"asc"}]`
-	got, err := EvaluateSmartPlaylist(store, idx, "*", sortJSON, 0, "_local")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "*", sortJSON, 0, "_local")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	// Titles sorted asc: "The Fifth Season" < "The Way of Kings" < "Words of Radiance"
+	// Titles sorted asc: "Hush" < "The Long Halloween" < "Year One"
 	if len(got) != 3 || got[0] != "b3" || got[1] != "b1" || got[2] != "b2" {
 		t.Errorf("sorted = %v, want [b3 b1 b2]", got)
 	}
@@ -145,8 +147,8 @@ func TestEvaluate_PerUserFilterReadStatus(t *testing.T) {
 		StatusManual: true, LastActivityAt: time.Now(),
 	})
 
-	// Query targets all Sanderson, but filter to finished only.
-	got, err := EvaluateSmartPlaylist(store, idx, "author:sanderson read_status:finished", "", 0, "alice")
+	// Query targets all Kyle, but filter to finished only.
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:kyle read_status:finished", "", 0, "alice")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestEvaluate_PerUserFilterReadStatus(t *testing.T) {
 	}
 
 	// Different user — no state, so no match.
-	got, err = EvaluateSmartPlaylist(store, idx, "author:sanderson read_status:finished", "", 0, "bob")
+	got, err = EvaluateSmartPlaylist(context.Background(), store, idx, "author:kyle read_status:finished", "", 0, "bob")
 	if err != nil {
 		t.Fatalf("evaluate (bob): %v", err)
 	}
@@ -173,7 +175,7 @@ func TestEvaluate_PerUserFilterNegated(t *testing.T) {
 	})
 
 	// NOT read_status:finished should exclude b1 but include b2 (unstarted).
-	got, err := EvaluateSmartPlaylist(store, idx, "author:sanderson -read_status:finished", "", 0, "alice")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:kyle -read_status:finished", "", 0, "alice")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -194,7 +196,7 @@ func TestEvaluate_PerUserFilterProgressRange(t *testing.T) {
 		ProgressPct: 10, LastActivityAt: time.Now(),
 	})
 
-	got, err := EvaluateSmartPlaylist(store, idx, "author:sanderson progress_pct:>25", "", 0, "alice")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:kyle progress_pct:>25", "", 0, "alice")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -206,7 +208,7 @@ func TestEvaluate_PerUserFilterProgressRange(t *testing.T) {
 func TestEvaluate_YearRangeQuery(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
-	got, err := EvaluateSmartPlaylist(store, idx, "year:[2013 TO 2020]", "", 0, "_local")
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "year:[2013 TO 2020]", "", 0, "_local")
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -227,7 +229,7 @@ func TestEvaluate_MalformedQueryErrors(t *testing.T) {
 	store, idx, _ := buildEvalFixture(t)
 
 	// Unterminated quote — parser should reject.
-	if _, err := EvaluateSmartPlaylist(store, idx, `title:"unterminated`, "", 0, "_local"); err == nil {
+	if _, err := EvaluateSmartPlaylist(context.Background(), store, idx, `title:"unterminated`, "", 0, "_local"); err == nil {
 		t.Error("expected parse error on unterminated quote")
 	}
 }

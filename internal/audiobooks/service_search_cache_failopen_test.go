@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache_failopen_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aaa9761e-be02-4d73-b401-4c5ce57dd330
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -37,7 +37,7 @@ func TestGetAudiobooksPage_SharedBuildErrorFallsBackUncached(t *testing.T) {
 	store.EXPECT().GetBooksByIDs(mock.Anything).Return(books, nil).Maybe()
 
 	for _, ctx := range []context.Context{context.Background(), WithPendingSearchResponse(context.Background())} {
-		got, total, meta, err := svc.GetAudiobooksPage(ctx, 10, 0, "author:sanderson", nil, nil, ListFilters{IsPrimaryVersion: &primary})
+		got, total, meta, err := svc.GetAudiobooksPage(ctx, 10, 0, "author:kyle", nil, nil, ListFilters{IsPrimaryVersion: &primary})
 		require.NoError(t, err, "a shared build error reached the caller")
 		require.False(t, meta.Stale)
 		require.Equal(t, 2, total)

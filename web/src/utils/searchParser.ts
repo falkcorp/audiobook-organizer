@@ -1,6 +1,6 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.6.0
-// last-edited: 2026-10-18
+// version: 1.7.1
+// last-edited: 2026-10-26
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
 /**
@@ -26,6 +26,85 @@ export interface FieldFilter {
 export interface ParsedSearch {
   freeText: string;
   fieldFilters: FieldFilter[];
+  /**
+   * Set when the query must be read by the server's own parser: it uses a
+   * per-user field (read_status, progress_pct, last_played) AND a boolean form
+   * the field/value split below cannot carry (an OR or AND, a parenthesised group, a
+   * NOT over a group). The Library then sends this raw text as `search=` and no
+   * field filters for it, so the server sees the OR and answers it, or refuses
+   * it with a message. Without it `read_status:finished OR author:kyle` became
+   * two filters that were ANDed, with the OR left as the free-text word "OR".
+   */
+  serverQuery?: string;
+}
+
+/**
+ * The fields whose value is the signed-in listener's own state. Kept in step
+ * with the Go side (internal/search PerUserFieldNames) by QueryHelp.test.tsx.
+ */
+export const PER_USER_SEARCH_FIELDS: readonly string[] = [
+  'read_status',
+  'progress_pct',
+  'last_played',
+] as const;
+
+/**
+ * The text a list request sends as `search=`: the raw query when the server must
+ * read it (ParsedSearch.serverQuery), otherwise the free text left after the
+ * field filters were taken out. One function for every request built from a
+ * parsed search, so the list, its tag facets and a select-all-across-pages
+ * cannot disagree.
+ */
+export function listSearchText(parsed: ParsedSearch | null, fallback: string): string {
+  return parsed ? (parsed.serverQuery ?? parsed.freeText) : fallback;
+}
+
+/**
+ * The field filters a list request sends as `filters=` for a parsed search: the
+ * parsed terms except `tag:` (those travel as tags[], see libraryTagsParam), and
+ * none at all when the server must read the query whole (serverQuery), because
+ * its terms are already inside `search=` and would be applied twice.
+ * `quoted` is carried so title:"a*" stays literal text while title:a* is a wildcard
+ * (see internal/querygrammar).
+ */
+export function listFieldFilters(
+  parsed: ParsedSearch | null
+): Array<{ field: string; value: string; negated: boolean; quoted?: boolean }> {
+  if (!parsed || parsed.serverQuery) return [];
+  return parsed.fieldFilters
+    .filter((ff) => ff.field !== 'tag')
+    .map((ff) => ({
+      field: ff.field,
+      value: ff.value,
+      negated: ff.negated,
+      ...(ff.quoted ? { quoted: true } : {}),
+    }));
+}
+
+/**
+ * Reports whether input uses a boolean form that field filters cannot carry:
+ * an explicit operator (`OR`, `AND`, `||` or `&&`: the field/value split would leave the
+ * word in the free text, where the server never reads it as an operator) or a
+ * parenthesis, other than the `(a|b)` that is the
+ * value of a field (`read_status:(finished|in_progress)`) and anything inside
+ * double quotes.
+ */
+export function hasBooleanStructure(input: string): boolean {
+  const bare = input.replace(/"[^"]*"?/g, ' ').replace(/\b\w+:\([^()]*\)/g, ' ');
+  return /(^|\s)(OR|AND|\|\||&&)(\s|$)/.test(bare) || /[()]/.test(bare);
+}
+
+const PER_USER_FIELD_IN_TEXT = new RegExp(`\\b(?:${PER_USER_SEARCH_FIELDS.join('|')})\\s*:`, 'i');
+
+/**
+ * Reports whether input names a per-user field outside double quotes. Read from
+ * the text, not from the parsed filters: inside a group the term is not a
+ * filter at all (`(read_status:finished title:Hush)` parses to none), and the
+ * server's refusal is exactly what the person needs to see there. Any letter
+ * case counts, so `Read_Status:` reaches the server's "write read_status" message.
+ */
+export function mentionsPerUserField(input: string): boolean {
+  return PER_USER_FIELD_IN_TEXT.test(input.replace(/"[^"]*"?/g, ' '));
 }
 
 export const SEARCH_FIELDS: readonly string[] = [
@@ -123,10 +202,7 @@ export function parseSearch(input: string): ParsedSearch {
     let negated = false;
     const startPos = pos;
 
-    if (
-      str.substring(pos, pos + 4) === 'NOT ' &&
-      pos + 4 < str.length
-    ) {
+    if (str.substring(pos, pos + 4) === 'NOT ' && pos + 4 < str.length) {
       // Peek ahead to see if what follows is a valid field:value
       const afterNot = pos + 4;
       const fieldMatch = tryMatchFieldValue(str, afterNot);
@@ -195,13 +271,17 @@ export function parseSearch(input: string): ParsedSearch {
     }
   }
 
-  return {
+  const parsed: ParsedSearch = {
     freeText: freeTextParts
       .filter((p) => p.length > 0)
       .join(' ')
       .trim(),
     fieldFilters,
   };
+  if (mentionsPerUserField(input) && hasBooleanStructure(input)) {
+    parsed.serverQuery = input.trim();
+  }
+  return parsed;
 }
 
 interface FieldValueMatch {
@@ -211,16 +291,10 @@ interface FieldValueMatch {
   endPos: number;
 }
 
-function tryMatchFieldValue(
-  str: string,
-  pos: number
-): FieldValueMatch | null {
+function tryMatchFieldValue(str: string, pos: number): FieldValueMatch | null {
   // Match field name (word chars and underscores)
   let fieldEnd = pos;
-  while (
-    fieldEnd < str.length &&
-    (isWordChar(str[fieldEnd]))
-  ) {
+  while (fieldEnd < str.length && isWordChar(str[fieldEnd])) {
     fieldEnd++;
   }
 
@@ -280,6 +354,22 @@ function tryMatchFieldValue(
     let end = close + 1;
     while (end < str.length && str[end] !== ' ') end++;
     return { field, value: str.substring(valueStart, end), quoted: false, endPos: end };
+  }
+
+  // A per-user alternation — `read_status:(finished | in_progress)` — may hold
+  // spaces too, and runs to its closing parenthesis. Only these fields have an
+  // alternation in a field filter; for any other field a `(` stays an ordinary
+  // character, as before.
+  if (str[valueStart] === '(' && PER_USER_SEARCH_FIELDS.includes(field)) {
+    const close = str.indexOf(')', valueStart + 1);
+    if (close !== -1) {
+      return {
+        field,
+        value: str.substring(valueStart, close + 1),
+        quoted: false,
+        endPos: close + 1,
+      };
+    }
   }
 
   // Bracketed range — `duration:[10m TO 2h]` contains spaces, so it runs to

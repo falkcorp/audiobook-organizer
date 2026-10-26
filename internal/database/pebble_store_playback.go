@@ -1,15 +1,17 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.8.0
+// version: 1.9.1
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-10-11
+// last-edited: 2026-10-26
 
 package database
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -369,6 +371,60 @@ func (p *PebbleStore) DeleteUserBookState(userID, bookID string) error {
 		}
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// UserBookStateLister reads every user_book_state row of one user in a single
+// prefix scan. A capability, not a Store method, so the wide Store interface and
+// its mocks do not grow: its callers (the per-viewer collection evaluator) resolve
+// it with AsCapability and fall back to point reads when a store lacks it.
+type UserBookStateLister interface {
+	// ListUserBookStates returns the user's rows keyed by book id. A user's rows
+	// number in the hundreds or low thousands (the books they have touched), not
+	// the library, so the whole set fits in memory and one scan replaces a point
+	// read per candidate book. An empty userID is an error here (the point
+	// reader's answer for "" is "no row", which a caller must not read as "this
+	// user has no state"). A row that does not decode is an error wrapping
+	// ErrUserBookStateUndecodable, never skipped: a caller that treated the book
+	// as stateless would match it under any negated or `unstarted` filter.
+	//
+	// ctx is the caller's request: the scan stops with ctx.Err() when it is done,
+	// so a client that went away does not keep the rest of the evaluation (and
+	// its slot) waiting on a scan nobody will read.
+	ListUserBookStates(ctx context.Context, userID string) (map[string]*UserBookState, error)
+}
+
+var _ UserBookStateLister = (*PebbleStore)(nil)
+
+// ListUserBookStates implements UserBookStateLister: one iterator over
+// [ubs:<userID>:, prefixUpperBound). The user id is validated like
+// ScanUserData's (non-empty, no ':'), because an id containing the separator
+// would make the prefix read another user's rows.
+func (p *PebbleStore) ListUserBookStates(ctx context.Context, userID string) (map[string]*UserBookState, error) {
+	if userID == "" || strings.Contains(userID, ":") {
+		return nil, fmt.Errorf("list user book states: invalid user id %q", userID)
+	}
+	prefix := []byte("ubs:" + userID + ":")
+	out := make(map[string]*UserBookState)
+	err := forEachKeyInRange(p.db, prefix, prefixUpperBound(prefix), func(k, v []byte) error {
+		// Checked every 256 rows: a user's rows are few, so this is not a hot
+		// loop, but it must stop for a request that is gone.
+		if len(out)%256 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		bookID := string(k[len(prefix):])
+		var s UserBookState
+		if err := json.Unmarshal(v, &s); err != nil {
+			return fmt.Errorf("%w: %s/%s: %w", ErrUserBookStateUndecodable, userID, bookID, err)
+		}
+		out[bookID] = &s
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (p *PebbleStore) GetUserBookState(userID, bookID string) (*UserBookState, error) {

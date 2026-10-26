@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.61.0
+// version: 4.62.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package server
 
@@ -1308,26 +1308,24 @@ func (s *Server) startBackfills() {
 		}
 	})
 
-	// Dynamic collections are evaluated as their owner (D75): give every one that
-	// has no usable owner (empty, "_local", or a deleted user) the first active
-	// admin, once, instead of leaving the read path to fall back on each request.
-	// Idempotent, over the collection rows only (see backfillCollectionOwners for
-	// why it is sequential), and it re-materializes only if the search index is
-	// already open; a rebuilding index (the first boot after a mapping bump) leaves
-	// the stored members for the next materialize.
-	s.bgWG.Go("collection-owner-backfill", func() {
+	// Dynamic collections are evaluated for the viewer (owner decision 2026-10-25),
+	// so a collection with a per-user query stores no member list. Clear the lists
+	// the old creator-evaluated behaviour left on existing rows: they are the
+	// creator's listening state. Idempotent, over the collection rows only (see
+	// purgePerViewerCollectionMembers for why it is sequential), and independent of
+	// the search index: it only removes stored data.
+	s.bgWG.Go("collection-peruser-purge", func() {
 		if err := s.bgCtx.Err(); err != nil {
 			return
 		}
-		st, ok := database.AsCapability[collectionOwnerStore](s.Ops())
+		st, ok := database.AsCapability[collectionPurgeStore](s.Ops())
 		if !ok {
-			lifecycleLog.Warn("collection-owner-backfill: store has no collection/user operations; dynamic collections without an owner keep the read-time fallback")
+			lifecycleLog.Warn("collection-peruser-purge: store has no collection operations; stored member lists of per-user collections are not served but were not cleared")
 			return
 		}
-		if _, err := backfillCollectionOwners(st, s.collectionRematerializer(),
-			logger.NewWithActivityLog("collection-owner-backfill", s.storeForWiring()),
-			config.AppConfig.EnableAuth); err != nil {
-			lifecycleLog.Warn("collection-owner-backfill failed; the next boot retries: err=%s", logger.SanitizeLogValue(err.Error()))
+		if _, err := purgePerViewerCollectionMembers(st,
+			logger.NewWithActivityLog("collection-peruser-purge", s.storeForWiring())); err != nil {
+			lifecycleLog.Warn("collection-peruser-purge failed; the next boot retries: err=%s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
 
