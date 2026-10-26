@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryPermission.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1b4c472c-399a-43a3-8df5-25a5dbd4979e
 // last-edited: 2026-10-25
 
@@ -14,6 +14,8 @@ export const LIBRARY_ORGANIZE_PERMISSION = 'library.organize';
 export interface PermissionAuth {
   initialized: boolean;
   authEnabled: boolean | null;
+  /** Authentication is on AND at least one user exists (/auth/status requires_auth). */
+  requiresAuth: boolean;
   user: { permissions?: string[] } | null;
 }
 
@@ -23,15 +25,20 @@ export interface PermissionAuth {
  * and fail-closed, like useCanManageCollections: until auth has initialised,
  * when the server's auth setting is unknown, and when authentication is on but
  * nobody is signed in or the permission list is missing, the caller does not
- * hold it. The one open case is authentication explicitly OFF, where the
- * server's gate is a no-op and every caller may do everything. With no auth
- * information at all (`null`: the component renders outside an AuthProvider)
- * the control is left as it was, since nothing says it would be refused.
+ * hold it. Two cases are open because the server lets the caller through: when
+ * authentication is explicitly OFF (its gate is a no-op), and on a first run
+ * (authentication on, no user created yet: `requiresAuth` is false although
+ * `authEnabled` is true), where the server's permission checks hold every
+ * permission until the first user exists (middleware.HoldsPermission). With no
+ * auth information at all (`null`: the component renders outside an
+ * AuthProvider) the control is left as it was, since nothing says it would be
+ * refused.
  */
 export function holdsPermission(auth: PermissionAuth | null, permission: string): boolean {
   if (auth === null) return true;
   if (!auth.initialized) return false;
   if (auth.authEnabled === false) return true;
+  if (auth.authEnabled === true && !auth.requiresAuth) return true;
   return auth.user?.permissions?.includes(permission) ?? false;
 }
 

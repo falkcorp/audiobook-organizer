@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-25
 
@@ -226,6 +226,11 @@ const (
 	// and the delete then failed (merge.ErrStateMovedBookKept), so the book
 	// was kept without it. Unlike OWNS_FILES, something changed.
 	CodeStateMovedBookKept = "STATE_MOVED_BOOK_KEPT"
+	// CodeProgressDiscardedBookKept: discard-progress-and-purge erased every
+	// user's listening progress (the owner asked for that) and the delete then
+	// failed (merge.ErrDiscardedBookKept), so the book is still in the trash
+	// without it. Unlike OWNS_FILES, something irreversible happened.
+	CodeProgressDiscardedBookKept = "PROGRESS_DISCARDED_BOOK_KEPT"
 )
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.

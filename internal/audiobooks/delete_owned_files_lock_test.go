@@ -1,5 +1,5 @@
 // file: internal/audiobooks/delete_owned_files_lock_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: c41e7a92-6d05-4b38-8e1f-2a9d5b073c64
 // last-edited: 2026-10-25
 
@@ -8,12 +8,15 @@ package audiobooks
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -37,7 +40,7 @@ type gainsFileStore struct {
 
 func (s *gainsFileStore) addFile(id string) {
 	require.NoError(s.t, s.PebbleStore.CreateBookFile(&database.BookFile{
-		BookID: id, FilePath: "/x/" + id + "-gained.m4b", Format: "m4b",
+		BookID: id, FilePath: "/lib/Gotham/" + id + "-gained.m4b", Format: "m4b",
 	}))
 }
 
@@ -76,7 +79,7 @@ func retireRowInto(t *testing.T, store *database.PebbleStore, holderID string) {
 	shell := "shell-" + holderID
 	_, err := store.CreateBook(&database.Book{ID: shell, Title: shell, Format: "m4b"})
 	require.NoError(t, err)
-	row := &database.BookFile{ID: "retired-row-" + holderID, BookID: shell, FilePath: "/x/" + holderID + "-retired.m4b", Format: "m4b"}
+	row := &database.BookFile{ID: "retired-row-" + holderID, BookID: shell, FilePath: "/lib/Gotham/" + holderID + "-retired.m4b", Format: "m4b"}
 	require.NoError(t, store.CreateBookFile(row))
 	v, err := store.CreateBookVersion(&database.BookVersion{
 		BookID: holderID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
@@ -366,6 +369,27 @@ func TestPurgeSoftDeletedBooks_RetiredOnlyStatelessBookIsRefusedBeforeAnySideEff
 	require.Nil(t, tomb, "no tombstone snapshot was written for a book that was kept")
 }
 
+// S1: "Purge now" of a trashed book holding only retired rows says what the
+// helper says (retired rows cannot be moved), once, and never advises
+// soft-deleting a book that is already in the trash.
+func TestPurgeNow_RetiredOnlyBookKeepsTheHelpersWording(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "holder", "g1", false, false)
+	retireRowInto(t, store, "holder")
+	trashBook(t, store, "holder")
+	book, err := store.GetBookByID("holder")
+	require.NoError(t, err)
+
+	_, err = NewAudiobookService(store).purgeNow(book)
+
+	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.Contains(t, err.Error(), "retired row(s)")
+	require.Contains(t, err.Error(), "cannot be moved")
+	require.NotContains(t, err.Error(), "soft-delete")
+	require.Equal(t, 1, strings.Count(err.Error(), "still owns book_file rows"), "%v", err)
+	require.False(t, bookGone(t, store, "holder"))
+}
+
 // R2: discard-progress-and-purge of a trashed book holding only retired rows
 // is refused before any user's progress is erased, in the helper's wording for
 // retired rows.
@@ -390,4 +414,57 @@ func TestDiscardProgressAndPurge_RetiredOnlyBookIsRefusedBeforeAnythingIsCleared
 	tomb, err := store.GetBookTombstone("holder")
 	require.NoError(t, err)
 	require.Nil(t, tomb)
+}
+
+// S4: a file row that lands AFTER both discard checks (the up-front one and
+// the one under the merge lock) is refused by DeleteBook only once every
+// user's progress has been erased. That is not "nothing changed": the book is
+// kept without its progress, so the service writes the audit row, reports
+// ErrDiscardedBookKept (which still wraps ErrBookOwnsFiles) and the handler
+// maps it to its own code.
+func TestDiscardProgressAndPurge_FileRowAfterClearingIsAuditedAsKept(t *testing.T) {
+	_, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "held", "")
+	u := purgeSeedProgress(t, store, "held")
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "held", afterInclRetCall: 2})
+	rec := &fakeRecorder{}
+	svc.auditOverride = rec
+
+	_, err := svc.DiscardProgressAndPurge(context.Background(), "held", "owner")
+	require.ErrorIs(t, err, merge.ErrDiscardedBookKept)
+	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.False(t, bookGone(t, store, "held"), "the delete refused, so the book stays")
+	require.Equal(t, 0, userPct(t, store, u.ID, "held"), "the progress was erased before the refusal")
+
+	require.Len(t, rec.entries, 1, "the erase is audited even though the purge failed")
+	e := rec.entries[0]
+	require.Equal(t, activity.TypeTrashDiscardProgressPurge, e.Type)
+	require.Equal(t, "error", e.Level)
+	require.Equal(t, false, e.Details["purged"])
+	require.Equal(t, 1, e.Details["users_cleared"])
+	require.Contains(t, e.Details["error"], "was erased and the book was kept")
+}
+
+// N6: the state-moved refusal of "Purge now" returns before the success arms'
+// cache refresh, but the sibling's progress did change, so the list cache is
+// invalidated on that path too.
+func TestPurgeNow_StateMovedRefusalInvalidatesTheListCache(t *testing.T) {
+	prev := config.AppConfig.CacheInvalidateOnBookUpdate
+	config.AppConfig.CacheInvalidateOnBookUpdate = true
+	t.Cleanup(func() { config.AppConfig.CacheInvalidateOnBookUpdate = prev })
+
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "keep", "g1", false, true)
+	groupBook(t, store, "dup", "g1", true, false)
+	purgeSeedProgress(t, store, "dup")
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 2})
+	svc.listCache.Set("probe", []database.Book{{ID: "cached"}})
+	_, warm := svc.listCache.Get("probe")
+	require.True(t, warm, "fixture: the probe entry is cached")
+
+	_, err := svc.DeleteAudiobook(context.Background(), "dup", &DeleteAudiobookOptions{})
+	require.ErrorIs(t, err, merge.ErrStateMovedBookKept)
+
+	_, still := svc.listCache.Get("probe")
+	require.False(t, still, "the refusal moved state, so cached lists are dropped")
 }

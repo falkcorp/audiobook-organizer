@@ -1,5 +1,5 @@
 // file: internal/server/batch_hard_delete_permission_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e0a974ef-0780-48c3-921a-e32b2e124b6c
 // last-edited: 2026-10-25
 
@@ -25,7 +25,7 @@ const batchOpsPath = "/api/v1/audiobooks/batch-operations"
 // does. The check is the handler's, made on the request it just bound and is
 // about to run, so a body the handler reads as a hard delete is refused
 // however the bytes are shaped. A role holding edit_metadata but not delete
-// (synthetic "metadata-only") gets 403 naming library.delete and the book
+// ("metadata-only") gets 403 naming library.delete and the book
 // survives for: a plain hard delete, a hard delete after other operations,
 // trailing bytes after the JSON value (the handler's decoder reads one value
 // and ignores the rest), and a duplicate hard_delete key (the last wins). The
@@ -55,7 +55,7 @@ func TestBatchOperations_HardDeleteNeedsLibraryDelete(t *testing.T) {
 	editor := session("ed2", auth.SeedRoleEditor)
 
 	newBook := func(title string) string {
-		b, err := ps.CreateBook(&database.Book{Title: title, FilePath: "/library/" + title + ".m4b"})
+		b, err := ps.CreateBook(&database.Book{Title: title, FilePath: "/lib/Gotham/" + title + ".m4b"})
 		require.NoError(t, err)
 		return b.ID
 	}
@@ -74,7 +74,7 @@ func TestBatchOperations_HardDeleteNeedsLibraryDelete(t *testing.T) {
 		{"duplicate key", `{"operations":[{"id":"%s","action":"delete","hard_delete":false,"hard_delete":true}]}`},
 	} {
 		t.Run("metadata-only role refused: "+tc.name, func(t *testing.T) {
-			id := newBook("Synthetic Refused " + tc.name)
+			id := newBook("Batman: Refused " + tc.name)
 			body := strings.ReplaceAll(tc.body, "%s", id)
 			w := postRepairs(srv, meta, batchOpsPath, body)
 			require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
@@ -83,14 +83,14 @@ func TestBatchOperations_HardDeleteNeedsLibraryDelete(t *testing.T) {
 		})
 	}
 	t.Run("metadata-only role: a plain update still reaches the handler", func(t *testing.T) {
-		id := newBook("Synthetic Update")
+		id := newBook("Batman: Update")
 		w := postRepairs(srv, meta, batchOpsPath, `{"operations":[{"id":"`+id+`","action":"update","updates":{"title":"t2"}}]}`)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		require.True(t, exists(id))
 	})
 	t.Run("editor and admin: a file-less book is really hard deleted", func(t *testing.T) {
 		for _, tok := range []string{editor, adminToken} {
-			id := newBook("Synthetic Deleted " + tok[:4])
+			id := newBook("Batman: Deleted " + tok[:4])
 			w := postRepairs(srv, tok, batchOpsPath, `{"operations":[{"id":"`+id+`","action":"delete","hard_delete":true}]}`)
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.False(t, exists(id), "the book is gone: %s", w.Body.String())
@@ -117,7 +117,7 @@ func TestBatchOperations_HardDeleteThroughTheWiredPermissionCheck(t *testing.T) 
 			srv, _, _ := repairsPermServer(t, tc.enableAuth, tc.users)
 			ps, ok := srv.storeForWiring().(*database.PebbleStore)
 			require.True(t, ok, "test store is a PebbleStore")
-			b, err := ps.CreateBook(&database.Book{Title: "Synthetic Wired", FilePath: "/library/wired.m4b"})
+			b, err := ps.CreateBook(&database.Book{Title: "Batman: Wired", FilePath: "/lib/Gotham/wired.m4b"})
 			require.NoError(t, err)
 
 			w := postRepairs(srv, "", batchOpsPath, `{"operations":[{"id":"`+b.ID+`","action":"delete","hard_delete":true}]}`)
@@ -166,7 +166,7 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 	editor := session("ed-trash", auth.SeedRoleEditor)
 
 	newBook := func(title string, trashed bool) string {
-		b := &database.Book{Title: title, FilePath: "/library/" + title + ".m4b"}
+		b := &database.Book{Title: title, FilePath: "/lib/Gotham/" + title + ".m4b"}
 		if trashed {
 			yes := true
 			b.MarkedForDeletion = &yes
@@ -213,7 +213,7 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 
 	for _, tc := range trashShapes {
 		t.Run("trash refused without library.delete: "+tc.name, func(t *testing.T) {
-			id := newBook("Synthetic Trash "+tc.name, false)
+			id := newBook("Batman: Trash "+tc.name, false)
 			w := postRepairs(srv, meta, tc.path, strings.ReplaceAll(tc.body, "%s", id))
 			require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 			require.Contains(t, w.Body.String(), "permission denied: library.delete")
@@ -223,7 +223,7 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 	for _, tc := range restoreShapes {
 		for who, tok := range map[string]string{"metadata-only": meta, "no-organize": noOrganize} {
 			t.Run("restore refused without library.organize ("+who+"): "+tc.name, func(t *testing.T) {
-				id := newBook("Synthetic Restore "+who+" "+tc.name, true)
+				id := newBook("Batman: Restore "+who+" "+tc.name, true)
 				require.True(t, trashed(id), "the fixture book starts in the trash")
 				w := postRepairs(srv, tok, tc.path, strings.ReplaceAll(tc.body, "%s", id))
 				require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
@@ -234,15 +234,15 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 	}
 
 	t.Run("no-organize role may still trash, and plain metadata edits pass on both routes", func(t *testing.T) {
-		id := newBook("Synthetic Allowed Trash", false)
+		id := newBook("Batman: Allowed Trash", false)
 		w := postRepairs(srv, noOrganize, batchOpsPath, `{"operations":[{"id":"`+id+`","action":"delete"}]}`)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		require.True(t, trashed(id), "library.delete is enough to trash")
 
 		for _, tok := range []string{meta, noOrganize} {
-			id := newBook("Synthetic Meta Edit", false)
+			id := newBook("Batman: Meta Edit", false)
 			for path, body := range map[string]string{
-				batchOpsPath: `{"operations":[{"id":"` + id + `","action":"update","updates":{"title":"Synthetic Edited"}}]}`,
+				batchOpsPath: `{"operations":[{"id":"` + id + `","action":"update","updates":{"title":"Batman: Edited"}}]}`,
 				batchPath:    `{"ids":["` + id + `"],"updates":{"genre":"Fantasy"}}`,
 			} {
 				w := postRepairs(srv, tok, path, body)
@@ -256,7 +256,7 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 			{"ops", batchOpsPath, `{"operations":[{"id":"%s","action":"delete"}]}`, `{"operations":[{"id":"%s","action":"restore"}]}`},
 			{"batch", batchPath, `{"ids":["%s"],"updates":{"marked_for_deletion":true}}`, `{"ids":["%s"],"updates":{"marked_for_deletion":false}}`},
 		} {
-			id := newBook("Synthetic Editor "+tc.name, false)
+			id := newBook("Batman: Editor "+tc.name, false)
 			w := postRepairs(srv, editor, tc.path, strings.ReplaceAll(tc.trash, "%s", id))
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.True(t, trashed(id), "%s: trashed", tc.name)
@@ -301,7 +301,7 @@ func TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore(t *testing.T) {
 
 	deleted := "deleted"
 	newBook := func(title string, label, flagged bool) string {
-		b := &database.Book{Title: title, FilePath: "/library/" + title + ".m4b"}
+		b := &database.Book{Title: title, FilePath: "/lib/Gotham/" + title + ".m4b"}
 		if label {
 			b.LibraryState = &deleted
 		}
@@ -334,7 +334,7 @@ func TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore(t *testing.T) {
 			label, flagged bool
 		}{{"labelled only", true, false}, {"flagged and labelled", true, true}} {
 			t.Run("refused row without library.organize: "+rt.name+", "+kind.name, func(t *testing.T) {
-				id := newBook("Synthetic State "+rt.name+kind.name, kind.label, kind.flagged)
+				id := newBook("Batman: State "+rt.name+kind.name, kind.label, kind.flagged)
 				w := postRepairs(srv, meta, rt.path, strings.ReplaceAll(rt.body, "%s", id))
 				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				require.Contains(t, w.Body.String(), "library.organize")
@@ -344,7 +344,7 @@ func TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore(t *testing.T) {
 				require.Equal(t, "deleted", label)
 			})
 			t.Run("allowed with library.organize: "+rt.name+", "+kind.name, func(t *testing.T) {
-				id := newBook("Synthetic Organizer "+rt.name+kind.name, kind.label, kind.flagged)
+				id := newBook("Batman: Organizer "+rt.name+kind.name, kind.label, kind.flagged)
 				w := postRepairs(srv, organizer, rt.path, strings.ReplaceAll(rt.body, "%s", id))
 				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				require.Contains(t, w.Body.String(), `"success":1`)
@@ -353,7 +353,7 @@ func TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore(t *testing.T) {
 			})
 		}
 		t.Run("a book that is not in the trash is a plain edit: "+rt.name, func(t *testing.T) {
-			id := newBook("Synthetic Live "+rt.name, false, false)
+			id := newBook("Batman: Live "+rt.name, false, false)
 			w := postRepairs(srv, meta, rt.path, strings.ReplaceAll(rt.body, "%s", id))
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			require.Contains(t, w.Body.String(), `"success":1`)
@@ -383,7 +383,7 @@ func TestBatchRoutes_TrashAndRestoreThroughTheWiredHolds(t *testing.T) {
 			ps, ok := srv.storeForWiring().(*database.PebbleStore)
 			require.True(t, ok, "test store is a PebbleStore")
 			deleted := "deleted"
-			b, err := ps.CreateBook(&database.Book{Title: "Synthetic Wired Holds", FilePath: "/library/wired-holds.m4b", LibraryState: &deleted})
+			b, err := ps.CreateBook(&database.Book{Title: "Batman: Wired Holds", FilePath: "/lib/Gotham/wired-holds.m4b", LibraryState: &deleted})
 			require.NoError(t, err)
 
 			w := postRepairs(srv, "", batchPath, `{"ids":["`+b.ID+`"],"updates":{"library_state":"organized"}}`)

@@ -1,7 +1,7 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package merge
 
@@ -360,6 +360,24 @@ func TestDiscardUserState_BookmarkOnly(t *testing.T) {
 	marks, err := s.ListBookmarks(u.ID, doomedSync)
 	require.NoError(t, err)
 	require.Empty(t, marks)
+}
+
+// S4: the delete failing after the state was cleared is not a plain error
+// string: it counts what was erased, says the book was kept, and still
+// reaches the delete's own cause.
+func TestDiscardUserState_DeleteFailureAfterClearingIsDiscardedBookKept(t *testing.T) {
+	s, _, _, doomed, _ := bookmarkOnly(t)
+	cause := errors.New("delete refused")
+	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { return cause })
+	require.ErrorIs(t, err, ErrDiscardedBookKept)
+	require.ErrorIs(t, err, cause)
+	var kept *DiscardedBookKeptError
+	require.ErrorAs(t, err, &kept)
+	require.Equal(t, doomed, kept.BookID)
+	require.Equal(t, res.Users, kept.Users)
+	require.Equal(t, res.Bookmarks, kept.Bookmarks)
+	require.Equal(t, 1, kept.Users)
+	require.Contains(t, err.Error(), "was erased and the book was kept")
 }
 
 // B: a bookmark under an alias of the book's id (an earlier merge loser

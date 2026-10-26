@@ -1,5 +1,5 @@
 // file: internal/batch/service.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-25
 
@@ -132,6 +132,10 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		var pre database.Book
 		var updated *database.Book
 		if isRestore(req.Updates) {
+			if gerr := req.Caller.checkRestore(book); gerr != nil {
+				resp.addError(id, gerr.Error())
+				continue
+			}
 			// marked_for_deletion=false is a restore like the "restore"
 			// action: the shared rule (merge.RestoreFromTrash) runs first, in
 			// the same write as the rest of the payload. The payload's
@@ -217,6 +221,10 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			}
 			var updated *database.Book
 			if isRestore(op.Updates) {
+				if gerr := req.Caller.checkRestore(book); gerr != nil {
+					resp.addError(op.ID, gerr.Error())
+					continue
+				}
 				var res merge.TrashRestoreResult
 				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
 					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)

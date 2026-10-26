@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-25
 
@@ -63,6 +63,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -982,7 +983,11 @@ func (h *Handler) withTrashProgress(c *gin.Context, books []database.Book) []tra
 // the owner's explicit choice to drop every user's listening state on one
 // book in the trash and purge it. 404 for an unknown book, 409 for a book
 // that is not in the trash or still owns book_file rows (nothing changed),
-// 503 when there is no activity log to record it in.
+// 503 when there is no activity log to record it in. A delete that fails
+// after the progress was erased (a file row a non-merge writer added in the
+// instant after the last check) answers PROGRESS_DISCARDED_BOOK_KEPT, 409
+// when the cause was file rows and 500 otherwise: the progress is gone, so it
+// is never reported as "nothing changed".
 func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 	id := c.Param("id")
 	actor := "unknown"
@@ -996,6 +1001,12 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithOK(c, res.ForViewer(viewerID, seeAll))
 	case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
 		httputil.RespondWithNotFound(c, "audiobook", id)
+	case errors.Is(err, merge.ErrDiscardedBookKept):
+		status := http.StatusInternalServerError
+		if errors.Is(err, database.ErrBookOwnsFiles) {
+			status = http.StatusConflict
+		}
+		httputil.RespondWithError(c, status, err.Error(), CodeProgressDiscardedBookKept)
 	case errors.Is(err, database.ErrBookOwnsFiles):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
 	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, audiobookspkg.ErrDiscardRefused):

@@ -33,7 +33,19 @@ read, refuses the delete. The batch path reads the rows through the
   helper too, so a trashed book that holds only retired rows is refused before any
   tombstone, progress carry or erase, with or without listening state. A book is
   counted once in the nightly purge report: skipped when refused before the carry,
-  an error when something failed after the state moved.
+  an error when something failed after the state moved. The purge carries the
+  helper's own wording through unchanged (a trashed book that holds only retired
+  rows is told those rows cannot be moved, not to soft-delete a book that is
+  already in the trash), and an early return for a state-moved refusal now
+  refreshes the list cache like the success paths.
+- Discard progress and purge erases every user's progress and then deletes the
+  book. When that delete failed after the erase (a file row landed after both
+  checks), the request used to answer as if nothing changed and wrote no audit
+  row. It now writes the audit row (level `error`, `purged: false`, the counts
+  erased and the failure), refreshes the list cache and answers with its own
+  code, `PROGRESS_DISCARDED_BOOK_KEPT` (409 when the cause was owned files, 500
+  otherwise; `merge.DiscardedBookKeptError`, matching `merge.ErrDiscardedBookKept`
+  and the delete's own cause), saying the progress is gone and the book stayed.
 - A refusal after the state moved (a non-merge writer such as the scanner added
   a file after the lock check) is reported as its own outcome:
   `merge.StateMovedBookKeptError` / `STATE_MOVED_BOOK_KEPT`, saying the state
@@ -73,11 +85,25 @@ or a duplicate key cannot slip past:
   that enters the trash needs `library.delete`. A row the caller may not change
   fails with a message naming the permission, nothing is written for it, and the
   rest of the request proceeds. `marked_for_deletion` and `library_state` are the
-  only payload fields that touch the trash. In-process callers (the queued
-  metadata apply) pass no grants and are not judged.
+  only payload fields that touch the trash. A request with no grants (a nil
+  `Caller`) fails closed: it is judged as a caller holding neither permission, so
+  an update that moves a book into or out of the trash is refused and every other
+  edit is unaffected (an update that sets `marked_for_deletion` to false, which
+  is a restore, is judged the same way). Both HTTP handlers always set the
+  grants and no in-process caller of these two service methods edits trash state;
+  the "delete" and "restore" actions are judged only by the handler.
 
 The routes previously needed only `library.edit_metadata`, so a role with edit but
 not delete could trash, restore or permanently delete books through them. The
 library page now disables "Delete Selected" without `library.delete` and
-"Restore Selected" without `library.organize` (with the reason as a tooltip), and
-shows the server's permission message when a bulk action is refused.
+"Restore Selected" without `library.organize` (with the reason as a tooltip that
+shows on hover: a disabled button receives no pointer events, so the tooltip
+wraps the button), and shows the server's permission message when a bulk action
+is refused. On a first run (authentication on, no user created yet) the server
+holds every permission, and the page now enables the buttons the same way.
+
+The delete error messages on the library and book pages no longer replace the
+server's wording for a trashed book: a purge or a discard-progress-and-purge
+refused for owned files shows the server's message instead of a sentence telling
+the user to soft-delete a book that is already in the trash, and the new
+`PROGRESS_DISCARDED_BOOK_KEPT` answer is shown as "progress erased, book kept".

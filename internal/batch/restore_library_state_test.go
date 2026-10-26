@@ -1,7 +1,7 @@
 // file: internal/batch/restore_library_state_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c054407-02a8-465f-bb5a-c509387c20b3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-25
 
 package batch
 
@@ -64,7 +64,8 @@ func TestBatchRestore_UsesTheSharedRestoreRule(t *testing.T) {
 func TestBatchUpdate_UnmarkDeletionUsesTheSharedRestoreRule(t *testing.T) {
 	f, id := trashedLikeDeleteAudiobook(t)
 	resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
-		IDs: []string{id}, Updates: map[string]any{"marked_for_deletion": false}})
+		IDs: []string{id}, Updates: map[string]any{"marked_for_deletion": false},
+		Caller: &TrashGrants{Restore: true}})
 	require.Equal(t, 1, resp.Success)
 	requireRestoredVisible(t, f, id)
 }
@@ -131,7 +132,8 @@ func TestBatchUpdate_DeletedLabelRecordsThePreTrashState(t *testing.T) {
 	id := f.Book(t, vptest.Spec{ID: "b", Primary: "nil", State: "imported"})
 
 	resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{
-		IDs: []string{id}, Updates: map[string]any{"library_state": "deleted", "marked_for_deletion": true}})
+		IDs: []string{id}, Updates: map[string]any{"library_state": "deleted", "marked_for_deletion": true},
+		Caller: &TrashGrants{Trash: true}})
 	require.Equal(t, 1, resp.Success)
 	b, err := f.S.GetBookByID(id)
 	require.NoError(t, err)

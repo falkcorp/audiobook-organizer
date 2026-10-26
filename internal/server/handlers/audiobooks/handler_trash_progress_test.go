@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
 // last-edited: 2026-10-25
 
@@ -74,6 +74,14 @@ func TestDiscardProgressAndPurge_StatusMapping(t *testing.T) {
 		{"not in trash", fmt.Errorf("%w: b1", audiobookspkg.ErrNotInTrash), http.StatusConflict, "CONFLICT"},
 		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, "OWNS_FILES"},
 		{"refused", fmt.Errorf("%w: pending repair", audiobookspkg.ErrDiscardRefused), http.StatusConflict, "CONFLICT"},
+		// The progress WAS erased and the delete then refused: a different
+		// code from OWNS_FILES ("nothing was deleted"), so a client can say so.
+		{"progress erased, book kept on file rows", &merge.DiscardedBookKeptError{BookID: "b1", Users: 1, Bookmarks: 2,
+			Err: fmt.Errorf("delete book b1: %w (1 row(s))", database.ErrBookOwnsFiles)},
+			http.StatusConflict, "PROGRESS_DISCARDED_BOOK_KEPT"},
+		{"progress erased, book kept on a store failure", &merge.DiscardedBookKeptError{BookID: "b1", Users: 1,
+			Err: errString("pebble closed")},
+			http.StatusInternalServerError, "PROGRESS_DISCARDED_BOOK_KEPT"},
 		{"no audit", audiobookspkg.ErrAuditUnavailable, http.StatusServiceUnavailable, ""},
 		{"other", errString("pebble closed"), http.StatusInternalServerError, ""},
 	}
