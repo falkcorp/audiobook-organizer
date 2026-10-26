@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/whisper_no_answer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a97db0f2-8212-49bc-b646-6b4c39e34a80
 // last-edited: 2026-10-26
 
@@ -470,7 +470,7 @@ func TestBookPage_ASecondStrikeFromTheSameWorkerIsNotCounted(t *testing.T) {
 	if st := accum.snapshot(); st.Deferred != 1 || st.TranscribeTimeout != 0 {
 		t.Fatalf("the book must be deferred: %+v", st)
 	}
-	if !strings.Contains(logs, "already struck the file") {
+	if !strings.Contains(logs, "may already have struck the file") {
 		t.Fatalf("the log must say why the strike was not counted:\n%s", logs)
 	}
 

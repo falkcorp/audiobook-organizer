@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-26
 
@@ -1155,10 +1155,12 @@ func (w *fileIntroWorker) recordTimeout(g fileIntroGroup, m fileIntroItem, gr gr
 			"file_id", m.FileID, "strikes", out.Strikes, "min_gap", transcribeStrikeMinGap.String())
 		w.accum.update(func(s *database.FileIntroStats) { s.Deferred++ })
 	case out.SameWorker:
-		// The file's previous strike came from this same worker: one sick worker
-		// on two nights is not two pieces of evidence about the audio.
-		log.Info("transcribe-file-intros: transcribe_timeout from the same worker as the file's last strike, deferred without a second strike",
-			"file_id", m.FileID, "strikes", out.Strikes, "worker", gr.worker)
+		// The strike came from a machine that already struck the file, or from
+		// one the store cannot tell apart from those (an unknown machine, or the
+		// first known one after only unknown ones, which is recorded): one sick
+		// machine on two nights is not two pieces of evidence about the audio.
+		log.Info("transcribe-file-intros: transcribe_timeout from a machine that may already have struck the file, deferred without a second strike",
+			"file_id", m.FileID, "strikes", out.Strikes, "worker", gr.worker, "identity_recorded", out.IdentityRecorded)
 		w.accum.update(func(s *database.FileIntroStats) { s.Deferred++ })
 	case out.Stale:
 		w.accum.update(func(s *database.FileIntroStats) { s.Stale++ })

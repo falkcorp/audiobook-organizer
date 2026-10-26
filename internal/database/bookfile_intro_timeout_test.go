@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_timeout_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3a7d1f58-c2e6-4b09-8d41-6f0b9e2a7c35
 // last-edited: 2026-10-26
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,7 +20,7 @@ func strike(hash, run string, limit int) IntroTimeoutStrike {
 		SourceHash: hash, RunOpID: run, Limit: limit,
 		Detail: "transcribe_timeout: no result within 90s",
 		At:     time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC),
-		Worker: "m:" + run,
+		Worker: fmt.Sprintf("m:%x", "w"+run), // a known machine per run, in the stored id alphabet
 	}
 }
 
@@ -114,17 +115,77 @@ func TestRecordIntroTimeout_TheRowRemembersEveryMachineThatStruck(t *testing.T) 
 }
 
 // A first strike counts from any worker, named or not (an unnamed one came
-// from an endpoint whose /health could not be read); a later named strike is
-// then a machine the row has not seen.
-func TestRecordIntroTimeout_AnUnnamedFirstStrikeAndANamedSecondCount(t *testing.T) {
+// from an endpoint whose /health could not be read). Its machine is unknown,
+// so the first known machine after it may be the same one: it is recorded, not
+// counted, and a second known machine makes the file permanent.
+func TestRecordIntroTimeout_AnUnnamedFirstStrikeNeedsTwoKnownMachinesAfterIt(t *testing.T) {
 	s, f := newIntroStoreFixture(t)
 	first := strike("hash-a", "run-1", 2)
 	first.Worker = ""
 	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, first); err != nil || out.Strikes != 1 {
 		t.Fatalf("strike 1: out=%+v err=%v", out, err)
 	}
-	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, strike("hash-a", "run-2", 2)); err != nil || !out.Permanent {
-		t.Fatalf("strike 2: out=%+v err=%v", out, err)
+	second := strike("hash-a", "run-2", 2)
+	second.Worker = "m:a1a1a1a1"
+	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, second); err != nil || out.Permanent || !out.SameWorker || !out.IdentityRecorded {
+		t.Fatalf("first known machine: out=%+v err=%v, want it recorded and not counted", out, err)
+	}
+	if got := reread(t, s, f); got.IntroTimeouts != 1 || got.IntroTimeoutWorker != "m:a1a1a1a1" || got.IntroTimeoutRunID != "run-1" {
+		t.Fatalf("recording the machine must touch only the worker field: strikes=%d worker=%q run=%q",
+			got.IntroTimeouts, got.IntroTimeoutWorker, got.IntroTimeoutRunID)
+	}
+	third := strike("hash-a", "run-3", 2)
+	third.Worker = "m:b2b2b2b2"
+	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, third); err != nil || !out.Permanent {
+		t.Fatalf("a second known machine: out=%+v err=%v, want the permanent verdict", out, err)
+	}
+}
+
+// S1 (review 3 of #4182): a worker that gains machine_id changes identity
+// once. A strike from its old "u:" id, or a raw URL a pre-release build
+// stored, followed by its new "m:" id 13 h later is ONE machine, not two.
+func TestRecordIntroTimeout_AnUpgradedWorkersNewIdentityIsNotASecondMachine(t *testing.T) {
+	for _, before := range []string{"u:0123456789ab", "http://192.0.2.10:19848"} {
+		t.Run(before, func(t *testing.T) {
+			s, f := newIntroStoreFixture(t)
+			first := strike("hash-a", "run-1", 2)
+			first.Worker = before
+			if out, err := s.RecordIntroTimeout(f.BookID, f.ID, first); err != nil || out.Strikes != 1 {
+				t.Fatalf("first: out=%+v err=%v", out, err)
+			}
+			second := strike("hash-a", "run-2", 2)
+			second.At = first.At.Add(13 * time.Hour)
+			second.MinGap = 12 * time.Hour
+			second.Worker = "m:aaaaaaaaaaaaaaaa"
+			out, err := s.RecordIntroTimeout(f.BookID, f.ID, second)
+			if err != nil || out.Permanent || out.Strikes != 1 {
+				t.Fatalf("out=%+v err=%v, want one strike and no verdict", out, err)
+			}
+			got := reread(t, s, f)
+			if got.TranscribeStatus != nil || strings.Contains(got.IntroTimeoutWorker, "http") || !strings.Contains(got.IntroTimeoutWorker, "m:aaaaaaaaaaaaaaaa") {
+				t.Fatalf("status=%v worker=%q, want no verdict, the new machine recorded and no address kept", got.TranscribeStatus, got.IntroTimeoutWorker)
+			}
+		})
+	}
+}
+
+// S1: old workers identify each port by a hash of its URL, so a condemnation
+// by two ports of one Mac names two "u:" ids. That is one machine as far as
+// anyone can tell; two such condemnations are not a permanent verdict.
+func TestRecordIntroTimeout_APortPairCondemnationByOldWorkersIsNotTwoMachines(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	for i, w := range []string{"u:000000019848 + u:000000019849", "u:000000019850 + u:000000019851"} {
+		c := strike("hash-a", fmt.Sprintf("run-%d", i+1), 2)
+		c.At = c.At.Add(time.Duration(i) * 13 * time.Hour)
+		c.MinGap = 12 * time.Hour
+		c.Worker = w
+		out, err := s.RecordIntroTimeout(f.BookID, f.ID, c)
+		if err != nil || out.Permanent || out.Strikes != 1 {
+			t.Fatalf("condemnation %d: out=%+v err=%v, want one strike and no verdict", i+1, out, err)
+		}
+	}
+	if got := reread(t, s, f); got.TranscribeStatus != nil {
+		t.Fatalf("status = %v", *got.TranscribeStatus)
 	}
 }
 

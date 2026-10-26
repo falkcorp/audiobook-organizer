@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
 // last-edited: 2026-10-26
 
@@ -7,7 +7,7 @@ package database
 
 import (
 	"fmt"
-	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -88,14 +88,19 @@ type IntroTimeoutStrike struct {
 	// names every machine the file was stuck on alone, joined with
 	// IntroTimeoutWorkerSeparator.
 	//
-	// A strike after the first counts only when it brings a machine that has
-	// not struck these bytes before, or is itself a condemnation by two or more
-	// machines (SameWorker otherwise): two strikes from one machine can be one
-	// sick box on two nights, not two pieces of evidence about the audio. A
-	// first strike counts from any worker, named or not; a later strike that
-	// names no worker (its endpoint's /health could not be read, so its machine
-	// is unknown) never counts. The row keeps the union of the machines that
-	// struck it, so a third machine is needed after A then B, not A again.
+	// A strike after the first counts only when it brings a KNOWN machine ("m:",
+	// from the machine_id its worker reports) that has not struck these bytes
+	// before while the row already knows a machine, or is itself a
+	// condemnation by two or more distinct known machines (SameWorker
+	// otherwise): two strikes from one machine can be one sick box on two
+	// nights, not two pieces of evidence about the audio. A first strike counts
+	// from any worker, named or not. A later strike from an unknown machine (a
+	// "u:" id from a worker too old to report machine_id, whose ports look like
+	// separate machines; or no id, because /health could not be read) never
+	// counts. The first known machine after only unknown ones is recorded but
+	// not counted (IdentityRecorded), since it may be one of them under its new
+	// name. The row keeps the union of the machines that struck it, so a third
+	// machine is needed after A then B, not A again.
 	//
 	// So any pool whose routing sends the file to the same machine each time
 	// never makes a timeout permanent: the file is deferred and re-sent every
@@ -135,10 +140,18 @@ type IntroTimeoutOutcome struct {
 	// (file, run); callers treat SameRun as "deferred", never as a new strike.
 	SameRun bool
 	// SameWorker: the previous counted strike on these bytes came from the same
-	// worker (or this one names no worker), so this one is not independent
-	// evidence and nothing was written. Strikes/Permanent are the stored values;
-	// callers treat it as "deferred". See IntroTimeoutStrike.Worker.
+	// worker (or this one names no known machine), so this one is not
+	// independent evidence and was not counted. Strikes/Permanent are the
+	// stored values; callers treat it as "deferred". Nothing was written unless
+	// IdentityRecorded. See IntroTimeoutStrike.Worker.
 	SameWorker bool
+	// IdentityRecorded (with SameWorker): every counted strike came from an
+	// unknown machine (a worker too old to report machine_id, or one whose
+	// /health could not be read), and this strike named a known one. It may be
+	// the same machine under its new name, so it is not counted, but its
+	// identity is added to IntroTimeoutWorker so that only a DIFFERENT known
+	// machine can give the next strike. Nothing else on the row changes.
+	IdentityRecorded bool
 }
 
 // BookFileIntroWrite is what SetBookFileIntro did with a result.
@@ -474,7 +487,14 @@ func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutS
 				Permanent:  row.IntroTimeouts >= st.Limit,
 				SameWorker: true,
 			}
-			return ErrSkipBookFileWrite
+			if !learnsMachine(struckBy, newBy) {
+				return ErrSkipBookFileWrite
+			}
+			// The first known machine after only unknown ones: record who it is,
+			// count nothing, leave the strike's time and run alone.
+			row.IntroTimeoutWorker = joinIntroTimeoutWorkers(struckBy, newBy)
+			out.IdentityRecorded = true
+			return nil
 		}
 		strikes := 1
 		if counted {
@@ -578,29 +598,77 @@ func introTimeoutWorkers(v string) map[string]bool {
 	return out
 }
 
+// knownMachines is the subset of ids that name a machine by the machine_id
+// its worker reported ("m:"). Every other stored value is an unknown machine:
+// "u:" (a hash of an endpoint URL, from a worker too old to report
+// machine_id: several ports of one Mac are several "u:" ids, and the same Mac
+// becomes an "m:" id once upgraded), a raw URL written by a pre-release build,
+// or nothing at all.
+func knownMachines(set map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(set))
+	for id := range set {
+		if strings.HasPrefix(id, "m:") {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 // independentStrike reports whether a strike by newBy is evidence the strikes
-// by struckBy are not: it names a machine that has not struck these bytes, or
-// it is a condemnation by two or more machines (each of which was stuck on the
-// file alone in that one dispatch). A strike that names no machine is never
-// independent.
+// by struckBy are not. Only known machines ("m:") count:
+//   - a condemnation by two or more DISTINCT known machines (each was stuck on
+//     the file alone in that one dispatch) is independent on its own;
+//   - otherwise the strike must name a known machine the row has not recorded,
+//     AND the row must already know at least one machine. When every recorded
+//     strike came from unknown machines, the new machine may be one of them
+//     under its new name (a worker that just gained machine_id), so it is not
+//     counted; see learnsMachine.
+//
+// A strike that names no known machine is never independent, so two "u:"
+// ports of one old Mac cannot make a file permanent, alone or as a condemned
+// pair.
 func independentStrike(struckBy, newBy map[string]bool) bool {
-	if len(newBy) >= 2 {
+	known := knownMachines(newBy)
+	if len(known) >= 2 {
 		return true
 	}
-	for id := range newBy {
-		if !struckBy[id] {
+	stored := knownMachines(struckBy)
+	if len(stored) == 0 {
+		return false
+	}
+	for id := range known {
+		if !stored[id] {
 			return true
 		}
 	}
 	return false
 }
 
-// joinIntroTimeoutWorkers is the stored union of two identity sets, sorted.
+// learnsMachine reports whether a strike that does not count should still be
+// recorded: the row knows no machine yet (only unknown ones struck it) and
+// this strike names a known one. Recording it means the next counted strike
+// must come from a different known machine.
+func learnsMachine(struckBy, newBy map[string]bool) bool {
+	return len(knownMachines(struckBy)) == 0 && len(knownMachines(newBy)) > 0
+}
+
+// storableWorker matches the identities the transcribe package produces
+// ("m:" or "u:" and a short lowercase hash). Anything else (a raw endpoint URL
+// written by a pre-release build) is dropped on the next write: the field is
+// returned in API responses, and endpoint addresses are internal.
+var storableWorker = regexp.MustCompile(`^[mu]:[0-9a-z]{1,64}$`)
+
+// joinIntroTimeoutWorkers is the stored union of two identity sets, sorted,
+// with every value that is not a storable identity dropped.
 func joinIntroTimeoutWorkers(a, b map[string]bool) string {
-	all := maps.Clone(a)
-	if all == nil {
-		all = make(map[string]bool, len(b))
+	var ids []string
+	for _, set := range []map[string]bool{a, b} {
+		for id := range set {
+			if storableWorker.MatchString(id) && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
 	}
-	maps.Copy(all, b)
-	return strings.Join(slices.Sorted(maps.Keys(all)), IntroTimeoutWorkerSeparator)
+	slices.Sort(ids)
+	return strings.Join(ids, IntroTimeoutWorkerSeparator)
 }

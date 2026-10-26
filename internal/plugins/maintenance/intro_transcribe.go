@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.44.0
+// version: 3.45.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-26
 
@@ -2141,8 +2141,9 @@ func (p *Plugin) recordBookTimeout(
 			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "min_gap", transcribeStrikeMinGap.String())
 		accum.recordDeferred(1)
 	case out.SameWorker:
-		log.Info("transcribe: transcribe_timeout from a machine that already struck the file, book deferred without a second strike",
-			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "worker", result.Worker, "endpoint", result.Endpoint)
+		log.Info("transcribe: transcribe_timeout from a machine that may already have struck the file, book deferred without a second strike",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "worker", result.Worker, "endpoint", result.Endpoint,
+			"identity_recorded", out.IdentityRecorded)
 		accum.recordDeferred(1)
 	case out.Stale:
 		log.Warn("transcribe: transcribe_timeout strike not recorded (file changed), book deferred",
