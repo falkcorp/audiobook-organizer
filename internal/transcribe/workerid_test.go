@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
 // last-edited: 2026-10-26
 
@@ -14,7 +14,9 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Worker identity (N1, N7) and routing a struck job to another machine (R4),
@@ -224,4 +226,99 @@ func TestPool_AStuckUnitIsPlacedOffTheMachinesThatAlreadyStruckIt(t *testing.T) 
 			t.Fatalf("verdict = %+v, want a condemnation", r)
 		}
 	})
+}
+
+// machineFaultPool is a faultPool over machineHarness workers, with requests of
+// 16 decoded in chunks of 16.
+func machineFaultPool(t *testing.T, machines []string, answer func(url, id string) BatchResult) *faultPool {
+	t.Helper()
+	p := &faultPool{h: machineHarness(t, machines), answer: answer, batch: 16}
+	useEndpoints(t, 16, endpointURLs(p.h.eps)...)
+	return p
+}
+
+// B1 (review 3 of #4182), per machine: prod's Mac serves four ports. When one
+// port timeout-faulted only that port was benched, and the re-queued units of
+// one or two clips went to its three siblings, which are just as ill (a Mac
+// that swaps, or whose decoders jetsam kills, is ill on every port) and whose
+// units can never fault, so their strikes were believed: 16 of 32 ordinary
+// files struck. A timeout-majority fault now benches every port of the machine.
+func TestPool_ASickMachineIsBenchedOnEveryPort(t *testing.T) {
+	const killed = PathErrDecoderKilled + pathErrSeparator + "the decode process was killed from outside (exit code -9)"
+	for _, kind := range []string{"timeout", "kill"} {
+		for _, jobs := range []int{32, 200} {
+			t.Run(fmt.Sprintf("%s %d jobs", kind, jobs), func(t *testing.T) {
+				sickErr := timeoutText
+				if kind == "kill" {
+					sickErr = killed
+				}
+				var p *faultPool
+				p = machineFaultPool(t, []string{"aaaa0001", "aaaa0001", "aaaa0001", "aaaa0001", "bbbb0002", "bbbb0002"},
+					func(url, id string) BatchResult {
+						if slices.ContainsFunc(p.h.eps[:4], func(ep Endpoint) bool { return ep.URL == url }) {
+							return BatchResult{Error: sickErr}
+						}
+						return BatchResult{Text: "T:" + id}
+					})
+				ids := loopers(jobs, "chap")
+				res, err := p.run(t, ids...)
+				if err != nil {
+					t.Fatalf("err = %v, want none", err)
+				}
+				strikes := 0
+				for _, id := range ids {
+					r := res[id]
+					if IsStrikeError(r.Error) {
+						strikes++
+						continue
+					}
+					if r.Text != "T:"+id || r.Worker != "m:bbbb0002" {
+						t.Errorf("%s = %+v, want the sound machine's transcript", id, r)
+					}
+				}
+				if strikes != 0 {
+					t.Errorf("strikes = %d of %d ordinary files, want 0 while a sound machine remains", strikes, jobs)
+				}
+			})
+		}
+	}
+}
+
+// The ports of one machine answer in the same round: one faults, its sibling
+// answers a single timeout among sound clips (a minority, so a per-clip strike)
+// and its response drains first. Every fault of the round is marked before any
+// result is read, so the sibling's strike is withheld whatever the order.
+func TestPool_ASiblingPortsStrikeInTheSameRoundAsItsMachinesFaultIsWithheld(t *testing.T) {
+	var (
+		p       *faultPool
+		sibling atomic.Int32
+		faulted atomic.Int32
+	)
+	p = machineFaultPool(t, []string{"aaaa0001", "aaaa0001", "bbbb0002"}, func(url, id string) BatchResult {
+		switch url {
+		case p.h.eps[0].URL:
+			if faulted.Add(1) == 1 {
+				time.Sleep(50 * time.Millisecond) // let the sibling's response drain first
+			}
+			return BatchResult{Error: timeoutText}
+		case p.h.eps[1].URL:
+			if sibling.Add(1) == 1 {
+				return BatchResult{Error: timeoutText}
+			}
+		}
+		return BatchResult{Text: "T:" + id}
+	})
+	ids := loopers(48, "chap")
+	res, err := p.run(t, ids...)
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if faulted.Load() == 0 || sibling.Load() == 0 {
+		t.Fatalf("both ports of the sick machine must be sent work in the first round (fault=%d sibling=%d)", faulted.Load(), sibling.Load())
+	}
+	for _, id := range ids {
+		if r := res[id]; r.Text != "T:"+id {
+			t.Errorf("%s = %+v, want its transcript (a strike from a port of a machine that faulted is no verdict)", id, r)
+		}
+	}
 }

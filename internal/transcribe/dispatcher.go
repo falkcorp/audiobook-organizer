@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -343,19 +343,22 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	//   - A response that was mostly timeouts or crashes (a timeout-majority
 	//     fault) is as often the batch's own clips as the worker: a page whose
 	//     every chunk is mostly genuine loopers faults on EVERY endpoint at once.
-	//     So the endpoint is soft-benched for the rest of THIS dispatch
-	//     (sickHere: it gets no new work, its strikes are withheld and the jobs
-	//     re-queued) only while some endpoint has NOT faulted; the faulted jobs
-	//     go back in units to those endpoints. Once every endpoint has faulted
-	//     (the all-loopers page) the bench is lifted for all of them: units go to
-	//     any endpoint and their per-clip strikes are believed, so loopers still
-	//     converge. Excluding a faulted endpoint for good (an earlier version
-	//     did) left such a page with nowhere to go, deferred forever; believing
-	//     a sick endpoint while a healthy one was idle (another earlier version)
-	//     let one swapping Mac give first strikes to healthy files, which the
-	//     next night's routing then sent to the only other machine.
+	//     So the endpoint, and every other endpoint on its machine, is
+	//     soft-benched for the rest of THIS dispatch (isSick: it gets no new
+	//     work, its strikes are withheld and the jobs re-queued) only while some
+	//     endpoint is not sick; the faulted jobs go back in units to those
+	//     endpoints. Once every endpoint is sick (the all-loopers page) the
+	//     bench is lifted for all of them: units go to any endpoint and their
+	//     per-clip strikes are believed, so loopers still converge. Excluding a
+	//     faulted endpoint for good (an earlier version did) left such a page
+	//     with nowhere to go, deferred forever; believing a sick endpoint, or
+	//     another port of its machine, while a healthy one was idle (other
+	//     earlier versions) let one swapping Mac give first strikes to healthy
+	//     files, which the next night's routing then sent to the only other
+	//     machine.
 	//   - Any other fault (worker_misconfigured: the worker cannot decode at
-	//     all; see WorkerFaultError.timeoutMajority) is about the endpoint only. faultedOn remembers, per job, every
+	//     all; see WorkerFaultError.timeoutMajority) is about the endpoint
+	//     only. faultedOn remembers, per job, every
 	//     endpoint whose worker-level fault held it; a job is never offered to
 	//     one of those again, nor to an endpoint that failed in this dispatch
 	//     and has not answered cleanly since (lastErr). A job that has faulted on
@@ -370,24 +373,36 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	faultedOn := make(map[string]map[string]bool)
 	faultedHere := make(map[string]bool)
 	// sickHere is every endpoint that faulted in this dispatch, of either kind,
-	// with its error in sickErr. Never cleared within the dispatch: a worker
-	// that answered most of a chunk with timeouts is not trusted with fresh
-	// chunks again until the next dispatch (each costs a chunk of per-clip
-	// deadlines before it faults again). See trustSick.
+	// with its error in sickErr. sickMachine is every machine (keyOf) one of
+	// whose endpoints had a timeout-majority fault: a Mac that is swapping, or
+	// whose decoders jetsam is killing, is ill on every port it serves, and
+	// re-queued units of one or two clips sent to a sibling port can never
+	// fault (a fault needs two timeouts and a majority), so their strikes would
+	// be believed. A worker_misconfigured fault stays with its own port (a bad
+	// environment or a broken child is usually one port's). An endpoint of
+	// unknown identity is its own machine (keyOf never groups two URLs it cannot
+	// tell are one box). Neither is cleared within the dispatch: a worker that
+	// answered most of a chunk with timeouts is not trusted with fresh chunks
+	// again until the next dispatch (each costs a chunk of per-clip deadlines
+	// before it faults again). See trustSick.
 	sickHere := make(map[string]bool)
+	sickMachine := make(map[string]bool)
 	sickErr := make(map[string]error)
-	// trustSick is true once every endpoint of the dispatch has faulted: then
-	// there is no one better to ask, the bench is lifted, and per-clip strikes
-	// from faulted endpoints are believed (the all-loopers page).
-	trustSick := func() bool {
+	isSick := func(url string) bool { return sickHere[url] || sickMachine[keyOf(url)] }
+	sickCount := func() int {
+		n := 0
 		for _, ep := range ordered {
-			if !sickHere[ep.URL] {
-				return false
+			if isSick(ep.URL) {
+				n++
 			}
 		}
-		return true
+		return n
 	}
-	distrusts := func(url string) bool { return faultedHere[url] || (sickHere[url] && !trustSick()) }
+	// trustSick is true once every endpoint of the dispatch is sick: then
+	// there is no one better to ask, the bench is lifted, and per-clip strikes
+	// from faulted endpoints are believed (the all-loopers page).
+	trustSick := func() bool { return sickCount() == len(ordered) }
+	distrusts := func(url string) bool { return faultedHere[url] || (isSick(url) && !trustSick()) }
 	faultLimit := min(2, len(ordered))
 	isFaultJob := func(id string) bool { return len(faultedOn[id]) > 0 }
 	faultCandidate := func(id, url string) bool { return !faultedOn[id][url] && lastErr[url] == nil }
@@ -535,7 +550,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		var healthy []Endpoint
 		trusted := trustSick()
 		for _, ep := range ordered {
-			if !endpointInCooldown(ep.URL) && (trusted || !sickHere[ep.URL]) {
+			if !endpointInCooldown(ep.URL) && (trusted || !isSick(ep.URL)) {
 				healthy = append(healthy, ep)
 			}
 		}
@@ -549,7 +564,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			if len(lastErr) == 0 {
 				return results, classifyTransport(endpointURLs(ordered), fmt.Errorf(
 					"%w: every whisper endpoint that has not faulted in this dispatch is in cooldown after waiting %s (%d of %d faulted)",
-					ErrPoolUnavailable, poolPaceMax, len(sickHere), len(ordered)))
+					ErrPoolUnavailable, poolPaceMax, sickCount(), len(ordered)))
 			}
 			// The endpoints that faulted are not asked again while one that has
 			// not faulted might come back: their timeouts are not believed.
@@ -710,16 +725,29 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		wg.Wait()
 		close(resCh)
-
+		var round []epResult
 		for r := range resCh {
+			round = append(round, r)
+		}
+		// Every fault of the round is marked before any result is read, so a
+		// sibling port's strikes are withheld whichever response drained first.
+		for _, r := range round {
+			if fault, isFault := errors.AsType[*WorkerFaultError](r.err); isFault {
+				ep := healthy[r.idx]
+				if fault.timeoutMajority() {
+					sickMachine[keyOf(ep.URL)] = true
+				} else {
+					faultedHere[ep.URL] = true
+				}
+				sickHere[ep.URL], sickErr[ep.URL] = true, r.err
+			}
+		}
+
+		for _, r := range round {
 			ep := healthy[r.idx]
 			fault, isFault := errors.AsType[*WorkerFaultError](r.err)
 			if isFault {
 				registerFollowers(fault.Followers)
-				if !fault.timeoutMajority() {
-					faultedHere[ep.URL] = true
-				}
-				sickHere[ep.URL], sickErr[ep.URL] = true, r.err
 			}
 			// Work the endpoint completed is valid whether or not the call as a
 			// whole failed: a sender returns the chunks that finished before the
