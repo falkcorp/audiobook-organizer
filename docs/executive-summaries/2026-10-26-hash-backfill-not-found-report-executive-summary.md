@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-26-hash-backfill-not-found-report-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: d7aaaf61-bcb5-45c2-947a-ffd1e4655e3c -->
 <!-- last-edited: 2026-10-26 -->
 
 # The file-hash backfill now reports missing files instead of warning about each one
 
-- Pull request: PR not yet opened (this summary replaces #4158, which is being redone as a single clean change)
+- Pull request: [#4170](https://github.com/falkcorp/audiobook-organizer/pull/4170) (replaces #4158, redone as a single clean change)
 - Related: the earlier design that marked missing files on each book record was rejected by the owner and is not part of this change
 
 ## Executive Summary
