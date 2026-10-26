@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
 // version: 1.12.1
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package server
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
 // version: 1.2.3
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit

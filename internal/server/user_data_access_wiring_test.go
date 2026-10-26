@@ -1,7 +1,7 @@
 // file: internal/server/user_data_access_wiring_test.go
 // version: 1.1.0
 // guid: b8b6eb72-5710-4aa4-bcd9-b827d8deba3d
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // The library.view routes that serve records holding other users' listening
 // state alongside library data, as the server wires them: the merge journals

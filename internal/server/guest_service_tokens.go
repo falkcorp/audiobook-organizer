@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens.go
 // version: 1.0.4
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package server
 
