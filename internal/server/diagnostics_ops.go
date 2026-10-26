@@ -1,5 +1,5 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
 // last-edited: 2026-10-26
 
@@ -94,7 +94,8 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 // out the Repairs runs it may not read, as every operations route does, and
 // blanks the params and result of an operation whose result names users
 // (opaccess.ResultUserDataDefs); logs.json leaves out the lines that name a
-// user and the user-id column. An account that holds users.manage and every
+// user or come from a user-data subsystem (activity.NamesOthersUserLog) and the
+// user-id column. An account that holds users.manage and every
 // fixer's permissions (the admin role) gets the export whole.
 func (s *Server) diagnosticsExportOptions(opID string) diagnostics.ExportOptions {
 	reader := s.opActorAccess(opID)
@@ -111,7 +112,7 @@ func (s *Server) diagnosticsExportOptions(opID string) diagnostics.ExportOptions
 				return l, true
 			}
 			l.UserID = ""
-			return l, !activity.NamesUserText(l.Message)
+			return l, !activity.NamesOthersUserLog(l.Source, l.Message)
 		},
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/diagnostics_export_redaction_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d6a9f13-8b47-4c20-a5e1-7f3b0c92d684
 // last-edited: 2026-10-26
 
@@ -86,6 +86,11 @@ func TestDiagnosticsExport_OperationsAndLogsFollowTheRequestersAccess(t *testing
 	insert(repairOp, merge.UserStateRepairOpID, `{"apply":false}`, `{"items":[{"user_id":"`+listener+`","positions":3}]}`)
 	insert(scanOp, "library.scan", `{}`, `{"scanned":3}`)
 	require.NoError(t, store.AddSystemActivityLog("abs", "info", "progress patch: user="+listener+" currentTime=12.5"))
+	// Lines of a user-data subsystem that carry no user text at all: the source
+	// (or the "<subsystem>: " prefix, when slog's text handler made it "server")
+	// is what marks them, the same predicate the activity reader applies.
+	require.NoError(t, store.AddSystemActivityLog("abs", "info", "seek to Year One chapter 3 position 4021"))
+	require.NoError(t, store.AddSystemActivityLog("server", "info", "merge: moved 3 rows for Knightfall"))
 	require.NoError(t, store.AddSystemActivityLog("scanner", "info", "scan complete count=12"))
 
 	exportOp := func(id string, actor *string) {
@@ -114,6 +119,8 @@ func TestDiagnosticsExport_OperationsAndLogsFollowTheRequestersAccess(t *testing
 		require.Contains(t, opsJSON, scanOp, "%s: an ordinary operation stays", id)
 		require.Contains(t, opsJSON, `scanned`, "%s: and so does its result", id)
 		require.Contains(t, opsJSON, repairOp, "%s: the row of a user-data operation stays, without its result", id)
+		require.NotContains(t, logsJSON, "Year One", "%s: a line of the abs subsystem names no user and is still withheld", id)
+		require.NotContains(t, logsJSON, "Knightfall", "%s: a line prefixed by the merge subsystem is withheld", id)
 		require.Contains(t, logsJSON, "scan complete", "%s: an ordinary log line stays", id)
 	}
 
@@ -122,6 +129,8 @@ func TestDiagnosticsExport_OperationsAndLogsFollowTheRequestersAccess(t *testing
 		require.Contains(t, opsJSON, want, "the admin's export carries %s", want)
 	}
 	require.Contains(t, logsJSON, "progress patch", "the admin's export carries the log line naming a user")
+	require.Contains(t, logsJSON, "Year One", "the admin's export carries the user-data subsystem lines")
+	require.Contains(t, logsJSON, "Knightfall")
 
 	// The handler stamps the caller as the export's actor, which is what the
 	// check above reads.

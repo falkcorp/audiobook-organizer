@@ -1,7 +1,7 @@
 // file: internal/activity/user_data.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f75db40-9f7a-4cb3-ad7f-757dd64ea827
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package activity
 
@@ -182,6 +182,19 @@ func summarySubsystem(summary string) string {
 	return name
 }
 
+// NamesOthersUserLog reports whether one server log line, given as the logger
+// subsystem it came from and its message, carries other users' own data: its
+// source or the "<subsystem>: " prefix of its message is a user-data subsystem
+// (userDataSource), or its text names a user (NamesUserText).
+//
+// It is the one predicate for a log line. The activity filter applies it to a
+// "system" entry (NamesOthersUserData) and the diagnostics export applies it to
+// a system_activity_logs row, so the two cannot disagree about which lines a
+// caller without users.manage may read.
+func NamesOthersUserLog(source, message string) bool {
+	return userDataSource(source) || userDataSource(summarySubsystem(message)) || NamesUserText(message)
+}
+
 // NamesOthersUserData reports whether entry e carries other users' own data, so
 // only a caller who may manage users reads it (owner decision, 2026-10-24). The
 // server's own log is mirrored into the activity log (Writer), and the abs
@@ -212,7 +225,7 @@ func NamesOthersUserData(e database.ActivityEntry) bool {
 		return true
 	}
 	if e.Type == "system" {
-		if userDataSource(e.Source) || userDataSource(summarySubsystem(e.Summary)) {
+		if NamesOthersUserLog(e.Source, e.Summary) {
 			return true
 		}
 		for _, t := range e.Tags {

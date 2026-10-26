@@ -1,7 +1,7 @@
 // file: internal/activity/user_data_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package activity
 
@@ -250,4 +250,27 @@ func TestLogBatch_UserDataLinesBatchApartAndStayTagged(t *testing.T) {
 	assert.EqualValues(t, 2, tagged.Details["original_count"])
 	assert.NotContains(t, plain.Tags, TagUserData)
 	assert.EqualValues(t, 2, plain.Details["original_count"], "the two plain lines coalesced")
+}
+
+// NamesOthersUserLog is the one predicate for a server log line: the activity
+// filter's "system" branch and the diagnostics export both use it, so a line of a
+// user-data subsystem is withheld by source, by message prefix, or by its text,
+// and an ordinary line passes.
+func TestNamesOthersUserLog(t *testing.T) {
+	cases := []struct {
+		name, source, message string
+		want                  bool
+	}{
+		{"user-data source, no user text", "abs", "seek to Year One chapter 3", true},
+		{"user-data source prefix", "abs-cache", "evicted Hush", true},
+		{"message prefix under the server source", "server", "merge: moved 3 rows for Knightfall", true},
+		{"user text under an ordinary source", "scanner", "progress patch: user=01INVENTEDUSER0000000000A", true},
+		{"ordinary line", "scanner", "scan complete count=12", false},
+		{"ordinary prefix", "server", "scanner: scan complete count=12", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, NamesOthersUserLog(tc.source, tc.message))
+		})
+	}
 }
