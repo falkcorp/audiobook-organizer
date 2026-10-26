@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.5
+// version: 1.38.6
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-26
 
@@ -1254,10 +1254,13 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	// HTTP list refuses it up front; this is the same check for every other caller
 	// (a scoped search), and its error is a search.PerUserValueError or
 	// search.ErrPerUserBoolean, which the handler answers with a 400.
-	if err := search.CheckPerUserTerms(ast, now); err != nil {
+	//
+	// A tag: term is refused the same way where it cannot be applied exactly (under
+	// an OR, an alternation or a NOT; search.CheckTagTerms).
+	if err := search.CheckQueryTerms(ast, now); err != nil {
 		return nil, 0, fmt.Errorf("search: %w", err)
 	}
-	bleveQ, perUser, err := search.TranslateAt(ast, now)
+	tr, err := search.TranslateQuery(ast, now)
 	if err != nil {
 		// Same silent-degradation hazard as the parse-failure branch above:
 		// the query parsed fine but could not be expressed as a Bleve query,
@@ -1269,6 +1272,27 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 		}
 		books, sErr := svc.store.SearchBooks(query, limit, offset)
 		return books, len(books), sErr
+	}
+
+	bleveQ, perUser := tr.Query, tr.PerUser
+
+	// tag: terms are EXACT tag filters, not index terms: the index holds a tag as
+	// words ("to-read" would match every book tagged "read"), so each is resolved
+	// with GetBooksByTag, the lookup the tags[] parameter and the tag chips use,
+	// and the books that carry every one of them become the scope of the rest of
+	// the query, ANDed with any scope the caller already set (author, series).
+	if len(tr.Tags) > 0 {
+		tagIDs, tagErr := search.ResolveTagIDs(svc.store, tr.Tags)
+		if tagErr != nil {
+			return nil, 0, tagErr
+		}
+		if restrictIDs != nil {
+			tagIDs = intersectSortedIDs(tagIDs, restrictIDs)
+		}
+		if len(tagIDs) == 0 {
+			return []database.Book{}, 0, nil
+		}
+		restrictIDs = tagIDs
 	}
 
 	window := postFilterWindow()
@@ -1377,7 +1401,9 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 }
 
 // SearchPerUserProblem reports why a search string's per-user terms (read_status,
-// progress_pct, last_played) cannot be evaluated as written, or nil. The library
+// progress_pct, last_played) or tag: terms cannot be evaluated as written, or nil.
+// (A tag: term is exact and top-level only; see search.SplitTagTerms. The name is
+// the older, narrower one.) The library
 // search applies them as one flat AND after the index answers, so an OR with a
 // sibling or a negated group would be answered as an AND, and a value that is not
 // a status, a number or a date (or a pattern) would match nothing, or, negated,
@@ -1399,5 +1425,21 @@ func SearchPerUserProblem(q string) error {
 		// listening-state term and says nothing. Refuse it when it writes one.
 		return search.UnparsablePerUserQuery(q, err)
 	}
-	return search.CheckPerUserTerms(ast, time.Now())
+	return search.CheckQueryTerms(ast, time.Now())
+}
+
+// intersectSortedIDs returns the ids of a that are also in b, in a's order. It is
+// how a tag: scope and a caller's own scope (author, series) are ANDed.
+func intersectSortedIDs(a, b []string) []string {
+	in := make(map[string]struct{}, len(b))
+	for _, id := range b {
+		in[id] = struct{}{}
+	}
+	out := make([]string, 0, min(len(a), len(b)))
+	for _, id := range a {
+		if _, ok := in[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

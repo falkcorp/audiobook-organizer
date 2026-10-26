@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -386,8 +386,8 @@ func SearchHasPerUserFilters(q string) bool {
 	if err != nil {
 		return false
 	}
-	_, perUser, err := search.Translate(ast)
-	return err == nil && len(perUser) > 0
+	tr, err := search.TranslateQuery(ast, time.Now())
+	return err == nil && len(tr.PerUser) > 0
 }
 
 // SearchHasRelativeDate reports whether a search string carries a relative date
