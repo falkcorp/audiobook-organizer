@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.purgeBackground.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e1c4b92-3a68-4d05-9f27-b84d0c6a1e53
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 /**
  * Library "Purge Deleted": the purge is a background operation. Clicking
@@ -283,6 +283,7 @@ describe('purge deleted in the background', () => {
         count: 0,
         purgeBreakdown: null,
         pendingFileRemovals: 2,
+        waitingFileRecords: 0,
       } as never);
       vi.mocked(api.awaitPurgeResult).mockResolvedValueOnce({
         ...preview,
@@ -306,10 +307,39 @@ describe('purge deleted in the background', () => {
         count: 0,
         purgeBreakdown: null,
         pendingFileRemovals: 0,
+        waitingFileRecords: 0,
       } as never);
       renderLibrary();
       const button = await screen.findByRole('button', { name: /purge deleted/i });
       await waitFor(() => expect(button).toBeDisabled());
+    });
+
+    it('Purge Deleted stays reachable for records waiting on a missing folder, where the owner can forget them', async () => {
+      vi.mocked(api.getSoftDeletedBooks).mockResolvedValue({
+        items: [],
+        count: 0,
+        purgeBreakdown: null,
+        pendingFileRemovals: 0,
+        waitingFileRecords: 3,
+      } as never);
+      renderLibrary();
+      const button = await screen.findByRole('button', { name: /purge deleted/i });
+      await waitFor(() => expect(button).toHaveTextContent('3 files waiting'));
+      expect(button).toBeEnabled();
+    });
+
+    it('Purge Deleted stays enabled when only the waiting count is unknown', async () => {
+      vi.mocked(api.getSoftDeletedBooks).mockResolvedValue({
+        items: [],
+        count: 0,
+        purgeBreakdown: null,
+        pendingFileRemovals: 0,
+        waitingFileRecords: null,
+      } as never);
+      renderLibrary();
+      const button = await screen.findByRole('button', { name: /purge deleted/i });
+      await waitFor(() => expect(vi.mocked(api.getSoftDeletedBooks)).toHaveBeenCalled());
+      expect(button).toBeEnabled();
     });
 
     it('Purge Deleted stays enabled when the server could not count the pending removals', async () => {

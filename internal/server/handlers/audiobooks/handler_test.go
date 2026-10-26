@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -334,7 +334,7 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
 		Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
 	d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
-	d.svc.EXPECT().PendingFileRemovals().Return(0, nil)
+	d.svc.EXPECT().PendingFileRemovals().Return(audiobookspkg.PendingFileCounts{}, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
@@ -531,7 +531,7 @@ func TestListSoftDeletedAudiobooks_CarriesPurgeBreakdown(t *testing.T) {
 	d.svc.EXPECT().LastPurgeBreakdown().Return(&audiobookspkg.PurgeBreakdown{
 		FromPreview: true, Total: 10, Purgeable: 4, OwnsFiles: 3, UndoPossible: 2, HasListeningState: 1,
 	})
-	d.svc.EXPECT().PendingFileRemovals().Return(0, nil)
+	d.svc.EXPECT().PendingFileRemovals().Return(audiobookspkg.PendingFileCounts{}, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
@@ -556,14 +556,20 @@ func TestListSoftDeletedAudiobooks_CarriesPurgeBreakdown(t *testing.T) {
 // when the trash is empty. A failed read is null (unknown), never 0.
 func TestListSoftDeletedAudiobooks_CarriesPendingFileRemovals(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		n    int
-		err  error
-		want any
+		name        string
+		counts      audiobookspkg.PendingFileCounts
+		err         error
+		want        any
+		wantWaiting any
 	}{
-		{"pending", 7, nil, float64(7)},
-		{"none", 0, nil, float64(0)},
-		{"unreadable is null not zero", 0, errString("journal unreadable"), nil},
+		{"pending", audiobookspkg.PendingFileCounts{Pending: 7}, nil, float64(7), float64(0)},
+		{"none", audiobookspkg.PendingFileCounts{}, nil, float64(0), float64(0)},
+		// Records waiting for a missing or empty folder are a count of their
+		// own: they are not in the pending one, so the dialog never offers to
+		// "finish" them.
+		{"waiting apart from pending", audiobookspkg.PendingFileCounts{Pending: 2, WaitingForFolder: 5}, nil, float64(2), float64(5)},
+		{"only waiting", audiobookspkg.PendingFileCounts{WaitingForFolder: 3}, nil, float64(0), float64(3)},
+		{"unreadable is null not zero", audiobookspkg.PendingFileCounts{}, errString("journal unreadable"), nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, d := newHandler(t)
@@ -573,7 +579,7 @@ func TestListSoftDeletedAudiobooks_CarriesPendingFileRemovals(t *testing.T) {
 			d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
 				Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
 			d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
-			d.svc.EXPECT().PendingFileRemovals().Return(tc.n, tc.err)
+			d.svc.EXPECT().PendingFileRemovals().Return(tc.counts, tc.err)
 			c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 			h.ListSoftDeletedAudiobooks(c)
 			if w.Code != http.StatusOK {
@@ -591,6 +597,13 @@ func TestListSoftDeletedAudiobooks_CarriesPendingFileRemovals(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("files_pending_from_earlier_pass = %v, want %v", got, tc.want)
+			}
+			waiting, present := body.Data["files_waiting_for_folder"]
+			if !present {
+				t.Fatalf("files_waiting_for_folder missing: %v", body.Data)
+			}
+			if waiting != tc.wantWaiting {
+				t.Fatalf("files_waiting_for_folder = %v, want %v", waiting, tc.wantWaiting)
 			}
 		})
 	}

@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useState } from 'react';
 import {
@@ -58,6 +58,13 @@ interface LibraryToolbarProps {
    * opening the dialog changes nothing and its preview counts them itself.
    */
   pendingFileRemovals: number | null;
+  /**
+   * Earlier-pass removals waiting for a folder that is missing or empty (not in
+   * `pendingFileRemovals`). A purge cannot finish them, but the dialog is where
+   * the owner forgets their records, so they keep "Purge Deleted" enabled.
+   * null = unknown: enabled too.
+   */
+  waitingFileRecords: number | null;
   libraryBookCount: number;
   importBookCount: number;
   librarySizeBytes: number;
@@ -111,6 +118,7 @@ export const LibraryToolbar = ({
   systemStatus,
   softDeletedCount,
   pendingFileRemovals,
+  waitingFileRecords,
   libraryBookCount,
   importBookCount,
   librarySizeBytes,
@@ -373,14 +381,18 @@ export const LibraryToolbar = ({
               variant="outlined"
               size="small"
               color="secondary"
-              disabled={softDeletedCount === 0 && pendingFileRemovals === 0}
+              disabled={
+                softDeletedCount === 0 && pendingFileRemovals === 0 && waitingFileRecords === 0
+              }
             >
               Purge Deleted
               {softDeletedCount > 0
                 ? ` (${softDeletedCount})`
                 : pendingFileRemovals !== null && pendingFileRemovals > 0
                   ? ` (${pendingFileRemovals} ${pendingFileRemovals === 1 ? 'file' : 'files'} left)`
-                  : ''}
+                  : waitingFileRecords !== null && waitingFileRecords > 0
+                    ? ` (${waitingFileRecords} ${waitingFileRecords === 1 ? 'file' : 'files'} waiting)`
+                    : ''}
             </Button>
           </Stack>
         )}

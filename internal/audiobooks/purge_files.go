@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-26
 
@@ -84,6 +84,17 @@ type pendingFile struct {
 	// (readPendingFiles); an entry a pass made itself starts at zero.
 	attempts   int
 	recordedAt time.Time
+	// waitingIDs are the books whose journal records carry WaitingForFolder
+	// (read back from the journal; empty for an entry a pass made itself).
+	waitingIDs []string
+}
+
+// allWaiting reports whether every journal record of the path is waiting for a
+// folder: only then is the path one no purge can settle. A path with a record
+// that is not (a later pass journaled the same path again) is still a removal a
+// purge will try.
+func (f *pendingFile) allWaiting() bool {
+	return len(f.bookIDs) > 0 && len(f.waitingIDs) == len(f.bookIDs)
 }
 
 // pendingFiles collects the removals a purge pass decided on. Workers add to it
@@ -108,14 +119,18 @@ type pendingFiles struct {
 	byPath map[string]*pendingFile
 }
 
-// markJournaled notes what the journal record of path says, keeping the largest
-// attempt count and the earliest write time of its records.
-func (p *pendingFiles) markJournaled(path string, attempts int, recordedAt time.Time) {
+// markJournaled notes what the journal record of bookID's removal of path says,
+// keeping the largest attempt count and the earliest write time of its records,
+// and which of them wait for a folder.
+func (p *pendingFiles) markJournaled(path, bookID string, attempts int, recordedAt time.Time, waiting bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	f := p.byPath[path]
 	if f == nil {
 		return
+	}
+	if waiting {
+		f.waitingIDs = append(f.waitingIDs, bookID)
 	}
 	f.attempts = max(f.attempts, attempts)
 	if f.recordedAt.IsZero() || (!recordedAt.IsZero() && recordedAt.Before(f.recordedAt)) {
@@ -332,10 +347,25 @@ func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pen
 				errs = append(errs, fmt.Sprintf("could not count this pass against the pending removal of %s: %v", f.path, err))
 			}
 		}
+		// What the owner sees: a record this pass could not decide for want of its
+		// folder is marked, so the trash listing and a preview count it apart from
+		// the removals a purge will carry out; one that is retried for any other
+		// reason (the folder is back) is unmarked. A path not reached (the run was
+		// stopped) says nothing about its folder.
+		switch {
+		case o.folderMissing && !f.allWaiting():
+			if err := svc.setWaitingForFolder(f, true); err != nil {
+				errs = append(errs, fmt.Sprintf("could not mark the pending removal of %s as waiting for its folder: %v", f.path, err))
+			}
+		case o.retry && !o.folderMissing && !o.notReached && len(f.waitingIDs) > 0:
+			if err := svc.setWaitingForFolder(f, false); err != nil {
+				errs = append(errs, fmt.Sprintf("could not clear the waiting-for-folder mark of the pending removal of %s: %v", f.path, err))
+			}
+		}
 	}
 	if folderMissing > 0 {
 		ex := pending[exampleMissing]
-		errs = append(errs, fmt.Sprintf("%d pending file removal(s) are waiting for a folder that is missing or empty and are kept, to be looked at again on every pass; for example %s (book %s), whose folder %s is not there or holds nothing: the file may have been removed together with its folder, or that part of the library is not mounted", folderMissing, ex.path, ex.bookIDs[0], filepath.Dir(ex.path)))
+		errs = append(errs, fmt.Sprintf("%d pending file removal(s) are waiting for a folder that is missing or empty and are kept, to be looked at again on every pass; for example %s (book %s), whose folder %s is not there or holds nothing: the file may have been removed together with its folder, or that part of the library is not mounted. Nothing removes these records while the folder stays like that; if it is gone for good, the owner can forget them in the purge dialog (that deletes only the records, never a file or a book)", folderMissing, ex.path, ex.bookIDs[0], filepath.Dir(ex.path)))
 	}
 	if notReached > 0 {
 		errs = append(errs, fmt.Sprintf("stopped (%v): %d file removal(s) not looked at, their records kept for a later run", ctx.Err(), notReached))

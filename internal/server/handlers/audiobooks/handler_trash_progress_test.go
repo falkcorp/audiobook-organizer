@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobookshandler_test
 
@@ -18,6 +18,50 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
+func TestForgetWaitingPurgeFileRecords_StatusMapping(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"ok", nil, http.StatusOK},
+		{"no audit log", audiobookspkg.ErrAuditUnavailable, http.StatusServiceUnavailable},
+		{"wrapped no audit log", fmt.Errorf("forget: %w", audiobookspkg.ErrAuditUnavailable), http.StatusServiceUnavailable},
+		{"other", errString("journal unreadable"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			var res *audiobookspkg.ForgetWaitingResult
+			if tc.err == nil {
+				res = &audiobookspkg.ForgetWaitingResult{Records: 3, Paths: 2, Warnings: []string{"the activity log row was not written"}}
+			}
+			d.svc.EXPECT().ForgetWaitingFileRecords(mock.Anything, "unknown").Return(res, tc.err)
+			c, w := newCtx("POST", "/audiobooks/purge-soft-deleted/forget-waiting-file-records", nil, nil)
+			h.ForgetWaitingPurgeFileRecords(c)
+			if w.Code != tc.want {
+				t.Fatalf("want %d, got %d (%s)", tc.want, w.Code, w.Body.String())
+			}
+			if tc.err != nil {
+				return
+			}
+			var body struct {
+				Data struct {
+					Records  int      `json:"records_forgotten"`
+					Paths    int      `json:"paths_forgotten"`
+					Warnings []string `json:"warnings"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Data.Records != 3 || body.Data.Paths != 2 || len(body.Data.Warnings) != 1 {
+				t.Fatalf("result not carried to the client: %s", w.Body.String())
+			}
+		})
+	}
+}
+
 // The trash listing carries has_progress / progress_summary per row, and a
 // row whose state could not be read says progress_unknown rather than
 // reading as "no progress".
@@ -27,7 +71,7 @@ func TestListSoftDeletedAudiobooks_FlagsProgress(t *testing.T) {
 		Return([]database.Book{{ID: "held", Title: "Held"}, {ID: "clean"}, {ID: "unread"}}, nil)
 	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(3, nil)
 	d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
-	d.svc.EXPECT().PendingFileRemovals().Return(0, nil)
+	d.svc.EXPECT().PendingFileRemovals().Return(audiobookspkg.PendingFileCounts{}, nil)
 	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"held", "clean", "unread"}).
 		Return(map[string]audiobookspkg.TrashProgressInfo{
 			"held":  {HasProgress: true, Summary: "reader: finished"},

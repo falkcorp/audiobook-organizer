@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -921,11 +921,16 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 	// button), so the toolbar needs the count apart from the trash's. A failed
 	// read is null, not 0: unknown must not read as "nothing waiting", and the
 	// listing is not worth failing for it.
-	var pendingFiles any
-	if n, perr := h.audiobookService.PendingFileRemovals(); perr != nil {
+	//
+	// The records that wait for a folder that is missing or empty are counted
+	// apart (files_waiting_for_folder): a purge does not remove them and they
+	// are not "finishable", so the dialog words and offers them differently.
+	var pendingFiles, waitingFiles any
+	if counts, perr := h.audiobookService.PendingFileRemovals(); perr != nil {
 		trashListLog.Warn("trash listing: cannot count the file removals an earlier purge left pending: %s", logger.SanitizeLogValue(perr.Error()))
 	} else {
-		pendingFiles = n
+		pendingFiles = counts.Pending
+		waitingFiles = counts.WaitingForFolder
 	}
 
 	httputil.RespondWithOK(c, gin.H{
@@ -935,6 +940,7 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 		"limit":                           params.Limit,
 		"offset":                          params.Offset,
 		"files_pending_from_earlier_pass": pendingFiles,
+		"files_waiting_for_folder":        waitingFiles,
 		// How many of the trash a purge would remove right now versus how many
 		// are blocked, by reason, as the last purge pass or preview measured
 		// it (null before one has run). The listing never recomputes it.
@@ -1018,6 +1024,28 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithServiceUnavailable(c, err.Error())
 	default:
 		httputil.InternalError(c, "failed to discard progress and purge", err)
+	}
+}
+
+// ForgetWaitingPurgeFileRecords handles
+// POST /audiobooks/purge-soft-deleted/forget-waiting-file-records: the owner's
+// explicit choice to delete the journal records of file removals that wait for
+// a folder that is missing or empty (the folder is gone for good). It deletes
+// records only, never a file or a book, and writes an audit row naming the
+// actor. 503 when there is no activity log to record it in (nothing deleted).
+func (h *Handler) ForgetWaitingPurgeFileRecords(c *gin.Context) {
+	actor := "unknown"
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		actor = u.Username + " (" + u.ID + ")"
+	}
+	res, err := h.audiobookService.ForgetWaitingFileRecords(c.Request.Context(), actor)
+	switch {
+	case err == nil:
+		httputil.RespondWithOK(c, res)
+	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
+		httputil.RespondWithServiceUnavailable(c, err.Error())
+	default:
+		httputil.InternalError(c, "failed to forget the waiting file records", err)
 	}
 }
 

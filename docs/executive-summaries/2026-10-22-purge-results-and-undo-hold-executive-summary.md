@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -232,3 +232,25 @@ undo above. Books that own files are still never purged.
   damaged undo record, or the operation journal not ready) or had stopped
   halfway. It now fails visibly with the reason and logs the same full summary
   as the manual purge.
+- A purge can leave a file removal waiting for good: when the folder of a file
+  it decided on is missing or empty (a drive that did not mount, or a folder
+  that was deleted) the purge cannot tell whether the file is gone or just out
+  of sight, so it removes nothing and keeps its note. Those notes are now counted
+  apart from the ones a purge will carry out, and the purge dialog says so in
+  plain words: the files could not be checked, neither "Purge" nor "Finish
+  removing" deletes them, and they are tried again whenever the server starts
+  and on every purge that deletes files. The "Purge Deleted" button stays
+  reachable while any are waiting. If the folder is gone for good, the owner can
+  press "Forget these records" (after a confirmation); that deletes only the
+  notes, never a file or a book, is refused unless the activity log can record
+  it, and leaves a log entry naming who did it and how many. If the folder
+  returns later its files stay on disk and a library scan would import them as
+  new books. Before this, such notes sat forever with nothing in the product
+  able to clear them.
+- Two guards that were still missing on the purge's own safety checks: a drive
+  that hangs can no longer pile up blocked checks (a check that gets no answer
+  is counted, and no new one starts until it does), a purge that is running when
+  the library folder becomes unavailable now stops once with one reason instead
+  of failing every remaining book, and "Purge now" on one trashed book and the
+  batch delete of trashed books check the library folder before they take the
+  global merge lock, so a refusal never waits for it.

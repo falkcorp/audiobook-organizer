@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -123,8 +123,15 @@ type PurgeResult struct {
 	// journal of pending file removals). A purge with delete_files carries
 	// those out too, through the same checks, on top of FilesToDeleteCount; a
 	// purge without it never does. They are not in FilesToDelete: they belong
-	// to books that are already gone.
+	// to books that are already gone. It does NOT count FilesWaitingForFolder.
 	FilesPendingFromEarlierPass int `json:"files_pending_from_earlier_pass,omitempty"`
+	// FilesWaitingForFolder, on a preview, is how many of the journal's files a
+	// pass could not decide because the file is not there and its folder is
+	// missing or empty. No purge removes them: the records stay until the folder
+	// holds something again or the owner forgets them
+	// (ForgetWaitingFileRecords), so they are counted apart from
+	// FilesPendingFromEarlierPass, which a purge with delete_files does act on.
+	FilesWaitingForFolder int `json:"files_waiting_for_folder,omitempty"`
 	// FilesReplayed, on a purge with delete_files, is how many of those files it
 	// removed. They are NOT in FilesDeleted, which counts only the books this
 	// pass purged; the lines about the ones it kept or could not remove are in

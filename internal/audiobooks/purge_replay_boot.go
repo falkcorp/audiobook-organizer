@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_replay_boot.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d4a6f13-2b95-4e07-a1c8-3f6e9b0d5c72
 // last-edited: 2026-10-26
 
@@ -42,10 +42,12 @@ func (svc *AudiobookService) ReplayPendingFileRemovalsOnBoot(ctx context.Context
 	for attempt := 1; attempt <= attempts; attempt++ {
 		// Cheap and read-only: nothing pending is the usual case, and then the
 		// mount is nobody's business.
-		pending, cerr := svc.countPendingFileRemovals()
+		counts, cerr := svc.countPendingFileRemovals()
 		if cerr != nil {
 			return 0, nil, fmt.Errorf("could not read the journal of pending file removals: %w", cerr)
 		}
+		// Records waiting for a folder are looked at too: the folder may be back.
+		pending := counts.Total()
 		if pending == 0 {
 			return 0, nil, nil
 		}

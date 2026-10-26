@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
 // last-edited: 2026-10-26
 
@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   previewPurgeSoftDeleted: vi.fn(),
   purgeSoftDeletedBooks: vi.fn(),
   awaitPurgeResult: vi.fn(),
+  forgetWaitingFileRecords: vi.fn(),
+  cancelOperation: vi.fn(),
 }));
 vi.mock('../../services/api', async (orig) => ({
   ...(await orig<typeof import('../../services/api')>()),
@@ -27,9 +29,11 @@ import { usePurgeRun, type PurgeRunEnd } from '../../hooks/usePurgeRun';
 function Harness({
   onFinished,
   onStarted,
+  onForgotten,
 }: {
   onFinished: (end: PurgeRunEnd) => void;
   onStarted?: (operationId: string) => void;
+  onForgotten?: () => void;
 }) {
   const run = usePurgeRun(onFinished, onStarted);
   const [open, setOpen] = useState(true);
@@ -37,7 +41,12 @@ function Harness({
     <>
       <button onClick={() => setOpen(true)}>reopen</button>
       <span data-testid="in-progress">{String(run.running)}</span>
-      <PurgeSoftDeletedDialog open={open} onClose={() => setOpen(false)} run={run} />
+      <PurgeSoftDeletedDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        run={run}
+        onFileRecordsForgotten={onForgotten}
+      />
     </>
   );
 }
@@ -59,12 +68,13 @@ const preview: PurgeResult = {
   errors: [],
 };
 
-function setup(onFinished = vi.fn(), onStarted = vi.fn()) {
+function setup(onFinished = vi.fn(), onStarted = vi.fn(), onForgotten = vi.fn()) {
   api.previewPurgeSoftDeleted.mockResolvedValue({ id: 'op-prev', dry_run: true });
   api.purgeSoftDeletedBooks.mockResolvedValue({ id: 'op-run', dry_run: false });
+  api.cancelOperation.mockResolvedValue(undefined);
   renderWithProviders(
     <OperationTrackerProvider>
-      <Harness onFinished={onFinished} onStarted={onStarted} />
+      <Harness onFinished={onFinished} onStarted={onStarted} onForgotten={onForgotten} />
     </OperationTrackerProvider>
   );
   return onFinished;
@@ -156,6 +166,170 @@ describe('PurgeSoftDeletedDialog', () => {
 
     fireEvent.click(finish);
     await waitFor(() => expect(api.purgeSoftDeletedBooks).toHaveBeenCalledWith(PREVIEW_AT, true));
+  });
+
+  describe('records waiting for a folder that is missing or empty', () => {
+    const waitingOnly: PurgeResult = {
+      ...preview,
+      attempted: 0,
+      purgeable: 0,
+      skipped_owns_files: 0,
+      kept_undo_possible: 0,
+      kept_has_progress: 0,
+      files_pending_from_earlier_pass: 0,
+      files_waiting_for_folder: 3,
+    };
+
+    it('says they could not be checked, offers no "Finish removing", and states what forgetting does', async () => {
+      api.awaitPurgeResult.mockResolvedValueOnce(waitingOnly);
+      setup();
+      const alert = await screen.findByTestId('purge-waiting-for-folder');
+      expect(alert).toHaveTextContent(
+        '3 files of books an earlier purge removed could not be checked'
+      );
+      expect(alert).toHaveTextContent('folder is missing or empty');
+      expect(alert).toHaveTextContent('"Finish removing" does not either');
+      expect(alert).toHaveTextContent('deletes only the records, never a file or a book');
+      // They are not the pending group: nothing to finish, nothing to purge.
+      expect(screen.queryByTestId('purge-earlier-only')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Finish removing/ })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Nothing to purge' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Forget 3 records' })).toBeEnabled();
+    });
+
+    it('with pending files too, finishes only the pending ones', async () => {
+      api.awaitPurgeResult.mockResolvedValueOnce({
+        ...waitingOnly,
+        files_pending_from_earlier_pass: 4,
+      });
+      setup();
+      expect(await screen.findByTestId('purge-earlier-only')).toHaveTextContent('4 files');
+      expect(screen.getByTestId('purge-waiting-for-folder')).toHaveTextContent('3 files');
+      expect(screen.getByRole('button', { name: 'Finish removing 4 files' })).toBeEnabled();
+    });
+
+    it('shows nothing about them when none are waiting', async () => {
+      api.awaitPurgeResult.mockResolvedValueOnce({ ...waitingOnly, files_waiting_for_folder: 0 });
+      setup();
+      await screen.findByTestId('purge-preview-headline');
+      expect(screen.queryByTestId('purge-waiting-for-folder')).toBeNull();
+    });
+
+    it('asks first: nothing is forgotten until the owner confirms, and "Keep them" backs out', async () => {
+      api.awaitPurgeResult.mockResolvedValueOnce(waitingOnly);
+      setup();
+      fireEvent.click(await screen.findByRole('button', { name: 'Forget 3 records' }));
+      expect(screen.getByTestId('purge-forget-confirm')).toHaveTextContent(
+        'its files stay on disk, and a library scan would import them as new books'
+      );
+      expect(api.forgetWaitingFileRecords).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Keep them' }));
+      expect(screen.queryByTestId('purge-forget-confirm')).toBeNull();
+      expect(api.forgetWaitingFileRecords).not.toHaveBeenCalled();
+    });
+
+    it('forgets on confirm, tells the page, re-checks, and reports what it did', async () => {
+      api.awaitPurgeResult
+        .mockResolvedValueOnce(waitingOnly)
+        .mockResolvedValueOnce({ ...waitingOnly, files_waiting_for_folder: 0 });
+      api.forgetWaitingFileRecords.mockResolvedValue({
+        records_forgotten: 3,
+        paths_forgotten: 2,
+      });
+      const onForgotten = vi.fn();
+      setup(vi.fn(), vi.fn(), onForgotten);
+      fireEvent.click(await screen.findByRole('button', { name: 'Forget 3 records' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Yes, forget them' }));
+      await waitFor(() => expect(api.forgetWaitingFileRecords).toHaveBeenCalledTimes(1));
+      expect(onForgotten).toHaveBeenCalledTimes(1);
+      // Re-checked, so the dialog shows what is left, not what was.
+      await waitFor(() => expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(2));
+      expect(await screen.findByTestId('purge-forget-note')).toHaveTextContent(
+        'Forgot 3 records of 2 files. No file and no book was touched.'
+      );
+      expect(screen.queryByTestId('purge-waiting-for-folder')).toBeNull();
+    });
+
+    it('shows a warning the server returned with the result', async () => {
+      api.awaitPurgeResult.mockResolvedValue(waitingOnly);
+      api.forgetWaitingFileRecords.mockResolvedValue({
+        records_forgotten: 3,
+        paths_forgotten: 2,
+        warnings: ['the activity log row was not written'],
+      });
+      setup();
+      fireEvent.click(await screen.findByRole('button', { name: 'Forget 3 records' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Yes, forget them' }));
+      expect(await screen.findByTestId('purge-forget-note')).toHaveTextContent(
+        'the activity log row was not written'
+      );
+    });
+
+    it('when the server refuses, says nothing was forgotten and keeps the choice open', async () => {
+      api.awaitPurgeResult.mockResolvedValue(waitingOnly);
+      api.forgetWaitingFileRecords.mockRejectedValue(new Error('permission denied'));
+      const onForgotten = vi.fn();
+      setup(vi.fn(), vi.fn(), onForgotten);
+      fireEvent.click(await screen.findByRole('button', { name: 'Forget 3 records' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Yes, forget them' }));
+      expect(await screen.findByTestId('purge-forget-error')).toHaveTextContent(
+        'permission denied The records were not forgotten.'
+      );
+      expect(onForgotten).not.toHaveBeenCalled();
+      expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Yes, forget them' })).toBeEnabled();
+    });
+  });
+
+  describe('a preview nobody will read is cancelled on the server', () => {
+    const closeDialog = () => fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+
+    it('closing the dialog while the check runs cancels it', async () => {
+      api.awaitPurgeResult.mockImplementationOnce(() => new Promise<PurgeResult>(() => {}));
+      setup();
+      await screen.findByTestId('purge-previewing');
+      await waitFor(() => expect(api.awaitPurgeResult).toHaveBeenCalled());
+      closeDialog();
+      await waitFor(() => expect(api.cancelOperation).toHaveBeenCalledWith('op-prev'));
+      expect(api.cancelOperation).toHaveBeenCalledTimes(1);
+    });
+
+    it('a check whose polling failed is cancelled too, and the failure is shown', async () => {
+      api.awaitPurgeResult.mockRejectedValueOnce(new Error('network down'));
+      setup();
+      expect(await screen.findByTestId('purge-error')).toHaveTextContent('network down');
+      expect(api.cancelOperation).toHaveBeenCalledWith('op-prev');
+    });
+
+    it('a check that finished is never cancelled', async () => {
+      api.awaitPurgeResult.mockResolvedValueOnce(preview);
+      setup();
+      await screen.findByTestId('purge-preview-headline');
+      closeDialog();
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.cancelOperation).not.toHaveBeenCalled();
+    });
+
+    it('a check queued after the dialog was already closed is cancelled as soon as its id is known', async () => {
+      let queue: (h: { id: string; dry_run: boolean }) => void = () => {};
+      api.previewPurgeSoftDeleted.mockImplementationOnce(
+        () => new Promise((resolve) => (queue = resolve))
+      );
+      api.cancelOperation.mockResolvedValue(undefined);
+      api.purgeSoftDeletedBooks.mockResolvedValue({ id: 'op-run', dry_run: false });
+      renderWithProviders(
+        <OperationTrackerProvider>
+          <Harness onFinished={vi.fn()} />
+        </OperationTrackerProvider>
+      );
+      await screen.findByTestId('purge-previewing');
+      closeDialog();
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.cancelOperation).not.toHaveBeenCalled();
+      queue({ id: 'op-late', dry_run: true });
+      await waitFor(() => expect(api.cancelOperation).toHaveBeenCalledWith('op-late'));
+      expect(api.awaitPurgeResult).not.toHaveBeenCalled();
+    });
   });
 
   it('with nothing purgeable and nothing waiting, does not offer to finish anything', async () => {

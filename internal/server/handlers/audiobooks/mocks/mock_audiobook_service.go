@@ -447,6 +447,74 @@ func (_c *MockAudiobookService_EnrichAudiobooksWithNames_Call) RunAndReturn(run 
 	return _c
 }
 
+// ForgetWaitingFileRecords provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) ForgetWaitingFileRecords(ctx context.Context, actor string) (*audiobooks.ForgetWaitingResult, error) {
+	ret := _mock.Called(ctx, actor)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ForgetWaitingFileRecords")
+	}
+
+	var r0 *audiobooks.ForgetWaitingResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*audiobooks.ForgetWaitingResult, error)); ok {
+		return returnFunc(ctx, actor)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *audiobooks.ForgetWaitingResult); ok {
+		r0 = returnFunc(ctx, actor)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*audiobooks.ForgetWaitingResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, actor)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_ForgetWaitingFileRecords_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ForgetWaitingFileRecords'
+type MockAudiobookService_ForgetWaitingFileRecords_Call struct {
+	*mock.Call
+}
+
+// ForgetWaitingFileRecords is a helper method to define mock.On call
+//   - ctx context.Context
+//   - actor string
+func (_e *MockAudiobookService_Expecter) ForgetWaitingFileRecords(ctx any, actor any) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	return &MockAudiobookService_ForgetWaitingFileRecords_Call{Call: _e.mock.On("ForgetWaitingFileRecords", ctx, actor)}
+}
+
+func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) Run(run func(ctx context.Context, actor string)) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) Return(forgetWaitingResult *audiobooks.ForgetWaitingResult, err error) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	_c.Call.Return(forgetWaitingResult, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_ForgetWaitingFileRecords_Call) RunAndReturn(run func(ctx context.Context, actor string) (*audiobooks.ForgetWaitingResult, error)) *MockAudiobookService_ForgetWaitingFileRecords_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAudiobook provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) GetAudiobook(ctx context.Context, id string) (*database.Book, error) {
 	ret := _mock.Called(ctx, id)
@@ -872,22 +940,22 @@ func (_c *MockAudiobookService_ListAllUserTags_Call) RunAndReturn(run func() ([]
 }
 
 // PendingFileRemovals provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) PendingFileRemovals() (int, error) {
+func (_mock *MockAudiobookService) PendingFileRemovals() (audiobooks.PendingFileCounts, error) {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for PendingFileRemovals")
 	}
 
-	var r0 int
+	var r0 audiobooks.PendingFileCounts
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func() (audiobooks.PendingFileCounts, error)); ok {
 		return returnFunc()
 	}
-	if returnFunc, ok := ret.Get(0).(func() int); ok {
+	if returnFunc, ok := ret.Get(0).(func() audiobooks.PendingFileCounts); ok {
 		r0 = returnFunc()
 	} else {
-		r0 = ret.Get(0).(int)
+		r0 = ret.Get(0).(audiobooks.PendingFileCounts)
 	}
 	if returnFunc, ok := ret.Get(1).(func() error); ok {
 		r1 = returnFunc()
@@ -914,12 +982,12 @@ func (_c *MockAudiobookService_PendingFileRemovals_Call) Run(run func()) *MockAu
 	return _c
 }
 
-func (_c *MockAudiobookService_PendingFileRemovals_Call) Return(n int, err error) *MockAudiobookService_PendingFileRemovals_Call {
-	_c.Call.Return(n, err)
+func (_c *MockAudiobookService_PendingFileRemovals_Call) Return(pendingFileCounts audiobooks.PendingFileCounts, err error) *MockAudiobookService_PendingFileRemovals_Call {
+	_c.Call.Return(pendingFileCounts, err)
 	return _c
 }
 
-func (_c *MockAudiobookService_PendingFileRemovals_Call) RunAndReturn(run func() (int, error)) *MockAudiobookService_PendingFileRemovals_Call {
+func (_c *MockAudiobookService_PendingFileRemovals_Call) RunAndReturn(run func() (audiobooks.PendingFileCounts, error)) *MockAudiobookService_PendingFileRemovals_Call {
 	_c.Call.Return(run)
 	return _c
 }

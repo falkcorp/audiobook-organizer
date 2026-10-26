@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryDialogs.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 import React from 'react';
 import {
   Typography,
@@ -199,6 +199,9 @@ interface LibraryDialogsProps {
   // The purge run is owned by the page (usePurgeRun) so it keeps going, and
   // reports its outcome, when this dialog is closed mid-run.
   purgeRun: PurgeRunController;
+  // The owner forgot the records of file removals waiting for a folder: the
+  // page refreshes the trash counts behind its "Purge Deleted" button.
+  onFileRecordsForgotten: () => void;
 
   // Add path dialog
   addPathDialogOpen: boolean;
@@ -331,6 +334,7 @@ export const LibraryDialogs = ({
   purgeDialogOpen,
   setPurgeDialogOpen,
   purgeRun,
+  onFileRecordsForgotten,
   addPathDialogOpen,
   setAddPathDialogOpen,
   showServerBrowser,
@@ -1029,6 +1033,7 @@ export const LibraryDialogs = ({
       open={purgeDialogOpen}
       onClose={() => setPurgeDialogOpen(false)}
       run={purgeRun}
+      onFileRecordsForgotten={onFileRecordsForgotten}
     />
 
     {/* Import Path Management Dialog */}

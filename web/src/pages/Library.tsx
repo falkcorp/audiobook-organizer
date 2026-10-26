@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.113.0
+// version: 1.114.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -923,6 +923,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     softDeletedCount,
     softDeletedBreakdown,
     pendingFileRemovals,
+    waitingFileRecords,
     softDeletedLoading,
     loadAudiobooks,
     loadSoftDeleted,
@@ -2444,6 +2445,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         systemStatus={systemStatus}
         softDeletedCount={softDeletedCount}
         pendingFileRemovals={pendingFileRemovals}
+        waitingFileRecords={waitingFileRecords}
         libraryBookCount={libraryBookCount}
         importBookCount={importBookCount}
         librarySizeBytes={librarySizeBytes}
@@ -2738,6 +2740,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           purgeDialogOpen={purgeDialogOpen}
           setPurgeDialogOpen={setPurgeDialogOpen}
           purgeRun={purgeRun}
+          onFileRecordsForgotten={() => void refreshSoftDeleted()}
           addPathDialogOpen={addPathDialogOpen}
           setAddPathDialogOpen={setAddPathDialogOpen}
           showServerBrowser={showServerBrowser}

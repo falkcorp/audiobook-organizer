@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-26
 
@@ -410,11 +410,12 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		// What a purge with delete_files would also do: the removals an earlier
 		// pass left pending. Counted from the journal, which a preview never
 		// changes.
-		n, cErr := svc.countPendingFileRemovals()
+		counts, cErr := svc.countPendingFileRemovals()
 		if cErr != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("could not count the file removals an earlier pass left pending: %v", cErr))
 		}
-		result.FilesPendingFromEarlierPass = n
+		result.FilesPendingFromEarlierPass = counts.Pending
+		result.FilesWaitingForFolder = counts.WaitingForFolder
 		// A purge with delete_files is refused while the root is not ready; say
 		// so on the preview, where the owner decides whether to run it.
 		if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
@@ -586,6 +587,11 @@ func (r *PurgeResult) summary() string {
 	// books, so apart from FilesDeleted.
 	if r.FilesPendingFromEarlierPass > 0 {
 		after += fmt.Sprintf("; %d file(s) an earlier pass left waiting would also be removed by a purge with delete_files", r.FilesPendingFromEarlierPass)
+	}
+	// Not removed by any purge, with or without delete_files: only the owner can
+	// settle them.
+	if r.FilesWaitingForFolder > 0 {
+		after += fmt.Sprintf("; %d file removal(s) from earlier passes are waiting for a folder that is missing or empty (a purge does not remove them; the records can be forgotten from the purge dialog)", r.FilesWaitingForFolder)
 	}
 	if r.FilesReplayed > 0 {
 		after += fmt.Sprintf("; %d file(s) an earlier pass had decided to remove were removed too (not in the files deleted count)", r.FilesReplayed)

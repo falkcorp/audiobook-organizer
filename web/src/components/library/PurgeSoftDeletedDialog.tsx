@@ -1,5 +1,5 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
 // last-edited: 2026-10-26
 
@@ -41,6 +41,12 @@ export interface PurgeSoftDeletedDialogProps {
    * closing the dialog mid-run does not stop the polling or lose the outcome.
    */
   run: PurgeRunController;
+  /**
+   * Called after the owner forgot the records of file removals that were
+   * waiting for a folder (the page refreshes the trash counts behind its
+   * "Purge Deleted" button).
+   */
+  onFileRecordsForgotten?: () => void;
 }
 
 /** The preview's own phases; the run's phases come from `run.state`. */
@@ -62,12 +68,28 @@ function messageOf(e: unknown): string {
  * the full breakdown of what was purged and what was kept. Reopening the
  * dialog while a purge runs shows the running state, not a new preview.
  */
-export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedDialogProps) {
+export function PurgeSoftDeletedDialog({
+  open,
+  onClose,
+  run,
+  onFileRecordsForgotten,
+}: PurgeSoftDeletedDialogProps) {
   const [phase, setPhase] = useState<PreviewPhase>('previewing');
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [preview, setPreview] = useState<api.PurgeResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // The preview operation the server is running for the latest check, until its
+  // result arrives. A check that is replaced, closed or whose polling failed is
+  // cancelled on the server, so abandoned previews do not pile up behind it
+  // (each one walks the whole trash).
+  const previewOpRef = useRef<string | null>(null);
+  // "Forget these records": the owner's two-step choice and its outcome. The
+  // outcome outlives the re-run preview that follows it.
+  const [forgetStage, setForgetStage] = useState<'idle' | 'confirm' | 'working'>('idle');
+  const [forgetError, setForgetError] = useState<string | null>(null);
+  const [forgetNote, setForgetNote] = useState<string | null>(null);
+  const onForgottenRef = useRef(onFileRecordsForgotten);
   // Set by the Purge button: the dialog closes as soon as the server has
   // queued the purge (progress then lives in the background operation), but
   // stays open when the server refuses, so its reason is shown here.
@@ -75,41 +97,71 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
   const runRef = useRef(run);
   useEffect(() => {
     runRef.current = run;
+    onForgottenRef.current = onFileRecordsForgotten;
   });
+
+  const cancelPreviewOp = useCallback(() => {
+    const id = previewOpRef.current;
+    previewOpRef.current = null;
+    if (id) void api.cancelOperation(id).catch(() => undefined);
+  }, []);
 
   // The preview is made with the same delete-files choice the purge will run
   // with, so what it lists as purgeable is what the run will purge: a book whose
   // file cannot be decided is kept by a delete-files run, and only a delete-files
   // preview says so.
-  const runPreview = useCallback(async (withFiles: boolean) => {
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setPhase('previewing');
-    setPreview(null);
-    setPreviewError(null);
-    try {
-      const handle = await api.previewPurgeSoftDeleted(withFiles);
-      const res = await api.awaitPurgeResult(handle.id, undefined, { signal: ac.signal });
-      if (ac.signal.aborted) return;
-      setPreview(res);
-      setPhase('ready');
-    } catch (e) {
-      if (ac.signal.aborted) return;
-      setPreviewError(messageOf(e));
-      setPhase('error');
-    }
-  }, []);
+  const runPreview = useCallback(
+    async (withFiles: boolean) => {
+      abortRef.current?.abort();
+      cancelPreviewOp();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      setPhase('previewing');
+      setPreview(null);
+      setPreviewError(null);
+      let opId: string | null = null;
+      try {
+        const handle = await api.previewPurgeSoftDeleted(withFiles);
+        opId = handle.id;
+        if (ac.signal.aborted) {
+          // Replaced or closed while the server was queueing it.
+          void api.cancelOperation(opId).catch(() => undefined);
+          return;
+        }
+        previewOpRef.current = opId;
+        const res = await api.awaitPurgeResult(opId, undefined, { signal: ac.signal });
+        if (ac.signal.aborted) return;
+        // Finished: nothing left to cancel.
+        if (previewOpRef.current === opId) previewOpRef.current = null;
+        setPreview(res);
+        setPhase('ready');
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        // Polling failed, not the check itself: stop the check the server may
+        // still be running, since this dialog will never read its result.
+        if (opId !== null && previewOpRef.current === opId) cancelPreviewOp();
+        setPreviewError(messageOf(e));
+        setPhase('error');
+      }
+    },
+    [cancelPreviewOp]
+  );
 
   useEffect(() => {
     if (!open) return;
     setDeleteFiles(false);
+    setForgetStage('idle');
+    setForgetError(null);
+    setForgetNote(null);
     // A purge started earlier is still running: show it, do not preview.
     if (runRef.current.running) return;
     runRef.current.reset();
     void runPreview(false);
-    return () => abortRef.current?.abort();
-  }, [open, runPreview]);
+    return () => {
+      abortRef.current?.abort();
+      cancelPreviewOp();
+    };
+  }, [open, runPreview, cancelPreviewOp]);
 
   const runPhase = run.state.phase;
   const running = runPhase === 'running';
@@ -133,6 +185,10 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
   // replays the pending removals.
   const earlierFiles = preview?.files_pending_from_earlier_pass ?? 0;
   const earlierOnly = purgeable === 0 && earlierFiles > 0;
+  // Earlier-pass removals whose file is not there and whose folder is missing or
+  // empty. They are NOT in earlierFiles: a purge cannot check them and removes
+  // nothing for them, so "Finish removing" must never be offered for them alone.
+  const waitingFiles = preview?.files_waiting_for_folder ?? 0;
   // The purge is bound to this preview: it carries the instant the preview was
   // taken at and takes no book trashed after it. A preview without one cannot
   // be purged from.
@@ -147,6 +203,27 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
   const tryAgain = () => {
     run.reset();
     void runPreview(deleteFiles);
+  };
+
+  const forgetRecords = async () => {
+    setForgetStage('working');
+    setForgetError(null);
+    try {
+      const res = await api.forgetWaitingFileRecords();
+      const n = res.records_forgotten;
+      setForgetNote(
+        `Forgot ${n.toLocaleString()} ${n === 1 ? 'record' : 'records'} of ${res.paths_forgotten.toLocaleString()} ${res.paths_forgotten === 1 ? 'file' : 'files'}. No file and no book was touched.` +
+          (res.warnings && res.warnings.length > 0 ? ` ${res.warnings.join(' ')}` : '')
+      );
+      setForgetStage('idle');
+      onForgottenRef.current?.();
+      void runPreview(deleteFiles);
+    } catch (e) {
+      // Nothing was deleted when the server refuses (403, 503): say so, keep
+      // the control so the owner can try again or leave the records alone.
+      setForgetError(`${messageOf(e)} The records were not forgotten.`);
+      setForgetStage('confirm');
+    }
   };
 
   return (
@@ -194,6 +271,73 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
                 {trashedBefore === null
                   ? ' The server did not say which books this check covered, so this is off; try again.'
                   : ''}
+              </Alert>
+            )}
+            {waitingFiles > 0 && (
+              <Alert severity="warning" sx={{ mt: 2 }} data-testid="purge-waiting-for-folder">
+                {waitingFiles.toLocaleString()} {waitingFiles === 1 ? 'file' : 'files'} of books an
+                earlier purge removed could not be checked: {waitingFiles === 1 ? 'its' : 'their'}{' '}
+                folder is missing or empty, which is also what a drive that is not mounted looks
+                like. A purge does not delete {waitingFiles === 1 ? 'it' : 'them'}, and &quot;Finish
+                removing&quot; does not either. The server keeps a record for{' '}
+                {waitingFiles === 1 ? 'it' : 'each'} and checks again when it starts and on every
+                purge that deletes files, so {waitingFiles === 1 ? 'it is' : 'they are'} removed
+                once the folder is back. If the folder is gone for good, you can forget the records:
+                that deletes only the records, never a file or a book, and the action is logged.
+                {forgetStage === 'idle' && (
+                  <Box sx={{ mt: 1 }}>
+                    <Button
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                      onClick={() => setForgetStage('confirm')}
+                      data-testid="purge-forget-open"
+                    >
+                      Forget {waitingFiles.toLocaleString()}{' '}
+                      {waitingFiles === 1 ? 'record' : 'records'}
+                    </Button>
+                  </Box>
+                )}
+                {forgetStage !== 'idle' && (
+                  <Box sx={{ mt: 1 }} data-testid="purge-forget-confirm">
+                    <Typography variant="body2" gutterBottom>
+                      Forget {waitingFiles.toLocaleString()}{' '}
+                      {waitingFiles === 1 ? 'record' : 'records'}? If the folder comes back later,
+                      its files stay on disk, and a library scan would import them as new books.
+                    </Typography>
+                    <Button
+                      size="small"
+                      color="error"
+                      variant="contained"
+                      disabled={forgetStage === 'working'}
+                      onClick={() => void forgetRecords()}
+                      data-testid="purge-forget-confirm-button"
+                      sx={{ mr: 1 }}
+                    >
+                      {forgetStage === 'working' ? 'Forgetting...' : 'Yes, forget them'}
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={forgetStage === 'working'}
+                      onClick={() => {
+                        setForgetStage('idle');
+                        setForgetError(null);
+                      }}
+                    >
+                      Keep them
+                    </Button>
+                  </Box>
+                )}
+                {forgetError && (
+                  <Typography variant="body2" sx={{ mt: 1 }} data-testid="purge-forget-error">
+                    {forgetError}
+                  </Typography>
+                )}
+              </Alert>
+            )}
+            {forgetNote && (
+              <Alert severity="info" sx={{ mt: 2 }} data-testid="purge-forget-note">
+                {forgetNote}
               </Alert>
             )}
             {/* Shown while the box is ticked even when the preview with files on

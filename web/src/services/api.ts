@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.205.0
+// version: 2.206.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1511,6 +1511,7 @@ export async function getSoftDeletedBooks(
   count: number;
   purgeBreakdown: PurgeBreakdown | null;
   pendingFileRemovals: number | null;
+  waitingFileRecords: number | null;
 }> {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -1534,6 +1535,10 @@ export async function getSoftDeletedBooks(
     // are the purge dialog's work even when the trash is empty. null = the
     // server could not read the journal (unknown, which is not "none").
     pendingFileRemovals: data.files_pending_from_earlier_pass ?? null,
+    // Earlier-pass removals whose folder is missing or empty: a purge cannot
+    // decide them and does not remove them, so they are NOT in the count above.
+    // Only the owner can settle them (forgetWaitingFileRecords). null = unknown.
+    waitingFileRecords: data.files_waiting_for_folder ?? null,
   };
 }
 
@@ -1613,9 +1618,18 @@ export interface PurgeResult {
   /**
    * Preview only: files an earlier purge decided to remove and never got to (it
    * crashed or was stopped). A purge with delete_files removes those too, on top
-   * of `files_to_delete`; a purge without it never does.
+   * of `files_to_delete`; a purge without it never does. Excludes
+   * `files_waiting_for_folder`.
    */
   files_pending_from_earlier_pass?: number;
+  /**
+   * Preview only: earlier-pass removals whose file is not there and whose
+   * folder is missing or empty (a drive that did not mount, or a folder that is
+   * gone for good). The purge cannot check them and removes nothing for them;
+   * they stay until the folder is back or the owner forgets the records
+   * (forgetWaitingFileRecords). Not counted in `files_pending_from_earlier_pass`.
+   */
+  files_waiting_for_folder?: number;
   /**
    * A purge with delete_files: how many of those earlier files it removed. Not
    * counted in `files_deleted`, which is this purge's own books.
@@ -1822,6 +1836,30 @@ export async function discardProgressAndPurge(bookId: string): Promise<DiscardPr
   );
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to discard progress and purge');
+  }
+  const body = await response.json();
+  return body.data;
+}
+
+export interface ForgetWaitingFileRecordsResult {
+  records_forgotten: number;
+  paths_forgotten: number;
+  warnings?: string[];
+}
+
+/**
+ * The owner's explicit choice to forget the records of file removals that wait
+ * for a folder that is missing or empty. It deletes the records only, never a
+ * file or a book, and the server records the action in the activity log (503,
+ * nothing deleted, when it cannot).
+ */
+export async function forgetWaitingFileRecords(): Promise<ForgetWaitingFileRecordsResult> {
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/purge-soft-deleted/forget-waiting-file-records`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to forget the waiting file records');
   }
   const body = await response.json();
   return body.data;
