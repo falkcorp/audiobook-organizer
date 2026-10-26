@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.15.4
+// version: 2.16.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -141,6 +141,9 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	// BookFilesWithHash, ...) refuse until it is serving, and a purge with
 	// delete_files=true would keep the file and fail the test under load.
 	store.WaitForWarmup()
+	// The undo hold on a purge is fail-closed until the operation-journal
+	// by-book index is trusted; boot runs this ensure before serving.
+	ensureLedgerIndexTrusted(t, store)
 	database.SetGlobalStore(store)
 
 	// Run migrations to ensure schema is up to date
@@ -1810,15 +1813,13 @@ func TestRestoreAudiobook(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w2.Code)
 }
 
-// TestPurgeSoftDeletedBooks tests purging soft-deleted books
-func TestPurgeSoftDeletedBooks(t *testing.T) {
+// TestPurgeSoftDeletedUnattended tests purging soft-deleted books
+func TestPurgeSoftDeletedUnattended(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted")
+	assert.Equal(t, 0, res.Purged)
 }
 
 // TestLinkAudiobookVersion tests linking two audiobooks as versions
@@ -2650,10 +2651,8 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 func TestPurgeSoftDeletedAudiobooks(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?older_than_days=30", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?older_than_days=30")
+	assert.Equal(t, 0, res.Purged)
 }
 
 func TestRestoreAudiobookNotFound(t *testing.T) {

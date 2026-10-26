@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tagTermQueries.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: ba4d9425-349f-45d9-94a5-c8b56faf4856
 // last-edited: 2026-10-26
 
@@ -7,6 +7,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
 
@@ -103,7 +104,9 @@ const lastBooksCall = () => vi.mocked(api.getBooks).mock.calls.at(-1)?.[2];
 function open(search: string) {
   return render(
     <MemoryRouter initialEntries={[`/library?search=${encodeURIComponent(search)}`]}>
-      <Library />
+      <OperationTrackerProvider>
+        <Library />
+      </OperationTrackerProvider>
     </MemoryRouter>
   );
 }

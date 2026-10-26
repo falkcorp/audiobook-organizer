@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.39.2
+// version: 1.41.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-26
 
@@ -55,6 +55,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -94,6 +95,9 @@ type Handler struct {
 
 	audiobookService AudiobookService
 	audiobookUpdater AudiobookUpdater
+
+	// enqueuePurge queues the manual purge operation (SetPurgeEnqueuer).
+	enqueuePurge PurgeEnqueuer
 
 	metadataStateService MetadataStateService
 	metadataFetchService MetadataFetchService
@@ -928,12 +932,35 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 		return
 	}
 
+	// Files an earlier purge pass decided to remove and did not finish. They are
+	// the purge dialog's work even when the trash is empty (its "Finish removing"
+	// button), so the toolbar needs the count apart from the trash's. A failed
+	// read is null, not 0: unknown must not read as "nothing waiting", and the
+	// listing is not worth failing for it.
+	//
+	// The records that wait for a folder that is missing or empty are counted
+	// apart (files_waiting_for_folder): a purge does not remove them and they
+	// are not "finishable", so the dialog words and offers them differently.
+	var pendingFiles, waitingFiles any
+	if counts, perr := h.audiobookService.PendingFileRemovals(); perr != nil {
+		trashListLog.Warn("trash listing: cannot count the file removals an earlier purge left pending: %s", logger.SanitizeLogValue(perr.Error()))
+	} else {
+		pendingFiles = counts.Pending
+		waitingFiles = counts.WaitingForFolder
+	}
+
 	httputil.RespondWithOK(c, gin.H{
-		"items":  h.withTrashProgress(c, books),
-		"count":  len(books),
-		"total":  total,
-		"limit":  params.Limit,
-		"offset": params.Offset,
+		"items":                           h.withTrashProgress(c, books),
+		"count":                           len(books),
+		"total":                           total,
+		"limit":                           params.Limit,
+		"offset":                          params.Offset,
+		"files_pending_from_earlier_pass": pendingFiles,
+		"files_waiting_for_folder":        waitingFiles,
+		// How many of the trash a purge would remove right now versus how many
+		// are blocked, by reason, as the last purge pass or preview measured
+		// it (null before one has run). The listing never recomputes it.
+		"purge_breakdown": h.audiobookService.LastPurgeBreakdown(),
 	})
 }
 
@@ -1013,6 +1040,10 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithError(c, status, err.Error(), CodeProgressDiscardedBookKept)
 	case errors.Is(err, database.ErrBookOwnsFiles):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
+	case errors.Is(err, audiobookspkg.ErrPurgeUndoPossible):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
+	case errors.Is(err, merge.ErrMergeBusy):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
 	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, audiobookspkg.ErrDiscardRefused):
 		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
@@ -1022,25 +1053,169 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 	}
 }
 
-// PurgeSoftDeletedAudiobooks handles DELETE /audiobooks/purge-soft-deleted.
-func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
-	deleteFiles := c.Query("delete_files") == "true"
-	olderThanStr := c.Query("older_than_days")
+// CodePurgeBusy: 409, a purge or replay is removing files and holds the lock the
+// forget action needs; nothing was changed. Try again when it has finished.
+const CodePurgeBusy = "PURGE_BUSY"
 
+// CodeRootNotReady: 503, the library root is not mounted (or not answering), so
+// a missing file cannot be told from a missing mount; nothing was changed.
+const CodeRootNotReady = "ROOT_NOT_READY"
+
+// ListWaitingPurgeFileRecords handles
+// GET /audiobooks/purge-soft-deleted/waiting-file-records: the files whose
+// removal waits for a folder that is missing or empty, at most the number one
+// forget may take, with the true total. The dialog shows them before the owner
+// confirms, and sends exactly that list back. Read-only.
+func (h *Handler) ListWaitingPurgeFileRecords(c *gin.Context) {
+	res, err := h.audiobookService.WaitingFileRecordPaths()
+	if err != nil {
+		httputil.InternalError(c, "failed to list the waiting file records", err)
+		return
+	}
+	httputil.RespondWithOK(c, res)
+}
+
+// forgetWaitingRequest is the body of the forget action: the paths the dialog
+// listed. Only those are forgotten.
+type forgetWaitingRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// ForgetWaitingPurgeFileRecords handles
+// POST /audiobooks/purge-soft-deleted/forget-waiting-file-records: the owner's
+// explicit choice to delete the journal records of the file removals the dialog
+// listed, which wait for a folder that is missing or empty (the folder is gone
+// for good). The body names those paths ({"paths": [...]}); a path that is no
+// longer waiting, or whose folder holds files again, is skipped and reported.
+// It deletes records only, never a file or a book, and writes an audit row
+// naming the actor and every forgotten path. 400 without paths or with too many,
+// 409 PURGE_BUSY while a purge is removing files, 503 ROOT_NOT_READY while the
+// library root is not ready, 503 when there is no activity log to record it in
+// (nothing deleted in any of these).
+func (h *Handler) ForgetWaitingPurgeFileRecords(c *gin.Context) {
+	var req forgetWaitingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, "the body must be {\"paths\": [...]}, the files the dialog listed: "+err.Error())
+		return
+	}
+	actor := "unknown"
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		actor = u.Username + " (" + u.ID + ")"
+	}
+	res, err := h.audiobookService.ForgetWaitingFileRecords(c.Request.Context(), actor, req.Paths)
+	switch {
+	case err == nil:
+		httputil.RespondWithOK(c, res)
+	case errors.Is(err, audiobookspkg.ErrForgetNothingShown), errors.Is(err, audiobookspkg.ErrForgetTooMany):
+		httputil.RespondWithBadRequest(c, err.Error())
+	case errors.Is(err, audiobookspkg.ErrPurgeBusy):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodePurgeBusy)
+	case errors.Is(err, audiobookspkg.ErrLibraryRootNotReady):
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), CodeRootNotReady)
+	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
+		httputil.RespondWithServiceUnavailable(c, err.Error())
+	default:
+		httputil.InternalError(c, "failed to forget the waiting file records", err)
+	}
+}
+
+// PurgeEnqueuer queues the manual purge operation and returns its id. The
+// server wires it to the operations registry (SetPurgeEnqueuer). actorUserID is
+// the signed-in user who asked ("" when authentication is off): it is stored on
+// the operation row, which is what lets that user cancel their own preview
+// (DELETE /audiobooks/purge-soft-deleted/preview/:id) without settings.manage.
+type PurgeEnqueuer func(ctx context.Context, actorUserID string, params any) (opID string, err error)
+
+// SetPurgeEnqueuer wires the manual purge operation's enqueue. Without it the
+// purge endpoints answer 500, rather than purging inside the request.
+func (h *Handler) SetPurgeEnqueuer(fn PurgeEnqueuer) { h.enqueuePurge = fn }
+
+// purgeOpParams is the body of the library.purge-soft-deleted op (the server's
+// PurgeSoftDeletedOpParams). The mode is always sent: DryRun is never omitted,
+// so neither endpoint depends on the op's omitted-means-preview default.
+type purgeOpParams struct {
+	DeleteFiles   bool  `json:"delete_files,omitempty"`
+	OlderThanDays *int  `json:"older_than_days,omitempty"`
+	DryRun        *bool `json:"dry_run"`
+	// TrashedBefore is the instant the preview returned (RFC 3339): the purge
+	// takes no book trashed after it. Sent only by DELETE.
+	TrashedBefore *time.Time `json:"trashed_before,omitempty"`
+}
+
+// PurgeSoftDeletedAudiobooks handles DELETE /audiobooks/purge-soft-deleted.
+//
+// It queues the library.purge-soft-deleted operation and answers 202 with its
+// id; the purge runs there, with progress, and its result (what was purged and
+// what was kept, by reason) is the operation's result. It used to run inside
+// the request: 72 s on 2026-10-21, no progress, no log line, and a response
+// whose breakdown the UI discarded. WHICH books are purgeable is unchanged.
+//
+// The request must carry trashed_before, the instant the preview returned: the
+// purge is bound to the books that preview showed and never takes one trashed
+// after it (the trash keeps changing while the dialog is open, and a purge has
+// no rollback). Without it the request is a 400 that says to preview first.
+func (h *Handler) PurgeSoftDeletedAudiobooks(c *gin.Context) {
+	h.enqueuePurgeOp(c, false)
+}
+
+// PreviewPurgeSoftDeleted handles POST /audiobooks/purge-soft-deleted/preview:
+// the same operation as a dry run. It classifies every trashed book exactly as
+// the purge would and changes nothing, so the dialog can say what a purge will
+// do before it is clicked.
+func (h *Handler) PreviewPurgeSoftDeleted(c *gin.Context) {
+	h.enqueuePurgeOp(c, true)
+}
+
+func (h *Handler) enqueuePurgeOp(c *gin.Context, dryRun bool) {
+	if h.enqueuePurge == nil {
+		httputil.RespondWithInternalError(c, "operation registry not initialized")
+		return
+	}
 	var olderThanDays *int
-	if olderThanStr != "" {
-		if days, err := strconv.Atoi(olderThanStr); err == nil && days > 0 {
+	if raw := c.Query("older_than_days"); raw != "" {
+		if days, err := strconv.Atoi(raw); err == nil && days > 0 {
 			olderThanDays = &days
 		}
 	}
-
-	result, err := h.audiobookService.PurgeSoftDeletedBooks(c.Request.Context(), deleteFiles, olderThanDays)
-	if err != nil {
-		httputil.InternalError(c, "failed to purge deleted audiobooks", err)
+	// trashed_before binds a real purge to the preview before it. Parsed, not
+	// passed through, so a malformed value is a 400 here rather than an op that
+	// fails to decode its params after it was accepted.
+	var trashedBefore *time.Time
+	if raw := c.Query("trashed_before"); raw != "" {
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			httputil.RespondWithBadRequest(c, "trashed_before must be the RFC 3339 instant the preview returned: "+err.Error())
+			return
+		}
+		trashedBefore = &at
+	}
+	if !dryRun && trashedBefore == nil {
+		httputil.RespondWithBadRequest(c, "trashed_before is required: preview the purge first and send the trashed_before it returns, so the purge takes only the books the preview showed")
 		return
 	}
-
-	httputil.RespondWithOK(c, result)
+	params := purgeOpParams{
+		DeleteFiles:   c.Query("delete_files") == "true",
+		OlderThanDays: olderThanDays,
+		DryRun:        &dryRun,
+	}
+	if !dryRun {
+		params.TrashedBefore = trashedBefore
+	}
+	actorUserID := ""
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		actorUserID = u.ID
+	}
+	opID, err := h.enqueuePurge(c.Request.Context(), actorUserID, params)
+	if err != nil {
+		httputil.InternalError(c, "failed to enqueue the purge operation", err)
+		return
+	}
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"id":      opID,
+		"type":    "purge-soft-deleted",
+		"status":  "queued",
+		"dry_run": dryRun,
+	})
 }
 
 // ReconcileAudiobookFiles re-stats the book's files on disk and updates the
@@ -1203,6 +1378,11 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 	id := c.Param("id")
 	updated, err := h.audiobookService.RestoreAudiobook(c.Request.Context(), id)
 	if err != nil {
+		if errors.Is(err, merge.ErrMergeBusy) {
+			// A running combine holds the merge lock; nothing was restored.
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
+			return
+		}
 		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}

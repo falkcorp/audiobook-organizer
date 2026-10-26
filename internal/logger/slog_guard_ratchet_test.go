@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.32.8
+// version: 1.34.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-26
 
@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 268
-	slogRatchetCallCeiling = 1491
+	slogRatchetCallCeiling = 1487
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -47,7 +47,7 @@ var slogRatchet = map[string]int{
 	"internal/audiobooks/helpers.go":                             1,
 	"internal/audiobooks/service.go":                             1,
 	"internal/audiobooks/service_filtering.go":                   3,
-	"internal/audiobooks/service_mutation.go":                    4,
+	"internal/audiobooks/service_mutation.go":                    2,
 	"internal/audiobooks/service_query.go":                       14,
 	"internal/audiobooks/service_single.go":                      7,
 	"internal/audiobooks/service_tags.go":                        2,
@@ -210,7 +210,7 @@ var slogRatchet = map[string]int{
 	"internal/search/register.go":                                5,
 	"internal/server/absauth/audit.go":                           3,
 	"internal/server/apikey_expiry_sweep.go":                     4,
-	"internal/server/audiobooks_helpers.go":                      7,
+	"internal/server/audiobooks_helpers.go":                      6,
 	"internal/server/batch_poller_register.go":                   2,
 	"internal/server/bench.go":                                   6,
 	"internal/server/bootstrap.go":                               13,

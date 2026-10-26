@@ -1,5 +1,5 @@
 // file: internal/batch/trash_grants_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 22c685fe-e807-4213-a039-f8dece0f9456
 // last-edited: 2026-10-26
 
@@ -139,7 +139,7 @@ func TestNilCallerFailsClosed(t *testing.T) {
 
 // Clearing the deletion flag of a book trashed by the flag alone carries no
 // library_state, so no up-front check on the payload's state label sees the
-// restore; checkRestore refuses it on the row read before RestoreFromTrash.
+// restore; checkRestore refuses it on the row read before RestoreFromTrashLocked.
 func TestBatchUpdate_ClearingTheDeletionFlagNeedsOrganize(t *testing.T) {
 	f, id := trashedLikeDeleteAudiobook(t)
 	// Strip the label so the row is in the trash by its flag alone.

@@ -1,16 +1,29 @@
 // file: internal/database/dedup_automerge_journal.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package database
 
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/cockroachdb/pebble/v2"
 )
+
+// autoMergeJournalGen counts the writes to the auto-merge journal in this
+// process. It is package-level because several EmbeddingStore values wrap the
+// one Pebble DB (every NewEmbeddingStoreFromStore call builds another), and a
+// reader holding a snapshot must see a write made through any of them.
+var autoMergeJournalGen atomic.Uint64
+
+// AutoMergeJournalGeneration is how many times this process has written an
+// auto-merge journal entry. A snapshot of the journal (OpenAutoMergeLosers)
+// records it BEFORE it scans; if it differs afterwards, an entry was written
+// during or after the scan and the snapshot may be missing one.
+func AutoMergeJournalGeneration() uint64 { return autoMergeJournalGen.Load() }
 
 // dedupAutoMergeJournalPfx is the Pebble keyspace for auto-merge journal
 // entries written by the dedup.auto-resolve Tier-1 op. Each apply-path merge
@@ -118,6 +131,9 @@ func (s *EmbeddingStore) PutAutoMergeJournalEntry(entry AutoMergeJournalEntry) (
 	if err := s.db.Set(key, data, pebble.Sync); err != nil {
 		return "", fmt.Errorf("write automerge journal entry: %w", err)
 	}
+	// After the commit, so a reader that sees the old generation either read
+	// before the write or will see the write on its next scan.
+	autoMergeJournalGen.Add(1)
 	return entry.Key, nil
 }
 
@@ -169,6 +185,66 @@ func (s *EmbeddingStore) ListAutoMergeJournalEntries(limit int) ([]AutoMergeJour
 		if limit > 0 && len(out) >= limit {
 			break
 		}
+	}
+	return out, nil
+}
+
+// AutoMergeOpenLosers is a snapshot of the auto-merge journal's open entries:
+// the id of every book that is the loser of an auto-merge whose undo
+// (Engine.UnmergeAuto) has not run, mapped to the journal key that holds it.
+// Gen is AutoMergeJournalGeneration read before the scan.
+//
+// An entry is open while UndoneAt is zero. A PROVISIONAL entry counts too:
+// it is written before the merge and patched after it, so the loser can be
+// soft-deleted while the entry is still provisional, and UnmergeAuto's own
+// refusal for one tells the operator to restore the loser from the trash.
+// Dropping the loser then would leave nothing to restore.
+//
+// Winners is the other book UnmergeAuto needs: an entry that recorded a
+// pre-merge snapshot of its winner (WinnerPreMergeTS != 0) makes UnmergeAuto
+// refuse, before it touches anything, when the winner row no longer exists. A
+// winner that was soft-deleted later and then purged would make the whole undo
+// impossible, so a trashed winner of an open, finalized entry is held too. A
+// provisional entry cannot be undone (UnmergeAuto refuses it), so its winner is
+// not held.
+type AutoMergeOpenLosers struct {
+	Gen     uint64
+	Losers  map[string]string
+	Winners map[string]string
+}
+
+// OpenAutoMergeLosers scans the auto-merge journal once. Unlike
+// ListAutoMergeJournalEntries it does NOT skip a row it cannot decode: the
+// caller (the trash purge) decides what may be deleted from the answer, and a
+// row that cannot be read might name the book. It returns the error and the
+// caller fails closed.
+func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	out := &AutoMergeOpenLosers{Gen: AutoMergeJournalGeneration(), Losers: map[string]string{}, Winners: map[string]string{}}
+	prefix := []byte(dedupAutoMergeJournalPfx)
+	upper := append([]byte(dedupAutoMergeJournalPfx), 0xff)
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upper})
+	if err != nil {
+		return nil, fmt.Errorf("iter automerge journal: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+	for iter.First(); iter.Valid(); iter.Next() {
+		var entry AutoMergeJournalEntry
+		if err := json.Unmarshal(iter.Value(), &entry); err != nil {
+			return nil, fmt.Errorf("automerge journal entry %s cannot be decoded, so the books it holds cannot be told: %w", iter.Key(), err)
+		}
+		if entry.UndoneAt != 0 || entry.LoserID == "" {
+			continue
+		}
+		out.Losers[entry.LoserID] = string(iter.Key())
+		if !entry.Provisional && entry.WinnerPreMergeTS != 0 && entry.WinnerID != "" {
+			out.Winners[entry.WinnerID] = string(iter.Key())
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("scan automerge journal: %w", err)
 	}
 	return out, nil
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4c81f0a7-5e93-4d2b-9a16-7f30c8e51b42
-// last-edited: 2026-10-11
+// last-edited: 2026-10-26
 
 package database
 
@@ -156,10 +156,16 @@ func stripBookSigForRow(b *Book) *Book {
 // — and booksig_recovery_audit reads exactly that shape as damage requiring a
 // snapshot restore. Failing loudly is the only safe option here.
 func (p *PebbleStore) hydrateBookSig(b *Book) error {
+	return hydrateBookSigFrom(p.db, b)
+}
+
+// hydrateBookSigFrom is hydrateBookSig reading from r (the live database or one
+// snapshot; see getBookByIDFrom).
+func hydrateBookSigFrom(r gatedReader, b *Book) error {
 	if b == nil || b.ID == "" {
 		return nil
 	}
-	val, closer, err := p.db.Get(bookSigKey(b.ID))
+	val, closer, err := r.Get(bookSigKey(b.ID))
 	if err == pebble.ErrNotFound {
 		return nil
 	}

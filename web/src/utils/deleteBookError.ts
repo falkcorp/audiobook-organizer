@@ -1,5 +1,5 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
 // last-edited: 2026-10-26
 
@@ -89,6 +89,17 @@ export interface DescribeDeleteBookErrorOptions {
 }
 
 /**
+ * Reports whether a delete or purge was refused because the library folder is
+ * not mounted or not answering (503, code ROOT_NOT_READY). Nothing was deleted,
+ * and it works again when the folder is back.
+ */
+export function isRootNotReadyRefusal(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 503) return false;
+  const data = error.data as { code?: unknown } | undefined;
+  return data?.code === 'ROOT_NOT_READY';
+}
+
+/**
  * Returns the message to show when deleting (or purging) a book failed.
  *
  * A STATE_MOVED_BOOK_KEPT or PROGRESS_DISCARDED_BOOK_KEPT error says what
@@ -131,9 +142,32 @@ export function describeDeleteBookError(
         'restorable), or move its files to another book first.'
       );
     }
+    if (isRootNotReadyRefusal(error)) {
+      return (
+        "Nothing was deleted: the library folder isn't mounted (or isn't answering), so the " +
+        "server can't tell a missing file from a missing drive. Check the drive, then try " +
+        `again. (${error.message})`
+      );
+    }
     if (error.message) {
       return error.message;
     }
   }
   return fallback;
+}
+
+/**
+ * What to say about the "block this file's hash" part of a delete. Only when a
+ * block was asked for: a hash the server did not block says why (its
+ * `warnings`, e.g. a live book still holds the file), instead of a bare
+ * "could not be blocked". The delete itself succeeded either way.
+ */
+export function describeBlockOutcome(
+  requested: boolean,
+  result: { blocked?: boolean; warnings?: string[] }
+): { notice: string; severity: 'success' | 'warning' } {
+  if (!requested) return { notice: '', severity: 'success' };
+  if (result.blocked) return { notice: ' Hash blocked.', severity: 'success' };
+  const why = result.warnings && result.warnings.length > 0 ? ` ${result.warnings.join(' ')}` : '';
+  return { notice: why || ' Hash could not be blocked.', severity: 'warning' };
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/journal_user_data_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 41be6667-4e23-4fde-9bef-f3782b221fbe
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package duplicates_test
 
@@ -49,7 +49,7 @@ func TestJournalLists_StripOtherUsersData(t *testing.T) {
 		"check refuses":      {func(*gin.Context) bool { return false }, false},
 		"check allows":       {func(*gin.Context) bool { return true }, true},
 	} {
-		h := duplicates.New(f.S, nil, nil, nil, func() duplicates.MergeService { return ms }, nil, nil)
+		h := duplicates.New(f.S, nil, nil, nil, func() duplicates.MergeService { return ms }, nil)
 		if tc.check != nil {
 			h = h.WithOthersUserDataAccess(tc.check)
 		}
@@ -69,7 +69,7 @@ func TestJournalLists_StripOtherUsersData(t *testing.T) {
 			require.NotContains(t, body, `"progress"`, "%s %s", name, url)
 		}
 	}
-	w := doReq(t, duplicates.New(f.S, nil, nil, nil, func() duplicates.MergeService { return ms }, nil, nil).ListCombineJournals,
+	w := doReq(t, duplicates.New(f.S, nil, nil, nil, func() duplicates.MergeService { return ms }, nil).ListCombineJournals,
 		http.MethodGet, "/merge/combine-journal", nil)
 	require.Contains(t, w.Body.String(), "invented library warning", "a warning naming no user stays")
 }
@@ -96,7 +96,7 @@ func TestJournalLists_StripWorksOnACopy(t *testing.T) {
 	ms := duplicatesmocks.NewMockMergeService(t)
 	ms.EXPECT().ListCombineJournals(50).Return(combine, nil)
 	ms.EXPECT().ListSiblingMoveJournals(50).Return(sibling, nil)
-	h := duplicates.New(nil, nil, nil, nil, func() duplicates.MergeService { return ms }, nil, nil)
+	h := duplicates.New(nil, nil, nil, nil, func() duplicates.MergeService { return ms }, nil)
 
 	var cEnv struct {
 		Data struct {

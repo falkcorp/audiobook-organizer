@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -1011,8 +1011,8 @@ func (m *MemStore) GetDistinctLanguages() ([]string, error) {
 }
 
 // ListSoftDeletedBooks returns books with MarkedForDeletion=true, with optional
-// age filter (olderThan: only books whose MarkedForDeletionAt is on/before this
-// time). Uses the marked_for_deletion index so cost is O(deleted_count), not
+// age filter (olderThan: only books whose trash time, Book.TrashedAt, is known
+// and on/before this time). Uses the marked_for_deletion index so cost is O(deleted_count), not
 // O(total_books) — the soft-deleted set is typically tiny relative to the
 // total books, so this is orders of magnitude faster than the Pebble full-scan.
 //
@@ -1048,7 +1048,7 @@ func (m *MemStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time)
 	matched := make([]*Book, 0, 32)
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
-		if olderThan != nil && b.MarkedForDeletionAt != nil && b.MarkedForDeletionAt.After(*olderThan) {
+		if olderThan != nil && trashedAfter(b, *olderThan) {
 			continue
 		}
 		matched = append(matched, b)

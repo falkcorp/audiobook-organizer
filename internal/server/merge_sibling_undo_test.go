@@ -1,7 +1,7 @@
 // file: internal/server/merge_sibling_undo_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 43e2fa1b-c761-4fd6-a2f1-e668c89b5335
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package server
 
@@ -73,7 +73,7 @@ func requireSiblingUndo(t *testing.T, f *vptest.Fixture, opID, k, ls string) {
 // sibling-move pointer goes under the op.
 func TestApplyBookMergeReroute_SiblingMoveIsUndoable(t *testing.T) {
 	f, k, l, ls := siblingUndoFixture(t)
-	_, err := applyBookMergeReroute(merge.NewService(f.S), "op-book-merge", k, []string{l})
+	_, _, err := applyBookMergeReroute(merge.NewService(f.S), "op-book-merge", k, []string{l})
 	require.NoError(t, err)
 	requireSiblingUndo(t, f, "op-book-merge", k, ls)
 }

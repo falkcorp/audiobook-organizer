@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler_test.go
-// version: 1.12.0
+// version: 1.13.1
 // guid: 62637af9-347f-4f38-b42b-d90ff3ab3654
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Tests for the duplicates-domain handlers. The store / merge-service /
 // metadata-fetch-service / operations-registry deps are generated mocks; the
@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,17 +49,16 @@ type recorders struct {
 }
 
 type testDeps struct {
-	store    *duplicatesmocks.MockDuplicatesStore
-	reg      *duplicatesmocks.MockOperationsRegistry
-	merge    *duplicatesmocks.MockMergeService
-	metaSvc  *duplicatesmocks.MockMetadataFetchService
-	dedupEng *duplicatesmocks.MockDedupEngine
-	cache    *cache.Cache[gin.H]
-	rec      *recorders
+	store   *duplicatesmocks.MockDuplicatesStore
+	reg     *duplicatesmocks.MockOperationsRegistry
+	merge   *duplicatesmocks.MockMergeService
+	metaSvc *duplicatesmocks.MockMetadataFetchService
+	cache   *cache.Cache[gin.H]
+	rec     *recorders
 }
 
 type cfg struct {
-	hasReg, hasMerge, hasMeta, hasDedupEng bool
+	hasReg, hasMerge, hasMeta bool
 }
 
 func noReg(c *cfg) { c.hasReg = false }
@@ -70,7 +68,7 @@ func noReg(c *cfg) { c.hasReg = false }
 // exercise the in-method nil guards.
 func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps) {
 	t.Helper()
-	cf := &cfg{hasReg: true, hasMerge: true, hasMeta: true, hasDedupEng: true}
+	cf := &cfg{hasReg: true, hasMerge: true, hasMeta: true}
 	for _, o := range opts {
 		o(cf)
 	}
@@ -79,7 +77,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	reg := duplicatesmocks.NewMockOperationsRegistry(t)
 	mergeMock := duplicatesmocks.NewMockMergeService(t)
 	metaMock := duplicatesmocks.NewMockMetadataFetchService(t)
-	dedupEngMock := duplicatesmocks.NewMockDedupEngine(t)
 	dc := cache.New[gin.H]("dedup-test", time.Minute)
 	rec := &recorders{}
 
@@ -90,10 +87,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 	var metaArg duplicates.MetadataFetchService
 	if cf.hasMeta {
 		metaArg = metaMock
-	}
-	var dedupEngArg duplicates.DedupEngine
-	if cf.hasDedupEng {
-		dedupEngArg = dedupEngMock
 	}
 
 	h := duplicates.New(
@@ -107,13 +100,12 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*duplicates.Handler, testDeps
 			}
 			return nil
 		},
-		dedupEngArg,
 		func() (any, error) {
 			rec.prunePreviewCalls++
 			return rec.prunePreviewResult, rec.prunePreviewErr
 		},
 	)
-	return h, testDeps{store, reg, mergeMock, metaMock, dedupEngMock, dc, rec}
+	return h, testDeps{store, reg, mergeMock, metaMock, dc, rec}
 }
 
 // doReq drives a single handler with the supplied method/url/body.
@@ -163,199 +155,105 @@ func assertReturnsV2OpID(t *testing.T, w *httptest.ResponseRecorder) {
 
 // --- CombineBooks ---
 
-func TestCombineBooks_OK(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks([]string{"b", "c", "a"}, "a", (*merge.CombineOverride)(nil)).Return(&merge.CombineResult{
-		PrimaryID: "a", FilesMoved: 3, BooksDeleted: 2, OperationID: "op-combine",
-	}, nil)
-	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b", "c"}).Return(2)
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b", "c"}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	// The id POST /operations/:id/revert undoes the combine with.
-	if !strings.Contains(w.Body.String(), `"operation_id":"op-combine"`) {
-		t.Fatalf("response does not carry the combine's operation id: %s", w.Body.String())
-	}
+func combineBody(keep string, merge []string) map[string]any {
+	return map[string]any{"keep_id": keep, "merge_ids": merge}
 }
 
-// A combine whose journal could not be marked applied still offers its
-// operation: the pending journal names every step, and reverting replays it.
-func TestCombineBooks_JournalPending_StillOffersTheOperation(t *testing.T) {
+// The handler only checks the request and queues the op: it answers 202 with
+// the v2 op id and never calls the combine itself (the merge mock has no
+// CombineBooks method, so a call would not compile).
+func TestCombineBooks_Enqueues202WithoutRunningTheCombine(t *testing.T) {
 	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks([]string{"b", "a"}, "a", (*merge.CombineOverride)(nil)).Return(&merge.CombineResult{
-		PrimaryID: "a", FilesMoved: 1, BooksDeleted: 1, OperationID: "op-combine", JournalID: "J1",
-		JournalPending: "disk full", Warnings: []string{"metadata override not applied"},
-	}, nil)
-	d.dedupEng.EXPECT().CleanupCandidatesAfterMerge([]string{"b"}).Return(1)
+	d.merge.EXPECT().PreflightCombine("a", []string{"b", "c"}).Return(nil)
+	var got dedup.BookCombineParams
+	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-combine", mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, params any, _ ...opsregistry.EnqueueOption) (string, error) {
+			got = params.(dedup.BookCombineParams)
+			return "rid", nil
+		})
 	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		map[string]any{"keep_id": "a", "merge_ids": []string{"b", "c"}, "override": map[string]string{"title": "T"}})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
-	body := w.Body.String()
-	for _, want := range []string{`"operation_id":"op-combine"`, `"journal_id":"J1"`, `"journal_pending":"disk full"`,
-		"still pending: reverting operation op-combine replays", `"warnings":["metadata override not applied"]`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("response lacks %s: %s", want, body)
-		}
+	assertReturnsV2OpID(t, w)
+	if got.KeepID != "a" || len(got.MergeIDs) != 2 || got.Override == nil || got.Override.Title != "T" {
+		t.Fatalf("op params = %+v, want keep a, two merge ids and the override", got)
 	}
-}
-
-// A combine that stopped after its undo pointer was journaled may already
-// have moved files and trashed books. The caller gets the ids that undo it
-// and a message saying so, not a bare "failed to combine books"; the store
-// error itself stays in the log.
-func TestCombineBooks_IncompleteCarriesTheUndoIDs(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.CombineIncompleteError{
-		JournalID: "J9", OperationID: "op-partial", Err: errString("soft-delete absorbed book b: disk full"),
-	})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
-	}
-	body := w.Body.String()
-	for _, want := range []string{`"journal_id":"J9"`, `"operation_id":"op-partial"`, `"code":"COMBINE_INCOMPLETE"`,
-		"stopped part-way", "Revert operation op-partial to undo what it did"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("response lacks %s: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "disk full") {
-		t.Fatalf("the store error must stay in the log, not the response: %s", body)
-	}
-}
-
-// An incomplete combine whose cause is a refusal is still a 409, with the ids.
-func TestCombineBooks_IncompleteRefusalIs409WithIDs(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.CombineIncompleteError{
-		JournalID: "J8", OperationID: "op-refused", Err: &merge.SoftDeletedInputError{BookID: "b"},
-	})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), `"operation_id":"op-refused"`) {
-		t.Fatalf("409 lacks the operation id: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), `"type":"book-combine"`) {
+		t.Fatalf("response does not name the operation type: %s", w.Body.String())
 	}
 }
 
 func TestCombineBooks_TooFew(t *testing.T) {
 	h, _ := newHandler(t)
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{}})
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine", combineBody("a", []string{}))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
 	}
 }
 
-func TestCombineBooks_NotFound(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.BookNotFoundError{BookID: "a"})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+// A repeated id, or keep_id repeated in merge_ids, is a malformed request: 400,
+// nothing queued, no store read.
+func TestCombineBooks_RepeatedIDIs400(t *testing.T) {
+	for name, merge := range map[string][]string{"keep in merge_ids": {"a", "b"}, "repeated loser": {"b", "b"}} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := newHandler(t)
+			w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine", combineBody("a", merge))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 
-// The user picked a keep_id with no audio route while a merged book has one.
-// The service refuses; the user must see WHY their pick lost, so this is a
-// 409 carrying the service's message, not a generic 500.
-func TestCombineBooks_FilelessPrimaryIs409WithReason(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).
-		Return(nil, &merge.FilelessPrimaryError{PrimaryID: "a", FileBearing: []string{"b"}})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "refusing to keep the file-less book") {
-		t.Fatalf("409 must carry the service's reason, got %s", w.Body.String())
-	}
-}
-
-// A "not found" that is only a substring of some other error's text is NOT a
-// 404: respondMergeError maps the typed error, not the wording. Before
-// 2026-09-02 a store failure mentioning a not-found index would have been
-// reported as a missing book. (Ported from the retired link-as-versions
-// handler's tests, 03-PR12: CombineBooks is respondMergeError's remaining
-// caller.)
-func TestCombineBooks_UntypedNotFoundTextIs500(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, errString("index shard not found while loading"))
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
+func TestCombineBooks_MergeServiceMissingIs500(t *testing.T) {
+	h, _ := newHandler(t, func(c *cfg) { c.hasMerge = false })
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine", combineBody("a", []string{"b"}))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-// A combine refused, with nothing written, because the library index is still
-// loading is temporary: 503 with Retry-After and the service's own message, not the
-// generic 500 that kept the reason in the server log.
-func TestCombineBooks_LookupIncompleteIs503RetryLater(t *testing.T) {
-	h, d := newHandler(t)
-	refusal := fmt.Errorf("combine refused: the complete list of the rows holding the path is not available yet, so the row of book Hush was not taken: %w",
-		database.ErrOwnershipLookupIncomplete)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, refusal)
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("want 503, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "COMBINE_RETRY_LATER") || !strings.Contains(w.Body.String(), "was not taken") {
-		t.Fatalf("503 must carry the code and the service's reason, got %s", w.Body.String())
-	}
-	if w.Header().Get("Retry-After") == "" {
-		t.Fatalf("503 must say when to retry")
+func TestCombineBooks_RegistryMissingIs500(t *testing.T) {
+	h, d := newHandler(t, noReg)
+	d.merge.EXPECT().PreflightCombine("a", []string{"b"}).Return(nil)
+	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine", combineBody("a", []string{"b"}))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-// The same error AFTER the journal is a CombineIncompleteError: that combine may
-// have written, so it is not "retry later" and keeps its own answer.
-func TestCombineBooks_IncompleteCombineWrappingLookupIncompleteIsNot503(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil,
-		&merge.CombineIncompleteError{JournalID: "journal-1", Err: database.ErrOwnershipLookupIncomplete})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code == http.StatusServiceUnavailable {
-		t.Fatalf("a combine that got past its journal must not be answered as retry-later: %s", w.Body.String())
+// The refusals the service gives before it writes anything answer the HTTP
+// call, with the service's reason, and queue nothing (the registry mock has no
+// EnqueueOp expectation, so an enqueue would fail the test).
+func TestCombineBooks_PreflightRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code int
+		body string
+	}{
+		{"missing book is 404", &merge.BookNotFoundError{BookID: "b"}, http.StatusNotFound, ""},
+		{"soft-deleted participant is 409", &merge.SoftDeletedInputError{BookID: "b"}, http.StatusConflict, "b"},
+		{"soft-deleted keep is 409", &merge.SoftDeletedInputError{BookID: "a", AsPrimary: true}, http.StatusConflict, "a"},
+		{"iTunes-protected is 409", &merge.ITunesProtectedError{BookID: "b", Reason: "in the iTunes library"}, http.StatusConflict, "iTunes"},
+		// A not-found that is only a substring of some other error's text is
+		// not a 404: respondMergeError maps the typed error, not the wording.
+		{"untyped not-found text is 500", errString("index shard not found while loading"), http.StatusInternalServerError, ""},
 	}
-}
-
-// The service refusing because a participant is soft-deleted is the caller's
-// problem to see, not a server fault: 409 with the service's reason.
-func TestCombineBooks_SoftDeletedInputIs409(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.SoftDeletedInputError{BookID: "b", AsPrimary: false})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "b") {
-		t.Fatalf("409 must carry the service's reason naming the book, got %s", w.Body.String())
-	}
-}
-
-func TestCombineBooks_ProvisionalIs409(t *testing.T) {
-	h, d := newHandler(t)
-	d.merge.EXPECT().CombineBooks(mock.Anything, "a", mock.Anything).Return(nil, &merge.ProvisionalScanError{BookID: "b"})
-	w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine",
-		map[string]any{"keep_id": "a", "merge_ids": []string{"b"}})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "deep scan") {
-		t.Fatalf("409 must carry the actionable reason, got %s", w.Body.String())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.merge.EXPECT().PreflightCombine("a", []string{"b"}).Return(tc.err)
+			w := doReq(t, h.CombineBooks, http.MethodPost, "/audiobooks/combine", combineBody("a", []string{"b"}))
+			if w.Code != tc.code {
+				t.Fatalf("want %d, got %d: %s", tc.code, w.Code, w.Body.String())
+			}
+			if tc.body != "" && !strings.Contains(w.Body.String(), tc.body) {
+				t.Fatalf("response must carry the reason (%q), got %s", tc.body, w.Body.String())
+			}
+		})
 	}
 }
 
@@ -364,6 +262,7 @@ func TestCombineBooks_ProvisionalIs409(t *testing.T) {
 func TestLinkBooks_Enqueues202(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().GetBookByID("keep").Return(&database.Book{ID: "keep"}, nil)
+	d.merge.EXPECT().PreflightLink("keep", []string{"m1"}).Return(nil)
 	d.reg.EXPECT().EnqueueOp(mock.Anything, "dedup.book-merge", mock.Anything).Return("rid", nil)
 	w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
@@ -380,6 +279,31 @@ func TestLinkBooks_KeepNotFound(t *testing.T) {
 		map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A merge the operation would refuse after running is refused here with a 409
+// carrying the reason, and nothing is queued (no EnqueueOp expectation: an
+// unexpected call fails the test).
+func TestLinkBooks_PreflightRefusalIs409AndQueuesNothing(t *testing.T) {
+	cases := map[string]error{
+		"trashed keep":   &merge.SoftDeletedInputError{BookID: "keep", AsPrimary: true},
+		"iTunes sibling": &merge.ITunesProtectedError{BookID: "sibling", Reason: "its file is inside the iTunes library"},
+	}
+	for name, refusal := range cases {
+		t.Run(name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.store.EXPECT().GetBookByID("keep").Return(&database.Book{ID: "keep"}, nil)
+			d.merge.EXPECT().PreflightLink("keep", []string{"m1"}).Return(refusal)
+			w := doReq(t, h.LinkBooks, http.MethodPost, "/audiobooks/link",
+				map[string]any{"keep_id": "keep", "merge_ids": []string{"m1"}})
+			if w.Code != http.StatusConflict {
+				t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), refusal.Error()) {
+				t.Fatalf("409 must carry the reason %q, got %s", refusal.Error(), w.Body.String())
+			}
+		})
 	}
 }
 

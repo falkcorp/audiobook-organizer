@@ -1,5 +1,5 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
 // last-edited: 2026-10-26
 
@@ -352,7 +352,7 @@ func TestUserStateProbe_RedirectedButUncopiedBookmarkIsOwed(t *testing.T) {
 func TestDiscardUserState_BookmarkOnly(t *testing.T) {
 	s, u, _, doomed, doomedSync := bookmarkOnly(t)
 	deleted := false
-	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { deleted = true; return nil })
+	res, err := discardUserStateThenHardDelete(s, doomed, nil, func() error { deleted = true; return nil })
 	require.NoError(t, err)
 	require.True(t, deleted)
 	require.Equal(t, 1, res.Users, "the bookmark-only user is counted")
@@ -368,7 +368,7 @@ func TestDiscardUserState_BookmarkOnly(t *testing.T) {
 func TestDiscardUserState_DeleteFailureAfterClearingIsDiscardedBookKept(t *testing.T) {
 	s, _, _, doomed, _ := bookmarkOnly(t)
 	cause := errors.New("delete refused")
-	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { return cause })
+	res, err := discardUserStateThenHardDelete(s, doomed, nil, func() error { return cause })
 	require.ErrorIs(t, err, ErrDiscardedBookKept)
 	require.ErrorIs(t, err, cause)
 	var kept *DiscardedBookKeptError
@@ -387,7 +387,7 @@ func TestDiscardUserState_DeleteFailureWithNothingErasedIsThePlainError(t *testi
 	empty, _ := seedSyncBooks(t, s)
 	seedSyncUser(t, s)
 	cause := errors.New("delete refused")
-	res, err := DiscardUserStateThenHardDelete(s, empty, nil, func() error { return cause })
+	res, err := discardUserStateThenHardDelete(s, empty, nil, func() error { return cause })
 	require.ErrorIs(t, err, cause)
 	require.NotErrorIs(t, err, ErrDiscardedBookKept)
 	var kept *DiscardedBookKeptError
@@ -413,7 +413,7 @@ func TestDiscardUserState_DeleteFailureAfterErasingAnUncarryableRowIsDiscardedBo
 	require.False(t, hasCarryableState(st, nil), "fixture: nothing in it is carryable")
 
 	cause := errors.New("delete refused")
-	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { return cause })
+	res, err := discardUserStateThenHardDelete(s, doomed, nil, func() error { return cause })
 
 	require.ErrorIs(t, err, ErrDiscardedBookKept)
 	require.ErrorIs(t, err, cause)

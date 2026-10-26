@@ -29,16 +29,28 @@ import (
 // clearly an improvement, so we keep the two patterns and rely on
 // this assertion + CI vet to prevent drift.)
 var _ Store = (*MockStore)(nil)
+var _ FileHashHolderLookup = (*MockStore)(nil)
+var _ FileHashHolderLookup = (*PebbleStore)(nil)
 
 // MockStore is a simple mock implementation for testing services
 type MockStore struct {
+	// BooksByFileHashFunc backs BooksByFileHash (the FileHashHolderLookup
+	// capability, not a Store method). Unset, BooksByFileHash answers with what
+	// GetBookByFileHash answers, as a one-element list, so a test that stubs
+	// only the single-answer lookup keeps working.
+	BooksByFileHashFunc func(hash string) ([]*Book, error)
+
 	// Book methods
 	GetBookByIDFunc           func(id string) (*Book, error)
 	ClearBookSignatureFunc    func(id string) error
 	GetBooksByIDsFunc         func(ids []string) ([]Book, error)
 	GetBookByFilePathFunc     func(path string) (*Book, error)
 	LiveBookIDsAtPathFunc     func(path string) ([]string, error)
+	BookIDsAtPathFunc         func(path string) ([]string, error)
 	LiveBookPathsUnderDirFunc func(dir string) (map[string]string, error)
+	// SampleLiveBookFilePathsUnderFunc backs SampleLiveBookFilePathsUnder (the
+	// LiveBookFileSampler capability, not a Store method).
+	SampleLiveBookFilePathsUnderFunc func(root string, k int) ([]string, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
 	// dedup tests set only this; GetAllBooksCoreFunc's default (see
@@ -1186,6 +1198,26 @@ func (m *MockStore) LiveBookIDsAtPath(path string) ([]string, error) {
 	return nil, nil
 }
 
+// BookIDsAtPath returns nil, nil when unconfigured: "no book, trashed or not,
+// at this path". A test whose code path decides "is this path free?" must set
+// the Func.
+func (m *MockStore) BookIDsAtPath(path string) ([]string, error) {
+	if m.BookIDsAtPathFunc != nil {
+		return m.BookIDsAtPathFunc(path)
+	}
+	return nil, nil
+}
+
+// SampleLiveBookFilePathsUnder returns nil, nil when unconfigured: "no live
+// book has a file under root", which a root check reads as nothing to compare
+// against. A test of the check sets the Func.
+func (m *MockStore) SampleLiveBookFilePathsUnder(root string, k int) ([]string, error) {
+	if m.SampleLiveBookFilePathsUnderFunc != nil {
+		return m.SampleLiveBookFilePathsUnderFunc(root, k)
+	}
+	return nil, nil
+}
+
 // LiveBookPathsUnderDir returns nil, nil when unconfigured: "no live book
 // under this dir", like LiveBookIDsAtPath.
 func (m *MockStore) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
@@ -1214,6 +1246,19 @@ func (m *MockStore) GetBookByFileHash(hash string) (*Book, error) {
 		return m.GetBookByFileHashFunc(hash)
 	}
 	return nil, nil
+}
+
+// BooksByFileHash is the FileHashHolderLookup capability: BooksByFileHashFunc
+// when set, else the single book GetBookByFileHash answers with.
+func (m *MockStore) BooksByFileHash(hash string) ([]*Book, error) {
+	if m.BooksByFileHashFunc != nil {
+		return m.BooksByFileHashFunc(hash)
+	}
+	b, err := m.GetBookByFileHash(hash)
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return []*Book{b}, nil
 }
 
 func (m *MockStore) GetBookByOriginalHash(hash string) (*Book, error) {

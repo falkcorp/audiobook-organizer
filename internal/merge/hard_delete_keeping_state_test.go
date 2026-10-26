@@ -1,5 +1,5 @@
 // file: internal/merge/hard_delete_keeping_state_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91c4e7b2-5a38-4d60-b7f1-3e8a0d9c2b64
 // last-edited: 2026-10-26
 
@@ -97,7 +97,7 @@ func TestHardDeleteKeepingUserState_CarryBranchPrecheckRefusal(t *testing.T) {
 	f := newHDFixture(t, true)
 	delRan := false
 
-	carriedTo, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+	carriedTo, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 		func() error { f.events = append(f.events, "precheck"); return errPrecheck },
 		func() error { delRan = true; return nil })
 
@@ -120,7 +120,7 @@ func TestHardDeleteKeepingUserState_CarryBranchPrecheckRefusal(t *testing.T) {
 func TestHardDeleteKeepingUserState_CarryBranchOrder(t *testing.T) {
 	f := newHDFixture(t, true)
 
-	carriedTo, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+	carriedTo, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 		func() error { f.events = append(f.events, "precheck"); return nil },
 		func() error { f.events = append(f.events, "del"); return f.s.DeleteBook("doomed") })
 
@@ -134,7 +134,7 @@ func TestHardDeleteKeepingUserState_CarryBranchOrder(t *testing.T) {
 func TestHardDeleteKeepingUserState_TargetCheckStillRuns(t *testing.T) {
 	f := newHDFixture(t, true)
 
-	_, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+	_, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 		func() error {
 			// ABS stops listing the target between the choice and the lock.
 			_, merr := f.s.ModifyBook("keep", func(b *database.Book) error { b.IsPrimaryVersion = new(false); return nil })
@@ -155,7 +155,7 @@ func TestHardDeleteKeepingUserState_NoStateBranchPrecheck(t *testing.T) {
 		f := newHDFixture(t, false)
 		delRan := false
 
-		carriedTo, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+		carriedTo, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 			func() error { return errPrecheck },
 			func() error { delRan = true; return nil })
 
@@ -169,7 +169,7 @@ func TestHardDeleteKeepingUserState_NoStateBranchPrecheck(t *testing.T) {
 		f := newHDFixture(t, false)
 		var order []string
 
-		_, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+		_, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 			func() error { order = append(order, "precheck"); return nil },
 			func() error { order = append(order, "del"); return nil })
 
@@ -180,7 +180,7 @@ func TestHardDeleteKeepingUserState_NoStateBranchPrecheck(t *testing.T) {
 		f := newHDFixture(t, false)
 		boom := errors.New("del failed")
 
-		_, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+		_, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 			func() error { return nil }, func() error { return boom })
 
 		require.ErrorIs(t, err, boom)
@@ -196,7 +196,7 @@ func TestHardDeleteKeepingUserState_LateDelFailureSaysTheStateMoved(t *testing.T
 	f := newHDFixture(t, true)
 	delErr := errors.New("delete refused late")
 
-	carriedTo, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
+	carriedTo, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t),
 		func() error { return nil }, func() error { return delErr })
 
 	require.Equal(t, "keep", carriedTo)
@@ -211,7 +211,7 @@ func TestHardDeleteKeepingUserState_LateDelFailureSaysTheStateMoved(t *testing.T
 func TestHardDeleteKeepingUserState_NilPrecheckUnchanged(t *testing.T) {
 	f := newHDFixture(t, true)
 
-	carriedTo, err := HardDeleteKeepingUserState(f.s, f.st, f.doomed(t), nil,
+	carriedTo, err := hardDeleteKeepingUserState(f.s, f.st, f.doomed(t), nil,
 		func() error { return f.s.DeleteBook("doomed") })
 
 	require.NoError(t, err)

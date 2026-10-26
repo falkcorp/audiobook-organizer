@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -59,15 +59,16 @@ func (p *Plugin) runPurgeDeleted(ctx context.Context, _ json.RawMessage, reporte
 	prog := sdk.NewProgress(reporter, 0)
 	prog.Start("Purging soft-deleted books...")
 	opID := ctxOpID(ctx)
-	p.deps.RunAutoPurgeSoftDeleted(ctx, opID)
+	err := p.deps.RunAutoPurgeSoftDeleted(ctx, opID)
 	p.deps.ActivityFlushOp(opID)
-	if ctx.Err() != nil {
-		// Timeout, shutdown, watchdog or quiesce stopped the purge between
-		// books; what is left will be picked up by the next run.
-		msg := "Purge stopped early: " + ctx.Err().Error()
-		_ = reporter.Log(slog.LevelWarn, msg)
-		prog.Done(msg)
-		return nil
+	if err != nil {
+		// Refused (the undo records could not be read) or stopped before it
+		// decided every book (timeout, shutdown, watchdog, quiesce): a failed
+		// run, not a completed one that did nothing. What is left is picked up
+		// by the next run.
+		_ = reporter.Log(slog.LevelWarn, "Purge did not finish: "+err.Error())
+		prog.Done("Purge did not finish: " + err.Error())
+		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, "Purge complete")
 	prog.Done("Purge complete")

@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.7.5 -->
+<!-- version: 1.8.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-21 -->
+<!-- last-edited: 2026-10-26 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -61,7 +61,7 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 
 ### `internal/database` — Data layer
 - **store.go** — `Store` interface (composite of ~36 role interfaces: `BookStore`, `AuthorStore`, `MetadataCacheStore`, …; PebbleStore is the ONLY implementation), ALL entity struct definitions (Book, Author, Series, Work, Narrator, BookSegment, Operation, etc.)
-- **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book:hash:<hash>`, `author:<id>`, `series:<id>`, etc.
+- **pebble_store.go** — Primary implementation. Key schema: `book:<ulid>`, `book:path:<filepath>`, `book_hash:<hash>\x00<ulid>` (multi-valued; `pebble_store_book_hash_index.go`), `author:<id>`, `series:<id>`, etc.
 - **embedding_store.go** — `EmbeddingStore` wrapping the main audiobooks.pebble DB for embeddings + dedup candidates + labeled dataset. Key-space: `emb:v:*`, `emb:c:*`, `dedup:r:*`, `dedup:p:*`, `dedup:e:*` (entity index), `dedup:s:*` (status index), `dedup:seq`, `dedup:label:*`.
 - **dedup_automerge_journal.go** — `dedup:automerge:<unixNano16hex>` journal entries written by the `dedup.auto-resolve` apply path; each merge records the book_ver snapshot timestamps so `Engine.UnmergeAuto` can reverse it.
 - **review_store.go** — generic human-review queue on `*PebbleStore` (`review_item:r:*` records, `review_item:status:*` index, `review_item:dedupkey:*` idempotency index). v1 producer is the regroup op; `UpsertReviewItem` upserts by stable DedupKey and never resurfaces an already-decided (approved/rejected/applied) item.
@@ -191,11 +191,17 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | GET | `/audiobooks/count` | `countAudiobooks` | Returns `{count: N}` |
 | GET | `/audiobooks/search` | `searchAudiobooks` | `?q=` query |
 | GET | `/audiobooks/soft-deleted` | `listSoftDeletedBooks` | `?limit=&offset=&older_than_days=` |
-| DELETE | `/audiobooks/purge-soft-deleted` | `purgeSoftDeletedBooks` | `?delete_files=&older_than_days=` |
+| DELETE | `/audiobooks/purge-soft-deleted` | `purgeSoftDeletedBooks` | `?delete_files=&older_than_days=&trashed_before=`. `trashed_before` (RFC 3339) is **required**: it is the instant the preview returned, and the purge takes no book trashed after it (400 without it or with a malformed one). **Async: answers 202** with the `library.purge-soft-deleted` operation id (it answered 200 with the result before); the breakdown is the operation result (`GET /operations/:id/result`: `purged`, `skipped_owns_files`, `kept_undo_possible`, `kept_has_progress`, `carried_to_sibling`, `carry_failed`, `failed`, `stopped_early`, `stop_reason`). Refuses while the operation-journal by-book index is not built (`maintenance.opchange-book-index-rebuild`), and while any combine-journal row (`merge:combine-journal:<id>`) or auto-merge journal row cannot be decoded (fail closed; the refusal names the key, and `maintenance.combine-journal-check` lists the unreadable combine-journal rows; repair is manual). |
+| POST | `/audiobooks/purge-soft-deleted/preview` | `previewPurgeSoftDeleted` | 202; runs the same operation as a dry run that classifies every trashed book and changes nothing. The result carries `trashed_before` (send it to the purge), `trashed_after_preview`, and the files a purge with `delete_files` would remove (`files_to_delete` capped, `files_to_delete_count`, `files_kept`). The result carries `library_root` (`ready`, `problem`, `hung_stats`) on every preview, so a root that is not ready is visible before the purge. The result also carries `files_waiting_for_folder`, a separate count of earlier-pass removals whose folder is missing or empty (a purge does not remove them; they are not in `files_pending_from_earlier_pass`) |
+| GET | `/audiobooks/purge-soft-deleted/waiting-file-records` | `listWaitingPurgeFileRecords` | `library.delete`. The file paths the forget action would delete, so the owner can review them first: only paths whose every journal record is marked as waiting for a folder, sorted, capped at 500. `{paths, total, limit}` (`total` is the uncapped count) |
+| POST | `/audiobooks/purge-soft-deleted/forget-waiting-file-records` | `forgetWaitingPurgeFileRecords` | `library.delete`. Body `{"paths": [...]}`: **exactly the paths the owner was shown** (400 for an empty list, more than 500, or a bad body). The owner's explicit choice to delete the journal records of file removals that wait for a folder that is missing or empty. Deletes **records only**, never a file or a book, and only the sent paths that are still waiting; each is re-checked first, and a path whose file is back, whose folder holds files again, or that cannot be checked (dead mount, other stat error) is kept and named in `kept`. Refuses (503 `ROOT_NOT_READY`) while the library root is not ready, and 409 `PURGE_BUSY` when a purge holds the journal for longer than 10 seconds. Writes an audit row (`trash_forget_pending_file_records`: actor, every forgotten path, `paths_sent`, `paths_no_longer_waiting`, `paths_kept`). 200 `{records_forgotten, paths_forgotten, forgotten_paths, paths_no_longer_waiting, kept: [{path, reason}], warnings?}`; 503 (nothing deleted) when there is no activity log to record it in. `GET /audiobooks/soft-deleted` carries the counts as `files_pending_from_earlier_pass` and `files_waiting_for_folder` (each null when the journal could not be read) |
+| DELETE | `/audiobooks/purge-soft-deleted/preview/:id` | `cancelPurgePreview` | `library.delete`. Cancels a purge **preview** operation (dry run) that the caller started: 404 when the id is not a `library.purge-soft-deleted` preview, 403 for another user's preview, 204 otherwise (also when it already finished). Never cancels a real purge. The dialog calls it when the owner closes it while the preview runs |
+| POST | `/audiobooks/link` | `linkBooks` | 202; queues `dedup.book-merge` (versions in a group). 409 for a soft-deleted keep book or an iTunes-protected selected book. Result: `merged`, `skipped`, `no_op`, `failed`, `partial`, `error` |
+| POST | `/audiobooks/combine` | `combineBooks` | **Async: answers 202** (it answered 200 with the finished result before); queues `dedup.book-combine`. 400 malformed ids, 404 missing book, 409 soft-deleted or iTunes-protected book. Result: `primary_id`, `files_moved`, `books_deleted`, `journal_id`, `operation_id` (always set on success; revert it with `POST /operations/:id/revert`), `journal_pending`, `warnings`, `message`, and on failure `failed`, `incomplete`, `error` |
 | GET | `/audiobooks/:id` | `getAudiobook` | Full book with enrichment |
 | PUT | `/audiobooks/:id` | `updateAudiobook` | **FULL replacement** — always pass complete object. Supports `overrides` for field provenance. |
-| DELETE | `/audiobooks/:id` | `deleteAudiobook` | `?block_hash=true` to also block the hash |
-| POST | `/audiobooks/:id/restore` | `restoreAudiobook` | Restore soft-deleted |
+| DELETE | `/audiobooks/:id` | `deleteAudiobook` | `?block_hash=true` to also block the hash. A hard delete of a trashed book answers 503 with code `ROOT_NOT_READY` while the library root is not ready (the batch endpoint reports the same refusal as `code: "ROOT_NOT_READY"` on the failed item) |
+| POST | `/audiobooks/:id/restore` | `restoreAudiobook` | Restore soft-deleted (409 `MERGE_BUSY` while a merge or combine holds the merge lock; also on the hard delete, purge-now and discard-progress-and-purge routes) |
 | GET | `/audiobooks/:id/tags` | `getBookTags` | Per-field provenance (file/fetched/override/effective) |
 | GET | `/audiobooks/:id/segments` | `getBookSegments` | Physical file segments |
 | GET | `/audiobooks/:id/segments/:segId/tags` | `getSegmentTags` | Tags for one segment file |
@@ -376,7 +382,8 @@ export async function getBooks(limit: number, offset: number): Promise<{ items: 
 ```
 book:<ulid>                    → Book JSON
 book:path:<filepath>           → ULID (index)
-book:hash:<sha256>             → ULID (index)
+book_hash:<sha256>\x00<ulid>   → (empty) one key per hash and book; also book_originalhash:, book_organizedhash:
+                                 (replaced the single-valued book:hash:<sha256> → ULID, deleted by maintenance.book-hash-index-repair)
 book:author:<author_id>:<ulid> → ULID (index)
 book:series:<series_id>:<ulid> → ULID (index)
 book_ver:<ulid>:<unix_nano>    → Book JSON snapshot (COW)
@@ -453,7 +460,7 @@ Every variable component is escaped (`%` and `:` and control bytes become `%XX`)
 - **Writers serialise per engine.** The subject lock is a package-level registry keyed by `KV.LockIdentity()` (`*PebbleStore` returns its engine handle; a wrapper that embeds the KV inherits it), so two `Store` values share it whether they were built over the same KV value or over different wrappers of one store. `LockIdentity` is on `decisions.KV` only, not on `RawKVStore`. `Load` reads one point-in-time snapshot (`database.RawSnapshotter`), so a record committing mid-load cannot be half-seen; the raw rows are collected and the snapshot closed before any id is resolved, and resolver output is canonicalised. `Iterate` walks ULID order, which can differ slightly from commit order across `Store` instances (a subject's own `History` follows `SupersedesID` and is exact).
 - **Book merges are not resolved yet.** The author-tombstone resolver is provided; a caller-composed resolver over `merge.ResolveMergeSurvivor` is required before a book-merging consumer lands (until then snapshots fail open for merged-away book ids).
 
-**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs the prune, sweep, purge, expiry and cleanup entry points of the log, activity, undo-journal, metrics and session stores plus `resultjournal.Journal.Prune`, `AudiobookService.PurgeSoftDeletedBooks` and `dedup.Engine.PurgeStaleCandidates`, and fails when a method of the four reflected store types matching `Prune|Sweep|Purge|DeleteExpired|Cleanup` is added without coverage. A sweep on any other type is listed by hand; plugin sweeps with their own fixed prefixes (`pcache_sweep`, the resultjournal) carry a `decision:` sentinel in their own tests. Only `internal/decisions` may build `decision:` keys (source guard).
+**Durability invariant**: `decision:` keys are never pruned and have no TTL. They are owner decisions and training data. `internal/decisions/retention_test.go` runs the prune, sweep, purge, expiry and cleanup entry points of the log, activity, undo-journal, metrics and session stores plus `resultjournal.Journal.Prune`, `AudiobookService.PurgeSoftDeletedUnattended` and `dedup.Engine.PurgeStaleCandidates`, and fails when a method of the four reflected store types matching `Prune|Sweep|Purge|DeleteExpired|Cleanup` is added without coverage. A sweep on any other type is listed by hand; plugin sweeps with their own fixed prefixes (`pcache_sweep`, the resultjournal) carry a `decision:` sentinel in their own tests. Only `internal/decisions` may build `decision:` keys (source guard).
 
 ---
 
