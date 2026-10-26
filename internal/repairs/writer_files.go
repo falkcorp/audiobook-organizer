@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package repairs
 
@@ -45,6 +45,25 @@ import (
 // ErrNotJournaled: the undo row could not be recorded, so the write it would
 // describe was not made.
 var ErrNotJournaled = errors.New("repairs: undo row not recorded; the write was not made")
+
+// ErrUnclassifiedChangeType: a fixer asked the Writer to journal a change type
+// that undo.ClassifyChangeType does not know, so nobody has decided whether its
+// rows carry one user's data. The journal routes serve rows to callers who may
+// not manage users and keep the user-data types from them (undo.IsUserDataChangeType);
+// an unclassified type would be served as library history by default. The
+// write is not made, so it also matches ErrNotJournaled. Declare the type as an
+// undo constant and classify it in undo's changeTypeHoldsUserData.
+var ErrUnclassifiedChangeType = errors.New("repairs: change type is not classified as user or library data; the write was not made")
+
+// checkChangeTypeClassified refuses a change type undo does not classify. Every
+// journaled write reaches the journal through journalRow or journalRows, and both
+// ask it first, before the lease beat and before anything is written.
+func checkChangeTypeClassified(changeType string) error {
+	if _, known := undo.ClassifyChangeType(changeType); !known {
+		return fmt.Errorf("%w: %w: %q", ErrNotJournaled, ErrUnclassifiedChangeType, changeType)
+	}
+	return nil
+}
 
 // ChangeJournal records operation change rows and lists an op's rows (for the
 // resume dedupe). CreateOperationChange stores a row under its id, so writing
@@ -207,6 +226,9 @@ type journaledRow struct {
 }
 
 func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journaledRow, error) {
+	if err := checkChangeTypeClassified(changeType); err != nil {
+		return journaledRow{}, err
+	}
 	if w.journal == nil || w.opID == "" || w.index == nil {
 		return journaledRow{}, fmt.Errorf("%w: no journal wired (book %s, %s)", ErrNotJournaled, bookID, changeType)
 	}
@@ -268,6 +290,11 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 func (w *Writer) journalRows(steps []BookStep) ([]journaledRow, error) {
 	if w.journal == nil || w.opID == "" || w.index == nil {
 		return nil, fmt.Errorf("%w: no journal wired (%d steps)", ErrNotJournaled, len(steps))
+	}
+	for _, st := range steps {
+		if err := checkChangeTypeClassified(st.Entry.ChangeType); err != nil {
+			return nil, err
+		}
 	}
 	for _, st := range steps {
 		// Every journaled write journals first, so beating here renews the lease

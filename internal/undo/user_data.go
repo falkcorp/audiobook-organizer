@@ -1,11 +1,15 @@
 // file: internal/undo/user_data.go
-// version: 1.2.0
+// version: 1.3.1
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
 // last-edited: 2026-10-25
 
 package undo
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
 
 // changeTypeHoldsUserData classifies every change type this package declares:
 // true when a row of that type carries one user's own data -- listening state
@@ -80,6 +84,36 @@ var changeTypeHoldsUserData = map[string]bool{
 	// /merge/sibling-journal).
 	ChangeTypeMergeCombineJournal: false,
 	ChangeTypeMergeSiblingJournal: false,
+}
+
+// libraryDataLiteralChangeTypes are the change types a journaling writer
+// records that no constant of this package declares: the shared edit-history
+// vocabulary (metadata_update), the series-prune ledger's (series_merge,
+// series_delete) and the book_file location repoint, whose constant lives in
+// the database package beside the location it encodes. Their rows are library history, never
+// one user's data. They are the only literals ClassifyChangeType knows besides
+// the constants above; a writer that must refuse an unclassified type
+// (repairs.Writer) adds a new literal here, deliberately, or declares a constant
+// and classifies it in changeTypeHoldsUserData.
+var libraryDataLiteralChangeTypes = map[string]bool{
+	"metadata_update": true,
+	"series_merge":    true,
+	"series_delete":   true,
+
+	database.ChangeTypeBookFileRepoint: true,
+}
+
+// ClassifyChangeType reports whether changeType is one this package has
+// classified, and if so whether its rows carry one user's own data. known is
+// false for a type that is neither a ChangeType constant of this package nor
+// one of libraryDataLiteralChangeTypes: nobody has decided whether it is user
+// data, and a writer whose rows reach callers who may not manage users should
+// not record it (repairs.Writer refuses it).
+func ClassifyChangeType(changeType string) (holdsUserData, known bool) {
+	if v, ok := changeTypeHoldsUserData[changeType]; ok {
+		return v, true
+	}
+	return false, libraryDataLiteralChangeTypes[changeType]
 }
 
 // IsUserDataChangeType reports whether a journal row of changeType carries
