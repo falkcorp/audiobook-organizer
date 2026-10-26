@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.5
+// version: 1.47.6
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -636,7 +636,7 @@ func (s *PebbleStore) batchCreateBookFilesAttempt(files []*BookFile) (*stagedBoo
 // UpdateBookFile replaces an existing BookFile, cleaning up stale secondary
 // indexes when the PID or path changes.
 func (s *PebbleStore) UpdateBookFile(id string, file *BookFile) error {
-	return s.updateBookFile(id, file, bookFileMergeReplace, true)
+	return s.updateBookFile(id, file, bookFileMergeReplace, true, nil)
 }
 
 // ErrBookAggregatesRecompute marks an UpdateBookFiles error from a book's
@@ -731,8 +731,13 @@ func (s *PebbleStore) UpdateBookFiles(ctx context.Context, files []*BookFile, af
 func (s *PebbleStore) updateBookFileNoNotify(id string, file *BookFile) (bool, error) {
 	unlock := s.lockBookFile(id)
 	defer unlock()
-	return s.updateBookFileLocked(id, file, bookFileMergeReplace, true)
+	return s.updateBookFileLocked(id, file, bookFileMergeReplace, true, nil)
 }
+
+// errBookFileMatchStale is updateBookFileLocked's refusal when its stillMatches
+// guard rejects the row a retry re-read: the caller matched a different row
+// than the one that is there now and must match again.
+var errBookFileMatchStale = errors.New("book_file row no longer matches the upsert")
 
 // bookFileMerge selects the merge rule updateBookFileLocked applies between
 // the caller's row and the stored row it re-reads.
@@ -757,7 +762,7 @@ const (
 // book aggregates read (UpdateBookFileHashes). Even then the recompute runs
 // if Duration, FileSize or BookID moved, so a mislabelled caller cannot leave
 // an aggregate stale.
-func (s *PebbleStore) updateBookFile(id string, file *BookFile, merge bookFileMerge, recomputeAggregates bool) error {
+func (s *PebbleStore) updateBookFile(id string, file *BookFile, merge bookFileMerge, recomputeAggregates bool, stillMatches func(old *BookFile) bool) error {
 	unlock := s.lockBookFile(id)
 	notify := false
 	// Deferred, so a panic in the merge (a reflection walk over every field)
@@ -772,7 +777,7 @@ func (s *PebbleStore) updateBookFile(id string, file *BookFile, merge bookFileMe
 		}
 	}()
 	var err error
-	notify, err = s.updateBookFileLocked(id, file, merge, recomputeAggregates)
+	notify, err = s.updateBookFileLocked(id, file, merge, recomputeAggregates, stillMatches)
 	// Applied includes a batch whose fsync failed (ErrBookFileDurabilityUnknown):
 	// its row is visible, so the book's aggregates must follow it
 	// (bookFileApplied's contract). Gating on err == nil left the book stale.
@@ -793,7 +798,13 @@ func (s *PebbleStore) updateBookFile(id string, file *BookFile, merge bookFileMe
 // maintained from that fresh row. After maxStageRetries lost races it returns
 // a *BookFileConflictError and writes nothing. On success file holds the row
 // as written; on failure it is left as the caller passed it.
-func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge bookFileMerge, recomputeAggregates bool) (bool, error) {
+//
+// stillMatches, when non-nil, is asked about the row as each attempt re-reads
+// it; false returns errBookFileMatchStale with nothing written. An upsert
+// chooses its row by PID, path or ID BEFORE this runs, so a retry that simply
+// re-read that row would write the upsert over a row the match no longer
+// describes (see UpsertBookFile).
+func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge bookFileMerge, recomputeAggregates bool, stillMatches func(old *BookFile) bool) (bool, error) {
 	// CONS-18: normalise to the stored standard — Duration is SECONDS. This was the
 	// last write path that did not, while CreateBookFile, UpsertBookFile and
 	// BatchUpsertBookFiles all did, which meant an update could reintroduce the
@@ -821,6 +832,9 @@ func (s *PebbleStore) updateBookFileLocked(id string, file *BookFile, merge book
 		}
 		if old == nil {
 			return false, fmt.Errorf("book file not found: %s", id)
+		}
+		if stillMatches != nil && !stillMatches(old) {
+			return false, errBookFileMatchStale
 		}
 		return s.updateBookFileOver(old, raw, file, merge, recomputeAggregates)
 	})
@@ -1917,6 +1931,66 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	normalizeBookFileDuration(file) // CONS-18: repair ms durations at the chokepoint
 
+	// The match is made again whenever a retry finds the matched row is no longer
+	// what the match saw (errBookFileMatchStale). Making it once, outside the
+	// retry, let this sequence run: an upsert carrying PID P matches row A; a
+	// concurrent create transfers P from A to B; the compare-and-swap loses; the
+	// retry re-reads the fresh A (no PID), merges the incoming P onto it, and
+	// points book_file_pid:P back at A, so two rows claim P. The batch path
+	// re-matches on every pass and never could.
+	//
+	// updateBookFile leaves file as the caller passed it on failure, but the
+	// match below sets ID and BookID, which the next match must not read as the
+	// caller's: restore them each round.
+	origID, origBookID := file.ID, file.BookID
+	for range maxStageRetries {
+		file.ID, file.BookID = origID, origBookID
+		existing, err := s.matchUpsertBookFile(file)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return s.CreateBookFile(file)
+		}
+
+		// Preserve the existing ID and bookID; update in place.
+		file.ID = existing.ID
+		file.BookID = existing.BookID
+
+		// An upsert row may be PARTIAL (a memdb-sourced slim row, or a bare row the
+		// scanner / iTunes sync built from what it observed). Every field the caller
+		// does not own keeps its stored value when the incoming one is zero/nil — the
+		// shared rule in bookfile_merge.go, identical to BatchUpsertBookFiles. Before
+		// it, only the fingerprint fields and IntroTranscription were restored and a
+		// rescan wiped 40 others (transcription state, Duration, media info, Missing,
+		// SkipScan, provenance). An intentional clear goes through UpdateBookFile.
+		// A changed FileHash drops the content-derived fields (see bookfile_merge.go).
+		// Missing is never cleared here: this caller has not stat'd the file.
+		//
+		// The merge runs INSIDE updateBookFileLocked (bookFileMergeUpsert), against
+		// the row as it is under the file stripe and again on every compare-and-swap
+		// retry. Merging here, against the lookup above, would have written fields
+		// restored from a row that a concurrent batch upsert may have changed since.
+		// The guard re-checks, on that fresh row, the one thing the match was made
+		// on that a concurrent writer moves without taking this row's stripe: its
+		// iTunes ID.
+		matchedPID := existing.ITunesPersistentID
+		err = s.updateBookFile(existing.ID, file, bookFileMergeUpsert, true, func(old *BookFile) bool {
+			return old.ITunesPersistentID == matchedPID
+		})
+		if !errors.Is(err, errBookFileMatchStale) {
+			return err
+		}
+	}
+	file.ID, file.BookID = origID, origBookID
+	return &BookFileConflictError{BookID: origBookID, FileID: origID, Attempts: maxStageRetries}
+}
+
+// matchUpsertBookFile finds the stored row an upsert of file means: by iTunes
+// ID, then path, and a caller-supplied ID's live row wins over both. nil when
+// the upsert creates a new row. The row it returns is only a match;
+// updateBookFile re-reads the row it writes.
+func (s *PebbleStore) matchUpsertBookFile(file *BookFile) (*BookFile, error) {
 	var existing *BookFile
 	var err error
 
@@ -1929,7 +2003,7 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	if file.ITunesPersistentID != "" {
 		existing, err = s.GetBookFileByPID(file.ITunesPersistentID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if existing != nil && existing.Retired {
 			existing = nil
@@ -1939,7 +2013,7 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	if existing == nil && file.FilePath != "" {
 		existing, err = s.GetBookFileByPath(file.FilePath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if existing != nil && existing.Retired {
 			existing = nil
@@ -1952,42 +2026,20 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 	if file.ID != "" {
 		live, gone, idErr := s.bookFileIDState(file.ID)
 		if idErr != nil {
-			return idErr
+			return nil, idErr
 		}
 		switch {
 		case gone:
-			return fmt.Errorf("UpsertBookFile %s: %w", file.ID, ErrBookFileRowDeleted)
+			return nil, fmt.Errorf("UpsertBookFile %s: %w", file.ID, ErrBookFileRowDeleted)
 		case live != nil:
 			if existing != nil && existing.ID != live.ID && file.ITunesPersistentID != "" && existing.ITunesPersistentID == file.ITunesPersistentID {
-				return fmt.Errorf("UpsertBookFile %s: iTunes PID %s is held by live row %s: %w", file.ID, file.ITunesPersistentID, existing.ID, ErrBookFilePIDConflict)
+				return nil, fmt.Errorf("UpsertBookFile %s: iTunes PID %s is held by live row %s: %w", file.ID, file.ITunesPersistentID, existing.ID, ErrBookFilePIDConflict)
 			}
 			existing = live
 		}
 	}
 
-	if existing == nil {
-		return s.CreateBookFile(file)
-	}
-
-	// Preserve the existing ID and bookID; update in place.
-	file.ID = existing.ID
-	file.BookID = existing.BookID
-
-	// An upsert row may be PARTIAL (a memdb-sourced slim row, or a bare row the
-	// scanner / iTunes sync built from what it observed). Every field the caller
-	// does not own keeps its stored value when the incoming one is zero/nil — the
-	// shared rule in bookfile_merge.go, identical to BatchUpsertBookFiles. Before
-	// it, only the fingerprint fields and IntroTranscription were restored and a
-	// rescan wiped 40 others (transcription state, Duration, media info, Missing,
-	// SkipScan, provenance). An intentional clear goes through UpdateBookFile.
-	// A changed FileHash drops the content-derived fields (see bookfile_merge.go).
-	// Missing is never cleared here: this caller has not stat'd the file.
-	//
-	// The merge runs INSIDE updateBookFileLocked (bookFileMergeUpsert), against
-	// the row as it is under the file stripe and again on every compare-and-swap
-	// retry. Merging here, against the lookup above, would have written fields
-	// restored from a row that a concurrent batch upsert may have changed since.
-	return s.updateBookFile(existing.ID, file, bookFileMergeUpsert, true)
+	return existing, nil
 }
 
 // BatchUpsertBookFiles upserts a slice of BookFile records using a single

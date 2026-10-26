@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -1048,5 +1048,44 @@ func TestReaders_DoNotCopyTheStoredRow(t *testing.T) {
 				t.Errorf("%s allocates %d bytes per read of a %d-byte fingerprint, want under %d: it is copying the stored row", name, best, len(fp), limit)
 			}
 		})
+	}
+}
+
+// N8: an upsert that matched row A by iTunes ID must match again when a retry
+// finds A no longer holds that ID. Here a concurrent create transfers the ID
+// from A to a new row B between the match and the commit: the upsert has to land
+// on B, and A must not get the ID back.
+func TestCAS_UpsertBookFile_RematchesAfterAPIDTransfer(t *testing.T) {
+	f := newCASFixture(t)
+	const newPath = "/lib/Gotham/Batman-Year-One/02.m4b"
+	n := injectBeforeCommit(t, 1, func(int) {
+		if err := f.s.CreateBookFile(&BookFile{BookID: f.book.ID, FilePath: newPath, ITunesPersistentID: casPID}); err != nil {
+			t.Errorf("injected CreateBookFile: %v", err)
+		}
+	})
+
+	if err := f.s.UpsertBookFile(&BookFile{BookID: f.book.ID, FilePath: newPath, ITunesPersistentID: casPID, Title: "Batman: Year One, Chapter 2"}); err != nil {
+		t.Fatalf("UpsertBookFile: %v", err)
+	}
+	if *n != 1 {
+		t.Fatalf("the concurrent create ran %d times, want 1", *n)
+	}
+
+	a := f.row(t)
+	if a.ITunesPersistentID != "" {
+		t.Errorf("row A got PID %q back: two rows now claim it", a.ITunesPersistentID)
+	}
+	if a.Title == "Batman: Year One, Chapter 2" {
+		t.Errorf("the upsert was written to row A, which no longer holds the PID")
+	}
+	owner, err := f.s.GetBookFileByPID(casPID)
+	if err != nil || owner == nil {
+		t.Fatalf("GetBookFileByPID: row=%v err=%v", owner, err)
+	}
+	if owner.ID == f.file.ID || owner.FilePath != newPath {
+		t.Errorf("book_file_pid:%s resolves to %s at %s, want the new row at %s", casPID, owner.ID, owner.FilePath, newPath)
+	}
+	if owner.Title != "Batman: Year One, Chapter 2" {
+		t.Errorf("owner title = %q, want the upsert applied to the row that holds the PID now", owner.Title)
 	}
 }
