@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.5.1
+// version: 1.10.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package opsv3
 
@@ -21,10 +21,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -93,6 +95,13 @@ type BrokerOptions struct {
 type message struct {
 	id   uint64
 	view RunView
+	// repairs and fixerID say which Repairs fixer the run belongs to, so each
+	// stream can leave out the runs its caller may not read. They are not part of
+	// the event body: the broker computes them once, from the record it just
+	// read, and each Events loop applies its own caller's verdict.
+	repairs bool
+	defID   string
+	fixerID string
 }
 
 // Broker turns the registry's event feed into numbered `run` events carrying a
@@ -292,11 +301,13 @@ func (b *Broker) refresh(id string, zs map[string]bool, always bool) {
 		delete(b.watch, id)
 		return
 	}
-	v := toView(*rec, zs)
+	// Published as the record says; the stream redacts the error text per caller
+	// when it sends (Handler.Events), because one view goes to every client.
+	v := toView(*rec, zs, func(s string) string { return s })
 	data, _ := json.Marshal(v)
 	last, watched := b.watch[id]
 	if always || !watched || string(last) != string(data) {
-		b.publish(v)
+		b.publishScoped(v, scopeOf(rec))
 	}
 	if state.ClassifyV3(rec.State).Settled && !zs[id] {
 		delete(b.watch, id)
@@ -322,12 +333,30 @@ func (b *Broker) recheckWatched() {
 	}
 }
 
-// publish numbers v, stores it in the ring and offers it to every client
-// without blocking.
-func (b *Broker) publish(v RunView) {
+// runScope is the Repairs fixer a published run belongs to; the zero value is a
+// run that is not a Repairs run.
+type runScope struct {
+	repairs bool
+	defID   string
+	fixerID string
+}
+
+// scopeOf is rec's runScope: a Repairs run carries its definition and fixer ("" when
+// it states none, which no caller may read).
+func scopeOf(rec *database.RunRecord) runScope {
+	if !opaccess.IsRepairsOp(rec.DefID) {
+		return runScope{}
+	}
+	return runScope{repairs: true, defID: rec.DefID, fixerID: opaccess.RunFixerID(rec)}
+}
+
+// publishScoped numbers v, stores it in the ring with the Repairs scope sc it
+// is checked against per client, and offers it to every client without
+// blocking.
+func (b *Broker) publishScoped(v RunView, sc runScope) {
 	b.mu.Lock()
 	b.seq++
-	m := message{id: b.seq, view: v}
+	m := message{id: b.seq, view: v, repairs: sc.repairs, defID: sc.defID, fixerID: sc.fixerID}
 	b.ring = append(b.ring, m)
 	if len(b.ring) > b.opt.RingSize {
 		b.ring = append(b.ring[:0], b.ring[len(b.ring)-b.opt.RingSize:]...)
@@ -524,6 +553,12 @@ func (h *Handler) Events(c *gin.Context) {
 	defer hb.Stop()
 	done := c.Request.Context().Done()
 	closing := h.d.Closing // nil blocks forever
+	// A Repairs run the caller may not read never goes to this stream, whether it
+	// is live or replayed from the ring. The verdict is asked again for every
+	// run event (live, opaccess.Repairs.ForStream): the stream stays open for
+	// hours, and a caller whose role was lowered, or whose account was disabled,
+	// after it opened must stop receiving what it may no longer read.
+	reader := h.d.RepairsAccess.ForStream(c)
 	// A subscribe that queued a replay or a resync has something to send now.
 	cl.signal()
 	for {
@@ -533,11 +568,18 @@ func (h *Handler) Events(c *gin.Context) {
 		case <-closing:
 			return
 		case <-hb.C:
+			// A quiet stream still ends when its credential stops standing.
+			if !reader.StreamOpen() {
+				return
+			}
 			if _, err := fmt.Fprint(c.Writer, ": heartbeat\n\n"); err != nil {
 				return
 			}
 			c.Writer.Flush()
 		case <-cl.wake:
+			if !reader.StreamOpen() {
+				return
+			}
 			msgs, resync := cl.take()
 			if resync {
 				if _, err := fmt.Fprint(c.Writer, "event: resync\ndata: {\"reason\":\"events missed\"}\n\n"); err != nil {
@@ -545,7 +587,21 @@ func (h *Handler) Events(c *gin.Context) {
 				}
 			}
 			for _, m := range msgs {
-				data, err := json.Marshal(m.view)
+				if m.repairs {
+					reader.Refresh()
+					if !reader.MayReadFixer(m.defID, m.fixerID) {
+						continue
+					}
+				}
+				// The error text and the workers' current-item labels of a run can
+				// name a user; they are held back from a caller without
+				// users.manage, whatever run it is.
+				view := m.view
+				if view.Error != "" || len(view.Progress.Workers) > 0 {
+					reader.Refresh()
+					view = view.withUserText(reader.UserText)
+				}
+				data, err := json.Marshal(view)
 				if err != nil {
 					continue
 				}

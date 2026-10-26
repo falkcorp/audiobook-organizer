@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -940,6 +940,35 @@ describe('ActivityLog revert asks the preflight first', () => {
     expect(mockedGetUndoPreflight).toHaveBeenCalledWith('op-purge-0001');
     expect(screen.queryByText('Revert Operation?')).not.toBeInTheDocument();
     expect(mockedRevertOperation).not.toHaveBeenCalled();
+  });
+
+  it('stops offering Undo for an operation the server refused it for (403)', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });
+    mockedGetUndoPreflight.mockRejectedValue(
+      Object.assign(new Error('permission denied: users.manage'), { response: { status: 403, data: {} } })
+    );
+
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Revert operation' }));
+
+    expect(await screen.findByText(/permission denied: users\.manage/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revert operation' })).not.toBeInTheDocument();
+    expect(mockedRevertOperation).not.toHaveBeenCalled();
+  });
+
+  it('keeps offering Undo after a preflight that failed for another reason', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });
+    mockedGetUndoPreflight.mockRejectedValue(
+      Object.assign(new Error('internal error'), { response: { status: 500, data: {} } })
+    );
+
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Revert operation' }));
+
+    expect(await screen.findByText(/internal error/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revert operation' })).toBeInTheDocument();
   });
 
   it('states the restorable count and names the record-only rows in the dialog', async () => {

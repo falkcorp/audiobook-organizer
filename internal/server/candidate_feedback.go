@@ -1,7 +1,7 @@
 // file: internal/server/candidate_feedback.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 432e499b-32d5-468b-9799-b4874d2e0f55
-// last-edited: 2026-10-09
+// last-edited: 2026-10-26
 
 package server
 
@@ -145,8 +145,19 @@ func (s *Server) handleExportCandidateFeedback(c *gin.Context) {
 	c.Status(http.StatusOK)
 	enc := json.NewEncoder(c.Writer)
 	n := 0
+	// Who judged a candidate is an account's own data: a caller without
+	// users.manage reads the labels, but another judge's user id and username
+	// are blanked. The caller's own rows keep theirs.
+	seeAll := s.othersUserDataAccess()(c)
+	var self string
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok && u != nil {
+		self = u.ID
+	}
 	err := s.candidateFeedbackStore().Each(bookID, func(fb *database.CandidateFeedback) error {
 		n++
+		if !seeAll && (self == "" || fb.UserID != self) {
+			fb.UserID, fb.Username = "", ""
+		}
 		return enc.Encode(fb)
 	})
 	if err == nil {

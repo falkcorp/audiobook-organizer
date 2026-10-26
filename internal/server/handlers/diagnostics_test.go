@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_test.go
-// version: 1.4.3
+// version: 1.7.0
 // guid: 8ab4b825-05c3-4569-b450-0dca6b872771
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package handlers_test
 
@@ -153,7 +153,7 @@ func TestDiagnosticsHandler_DownloadExport_TerminalFailureIsNot202(t *testing.T)
 			store := databasemocks.NewMockStore(t)
 			msg := "collect books: pebble: closed"
 			store.EXPECT().GetOperationV2("op-x").Return(&database.OperationV2Row{
-				ID: "op-x", Status: status,
+				ID: "op-x", DefID: handlers.DiagnosticsExportDefID, Status: status,
 				ProgressMessage: "Generating export data",
 				ErrorMessage:    &msg,
 			}, nil)
@@ -173,7 +173,7 @@ func TestDiagnosticsHandler_DownloadExport_TerminalFailureIsNot202(t *testing.T)
 func TestDiagnosticsHandler_DownloadExport_NotCompleted_202(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "running", ProgressMessage: "still going"}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsExportDefID, Status: "running", ProgressMessage: "still going"}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-1/download", "",
@@ -196,7 +196,7 @@ func TestDiagnosticsHandler_DownloadExport_Completed_ServesZipFromV2Result(t *te
 	store := databasemocks.NewMockStore(t)
 	result := `{"zip_path":"` + zipPath + `"}`
 	store.EXPECT().GetOperationV2("op-done").
-		Return(&database.OperationV2Row{ID: "op-done", Status: "completed", ResultData: &result}, nil)
+		Return(&database.OperationV2Row{ID: "op-done", DefID: handlers.DiagnosticsExportDefID, Status: "completed", ResultData: &result}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/export/op-done/download", "",
@@ -312,7 +312,9 @@ func TestDiagnosticsHandler_SubmitAI_EnqueueFailureIs500(t *testing.T) {
 
 func TestDiagnosticsHandler_GetAIResults_NotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationV2("missing").Return(nil, assert.AnError)
+	// A row that does not exist is a 404; a store failure is a 500
+	// (TestAIRoutes_AStoreFailureIsA500AndAMissingRowA404).
+	store.EXPECT().GetOperationV2("missing").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/missing", "",
@@ -329,7 +331,7 @@ func TestDiagnosticsHandler_GetAIResults_ReadsTheV2Row(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions"}],"raw_responses":[{"custom_id":"c1"}]}`
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed", ResultData: new(rd)}, nil)
 	store.AssertNotCalled(t, "GetOperationByID", mock.Anything)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
@@ -349,7 +351,7 @@ func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-1").
 		Return(&database.OperationV2Row{
-			ID: "op-1", Status: "running", ProgressMessage: "Batch b-9: in_progress (poll 3/288)",
+			ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "running", ProgressMessage: "Batch b-9: in_progress (poll 3/288)",
 		}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
@@ -371,7 +373,7 @@ func TestDiagnosticsHandler_GetAIResults_NotCompleted_200(t *testing.T) {
 func TestDiagnosticsHandler_GetAIResults_CompletedWithNoResult_IsEmptyNot500(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed"}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed"}, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodGet, "/diagnostics/ai-results/op-1", "",
@@ -396,7 +398,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MissingFields_400(t *testing.T) {
 
 func TestDiagnosticsHandler_ApplySuggestions_OperationNotFound(t *testing.T) {
 	store := databasemocks.NewMockStore(t)
-	store.EXPECT().GetOperationV2("op-x").Return(nil, assert.AnError)
+	store.EXPECT().GetOperationV2("op-x").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
 	c, w := newDiagCtx(http.MethodPost, "/diagnostics/apply-suggestions",
@@ -412,7 +414,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersions(t *testing.T) {
 
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions","book_ids":["b1","b2"],"primary_id":"b1"}]}`
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed", ResultData: new(rd)}, nil)
 	mergeSvc.EXPECT().MergeBooks([]string{"b1", "b2"}, "b1").Return(nil, nil)
 
 	h := handlers.NewDiagnosticsHandler(store, mergeSvc, nil, nil, nil)
@@ -435,7 +437,7 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersionsReportsSiblingOperatio
 
 	rd := `{"suggestions":[{"id":"s1","action":"merge_versions","book_ids":["b1","b2"],"primary_id":"b1"}]}`
 	store.EXPECT().GetOperationV2("op-1").
-		Return(&database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: new(rd)}, nil)
+		Return(&database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed", ResultData: new(rd)}, nil)
 	mergeSvc.EXPECT().MergeBooks([]string{"b1", "b2"}, "b1").
 		Return(&merge.Result{PrimaryID: "b1", SiblingJournalID: "S1", SiblingOperationID: "op-sib"}, nil)
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -301,14 +301,19 @@ func (p *Plugin) ownerRedeemer(reporter sdk.Reporter) repairs.OwnerRedeemer {
 	if !ok {
 		return who
 	}
-	// ActorAuthMethod: a key is never the owner (owner decision
-	// 2026-10-07). Only the Repairs owner-apply handler enqueues with
-	// cf_access; an op enqueued any other way (POST /operations/v2 by the
-	// owner's own API key that read the token from GET /operations, a
-	// session, a future path that records the actor) carries another
-	// method or none, and is refused.
+	// OwnerApply: only the Repairs owner-apply handler marks its op
+	// (registry.WithOwnerApply), after the owner's own same-origin click, so an
+	// op enqueued any other way is refused. That includes the generic
+	// POST /operations/v2 start and its /:id/retry, which record the actor
+	// and how it signed in for every caller (servermiddleware.ActorOptions):
+	// the owner's own Cloudflare Access session on one of them carries
+	// cf_access, so the auth method alone is not proof of an owner-apply
+	// request, and params, which any caller of those routes can set (an
+	// owner grant token is readable from GET /operations), prove nothing.
+	// ActorAuthMethod: a key is never the owner (owner decision 2026-10-07),
+	// so the marked op must also have been enqueued under cf_access.
 	if row, err := reader.GetOperationV2(opID); err == nil && row != nil && row.ActorUserID != nil &&
-		row.ActorAuthMethod == repairs.OwnerAuthMethod &&
+		row.OwnerApply && row.ActorAuthMethod == repairs.OwnerAuthMethod &&
 		row.ManualRetryCount == 0 && row.ResumeCount == 0 {
 		who.ActorUserID = *row.ActorUserID
 	}
