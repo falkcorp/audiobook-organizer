@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/revert_retired_key_owner_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4a7d915-2e63-48b0-9f1d-5b8e3a07c162
 // last-edited: 2026-10-26
 
@@ -106,4 +106,30 @@ func TestRevertRepoint_LiveRowAtPathOutranksTheRetiredOwner(t *testing.T) {
 	require.False(t, got.Retired)
 	require.NotEqual(t, kRow, got.ID)
 	require.Zero(t, rec.retiredClaims, "the retired owner is only a last resort, never asked while a live row can take the key")
+}
+
+// A live iTunes row at the path is never handed the key by the revert, but it
+// still counts as a live row at the path: the key must not go back to the retired
+// owner while it is there (a retired row keeps a path key only while no live row
+// carries the path). The iTunes row is created between the repoint and the
+// revert, so the journal names the retired row K as the owner and the revert
+// finds K and the iTunes row together. The store's own refusal would keep the key
+// off K regardless, so the test pins that the revert never asks.
+func TestRevertRepoint_LiveITunesRowAtPathKeepsTheKeyFromTheRetiredOwner(t *testing.T) {
+	d, path, kRow, _, xBook, xRow := retiredKeyFixture(t)
+	was := repointOnto(t, d, xBook, xRow, path, false)
+
+	itBook := d.book(t, "I", "Knightfall", path, nil)
+	itRow := &database.BookFile{BookID: itBook, FilePath: path, FileSize: 500, Duration: 600, FileHash: "k", ITunesPersistentID: "TRK-KF"}
+	require.NoError(t, d.s.CreateBookFile(itRow))
+
+	rec := &retiredClaimRecorder{PebbleStore: d.s}
+	revertRepoint(t, d, rec, xBook, xRow, was)
+
+	got, err := d.s.GetBookFileByPathIncludingRetired(path)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, itRow.ID, got.ID, "the key stays with the live iTunes row")
+	require.NotEqual(t, kRow, got.ID)
+	require.Zero(t, rec.retiredClaims, "the retired owner is never asked while a live row carries the path")
 }

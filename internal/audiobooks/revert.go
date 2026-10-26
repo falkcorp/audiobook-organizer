@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.93.0
+// version: 1.94.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-26
 
@@ -2020,7 +2020,9 @@ func (rs *RevertService) revertBookFileRepoint(c *database.OperationChange) erro
 // as a last resort, through ClaimRetiredBookFilePathKey: a retired row keeps a
 // path key while no live row carries the path, so after a repoint took the key
 // from it, the revert gives it back and the single-row claim read
-// (GetBookFileByPathIncludingRetired) does not see the path as free.
+// (GetBookFileByPathIncludingRetired) does not see the path as free. While any
+// live row carries the path (an iTunes row included, which is never handed the
+// key but still counts) the key is not given back to the retired row.
 // The fallback never picks an iTunes row (a row or book iTunes id, a row
 // iTunes path), which it cannot tell was the owner; nor does anything act on
 // a path under books/itunes/**. With no eligible row the key stays dropped.
@@ -2047,6 +2049,11 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 	}
 	var owner, live, hidden []database.BookFile
 	var retiredOwner *database.BookFile
+	// liveAtPath is set when any non-retired row other than except carries the
+	// path, whether or not it is eligible for the key (an iTunes row never is).
+	// The retired fallback below must not run then: a retired row keeps a path
+	// key only while no live row carries the path.
+	liveAtPath := false
 	seen := map[string]bool{}
 	for i := range cands {
 		o := cands[i]
@@ -2061,6 +2068,7 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 			continue
 		}
 		seen[o.ID] = true
+		liveAtPath = true
 		b, err := rs.db.GetBookByID(o.BookID)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", o.BookID, err)
@@ -2085,11 +2093,11 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 			return nil
 		}
 	}
-	if retiredOwner == nil {
+	if retiredOwner == nil || liveAtPath {
 		return nil
 	}
-	// No non-retired row took the key: it goes back to the retired row that
-	// held it. A store that cannot claim for a retired row cannot hold one.
+	// No row at the path is live, so no non-retired row took the key: it goes
+	// back to the retired row that held it. A store that cannot claim for a retired row cannot hold one.
 	claimer, ok := database.AsCapability[database.RetiredPathKeyClaimer](rs.db)
 	if !ok {
 		return fmt.Errorf("re-index %s at %s: the store cannot hand a path key to a retired row", retiredOwner.ID, path)
