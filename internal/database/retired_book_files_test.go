@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
 // last-edited: 2026-10-26
 
@@ -158,11 +158,11 @@ func TestRetireBookFiles_RepointsRowsAndDeletesNone(t *testing.T) {
 			}
 			// The single-row twin sees the retired row in both modes, and is what
 			// the ownership fallback reads while memdb is not serving.
-			pathAny, err := fx.ps.GetBookFileByPathIncludingRetired("/lib/Gotham/ret/shell/01.mp3")
+			pathAny, err := fx.ps.GetBookFileByPathIncludingRetired("/lib/ret/shell/01.mp3")
 			require.NoError(t, err)
 			require.NotNil(t, pathAny)
 			require.Equal(t, x1.ID, pathAny.ID)
-			owners, err := BookFileRowsAtPath(fx.ps, "/lib/Gotham/ret/shell/01.mp3")
+			owners, err := BookFileRowsAtPath(fx.ps, "/lib/ret/shell/01.mp3")
 			require.NoError(t, err)
 			require.Len(t, owners, 1, "the scanner's ownership lookup counts the retired row in both modes (SF2)")
 			require.Equal(t, x1.ID, owners[0].ID)
