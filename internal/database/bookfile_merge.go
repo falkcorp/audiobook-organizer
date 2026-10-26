@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_merge.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0f6bdcdf-d13a-46a8-90f7-5d62bbccd3a8
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -273,7 +273,9 @@ var bookFileFieldClasses = map[string]bookFileFieldRule{
 	// dropped when the audio changes (and IntroTimeoutHash no longer matches).
 	"IntroTimeouts":    preserveAudio,
 	"IntroTimeoutHash": preserveAudio,
-	"IntroMeta":        {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
+	// The run that counted the latest strike; it travels with the strikes.
+	"IntroTimeoutRunID": preserveAudio,
+	"IntroMeta":         {class: bfPreserveAlways, derived: derivedAudio}, // memdb-stripped
 }
 
 // bookFileRulesByIndex is bookFileFieldClasses resolved to BookFile struct

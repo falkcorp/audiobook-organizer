@@ -388,6 +388,7 @@ export interface BookFileCore {
    */
   intro_timeouts?: number /* int */;
   intro_timeout_hash?: string;
+  intro_timeout_run_id?: string;
   /**
    * Per-file scan cache. RETAINED rather than stripped: the stripped set is the
    * heavy fingerprint/transcript strings, and these are three small scalars that

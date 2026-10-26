@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.124.0
+// version: 2.125.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -1228,6 +1228,12 @@ type BookFile struct {
 	// with the rest of the result by ClearBookFileIntro.
 	IntroTimeouts    int    `json:"intro_timeouts,omitempty"`
 	IntroTimeoutHash string `json:"intro_timeout_hash,omitempty"`
+	// IntroTimeoutRunID is the run that counted the latest strike. A strike is
+	// one per (file, run): a run that sees the same file time out again (a
+	// retry round, or a worker that stalls on everything) is not a second
+	// piece of evidence about the audio, so a repeat from the same run is
+	// refused rather than counted.
+	IntroTimeoutRunID string `json:"intro_timeout_run_id,omitempty"`
 	// IntroMeta is how the clip was made and which model heard it. Not queried by
 	// any filter, so stripBookFileForMemdb clears it like IntroTranscription.
 	IntroMeta *IntroMeta `json:"intro_meta,omitempty"`
