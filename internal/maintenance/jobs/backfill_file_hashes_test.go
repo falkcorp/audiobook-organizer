@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package jobs_test
 
@@ -20,6 +20,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// storeHashVia is a ModifyBookFile stub over files: the job stores a hash
+// through ModifyBookFile (conditionally, on the row still matching), so it runs
+// the callback on a row built from the matching file and reports the hash it
+// would have stored to onStore.
+func storeHashVia(files []database.BookFileCore, onStore func(id, hash string)) func(string, string, func(*database.BookFile) error) (*database.BookFile, error) {
+	return func(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+		for _, c := range files {
+			if c.ID != fileID {
+				continue
+			}
+			row := database.BookFile{ID: c.ID, BookID: c.BookID, FilePath: c.FilePath, FileSize: c.FileSize, LastScanMtime: c.LastScanMtime, FileHash: c.FileHash}
+			if err := fn(&row); err != nil {
+				return &row, nil
+			}
+			onStore(fileID, row.FileHash)
+			return &row, nil
+		}
+		return nil, nil
+	}
+}
 
 func TestBackfillFileHashesJob_Registered(t *testing.T) {
 	assertJobRegistered(t, "backfill-file-hashes")
@@ -55,12 +76,11 @@ func TestBackfillFileHashesJob_BookIDsScope(t *testing.T) {
 	hashed := map[string]bool{}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc: func(id, h string) error {
+		ModifyBookFileFunc: storeHashVia(files, func(id, h string) {
 			mu.Lock()
 			defer mu.Unlock()
 			hashed[id] = true
-			return nil
-		},
+		}),
 	}
 	j, err := maintenance.Get("backfill-file-hashes")
 	require.NoError(t, err)
@@ -84,13 +104,13 @@ func TestBackfillFileHashesJob_SkipsAlreadyHashed(t *testing.T) {
 	var setCalled bool
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc:     func(id, h string) error { setCalled = true; return nil },
+		ModifyBookFileFunc:      storeHashVia(files, func(id, h string) { setCalled = true }),
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
 	require.NoError(t, err)
 	require.NoError(t, j.Run(context.Background(), store, &noopReporter{}, false))
-	assert.False(t, setCalled, "SetBookFileHash must not be called for already-hashed files")
+	assert.False(t, setCalled, "no hash may be stored for already-hashed files")
 }
 
 func TestBackfillFileHashesJob_HashesNewFile(t *testing.T) {
@@ -109,7 +129,7 @@ func TestBackfillFileHashesJob_HashesNewFile(t *testing.T) {
 	var gotHash string
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc:     func(id, h string) error { gotHash = h; return nil },
+		ModifyBookFileFunc:      storeHashVia(files, func(id, h string) { gotHash = h }),
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
@@ -128,13 +148,13 @@ func TestBackfillFileHashesJob_DryRun_SkipsWrite(t *testing.T) {
 	var setCalled bool
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc:     func(id, h string) error { setCalled = true; return nil },
+		ModifyBookFileFunc:      storeHashVia(files, func(id, h string) { setCalled = true }),
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
 	require.NoError(t, err)
 	require.NoError(t, j.Run(context.Background(), store, &noopReporter{}, true /* dryRun */))
-	assert.False(t, setCalled, "dry_run=true: SetBookFileHash must not be called")
+	assert.False(t, setCalled, "dry_run=true: no hash may be stored")
 }
 
 func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
@@ -143,13 +163,13 @@ func TestBackfillFileHashesJob_MissingFile_Warns(t *testing.T) {
 	rep := &noopReporter{}
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc:     func(id, h string) error { setCalled = true; return nil },
+		ModifyBookFileFunc:      storeHashVia(files, func(id, h string) { setCalled = true }),
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")
 	require.NoError(t, err)
 	require.NoError(t, j.Run(context.Background(), store, rep, false))
-	assert.False(t, setCalled, "SetBookFileHash must not be called when file does not exist")
+	assert.False(t, setCalled, "no hash may be stored when file does not exist")
 	assert.NotEmpty(t, rep.logs, "expected a warning log for the missing file")
 }
 
@@ -176,15 +196,14 @@ func TestBackfillFileHashesJob_ParallelHashesAll(t *testing.T) {
 	got := make(map[string]string, n)
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
-		SetBookFileHashFunc: func(id, h string) error {
+		ModifyBookFileFunc: storeHashVia(files, func(id, h string) {
 			mu.Lock()
 			defer mu.Unlock()
 			if _, dup := got[id]; dup {
-				t.Errorf("SetBookFileHash called twice for %s", id)
+				t.Errorf("hash stored twice for %s", id)
 			}
 			got[id] = h
-			return nil
-		},
+		}),
 	}
 
 	j, err := maintenance.Get("backfill-file-hashes")

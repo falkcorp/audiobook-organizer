@@ -596,6 +596,7 @@ type MockStore struct {
 	UpsertBookFileFunc                      func(file *BookFile) error
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	ModifyBookFileDeferAggregatesFunc       func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	BatchUpsertBookFilesKeepPathsFunc       func(files []*BookFile) error
 	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
@@ -3551,6 +3552,19 @@ func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) err
 		return &row, nil
 	}
 	return nil, nil
+}
+
+// ModifyBookFileDeferAggregates uses ModifyBookFileDeferAggregatesFunc when set;
+// otherwise it behaves as ModifyBookFile (the mock keeps no aggregates, so there
+// is nothing to defer), so a test that only stubs ModifyBookFileFunc keeps working.
+// It is not part of Store (TestStoreFlattenedWidth: Store may only narrow); the
+// mock has it so a job that resolves the capability with database.AsCapability
+// (backfill-file-hashes) finds it on a MockStore, as it does on a *PebbleStore.
+func (m *MockStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	if m.ModifyBookFileDeferAggregatesFunc != nil {
+		return m.ModifyBookFileDeferAggregatesFunc(bookID, fileID, fn)
+	}
+	return m.ModifyBookFile(bookID, fileID, fn)
 }
 
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {
