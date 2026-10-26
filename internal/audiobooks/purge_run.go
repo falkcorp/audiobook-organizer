@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
 // last-edited: 2026-10-25
 
@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -78,6 +79,11 @@ type purgeEnv struct {
 	// files collects the removals a delete_files pass decides on, to be made once
 	// every book is decided (removeDeferredFiles). nil: not a delete_files pass.
 	files *pendingFiles
+	// rootReady: the pass has checked the library root (libraryRootReady) at its
+	// start, so decideFile need not, per book. Only RunPurge sets it, for a real
+	// delete_files pass; the single-book paths leave it false and decideFile
+	// checks for each.
+	rootReady bool
 	// lockHeld is set by an interactive caller that already holds the merge
 	// lock (merge.TryLockMergeRMWWithin, so it can answer ErrMergeBusy instead
 	// of hanging behind a combine): purgeIfStateless and purgeCarryingState
@@ -190,7 +196,7 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 // state check (which, as in the real pass, either carries to a listed sibling,
 // or keeps the book). It answers what the real pass would do with this book
 // right now.
-func (svc *AudiobookService) previewOne(book *database.Book, env purgeEnv) purgeOutcome {
+func (svc *AudiobookService) previewOne(book *database.Book, env purgeEnv, deleteFiles bool) purgeOutcome {
 	if o, blocked := svc.purgeGate(book, env); blocked {
 		return o
 	}
@@ -199,7 +205,7 @@ func (svc *AudiobookService) previewOne(book *database.Book, env purgeEnv) purge
 	case err != nil:
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: would not be purged: %s: %v", book.ID, stateCheckFailureReason(err), err)}}
 	case !has:
-		return svc.previewPurged(book, purgePurged)
+		return svc.previewPurged(book, purgePurged, deleteFiles)
 	}
 	sibling, err := svc.liveSiblingFor(book)
 	switch {
@@ -208,7 +214,7 @@ func (svc *AudiobookService) previewOne(book *database.Book, env purgeEnv) purge
 	case sibling == "":
 		return purgeOutcome{kind: purgeKeptHasProgress}
 	}
-	return svc.previewPurged(book, purgeCarried)
+	return svc.previewPurged(book, purgeCarried, deleteFiles)
 }
 
 // previewPurged is the outcome of a book the preview says would be purged
@@ -216,8 +222,17 @@ func (svc *AudiobookService) previewOne(book *database.Book, env purgeEnv) purge
 // its file when the purge is asked to delete files. It is worked out whether or
 // not the preview was asked for delete_files: the checkbox can change between
 // the preview and the click, and the dialog shows the list only when it is on.
-func (svc *AudiobookService) previewPurged(book *database.Book, kind purgeKind) purgeOutcome {
+//
+// A preview asked for delete_files counts a book whose file cannot be decided
+// (fileUndecided) as failed, as the run does (decideFile): the book stays in the
+// trash on that run, so the two must agree.
+func (svc *AudiobookService) previewPurged(book *database.Book, kind purgeKind, deleteFiles bool) purgeOutcome {
 	v := svc.planPurgeFile(book)
+	if deleteFiles {
+		if o := fileUndecided(book, v); o != nil {
+			return *o
+		}
+	}
 	return purgeOutcome{kind: kind, wouldRemove: v.remove, wouldKeepFile: v.protected || v.keptErr != nil}
 }
 
@@ -267,6 +282,18 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	var replayed int
 	var replayErrs []string
 	if !opts.DryRun && opts.DeleteFiles {
+		// Every part of a delete_files pass reads "no file at this path" as "the
+		// file is already gone", so it runs only with a library root that is
+		// there (libraryRootReady). Refused whole, with every journal record kept:
+		// the books stay in the trash, and the next pass tries again.
+		if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+			return &PurgeResult{
+				Errors:        []string{},
+				StoppedEarly:  true,
+				StopReason:    fmt.Sprintf("purge refused: %v", rootErr),
+				TrashedBefore: opts.TrashedBefore,
+			}, fmt.Errorf("purge refused: %w", rootErr)
+		}
 		replayed, replayErrs = svc.replayPendingFileRemovals()
 		if replayed > 0 || len(replayErrs) > 0 {
 			singleLog.Info("purge: replayed the file removals an earlier pass left pending: %d removed, %d error line(s)", replayed, len(replayErrs))
@@ -382,6 +409,11 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 			result.Errors = append(result.Errors, fmt.Sprintf("could not count the file removals an earlier pass left pending: %v", cErr))
 		}
 		result.FilesPendingFromEarlierPass = n
+		// A purge with delete_files is refused while the root is not ready; say
+		// so on the preview, where the owner decides whether to run it.
+		if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("a purge with delete_files would be refused: %v", rootErr))
+		}
 	}
 	// Users, combine journals and the other undo records are read once per
 	// pass, not once per book.
@@ -402,6 +434,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		env.preview = preview
 		if !opts.DryRun && opts.DeleteFiles {
 			env.files = &pendingFiles{preview: preview}
+			env.rootReady = true // checked above, before the replay
 		}
 	}
 
@@ -447,7 +480,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 				}
 				var out purgeOutcome
 				if opts.DryRun {
-					out = svc.previewOne(&part[i], env)
+					out = svc.previewOne(&part[i], env, opts.DeleteFiles)
 				} else {
 					out = svc.purgeOne(&part[i], opts.DeleteFiles, env)
 				}

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-25
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -385,7 +386,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	if deleteFiles {
 		var undecided *purgeOutcome
 		if plan, undecided = svc.decideFile(book, env); undecided != nil {
-			return *undecided
+			return svc.undecidedOutcome(book, env, *undecided)
 		}
 	}
 	// Step 0b: a book a user still has listening state on, checked at the
@@ -474,8 +475,10 @@ type statelessPurge struct {
 //
 // The hold is not counted (merge.LockMergeRMWBookRowsOnly): everything it
 // writes is the book row's delete, which the book change log records, plus
-// tombstones nothing snapshots, and it never touches a book_file row (a book
-// that owns one is refused, here and by DeleteBook). A counted hold per
+// tombstones nothing snapshots, and the journal record of the book's file
+// removal (purge_pending_journal.go: purge_pending_file: keys, one synced write
+// per purged file, which nothing that snapshots reads), and it never touches a
+// book_file row (a book that owns one is refused, here and by DeleteBook). A counted hold per
 // trashed book made the chapter-fragment fixer list the whole library again
 // before nearly every row of an apply running beside the purge (see
 // merge.MergeLockAcquisitions). Anything added under this hold that writes a
@@ -705,6 +708,11 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book, plan *filePlan)
 	}
 	journaled := false
 	if plan != nil && plan.journal {
+		// Shared across the record's write and the delete that follows: a replay
+		// (exclusive) must not read the record while its book is still in the
+		// trash (see AudiobookService.pendingMu).
+		svc.pendingMu.RLock()
+		defer svc.pendingMu.RUnlock()
 		if err := svc.journalPendingFile(book.ID, plan.v); err != nil {
 			return fmt.Errorf("not purged: the removal of its file %s cannot be recorded, so a crash after the delete would leave it on disk: %w", plan.v.remove, err)
 		}
@@ -795,11 +803,7 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool, 
 			// nothing to remember for it.
 			files.add(book.ID, v)
 		case v.remove != "":
-			if twinErr := svc.otherBookRowAt(v.remove); twinErr != nil {
-				errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, twinErr))
-				break
-			}
-			filesDeleted, errs = removePurgedFile(book.ID, v, config.Snapshot().RootDir)
+			filesDeleted, errs = svc.removeSingleBookFile(book, v, plan)
 		}
 		// Nothing to remove and nothing kept: the file is already gone (or
 		// the book names none, or the directory is not empty), which is fine.
@@ -808,6 +812,72 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool, 
 	// Step 4: Clean up tombstone (best-effort — sweeper handles failures)
 	_ = svc.store.DeleteBookTombstone(book.ID)
 	return filesDeleted, errs
+}
+
+// removeSingleBookFile is the removal of a single-book purge's file (no pass:
+// "Purge now", batch hard delete, discard progress and purge), which happens
+// right after the row delete. v is the verdict purgeFinish acts on: a decision
+// made before the delete (plan.isFor), or made just now.
+//
+// A decision made before the delete is stale by now. The row delete is preceded
+// by the undo hold, the listening-state probe and, with state, the carry, each
+// a synced store read or write, and the merge lock the caller holds does not
+// exclude the scanner: a scan can attach this very path to a live book as a track
+// (a book_file row, which otherBookRowAt does not read) or put another file at
+// it. So the path is planned again and removed only when that says remove and it
+// is still the file that was decided (fileIdentity), exactly as a pass does at
+// the end (removeDeferredFile).
+//
+// The removal was journaled with the row delete (purgeDeleteRow), so what is
+// decided here is also settled in the journal: forgotten when the file is
+// removed, gone, or kept for a reason that will not change, and left in place
+// when it failed for one that may pass (an unlink error, a failed lookup, a
+// library root that is not up), for the next pass's replay.
+func (svc *AudiobookService) removeSingleBookFile(book *database.Book, v purgeFileVerdict, plan *filePlan) (removed int, errs []string) {
+	journaled := plan != nil && plan.journal
+	// settle forgets the journal record; its failure is a line to report.
+	settle := func() []string {
+		if !journaled {
+			return nil
+		}
+		if err := svc.forgetPendingFiles([]string{book.ID}); err != nil {
+			return []string{fmt.Sprintf("%s: the record of its file removal could not be cleared (a later pass will re-decide it, which removes nothing twice): %v", book.ID, err)}
+		}
+		return nil
+	}
+	if plan.isFor(book) {
+		if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+			return 0, []string{fmt.Sprintf("%s: book purged, file kept (its record is kept for a later pass): %v", book.ID, rootErr)}
+		}
+		now := svc.planPurgeFile(book)
+		switch {
+		case now.protected:
+			return 0, settle()
+		case now.keptErr != nil:
+			line := fmt.Sprintf("%s: book purged, file kept: %v", book.ID, now.keptErr)
+			if errors.Is(now.keptErr, errPathLookupFailed) && !errors.Is(now.keptErr, errPathUnresolvable) {
+				return 0, []string{line} // may pass: the record stays
+			}
+			return 0, append(settle(), line)
+		case now.remove == "":
+			return 0, settle() // gone since, or a directory that is not empty now
+		case now.isDir != v.isDir || !v.id.matches(now.id, v.isDir):
+			return 0, append(settle(), fmt.Sprintf("%s: book purged, file kept: %s is not the file this purge decided to remove (it was replaced or changed since)", book.ID, v.remove))
+		}
+		v = now
+	}
+	if twinErr := svc.otherBookRowAt(v.remove); twinErr != nil {
+		line := fmt.Sprintf("%s: book purged, file kept: %v", book.ID, twinErr)
+		if errors.Is(twinErr, errPathLookupFailed) {
+			return 0, []string{line}
+		}
+		return 0, append(settle(), line)
+	}
+	removed, errs = removePurgedFile(book.ID, v, config.Snapshot().RootDir)
+	if len(errs) == 0 {
+		errs = settle()
+	}
+	return removed, errs
 }
 
 // purgeFileVerdict is what a purge with delete_files does about a purged
@@ -858,7 +928,16 @@ func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict
 	switch {
 	case pathIsGone(statErr):
 		// ENOENT, or ENOTDIR (a parent is not a directory, so the path cannot
-		// exist): the file is already gone, which is fine.
+		// exist): the file is already gone, which is fine. Except that ENOTDIR is
+		// also what a trailing separator on a regular file answers ("file/"), while
+		// the file is there: a path that names a file once cleaned is not gone.
+		// Kept and reported (not removed: the removal path is not the file's name),
+		// never silently read as gone.
+		if clean := filepath.Clean(book.FilePath); clean != book.FilePath {
+			if cinfo, cerr := os.Stat(clean); cerr == nil && !cinfo.IsDir() {
+				return purgeFileVerdict{keptErr: fmt.Errorf("%s has a trailing path separator but names a file, so it is not removed; the file stays at %s", book.FilePath, clean)}
+			}
+		}
 		return purgeFileVerdict{}
 	case statErr != nil:
 		// Any other failure (EIO, EACCES on a parent, ESTALE) says nothing
@@ -918,6 +997,15 @@ func purgePathInsideRoot(path, root string) error {
 		return fmt.Errorf("%s is outside the library root %s", path, root)
 	}
 	if _, err := pathvalidation.SecureJoinResolved(cleanRoot, rel); err != nil {
+		// A path that escapes the root (ErrPathTraversal, ErrAbsolutePathNotAllowed)
+		// is a definite refusal, and a root that does not exist is the library not
+		// being there (libraryRootReady's to catch). Anything else is the
+		// filesystem failing to answer (EIO, ESTALE, EACCES resolving a link): it
+		// may pass, so it is a failed lookup, and a book is not purged on it
+		// (decideFile) with its file left with no record.
+		if !errors.Is(err, pathvalidation.ErrPathTraversal) && !errors.Is(err, pathvalidation.ErrAbsolutePathNotAllowed) && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s cannot be resolved inside the library root %s: %w: %w", path, root, errPathLookupFailed, err)
+		}
 		return fmt.Errorf("%s does not resolve inside the library root %s: %w", path, root, err)
 	}
 	return nil

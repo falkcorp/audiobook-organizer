@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.14.2
+// version: 1.15.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-25
 
@@ -650,6 +650,11 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		return nil, fmt.Errorf("the store cannot clear listening state")
 	}
 
+	// Read once: the decision about the file below, the delete and the removal
+	// must all be about the same setting.
+	deleteFiles := config.AppConfig.PurgeSoftDeletedDeleteFiles
+	var plan *filePlan
+
 	res := &DiscardProgressResult{BookID: id, Title: book.Title}
 	if info, perr := svc.TrashProgress(ctx, []string{id}); perr == nil {
 		res.progress = info[id]
@@ -695,16 +700,29 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 			return fmt.Errorf("discard progress and purge %s: %w", id, ErrPurgeUndoPossible)
 		}
 		book = cur
+		// With delete_files, what to do about the book's file is decided HERE,
+		// before any state is cleared and before the row goes, as a pass does
+		// (purgeOne, decideFile): the row delete is the point of no return, and a
+		// lookup that fails after it leaves the file with no row and no record. An
+		// undecidable file refuses the whole action, with nothing discarded; the
+		// removal is journaled with the row delete (purgeDeleteRow).
+		if deleteFiles {
+			p, undecided := svc.decideFile(cur, purgeEnv{})
+			if undecided != nil {
+				return fmt.Errorf("discard progress and purge %s refused, nothing discarded: %s", id, strings.Join(undecided.errs, "; "))
+			}
+			plan = p
+		}
 		return nil
 	}
 	cleared, err := merge.DiscardUserStateThenHardDeleteLocked(merger, id, precheck, func() error {
-		return svc.purgeDeleteRow(book, nil)
+		return svc.purgeDeleteRow(book, plan)
 	})
 	res.UsersCleared, res.BookmarksCleared = cleared.Users, cleared.Bookmarks
 	if err != nil {
 		return nil, err
 	}
-	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles, nil, nil)
+	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, deleteFiles, nil, plan)
 	svc.InvalidateListCache()
 	release()
 

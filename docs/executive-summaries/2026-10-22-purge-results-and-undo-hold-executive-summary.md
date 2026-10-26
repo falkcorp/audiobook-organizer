@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.13.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-25 -->
 
@@ -181,10 +181,28 @@ undo above. Books that own files are still never purged.
   "the file is gone": the file stays and the check is retried on the next purge.
   The preview says how many leftover files are waiting, and the result counts the
   ones it removed separately from the books it purged. When there is nothing to
-  purge but leftover files are waiting, the purge window offers "Finish removing
-  N files", so they never sit on disk with nothing to remove them. A purge that
-  cannot tell whether a file is there now leaves the book in the trash to try
-  again next time, instead of deleting the book and losing track of the file.
+  purge but leftover files are waiting, the purge button on the library page
+  stays usable and says how many files are left, and the purge window offers
+  "Finish removing N files". The server also carries out any leftover removals
+  once when it starts, so a crash or a restart does not leave them waiting for
+  someone to ask. A purge that cannot tell whether a file is there now leaves
+  the book in the trash to try again next time, instead of deleting the book and
+  losing track of the file.
+- A purge with "Also delete files" now refuses to run, and the start-up
+  clean-up waits, while the library folder is not ready (not set, missing, or
+  completely empty). A network or ZFS share that has not mounted yet looks like
+  an empty folder, and every file would have read as "already gone"; nothing
+  is removed and every note of a pending removal is kept. The start-up clean-up
+  retries for about fifteen minutes, then gives up with an error and tries again
+  at the next purge. The price: a library that really is empty cannot be purged
+  with "Also delete files" until it holds at least one entry.
+- Purging, or discarding progress and purging, a single book from its own page
+  now follows the same order as the big purge: it decides about the file first
+  and refuses with the reason if it cannot, writes down the file to remove
+  before it deletes the book, and checks the file again just before removing
+  it, so a file that another book has taken over, or that was replaced in the
+  meantime, is left alone. A failed removal keeps its note so a later purge
+  finishes it.
 - The nightly purge used to report success even when it had refused to run (a
   damaged undo record, or the operation journal not ready) or had stopped
   halfway. It now fails visibly with the reason and logs the same full summary

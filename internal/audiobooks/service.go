@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.58.2
+// version: 1.59.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-25
 
@@ -236,6 +236,12 @@ type AudiobookService struct {
 	// preview decided. In memory only.
 	purgePreviewMu sync.Mutex
 	purgePreviews  []*purgePreviewRecord
+	// pendingMu orders the writers and the replayers of the journal of pending
+	// file removals (purge_pending_journal.go): a purge holds it shared across a
+	// record's write and the row delete that follows (purgeDeleteRow), a replay
+	// holds it exclusively, so a replay never sees a record whose book is still
+	// in the trash because its purge is half way through.
+	pendingMu sync.RWMutex
 	// runtimeIdx caches canonical book runtimes for the duration: list
 	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
 	// stored Book.Duration aggregate.

@@ -871,6 +871,59 @@ func (_c *MockAudiobookService_ListAllUserTags_Call) RunAndReturn(run func() ([]
 	return _c
 }
 
+// PendingFileRemovals provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) PendingFileRemovals() (int, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for PendingFileRemovals")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (int, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() int); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_PendingFileRemovals_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PendingFileRemovals'
+type MockAudiobookService_PendingFileRemovals_Call struct {
+	*mock.Call
+}
+
+// PendingFileRemovals is a helper method to define mock.On call
+func (_e *MockAudiobookService_Expecter) PendingFileRemovals() *MockAudiobookService_PendingFileRemovals_Call {
+	return &MockAudiobookService_PendingFileRemovals_Call{Call: _e.mock.On("PendingFileRemovals")}
+}
+
+func (_c *MockAudiobookService_PendingFileRemovals_Call) Run(run func()) *MockAudiobookService_PendingFileRemovals_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_PendingFileRemovals_Call) Return(n int, err error) *MockAudiobookService_PendingFileRemovals_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_PendingFileRemovals_Call) RunAndReturn(run func() (int, error)) *MockAudiobookService_PendingFileRemovals_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RestoreAudiobook provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) RestoreAudiobook(ctx context.Context, id string) (*database.Book, error) {
 	ret := _mock.Called(ctx, id)

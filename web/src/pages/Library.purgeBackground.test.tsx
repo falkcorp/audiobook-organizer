@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.purgeBackground.test.tsx
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7e1c4b92-3a68-4d05-9f27-b84d0c6a1e53
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 /**
  * Library "Purge Deleted": the purge is a background operation. Clicking
@@ -13,7 +13,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
 import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
@@ -256,5 +256,73 @@ describe('purge deleted in the background', () => {
 
     finish({ attempted: 3, purged: 2, files_deleted: 0, kept_undo_possible: 1, errors: [] });
     await waitFor(() => expect(lastToast().message).toMatch(/Purged 2 of 3/));
+  });
+
+  describe('with the trash empty', () => {
+    const renderLibrary = () =>
+      render(
+        <MemoryRouter>
+          <ToastProvider>
+            <OperationTrackerProvider>
+              <Library />
+            </OperationTrackerProvider>
+          </ToastProvider>
+        </MemoryRouter>
+      );
+
+    afterEach(() => {
+      vi.mocked(api.getSoftDeletedBooks).mockResolvedValue({
+        items: [],
+        count: 3,
+      } as never);
+    });
+
+    it('Purge Deleted stays reachable while an earlier pass left file removals pending, and finishes them', async () => {
+      vi.mocked(api.getSoftDeletedBooks).mockResolvedValue({
+        items: [],
+        count: 0,
+        purgeBreakdown: null,
+        pendingFileRemovals: 2,
+      } as never);
+      vi.mocked(api.awaitPurgeResult).mockResolvedValueOnce({
+        ...preview,
+        attempted: 0,
+        purgeable: 0,
+        kept_undo_possible: 0,
+        files_pending_from_earlier_pass: 2,
+      } as never);
+      const user = userEvent.setup();
+      renderLibrary();
+      const button = await screen.findByRole('button', { name: /purge deleted/i });
+      expect(button).toBeEnabled();
+      expect(button).toHaveTextContent('2 files left');
+      await user.click(button);
+      expect(await screen.findByRole('button', { name: 'Finish removing 2 files' })).toBeEnabled();
+    });
+
+    it('Purge Deleted is disabled when the trash is empty and nothing is pending', async () => {
+      vi.mocked(api.getSoftDeletedBooks).mockResolvedValue({
+        items: [],
+        count: 0,
+        purgeBreakdown: null,
+        pendingFileRemovals: 0,
+      } as never);
+      renderLibrary();
+      const button = await screen.findByRole('button', { name: /purge deleted/i });
+      await waitFor(() => expect(button).toBeDisabled());
+    });
+
+    it('Purge Deleted stays enabled when the server could not count the pending removals', async () => {
+      vi.mocked(api.getSoftDeletedBooks).mockResolvedValue({
+        items: [],
+        count: 0,
+        purgeBreakdown: null,
+        pendingFileRemovals: null,
+      } as never);
+      renderLibrary();
+      const button = await screen.findByRole('button', { name: /purge deleted/i });
+      await waitFor(() => expect(vi.mocked(api.getSoftDeletedBooks)).toHaveBeenCalled());
+      expect(button).toBeEnabled();
+    });
   });
 });

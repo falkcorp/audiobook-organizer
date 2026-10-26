@@ -1,7 +1,7 @@
 // file: internal/merge/serialize.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b1e7d4a9-2c63-4f81-9a05-6d3e2f0c7b48
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package merge
 
@@ -106,11 +106,14 @@ func (m *countedMutex) Unlock() { m.mu.Unlock() }
 // holder that may move, create or rewrite a file row, or that writes anything
 // else a counter consumer reads without logging it, must count its hold
 // (LockMergeRMW). Writes no consumer reads (a book tombstone snapshot, an
-// external-ID tombstone) do not matter.
+// external-ID tombstone, the purge's pending-file-removal journal record) do not
+// matter.
 //
 // The trash purge is the one uncounted holder: per trashed book it re-reads
 // the row, checks listening state, and deletes the row (DeleteBook, logged),
-// writing a tombstone snapshot and external-ID tombstones beside it, and it
+// writing a tombstone snapshot, external-ID tombstones and, with delete_files,
+// the journal record of the file's removal (purge_pending_file: key, one synced
+// write per purged file; no snapshot reads those keys) beside it, and it
 // never touches a file row (it refuses a book that still owns any:
 // database.ErrBookOwnsFiles). Counted, it bumped this once per trashed book,
 // so a purge running beside a fixer apply made the fixer list the whole

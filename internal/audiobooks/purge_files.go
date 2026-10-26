@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-25
 
@@ -76,12 +76,12 @@ type pendingFile struct {
 	id         fileIdentity
 	idConflict bool
 	bookIDs    []string
-	// fromJournal: the entry was read back from the journal (readPendingFiles),
-	// with the attempts a path that cannot be resolved has used so far and the
-	// time the first record was written.
-	fromJournal bool
-	attempts    int
-	recordedAt  time.Time
+	// attempts is how many passes a path that cannot be resolved has used so far
+	// (the largest count among its journal records), and recordedAt the time the
+	// first record was written. Both are read back from the journal
+	// (readPendingFiles); an entry a pass made itself starts at zero.
+	attempts   int
+	recordedAt time.Time
 }
 
 // pendingFiles collects the removals a purge pass decided on. Workers add to it
@@ -106,8 +106,8 @@ type pendingFiles struct {
 	byPath map[string]*pendingFile
 }
 
-// markJournaled notes that the entry for path was read from the journal, keeping
-// the largest attempt count and the earliest write time of its records.
+// markJournaled notes what the journal record of path says, keeping the largest
+// attempt count and the earliest write time of its records.
 func (p *pendingFiles) markJournaled(path string, attempts int, recordedAt time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -115,7 +115,6 @@ func (p *pendingFiles) markJournaled(path string, attempts int, recordedAt time.
 	if f == nil {
 		return
 	}
-	f.fromJournal = true
 	f.attempts = max(f.attempts, attempts)
 	if f.recordedAt.IsZero() || (!recordedAt.IsZero() && recordedAt.Before(f.recordedAt)) {
 		f.recordedAt = recordedAt
@@ -169,7 +168,9 @@ func removePurgedFile(bookID string, v purgeFileVerdict, root string) (removed i
 	// Single-file book
 	if err := os.Remove(v.remove); err != nil && !os.IsNotExist(err) {
 		// The row is gone and so is its tombstone (purgeFinish): the file is
-		// left on disk, and a purge pass remembers the removal and retries it
+		// left on disk. Its removal was journaled before the row went
+		// (purgeDeleteRow), whether the purge was a pass or a single book, and the
+		// caller keeps that record when this fails, so a later pass retries it
 		// (purge_pending_journal.go).
 		errs = append(errs, fmt.Sprintf("%s: book purged, but its file could not be removed: %v", bookID, err))
 	} else if err == nil {
@@ -269,6 +270,14 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 		return 0, nil
 	}
 	root := config.Snapshot().RootDir
+	// Every "not there" below reads as "already gone" and settles its record, so
+	// with the library root not up (an unmounted library is an empty directory)
+	// nothing is decided and every record is kept for a later pass
+	// (libraryRootReady). The pass's own entries are among them: it checked at
+	// its start, and a mount lost since is caught here.
+	if rootErr := libraryRootReady(root); rootErr != nil {
+		return 0, []string{fmt.Sprintf("%d file removal(s) not carried out, their records kept for a later pass: %v", len(pending), rootErr)}
+	}
 	type outcome struct {
 		removed int
 		errs    []string
@@ -294,7 +303,9 @@ func (svc *AudiobookService) removeDeferredFiles(files *pendingFiles, preview *p
 		errs = append(errs, out[i].errs...)
 		if !out[i].retry {
 			settled = append(settled, f.bookIDs...)
-		} else if out[i].bump && f.fromJournal {
+		} else if out[i].bump {
+			// Counted for the pass's own entry too: its record was journaled with
+			// no attempts used, and this pass is the first to try it.
 			if err := svc.recordUnresolvableAttempt(f); err != nil {
 				errs = append(errs, fmt.Sprintf("could not count this pass against the pending removal of %s: %v", f.path, err))
 			}

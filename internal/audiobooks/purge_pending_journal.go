@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_pending_journal.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b2d8e60-1c47-4a93-b0f5-9e3a7d1c4826
 // last-edited: 2026-10-25
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -58,6 +59,7 @@ const earlierPassLabel = "from an earlier pass: "
 // pendingFileKV is the raw key surface the journal lives in, asserted on the
 // store rather than widening audiobookStore (the way revert_settle.go does it).
 type pendingFileKV interface {
+	GetRaw(key string) ([]byte, error)
 	SetRaw(key string, value []byte) error
 	DeleteRawBatch(keys []string) error
 	ScanPrefixPage(prefix, after string, limit int) (pairs []database.KVPair, next string, err error)
@@ -91,20 +93,38 @@ func (svc *AudiobookService) journalPendingFile(bookID string, v purgeFileVerdic
 	return nil
 }
 
-// recordUnresolvableAttempt rewrites the journal records of f (read from the
-// journal) with one more attempt used, keeping the identity and the time they
-// were first written.
+// recordUnresolvableAttempt counts one more attempt on the journal records of f
+// (a path that cannot be resolved), keeping each record exactly as written
+// otherwise: its own identity and write time. The records of one path can
+// disagree about the file (f.idConflict: books decided at different moments saw
+// different files, and the path is then never removed); rewriting them all from
+// f's single merged identity would make them agree, and let the path be removed
+// on a match with the first one. A record that is not there (never journaled, or
+// cleared meanwhile) is left unwritten: this never creates one.
 func (svc *AudiobookService) recordUnresolvableAttempt(f *pendingFile) error {
 	kv, err := svc.pendingFileKV()
 	if err != nil {
 		return err
 	}
 	for _, bookID := range f.bookIDs {
-		raw, err := json.Marshal(pendingFileRecord{BookID: bookID, Path: f.path, IsDir: f.isDir, Identity: f.id, RecordedAt: f.recordedAt, Attempts: f.attempts + 1})
+		key := pendingFilePrefix + bookID
+		raw, err := kv.GetRaw(key)
+		if err != nil {
+			return fmt.Errorf("read pending file removal: %w", err)
+		}
+		if raw == nil {
+			continue
+		}
+		var rec pendingFileRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			continue // unreadable: the next load drops it and says so
+		}
+		rec.Attempts = f.attempts + 1
+		out, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("encode pending file removal: %w", err)
 		}
-		if err := kv.SetRaw(pendingFilePrefix+bookID, raw); err != nil {
+		if err := kv.SetRaw(key, out); err != nil {
 			return fmt.Errorf("record pending file removal: %w", err)
 		}
 	}
@@ -175,6 +195,15 @@ func (svc *AudiobookService) countPendingFileRemovals() (int, error) {
 	return len(files.sorted()), nil
 }
 
+// PendingFileRemovals is countPendingFileRemovals for callers outside the
+// package (the trash listing).
+func (svc *AudiobookService) PendingFileRemovals() (int, error) {
+	if svc.store == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+	return svc.countPendingFileRemovals()
+}
+
 // loadPendingFiles is readPendingFiles for a pass that acts on the journal: the
 // records that cannot be decoded are dropped (and reported).
 func (svc *AudiobookService) loadPendingFiles() (files *pendingFiles, errs []string, err error) {
@@ -202,6 +231,9 @@ func (svc *AudiobookService) loadPendingFiles() (files *pendingFiles, errs []str
 // (fileIdentity). There is no preview to hold it to, and none is needed: the
 // journal holds only paths the pass's own preview had listed (purgeFinish).
 //
+// It is also run once at boot (ReplayPendingFileRemovalsOnBoot), so records a
+// crash left do not wait for a purge to be asked for.
+//
 // RunPurge calls it only for a pass that deletes files: a purge the owner ran
 // with "also delete files" off never removes a file, whatever an earlier pass
 // left. A resumed purge op carries its saved delete_files, so a crashed pass's
@@ -212,6 +244,19 @@ func (svc *AudiobookService) loadPendingFiles() (files *pendingFiles, errs []str
 // It reports how many things it removed and the error lines, each labelled as
 // being about an earlier pass (earlierPassLabel).
 func (svc *AudiobookService) replayPendingFileRemovals() (removed int, errs []string) {
+	// A replay changes nothing while the library root is not ready: every "no
+	// file here" it would read is a missing mount, and it would clear the record
+	// of a file that is still on the real disk (libraryRootReady). The records,
+	// readable or not, are all kept.
+	if rootErr := libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+		return 0, labelEarlierPass([]string{fmt.Sprintf("nothing replayed, every record kept: %v", rootErr)})
+	}
+	// Exclusive of every writer of a record between its journal write and its
+	// row delete (purgeDeleteRow): a replay that read such a record would find the
+	// book's row still there, take that for "a book still has this file" and clear
+	// the record of a book that is about to be purged.
+	svc.pendingMu.Lock()
+	defer svc.pendingMu.Unlock()
 	files, loadErrs, err := svc.loadPendingFiles()
 	errs = append(errs, loadErrs...)
 	if err != nil {

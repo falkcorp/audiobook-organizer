@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.62.0
+// version: 4.63.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package server
 
@@ -376,6 +376,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// interrupted-ops list, which no longer has rows for this op.
 
 	s.startBackfills()
+
+	// File removals a purge pass journaled and never finished are carried out
+	// once, in the background (purge_replay_boot.go).
+	s.startPurgeJournalReplay()
 
 	// Stale transcode temp files under the import paths are swept by the
 	// hourly transcode_temp_cleanup scheduler task (maintenance.temp-file-cleanup
@@ -1139,6 +1143,55 @@ func (s *Server) seedRolesAndTokens() {
 			}
 		}
 	}
+}
+
+// purgeReplayRetryEvery and purgeReplayAttempts bound how long the boot replay of
+// the purge's journal waits for a library root that is mounted late: a remote
+// filesystem can come up after the service does (the unit does not order itself
+// after it). Eight tries two minutes apart; after that the records are kept for
+// the next purge with delete_files.
+const (
+	purgeReplayRetryEvery = 2 * time.Minute
+	purgeReplayAttempts   = 8
+)
+
+// startPurgeJournalReplay replays, once per boot, the file removals an earlier
+// purge pass journaled and did not finish (AudiobookService.
+// ReplayPendingFileRemovalsOnBoot), so they do not sit on disk waiting for a
+// purge to be asked for. A purge op the shutdown interrupted is resumed by the
+// operations registry and replays first thing too; the two serialize on the
+// service's replay lock. Background, bgWG-tracked and cancelled with bgCtx, and
+// it waits for the memdb warmup first: the removal checks read the book path
+// indexes. It never blocks startup.
+func (s *Server) startPurgeJournalReplay() {
+	if s.audiobookService == nil {
+		return
+	}
+	svc := s.audiobookService
+	s.bgWG.Go("purge-journal-replay", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		if w, ok := resolveWarmupWaiter(s.Ops()); ok {
+			warm := make(chan struct{})
+			go func() { w.WaitForWarmup(); close(warm) }()
+			select {
+			case <-warm:
+			case <-s.bgCtx.Done():
+				return
+			}
+		}
+		removed, errs, err := svc.ReplayPendingFileRemovalsOnBoot(s.bgCtx, purgeReplayRetryEvery, purgeReplayAttempts)
+		switch {
+		case err != nil:
+			lifecycleLog.Error("purge journal replay at boot: %v", err)
+		case removed > 0 || len(errs) > 0:
+			lifecycleLog.Info("purge journal replay at boot: %d removed, %d error line(s)", removed, len(errs))
+			for _, line := range errs {
+				lifecycleLog.Warn("purge journal replay at boot: %s", logger.SanitizeLogValue(line))
+			}
+		}
+	})
 }
 
 // startBackfills launches the one-time, idempotent backfill and maintenance

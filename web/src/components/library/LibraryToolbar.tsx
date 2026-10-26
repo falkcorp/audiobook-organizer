@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryToolbar.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 import { useState } from 'react';
 import {
@@ -51,6 +51,13 @@ interface LibraryToolbarProps {
   storageDrawerOpen: boolean;
   systemStatus: api.SystemStatus | null;
   softDeletedCount: number;
+  /**
+   * Files an earlier purge pass decided to remove and did not finish. The purge
+   * dialog can finish them with the trash empty, so they keep "Purge Deleted"
+   * enabled. null = unknown (the server could not read them): enabled too, since
+   * opening the dialog changes nothing and its preview counts them itself.
+   */
+  pendingFileRemovals: number | null;
   libraryBookCount: number;
   importBookCount: number;
   librarySizeBytes: number;
@@ -103,6 +110,7 @@ export const LibraryToolbar = ({
   storageDrawerOpen,
   systemStatus,
   softDeletedCount,
+  pendingFileRemovals,
   libraryBookCount,
   importBookCount,
   librarySizeBytes,
@@ -365,9 +373,14 @@ export const LibraryToolbar = ({
               variant="outlined"
               size="small"
               color="secondary"
-              disabled={softDeletedCount === 0}
+              disabled={softDeletedCount === 0 && pendingFileRemovals === 0}
             >
-              Purge Deleted{softDeletedCount > 0 ? ` (${softDeletedCount})` : ''}
+              Purge Deleted
+              {softDeletedCount > 0
+                ? ` (${softDeletedCount})`
+                : pendingFileRemovals !== null && pendingFileRemovals > 0
+                  ? ` (${pendingFileRemovals} ${pendingFileRemovals === 1 ? 'file' : 'files'} left)`
+                  : ''}
             </Button>
           </Stack>
         )}

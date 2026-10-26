@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.203.2
+// version: 2.204.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-25
 
@@ -1506,7 +1506,12 @@ export async function getSoftDeletedBooks(
   limit = 100,
   offset = 0,
   olderThanDays?: number
-): Promise<{ items: Book[]; count: number; purgeBreakdown: PurgeBreakdown | null }> {
+): Promise<{
+  items: Book[];
+  count: number;
+  purgeBreakdown: PurgeBreakdown | null;
+  pendingFileRemovals: number | null;
+}> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -1525,6 +1530,10 @@ export async function getSoftDeletedBooks(
     count: data.total ?? data.count ?? (data.items ? data.items.length : 0),
     // null until a purge or preview has run since the server started.
     purgeBreakdown: data.purge_breakdown ?? null,
+    // Files an earlier purge pass decided to remove and did not finish. They
+    // are the purge dialog's work even when the trash is empty. null = the
+    // server could not read the journal (unknown, which is not "none").
+    pendingFileRemovals: data.files_pending_from_earlier_pass ?? null,
   };
 }
 

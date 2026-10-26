@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.112.0
+// version: 1.113.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -922,6 +922,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     softDeletedBooks,
     softDeletedCount,
     softDeletedBreakdown,
+    pendingFileRemovals,
     softDeletedLoading,
     loadAudiobooks,
     loadSoftDeleted,
@@ -2442,6 +2443,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         storageDrawerOpen={storageDrawerOpen}
         systemStatus={systemStatus}
         softDeletedCount={softDeletedCount}
+        pendingFileRemovals={pendingFileRemovals}
         libraryBookCount={libraryBookCount}
         importBookCount={importBookCount}
         librarySizeBytes={librarySizeBytes}

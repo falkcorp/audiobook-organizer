@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -896,12 +896,25 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 		return
 	}
 
+	// Files an earlier purge pass decided to remove and did not finish. They are
+	// the purge dialog's work even when the trash is empty (its "Finish removing"
+	// button), so the toolbar needs the count apart from the trash's. A failed
+	// read is null, not 0: unknown must not read as "nothing waiting", and the
+	// listing is not worth failing for it.
+	var pendingFiles any
+	if n, perr := h.audiobookService.PendingFileRemovals(); perr != nil {
+		trashListLog.Warn("trash listing: cannot count the file removals an earlier purge left pending: %s", logger.SanitizeLogValue(perr.Error()))
+	} else {
+		pendingFiles = n
+	}
+
 	httputil.RespondWithOK(c, gin.H{
-		"items":  h.withTrashProgress(c, books),
-		"count":  len(books),
-		"total":  total,
-		"limit":  params.Limit,
-		"offset": params.Offset,
+		"items":                           h.withTrashProgress(c, books),
+		"count":                           len(books),
+		"total":                           total,
+		"limit":                           params.Limit,
+		"offset":                          params.Offset,
+		"files_pending_from_earlier_pass": pendingFiles,
 		// How many of the trash a purge would remove right now versus how many
 		// are blocked, by reason, as the last purge pass or preview measured
 		// it (null before one has run). The listing never recomputes it.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -150,6 +150,11 @@ type AudiobookTrashService interface {
 	// recent purge pass or preview (nil before one has run since the server
 	// started). The trash listing shows it; it is never recomputed per request.
 	LastPurgeBreakdown() *audiobookspkg.PurgeBreakdown
+	// PendingFileRemovals is how many files an earlier purge pass decided to
+	// remove and did not finish (its journal of pending removals). It is read
+	// live, not measured by a pass: the trash listing shows it so the owner can
+	// finish them even when the trash itself is empty.
+	PendingFileRemovals() (int, error)
 	RestoreAudiobook(ctx context.Context, id string) (*database.Book, error)
 	DeleteAudiobook(ctx context.Context, id string, opts *audiobookspkg.DeleteAudiobookOptions) (map[string]any, error)
 	// TrashProgress flags the trashed books a user still has listening

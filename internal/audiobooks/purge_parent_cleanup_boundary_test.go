@@ -1,12 +1,13 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 package audiobooks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,11 @@ func setupPurgeBoundaryUntrusted(t *testing.T) (*AudiobookService, *database.Peb
 	base := t.TempDir()
 	config.AppConfig.RootDir = filepath.Join(base, "lib")
 	if err := os.MkdirAll(config.AppConfig.RootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A library that is up holds something: a purge with delete_files refuses an
+	// empty root (libraryRootReady), which is what an unmounted library looks like.
+	if err := os.WriteFile(filepath.Join(config.AppConfig.RootDir, ".gotham-mounted"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return NewAudiobookService(store), store, base
@@ -213,7 +219,9 @@ func TestPurge_RootItselfIsKeptAndReported(t *testing.T) {
 	requireKeptOutsideRoot(t, res, store, "rootbook", root, "is the library root itself")
 }
 
-// No RootDir configured: nothing is inside it, so nothing is deleted.
+// No RootDir configured: nothing is inside it, so nothing is deleted, and a
+// purge with delete_files is refused whole (libraryRootReady) with the book
+// still in the trash.
 func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	file := filepath.Join(base, "lib", "a.m4b")
@@ -224,10 +232,18 @@ func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
 	softDeleted(t, store, "noroot", file)
 
 	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrLibraryRootNotReady) {
+		t.Fatalf("err = %v, want ErrLibraryRootNotReady", err)
 	}
-	requireKeptOutsideRoot(t, res, store, "noroot", file, "no library root")
+	if res == nil || !res.StoppedEarly || res.Purged != 0 {
+		t.Fatalf("result = %+v, want a refused pass that purged nothing", res)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("%s removed from disk: %v", file, err)
+	}
+	if b, _ := store.GetBookByID("noroot"); b == nil {
+		t.Error("the book was purged although the pass was refused")
+	}
 }
 
 // Inside the root the file is removed, and the parents it emptied are

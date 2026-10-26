@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -334,6 +334,7 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
 		Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
 	d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
+	d.svc.EXPECT().PendingFileRemovals().Return(0, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
@@ -530,6 +531,7 @@ func TestListSoftDeletedAudiobooks_CarriesPurgeBreakdown(t *testing.T) {
 	d.svc.EXPECT().LastPurgeBreakdown().Return(&audiobookspkg.PurgeBreakdown{
 		FromPreview: true, Total: 10, Purgeable: 4, OwnsFiles: 3, UndoPossible: 2, HasListeningState: 1,
 	})
+	d.svc.EXPECT().PendingFileRemovals().Return(0, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
@@ -546,6 +548,51 @@ func TestListSoftDeletedAudiobooks_CarriesPurgeBreakdown(t *testing.T) {
 	if body.Data.Breakdown["purgeable"] != float64(4) || body.Data.Breakdown["undo_possible"] != float64(2) ||
 		body.Data.Breakdown["owns_files"] != float64(3) || body.Data.Breakdown["has_listening_state"] != float64(1) {
 		t.Fatalf("breakdown not carried through: %v", body.Data.Breakdown)
+	}
+}
+
+// The listing carries how many file removals an earlier purge left pending,
+// apart from the trash's own count, so the toolbar can offer to finish them
+// when the trash is empty. A failed read is null (unknown), never 0.
+func TestListSoftDeletedAudiobooks_CarriesPendingFileRemovals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		n    int
+		err  error
+		want any
+	}{
+		{"pending", 7, nil, float64(7)},
+		{"none", 0, nil, float64(0)},
+		{"unreadable is null not zero", 0, errString("journal unreadable"), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.svc.EXPECT().GetSoftDeletedBooks(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return([]database.Book{{ID: "b1"}}, nil)
+			d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(1, nil)
+			d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
+				Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
+			d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
+			d.svc.EXPECT().PendingFileRemovals().Return(tc.n, tc.err)
+			c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
+			h.ListSoftDeletedAudiobooks(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", w.Code)
+			}
+			var body struct {
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			got, present := body.Data["files_pending_from_earlier_pass"]
+			if !present {
+				t.Fatalf("files_pending_from_earlier_pass missing: %v", body.Data)
+			}
+			if got != tc.want {
+				t.Fatalf("files_pending_from_earlier_pass = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

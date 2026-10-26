@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
 // last-edited: 2026-10-25
 
@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"syscall"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -24,10 +25,12 @@ type filePlan struct {
 	// different by the time it is deleted was not decided (stillFor).
 	path string
 	v    purgeFileVerdict
-	// journal: the file is to be removed by the pass, and the bound preview
-	// listed it, so its removal is journaled with the row delete. A path the
-	// preview said stays is never journaled: a later replay has no preview to
-	// consult, and must not remove what the owner was told would stay.
+	// journal: the file is to be removed, and the removal is journaled with the
+	// row delete. For a pass that is when the bound preview listed it: a path the
+	// preview said stays is never journaled, because a later replay has no
+	// preview to consult and must not remove what the owner was told would stay.
+	// A single-book purge (no pass, no preview: "Purge now", discard progress and
+	// purge) is the owner's explicit act on that one book and is always journaled.
 	journal bool
 }
 
@@ -60,23 +63,75 @@ func statLookupError(path, op string, err error) error {
 	return fmt.Errorf("cannot verify %s is gone or removable: %s: %w: %w", path, op, errPathLookupFailed, err)
 }
 
+// fileUndecided is the outcome of a book whose file cannot be decided: a lookup
+// or a stat failed for a reason that may pass (v.keptErr is errPathLookupFailed
+// and not errPathUnresolvable), so the book stays in the trash, counted as
+// failed. nil when the file is decided (remove it, keep it, protected, already
+// gone, an unresolvable path). The preview asks it too (previewPurged), so a
+// preview and the run that follows it count the book the same way.
+//
+// There is no attempt cap, on purpose. A cap would have to purge the book
+// without a decision about its file, which is exactly the file left with no
+// row and no record that deciding first exists to prevent; and the book is
+// restorable, hidden and harmless in the trash. What a persistent failure (a
+// directory the process cannot read: EACCES, a dying disk: EIO, a stale
+// handle: ESTALE) does need is to be reported as persistent, so the line says
+// it repeats on every delete_files pass and names the way out.
+func fileUndecided(book *database.Book, v purgeFileVerdict) *purgeOutcome {
+	if v.keptErr == nil || !errors.Is(v.keptErr, errPathLookupFailed) || errors.Is(v.keptErr, errPathUnresolvable) {
+		return nil
+	}
+	return &purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf(
+		"%s: not purged, kept in the trash: cannot decide what to do with its file (%v); every purge with \"also delete files\" asks again and keeps it until the path can be read, and a purge without that option is not held up by it", book.ID, v.keptErr)}}
+}
+
 // decideFile plans the removal of book's file ahead of the row delete. The
-// outcome is non-nil only when the file cannot be decided (a lookup or a stat
-// failed for a reason that may pass): the book then stays in the trash, counted
-// as failed, and the next pass decides it again. Every other verdict (remove it,
-// keep it, protected, already gone, an unresolvable path) lets the purge go on;
-// the ones that keep the file are reported by purgeFinish.
+// outcome is non-nil only when the file cannot be decided (fileUndecided), or
+// the library root is not ready (libraryRootReady): the book then stays in the
+// trash, counted as failed, and the next pass decides it again. Every other
+// verdict (remove it, keep it, protected, already gone, an unresolvable path)
+// lets the purge go on; the ones that keep the file are reported by purgeFinish.
+//
+// The root check is the one a pass makes once at its start (env.rootReady),
+// made here per book only for the single-book paths that run no pass.
 func (svc *AudiobookService) decideFile(book *database.Book, env purgeEnv) (*filePlan, *purgeOutcome) {
+	if !env.rootReady {
+		if err := libraryRootReady(config.Snapshot().RootDir); err != nil {
+			return nil, &purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged, kept in the trash: %v", book.ID, err)}}
+		}
+	}
 	v := svc.planPurgeFile(book)
-	if v.keptErr != nil && errors.Is(v.keptErr, errPathLookupFailed) && !errors.Is(v.keptErr, errPathUnresolvable) {
-		return nil, &purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf(
-			"%s: not purged, kept in the trash: cannot decide what to do with its file, so the next pass decides it again: %v", book.ID, v.keptErr)}}
+	if o := fileUndecided(book, v); o != nil {
+		return nil, o
 	}
 	return &filePlan{
 		path:    book.FilePath,
 		v:       v,
-		journal: v.remove != "" && env.files != nil && env.files.preview.listsFile(v.remove),
+		journal: v.remove != "" && (env.files == nil || env.files.preview.listsFile(v.remove)),
 	}, nil
+}
+
+// undecidedOutcome is what a book whose file could not be decided (decideFile)
+// is counted as. Usually that outcome itself (failed, kept in the trash). A book
+// that holds listening state no live version can take is kept for THAT reason
+// whatever its file is doing, and the preview says so (previewOne checks the
+// state before it plans the file): the file check runs first only so that it
+// precedes the delete, so when it fails the reason the book stays is still the
+// state's. The state check here is lock-free and only reclassifies; the
+// authoritative one still runs under the merge lock (purgeIfStateless) for every
+// book that gets that far, and a failed read here changes nothing.
+func (svc *AudiobookService) undecidedOutcome(book *database.Book, env purgeEnv, undecided purgeOutcome) purgeOutcome {
+	if env.probe == nil {
+		return undecided
+	}
+	has, err := env.probe.Has(book.ID)
+	if err != nil || !has {
+		return undecided
+	}
+	if sibling, serr := svc.liveSiblingFor(book); serr == nil && sibling == "" {
+		return purgeOutcome{kind: purgeKeptHasProgress}
+	}
+	return undecided
 }
 
 // isFor reports whether the plan was made for book's path.
