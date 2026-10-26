@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -142,11 +142,13 @@ type stubWhisper struct {
 	errs        map[string]string // path -> per-file error
 	transErr    error             // returned for the whole call
 	transErrFor int               // when > 0, transErr is returned for this many calls, then cleared
+	alsoErr     error             // returned WITH the per-file answers: a dispatch that settled some clips and then failed
 	dropKeys    bool              // answer with an empty map (a transport that dropped every job)
 	calls       [][]fileIntroJob
 	inFlight    atomic.Int32
 	maxSeen     atomic.Int32
 	delay       time.Duration
+	worker      string // names the answering worker; "" = a new worker per call, as a rotating pool
 }
 
 func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ func(int, int)) (map[string]fileIntroWhisperResult, error) {
@@ -185,14 +187,19 @@ func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ fu
 		return map[string]fileIntroWhisperResult{}, nil
 	}
 	out := make(map[string]fileIntroWhisperResult, len(jobs))
+	worker := w.worker
+	if worker == "" {
+		n := stampedWorkerCalls.Add(1) // shared with stampWorkers: never a repeat, even after calls = nil
+		worker = fmt.Sprintf("http://192.0.2.%d:%d", 10+n%200, 8000+n/200)
+	}
 	for k, j := range jobs {
 		if e, ok := w.errs[j.Path]; ok {
-			out[k] = fileIntroWhisperResult{Error: e}
+			out[k] = fileIntroWhisperResult{Error: e, Endpoint: worker}
 			continue
 		}
-		out[k] = fileIntroWhisperResult{Text: w.texts[j.Path], Model: "model-x", Language: "en"}
+		out[k] = fileIntroWhisperResult{Text: w.texts[j.Path], Model: "model-x", Language: "en", Endpoint: worker}
 	}
-	return out, nil
+	return out, w.alsoErr
 }
 
 func (w *stubWhisper) sentPaths() map[string]int {
@@ -222,6 +229,11 @@ func newIntroFx(t *testing.T) *introFx {
 	fx := &introFx{t: t, s: s, p: New(fakeDeps{store: s}), dir: t.TempDir(), whisp: &stubWhisper{texts: map[string]string{}, errs: map[string]string{}}}
 
 	origFn, origSlots, origPause, origPre, origOutage := fileIntroWhisperFn, fileIntroSlots, fileIntroPauseInterval, fileIntroPreflight, fileIntroOutageInterval
+	// Most tests strike a file twice within one test run, so the 12 h gap
+	// between strikes is off by default; the gap tests turn it back on.
+	origGap := transcribeStrikeMinGap
+	transcribeStrikeMinGap = 0
+	t.Cleanup(func() { transcribeStrikeMinGap = origGap })
 	fileIntroWhisperFn = fx.whisp.fn
 	fileIntroOutageInterval = time.Millisecond
 	fileIntroPreflight = func(context.Context) error { return nil }
@@ -1026,7 +1038,7 @@ func TestFileIntroClear_DryRunCountsThenLiveRevertsOnlyItsOwnFills(t *testing.T)
 	if err := fx.p.runFileIntroTranscribe(context.Background(), json.RawMessage(`{"clear_run_id":"run-test-1"}`), rep); err != nil {
 		t.Fatal(err)
 	}
-	if m := rep.lastMessage(); !strings.HasPrefix(m, introPreviewMarker) || !strings.Contains(m, "would clear per-file results on 3 files and 1 book transcripts") {
+	if m := rep.lastMessage(); !strings.HasPrefix(m, introPreviewMarker) || !strings.Contains(m, "would clear per-file results on 3 files and 1 book results") {
 		t.Fatalf("clear preview: %q", m)
 	}
 	if fx.row(a, a1).IntroTranscription == nil || fx.bookRow(a).IntroTranscription == nil {
@@ -1038,7 +1050,7 @@ func TestFileIntroClear_DryRunCountsThenLiveRevertsOnlyItsOwnFills(t *testing.T)
 	if err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), rep); err != nil {
 		t.Fatal(err)
 	}
-	if m := rep.lastMessage(); !strings.Contains(m, "cleared per-file results on 3 files and 1 book transcripts") {
+	if m := rep.lastMessage(); !strings.Contains(m, "cleared per-file results on 3 files and 1 book results") {
 		t.Fatalf("clear message: %q", m)
 	}
 	for _, id := range []struct{ book, file string }{{a, a1}, {a, a2}, {b, b1}} {

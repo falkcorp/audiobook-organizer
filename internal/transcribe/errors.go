@@ -1,17 +1,77 @@
 // file: internal/transcribe/errors.go
-// version: 1.0.1
+// version: 1.3.0
 // guid: e630c83e-990b-47c4-ac80-dea9e41b20c5
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 package transcribe
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// ErrWorkerStuck marks a request that a worker accepted (its /health answered)
+// and then did not answer within the request timeout. That is not an outage:
+// the endpoint is reachable but wedged, usually on one clip that sends the
+// decoder into an endless loop. The distinction matters because the two call
+// for opposite handling. An outage is waited out and the SAME batch re-sent;
+// re-sending a batch to a wedged worker parks it behind the stuck job, and
+// handing it to the next worker is how one bad clip took out all four on
+// 2026-10-23. A stuck batch is instead split and its parts retried elsewhere
+// until the culprit is a single job (see dispatchPool).
+var ErrWorkerStuck = errors.New("whisper worker stuck")
+
+// WorkerStuckError is the typed form of ErrWorkerStuck: which endpoint, how
+// long the request ran, and which jobs were in the stuck request, so the
+// dispatcher can split exactly that request and nothing else.
+type WorkerStuckError struct {
+	URL   string
+	After time.Duration
+	// Jobs are the ids of the jobs in the stuck request.
+	Jobs []string
+	// Followers maps a job in Jobs to the ids that were NOT sent because their
+	// audio is byte-identical to it (the journal's content dedup). They share
+	// its fate: the dispatcher splits and condemns them with it instead of
+	// re-sending each one alone as if it were an unrelated file. Nil for path
+	// jobs, which are never assumed identical without reading them.
+	Followers map[string][]string
+}
+
+func (e *WorkerStuckError) Error() string {
+	return fmt.Sprintf("worker stuck: %s did not answer a request of %d job(s) within %s", e.URL, len(e.Jobs), e.After.Round(time.Second))
+}
+
+// Is makes errors.Is(err, ErrWorkerStuck) true for every *WorkerStuckError.
+func (e *WorkerStuckError) Is(target error) bool { return target == ErrWorkerStuck }
+
+// IsWorkerStuck reports whether err is (or wraps) a stuck-worker failure.
+func IsWorkerStuck(err error) bool { return errors.Is(err, ErrWorkerStuck) }
+
+// stuckFromHTTP converts a failed client call into a *WorkerStuckError when the
+// failure is the client's own request timeout and the caller's context is
+// still live and the request was already accepted, and returns err untouched
+// otherwise. The ctx check is what keeps
+// an operator cancelling the op, whose error text also says "context deadline
+// exceeded" or "canceled", from being read as a stuck worker.
+func stuckFromHTTP(ctx context.Context, err error, url string, after time.Duration, jobs []string) error {
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	// A timeout while DIALLING means the endpoint is unreachable, which is the
+	// outage case, not a wedged worker: the request never reached it.
+	if op, ok := errors.AsType[*net.OpError](err); ok && op.Op == "dial" {
+		return err
+	}
+	if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+		return &WorkerStuckError{URL: url, After: after, Jobs: jobs}
+	}
+	return err
+}
 
 // TransportError reports that the request never reached a working model: the
 // endpoint was unreachable, refused the connection, timed out at the transport
@@ -42,7 +102,10 @@ type TransportError struct {
 
 func (e *TransportError) Error() string {
 	kind := "transport failure"
-	if !e.Recognized {
+	switch {
+	case IsWorkerStuck(e.Err):
+		kind = "worker stuck (reachable, but did not answer)"
+	case !e.Recognized:
 		kind = "unclassified batch failure (treated as transport)"
 	}
 	if len(e.Endpoints) == 0 {
@@ -100,7 +163,18 @@ func classifyTransport(endpoints []string, err error) error {
 // isTransportishError recognises network-layer failures structurally where it
 // can (net.Error, *url.Error, net.OpError) and by wording only as a fallback,
 // since Go's HTTP stack surfaces some conditions as bare errors.
+//
+// A worker fault (ErrWorkerFault) is deliberately NOT recognised, even when it
+// arrives wrapped in a net-looking chain: the worker answered. The per-file op
+// waits out and re-sends a recognised failure five times and then stops the run,
+// which for a fault caused by the batch's own clips (a response that is mostly
+// genuine loopers) re-sent the same clips into the same fault and then stopped
+// every later run at the same batch. A fault is handled by the dispatcher
+// instead (re-queue elsewhere, then defer), and what reaches an op is deferred.
 func isTransportishError(err error) bool {
+	if IsWorkerFault(err) {
+		return false
+	}
 	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}

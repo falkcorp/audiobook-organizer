@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -34,6 +34,13 @@ import (
 // A book fill is reverted only when the book still holds EXACTLY what the fill
 // wrote (same text, same transcribed-at, same attempted-at), so a transcript
 // the book op or the owner wrote afterwards is never erased.
+//
+// clear_run_id also takes a book-op run id (the book op's strikes and verdicts
+// carry its op id). When that run made a file's transcribe_timeout permanent it
+// stamped the same verdict on the BOOK in the same step (same status, error and
+// attempted-at); that stamp is reverted with the file row, on the same
+// exact-match rule, or the book would stay skipped as a durable failure after
+// its cause was rolled back.
 func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) error {
 	mark := introModeMarker(dryRun)
 	log := reporter.Logger()
@@ -107,7 +114,7 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 				}
 				before = row
 				files.Add(1)
-				if b, berr := store.GetBookByID(r.bookID); berr == nil && b != nil && bookHoldsFileFill(b, before) {
+				if b, berr := store.GetBookByID(r.bookID); berr == nil && b != nil && (bookHoldsFileFill(b, before) || bookHoldsFileVerdict(b, before)) {
 					bookReverts.Add(1)
 				}
 				continue
@@ -149,7 +156,7 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 		verb = "would clear"
 		tail = " Pass dry_run=false to clear."
 	}
-	msg := mark + fmt.Sprintf("%s per-file results on %d files and %d book transcripts that run %s wrote (%d errors). "+
+	msg := mark + fmt.Sprintf("%s per-file results on %d files and %d book results (transcripts or timeout verdicts) that run %s wrote (%d errors). "+
 		"Clearing returns files to untranscribed; it cannot restore a transcript a forced re-run replaced.%s",
 		verb, files.Load(), bookReverts.Load(), runID, errs.Load(), tail)
 	log.Info("transcribe-file-intros: clear", "run_id", runID, "dry_run", dryRun,
@@ -181,15 +188,36 @@ func bookHoldsFileFill(b *database.Book, f *database.BookFile) bool {
 		f.TranscribeAttemptedAt != nil && ptrTimeEq(b.TranscribeAttemptedAt, f.TranscribeAttemptedAt)
 }
 
+// bookHoldsFileVerdict reports whether the book still holds exactly the
+// transcribe_timeout verdict the book op stamped on it when this file row's
+// strikes became permanent (recordBookTimeout writes both from one `now` and one
+// detail), and carries no transcript.
+func bookHoldsFileVerdict(b *database.Book, f *database.BookFile) bool {
+	return f.TranscribeStatus != nil && *f.TranscribeStatus == database.IntroStatusTranscribeTimeout &&
+		b.TranscribeStatus != nil && *b.TranscribeStatus == statusTranscribeTimeout &&
+		(b.IntroTranscription == nil || *b.IntroTranscription == "") &&
+		ptrStrEq(b.TranscribeError, f.TranscribeError) &&
+		f.TranscribeAttemptedAt != nil && ptrTimeEq(b.TranscribeAttemptedAt, f.TranscribeAttemptedAt)
+}
+
 // revertBookFill undoes a book-level fill made from the (just cleared) file
 // row prior, if the book still holds it exactly. Parsed credits are cleared
-// only where they still equal the file's.
+// only where they still equal the file's. It also undoes a book-level
+// transcribe_timeout verdict stamped from that row (bookHoldsFileVerdict),
+// clearing only the status, error and attempt time.
 func revertBookFill(store fileIntroStore, bookID string, prior *database.BookFile) (bool, error) {
 	if prior == nil {
 		return false, nil
 	}
 	reverted := false
 	_, err := store.ModifyBook(bookID, func(cur *database.Book) error {
+		if bookHoldsFileVerdict(cur, prior) {
+			cur.TranscribeStatus = nil
+			cur.TranscribeError = nil
+			cur.TranscribeAttemptedAt = nil
+			reverted = true
+			return nil
+		}
 		if !bookHoldsFileFill(cur, prior) {
 			return database.ErrSkipBookWrite
 		}

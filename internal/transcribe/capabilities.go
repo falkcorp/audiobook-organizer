@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.0.0
+// version: 2.3.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-08-31
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -81,6 +81,18 @@ type gpuRefusal struct {
 	URL    string
 	Label  string
 	Reason string
+	// Stuck marks a refusal because the worker is wedged on one inference past
+	// its own deadline (see stuckRefusal), as opposed to a capability or mount
+	// problem. When every refusal is Stuck the dispatcher's error wraps
+	// ErrWorkerStuck so callers do not treat the pool as unreachable.
+	Stuck bool
+	// Transient marks a refusal that clears by itself within minutes (a decoder
+	// that failed to start is reported for the worker's fault window, then the
+	// worker is tried again). When every refusal is Transient the dispatcher
+	// paces -- it waits and asks again -- instead of failing the dispatch at once,
+	// so a single worker whose decoder is restarting does not defer batch after
+	// batch for the whole window.
+	Transient bool
 }
 
 func (r gpuRefusal) String() string {
@@ -295,4 +307,45 @@ func describeRefusals(refused []gpuRefusal) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "; ")
+}
+
+// stuckGrace is how far past its own per-clip deadline a worker's current
+// inference may run before the gate calls it stuck. When the deadline fires the
+// worker SIGKILLs the decoder's process group and then reaps it, waiting up to
+// 30 s (whisper_mlx_server.py, InferenceChild._kill), during which busy_seconds
+// keeps climbing; the grace is that wait plus 15 s, so a worker that is in the
+// middle of a clean recovery is never refused, and a worker whose decoder will
+// not die (the reap gives up after 30 s) is.
+const stuckGrace = 45.0
+
+// stuckRefusal is the reason a worker is refused because it is wedged, or "".
+// busy_seconds is how long its current inference has run and busy_limit_seconds
+// that inference's deadline; a worker that is past the deadline AND the grace
+// has lost control of its own decoder, so no request sent to it will be
+// answered. Sending one anyway is how a single bad clip parked four workers on
+// 2026-10-23. A worker that does not report the fields (older than 1.8.0, or an
+// unprobed endpoint) is never judged stuck.
+func stuckRefusal(g gatedEndpoint) string {
+	h := g.Health
+	if !g.Probed || h.BusySeconds == nil || h.BusyLimitSeconds == nil {
+		return ""
+	}
+	if *h.BusySeconds <= *h.BusyLimitSeconds+stuckGrace {
+		return ""
+	}
+	return fmt.Sprintf("stuck: current inference has run %.0fs, past its %.0fs deadline",
+		*h.BusySeconds, *h.BusyLimitSeconds)
+}
+
+// childFaultRefusal is the reason a worker is refused because its decoder
+// process cannot start, or "". The worker reports the failure in /health
+// (child_start_error) for a while after it happens, so the gate can set the
+// endpoint aside BEFORE a request pays the child-ready timeout (minutes) just to
+// be answered worker_misconfigured. Fail-closed against an unprobed endpoint
+// is not this check's job: there is nothing to read.
+func childFaultRefusal(g gatedEndpoint) string {
+	if !g.Probed || g.Health.ChildStartError == "" {
+		return ""
+	}
+	return "decoder process cannot start: " + g.Health.ChildStartError
 }

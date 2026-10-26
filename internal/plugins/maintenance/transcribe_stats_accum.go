@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.4.0
+// version: 1.7.0
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package maintenance
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -26,6 +27,12 @@ const (
 	statusNoAudio       = "no_audio"
 	statusFFmpegError   = "ffmpeg_error"
 	statusWhisperError  = "whisper_error"
+	// statusTranscribeTimeout: the worker's decoder ran past its per-clip
+	// deadline on this file transcribeTimeoutStrikeLimit times. A verdict about
+	// the audio, so durable (see isDurableTranscribeFailure): both ops skip it
+	// until retry_failed or the file changes. Equals transcribe.PathErrTranscribeTimeout
+	// and database.IntroStatusTranscribeTimeout (pinned by a test).
+	statusTranscribeTimeout = "transcribe_timeout"
 	// statusPathUnmapped: remote_extract only. The worker could not read the
 	// book's source file through its mount, but this server can stat it, so the
 	// fault is the worker's path map or NFS mount rather than the book. NOT
@@ -45,6 +52,38 @@ type transcribeStatsAccum struct {
 	mu    sync.Mutex
 	stats database.TranscribeStats
 	sink  database.TranscribeStatsStore
+	// stuck counts consecutive pages the pool answered "worker stuck" (see
+	// whisperStuckMaxBatches); a page that gets an answer resets it.
+	stuck stuckStreak
+	// unavailable counts consecutive pages that got no answer because the pool
+	// was unreachable or unavailable (see whisperUnavailableMaxBatches).
+	unavailable stuckStreak
+	// heartbeat, when set, re-announces the run's progress with a message while
+	// a whisper request is outstanding (see tickWhileWaiting). Set once before
+	// the pages start.
+	heartbeat func(msg string)
+	// gate, when set, returns nil only when no library scan is running right now
+	// (it does not wait) and an error when one is or that cannot be established.
+	// The per-book op calls it, once per page, before a book_file write (a
+	// timeout strike), which a scan's unlocked batch upsert could otherwise race;
+	// on an error the write is deferred. Set once before the pages start; nil runs
+	// ungated.
+	gate func(ctx context.Context) error
+}
+
+// gateWrite asks the write gate whether a book_file write may be made now; nil when none is set.
+func (a *transcribeStatsAccum) gateWrite(ctx context.Context) error {
+	if a.gate == nil {
+		return nil
+	}
+	return a.gate(ctx)
+}
+
+// beat reports liveness through the run's heartbeat; a no-op when none is set.
+func (a *transcribeStatsAccum) beat(msg string) {
+	if a.heartbeat != nil {
+		a.heartbeat(msg)
+	}
 }
 
 func newTranscribeStatsAccum(sink database.TranscribeStatsStore, opID string, totalBooks int, startedAt time.Time) *transcribeStatsAccum {
@@ -77,6 +116,8 @@ func (a *transcribeStatsAccum) recordOutcome(status string, now time.Time) {
 		a.stats.FFmpegError++
 	case statusWhisperError:
 		a.stats.WhisperError++
+	case statusTranscribeTimeout:
+		a.stats.TranscribeTimeout++
 	case statusPathUnmapped:
 		a.stats.PathUnmapped++
 	case statusEmpty:

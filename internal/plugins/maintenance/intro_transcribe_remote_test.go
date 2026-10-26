@@ -1,18 +1,20 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ type pathBatchFn = func(context.Context, map[string]transcribe.PathJob, transcri
 func swapPathSeams(t *testing.T, available bool, reason string, fn pathBatchFn) {
 	t.Helper()
 	origPath, origProbe, origUpload := transcribePathBatchFn, pathPipelineAvailableFn, transcribeBatchFn
-	transcribePathBatchFn = fn
+	transcribePathBatchFn = stampWorkers(fn)
 	pathPipelineAvailableFn = func(context.Context) (bool, string) { return available, reason }
 	transcribeBatchFn = func(context.Context, map[string]string, transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 		t.Error("remote mode reached the upload-path batch call, which needs a locally decoded WAV")
@@ -40,6 +42,30 @@ func swapPathSeams(t *testing.T, available bool, reason string, fn pathBatchFn) 
 	t.Cleanup(func() {
 		transcribePathBatchFn, pathPipelineAvailableFn, transcribeBatchFn = origPath, origProbe, origUpload
 	})
+}
+
+// stampedWorkerCalls numbers stampWorkers' calls across the whole test binary,
+// so no two calls (even under two swaps in one test) share a worker name.
+var stampedWorkerCalls atomic.Int64
+
+// stampWorkers names the answering worker on every result that does not name
+// one, as the real dispatcher always does (BatchResult.Endpoint): each call is
+// answered by its own worker, so successive runs' timeout strikes come from
+// different workers the way a rotating pool's would. A test that needs one
+// worker to answer twice sets Endpoint itself.
+func stampWorkers(fn pathBatchFn) pathBatchFn {
+	return func(ctx context.Context, jobs map[string]transcribe.PathJob, opts transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+		out, err := fn(ctx, jobs, opts)
+		n := stampedWorkerCalls.Add(1)
+		worker := fmt.Sprintf("http://192.0.2.%d:%d", 10+n%200, 8000+n/200)
+		for k, r := range out {
+			if r.Endpoint == "" {
+				r.Endpoint = worker
+				out[k] = r
+			}
+		}
+		return out, err
+	}
 }
 
 func boolPtr(b bool) *bool { return &b }
@@ -161,7 +187,7 @@ func runRemotePage(t *testing.T, store *database.MockStore, books []database.Boo
 	t.Helper()
 	p := New(fakeDeps{store: store})
 	accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
-	n := p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false, pageJournal{}, extractRemote)
+	n := p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false, false, pageJournal{}, extractRemote)
 	return n, accum
 }
 
