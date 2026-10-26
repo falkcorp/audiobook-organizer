@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.94.0
+// version: 1.95.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-26
 
@@ -2097,7 +2097,8 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 		return nil
 	}
 	// No row at the path is live, so no non-retired row took the key: it goes
-	// back to the retired row that held it. A store that cannot claim for a retired row cannot hold one.
+	// back to the retired row that held it. A store that cannot claim for a
+	// retired row cannot hold one.
 	claimer, ok := database.AsCapability[database.RetiredPathKeyClaimer](rs.db)
 	if !ok {
 		return fmt.Errorf("re-index %s at %s: the store cannot hand a path key to a retired row", retiredOwner.ID, path)

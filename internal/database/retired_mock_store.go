@@ -1,5 +1,5 @@
 // file: internal/database/retired_mock_store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e8b4d90-6f13-4c75-a9d2-b05c71e3f482
 // last-edited: 2026-10-26
 
@@ -54,6 +54,12 @@ func (m *MockStore) GetBookFileByPathIncludingRetired(path string) (*BookFile, e
 //   - With neither stubbed the mock holds no row at all, so it is false, which
 //     is what lets those two lookups answer "none" for a MockStore without
 //     stubs, where BookFilesWithHash would otherwise fail closed.
+//
+// Stubbing BookFilesAtPathFunc also opts BookFileRowsAtPathForWrite into the
+// strict lookup, so a stub that returns ErrBookFilesAtPathUnavailable makes it
+// answer ErrOwnershipLookupIncomplete instead of falling back to the live rows.
+// A test that stubs BookFilesAtPathFunc only to feed a read path will see the
+// write-side lookup go strict too.
 //
 // It answered false unconditionally until 2026-10-26, and every MockStore
 // scanner test then skipped the retired check whatever it had stubbed.
