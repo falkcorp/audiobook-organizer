@@ -1,28 +1,38 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 1.9.2
+// version: 2.0.0
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 package jobs
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"log/slog"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
+	"github.com/falkcorp/audiobook-organizer/internal/libroot"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 func init() { maintenance.Register(&backfillFileHashesJob{}) }
@@ -68,7 +78,153 @@ func scopeToBooks(files []database.BookFileCore, bookIDs []string) []database.Bo
 	return out
 }
 func (j *backfillFileHashesJob) Description() string {
-	return "Compute and store file hashes for book_files missing them"
+	return "Compute and store file hashes for book_files missing them. A file that is not on disk is counted as not_found (one capped log line set and a per-row TSV report under the library's .reports directory), not warned about once per file; nothing is written to the database for it"
+}
+
+// hashBackfillNotFoundLogCap bounds how many not-found paths one run writes to
+// the operation log. A library can hold hundreds of thousands of rows whose
+// files are gone (a prod preview found about 515k rows with no hash, every
+// sampled failure a file missing on the server); they are all COUNTED and
+// written to the TSV report, but one log row each would bury everything else in
+// the op log.
+const hashBackfillNotFoundLogCap = 50
+
+// fileAbsent reports whether err means the path is definitively not there:
+// not found (ENOENT) or a path component that is not a directory (ENOTDIR).
+// Anything else -- permission denied, an I/O error, a stale network handle --
+// leaves the file's state unknown, so it stays a read error and is retried.
+func fileAbsent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// hashBackfillCounts is one run's tally. Every row that has no hash when the run
+// reaches it lands in exactly one of these six, and a row that has one is not
+// counted at all:
+//
+//	hashed                   hash computed (and, unless dry-run, stored)
+//	not_found                the hash attempt found the file absent (ENOENT/ENOTDIR)
+//	unverified_outside_root  not found, but the path is outside the library root, so
+//	                         the mount check says nothing about it (an import folder,
+//	                         an iTunes share that may simply be unmounted)
+//	read_errors              hash failed for a reason other than not-found; retried next run
+//	write_errors             the hash was computed but could not be saved
+//	skipped_no_path          the row has an empty path; nothing to hash
+//
+// Atomics: the worker pool updates them concurrently.
+type hashBackfillCounts struct {
+	hashed                atomic.Int64
+	notFound              atomic.Int64
+	unverifiedOutsideRoot atomic.Int64
+	readErrors            atomic.Int64
+	writeErrors           atomic.Int64
+	skippedNoPath         atomic.Int64
+}
+
+// summary is the one-line result stored on the operation log. In a dry run the
+// same counts are what an apply WOULD do and nothing is written.
+func (c *hashBackfillCounts) summary(dryRun bool, reportPath string) string {
+	prefix := "Backfilled hashes"
+	if dryRun {
+		prefix = "Dry run, nothing written (counts are what an apply would do)"
+	}
+	s := fmt.Sprintf("%s: hashed=%d not_found=%d unverified_outside_root=%d read_errors=%d write_errors=%d skipped_no_path=%d",
+		prefix, c.hashed.Load(), c.notFound.Load(), c.unverifiedOutsideRoot.Load(), c.readErrors.Load(),
+		c.writeErrors.Load(), c.skippedNoPath.Load())
+	if reportPath != "" {
+		s += " report=" + reportPath
+	}
+	return s
+}
+
+// Report buckets: every row the run did not hash.
+const (
+	hbBucketNotFound   = "not-found"
+	hbBucketOutside    = "not-found-outside-root"
+	hbBucketReadError  = "read-error"
+	hbBucketWriteError = "write-error"
+	hbBucketNoPath     = "no-path"
+)
+
+// hashBackfillReport streams the run's per-row decisions to a TSV (bucket,
+// file_id, book_id, path, reason), the way mark-missing-files does, so a person
+// can read what is missing before deciding what to do about it. It streams (a
+// run can list hundreds of thousands of rows) and is safe for the worker pool.
+// A nil report discards, for a run with no library root to put it under.
+type hashBackfillReport struct {
+	mu  sync.Mutex
+	f   *os.File
+	w   *bufio.Writer
+	err error // first write error; later writes are dropped
+}
+
+var hbTSVClean = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
+
+// openHashBackfillReport opens path for writing. A resumed run appends to the
+// report its earlier part wrote; a fresh one truncates and writes the header.
+func openHashBackfillReport(path string, resumed bool) (*hashBackfillReport, error) {
+	flags := os.O_WRONLY | os.O_CREATE
+	if resumed {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flags, 0o664)
+	if err != nil {
+		return nil, err
+	}
+	r := &hashBackfillReport{f: f, w: bufio.NewWriterSize(f, 64<<10)}
+	if st, serr := f.Stat(); !resumed || serr != nil || st.Size() == 0 {
+		_, r.err = r.w.WriteString("bucket\tfile_id\tbook_id\tpath\treason\n")
+	}
+	return r, r.err
+}
+
+func (r *hashBackfillReport) row(bucket string, bf database.BookFileCore, reason string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return
+	}
+	_, r.err = fmt.Fprintf(r.w, "%s\t%s\t%s\t%s\t%s\n", bucket, bf.ID, bf.BookID, hbTSVClean(bf.FilePath), hbTSVClean(reason))
+}
+
+// flush pushes buffered rows to disk and returns the first write error.
+func (r *hashBackfillReport) flush() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err == nil {
+		r.err = r.w.Flush()
+	}
+	return r.err
+}
+
+func (r *hashBackfillReport) close() error {
+	if r == nil {
+		return nil
+	}
+	ferr := r.flush()
+	cerr := r.f.Close()
+	return errors.Join(ferr, cerr)
+}
+
+var hbOpIDUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
+// hashBackfillReportName is the report's file name under {root}/.reports. It is
+// unique to the run: the operation ID when there is one (a resume of the same op
+// appends to it), otherwise a timestamp, so two runs that have no op ID never
+// truncate each other's report.
+func hashBackfillReportName(opID string, now time.Time) string {
+	id := hbOpIDUnsafe.ReplaceAllString(opID, "_")
+	if opID == "" {
+		id = "adhoc-" + strconv.FormatInt(now.UnixNano(), 10)
+	}
+	return "backfill-file-hashes-" + id + ".tsv"
 }
 
 // hashBackfillWorkers bounds the parallel hashing pool. Hashing reads whole
@@ -90,9 +246,103 @@ func hashBackfillWorkers() int {
 // before a checkpoint is written. See the checkpoint invariant in Run.
 const hashBackfillChunkSize = 512
 
+// hashBackfillRun is one Run's state, shared by the worker pool.
+type hashBackfillRun struct {
+	store    maintenance.JobStore
+	reporter maintenance.ProgressReporter
+	report   *hashBackfillReport
+	counts   hashBackfillCounts
+	dryRun   bool
+	root     string // cleaned library root; "" when none is configured
+	workers  int
+
+	// mu serializes reporter: maintenance.ProgressAdapter increments a plain int
+	// and is NOT concurrency-safe. The guarded calls are microseconds; hashing
+	// dominates, so this does not meaningfully serialize the pool.
+	mu sync.Mutex
+
+	notFoundLogged atomic.Int64
+}
+
+func (r *hashBackfillRun) log(level, msg string, detail *string) {
+	r.mu.Lock()
+	r.reporter.Log(level, msg, detail)
+	r.mu.Unlock()
+}
+
+// outsideRoot reports whether path is outside the library root whose mount was
+// checked at the start of the run. A not-found there says nothing about that
+// mount (an import folder or an iTunes share may simply be unmounted), so it is
+// counted apart.
+func (r *hashBackfillRun) outsideRoot(path string) bool {
+	return r.root != "" && !pathutil.IsWithin(filepath.Clean(path), r.root)
+}
+
+// processRow handles one row on a worker.
+func (r *hashBackfillRun) processRow(bf database.BookFileCore) {
+	r.mu.Lock()
+	r.reporter.Increment()
+	r.mu.Unlock()
+
+	if bf.FileHash != "" {
+		return
+	}
+	if strings.TrimSpace(bf.FilePath) == "" {
+		r.counts.skippedNoPath.Add(1)
+		r.report.row(hbBucketNoPath, bf, "row has no file path")
+		return
+	}
+	// filehash.BookFileHash directly: scanner.ComputeFileHash is only a thin
+	// wrapper over it, and filehash is the single entry point for the digest.
+	hash, herr := filehash.BookFileHash(bf.FilePath)
+	if herr != nil {
+		msg := herr.Error()
+		if fileAbsent(herr) {
+			r.onNotFound(bf, msg)
+			return
+		}
+		r.counts.readErrors.Add(1)
+		r.report.row(hbBucketReadError, bf, msg)
+		slog.Warn("backfill-file-hashes hash failed", "file", bf.FilePath, "details", msg)
+		r.log("warn", "Hash computation failed for "+bf.FilePath, &msg)
+		return // one unreadable file must not abort the run
+	}
+	if !r.dryRun {
+		if serr := r.store.SetBookFileHash(bf.ID, hash); serr != nil {
+			r.counts.writeErrors.Add(1)
+			msg := serr.Error()
+			r.report.row(hbBucketWriteError, bf, msg)
+			slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
+			r.log("error", "Failed to save file hash for "+bf.FilePath, &msg)
+			return
+		}
+	}
+	r.counts.hashed.Add(1)
+}
+
+// onNotFound counts a hash attempt that found the file absent. Nothing is
+// written to the database for it: the row stays as it is, and the TSV report
+// lists it. Only the first hashBackfillNotFoundLogCap are logged.
+func (r *hashBackfillRun) onNotFound(bf database.BookFileCore, msg string) {
+	bucket, reason := hbBucketNotFound, "file not found"
+	if r.outsideRoot(bf.FilePath) {
+		r.counts.unverifiedOutsideRoot.Add(1)
+		bucket, reason = hbBucketOutside, "file not found outside the library root, so its mount is unverified"
+	} else {
+		r.counts.notFound.Add(1)
+	}
+	if bf.Missing {
+		reason += " (row already flagged missing)"
+	}
+	r.report.row(bucket, bf, reason)
+	if r.notFoundLogged.Add(1) <= hashBackfillNotFoundLogCap {
+		r.log("warn", "File not found: "+bf.FilePath, &msg)
+	}
+}
+
 // Job supports checkpoint-based resume after restart.
 func (j *backfillFileHashesJob) CanResume() bool { return true }
-func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
+func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) (retErr error) {
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return err
@@ -106,6 +356,13 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 	reporter.SetTotal(len(files))
 
+	run := &hashBackfillRun{
+		store:    store,
+		reporter: reporter,
+		dryRun:   dryRun,
+		workers:  hashBackfillWorkers(),
+	}
+
 	// Resume support: load checkpoint if present.
 	opID := maintenance.OperationIDFromCtx(ctx)
 	resumeIndex := 0
@@ -118,13 +375,35 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 	}
 
-	var hashed atomic.Int64
-	// repMu serializes access to reporter, whose maintenance.ProgressAdapter
-	// increments a plain int (progress.go) and is NOT concurrency-safe. The
-	// guarded calls are microseconds; file hashing dominates, so this does not
-	// meaningfully serialize the pool.
-	var repMu sync.Mutex
-	workers := hashBackfillWorkers()
+	reportPath := ""
+	if root := strings.TrimSpace(config.AppConfig.RootDir); root != "" {
+		// An unmounted share leaves an empty directory, so every path under it
+		// answers not-found and the whole library would be reported as gone.
+		// Nothing is written for a not-found, so this is only a guard against a
+		// useless, misleading run; it is a coarse check (libroot.Mounted), not a
+		// proof of a healthy mount. It runs BEFORE the report is resolved because
+		// that creates {root}/.reports.
+		if merr := libroot.Mounted(root); merr != nil {
+			return fmt.Errorf("backfill-file-hashes: refusing to run: %w", merr)
+		}
+		run.root = filepath.Clean(root)
+		path, rerr := libroot.ReportPath(root, "", hashBackfillReportName(opID, time.Now()))
+		if rerr != nil {
+			return fmt.Errorf("backfill-file-hashes: %w", rerr)
+		}
+		report, oerr := openHashBackfillReport(path, resumeIndex > 0)
+		if oerr != nil {
+			return fmt.Errorf("backfill-file-hashes: open report %s: %w", path, oerr)
+		}
+		run.report = report
+		reportPath = path
+		run.log("info", "Per-row report: "+path, nil)
+		defer func() {
+			if cerr := report.close(); cerr != nil && retErr == nil {
+				retErr = fmt.Errorf("backfill-file-hashes: report %s: %w", path, cerr)
+			}
+		}()
+	}
 
 	// Process in ORDERED chunks. Each chunk runs through a bounded worker pool,
 	// and the checkpoint is written only AFTER the whole chunk completes. That
@@ -142,50 +421,27 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		end := min(start+hashBackfillChunkSize, len(files))
 
 		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(workers)
+		g.SetLimit(run.workers)
 		for i := start; i < end; i++ {
 			bf := files[i]
 			g.Go(func() error {
 				if gctx.Err() != nil {
 					return gctx.Err()
 				}
-				repMu.Lock()
-				reporter.Increment()
-				repMu.Unlock()
-				if bf.FileHash != "" {
-					return nil
-				}
-				// filehash.BookFileHash directly: scanner.ComputeFileHash is only
-				// a thin wrapper over it, and filehash is the single entry point
-				// for the digest.
-				hash, herr := filehash.BookFileHash(bf.FilePath)
-				if herr != nil {
-					msg := herr.Error()
-					slog.Warn("backfill-file-hashes hash failed for"+bf.FilePath, "details", msg)
-					repMu.Lock()
-					reporter.Log("warn", "Hash computation failed for "+bf.FilePath, &msg)
-					repMu.Unlock()
-					return nil // one unreadable file must not abort the run
-				}
-				if !dryRun {
-					if serr := store.SetBookFileHash(bf.ID, hash); serr != nil {
-						msg := serr.Error()
-						slog.Error("backfill-file-hashes SetBookFileHash failed", "details", msg)
-						repMu.Lock()
-						reporter.Log("error", "Failed to save file hash for "+bf.FilePath, &msg)
-						repMu.Unlock()
-						return nil
-					}
-				}
-				hashed.Add(1)
+				run.processRow(bf)
 				return nil
 			})
 		}
-		// Per-file failures are swallowed above, so a non-nil result here means
-		// the context was cancelled. Return it: the checkpoint from the last
+		// Per-file failures are swallowed in processRow, so a non-nil result here
+		// means the context was cancelled. Return it: the checkpoint from the last
 		// fully-completed chunk stands, and resume restarts at that boundary.
 		if gerr := g.Wait(); gerr != nil {
 			return gerr
+		}
+		// The report is the run's deliverable: stop, with the checkpoint unmoved,
+		// rather than hash on while rows are being dropped from it.
+		if rerr := run.report.flush(); rerr != nil {
+			return fmt.Errorf("backfill-file-hashes: report %s: %w", reportPath, rerr)
 		}
 
 		// Periodic checkpoint so long runs can resume after restart.
@@ -200,7 +456,8 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	}
 
 	// Save a lightweight operation summary for the UI and activity feed.
-	res := fmt.Sprintf("Backfilled hashes for %d files", hashed.Load())
+	res := run.counts.summary(dryRun, reportPath)
+	run.log("info", res, nil)
 	now := time.Now()
 	opLog := &database.OperationSummaryLog{
 		ID:          opID,

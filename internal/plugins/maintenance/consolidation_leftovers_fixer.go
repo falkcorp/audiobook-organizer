@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-10-20
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -25,6 +25,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
+	"github.com/falkcorp/audiobook-organizer/internal/libroot"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -907,23 +908,6 @@ func leftoverBasisRank(b string) int {
 	}
 }
 
-// leftoverRootMounted refuses a plan or re-plan when the library root is
-// unset, missing or empty: an unmounted share would make every row ENOENT
-// and look like a library of leftovers.
-func leftoverRootMounted(root string) error {
-	if root == "" {
-		return errors.New("library root is not configured")
-	}
-	ents, err := os.ReadDir(root)
-	if err != nil {
-		return fmt.Errorf("library root %s unreadable: %w", root, err)
-	}
-	if len(ents) == 0 {
-		return fmt.Errorf("library root %s is empty (share not mounted?)", root)
-	}
-	return nil
-}
-
 func appendUnique(list []string, v string) []string {
 	if contains(list, v) {
 		return list
@@ -992,7 +976,7 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	if err := leftoverRootMounted(f.p.deps.RootDir()); err != nil {
+	if err := libroot.Mounted(f.p.deps.RootDir()); err != nil {
 		return nil, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	books, rowsOf, err := f.buildIndex(store)
@@ -1083,7 +1067,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
-	if err := leftoverRootMounted(f.p.deps.RootDir()); err != nil {
+	if err := libroot.Mounted(f.p.deps.RootDir()); err != nil {
 		return repairs.Row{}, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	idx, err := f.sizeIndex(store)
