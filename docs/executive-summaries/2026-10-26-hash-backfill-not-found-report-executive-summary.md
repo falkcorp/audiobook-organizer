@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-26-hash-backfill-not-found-report-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: d7aaaf61-bcb5-45c2-947a-ffd1e4655e3c -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -27,7 +27,8 @@
   can be restarted by a server restart. A restarted run used to write some report
   lines a second time and restart its totals from zero. Now it picks up the
   earlier report, skips what is already listed, and its final totals cover the
-  whole run, with no line listed twice.
+  whole run, with no line listed twice. One narrow case is not covered: a hard
+  kill part way through storing a batch (see the section on resuming).
 - **What a "not found" does and does not prove.** A file outside the library
   folder, or any file when no library folder is configured, is counted separately
   as "unverified", because the check that the library drive is attached says
@@ -67,10 +68,13 @@
   behind and is simply redone. When a run resumes it reads the report it already
   wrote, skips the files it lists, and starts its totals from it, which is why the
   report now also lists files that were fingerprinted. If the earlier report is
-  missing, the summary says its totals cover only the resumed part. One window
-  remains: if the whole server is killed in the instant after a batch's
-  fingerprints are stored and before its report lines reach disk, those files are
-  fingerprinted but not counted as such in the totals.
+  missing, the summary says its totals cover only the resumed part. One gap
+  remains: a batch's fingerprints are stored first, then its report lines are
+  written. If the whole server is killed (not merely stopped) partway through
+  storing a batch, the files already fingerprinted in that batch are kept, but the
+  resumed run skips them and does not list or count them, so the totals and the
+  report can be short by up to one batch (512 files). The fingerprints themselves
+  are correct, and a preview, which stores nothing, is not affected.
 
 ## When the job refuses to start
 
