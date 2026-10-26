@@ -1,5 +1,5 @@
 // file: internal/server/guest_service_tokens.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9e4b7c15-2a83-4d60-b1f9-6c8d0a3e5f72
 // last-edited: 2026-10-23
 
@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -76,10 +77,10 @@ const (
 // Audit entry types (activity tier "audit"). None carries a secret, a client id
 // or an email address.
 const (
-	auditGuestTokenMinted       = "guest_service_token_minted"
-	auditGuestTokenMintFailed   = "guest_service_token_mint_failed"
-	auditGuestTokenRevoked      = "guest_service_token_revoked"
-	auditGuestTokenRevokeFailed = "guest_service_token_revoke_failed"
+	auditGuestTokenMinted       = activity.TypeGuestServiceTokenPrefix + "minted"
+	auditGuestTokenMintFailed   = activity.TypeGuestServiceTokenPrefix + "mint_failed"
+	auditGuestTokenRevoked      = activity.TypeGuestServiceTokenPrefix + "revoked"
+	auditGuestTokenRevokeFailed = activity.TypeGuestServiceTokenPrefix + "revoke_failed"
 )
 
 // guestTokenCloudflare is the slice of *cfservicetoken.Client the feature uses.

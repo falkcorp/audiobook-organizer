@@ -1,5 +1,5 @@
 // file: internal/activity/user_data_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 70dbd475-4218-4a5d-ae68-86d5bd16ad4f
 // last-edited: 2026-10-25
 
@@ -8,7 +8,9 @@ package activity
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,116 @@ func TestWithoutOthersUserData(t *testing.T) {
 	other := database.ActivityEntry{Type: "library.scan", Details: map[string]any{DetailProgressSummary: "kept"}}
 	assert.Equal(t, other, WithoutOthersUserData(other))
 	assert.Equal(t, database.ActivityEntry{Type: TypeTrashDiscardProgressPurge}, WithoutOthersUserData(database.ActivityEntry{Type: TypeTrashDiscardProgressPurge}))
+}
+
+// The audit rows that name the person who acted (the trash discard-and-purge,
+// the admin debug edit and undo) lose the actor's username for a caller who may
+// not manage users, and keep the row and every other detail.
+func TestWithoutOthersUserData_StripsTheActorName(t *testing.T) {
+	for _, typ := range []string{TypeTrashDiscardProgressPurge, TypeAdminDebugEdit, TypeAdminDebugUndo} {
+		in := database.ActivityEntry{Type: typ, Tier: "audit", Summary: "a book changed", Details: map[string]any{
+			DetailActor: "bruce.wayne (01INVENTEDUSER0000000000A)", "book_id": "book-invented-year-one",
+		}}
+		out := WithoutOthersUserData(in)
+		assert.NotContains(t, out.Details, DetailActor, typ)
+		assert.Equal(t, "book-invented-year-one", out.Details["book_id"], typ)
+		assert.Equal(t, "a book changed", out.Summary, typ)
+		assert.Contains(t, in.Details, DetailActor, "%s: the input is not modified", typ)
+		assert.False(t, NamesOthersUserData(database.ActivityEntry{Type: typ, Summary: "a book changed"}),
+			"%s: the row itself is about a book and stays visible", typ)
+	}
+}
+
+// The account and identity audit rows are withheld by their type: their summary
+// says "account <id>" and their details carry account ids and provider error
+// text, which no wording rule can own.
+func TestNamesOthersUserData_AccountAuditTypes(t *testing.T) {
+	for _, typ := range []string{
+		TypeAuthEmailDisplaced, TypeUserMerge,
+		TypeGuestServiceTokenPrefix + "minted", TypeGuestServiceTokenPrefix + "mint_failed",
+		TypeGuestServiceTokenPrefix + "revoked", TypeGuestServiceTokenPrefix + "revoke_failed",
+	} {
+		e := database.ActivityEntry{Type: typ, Tier: "audit", Source: "invite", Summary: "a thing happened to somebody"}
+		assert.True(t, NamesOthersUserData(e), typ)
+	}
+	assert.False(t, NamesOthersUserData(database.ActivityEntry{Type: "metadata_apply", Tier: "audit", Summary: "a thing happened"}))
+}
+
+// Every line the review of PR 4166 found missing, rendered the way the server
+// really emits it: slog's text handler writes `msg="<subsystem>: <text>"`, so
+// the line parses to Source "server" and the subsystem survives only as the
+// summary's prefix. Each is withheld; the ordinary lines are not.
+func TestWriter_RealTextHandlerLinesNamingUsersAreWithheld(t *testing.T) {
+	const (
+		u1 = "01INVENTEDUSER0000000000A"
+		u2 = "01INVENTEDUSER0000000000B"
+		b1 = "01INVENTEDBOOK00000000YR1"
+	)
+	store := newTestPebbleActivityStore(t)
+	devNull, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	defer devNull.Close()
+	w := NewWriter(store, 50)
+	w.stdout = devNull
+	log := slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	hidden := map[string]func(){
+		"playback": func() {
+			log.Warn("database.playback: SetUserBookState " + u1 + "/" + b1 + ": stored state unreadable (bad json); overwriting it")
+		},
+		"verified mail": func() {
+			log.Warn("database.auth: verified-email lookup: an address is proven for more than one user (" + u1 + ", " + u2 + "); left unverified for both")
+		},
+		"invite accept": func() {
+			log.Warn("server.invites: invite accept: an emailed invitation took its address back from unverified account(s) [" + u1 + "]; new account " + u2)
+		},
+		"oauth resolve": func() {
+			log.Warn("oauth.resolve: oauth resolve: verified google login took its email back from unverified account(s) [" + u1 + "]; new account " + u2)
+		},
+		"guest token": func() {
+			log.Info("server.invites: guest service token: minted and added to the books policy for account " + u1 + " (token tok-1)")
+		},
+		"collections": func() {
+			log.Warn("collections: collection col-1 has owner \"" + u1 + "\" which is not a user; first admin " + u2 + " stands in for it")
+		},
+		"internal err": func() {
+			log.Error("revert failed", "err", "store cannot restore user listening state; "+u1+" on "+b1+" left as the import wrote it")
+		},
+		"bootstrap": func() {
+			log.Info("Token consumed new API key created user key_id ip", "adminUser", "bruce.wayne", "created", u1)
+		},
+		"email only": func() { log.Info("sign-in refused for bruce.wayne@example.invalid") },
+	}
+	visible := map[string]func(){
+		"scheduler": func() { log.Info("scheduler: Next sync in 28m") },
+		"scan":      func() { log.Info("scanner: scan complete count=12 path=/lib/Gotham/year-one.m4b") },
+		"book id":   func() { log.Info("organizer: moved book " + b1 + " to /lib/Gotham/hush.m4b") },
+	}
+	for _, f := range hidden {
+		f()
+	}
+	for _, f := range visible {
+		f()
+	}
+	w.Flush()
+
+	entries, _, err := store.Query(context.Background(), database.ActivityFilter{Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, entries, len(hidden)+len(visible))
+	withheld, shown := 0, 0
+	for _, e := range entries {
+		assert.Equal(t, "server", e.Source, "a text-handler line has no source of its own: %q", e.Summary)
+		isVisible := strings.HasPrefix(e.Summary, "scheduler:") || strings.HasPrefix(e.Summary, "scanner:") || strings.HasPrefix(e.Summary, "organizer:")
+		if isVisible {
+			assert.False(t, NamesOthersUserData(e), "an ordinary line stays visible: %q", e.Summary)
+			shown++
+			continue
+		}
+		assert.True(t, NamesOthersUserData(e), "the line names a user and is withheld: %q", e.Summary)
+		withheld++
+	}
+	assert.Equal(t, len(hidden), withheld)
+	assert.Equal(t, len(visible), shown)
 }
 
 // The server's own log lines are mirrored into the activity log, and several

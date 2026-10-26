@@ -1,5 +1,5 @@
 // file: internal/server/user_data_access_wiring_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b8b6eb72-5710-4aa4-bcd9-b827d8deba3d
 // last-edited: 2026-10-25
 
@@ -136,5 +136,80 @@ func TestActivity_TrashPurgeProgressIsAdminOnly(t *testing.T) {
 		}
 		require.NotContains(t, body, purgeSummary, tc.who)
 		require.NotContains(t, body, activity.DetailProgressSummary, tc.who)
+	}
+}
+
+// TestActivity_AccountAuditRowsAreAdminOnly: the audit rows that name other
+// accounts (email displacement, guest service tokens, user merges) are withheld
+// from the viewer and the editor whatever the filter, tier or type they ask
+// for, and the admin reads them; the audit rows about a book (the admin debug
+// edit, the trash purge) stay visible but lose the actor's username. Before
+// this the "account <id>" summaries and the account ids in Details went to every
+// library.view caller (tier=audit, type=auth_email_displaced).
+// Not parallel: it swaps the process-wide config.
+func TestActivity_AccountAuditRowsAreAdminOnly(t *testing.T) {
+	const (
+		acct    = "01INVENTEDACCOUNT00000000A"
+		cfText  = "invented-cloudflare-refusal-text"
+		actorNm = "selina.kyle (01INVENTEDUSER0000000000A)"
+	)
+	f := newRepairsOpAccessFixture(t)
+	require.NotNil(t, f.srv.activityService, "the test server has an activity log")
+	rec := func(typ, source, summary string, details map[string]any) {
+		t.Helper()
+		require.NoError(t, f.srv.activityService.Record(database.ActivityEntry{
+			Timestamp: time.Now().UTC(), Tier: "audit", Type: typ, Level: "info", Source: source,
+			Summary: summary, Details: details, BookID: "book-invented-hush",
+		}))
+	}
+	accountRows := map[string]string{
+		activity.TypeAuthEmailDisplaced:                        "their email was cleared and account " + acct + " was created",
+		activity.TypeGuestServiceTokenPrefix + "minted":        "a per-guest token was minted (account " + acct + ")",
+		activity.TypeGuestServiceTokenPrefix + "mint_failed":   "a per-guest token could not be minted (account " + acct + ")",
+		activity.TypeGuestServiceTokenPrefix + "revoked":       "a per-guest token was revoked (account " + acct + ")",
+		activity.TypeGuestServiceTokenPrefix + "revoke_failed": "revoking a token failed (account " + acct + ")",
+		activity.TypeUserMerge:                                 "merged the first account into the second",
+	}
+	for typ, summary := range accountRows {
+		rec(typ, "invite", summary, map[string]any{"user_id": acct, "detail": cfText})
+	}
+	rec(activity.TypeAdminDebugEdit, "admin_debug", "admin debug edit: book book-invented-hush (title)", map[string]any{"actor": actorNm, "entity_id": "book-invented-hush"})
+	rec(activity.TypeAdminDebugUndo, "admin_debug", "admin debug undo of edit e1: book book-invented-hush (title)", map[string]any{"actor": actorNm, "entity_id": "book-invented-hush"})
+	rec(activity.TypeTrashDiscardProgressPurge, "trash", "discarded listening progress and purged \"Hush\" from the trash (1 user(s), 0 bookmark(s))", map[string]any{"actor": actorNm, "book_id": "book-invented-hush"})
+
+	paths := []string{
+		"/api/v1/activity?tier=audit&limit=100",
+		"/api/v1/activity?type=" + activity.TypeAuthEmailDisplaced,
+		"/api/v1/activity?type=" + activity.TypeGuestServiceTokenPrefix + "minted",
+		"/api/v1/activity?book_id=book-invented-hush&limit=100",
+		"/api/v1/activity?search=account&limit=100",
+	}
+	for _, path := range paths {
+		for _, tc := range []struct {
+			who, token string
+			sees       bool
+		}{{"viewer", f.viewer, false}, {"editor", f.editor, false}, {"admin", f.admin, true}} {
+			w := getAs(f.srv, tc.token, path)
+			require.Equal(t, 200, w.Code, "%s %s: %s", tc.who, path, w.Body.String())
+			body := w.Body.String()
+			if tc.sees {
+				if path == paths[0] {
+					require.Contains(t, body, acct, "admin %s", path)
+					require.Contains(t, body, cfText, "admin %s", path)
+					require.Contains(t, body, actorNm, "admin %s", path)
+				}
+				continue
+			}
+			require.NotContains(t, body, acct, "%s %s", tc.who, path)
+			require.NotContains(t, body, cfText, "%s %s", tc.who, path)
+			require.NotContains(t, body, actorNm, "%s %s: the actor's username", tc.who, path)
+			for typ := range accountRows {
+				require.NotContains(t, body, `"`+typ+`"`, "%s %s: the %s row is withheld", tc.who, path, typ)
+			}
+			if path == paths[0] || path == paths[3] {
+				require.Contains(t, body, activity.TypeAdminDebugEdit, "%s %s: the book audit row stays", tc.who, path)
+				require.Contains(t, body, activity.TypeTrashDiscardProgressPurge, "%s %s: the book audit row stays", tc.who, path)
+			}
+		}
 	}
 }
