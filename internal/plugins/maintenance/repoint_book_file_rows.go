@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -60,6 +60,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -106,6 +107,11 @@ var errRBFRowChanged = errors.New("row changed since it was planned")
 // check before the disk re-check would leave the hash-and-stat window (a retire
 // can commit in it) between the check and the write.
 var errRBFRowRetired = errors.New("row was retired since the plan")
+
+// errRBFNothingWritten marks an error the ModifyBookFile callback returns before
+// it has changed any field (the journal row could not be built or stored). The
+// store aborts the write on a callback error, so these are provably not applied.
+var errRBFNothingWritten = errors.New("nothing was written")
 
 // rbfStat and rbfHash are variables only so a test can change the disk between
 // the plan and the apply; production never reassigns them.
@@ -697,6 +703,13 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 	}
 
 	newHash, newSize := r.DiskHash, r.DiskSize
+	// ModifyBookFile re-runs its callback on a fresh copy of the row each time
+	// another writer changes the row under it, so the callback must not mint
+	// anything of its own: the journal row is keyed by ONE id for the whole
+	// apply, so each run rewrites the same row (the last run's pre-image, the
+	// one the write commits against) instead of leaving one row per attempt.
+	changeID := ulid.Make().String()
+	var journaled *database.OperationChange // the row stored under changeID, nil until one is written
 	updated, err := env.store.ModifyBookFile(r.BookID, r.RowID, func(f *database.BookFile) error {
 		if f.Retired {
 			return errRBFRowRetired
@@ -706,21 +719,23 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 		}
 		blob, mErr := json.Marshal(f)
 		if mErr != nil {
-			return fmt.Errorf("serialize row for the undo ledger: %w", mErr)
+			return fmt.Errorf("%w: serialize row for the undo ledger: %w", errRBFNothingWritten, mErr)
 		}
-		// Journal first: a failure here returns before any field changes, so
-		// ModifyBookFile writes nothing.
-		if jErr := env.store.CreateOperationChange(&database.OperationChange{
-			ID:          ulid.Make().String(),
+		change := &database.OperationChange{
+			ID:          changeID,
 			OperationID: opID,
 			BookID:      f.BookID,
 			ChangeType:  rbfChangeType,
 			FieldName:   f.ID,
 			OldValue:    string(blob), // the ENTIRE row, so the repoint can be replayed back
 			NewValue:    planned.NewPath,
-		}); jErr != nil {
-			return fmt.Errorf("journal row: %w", jErr)
 		}
+		// Journal first: a failure here returns before any field changes, so
+		// ModifyBookFile writes nothing.
+		if jErr := env.store.CreateOperationChange(change); jErr != nil {
+			return fmt.Errorf("%w: journal row: %w", errRBFNothingWritten, jErr)
+		}
+		journaled = change
 		f.FilePath = planned.NewPath
 		f.Missing = false
 		f.FileHash = newHash
@@ -729,16 +744,63 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 		}
 		return nil
 	})
-	if err != nil {
-		return err.Error()
-	}
-	if updated == nil {
+	if err != nil || updated == nil {
+		// An earlier run of the callback may have journaled the repoint (a lost
+		// CAS round, then a refusal or a conflict on the next one). Take the row
+		// back, so the undo ledger never claims a repoint that did not happen,
+		// only when the write provably did not happen: the row changed since the
+		// plan or was retired since it, the store gave up on it (database.ErrBookFileConflict), the
+		// callback failed before changing a field, or the row vanished. Any other
+		// error keeps its row (JOURNAL FIRST), the rule the repairs writer
+		// follows: a commit whose fsync failed (database.ErrBookFileDurabilityUnknown)
+		// WAS applied and its journal row is what undoes it, and an error type
+		// this code does not know may be a post-commit one too.
+		var voidErr error
+		if err == nil || rbfProvablyUnwritten(err) {
+			voidErr = rbfVoidJournal(env.store, journaled)
+		}
+		if err != nil {
+			if voidErr != nil {
+				return err.Error() + "; " + voidErr.Error()
+			}
+			return err.Error()
+		}
+		if voidErr != nil {
+			return "row vanished before the write; " + voidErr.Error()
+		}
 		return "row vanished before the write"
 	}
 	if rErr := env.store.RecomputeBookAggregates(r.BookID); rErr != nil {
 		r.addWarning("row repointed; book aggregate recompute failed: " + rErr.Error())
 	}
 	return ""
+}
+
+// rbfProvablyUnwritten reports whether err means ModifyBookFile wrote nothing.
+func rbfProvablyUnwritten(err error) bool {
+	return errors.Is(err, errRBFRowChanged) ||
+		errors.Is(err, errRBFRowRetired) ||
+		errors.Is(err, errRBFNothingWritten) ||
+		errors.Is(err, database.ErrBookFileConflict)
+}
+
+// rbfVoidJournal takes back the journal row of a repoint that was refused after
+// its row was written (database.OperationChange.Voided: nothing happened, so no
+// revert, count or preflight sees it). journaled is the row stored under the
+// apply's id, nil when no run of the callback wrote one (nothing to take back).
+// A void that cannot be written is reported: a live row for a write that never
+// happened is worse than a failed op.
+func rbfVoidJournal(store rbfWriter, journaled *database.OperationChange) error {
+	if journaled == nil {
+		return nil
+	}
+	v := *journaled
+	now := time.Now()
+	v.RevertedAt, v.Voided = &now, true
+	if err := store.CreateOperationChange(&v); err != nil {
+		return fmt.Errorf("void journal row %s: %w", v.ID, err)
+	}
+	return nil
 }
 
 // rbfBookStates reads each touched book's aggregates. A book that cannot be

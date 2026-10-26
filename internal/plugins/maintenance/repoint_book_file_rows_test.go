@@ -1,13 +1,15 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c8e1a57-92d3-4f6b-b0a4-6e3f9d2c7b18
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -456,4 +458,184 @@ func TestRepointBookFileRows_LiveAllowedHashMismatchStoresNewHash(t *testing.T) 
 	require.Equal(t, "deadbeef", r.RowHash)
 	require.Equal(t, f.contentHash, r.DiskHash)
 	require.Equal(t, f.contentHash, f.storedRow(t).FileHash)
+}
+
+// casRetryStore stands in for a ModifyBookFile whose compare-and-swap lost
+// rounds: the store re-runs the callback on a fresh copy of the row for every
+// lost round (internal/database/bookfile_cas.go), so a callback that does
+// anything but edit its argument runs more than once. extraRuns is how many
+// discarded runs happen before the one the write commits; conflict makes the
+// final write give up the way an exhausted retry budget does, after the
+// callback ran and with nothing written.
+type casRetryStore struct {
+	*database.PebbleStore
+	extraRuns int
+	conflict  bool
+	// retireLast makes the row look retired to the final run only: a retire that
+	// committed after the earlier (discarded) runs had already journaled.
+	retireLast bool
+	// failWith, when set, is returned after the callback ran, in place of a
+	// commit: an error the repoint code does not know the meaning of.
+	failWith error
+}
+
+func (s *casRetryStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.PebbleStore.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
+		for i := 0; i < s.extraRuns; i++ {
+			lost := *f
+			if err := fn(&lost); err != nil {
+				return err
+			}
+		}
+		if s.retireLast {
+			f.Retired = true
+		}
+		if err := fn(f); err != nil {
+			return err
+		}
+		if s.conflict {
+			return &database.BookFileConflictError{BookID: bookID, FileID: fileID, Attempts: s.extraRuns + 1}
+		}
+		return s.failWith
+	})
+}
+
+// A write whose fsync failed was still applied: the row is repointed, so its
+// journal row must keep standing, or the repoint could not be undone.
+func TestRepointBookFileRows_DurabilityUnknownKeepsItsJournalRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPDURAB0000000000000Z"
+	rep := runRBF(t, &durabilityUnknownStore{PebbleStore: f.s}, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 1, rep.Failed)
+	require.Equal(t, f.newPath, f.storedRow(t).FilePath, "the write was applied")
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Len(t, standing, 1, "the repoint happened, so its undo row stands")
+	require.Empty(t, voided)
+}
+
+// durabilityUnknownStore applies the write for real, then reports that its
+// fsync failed, the way the store does (database.ErrBookFileDurabilityUnknown).
+type durabilityUnknownStore struct{ *database.PebbleStore }
+
+func (s *durabilityUnknownStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if _, err := s.PebbleStore.ModifyBookFile(bookID, fileID, fn); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("ModifyBookFile: write %s: %w: fsync", fileID, database.ErrBookFileDurabilityUnknown)
+}
+
+// repointJournalRows returns the repoint rows of one op, split into the ones
+// that stand and the ones that were voided (taken back).
+func repointJournalRows(t *testing.T, s *database.PebbleStore, opID string) (standing, voided []*database.OperationChange) {
+	t.Helper()
+	changes, err := s.GetOperationChanges(opID)
+	require.NoError(t, err)
+	for _, c := range changes {
+		if c.ChangeType != rbfChangeType {
+			continue
+		}
+		if c.Voided {
+			voided = append(voided, c)
+		} else {
+			standing = append(standing, c)
+		}
+	}
+	return standing, voided
+}
+
+// A lost CAS round re-runs the callback. The journal must still hold ONE repoint
+// row for the row, not one per run: a stale second row would replay a repoint
+// the ledger has already undone, or one against a pre-image that never
+// committed.
+func TestRepointBookFileRows_LostCASRoundsJournalOneRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPRETRY0000000000000Z"
+	rep := runRBF(t, &casRetryStore{PebbleStore: f.s, extraRuns: 3}, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 1, rep.Repointed, rep.Repoints[0].Error)
+	require.Equal(t, f.newPath, f.storedRow(t).FilePath)
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Len(t, standing, 1, "one repoint, one journal row, however many times the callback ran")
+	require.Empty(t, voided)
+	var old database.BookFile
+	require.NoError(t, json.Unmarshal([]byte(standing[0].OldValue), &old))
+	require.Equal(t, f.oldPath, old.FilePath, "the pre-image is the row as it was before the write")
+}
+
+// A write that gives up after the callback ran leaves nothing repointed, so the
+// ledger must not carry a live row for it.
+func TestRepointBookFileRows_ConflictedWriteVoidsItsJournalRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPCONFL0000000000000Z"
+	rep := runRBF(t, &casRetryStore{PebbleStore: f.s, extraRuns: 2, conflict: true}, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 0, rep.Repointed)
+	require.Equal(t, 1, rep.Failed)
+	row := f.storedRow(t)
+	require.Equal(t, f.oldPath, row.FilePath, "nothing was written")
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Empty(t, standing, "a repoint that did not happen has no standing journal row")
+	require.Len(t, voided, 1, "the one row the callback wrote is taken back, not duplicated")
+}
+
+// A row retired between two runs of the callback stops the write before it
+// commits, so the row an earlier run journaled is taken back, like any other
+// refusal that provably wrote nothing.
+func TestRepointBookFileRows_RetiredAfterAnEarlierRunVoidsItsJournalRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPRETIR0000000000000Z"
+	rep := runRBF(t, &casRetryStore{PebbleStore: f.s, extraRuns: 1, retireLast: true}, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 0, rep.Repointed)
+	require.Equal(t, 1, rep.Failed)
+	require.Equal(t, f.oldPath, f.storedRow(t).FilePath, "nothing was written")
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Empty(t, standing, "a repoint that did not happen has no standing journal row")
+	require.Len(t, voided, 1)
+}
+
+// An error the repoint code cannot classify may have been raised after the
+// commit, so its journal row keeps standing (the rule the repairs writer
+// follows): voiding it would leave an applied repoint that no revert can see.
+func TestRepointBookFileRows_UnclassifiedErrorKeepsItsJournalRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPUNKNO0000000000000Z"
+	rep := runRBF(t, &casRetryStore{PebbleStore: f.s, failWith: errors.New("disk on fire")}, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 1, rep.Failed)
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Len(t, standing, 1, "the outcome is unknown, so the undo row stands")
+	require.Empty(t, voided)
+}
+
+// failSecondJournalStore refuses the second journal write only: the first run
+// of the callback journals, the second cannot, and the void that takes the
+// first row back (a third write) goes through.
+type failSecondJournalStore struct {
+	*casRetryStore
+	writes int
+}
+
+func (s *failSecondJournalStore) CreateOperationChange(c *database.OperationChange) error {
+	s.writes++
+	if s.writes == 2 {
+		return errors.New("journal disk full")
+	}
+	return s.casRetryStore.CreateOperationChange(c)
+}
+
+// A callback that fails before changing a field wrote nothing, so the row an
+// earlier run of it journaled is taken back.
+func TestRepointBookFileRows_CallbackFailureVoidsTheEarlierRunsJournalRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPJRNFL0000000000000Z"
+	st := &failSecondJournalStore{casRetryStore: &casRetryStore{PebbleStore: f.s, extraRuns: 1}}
+	rep := runRBF(t, st, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 1, rep.Failed)
+	require.Equal(t, f.oldPath, f.storedRow(t).FilePath, "nothing was written")
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Empty(t, standing)
+	require.Len(t, voided, 1)
 }

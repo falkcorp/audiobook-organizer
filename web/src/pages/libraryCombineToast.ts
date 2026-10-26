@@ -1,7 +1,7 @@
 // file: web/src/pages/libraryCombineToast.ts
-// version: 1.4.0
+// version: 1.5.1
 // guid: 153032e4-1d3e-45a8-9827-f498afe24850
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 /**
  * Pure wording/decision helpers for the Library "Combine into One Book" toasts.
@@ -70,6 +70,13 @@ export function combineIncompleteOperationId(error: unknown): string | undefined
   return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
+/** True for the server's 503 COMBINE_RETRY_LATER refusal of a combine. */
+export function combineRetryLater(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const data = error.data as { code?: unknown } | null | undefined;
+  return data?.code === 'COMBINE_RETRY_LATER';
+}
+
 export function describeCombineFailure(error: unknown): CombineToastPlan {
   const undoOperationId = combineIncompleteOperationId(error);
   if (undoOperationId) {
@@ -85,6 +92,16 @@ export function describeCombineFailure(error: unknown): CombineToastPlan {
   }
   const base =
     error instanceof ApiError && error.message ? error.message : 'Failed to combine books.';
+  // COMBINE_RETRY_LATER (503): refused before any absorbed file moved, because the
+  // library index is still loading or other writers kept changing the files the
+  // combine moves. Nothing needs undoing; the same request works shortly. The
+  // server's message says which, so it follows the instruction.
+  if (combineRetryLater(error)) {
+    return {
+      message: `The combine was refused before it moved any files from the other books. Try again in a little while. (${base})`,
+      severity: 'warning',
+    };
+  }
   return { message: base, severity: 'error' };
 }
 

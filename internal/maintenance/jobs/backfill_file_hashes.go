@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.4.1
+// version: 4.5.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -802,10 +802,14 @@ func hbSameRow(row *database.BookFile, bf database.BookFileCore) bool {
 // recomputeBooks. An outcome that may have written the row is marked written for
 // that.
 //
-// TODO(#4169): once PR #4169 lands, the store runs this callback under
-// compare-and-swap and returns database.ErrBookFileConflict when other writers
-// keep changing the row; count that as busy here. (database.ErrBookFileChangedSince,
-// the generic changed-since error main has, comes only from PatchBookFileFields:
+// Both store calls are compare-and-swap loops (database.PebbleStore.modifyBookFile):
+// apply may run more than once, each time on a fresh copy of the row. The flags
+// below are only ever set by a run that returns ErrSkipBookFileWrite, which ends
+// the loop, so they always describe the final run. A row that other writers keep
+// changing past the store's retry budget comes back as database.ErrBookFileConflict
+// with nothing written; that is counted as busy (hbBusyReason) and retried next
+// run, never reported as a write error and never written over. (The generic
+// database.ErrBookFileChangedSince comes only from PatchBookFileFields:
 // ModifyBookFile* never returns it, so it is not matched.)
 func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 	var already, changed bool
@@ -841,6 +845,13 @@ func (r *hashBackfillRun) storeHash(o *hbOutcome) {
 	}
 	row, err := modify(o.bf.BookID, o.bf.ID, apply)
 	switch {
+	case errors.Is(err, database.ErrBookFileConflict):
+		// The store gave up after other writers kept changing the row and wrote
+		// nothing, so there is no hash to recompute a book for (o.written stays
+		// false). Busy, not an error: a later run picks the row up.
+		o.bucket, o.reason = hbBucketBusy, hbBusyReason
+		msg := err.Error()
+		r.log("warn", "Row kept changing, will retry next run: "+o.bf.FilePath, &msg)
 	case err != nil:
 		// A failed write may still have been applied (an fsync that failed after
 		// the commit), so its book is recomputed too.

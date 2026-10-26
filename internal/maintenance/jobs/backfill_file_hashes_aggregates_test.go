@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_aggregates_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f6a1c84-b2d7-4e95-8a13-d90e5b7c4f26
 // last-edited: 2026-10-26
 
@@ -85,6 +85,51 @@ func TestBackfillFileHashes_DoesNotRecomputeABookThatWroteNothing(t *testing.T) 
 
 	assert.Equal(t, hbCounts{"hashed": 2, "busy": 1}, c)
 	assert.Equal(t, map[string]int{"b1": 1}, h.recomputes, "only the book whose hash was written is recomputed")
+}
+
+// The store's compare-and-swap gives up on a row other writers keep changing
+// (database.ErrBookFileConflict) and writes nothing. That is a busy row, retried
+// next run: not a write error, and not a book to recompute, since no hash was
+// stored for it. The row beside it is unaffected.
+func TestBackfillFileHashes_ACompareAndSwapConflictIsBusyNotAWriteError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opID string // no operation ID: no journal, so the per-row recomputing ModifyBookFile is used
+	}{
+		{"deferred store", "01CASCONFLICT"},
+		{"per-row recompute store", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := hbLibrary(t)
+			h := newHBStore(t,
+				database.BookFileCore{ID: "f1", BookID: "b1", FilePath: hbWrite(t, root, "Year One.m4b", "year one bytes")},
+				database.BookFileCore{ID: "f2", BookID: "b2", FilePath: hbWrite(t, root, "Hush.m4b", "hush bytes")},
+			)
+			h.failHash = func(id string) error {
+				if id == "f1" {
+					return fmt.Errorf("ModifyBookFile: write %s: %w", id, database.ErrBookFileConflict)
+				}
+				return nil
+			}
+
+			rep, c, report := runHB(t, h.store(), hbRun{opID: tc.opID})
+
+			assert.Equal(t, hbCounts{"hashed": 1, "busy": 1}, c, "a conflict is busy, never a write error")
+			assert.Equal(t, []string{"f2"}, h.hashed(), "nothing is stored for the row that kept changing")
+			assert.Equal(t, 0, h.writes["f1"])
+			if tc.opID != "" {
+				assert.Equal(t, map[string]int{"b2": 1}, h.recomputes, "the conflicted row's book is not recomputed: nothing was written to it")
+				rows := hbReadReport(t, report)
+				assert.Equal(t, map[string][]string{"busy": {"f1"}, "hashed": {"f2"}}, hbBuckets(rows))
+				for _, r := range rows {
+					if r.fileID == "f1" {
+						assert.Equal(t, "row was busy, retried next run", r.reason)
+					}
+				}
+			}
+			assert.Contains(t, rep.logs[len(rep.logs)-1], "busy=1")
+		})
+	}
 }
 
 // The real store: N hashes of one book, stored through the job, cost exactly one
