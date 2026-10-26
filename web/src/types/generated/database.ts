@@ -383,6 +383,12 @@ export interface BookFileCore {
   intro_source_hash?: string;
   intro_run_op_id?: string;
   /**
+   * IntroTimeouts / IntroTimeoutHash are the decoder-timeout strikes and the
+   * FileHash they were counted against; see BookFile.
+   */
+  intro_timeouts?: number /* int */;
+  intro_timeout_hash?: string;
+  /**
    * Per-file scan cache. RETAINED rather than stripped: the stripped set is the
    * heavy fingerprint/transcript strings, and these are three small scalars that
    * the scan path queries on every walk -- "small and queryable", which is the
