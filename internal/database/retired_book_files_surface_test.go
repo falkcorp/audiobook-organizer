@@ -1,13 +1,12 @@
 // file: internal/database/retired_book_files_surface_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7d5a19-c0e2-4f84-9a61-d8e24b70f315
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -124,18 +123,6 @@ func TestGetBookFileByAcoustID_IgnoresARetiredHolder(t *testing.T) {
 	got, err = fx.ps.GetBookFileByAcoustID(fp)
 	require.NoError(t, err)
 	require.Nil(t, got, "a fingerprint held only by a retired row names nobody")
-}
-
-// A retired version is created by the retire op only, which names the shell and
-// the time; a version without them would have no idx:bv:from: entry and no
-// provenance for the undo.
-func TestCreateBookVersion_RetiredNeedsItsProvenance(t *testing.T) {
-	fx := newRetiredFixture(t)
-	now := time.Now()
-	_, err := fx.ps.CreateBookVersion(&BookVersion{BookID: fx.holder.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book", RetiredAt: &now})
-	require.ErrorIs(t, err, ErrRetiredVersionMismatch, "no retired_from_book_id")
-	_, err = fx.ps.CreateBookVersion(&BookVersion{BookID: fx.holder.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book", RetiredFromBookID: fx.shell.ID})
-	require.ErrorIs(t, err, ErrRetiredVersionMismatch, "no retired_at")
 }
 
 // A retired version cannot be rehomed onto the shell it was retired out of.

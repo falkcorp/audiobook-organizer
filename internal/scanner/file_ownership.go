@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.4.2
+// version: 1.6.0
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package scanner
 
@@ -167,6 +167,13 @@ const (
 //     rows at all. That is the owner, grown -- a download that was scanned
 //     half-written. The verdict names the owner and the new files, and the
 //     caller appends rows for them instead of creating a book.
+//     A RETIRED row (a version another book holds, database.BookFile.Retired)
+//     is not an owner and never reaches this step: it is collected per file,
+//     apart from the claim tally, and a scanned file whose only claims are
+//     retired rows skips the whole scanned book (see retiredOnlyVerdict). It is
+//     never read as "owned by the holder", which is what would otherwise make
+//     the scan the holder's rescan (sameBook) or grow the holder with the
+//     retired file (appendTo).
 //  5. Everything else is a fragment and is skipped: files owned by a
 //     different book, owned files mixed with unowned ones in any other shape,
 //     files owned by several books.
@@ -185,7 +192,18 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	// A segment list is the one shape whose FilePath is merely its first file;
 	// every other shape's FilePath names the whole book.
 	if !segmentList && atPath != nil {
-		return directoryBookArrivals(store, book, atPath)
+		// A retired shell at the path is not "this same book": its files live
+		// on as retired rows under another book, so a rescan of the shell's own
+		// path must still be judged by who claims the scanned files. The
+		// full check below skips a file only retired rows claim, where the
+		// shortcut would let the scan mint a second, live row on it.
+		shell, serr := isRetiredShell(store, atPath.ID)
+		if serr != nil {
+			return fileOwnershipVerdict{}, fmt.Errorf("retired versions of book %s: %w", atPath.ID, serr)
+		}
+		if !shell {
+			return directoryBookArrivals(store, book, atPath)
+		}
 	}
 	files, err := scannedFilesOf(book)
 	if err != nil {
@@ -202,6 +220,7 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 
 	state := make(map[string]ownerState)    // bookID -> what it is
 	fileOwners := make(map[string][]string) // scanned file -> owning book IDs (live or soft-deleted)
+	retired := make(map[string][]retiredClaim)
 	anyLive := false
 	for f := range scanned {
 		rows, err := database.BookFileRowsAtPath(store, f)
@@ -210,6 +229,14 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 		}
 		seen := make(map[string]struct{}, len(rows))
 		for _, r := range rows {
+			if r.Retired {
+				// BookFileRowsAtPath is the complete lookup and returns a
+				// retired version under its holder. It is a claim on the file
+				// but not an owner: kept apart so it can neither make the
+				// holder the owner nor count as a second owning book.
+				retired[f] = append(retired[f], retiredClaim{holder: r.BookID, versionID: r.VersionID})
+				continue
+			}
 			if _, dup := seen[r.BookID]; dup {
 				continue
 			}
@@ -238,6 +265,10 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 			}
 			fileOwners[f] = append(fileOwners[f], r.BookID)
 		}
+	}
+
+	if v, ok := retiredOnlyVerdict(scanned, fileOwners, retired); ok {
+		return v, nil
 	}
 
 	owned := make(map[string]int)
@@ -323,6 +354,63 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 	}
 	return fileOwnershipVerdict{skip: true, owners: owners,
 		reason: "some files are owned by another book and some are not"}, nil
+}
+
+// isRetiredShell reports whether bookID is a book some retired version was
+// retired out of: a trashed or merged shell whose files now live as retired
+// rows under another book. A store that cannot say fails the check, and the
+// caller fails closed.
+func isRetiredShell(store any, bookID string) (bool, error) {
+	versions, err := database.RetiredVersionsFromBook(store, bookID)
+	if err != nil {
+		return false, err
+	}
+	return len(versions) > 0, nil
+}
+
+// retiredClaim is one retired version's claim on a scanned file: the live
+// book holding it and the version row.
+type retiredClaim struct {
+	holder    string
+	versionID string
+}
+
+// retiredOnlyVerdict skips the scanned book when any of its files is claimed
+// only by retired rows. Such a file is a former file of a trashed or merged
+// book that now lives on as a retired version of another book: importing it
+// again would mint a new book for content the library already holds, and
+// treating it as the holder's own file would grow or rescan the holder with a
+// file it deliberately keeps out of its live track list. A file that ALSO has
+// a non-retired claim (fileOwners) ignores its retired rows, since the live
+// claim is the one the ownership rules below judge. The files are examined in
+// natural order so the logged holder is stable. ok is false when no file is
+// retired-only.
+func retiredOnlyVerdict(scanned map[string]struct{}, fileOwners map[string][]string, retired map[string][]retiredClaim) (fileOwnershipVerdict, bool) {
+	var only []string
+	for f := range scanned {
+		if len(fileOwners[f]) == 0 && len(retired[f]) > 0 {
+			only = append(only, f)
+		}
+	}
+	if len(only) == 0 {
+		return fileOwnershipVerdict{}, false
+	}
+	slices.SortFunc(only, util.CompareNatural)
+	first := retired[only[0]][0]
+	holders := make([]string, 0, len(only))
+	for _, f := range only {
+		for _, c := range retired[f] {
+			if !slices.Contains(holders, c.holder) {
+				holders = append(holders, c.holder)
+			}
+		}
+	}
+	slices.Sort(holders)
+	reason := fmt.Sprintf("retired version of book %s (version %s)", first.holder, first.versionID)
+	if len(only) > 1 {
+		reason = fmt.Sprintf("%s; %d of the scanned files are retired versions", reason, len(only))
+	}
+	return fileOwnershipVerdict{skip: true, owners: holders, reason: reason}, true
 }
 
 // directoryBookArrivals handles a single-file or directory-shaped scanned book

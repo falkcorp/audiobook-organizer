@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
-// last-edited: 2026-10-15
+// last-edited: 2026-10-26
 
 package admindebug
 
@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
@@ -332,4 +333,41 @@ func TestLookups(t *testing.T) {
 	w, out = do(t, r, http.MethodGet, "/api/v1/admin/debug/lookup?path="+url.QueryEscape(fx.book.FilePath), "")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Equal(t, []any{fx.book.ID}, out["book_ids"])
+}
+
+// TestGetBook_ListsRetiredRowsFlagged: the debug view shows every row keyed
+// under the book, a retired version included, flagged, and counts them apart.
+func TestGetBook_ListsRetiredRowsFlagged(t *testing.T) {
+	fx := newFixture(t)
+	shell, err := fx.store.CreateBook(&database.Book{Title: "The Dark Knight Returns", FilePath: "/lib/Gotham/Bruce Wayne/The Dark Knight Returns"})
+	require.NoError(t, err)
+	retiredRow := &database.BookFile{BookID: shell.ID, FilePath: "/lib/Gotham/Bruce Wayne/The Dark Knight Returns/01.m4b", FileHash: "h-ret", Duration: 50}
+	require.NoError(t, fx.store.CreateBookFile(retiredRow))
+	ver, err := fx.store.CreateBookVersion(&database.BookVersion{
+		BookID: fx.book.ID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-admin", RetiredAt: new(time.Now()),
+	})
+	require.NoError(t, err)
+	require.NoError(t, fx.store.RetireBookFiles(
+		[]database.BookFileMove{{FileIDs: []string{retiredRow.ID}, SourceBookID: shell.ID}}, fx.book.ID, ver.ID))
+
+	r := fx.router(admin)
+	w, out := do(t, r, http.MethodGet, "/api/v1/admin/debug/books/"+fx.book.ID, "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.EqualValues(t, 3, out["book_file_count"], "two live rows plus the retired one")
+	require.EqualValues(t, 1, out["retired_book_file_count"])
+	var flagged []string
+	for _, f := range out["book_files"].([]any) {
+		row := f.(map[string]any)
+		if row["retired"] == true {
+			flagged = append(flagged, row["id"].(string))
+		}
+	}
+	require.Equal(t, []string{retiredRow.ID}, flagged)
+
+	w, out = do(t, r, http.MethodGet, "/api/v1/admin/debug/book-files/"+retiredRow.ID, "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, true, out["retired"])
+	require.Equal(t, ver.ID, out["retired_version_id"])
+	require.Equal(t, fx.book.ID, out["book_id"], "book_id is the holder")
 }

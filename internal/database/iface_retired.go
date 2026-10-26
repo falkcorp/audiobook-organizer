@@ -1,7 +1,7 @@
 // file: internal/database/iface_retired.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -97,7 +97,16 @@ type RetiredBookFileWriter interface {
 	RehomeRetiredVersion(versionID, newHolderID string) error
 }
 
+// RetiredPathKeyClaimer hands a path's single-owner key back to a retired row.
+// ClaimBookFilePathKey (the Store method) refuses a retired row on purpose; an
+// undo that vacated a path a retired row keyed uses this instead, and it never
+// takes the key from a live row. See PebbleStore.ClaimRetiredBookFilePathKey.
+type RetiredPathKeyClaimer interface {
+	ClaimRetiredBookFilePathKey(bookID, fileID, path string) (claimed bool, err error)
+}
+
 var (
 	_ RetiredBookFileReader = (*PebbleStore)(nil)
 	_ RetiredBookFileWriter = (*PebbleStore)(nil)
+	_ RetiredPathKeyClaimer = (*PebbleStore)(nil)
 )

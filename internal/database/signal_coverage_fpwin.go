@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage_fpwin.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 5ab03e39-dbc3-43e9-8008-dd58c0f20f7d
-// last-edited: 2026-10-10
+// last-edited: 2026-10-26
 
 package database
 
@@ -514,7 +514,7 @@ func (p *PebbleStore) GetFingerprintWindowCoverage(ctx context.Context, deep boo
 	return out, nil
 }
 
-// slimBookFileRows reads ID, BookID and Missing of every primary book_file row
+// slimBookFileRows reads ID, BookID and Missing of every primary, non-retired book_file row
 // from Pebble: IDs from the key, Missing from a one-field decode spread across
 // a bounded pool (values carry raw prints, so the decode is the cost).
 func (p *PebbleStore) slimBookFileRows(ctx context.Context, workers int) ([]BookFile, error) {
@@ -532,9 +532,15 @@ func (p *PebbleStore) slimBookFileRows(ctx context.Context, workers int) ([]Book
 				for _, it := range batch {
 					var row struct {
 						Missing bool `json:"missing"`
+						Retired bool `json:"retired"`
 					}
 					if err := json.Unmarshal(it.val, &row); err != nil {
 						return fmt.Errorf("decode book_file %s: %w", it.fileID, err)
+					}
+					if row.Retired {
+						// A retired version's row is not part of the coverage
+						// population (see MemStore.bookFilePointers).
+						continue
 					}
 					outs[w] = append(outs[w], BookFile{ID: it.fileID, BookID: it.bookID, Missing: row.Missing})
 				}

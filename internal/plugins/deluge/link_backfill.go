@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 7101d385-7f6e-4a95-bd2e-11760d0fed02
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package deluge
 
@@ -436,6 +436,15 @@ func buildLinkLibraryIndex(root string, rows []database.BookFileCore) *linkLibra
 		c := candidateFromCore(r)
 		if r.DelugeHash != "" {
 			idx.rowHashes[strings.ToLower(r.DelugeHash)] = true
+		}
+		// A retired row is a version that left the library: it is never a link
+		// candidate (rules a and d), and its version id and torrent-less state are
+		// not the holder's, so they stay out of the relink hold-back counts too.
+		// GetAllBookFilesCoreComplete already omits retired rows; this keeps the
+		// index right if a caller hands it a list that does not. Its DelugeHash
+		// still counts above: that torrent is already linked to something.
+		if r.Retired {
+			continue
 		}
 		switch {
 		case r.VersionID != "":
@@ -1297,9 +1306,17 @@ func (r *linkRun) candidates(abs string, size int64, h string) ([]linkCandidate,
 	return nil, sawOutside, nil
 }
 
+// rowsToCandidates turns store rows into link candidates, leaving out retired
+// rows: BookFilesWithHash and BookFilesAtPath return them by design (a retired
+// row still owns its hash and path for claim purposes), but a retired row is a
+// version that left the library, so linking a torrent to it would attach the
+// torrent to a file the holder no longer plays.
 func rowsToCandidates(rows []database.BookFile) []linkCandidate {
 	out := make([]linkCandidate, 0, len(rows))
 	for i := range rows {
+		if rows[i].Retired {
+			continue
+		}
 		out = append(out, candidateFromRow(&rows[i]))
 	}
 	return out

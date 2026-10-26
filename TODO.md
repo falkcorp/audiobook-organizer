@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.7 -->
+<!-- version: 10.78.8 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -20,9 +20,10 @@ into one of the curated sections below, is a normal direct edit.
       therefore reports the shell, not the holder, until the index is rebuilt.
       Rewrite the `fpidx:` value in the retire and un-retire batch (or have the
       LSH readers resolve the owner through the file id), and add a test that a
-      retire followed by an `LSHProbe` hit resolves to the holder. Callers of
-      `LookupAcoustIDCandidates` and `LSHProbe` must skip a retired row until
-      then (follow-up PR 3b, dedup collectors).
+      retire followed by an `LSHProbe` hit resolves to the holder. The callers
+      of `LookupAcoustIDCandidates` and `LSHProbe` (the dedup collectors and
+      the `AcoustIDScan` LSH branch) already skip a retired row, so this
+      rewrite is no longer blocking them.
 
 - [ ] **TODO-JUNK-TITLE-SLIPS** The junk-title fixer's string rules (v2, evidence ranking) still let 146 of the 261 reviewer-rejected transcription rows, 85 of 134 filename rows and 14 of 57 folder rows through, measured by replaying the 2026-10-23 plan offline. Classes left as they are because a string rule cannot tell them from a title: a misheard transcription (needs a corroborating folder, filename or candidate before it is applicable, the same ask as the garbled-transcription entry above), a plain series prefix with no "Book N", a bare leading or trailing year, "a novel" without a comma, a trailing "... Stories", a number-and-year prefix. Decide which of these the owner wants refused outright and which need a second source, then add them to `junk_title_filters.go` with invented fixtures. Also still refused although they can be real titles: an opening "Welcome to ...", a sentence-case "It ends ..." and a trailing "..." in a transcription (`junk_title_filters.go`), and `junkStoredAuthor` still uses `authorjunk.ClassifyName` with its relink-only rules; each is a refusal, so a title is listed for a person, never mis-proposed.
 

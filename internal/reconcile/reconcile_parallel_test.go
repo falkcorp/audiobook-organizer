@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.8.0
+// version: 1.10.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-10-14
+// last-edited: 2026-10-26
 
 package reconcile
 
@@ -25,6 +25,9 @@ import (
 // concurrent access. `books` is read-only during a run.
 type fakeReconcileStore struct {
 	database.Store
+	// The nil reader only makes the fake resolve as a RetiredBookFileReader;
+	// GetBookFilesIncludingRetired below is the one method the cleanup reads.
+	database.RetiredBookFileReader
 	books   []database.BookCore
 	files   map[string][]database.BookFile
 	byID    map[string]*database.Book
@@ -46,6 +49,12 @@ func (f *fakeReconcileStore) GetUserBookState(_, bookID string) (*database.UserB
 
 func (f *fakeReconcileStore) ListUserPositionsForBook(string, string) ([]database.UserPosition, error) {
 	return nil, nil
+}
+
+// GetBookFilesIncludingRetired: this in-memory fake never holds a retired row, so
+// its GetBookFiles is the complete answer.
+func (f *fakeReconcileStore) GetBookFilesIncludingRetired(bookID string) ([]database.BookFile, error) {
+	return f.GetBookFiles(bookID)
 }
 
 func newFakeStore() *fakeReconcileStore {

@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.133.0
+// version: 1.135.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-16
+// last-edited: 2026-10-26
 
 package scanner
 
@@ -2503,6 +2503,36 @@ func createSingleFileBookFile(book *Book, scanLog logger.Logger) {
 	createBookFilesForBookWithAudio(book.FilePath, segs, scanLog, keepFilePath, book.SegmentHashes, knownInfo, maxDirectoryBookFiles, nil)
 }
 
+// withoutRetiredClaims returns files minus the ones a retired book_file row
+// claims by path, when bookID is a retired shell (some retired version was
+// retired out of it). For any other book it returns files unchanged: a book
+// that is not a shell cannot hold rows on a retired version's file, and its
+// retired-claim check already ran in checkFileOwnership. A claim is never a
+// reason to mint a second row on one file, so those files are skipped and
+// logged; the retired rows keep them.
+func withoutRetiredClaims(bookID string, files []string, scanLog logger.Logger) ([]string, error) {
+	store := getStore()
+	shell, err := isRetiredShell(store, bookID)
+	if err != nil || !shell {
+		return files, err
+	}
+	kept := make([]string, 0, len(files))
+	for _, f := range files {
+		rows, err := database.BookFileRowsAtPath(store, f)
+		if err != nil {
+			return nil, fmt.Errorf("book_file lookup for %s: %w", f, err)
+		}
+		claimed := slices.ContainsFunc(rows, func(r database.BookFile) bool { return r.Retired })
+		if claimed {
+			scanLog.Warn("not giving retired shell %s a row on %s: a retired version holds that file",
+				logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(f))
+			continue
+		}
+		kept = append(kept, f)
+	}
+	return kept, nil
+}
+
 // normalizeToDirectory / keepFilePath name createBookFilesForBookWithAudio's
 // normalizeBookPath argument at the call sites, because a bare true/false there
 // says nothing about which of the two very different behaviours is wanted.
@@ -2730,6 +2760,22 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 		// list IS the positional order a book falls back to when its tag
 		// numbers are refused, so put it in natural order.
 		slices.SortFunc(segmentFiles, util.CompareNatural)
+	}
+
+	// A retired shell with no rows of its own must not be given a live row on a
+	// file a retired row holds: every scan route that reaches a shell (its own
+	// path, its organizer ID, a re-sorted segment list) ends here, so this is
+	// the backstop behind checkFileOwnership and lookupScanExisting.
+	scannedCount := len(segmentFiles)
+	segmentFiles, claimErr := withoutRetiredClaims(dbBook.ID, segmentFiles, scanLog)
+	if claimErr != nil {
+		warnSampled(&bookFileLookupErrCount, scanLog,
+			"createBookFilesForBookWithAudio: retired-claim check failed for book %s: %v "+
+				"(no book_file rows created; the next scan retries)", logger.SanitizeLogValue(dbBook.ID), claimErr)
+		return normalizedPath
+	}
+	if scannedCount > 0 && len(segmentFiles) == 0 {
+		return normalizedPath // every file is a retired version's: nothing to mint
 	}
 
 	// The hard bound's backstop, on the SHAPE rather than on one branch.
@@ -3429,6 +3475,11 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		found, err := lookupScanExisting(book, verdict, fileHash)
 		if err != nil {
 			return err
+		}
+		if found.retired != nil {
+			// Known retired content: the library already holds these bytes as
+			// a version another book keeps out of its live files.
+			return found.retired.asError(book.FilePath)
 		}
 
 		// An EXISTING row keeps its title, author, series and position

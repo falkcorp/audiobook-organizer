@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package scanner
 
@@ -303,7 +303,7 @@ func mergeScannedKeepingForeignEdits(cur, scanned *database.Book, locked map[str
 
 // resolveScanLockSet returns the book rows the worker must hold for b: the row
 // at its path, for a multi-file book also the row at its directory and the
-// owner of its first segment, plus every member of each such row's version
+// owner of its first segment (the holder, for a retired version's row), plus every member of each such row's version
 // group (capped), plus any rows a previous attempt discovered mid-save.
 //
 // The version group is what lets an apply lock only its own book: the scanner
@@ -333,7 +333,12 @@ func resolveScanLockSet(b *Book) ([]string, map[string]*database.Book, error) {
 		if r, err := st.GetBookByFilePath(filepath.Dir(b.FilePath)); err == nil {
 			add(r)
 		}
-		if bf, err := st.GetBookFileByPath(b.SegmentFiles[0]); err == nil && bf != nil && bf.BookID != "" {
+		// Unfiltered: a first segment only a retired version's row claims is
+		// owned, for this scan's purposes, by the book the version is held
+		// under. The scan reads that book's retired rows to decide the file is
+		// not new (and a live-only lookup answers nil for it), so a retire into
+		// or a purge of that book must not run under it.
+		if bf, err := database.BookFileByPathIncludingRetired(st, b.SegmentFiles[0]); err == nil && bf != nil && bf.BookID != "" {
 			if r, err := st.GetBookByID(bf.BookID); err == nil {
 				add(r)
 			}
