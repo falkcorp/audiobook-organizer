@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ba9416a6-0f06-432d-ba9c-534d5579ab16
 // last-edited: 2026-10-26
 
@@ -62,6 +62,27 @@ func (e *WorkerFaultError) timeoutMajority() bool {
 		}
 	}
 	return true
+}
+
+// killMajority reports whether a timeout-majority fault is mostly kills: more
+// than half of its faulted answers are decoder_killed (SF2 of review 5 of
+// #4182). Jetsam kills a decoder as it grows on a long clip under memory
+// pressure, and the two-second canary clip loads and decodes before that
+// pressure bites, so a machine whose fault was kills can pass the canary and
+// still be killing real clips. The dispatcher keeps withholding such a
+// machine's decoder_killed answers for the rest of the dispatch even once its
+// canary passes; only its timeouts and crashes are vouched for.
+func (e *WorkerFaultError) killMajority() bool {
+	if !e.timeoutMajority() {
+		return false
+	}
+	killed := 0
+	for _, r := range e.Faulted {
+		if PathErrorCode(r.Error) == PathErrDecoderKilled {
+			killed++
+		}
+	}
+	return 2*killed > len(e.Faulted)
 }
 
 // isWorkerLevelCode is a per-job answer that is about the worker at any count:
