@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections_bounds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f8a6c41-9d03-4e57-b1a8-7c5e0d3f6b92
 // last-edited: 2026-10-26
 
@@ -32,8 +32,8 @@ func ghostIDs(n int) []string {
 
 func withFixedViewerMembers(sets map[string][]string) harnessOpt {
 	return func(o *abshandler.Options) {
-		o.CollectionViewerMembers = func(_ context.Context, _ []database.Collection, _ string) (map[string][]string, error) {
-			return sets, nil
+		o.CollectionViewerMembers = func(_ context.Context, _ []database.Collection, _ string) (abshandler.ViewerMembers, error) {
+			return abshandler.ViewerMembers{Sets: sets}, nil
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_bounds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b4e1f73-2a96-4c05-9d38-e6a1c7f50b24
 // last-edited: 2026-10-26
 
@@ -107,12 +107,16 @@ func TestPlaylists_RefuseAPerUserTermTheEvaluatorCannotEvaluateAsWritten(t *test
 			assert.Contains(t, w.Body.String(), "read_status:(finished|in_progress)")
 		})
 		t.Run("update "+q, func(t *testing.T) {
-			store := handlersmocks.NewMockPlaylistStore(t)
+			store := handlersmocks.NewMockPlaylistStore(t) // the row is read, never written
+			store.EXPECT().GetUserPlaylist("pl-1").Return(&database.UserPlaylist{
+				ID: "pl-1", Name: "Hush", Type: database.UserPlaylistTypeSmart, Query: "title:Alpha", CreatedByUserID: "alice",
+			}, nil)
 			h := handlers.NewPlaylistHandler(store, noSearchIndex)
 			c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "alice")
 			body, _ := json.Marshal(map[string]any{"query": q})
 			c.Request = httptest.NewRequest(http.MethodPut, "/playlists/pl-1", bytes.NewReader(body))
 			c.Request.Header.Set("Content-Type", "application/json")
+			c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
 			h.UpdatePlaylist(c)
 			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 		})
@@ -186,6 +190,19 @@ func TestCollections_MemberListsAreCutToTheBoundAndReportTheTotal(t *testing.T) 
 		list := decodeListView[view](t, rig.do(t, http.MethodGet, "/api/v1/collections", "alice", nil))
 		assert.Len(t, list["pv"].Members, database.MaxMaterializedMembers)
 		assert.Equal(t, over, list["pv"].Total)
+		// The log is readable by every library.view user, and one viewer's match
+		// count is that viewer's listening data: the bound is logged, the count is not.
+		var capped []string
+		for _, line := range rig.warns() {
+			if strings.Contains(line, "for a viewer") {
+				capped = append(capped, line)
+			}
+		}
+		require.NotEmpty(t, capped, "the cut is logged; warns: %v", rig.warns())
+		for _, line := range capped {
+			assert.Contains(t, line, fmt.Sprintf("more than %d books", database.MaxMaterializedMembers))
+			assert.NotContains(t, line, fmt.Sprint(over), "a viewer's own count is not logged")
+		}
 		assert.Empty(t, store.cols[0].MaterializedBookIDs)
 		assert.Zero(t, store.cols[0].MaterializedTotal)
 	})
@@ -285,30 +302,29 @@ func TestCollections_ViewerMembersWithACancelledContextReturnsItsError(t *testin
 	assert.Empty(t, rig.warns())
 }
 
-// S-4: the failure log line carries the class of the failure and no user or book id,
-// no path and no store text: the activity log is readable with library.view.
-func TestCollections_EvaluationFailureLogLinesAreRedacted(t *testing.T) {
-	cases := []struct {
+// S-4 / S-C: a failure to read the viewer's own state is logged by class only (its
+// text names the user and a book, and the activity log is readable with
+// library.view); every other failure is logged with its text, because the operator
+// needs it and it names no viewer.
+func TestCollections_EvaluationFailureLogLinesAreRedactedOnlyForStateReads(t *testing.T) {
+	stateReads := []struct {
 		name    string
 		err     error
-		want    string
 		secrets []string
 	}{
 		{
 			name: "an undecodable state row names a user and a book",
 			err: fmt.Errorf("%w: %s/%s: %w", database.ErrUserBookStateUndecodable,
 				"alice", "b1", errors.New("unexpected EOF at /lib/Gotham/blob")),
-			want:    "did not decode",
 			secrets: []string{"alice/b1", "alice", "unexpected EOF", "Gotham"},
 		},
 		{
-			name:    "a store error with a path and a name",
+			name:    "a state scan failure with a path and a name",
 			err:     errors.New("disk read failed at /lib/Gotham for user alice"),
-			want:    "failed",
 			secrets: []string{"Gotham", "alice", "disk read"},
 		},
 	}
-	for _, tc := range cases {
+	for _, tc := range stateReads {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &colFakeStore{cols: []database.Collection{perViewerRow("c1", "read_status:finished")}}
 			ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}, listErr: tc.err}
@@ -317,12 +333,28 @@ func TestCollections_EvaluationFailureLogLinesAreRedacted(t *testing.T) {
 			lines := rig.warns()
 			require.Len(t, lines, 1)
 			assert.Contains(t, lines[0], "evaluation-failed")
-			assert.Contains(t, lines[0], tc.want)
+			assert.Contains(t, lines[0], "details withheld")
 			for _, secret := range tc.secrets {
 				assert.False(t, strings.Contains(lines[0], secret), "log line %q must not contain %q", lines[0], secret)
 			}
 		})
 	}
+
+	t.Run("a sort spec that does not parse is logged as it is", func(t *testing.T) {
+		// Saved before sort_json was validated: every evaluation of two or more
+		// books fails on it, and the operator has to be able to read why.
+		row := perViewerRow("c1", "-read_status:finished")
+		row.SortJSON = "title"
+		store := &colFakeStore{cols: []database.Collection{row}}
+		docs := []search.BookDocument{{BookID: "b1", Title: "Alpha"}, {BookID: "b2", Title: "Bravo"}, {BookID: "b3", Title: "Charlie"}}
+		rig := newFailureRigDocs(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true, docs)
+		got := decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
+		assert.True(t, got.MembersUnavailable)
+		lines := rig.warns()
+		require.Len(t, lines, 1)
+		assert.Contains(t, lines[0], "parse sort_json", "the cause is readable")
+		assert.NotContains(t, lines[0], "details withheld")
+	})
 }
 
 // S-1 for smart playlists, which share the evaluator: the answer and the cached

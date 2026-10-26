@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.2
+// version: 1.38.3
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -1238,6 +1238,16 @@ func (svc *AudiobookService) searchWithBleve(query string, limit, offset int, us
 	// One instant for this whole search: relative date terms in the Bleve query
 	// and in the per-user pass below resolve against the same now.
 	now := time.Now()
+	// A per-user term the flat post-filter below cannot evaluate as written (an OR
+	// with a sibling, a NOT over a group, a value that is no status/number/date,
+	// a pattern) is refused, never answered as something else: read_status:finished
+	// OR author:kyle used to return the kyle books the viewer had finished. The
+	// HTTP list refuses it up front; this is the same check for every other caller
+	// (a scoped search), and its error is a search.PerUserValueError or
+	// search.ErrPerUserBoolean, which the handler answers with a 400.
+	if err := search.CheckPerUserTerms(ast, now); err != nil {
+		return nil, 0, fmt.Errorf("search: %w", err)
+	}
 	bleveQ, perUser, err := search.TranslateAt(ast, now)
 	if err != nil {
 		// Same silent-degradation hazard as the parse-failure branch above:

@@ -1,5 +1,5 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.36.1
+// version: 1.36.2
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
 // last-edited: 2026-10-26
 
@@ -570,8 +570,13 @@ func (s *Server) wireABSRoutes() {
 		// A dynamic collection with a per-user rule is evaluated for the signed-in
 		// user on every read; the stored list is never served for it. It is the same
 		// handler the native routes use, resolved on first use.
-		CollectionViewerMembers: func(ctx context.Context, cols []database.Collection, viewerID string) (map[string][]string, error) {
-			return s.collectionHandler().ViewerMemberSets(ctx, cols, viewerID)
+		CollectionViewerMembers: func(ctx context.Context, cols []database.Collection, viewerID string) (abshandler.ViewerMembers, error) {
+			viewer, err := s.collectionHandler().ViewerMembers(ctx, cols, viewerID)
+			unavailable := make(map[string]struct{}, len(viewer.Unavailable))
+			for id := range viewer.Unavailable {
+				unavailable[id] = struct{}{}
+			}
+			return abshandler.ViewerMembers{Sets: viewer.Sets, Unavailable: unavailable}, err
 		},
 		Progress: asProgressStore(s.Ops()),
 		// Phase 6 write half. Already asserted non-nil above (bookmarkStore), so

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_review_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: b4e8c1a7-6f23-4d95-8a10-3c9d7e5f2b61
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package handlers_test
 
@@ -409,7 +409,7 @@ func TestCollectionMalformedQueryIsRefusedOnCreateAndUpdate(t *testing.T) {
 			w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
 				map[string]any{"name": "X", "type": "dynamic", "query": q})
 			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "translate query")
+			assert.Contains(t, w.Body.String(), "last_played", "the message names the field that is wrong")
 			assert.Empty(t, store.cols, "nothing is stored")
 			assert.Nil(t, store.created)
 		})
@@ -421,7 +421,7 @@ func TestCollectionMalformedQueryIsRefusedOnCreateAndUpdate(t *testing.T) {
 			rig := newViewerRig(t, store, viewerStates())
 			w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": q})
 			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "translate query")
+			assert.Contains(t, w.Body.String(), "last_played", "the message names the field that is wrong")
 			assert.Equal(t, "title:Alpha", store.cols[0].Query, "the stored query is unchanged")
 			assert.Equal(t, []string{"b1"}, store.cols[0].MaterializedBookIDs)
 			assert.Zero(t, store.updates, "nothing is written")

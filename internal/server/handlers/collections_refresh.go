@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_refresh.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 5e2a9c74-1b83-4f06-a7d1-8c4e0b3f6a92
 // last-edited: 2026-10-26
 
@@ -133,6 +133,8 @@ func (h *CollectionHandler) RefreshRelativeDynamic(ctx context.Context, dryRun b
 				res.Unchanged++
 			case refreshConflict:
 				res.Conflicts++
+			case refreshCancelled:
+				// not counted: the run returns the cancellation
 			default:
 				res.Failed++
 				if errors.Is(err, playlist.ErrSearchIndexUnavailable) {
@@ -159,6 +161,10 @@ const (
 	refreshChanged
 	refreshUnchanged
 	refreshConflict
+	// refreshCancelled is a collection the run did not evaluate because the run
+	// was cancelled. It is neither a failure nor worth a warning: the cancellation
+	// is the run's outcome, and every collection still queued would repeat it.
+	refreshCancelled
 )
 
 // refreshOne evaluates and, unless dryRun, stores one collection.
@@ -170,6 +176,8 @@ func (h *CollectionHandler) refreshOne(ctx context.Context, col *database.Collec
 	case errors.Is(err, playlist.ErrSearchIndexUnavailable):
 		// The run reports this once, not once per collection.
 		return refreshFailed, err
+	case ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
+		return refreshCancelled, err
 	case err != nil:
 		h.log.Warn("collections: scheduled refresh could not evaluate %s: %s",
 			logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(err.Error()))

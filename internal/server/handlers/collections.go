@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-26
 
@@ -275,6 +275,12 @@ func (h *CollectionHandler) CreateCollection(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, err.Error())
 			return
 		}
+		// An unusable sort spec fails every evaluation of two or more books, which
+		// for a per-viewer collection is every viewer, so it is refused here.
+		if err := playlist.ValidateSortJSON(col.SortJSON); err != nil {
+			httputil.RespondWithBadRequest(c, err.Error())
+			return
+		}
 	}
 
 	// Evaluate a dynamic collection ONCE at creation so it is populated the first
@@ -464,7 +470,7 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	origQuery := col.Query
+	origQuery, origSort := col.Query, col.SortJSON
 
 	if req.Name != nil {
 		if strings.TrimSpace(*req.Name) == "" {
@@ -524,6 +530,14 @@ func (h *CollectionHandler) UpdateCollection(c *gin.Context) {
 		col.Query = *req.Query
 	}
 	if req.SortJSON != nil {
+		// Only a CHANGED spec is checked, like the query: a stored row with a bad
+		// spec can still be renamed.
+		if col.Type == database.CollectionTypeDynamic && *req.SortJSON != origSort {
+			if err := playlist.ValidateSortJSON(*req.SortJSON); err != nil {
+				httputil.RespondWithBadRequest(c, err.Error())
+				return
+			}
+		}
 		col.SortJSON = *req.SortJSON
 	}
 	if req.Limit != nil {
@@ -657,17 +671,19 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 // searching: it parses and translates it, the same pair playlist.EvaluateSmartPlaylist
 // runs first, so every error EvaluateSmartPlaylist would return for the query's
 // text is returned here (an unsigned per-user date such as last_played:>30d, or a
-// per-user term under an OR or a grouped NOT, among them). It does not need the search index, so it works while the index is closed
+// per-user term under an OR or a grouped NOT, or one whose value is not a status,
+// a number or a date, among them). It does not need the search index, so it works while the index is closed
 // or rebuilding. It deliberately does not look at who is evaluating.
 func validateCollectionQuery(query string) error {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		return fmt.Errorf("parse query: %w", err)
 	}
-	if err := search.CheckPerUserBoolean(ast); err != nil {
+	now := time.Now()
+	if err := search.CheckPerUserTerms(ast, now); err != nil {
 		return fmt.Errorf("query: %w", err)
 	}
-	if _, _, err := search.TranslateAt(ast, time.Now()); err != nil {
+	if _, _, err := search.TranslateAt(ast, now); err != nil {
 		return fmt.Errorf("translate query: %w", err)
 	}
 	return nil
@@ -738,6 +754,12 @@ func membersUnavailableMessage(col *database.Collection, err error) string {
 	case "search-index-unavailable":
 		return "The search index is not ready, so this collection's members could not be worked out for you yet. Try again shortly."
 	case "query-invalid":
+		// A refusal of the per-user terms is the same text the person got when
+		// they tried to save such a query, and says what to write instead; it
+		// names no user and no book. Any other query failure keeps the generic text.
+		if verr := validateCollectionQuery(col.Query); verr != nil && search.IsPerUserQueryError(verr) {
+			return "This collection's query can no longer be evaluated, so it shows no members: " + verr.Error() + ". Edit the query to fix it."
+		}
 		return "This collection's query can no longer be evaluated, so it shows no members. Edit the query to fix it."
 	default:
 		return "This collection's members could not be worked out for you right now. See the server log."
@@ -758,7 +780,7 @@ func (h *CollectionHandler) noteEvalFailure(col *database.Collection, err error)
 		return
 	}
 	h.log.Warn("collections: members of %s (%s) could not be evaluated for the viewer (%s, shown as no members): %s",
-		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), kind, redactedEvalCause(kind, err))
+		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), kind, evalCause(err))
 }
 
 // shouldWarn reports whether a log line under key may be written now, and records
@@ -785,6 +807,15 @@ func (h *CollectionHandler) noteCapped(col *database.Collection, total int) {
 	if !h.shouldWarn("capped:" + col.ID) {
 		return
 	}
+	if collectionIsPerViewer(col) {
+		// One viewer's match count is that viewer's listening data (how much of
+		// the library they have not finished), and this log is readable by every
+		// library.view user. The bound is the same for everyone, so it is what is
+		// logged; the viewer's own answer carries their count (materialized_total).
+		h.log.Warn("collections: %s (%s) matches more than %d books for a viewer; the member list is cut to the first %d (materialized_total reports the real count to that viewer)",
+			logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), database.MaxMaterializedMembers, database.MaxMaterializedMembers)
+		return
+	}
 	h.log.Warn("collections: %s (%s) matches %d books; its member list is cut to the first %d (materialized_total reports the real count)",
 		logger.SanitizeLogValue(col.ID), logger.SanitizeLogValue(col.Name), total, database.MaxMaterializedMembers)
 }
@@ -804,25 +835,18 @@ func (h *CollectionHandler) materializeInto(col *database.Collection, ids []stri
 	return changed
 }
 
-// redactedEvalCause names why an evaluation failed in words that are safe for the
-// activity log, which any library.view user can read. It deliberately does NOT
-// print err: the text of a state-read failure carries the viewer's user id and a
-// book id (database.ErrUserBookStateUndecodable wraps "<userID>/<bookID>"), and a
-// store error can carry more. The operator who needs the detail has the request
-// that failed; the log needs only the class of the failure.
-func redactedEvalCause(kind string, err error) string {
-	switch {
-	case kind == "search-index-unavailable":
-		return "the search index is not open or is rebuilding"
-	case errors.Is(err, search.ErrPerUserBoolean):
-		return "a per-user term sits under an OR or a negated group"
-	case kind == "query-invalid":
-		return "the stored query no longer parses or translates"
-	case errors.Is(err, database.ErrUserBookStateUndecodable):
-		return "a state row of the viewer did not decode"
-	default:
-		return "reading state or books, or evaluating, failed"
+// evalCause is the cause of an evaluation failure as the log prints it. The one
+// class that is withheld is a failure to read the viewer's own state: its text
+// carries the viewer's user id and a book id (database.ErrUserBookStateUndecodable
+// wraps "<userID>/<bookID>"), and the activity log is readable by any library.view
+// user. Every other failure (a bad sort_json, a search error, a stored query that
+// no longer translates) is logged as it is, because the operator needs the text and
+// it names nothing about a viewer.
+func evalCause(err error) string {
+	if errors.Is(err, playlist.ErrViewerStateRead) {
+		return "reading the viewer's listening state failed (details withheld: they name the viewer and a book)"
 	}
+	return logger.SanitizeLogValue(err.Error())
 }
 
 // collectionEvalSlots bounds how many collection evaluations run at once in the
@@ -877,10 +901,10 @@ func (h *CollectionHandler) evaluateWith(ctx context.Context, col *database.Coll
 	}
 	if states != nil && states.UserID() == userID {
 		return playlist.EvaluateSmartPlaylistFor(
-			h.evalStore, h.indexFn(), col.Query, col.SortJSON, col.Limit, states)
+			ctx, h.evalStore, h.indexFn(), col.Query, col.SortJSON, col.Limit, states)
 	}
 	return playlist.EvaluateSmartPlaylist(
-		h.evalStore, h.indexFn(),
+		ctx, h.evalStore, h.indexFn(),
 		col.Query, col.SortJSON, col.Limit,
 		userID,
 	)

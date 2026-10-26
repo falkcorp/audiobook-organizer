@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.3
+// version: 2.6.4
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
 // last-edited: 2026-10-26
 
@@ -197,16 +197,36 @@ func (h *PlaylistHandler) GetPlaylist(c *gin.Context) {
 		resp["book_ids"] = pl.BookIDs
 	case database.UserPlaylistTypeSmart:
 		bookIDs, evalErr := playlist.EvaluateSmartPlaylist(
-			h.store, h.indexFn(),
+			c.Request.Context(), h.store, h.indexFn(),
 			pl.Query, pl.SortJSON, pl.Limit,
 			CallingUserID(c),
 		)
 		if evalErr != nil {
+			if abortIfClientGone(c, evalErr, "GetPlaylist") {
+				return // a client that went away is not a bad query
+			}
 			// Surface as 503 when the index is unavailable — this is
-			// a transient condition during startup. Actual query
-			// errors are 400 (user's smart-playlist DSL is busted).
-			if evalErr == playlist.ErrSearchIndexUnavailable {
+			// a transient condition during startup (errors.Is: the paging helper
+			// wraps it). Actual query errors are 400 (user's smart-playlist DSL
+			// is busted).
+			if errors.Is(evalErr, playlist.ErrSearchIndexUnavailable) {
 				httputil.RespondWithError(c, 503, evalErr.Error(), "SERVICE_UNAVAILABLE")
+				return
+			}
+			// A stored query whose per-user terms are refused (it was saved before
+			// the check existed) is not a bad request: the playlist is fine, its
+			// answer is not available. It reads as no members, with the reason, and
+			// the list cached by the previous evaluation is dropped so nothing (the
+			// ABS surface serves it) keeps answering the old, wrong way.
+			if search.IsPerUserQueryError(evalErr) {
+				if len(pl.MaterializedBookIDs) > 0 || pl.MaterializedTotal != 0 {
+					pl.MaterializedBookIDs, pl.MaterializedTotal = nil, 0
+					_ = h.store.UpdateUserPlaylist(pl)
+				}
+				resp["book_ids"] = []string{}
+				resp["members_unavailable"] = true
+				resp["members_unavailable_message"] = "This playlist's query can no longer be evaluated, so it shows no books: " + evalErr.Error() + ". Edit the query to fix it."
+				httputil.RespondWithOK(c, resp)
 				return
 			}
 			httputil.RespondWithBadRequest(c, evalErr.Error())
@@ -237,12 +257,6 @@ func (h *PlaylistHandler) UpdatePlaylist(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	if req.Query != nil {
-		if err := validatePlaylistQuery(*req.Query); err != nil {
-			httputil.RespondWithBadRequest(c, err.Error())
-			return
-		}
-	}
 	h.mutatePlaylist(c, "failed to update playlist", func(pl *database.UserPlaylist) error {
 		if req.Name != nil {
 			pl.Name = strings.TrimSpace(*req.Name)
@@ -269,9 +283,22 @@ func (h *PlaylistHandler) UpdatePlaylist(c *gin.Context) {
 			if pl.Type != database.UserPlaylistTypeSmart {
 				return playlistBadRequest("query only valid for smart playlists")
 			}
+			// Only a CHANGED query is checked, as UpdateCollection does: a client
+			// that resends the stored query with a rename must not be refused for a
+			// query it did not touch.
+			if *req.Query != pl.Query {
+				if err := validatePlaylistQuery(*req.Query); err != nil {
+					return playlistBadRequest(err.Error())
+				}
+			}
 			pl.Query = *req.Query
 		}
 		if req.SortJSON != nil {
+			if pl.Type == database.UserPlaylistTypeSmart && *req.SortJSON != pl.SortJSON {
+				if err := playlist.ValidateSortJSON(*req.SortJSON); err != nil {
+					return playlistBadRequest(err.Error())
+				}
+			}
 			pl.SortJSON = *req.SortJSON
 		}
 		if req.Limit != nil {
@@ -449,12 +476,15 @@ func (h *PlaylistHandler) MaterializePlaylist(c *gin.Context) {
 		return
 	}
 	bookIDs, evalErr := playlist.EvaluateSmartPlaylist(
-		h.store, h.indexFn(),
+		c.Request.Context(), h.store, h.indexFn(),
 		src.Query, src.SortJSON, src.Limit,
 		CallingUserID(c),
 	)
 	if evalErr != nil {
-		if evalErr == playlist.ErrSearchIndexUnavailable {
+		if abortIfClientGone(c, evalErr, "MaterializeSmartPlaylist") {
+			return // nothing is created for a request nobody is waiting on
+		}
+		if errors.Is(evalErr, playlist.ErrSearchIndexUnavailable) {
 			httputil.RespondWithError(c, 503, evalErr.Error(), "SERVICE_UNAVAILABLE")
 			return
 		}
@@ -462,13 +492,24 @@ func (h *PlaylistHandler) MaterializePlaylist(c *gin.Context) {
 		return
 	}
 
+	// The snapshot is a static list, which nothing downstream cuts (the ABS
+	// surface expands every id of a static playlist), so it is cut here to the
+	// same bound as every other member list. The true count is kept in
+	// materialized_total and in the description, so a snapshot that stops short of
+	// its query's answer says so.
+	snapIDs, snapTotal := database.CapMembers(bookIDs)
+	description := fmt.Sprintf("Materialized from smart playlist %q at %s", src.Name, time.Now().Format(time.RFC3339))
+	if snapTotal > 0 {
+		description += fmt.Sprintf("; the query matched %d books and the snapshot holds the first %d", snapTotal, len(snapIDs))
+	}
 	snapshot := &database.UserPlaylist{
-		Name:            fmt.Sprintf("%s (snapshot %s)", src.Name, time.Now().Format("2006-01-02")),
-		Description:     fmt.Sprintf("Materialized from smart playlist %q at %s", src.Name, time.Now().Format(time.RFC3339)),
-		Type:            database.UserPlaylistTypeStatic,
-		BookIDs:         bookIDs,
-		CreatedByUserID: CallingUserID(c),
-		Dirty:           true,
+		Name:              fmt.Sprintf("%s (snapshot %s)", src.Name, time.Now().Format("2006-01-02")),
+		Description:       description,
+		Type:              database.UserPlaylistTypeStatic,
+		BookIDs:           snapIDs,
+		MaterializedTotal: snapTotal,
+		CreatedByUserID:   CallingUserID(c),
+		Dirty:             true,
 	}
 	created, err := h.store.CreateUserPlaylist(snapshot)
 	if err != nil {
@@ -510,6 +551,9 @@ func validatePlaylistCreate(req *PlaylistCreateReq) error {
 		if err := validatePlaylistQuery(req.Query); err != nil {
 			return err
 		}
+		if err := playlist.ValidateSortJSON(req.SortJSON); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("type must be static or smart")
 	}
@@ -519,13 +563,15 @@ func validatePlaylistCreate(req *PlaylistCreateReq) error {
 // validatePlaylistQuery reports why a smart playlist's query cannot be saved: it
 // does not parse, or it puts a per-user term (read_status, progress_pct,
 // last_played) where the evaluator cannot give it its boolean meaning (under an
-// OR with a sibling, or under a NOT over a group; search.CheckPerUserBoolean).
+// OR with a sibling, or under a NOT over a group; search.CheckPerUserBoolean) or
+// with a value it cannot evaluate (a status that does not exist, a pattern, a
+// number or a date that does not parse; search.CheckPerUserValues).
 func validatePlaylistQuery(query string) error {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		return fmt.Errorf("invalid query: %w", err)
 	}
-	if err := search.CheckPerUserBoolean(ast); err != nil {
+	if err := search.CheckPerUserTerms(ast, time.Now()); err != nil {
 		return fmt.Errorf("invalid query: %w", err)
 	}
 	return nil

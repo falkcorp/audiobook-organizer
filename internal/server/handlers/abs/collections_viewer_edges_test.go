@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_viewer_edges_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4e2c61-7d03-4f58-b1a9-d6c80e3f2547
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package abs_test
 
@@ -55,6 +55,14 @@ func TestCollections_ABSServesNothingForAnUnparseablePerUserQuery(t *testing.T) 
 			}
 
 			code, body := h.doAny(t, request{method: http.MethodGet, path: "/api/collections/bad1", headers: bearer(tok)})
+			if injected {
+				// The evaluation ran and could not answer: the detail route says so
+				// (503) rather than serve an empty collection as the truth.
+				if code != http.StatusServiceUnavailable {
+					t.Fatalf("GET collection = %d, want 503 for a collection whose evaluation failed", code)
+				}
+				return
+			}
 			if code != http.StatusOK {
 				t.Fatalf("GET collection = %d", code)
 			}

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_per_user_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: e3a7c1d9-4b2f-4a68-9c1e-5f8a2d3b7c40
-// last-edited: 2026-09-28
+// last-edited: 2026-10-26
 
 // Tests for the searchWithBleve per-user DSL filter fix (INIT-4 T2).
 // read_status / progress_pct / last_played filters are peeled off by
@@ -293,4 +293,29 @@ func completedIndex(t testing.TB, idx *search.BleveIndex) *search.BleveIndex {
 		}
 	}
 	return idx
+}
+
+// S-D: every caller of the search, not only the HTTP list, gets the refusal. A
+// per-user term the flat post-filter cannot evaluate as written is an error the
+// handler maps to a 400, never an answer to a different question.
+func TestSearchWithBleveRefusesAPerUserTermItCannotEvaluate(t *testing.T) {
+	idx := buildSearchTestIndex(t, "b1", "b2")
+	mockStore := mocks.NewMockStore(t) // no state may be read for a refused query
+	svc := NewAudiobookService(mockStore)
+	svc.SetSearchIndex(completedIndex(t, idx))
+
+	for _, q := range []string{
+		"read_status:finished OR author:sanderson",
+		"-(read_status:finished author:sanderson)",
+		"read_status:completed",
+		"-read_status:completed author:sanderson",
+		"progress_pct:>half",
+		"READ_STATUS:finished",
+	} {
+		got, err := svc.GetAudiobooks(context.Background(), 50, 0, q, nil, nil, ListFilters{UserID: "alice"})
+		if assert.Error(t, err, q) {
+			assert.True(t, search.IsPerUserQueryError(err), "%q: %v", q, err)
+		}
+		assert.Empty(t, got, q)
+	}
 }

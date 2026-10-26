@@ -1,12 +1,13 @@
 // file: internal/server/handlers/abs/collections_viewer_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 6d3f9b28-4e71-4a05-b8c2-1f7a0e5d9c43
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package abs_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,16 @@ func (o *viewerEvalStore) GetUserBookState(userID, bookID string) (*database.Use
 // withViewerMembers injects the native handler's per-viewer evaluation, the way
 // the server wires it.
 func withViewerMembers(native *handlers.CollectionHandler) harnessOpt {
-	return func(o *abshandler.Options) { o.CollectionViewerMembers = native.ViewerMemberSets }
+	return func(o *abshandler.Options) {
+		o.CollectionViewerMembers = func(ctx context.Context, cols []database.Collection, viewerID string) (abshandler.ViewerMembers, error) {
+			viewer, err := native.ViewerMembers(ctx, cols, viewerID)
+			unavailable := make(map[string]struct{}, len(viewer.Unavailable))
+			for id := range viewer.Unavailable {
+				unavailable[id] = struct{}{}
+			}
+			return abshandler.ViewerMembers{Sets: viewer.Sets, Unavailable: unavailable}, err
+		}
+	}
 }
 
 // viewerFixture is the shared setup: alice (the creator) finished the single-file

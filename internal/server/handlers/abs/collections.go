@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/collections.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 6b3d81f0-4a27-4e95-8c16-0d75be2439af
 // last-edited: 2026-10-26
 
@@ -95,7 +95,22 @@ import (
 // native collection handler so the two surfaces share one definition. ctx is the
 // request's; the error is only ever its cancellation, in which case the answer is
 // partial and the caller drops the page.
-type CollectionViewerMembers func(ctx context.Context, cols []database.Collection, viewerID string) (map[string][]string, error)
+type CollectionViewerMembers func(ctx context.Context, cols []database.Collection, viewerID string) (ViewerMembers, error)
+
+// ViewerMembers is what CollectionViewerMembers answers: the members, and which of
+// the per-viewer collections could not be worked out at all.
+type ViewerMembers struct {
+	// Sets maps a per-viewer collection id to the caller's ordered book ids. A
+	// collection absent from it is not per-viewer.
+	Sets map[string][]string
+	// Unavailable holds the ids of per-viewer collections whose members could not be
+	// worked out (the search index is closed or rebuilding, the query is refused, the
+	// caller's state could not be read). Their Sets entry is empty, and that emptiness
+	// means "unknown". The list routes still show them with no books, because a page
+	// of collections cannot fail for one of its rows; the detail route answers 503
+	// rather than serve an empty collection as the truth.
+	Unavailable map[string]struct{}
+}
 
 // CollectionStore is the narrow slice of the store this surface needs.
 //
@@ -143,6 +158,10 @@ func (h *Handler) LibraryCollections(c *gin.Context) {
 	// membership is user-controlled and can reach library scale, which is the
 	// loop shape CLAUDE.md's concurrency section exists to prevent.
 	byCollection := h.collectionsPageBooks(c, cols)
+	if byCollection.gone {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
 
 	results := make([]any, 0, len(cols))
 	for i := range cols {
@@ -165,8 +184,21 @@ func (h *Handler) CollectionDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	books := h.collectionsPageBooks(c, []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books))
+	page := h.collectionsPageBooks(c, []database.Collection{*col})
+	if page.gone {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
+	// A read of one collection whose members could not be worked out is an error,
+	// not an empty collection: the list routes have to show such a row with no books
+	// (one row cannot fail a page), but a client that asked for this one collection
+	// can be told to try again, and does not cache an empty list as the answer.
+	if _, failed := page.unavailable[col.ID]; failed {
+		respondError(c, http.StatusServiceUnavailable,
+			"this collection's members could not be worked out right now; try again shortly")
+		return
+	}
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, page))
 }
 
 // ── POST /api/collections ───────────────────────────────────────────────────
@@ -236,8 +268,7 @@ func (h *Handler) CreateCollection(c *gin.Context) {
 		return
 	}
 
-	books := h.collectionsPageBooks(c, []database.Collection{*created})
-	respondJSON(c, http.StatusOK, h.collectionDTO(created, books))
+	h.respondCollection(c, created)
 }
 
 // ── PATCH /api/collections/:id ──────────────────────────────────────────────
@@ -321,8 +352,7 @@ func (h *Handler) UpdateCollection(c *gin.Context) {
 		return
 	}
 
-	books := h.collectionsPageBooks(c, []database.Collection{*col})
-	respondJSON(c, http.StatusOK, h.collectionDTO(col, books))
+	h.respondCollection(c, col)
 }
 
 // ── DELETE /api/collections/:id ─────────────────────────────────────────────
@@ -388,8 +418,7 @@ func (h *Handler) AddBookToCollection(c *gin.Context) {
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c, []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books))
+	h.respondCollection(c, updated)
 }
 
 // RemoveBookFromCollection handles DELETE /api/collections/:id/book/:bookId.
@@ -416,8 +445,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		// The sync id does not resolve. The collection cannot contain it, so the
 		// requested end state already holds; report the collection unchanged
 		// rather than an error the user cannot act on.
-		books := h.collectionsPageBooks(c, []database.Collection{*col})
-		respondJSON(c, http.StatusOK, h.collectionDTO(col, books))
+		h.respondCollection(c, col)
 		return
 	}
 
@@ -433,8 +461,7 @@ func (h *Handler) RemoveBookFromCollection(c *gin.Context) {
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c, []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books))
+	h.respondCollection(c, updated)
 }
 
 // ── POST /api/collections/:id/batch/add, /batch/remove ──────────────────────
@@ -503,8 +530,7 @@ func (h *Handler) batchEditCollection(c *gin.Context, apply func(current, ids []
 		h.respondMembershipError(c, err)
 		return
 	}
-	books := h.collectionsPageBooks(c, []database.Collection{*updated})
-	respondJSON(c, http.StatusOK, h.collectionDTO(updated, books))
+	h.respondCollection(c, updated)
 }
 
 // respondMembershipError maps a locked membership operation's error onto the
@@ -644,10 +670,12 @@ func (h *Handler) collectionsPageBooks(
 	// bounded pass. Nil (nothing injected) leaves them empty: fail closed.
 	var viewerSets map[string][]string
 	if h.collectionViewerMembers != nil {
-		var err error
-		if viewerSets, err = h.collectionViewerMembers(ctx, cols, callerID(c)); err != nil {
+		viewer, err := h.collectionViewerMembers(ctx, cols, callerID(c))
+		if err != nil {
+			out.gone = true
 			return out // the client went away mid-evaluation; nobody reads this page
 		}
+		viewerSets, out.unavailable = viewer.Sets, viewer.Unavailable
 	}
 
 	var ids []string
@@ -689,6 +717,7 @@ func (h *Handler) collectionsPageBooks(
 
 	views, err := h.memberViews(ctx, ids)
 	if err != nil {
+		out.gone = ctx.Err() != nil
 		return out
 	}
 	byID := make(map[string]libraryItemDTO, len(views))
@@ -718,6 +747,27 @@ func (h *Handler) collectionsPageBooks(
 type collectionPage struct {
 	books map[string][]any
 	total map[string]int
+	// gone is set when the request's context ended during the expansion: the page
+	// is empty because the client went away, not because the collections are.
+	gone bool
+	// unavailable is the per-viewer collections whose members could not be worked
+	// out (ViewerMembers.Unavailable). Nil when none, or when no evaluator is injected.
+	unavailable map[string]struct{}
+}
+
+// statusClientClosedRequest is nginx's 499: the client went away before the
+// response was written. It is what the native handlers answer too.
+const statusClientClosedRequest = 499
+
+// respondCollection answers with one collection and its served members, or 499
+// when the client went away while they were being worked out.
+func (h *Handler) respondCollection(c *gin.Context, col *database.Collection) {
+	page := h.collectionsPageBooks(c, []database.Collection{*col})
+	if page.gone {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
+	respondJSON(c, http.StatusOK, h.collectionDTO(col, page))
 }
 
 // memberViews builds the item views for canonical member ids, keyed by book id.

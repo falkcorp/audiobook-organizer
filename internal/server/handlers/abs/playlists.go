@@ -1,16 +1,18 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 package abs
 
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -131,6 +133,13 @@ func (h *Handler) playlistDTO(c *gin.Context, pl *database.UserPlaylist) gin.H {
 	bookIDs := pl.BookIDs
 	if pl.Type == database.UserPlaylistTypeSmart {
 		bookIDs = pl.MaterializedBookIDs
+		// A stored query whose per-user terms are refused (saved before that check
+		// existed) has a cached list from the evaluation that answered it wrongly;
+		// it is not served. The native GET also drops the cache, but a user who only
+		// ever opens the playlist from this app would otherwise keep the old answer.
+		if smartQueryRefused(pl.Query) {
+			bookIDs = nil
+		}
 	}
 
 	var description any
@@ -149,6 +158,17 @@ func (h *Handler) playlistDTO(c *gin.Context, pl *database.UserPlaylist) gin.H {
 		"lastUpdate":  msEpoch(pl.UpdatedAt),
 		"createdAt":   msEpoch(pl.CreatedAt),
 	}
+}
+
+// smartQueryRefused reports whether a smart playlist's query is one whose per-user
+// terms the evaluator refuses (search.CheckPerUserTerms), by parsing alone: this
+// is a read path that must not depend on the index.
+func smartQueryRefused(query string) bool {
+	ast, err := search.ParseQuery(query)
+	if err != nil {
+		return false
+	}
+	return search.CheckPerUserTerms(ast, time.Now()) != nil
 }
 
 // playlistItems expands the ordered book list into ABS playlist items.

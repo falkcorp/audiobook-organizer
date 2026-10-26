@@ -1,11 +1,12 @@
 // file: internal/playlist/evaluator_collection_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e8b2d5a7-1f43-4c96-9a08-b7d3c6e4f215
 // last-edited: 2026-10-26
 
 package playlist
 
 import (
+	"context"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -70,7 +71,7 @@ func collectionFixture(t *testing.T) (*database.PebbleStore, *search.BleveIndex,
 
 func evalAs(t *testing.T, store *database.PebbleStore, idx *search.BleveIndex, query, userID string) []string {
 	t.Helper()
-	got, err := EvaluateSmartPlaylist(store, idx, query, "", 0, userID)
+	got, err := EvaluateSmartPlaylist(context.Background(), store, idx, query, "", 0, userID)
 	if err != nil {
 		t.Fatalf("evaluate %q as %s: %v", query, userID, err)
 	}

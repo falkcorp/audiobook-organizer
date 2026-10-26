@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
 // last-edited: 2026-10-26
 //
@@ -28,6 +28,7 @@
 package playlist
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +55,22 @@ type PlaylistSort struct {
 // ErrSearchIndexUnavailable indicates the Bleve index is not open.
 // Callers can retry once the server has finished its startup phase.
 var ErrSearchIndexUnavailable = errors.New("search index not yet available")
+
+// ErrViewerStateRead marks a failure to read the viewer's own listening state. The
+// text of such an error can carry the viewer's user id and a book id (a state row
+// that does not decode is reported as "<userID>/<bookID>"), so callers that log an
+// evaluation failure for other people to read redact exactly this class and print
+// every other error as it is. errors.Is(err, ErrViewerStateRead) is the test; the
+// cause stays reachable through errors.Is / errors.As as before.
+var ErrViewerStateRead = errors.New("viewer state read failed")
+
+// viewerStateReadError carries a state-read failure as ErrViewerStateRead without
+// changing its text or hiding its cause.
+type viewerStateReadError struct{ err error }
+
+func (e *viewerStateReadError) Error() string        { return e.err.Error() }
+func (e *viewerStateReadError) Unwrap() error        { return e.err }
+func (e *viewerStateReadError) Is(target error) bool { return target == ErrViewerStateRead }
 
 // bookLookup, userStateReader and playlistEvalStore are the two methods the
 // evaluator calls on a store (it was 43 methods of database.* embeds), measured
@@ -109,7 +126,7 @@ func LoadViewerStates(store playlistEvalStore, userID string) (*ViewerStates, er
 	if lister, ok := database.AsCapability[database.UserBookStateLister](store); ok {
 		rows, err := lister.ListUserBookStates(userID)
 		if err != nil {
-			return nil, fmt.Errorf("read user state: %w", err)
+			return nil, &viewerStateReadError{fmt.Errorf("read user state: %w", err)}
 		}
 		return &ViewerStates{userID: userID, rows: rows}, nil
 	}
@@ -144,6 +161,7 @@ var evalWindowOverride int
 // search was capped at the first 10,000 documents by id, so on a 122k library a
 // per-user collection silently covered only the oldest tenth of it).
 func EvaluateSmartPlaylist(
+	ctx context.Context,
 	store playlistEvalStore,
 	idx *search.BleveIndex,
 	query string,
@@ -151,13 +169,14 @@ func EvaluateSmartPlaylist(
 	limit int,
 	userID string,
 ) ([]string, error) {
-	return evaluate(store, idx, query, sortJSON, limit, userID, nil)
+	return evaluate(ctx, store, idx, query, sortJSON, limit, userID, nil)
 }
 
 // EvaluateSmartPlaylistFor is EvaluateSmartPlaylist for a viewer whose state was
 // already loaded, so a caller evaluating many queries for one viewer reads the
 // state once. A nil viewer is no viewer.
 func EvaluateSmartPlaylistFor(
+	ctx context.Context,
 	store playlistEvalStore,
 	idx *search.BleveIndex,
 	query string,
@@ -165,10 +184,11 @@ func EvaluateSmartPlaylistFor(
 	limit int,
 	viewer *ViewerStates,
 ) ([]string, error) {
-	return evaluate(store, idx, query, sortJSON, limit, viewer.UserID(), viewer)
+	return evaluate(ctx, store, idx, query, sortJSON, limit, viewer.UserID(), viewer)
 }
 
 func evaluate(
+	ctx context.Context,
 	store playlistEvalStore,
 	idx *search.BleveIndex,
 	query string,
@@ -177,30 +197,35 @@ func evaluate(
 	userID string,
 	viewer *ViewerStates,
 ) ([]string, error) {
+	// ONE instant for the whole evaluation: relative dates (last_played:>-30d)
+	// in the Bleve translation and in the per-user pass resolve against the same
+	// now, so a window cannot shift between the first book and the last.
+	now := time.Now()
+	var ast search.Node
+	if strings.TrimSpace(query) != "" {
+		var err error
+		if ast, err = search.ParseQuery(query); err != nil {
+			return nil, fmt.Errorf("parse query: %w", err)
+		}
+		// A per-user term the per-user pass cannot evaluate as written (an OR
+		// with a sibling, a NOT over a group, a value that is not a status, a
+		// number or a date, a pattern) is refused rather than answered as
+		// something else. Creates and updates refuse it up front; this is the same
+		// check for a stored row that predates it, so it reads as unavailable
+		// instead of wrong. It runs before the index is looked at: the query is
+		// what is wrong, and "try again shortly" would be the wrong advice.
+		if err := search.CheckPerUserTerms(ast, now); err != nil {
+			return nil, fmt.Errorf("query: %w", err)
+		}
+	}
 	// A rebuilding index (created empty, not yet drained) would yield a
 	// partial membership that callers persist and push; refuse instead.
 	if idx == nil || idx.Rebuilding() {
 		return nil, ErrSearchIndexUnavailable
 	}
-	if strings.TrimSpace(query) == "" {
+	if ast == nil {
 		return nil, fmt.Errorf("empty query")
 	}
-
-	ast, err := search.ParseQuery(query)
-	if err != nil {
-		return nil, fmt.Errorf("parse query: %w", err)
-	}
-	// A per-user term the translator cannot give its boolean meaning (under an OR
-	// with a sibling, or under a NOT over a group) is refused rather than answered
-	// as an AND. Creates and updates refuse it up front; this is the same check for
-	// a stored row that predates it, so it reads as unavailable instead of wrong.
-	if err := search.CheckPerUserBoolean(ast); err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	// ONE instant for the whole evaluation: relative dates (last_played:>-30d)
-	// in the Bleve translation and in the per-user pass resolve against the same
-	// now, so a window cannot shift between the first book and the last.
-	now := time.Now()
 	bleveQ, perUserFilters, err := search.TranslateAt(ast, now)
 	if err != nil {
 		return nil, fmt.Errorf("translate query: %w", err)
@@ -209,7 +234,7 @@ func evaluate(
 	var ids []string
 	switch {
 	case len(perUserFilters) == 0:
-		ids, err = searchAllIDs(idx, bleveQ, 0)
+		ids, err = searchAllIDs(ctx, idx, bleveQ, 0)
 	case userID == "":
 		// NO VIEWER, NO STATE, NO MATCH. With no user there is no state row to
 		// read, and a nil state is evaluated as the zero value, which satisfies
@@ -226,12 +251,17 @@ func evaluate(
 				return nil, err
 			}
 		}
-		ids, err = matchViewerStates(idx, bleveQ, perUserFilters, viewer, now)
+		ids, err = matchViewerStates(ctx, idx, bleveQ, perUserFilters, viewer, now)
 	}
 	if err != nil {
 		return nil, err
 	}
 
+	// The search and the state pass stop when ctx is done; the sort below reads one
+	// book per id, so a request that went away is not carried through it either.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ids, err = sortBookIDs(store, ids, sortJSON)
 	if err != nil {
 		return nil, fmt.Errorf("sort: %w", err)
@@ -253,7 +283,7 @@ func evaluate(
 // hits returned) it asks again for the full total: a short answer is never
 // returned as if it were complete. Order is the index's (score, then id); every
 // caller sorts afterwards, so only the set matters.
-func searchAllIDs(idx *search.BleveIndex, q query.Query, window int) ([]string, error) {
+func searchAllIDs(ctx context.Context, idx *search.BleveIndex, q query.Query, window int) ([]string, error) {
 	if window <= 0 {
 		window = evalWindowOverride
 	}
@@ -268,7 +298,7 @@ func searchAllIDs(idx *search.BleveIndex, q query.Query, window int) ([]string, 
 		window = 1 // a size of 0 means "the default page" to the search layer
 	}
 	return collectAllHits(window, func(size int) ([]search.SearchResult, uint64, error) {
-		return idx.SearchNativeIDs(q, 0, size)
+		return idx.SearchNativeIDsContext(ctx, q, 0, size)
 	})
 }
 
@@ -322,6 +352,7 @@ const searchAllIDsMaxPasses = 4
 // A store that cannot list a viewer's rows takes the second strategy with a point
 // read per candidate; a read error fails the evaluation (see judgeByPointReads).
 func matchViewerStates(
+	ctx context.Context,
 	idx *search.BleveIndex,
 	bleveQ query.Query,
 	filters []search.PerUserFilter,
@@ -343,10 +374,10 @@ func matchViewerStates(
 			q = bleve.NewConjunctionQuery(bleveQ, q)
 		}
 		// The window is the candidate count: no hit can exceed it.
-		return searchAllIDs(idx, q, len(candidates))
+		return searchAllIDs(ctx, idx, q, len(candidates))
 	}
 
-	ids, err := searchAllIDs(idx, bleveQ, 0)
+	ids, err := searchAllIDs(ctx, idx, bleveQ, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +390,7 @@ func matchViewerStates(
 		}
 		return kept, nil
 	}
-	return judgeByPointReads(viewer, ids, filters, now, evalWorkers())
+	return judgeByPointReads(ctx, viewer, ids, filters, now, evalWorkers())
 }
 
 // judgeByPointReads keeps the candidates whose state satisfies every filter,
@@ -372,6 +403,7 @@ func matchViewerStates(
 // book as having no state, and under a negated or `unstarted` filter that makes
 // it match: a store error turned into extra members.
 func judgeByPointReads(
+	ctx context.Context,
 	viewer *ViewerStates,
 	ids []string,
 	filters []search.PerUserFilter,
@@ -380,10 +412,13 @@ func judgeByPointReads(
 ) ([]string, error) {
 	matched := make([]bool, len(ids))
 	err := parallelRanges(len(ids), workers, perUserFilterChunk, func(lo, hi int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for i := lo; i < hi; i++ {
 			state, err := viewer.lookup(ids[i])
 			if err != nil {
-				return fmt.Errorf("read user state for book %s: %w", ids[i], err)
+				return &viewerStateReadError{fmt.Errorf("read user state for book %s: %w", ids[i], err)}
 			}
 			matched[i] = search.MatchPerUserFilters(state, filters, now)
 		}
@@ -435,6 +470,21 @@ func parallelRanges(n, workers, minChunk int, fn func(lo, hi int) error) error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ValidateSortJSON reports whether sortJSON can be used as a sort spec: empty (the
+// default order) or a JSON array of {field, direction}. A spec that is not that
+// fails every evaluation of a list of two or more books, so it is refused when it
+// is saved (HTTP 400) instead of leaving a collection or playlist unavailable.
+func ValidateSortJSON(sortJSON string) error {
+	if strings.TrimSpace(sortJSON) == "" {
+		return nil
+	}
+	var directives []PlaylistSort
+	if err := json.Unmarshal([]byte(sortJSON), &directives); err != nil {
+		return fmt.Errorf("sort_json must be a JSON array of {\"field\", \"direction\"} objects: %w", err)
 	}
 	return nil
 }

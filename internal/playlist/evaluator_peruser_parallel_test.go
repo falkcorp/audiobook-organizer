@@ -1,11 +1,12 @@
 // file: internal/playlist/evaluator_peruser_parallel_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8e3a6c1d-47b2-4d95-a0f8-5c2b9e7d1346
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package playlist
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -59,7 +60,7 @@ func TestJudgeByPointReads_ParallelKeepsOrderAndMembership(t *testing.T) {
 			}
 			states := &countingStates{}
 			viewer := &ViewerStates{userID: "alice", reader: states}
-			got, err := judgeByPointReads(viewer, ids, perUserFiltersFor(t, "read_status:finished"), time.Now(), workers)
+			got, err := judgeByPointReads(context.Background(), viewer, ids, perUserFiltersFor(t, "read_status:finished"), time.Now(), workers)
 			require.NoError(t, err)
 			assert.Equal(t, len(ids), int(states.reads.Load()), "n=%d workers=%d: one read per candidate", n, workers)
 			if want == nil {
@@ -111,7 +112,7 @@ func TestJudgeByPointReads_AReadErrorFailsTheEvaluation(t *testing.T) {
 	}
 	for _, workers := range []int{1, 4} {
 		viewer := &ViewerStates{userID: "alice", reader: failingStates{failOn: ids[len(ids)-7]}}
-		got, err := judgeByPointReads(viewer, ids, perUserFiltersFor(t, "-read_status:finished"), time.Now(), workers)
+		got, err := judgeByPointReads(context.Background(), viewer, ids, perUserFiltersFor(t, "-read_status:finished"), time.Now(), workers)
 		require.Error(t, err, "workers=%d: a failed read must not count as no state", workers)
 		assert.Contains(t, err.Error(), "disk on fire")
 		assert.Nil(t, got)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.37.0
+// version: 1.37.1
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -55,6 +55,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -427,6 +428,25 @@ func searchNamesUnindexedFilterField(q string) (string, bool) {
 	return "", false
 }
 
+// searchPerUserProblem reports why a search string's per-user terms (read_status,
+// progress_pct, last_played) cannot be evaluated as written, or nil. The library
+// search applies them as one flat AND after the index answers, so an OR with a
+// sibling or a negated group would be answered as an AND, and a value that is not
+// a status, a number or a date (or a pattern) would match nothing, or, negated,
+// every book. Each used to be answered silently; a collection or playlist refuses
+// the same queries when they are saved (search.CheckPerUserTerms). A string that
+// does not parse is not judged here: it takes the substring fallback.
+func searchPerUserProblem(q string) error {
+	if strings.TrimSpace(q) == "" || !strings.Contains(q, ":") {
+		return nil
+	}
+	ast, err := search.ParseQuery(q)
+	if err != nil {
+		return nil
+	}
+	return search.CheckPerUserTerms(ast, time.Now())
+}
+
 // listRequest is one GET /audiobooks request parsed into the arguments of the
 // list pipeline. Built ONLY by parseListRequest, which both ListAudiobooks and
 // AudiobookFacets (scoped=1) call, so the tag facets of a request are
@@ -485,6 +505,10 @@ func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 				"inside the search parameter it would match nothing (and, negated, everything). "+
 				"Pass it in the filters parameter instead, e.g. "+
 				"filters=[{\"field\":\""+field+"\",\"value\":\"...\"}].")
+		return listRequest{}, false
+	}
+	if err := searchPerUserProblem(params.Search); err != nil {
+		httputil.RespondWithBadRequest(c, "invalid search: "+err.Error())
 		return listRequest{}, false
 	}
 	authorID := httputil.ParseQueryIntPtr(c, "author_id")
@@ -1324,6 +1348,12 @@ func respondIdentIndexBuilding(c *gin.Context, err error) bool {
 }
 
 func respondSearchLimit(c *gin.Context, err error) bool {
+	// A per-user term the search cannot evaluate as written (the service refuses
+	// it for every caller; parseListRequest already did for this one).
+	if search.IsPerUserQueryError(err) {
+		httputil.RespondWithBadRequest(c, "invalid search: "+err.Error())
+		return true
+	}
 	if slow, ok := errors.AsType[*querygrammar.TooSlowError](err); ok {
 		httputil.RespondWithBadRequest(c, slow.Error())
 		return true
