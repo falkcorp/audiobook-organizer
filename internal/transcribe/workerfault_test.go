@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4503544-1899-4765-aa15-eda9489b6832
 // last-edited: 2026-10-26
 
@@ -152,26 +152,33 @@ func TestPathChunks_AResponseOfMostlyTimeoutsIsAWorkerFaultThatKeepsTheSoundResu
 	useEndpoints(t, 4, w.srv.URL)
 	res, err := TranscribeByPathBatch(context.Background(), pathJobs(t, 8), BatchOptions{})
 	if err != nil {
-		t.Fatalf("err = %v, want none: a timeout-majority fault on the only worker defers its jobs and the dispatch goes on", err)
-	}
-	for id, r := range res {
-		if PathErrorCode(r.Error) == PathErrTranscribeTimeout {
-			t.Errorf("%s = %+v: a faulted timeout must not come back as a verdict", id, r)
-		}
+		t.Fatalf("err = %v, want none: a timeout-majority fault on the only worker re-sends its jobs and the dispatch goes on", err)
 	}
 	if res["book-d"].Text != "T" {
 		t.Errorf("the sound result in the faulted response was thrown away: %+v", res)
 	}
 	if len(res) != 8 {
-		t.Fatalf("results = %d, want 8 (7 deferred + 1 transcript): %+v", len(res), res)
+		t.Fatalf("results = %d, want 8 (7 per-clip verdicts + 1 transcript): %+v", len(res), res)
 	}
+	// R2 (review of #4182): the faulted jobs are judged per clip, in requests
+	// too small to fault, by the same worker; the store's different-worker rule
+	// keeps such a strike from ever making a file permanent on its own.
 	for id, r := range res {
-		if id != "book-d" && PathErrorCode(r.Error) != PathErrWorkerFault {
-			t.Errorf("%s = %+v, want a worker_fault deferral", id, r)
+		if id != "book-d" && (PathErrorCode(r.Error) != PathErrTranscribeTimeout || r.Endpoint != w.srv.URL) {
+			t.Errorf("%s = %+v, want a per-clip timeout verdict naming the worker", id, r)
 		}
 	}
-	if w.postCount() != 2 {
-		t.Errorf("POSTs = %d, want 2: the unsent chunk is sent once more, the faulted one never", w.postCount())
+	// Two chunks of 4 that each fault, then the 7 faulted jobs in requests of
+	// at most 2.
+	if w.postCount() != 6 {
+		t.Errorf("POSTs = %d, want 6", w.postCount())
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i, req := range w.requests[2:] {
+		if len(req) >= timeoutBreakerMin {
+			t.Errorf("re-send %d carried %d clips, want fewer than %d", i, len(req), timeoutBreakerMin)
+		}
 	}
 }
 
@@ -253,18 +260,18 @@ func TestUploadBatch_AResponseOfMostlyTimeoutsIsAWorkerFault(t *testing.T) {
 	useEndpoints(t, 4, srv.URL)
 	res, err := transcribePool(context.Background(), []Endpoint{{URL: srv.URL, Concurrency: 1}}, nil, tempWAVJobs(t, 8), nil, nil)
 	if err != nil {
-		t.Fatalf("err = %v, want none: the faulted jobs are deferred", err)
+		t.Fatalf("err = %v, want none: the faulted jobs are re-sent in requests too small to fault", err)
 	}
 	if len(res) != 8 {
-		t.Fatalf("results = %d, want 8 deferrals", len(res))
+		t.Fatalf("results = %d, want 8 per-clip verdicts", len(res))
 	}
 	for id, r := range res {
-		if PathErrorCode(r.Error) != PathErrWorkerFault {
-			t.Errorf("%s = %+v: a faulted crash came back as something other than a deferral", id, r)
+		if PathErrorCode(r.Error) != PathErrDecoderCrashed || r.Endpoint != srv.URL {
+			t.Errorf("%s = %+v: want a per-clip crash verdict naming the worker", id, r)
 		}
 	}
-	if posts != 2 {
-		t.Errorf("POSTs = %d, want 2 (the unsent chunk is sent once more)", posts)
+	if posts != 6 {
+		t.Errorf("POSTs = %d, want 6 (two faulted chunks of 4, then four pairs)", posts)
 	}
 }
 

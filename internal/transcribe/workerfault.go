@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ba9416a6-0f06-432d-ba9c-534d5579ab16
 // last-edited: 2026-10-26
 
@@ -19,11 +19,13 @@ import (
 // most of the clips beside it fail the same way in one response; the common
 // cause is the worker (swapping, or sharing its box with a CI job).
 //
-// It is a failure of the ENDPOINT. The dispatcher benches the endpoint and
-// re-queues the faulted jobs to workers they have not faulted on, in units too
-// small to fault again on timeouts alone, and defers a job (PathErrWorkerFault)
-// once it has faulted on two workers or on every worker left; see dispatchPool.
-// The maintenance ops write no strike for a clip only a failing worker answered.
+// The dispatcher re-queues the faulted jobs in units too small to fault again
+// on timeouts alone. After a timeout-majority fault they may go to any worker;
+// after a worker-level fault (the worker cannot decode at all) the endpoint is
+// benched, the jobs never go back to it, and a job is deferred
+// (PathErrWorkerFault) once it has faulted on two workers or on every worker
+// left; see dispatchPool. The maintenance ops write no strike for a clip only a
+// faulted response answered.
 //
 // It is NOT a network failure: the worker answered. isTransportishError does not
 // recognise it, so an op never waits it out as an outage and re-sends the same
@@ -44,24 +46,29 @@ type WorkerFaultError struct {
 	Followers map[string][]string
 }
 
-// workerLevel reports whether any faulted result says the worker itself cannot
-// decode right now (worker_misconfigured, decoder_killed), as opposed to a
-// response that is merely mostly timeouts. Single-endpoint dispatch stops
-// sending to a worker-level fault; a timeout majority it works around.
-func (e *WorkerFaultError) workerLevel() bool {
+// timeoutMajority reports whether the fault is only a majority of strike-type
+// answers (timeouts, crashes, kills): every faulted result is one, and there
+// are enough of them to have made the fault. Such a fault is as often the
+// batch's own clips as the worker, so its jobs are re-sent in units too small
+// to fault (see dispatchPool). Anything else (a worker-level code, or a fault
+// that names no results) is treated as the endpoint's.
+func (e *WorkerFaultError) timeoutMajority() bool {
+	if len(e.Faulted) < timeoutBreakerMin {
+		return false
+	}
 	for _, r := range e.Faulted {
-		if isWorkerLevelCode(r.Error) {
-			return true
+		if !IsStrikeError(r.Error) {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // isWorkerLevelCode is a per-job answer that is about the worker at any count:
 // one is enough to fault the response.
 func isWorkerLevelCode(errText string) bool {
 	switch PathErrorCode(errText) {
-	case PathErrWorkerMisconfigured, PathErrDecoderKilled:
+	case PathErrWorkerMisconfigured:
 		return true
 	}
 	return false
@@ -88,12 +95,14 @@ const timeoutBreakerMin = 3
 
 // IsStrikeError reports whether a worker's per-clip error text is of the kind a
 // maintenance op counts as a strike against the clip: the decoder ran out its
-// deadline on it (transcribe_timeout), or died while holding it
-// (decoder_crashed). Both are evidence about the clip when they are rare in a
-// response, and about the worker when they are not.
+// deadline on it (transcribe_timeout), died while holding it
+// (decoder_crashed), or was killed from outside while holding it
+// (decoder_killed). Each is evidence about the clip when it is rare in a
+// response, and about the worker when it is not; and none makes a file
+// permanent without a second strike from a different worker.
 func IsStrikeError(errText string) bool {
 	switch PathErrorCode(errText) {
-	case PathErrTranscribeTimeout, PathErrDecoderCrashed:
+	case PathErrTranscribeTimeout, PathErrDecoderCrashed, PathErrDecoderKilled:
 		return true
 	}
 	return false
@@ -103,8 +112,7 @@ func IsStrikeError(errText string) bool {
 // read as verdicts about their clips. res is a single HTTP response's results,
 // so the majority test has the right denominator: it is the worker's own batch.
 //
-//   - Every worker_misconfigured or decoder_killed result: the worker cannot
-//     decode at all, or something outside the decoder killed it mid-clip.
+//   - Every worker_misconfigured result: the worker cannot decode at all.
 //   - The strike-type results (IsStrikeError) when there are at least
 //     timeoutBreakerMin of them and they are most of the response.
 func workerFaultIn(res map[string]BatchResult) map[string]BatchResult {

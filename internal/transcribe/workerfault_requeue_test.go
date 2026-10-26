@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -177,10 +177,13 @@ func TestPool_LoopersAloneInADispatchTerminate(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no result", id)
 		}
-		// Judged alone (or in a pair) on the worker that did NOT fault on it: a
-		// per-clip verdict, which the ops count as a strike from that worker.
-		if PathErrorCode(r.Error) != PathErrTranscribeTimeout || r.Endpoint == "" || r.Endpoint == faultedOn[id] {
-			t.Errorf("%s = %+v, want a timeout verdict from a worker other than %s", id, r, faultedOn[id])
+		// Judged in a unit too small to fault, on any worker: a per-clip
+		// verdict naming that worker, which the ops count as its strike.
+		if PathErrorCode(r.Error) != PathErrTranscribeTimeout || r.Endpoint == "" {
+			t.Errorf("%s = %+v, want a per-clip timeout verdict naming its worker", id, r)
+		}
+		if faultedOn[id] == "" {
+			t.Errorf("%s was never in a faulted request: the scenario did not fault", id)
 		}
 	}
 }
@@ -188,7 +191,7 @@ func TestPool_LoopersAloneInADispatchTerminate(t *testing.T) {
 // The brief's case: two endpoints where every job keeps faulting (a worker-level
 // code faults a response of any size). It must end, with every job deferred.
 func TestPool_EveryResponseFaultingOnTwoEndpointsEndsWithDeferrals(t *testing.T) {
-	for _, code := range []string{misconfText, "decoder_killed: the decode process was killed from outside (exit code -9)"} {
+	for _, code := range []string{misconfText} {
 		t.Run(PathErrorCode(code), func(t *testing.T) {
 			p := newFaultPool(t, 2, 16, func(string, string) BatchResult { return BatchResult{Error: code} })
 			ids := loopers(5, "job")
@@ -229,15 +232,6 @@ func TestPool_ProductionFaultShapesConvergeOnPerClipVerdicts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
-			faulted := p.faultedOnBy(t, func(url string, ids []string) bool {
-				n := 0
-				for _, id := range ids {
-					if strings.HasPrefix(id, "loop") {
-						n++
-					}
-				}
-				return n >= timeoutBreakerMin && n*2 > len(ids)
-			})
 			for _, id := range tc.ids {
 				r, ok := res[id]
 				switch {
@@ -247,12 +241,10 @@ func TestPool_ProductionFaultShapesConvergeOnPerClipVerdicts(t *testing.T) {
 					if r.Text != "T:"+id {
 						t.Errorf("%s = %+v, want its transcript", id, r)
 					}
-				case PathErrorCode(r.Error) == PathErrTranscribeTimeout:
-					if r.Endpoint == "" || faulted[id][r.Endpoint] {
-						t.Errorf("%s = %+v: a verdict must come from a worker that did not fault on it", id, r)
-					}
-				case PathErrorCode(r.Error) != PathErrWorkerFault:
-					t.Errorf("%s = %+v, want a per-clip timeout verdict or a deferral", id, r)
+				case PathErrorCode(r.Error) != PathErrTranscribeTimeout || r.Endpoint == "":
+					// R2: every looper converges on a per-clip verdict naming its
+					// worker; none is deferred.
+					t.Errorf("%s = %+v, want a per-clip timeout verdict", id, r)
 				}
 			}
 			if n := len(p.sendLog()); n > 2+len(tc.ids) {
@@ -262,14 +254,19 @@ func TestPool_ProductionFaultShapesConvergeOnPerClipVerdicts(t *testing.T) {
 	}
 }
 
-// S2's "plainly sick" rule: a worker that faulted earlier in this dispatch is not
-// believed about a lone timeout either. Worker 0 (priority 1) times out on
-// everything; worker 1 transcribes everything. Worker 0 gets j0-j2 plus j6 in
-// round 1 and faults on the first chunk; in round 2 it is handed j6 alone.
+// S2's "plainly sick" rule: a worker that could not decode at all earlier in
+// this dispatch (a worker-level fault) is not believed about a lone timeout
+// either. Worker 0 (priority 1) answers j0 worker_misconfigured and times out
+// on everything else; worker 1 transcribes everything. Worker 0 gets j0-j2 plus
+// j6 in round 1 and faults on the first chunk; in round 2 it is handed j6 alone.
+// (A timeout-majority fault does not make a worker sick: see R2.)
 func TestPool_ASickWorkersLoneTimeoutIsWithheldAndTheJobGoesElsewhere(t *testing.T) {
 	var p *faultPool
 	p = newFaultPool(t, 2, 3, func(url, id string) BatchResult {
 		if url == p.h.eps[0].URL {
+			if id == "j0" {
+				return BatchResult{Error: misconfText}
+			}
 			return BatchResult{Error: timeoutText}
 		}
 		return BatchResult{Text: "T:" + id}
@@ -388,7 +385,7 @@ func TestRequestDeadlineHeaderRoundsUp(t *testing.T) {
 func TestIsNoAnswer(t *testing.T) {
 	for text, want := range map[string]bool{
 		"request_abandoned: the client's request timeout passed before this clip started": true,
-		"decoder_killed: the decode process was killed from outside (exit code -9)":       true,
+		"decoder_killed: the decode process was killed from outside (exit code -9)":       false,
 		misconfText:               true,
 		"worker_fault: no answer": true,
 		timeoutText:               false,
@@ -433,6 +430,110 @@ func TestPool_EveryAnswerNamesTheWorkerThatGaveIt(t *testing.T) {
 			}
 			if r := res["loop0"]; !IsStrikeError(r.Error) {
 				t.Fatalf("the scenario must produce a strike-type verdict, got %+v", r)
+			}
+		})
+	}
+}
+
+// R2 (review of #4182): a page whose chunks are mostly genuine loopers faults on
+// EVERY endpoint in the first round. Its loopers must still converge on per-clip
+// verdicts (strikes the store can count), not be deferred on every run because
+// no endpoint was left that had not faulted.
+func TestPool_ALooperPageThatFaultsEveryEndpointConvergesOnPerClipVerdicts(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		workers, loop int
+		ok            int
+	}{
+		{"six workers, 96 loopers", 6, 96, 0},
+		{"a 200-job mixed page", 6, 120, 80},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newFaultPool(t, tc.workers, 16, isLooper)
+			// Two loopers to every chapter, so every chunk is a looper majority.
+			var ids []string
+			for li, oi := 0, 0; li < tc.loop || oi < tc.ok; {
+				for range 2 {
+					if li < tc.loop {
+						ids = append(ids, fmt.Sprintf("loop%03d", li))
+						li++
+					}
+				}
+				if oi < tc.ok {
+					ids = append(ids, fmt.Sprintf("chap%03d", oi))
+					oi++
+				}
+			}
+			res, err := p.run(t, ids...)
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			faultedFirst := 0
+			for _, s := range p.sendLog()[:min(tc.workers, len(p.sendLog()))] {
+				if len(s.ids) >= timeoutBreakerMin {
+					faultedFirst++
+				}
+			}
+			if faultedFirst < tc.workers {
+				t.Fatalf("the scenario must fault every endpoint in round 1: %d of %d", faultedFirst, tc.workers)
+			}
+			strikes := 0
+			for _, id := range ids {
+				r, ok := res[id]
+				switch {
+				case !ok:
+					t.Fatalf("%s has no result", id)
+				case strings.HasPrefix(id, "chap"):
+					if r.Text != "T:"+id {
+						t.Errorf("%s = %+v, want its transcript", id, r)
+					}
+				case PathErrorCode(r.Error) == PathErrTranscribeTimeout && r.Endpoint != "":
+					strikes++
+				default:
+					t.Errorf("%s = %+v, want a per-clip timeout verdict naming its worker", id, r)
+				}
+			}
+			if strikes != tc.loop {
+				t.Fatalf("strikes = %d, want one per looper (%d)", strikes, tc.loop)
+			}
+		})
+	}
+}
+
+// N2 (owner decision, review of #4182): decoder_killed is a strike-type answer.
+// A lone kill is a per-clip verdict naming its worker (the store counts a second
+// one only from a different worker), and a response of mostly kills is a
+// timeout-majority fault re-sent in units too small to fault, on one worker as
+// on many: it never ends the dispatch or defers the batch.
+func TestPool_DecoderKilledIsAPerClipStrikeThatNeverDrainsTheBatch(t *testing.T) {
+	const killed = "decoder_killed: the decode process was killed from outside (exit code -9)"
+	for _, workers := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d workers", workers), func(t *testing.T) {
+			p := newFaultPool(t, workers, 16, func(_ string, id string) BatchResult {
+				if strings.HasPrefix(id, "kill") {
+					return BatchResult{Error: killed}
+				}
+				return BatchResult{Text: "T:" + id}
+			})
+			ids := append(loopers(5, "kill"), loopers(3, "chap")...)
+			res, err := p.run(t, ids...)
+			if err != nil {
+				t.Fatalf("err = %v, want none", err)
+			}
+			for _, id := range ids {
+				r := res[id]
+				if strings.HasPrefix(id, "chap") {
+					if r.Text != "T:"+id {
+						t.Errorf("%s = %+v, want its transcript", id, r)
+					}
+					continue
+				}
+				if PathErrorCode(r.Error) != PathErrDecoderKilled || !IsStrikeError(r.Error) || IsNoAnswer(r.Error) || r.Endpoint == "" {
+					t.Errorf("%s = %+v, want a per-clip decoder_killed strike naming its worker", id, r)
+				}
+			}
+			if n := len(p.sendLog()); n > 1+len(ids) {
+				t.Errorf("sends = %d for %d jobs: %v", n, len(ids), p.sendLog())
 			}
 		})
 	}

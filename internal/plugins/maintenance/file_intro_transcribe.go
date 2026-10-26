@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-26
 
@@ -963,21 +963,23 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		//   ffmpeg_error -> the worker could not decode it: a verdict about the
 		//                   file, held until retry_failed (so a corrupt file is
 		//                   not re-sent by every run);
-		//   transcribe_timeout, decoder_crashed -> the decoder ran past its deadline on
-		//                   it, or died holding it: one
-		//                   strike is retried, transcribeTimeoutStrikeLimit make it
-		//                   permanent like ffmpeg_error;
+		//   transcribe_timeout, decoder_crashed, decoder_killed -> the decoder ran
+		//                   past its deadline on it, died holding it, or was
+		//                   killed from outside holding it: one strike is
+		//                   retried, transcribeTimeoutStrikeLimit (each after the
+		//                   first from a different worker) make it permanent like
+		//                   ffmpeg_error;
 		//   path_unmapped, ffmpeg_timeout, container_rejected, and every
 		//                   no-answer code (transcribe.IsNoAnswer:
-		//                   worker_misconfigured, decoder_killed,
-		//                   request_abandoned, worker_fault) -> the mount, the
+		//                   worker_misconfigured, request_abandoned,
+		//                   worker_fault) -> the mount, the
 		//                   share or the worker's own setup or policy, not the
 		//                   file: written as nothing, the file stays undone;
 		//   anything else (whisper_error, bad_request, no code) -> whisper_error,
 		//                   retried by the next run.
 		detail := truncateDetail(r.Error)
 		if transcribe.IsNoAnswer(r.Error) {
-			// No answer about the file (a broken or killed decoder, an abandoned
+			// No answer about the file (a decoder that cannot start, an abandoned
 			// request, a job the dispatcher deferred because only faulted workers
 			// answered it): written as nothing, the file stays undone.
 			return groupResult{kind: "deferred", hasResult: true}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.41.0
+// version: 3.42.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-26
 
@@ -1719,8 +1719,8 @@ func (p *Plugin) processTranscribePage(
 			accum.recordDeferred(1)
 		case ok && transcribe.IsNoAnswer(result.Error):
 			// No answer about the book: the worker is broken (ffmpeg missing from
-			// its PATH, a decoder that cannot start, a decoder killed from
-			// outside), the request was abandoned, or the dispatcher deferred a
+			// its PATH, a decoder that cannot start), the request was
+			// abandoned, or the dispatcher deferred a
 			// job only faulted workers answered. Storing it as a per-book verdict
 			// is the 2026-08-31 shape: write nothing and defer, like an
 			// unreachable endpoint. Checked before every other error case: local

@@ -1,5 +1,5 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
 // last-edited: 2026-10-26
 
@@ -92,6 +92,13 @@ type gpuRefusal struct {
 	// paces -- it waits and asks again -- instead of failing the dispatch at once,
 	// so a single worker whose decoder is restarting does not defer batch after
 	// batch for the whole window.
+	//
+	// An endpoint whose /health could not be read at all is Transient too: a
+	// tunnel that dropped, a Mac that went to sleep, a worker stopped for a CI
+	// window. On a pool where every endpoint sets require_gpu (prod), a dead
+	// pool is refused here, at the gate, before any send could fail as an
+	// outage; without pacing, each page found the whole pool refused in under
+	// a millisecond and deferred, and a run drained the library in minutes.
 	Transient bool
 }
 
@@ -144,6 +151,9 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 				URL:    g.Endpoint.URL,
 				Label:  g.Endpoint.Label,
 				Reason: reason,
+				// Not shown to lack a label, only not reachable to ask: that
+				// clears by itself (see gpuRefusal.Transient).
+				Transient: !g.Probed,
 			})
 			continue
 		}

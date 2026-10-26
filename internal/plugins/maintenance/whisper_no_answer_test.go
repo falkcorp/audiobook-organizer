@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/whisper_no_answer_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: a97db0f2-8212-49bc-b646-6b4c39e34a80
 // last-edited: 2026-10-26
 
@@ -230,7 +230,6 @@ func TestBookPage_AFirstPassTimeoutOnAFileHoldingSilenceGoesOnToTheLongClip(t *t
 
 var noAnswerCodes = []string{
 	transcribe.PathErrWorkerMisconfigured,
-	transcribe.PathErrDecoderKilled,
 	transcribe.PathErrRequestAbandoned,
 	transcribe.PathErrWorkerFault,
 }
@@ -331,7 +330,7 @@ func TestBookPage_OnlyAnUnavailablePoolCountsTowardStoppingTheRun(t *testing.T) 
 	}{
 		{"recognized outage", &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: errors.New("connection refused"), Recognized: true}, true},
 		{"pool unavailable after pacing", &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: fmt.Errorf("every endpoint benched: %w", transcribe.ErrPoolUnavailable)}, true},
-		{"worker fault", &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: &transcribe.WorkerFaultError{URL: "http://192.0.2.10:8000", Reason: "decoder_killed"}}, false},
+		{"worker fault", &transcribe.TransportError{Endpoints: []string{"http://192.0.2.10:8000"}, Err: &transcribe.WorkerFaultError{URL: "http://192.0.2.10:8000", Reason: "worker_misconfigured"}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -356,6 +355,33 @@ func TestBookPage_OnlyAnUnavailablePoolCountsTowardStoppingTheRun(t *testing.T) 
 				t.Fatalf("the book must be deferred: %+v", st)
 			}
 		})
+	}
+}
+
+// R1 (review of #4182): a pool refused at the gate because no endpoint's
+// /health could be read reaches the file op as an unrecognised TransportError
+// wrapping ErrPoolUnavailable. The op must treat it as the outage it is: retry
+// the batch fileIntroOutageMaxTries times and stop the run, never mark files.
+func TestFileIntroRun_AnUnavailablePoolIsAnOutageNotADeferral(t *testing.T) {
+	fx := newIntroFx(t)
+	b := fx.book("Knightfall")
+	_, p1 := fx.file(b, "01.m4b", 1, "kf-1", false)
+	fx.whisp.texts[p1] = goodIntro
+	fx.whisp.transErr = &transcribe.TransportError{
+		Endpoints: []string{"http://192.0.2.10:8000", "http://192.0.2.11:8000"},
+		Err:       fmt.Errorf("every endpoint unreachable or unable to start its decoder: %w", transcribe.ErrPoolUnavailable),
+	}
+	_, err := fx.run("")
+	if !errors.Is(err, errFileIntroOutage) {
+		t.Fatalf("an unavailable pool must stop the run as an outage, got %v", err)
+	}
+	if n := len(fx.whisp.calls); n != fileIntroOutageMaxTries {
+		t.Fatalf("the batch was tried %d times, want %d", n, fileIntroOutageMaxTries)
+	}
+	for _, r := range mustFiles(t, fx.s, b) {
+		if r.IntroSourceHash != "" || r.TranscribeStatus != nil || r.IntroTranscription != nil || r.IntroTimeouts != 0 {
+			t.Fatalf("an outage wrote to %s: %+v", r.ID, r)
+		}
 	}
 }
 

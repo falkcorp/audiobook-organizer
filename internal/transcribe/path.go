@@ -1,5 +1,5 @@
 // file: internal/transcribe/path.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
 // last-edited: 2026-10-26
 
@@ -69,9 +69,14 @@ const (
 	// PathErrDecoderKilled: the decode process was killed from OUTSIDE while it
 	// held this clip (SIGKILL or SIGTERM: macOS jetsam under memory pressure from
 	// another job on the box, an operator), or it could not be reaped to say how
-	// it died. Nothing about the clip is learned from that, so it is a fault of
-	// the WORKER, like worker_misconfigured: the job is sent to another worker or
-	// deferred, and never struck. whisper_mlx_server.py 1.11.0 and later.
+	// it died. One kill says little about the clip (it may be a decode that grew
+	// until jetsam took it, or another job's memory pressure), so it is counted
+	// like a timeout but can only make a file permanent with a second strike
+	// from a DIFFERENT worker (the store's IntroTimeoutWorker rule): kills on one
+	// host alone never settle a file, kills on two hosts do. It is a strike-type
+	// answer (IsStrikeError), so a response that is mostly kills is a worker
+	// fault judged like one that is mostly timeouts. whisper_mlx_server.py
+	// 1.11.0 and later.
 	PathErrDecoderKilled = "decoder_killed"
 	// PathErrRequestAbandoned: the worker did not start this clip because the
 	// client's request deadline (X-Whisper-Request-Timeout-S) had passed. The
@@ -95,15 +100,14 @@ var pathErrCodes = []string{
 }
 
 // IsNoAnswer reports whether a per-job error text means the job got NO answer
-// about its file: the worker could not do the job (worker_misconfigured), its
-// decoder was killed from outside (decoder_killed), the request was abandoned
+// about its file: the worker could not do the job (worker_misconfigured), the request was abandoned
 // before the clip started (request_abandoned), or the dispatcher gave up on it
 // because only faulted workers answered it (worker_fault). Every caller defers
 // such a job (nothing written, retried by a later run) and never strikes it,
 // writes a status for it, or reads its empty text as silence.
 func IsNoAnswer(errText string) bool {
 	switch PathErrorCode(errText) {
-	case PathErrWorkerMisconfigured, PathErrDecoderKilled, PathErrRequestAbandoned, PathErrWorkerFault:
+	case PathErrWorkerMisconfigured, PathErrRequestAbandoned, PathErrWorkerFault:
 		return true
 	}
 	return false

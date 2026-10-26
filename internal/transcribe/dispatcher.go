@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -171,10 +171,12 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		if len(gated) > 0 || !allTransient(refused) || !time.Now().Before(paceUntil) {
 			break
 		}
-		// Every worker said its decoder is restarting. That clears by itself
-		// (the worker's fault window), so ask again shortly rather than failing
-		// this dispatch and the next one and the one after that.
-		dispatchLog.Warn("every whisper endpoint reports its decoder cannot start; waiting %s before asking again: %s",
+		// Every endpoint is refused for something that clears by itself: its
+		// decoder is restarting (the worker's fault window), or its /health
+		// could not be read (a dropped tunnel, a sleeping host). Ask again
+		// shortly rather than failing this dispatch and the next one and the
+		// one after that.
+		dispatchLog.Warn("every whisper endpoint is unreachable or reports its decoder cannot start; waiting %s before asking again: %s",
 			poolPaceInterval, logger.SanitizeLogValue(describeRefusals(refused)))
 		if err := sleepCtx(ctx, min(poolPaceInterval, time.Until(paceUntil))); err != nil {
 			return nil, classifyTransport(endpointURLs(endpoints), err)
@@ -199,7 +201,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		if allTransient(refused) {
 			return nil, classifyTransport(endpointURLs(endpoints), fmt.Errorf(
-				"%w: all %d whisper endpoint(s) still report their decoder cannot start after waiting %s: %s",
+				"%w: all %d whisper endpoint(s) still unreachable or unable to start their decoder after waiting %s: %s",
 				ErrPoolUnavailable, len(endpoints), poolPaceMax, describeRefusals(refused)))
 		}
 		// Distinct from "no whisper endpoints configured": that sends an
@@ -310,29 +312,34 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	lastErr := make(map[string]error)
 
 	// Worker-fault bookkeeping (see ErrWorkerFault). A faulted response says the
-	// worker is unwell, not which clip is to blame, so its jobs are re-queued --
-	// but a re-queue with no memory could go on forever: three genuine loopers
-	// left alone in a dispatch make every response that carries them a fault, the
-	// benched endpoint's cooldown (at most 5 minutes) has long expired by the time
-	// a round of three 300 s clips ends, and two endpoints then trade the same
-	// three jobs until the op is cancelled. So:
+	// worker may be unwell, not which clip is to blame, so its jobs are re-queued
+	// in units of at most timeoutBreakerMin-1 jobs: a unit's answer is judged per
+	// clip, because two timeouts cannot make a fault, so it always ends. The two
+	// kinds of fault are handled differently:
 	//
-	//   - faultedOn remembers, per job, every endpoint whose faulted response
-	//     held it. A job is never offered to one of those again, nor to an
-	//     endpoint that failed in this dispatch and has not answered cleanly
-	//     since (lastErr).
-	//   - A faulted job goes back in a unit of at most timeoutBreakerMin-1 jobs,
-	//     so its next answer is judged per clip: two timeouts cannot make a fault.
-	//     That is what lets genuine loopers converge (a strike from a worker that
-	//     did not fault on them) instead of being deferred every night.
-	//   - A job that has faulted on faultLimit workers, or that no worker is left
-	//     to take, is DEFERRED: it gets a PathErrWorkerFault result, which every
-	//     caller treats as no answer, never as a strike.
+	//   - A response that was mostly timeouts or crashes (a timeout-majority
+	//     fault) is as often the batch's own clips as the worker: a page whose
+	//     every chunk is mostly genuine loopers faults on EVERY endpoint at once.
+	//     Its jobs may go back to any endpoint, the one that faulted included,
+	//     and the endpoint is neither benched nor distrusted. Excluding it (an
+	//     earlier version did) left a pool whose endpoints all faulted in one
+	//     round with nowhere to send the loopers, so they were deferred with no
+	//     strike on every run and never converged. A sick worker's per-clip
+	//     strikes cannot make a file permanent on their own: the store requires
+	//     the second strike from a different worker (IntroTimeoutWorker).
+	//   - Any other fault (worker_misconfigured: the worker cannot decode at
+	//     all; see WorkerFaultError.timeoutMajority) is about the endpoint only. faultedOn remembers, per job, every
+	//     endpoint whose worker-level fault held it; a job is never offered to
+	//     one of those again, nor to an endpoint that failed in this dispatch
+	//     and has not answered cleanly since (lastErr). A job that has faulted on
+	//     faultLimit workers, or that no worker is left to take, is DEFERRED: it
+	//     gets a PathErrWorkerFault result, which every caller treats as no
+	//     answer, never as a strike.
 	//
-	// faultedHere is the "plainly sick" rule: an endpoint that returned a worker
-	// fault in this dispatch is not believed about timeouts or crashes either,
-	// however few, until it answers a response with none of them. A sick worker's
-	// lone timeout is the same evidence as its majority of timeouts.
+	// faultedHere is the "plainly sick" rule, for those endpoint faults only: an
+	// endpoint that could not decode at all in this dispatch is not believed
+	// about timeouts or crashes either, however few, until it answers a
+	// response with none of them.
 	faultedOn := make(map[string]map[string]bool)
 	faultedHere := make(map[string]bool)
 	faultLimit := min(2, len(ordered))
@@ -351,18 +358,27 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		bump(settled)
 	}
-	requeueFaulted := func(ids []string, url string) {
+	// requeueUnits puts jobs back in units too small to fault on timeouts.
+	requeueUnits := func(ids []string) {
 		ids = slices.DeleteFunc(slices.Clone(ids), func(id string) bool { _, ok := remaining[id]; return !ok })
 		slices.Sort(ids)
+		for part := range slices.Chunk(ids, timeoutBreakerMin-1) {
+			units = append(units, part)
+		}
+	}
+	// requeueFaulted is requeueUnits for a worker-level fault: the jobs also
+	// remember the endpoint, so they are never offered to it again.
+	requeueFaulted := func(ids []string, url string) {
 		for _, id := range ids {
+			if _, ok := remaining[id]; !ok {
+				continue
+			}
 			if faultedOn[id] == nil {
 				faultedOn[id] = make(map[string]bool)
 			}
 			faultedOn[id][url] = true
 		}
-		for part := range slices.Chunk(ids, timeoutBreakerMin-1) {
-			units = append(units, part)
-		}
+		requeueUnits(ids)
 	}
 	// canTake reports whether a split part may go to url.
 	canTake := func(live []string, url string) bool {
@@ -562,8 +578,10 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			ep := healthy[r.idx]
 			fault, isFault := errors.AsType[*WorkerFaultError](r.err)
 			if isFault {
-				faultedHere[ep.URL] = true
 				registerFollowers(fault.Followers)
+				if !fault.timeoutMajority() {
+					faultedHere[ep.URL] = true
+				}
 			}
 			// Work the endpoint completed is valid whether or not the call as a
 			// whole failed: a sender returns the chunks that finished before the
@@ -611,6 +629,25 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 			for id := range settledHere {
 				delete(remaining, id)
+			}
+			if isFault && !faultedHere[ep.URL] {
+				// A timeout-majority fault from an endpoint with no worker-level
+				// fault in this dispatch: its faulted jobs go back in units of at
+				// most timeoutBreakerMin-1, to any endpoint (this one included),
+				// and the endpoint is not benched; see the worker-fault
+				// bookkeeping above. The jobs its transport never sent stay in
+				// remaining as ordinary work.
+				faultedIDs := slices.Sorted(maps.Keys(fault.Faulted))
+				dispatchLog.Warn("worker fault (mostly timeouts): re-sending its jobs in units too small to fault: url=%s jobs=%d",
+					logger.SanitizeLogValue(ep.URL), len(faultedIDs))
+				requeueUnits(faultedIDs)
+				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool {
+					_, ok := remaining[id]
+					return !ok || slices.Contains(faultedIDs, id)
+				}); len(u) > 0 {
+					units = append(units, u)
+				}
+				continue
 			}
 			requeued := make(map[string]bool)
 			if isFault || len(distrusted) > 0 {
@@ -724,29 +761,33 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 }
 
 // dispatchSingle is dispatchPool for a pool of one eligible endpoint: no
-// re-queue, no bench, the historical single-URL behaviour, except for a worker
-// fault, where there is nobody else to hand the jobs to.
+// re-queue to another worker, no bench, the historical single-URL behaviour,
+// except for a worker fault, where there is nobody else to hand the jobs to.
 //
-//   - The faulted jobs have faulted on every worker there is, so they are
-//     deferred (PathErrWorkerFault), never struck.
-//   - A fault that is only a majority of timeouts is the batch's own clips as
-//     often as the worker (a chunk of a book whose every track opens on the
-//     same long theme), so the jobs the transport never got to send after the
-//     faulted chunk are sent again. Dropping them instead would defer the same
-//     page's later chunks on every run, in the same order, forever. Every pass
-//     settles or defers at least the faulted jobs, so this ends.
-//   - A worker-level fault (decoder cannot start, decoder killed) ends the
-//     dispatch with an error that is NOT a recognised outage: the ops defer the
-//     unanswered jobs and go on, and the gate refuses the worker while it
-//     reports the fault (pacing, see dispatchPool).
-//   - Once the worker has faulted, its timeouts and crashes in later responses
-//     are withheld the same way (deferred): it is the plainly sick worker.
+//   - A fault that is only a majority of timeouts or crashes is the batch's own
+//     clips as often as the worker (a chunk of a book whose every track opens
+//     on the same long theme). The faulted jobs are sent again to the same
+//     worker in requests of at most timeoutBreakerMin-1 clips, whose answers
+//     are judged per clip (two timeouts cannot make a fault), and the jobs the
+//     transport never got to send are sent again too. Dropping or deferring
+//     them instead left the same page's loopers unjudged on every run, in the
+//     same order, forever. A timeout from the only worker can never make a
+//     file permanent by itself: the store wants the second strike from a
+//     different worker. Every pass settles at least the faulted jobs, so this
+//     ends.
+//   - A worker-level fault (the decoder cannot start) defers the faulted jobs
+//     (PathErrWorkerFault, never a strike) and ends the dispatch with an error
+//     that is NOT a recognised outage: the ops defer the unanswered jobs and go
+//     on, and the gate refuses the worker while it reports the fault (pacing,
+//     see dispatchPool).
 func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string]J, onProgress ProgressFunc, send endpointSender[J]) (map[string]BatchResult, error) {
 	url := g.Endpoint.URL
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
 	pending := jobs
-	faulted := false
+	// small holds the faulted jobs waiting to be sent again in requests too
+	// small to fault on timeouts.
+	var small [][]string
 	for {
 		var progress ProgressFunc
 		if onProgress != nil {
@@ -755,22 +796,16 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string
 		}
 		res, err := send(ctx, g, pending, progress)
 		fault, isFault := errors.AsType[*WorkerFaultError](err)
-		if isFault {
-			faulted = true
-		}
 		for id, br := range res {
-			if faulted && IsStrikeError(br.Error) && !br.Condemned {
-				br = faultDeferral(1)
-			}
-			if br.Endpoint == "" && !IsNoAnswer(br.Error) {
+			// Every answer the worker gave names it, a no-answer one included,
+			// as dispatchPool's do; only a result the dispatcher made itself
+			// (a deferral) is unnamed.
+			if br.Endpoint == "" {
 				br.Endpoint = url
 			}
 			results[id] = br
 		}
-		if err == nil {
-			return results, nil
-		}
-		if !isFault {
+		if err != nil && !isFault {
 			if IsWorkerStuck(err) && ctx.Err() == nil {
 				// A request that went unanswered because the host vanished is an
 				// outage, not a wedged decoder (see afterStuck).
@@ -780,28 +815,67 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string
 			// with the error.
 			return results, classifyTransport([]string{url}, err)
 		}
-		deferral := faultDeferral(1)
-		for id := range fault.Faulted {
-			for _, cid := range append([]string{id}, fault.Followers[id]...) {
-				if _, sent := jobs[cid]; sent {
-					results[cid] = deferral
+		if isFault && (!fault.timeoutMajority() || ctx.Err() != nil) {
+			deferral := faultDeferral(1)
+			for id := range fault.Faulted {
+				for _, cid := range append([]string{id}, fault.Followers[id]...) {
+					if _, sent := jobs[cid]; sent {
+						results[cid] = deferral
+					}
+				}
+			}
+			for id := range jobs {
+				if _, done := results[id]; !done {
+					// Jobs left unanswered: the ops defer them on this error.
+					return results, classifyTransport([]string{url}, err)
+				}
+			}
+			return results, nil
+		}
+		if isFault {
+			ids := slices.Sorted(maps.Keys(fault.Faulted))
+			for part := range slices.Chunk(ids, timeoutBreakerMin-1) {
+				unit := slices.Clone(part)
+				for _, id := range part {
+					unit = append(unit, fault.Followers[id]...)
+				}
+				small = append(small, unit)
+			}
+			dispatchLog.Warn("worker fault (mostly timeouts) on the only endpoint: re-sending the faulted jobs in requests too small to fault: url=%s faulted=%d",
+				logger.SanitizeLogValue(url), len(ids))
+		}
+		inSmall := make(map[string]bool)
+		for _, u := range small {
+			for _, id := range u {
+				inSmall[id] = true
+			}
+		}
+		// After a clean answer, a job with no result was skipped by the
+		// transport (an unreadable file), not left unsent: only a fault leaves
+		// jobs unsent.
+		rest := make(map[string]J)
+		if isFault {
+			for id, j := range pending {
+				if _, done := results[id]; !done && !inSmall[id] {
+					rest[id] = j
 				}
 			}
 		}
-		rest := make(map[string]J)
-		for id, j := range pending {
-			if _, done := results[id]; !done {
-				rest[id] = j
+		if len(rest) == 0 {
+			for len(small) > 0 && len(rest) == 0 {
+				for _, id := range small[0] {
+					if _, done := results[id]; !done {
+						if j, ok := jobs[id]; ok {
+							rest[id] = j
+						}
+					}
+				}
+				small = small[1:]
 			}
 		}
 		if len(rest) == 0 {
 			return results, nil
 		}
-		if fault.workerLevel() || ctx.Err() != nil {
-			return results, classifyTransport([]string{url}, err)
-		}
-		dispatchLog.Warn("worker fault on the only endpoint: deferred the faulted jobs, sending the rest again: url=%s deferred=%d rest=%d",
-			logger.SanitizeLogValue(url), len(fault.Faulted), len(rest))
 		pending = rest
 	}
 }
@@ -815,7 +889,8 @@ func faultDeferral(workers int) BatchResult {
 
 // ErrPoolUnavailable marks a dispatch that found no endpoint it could use and
 // kept finding none for poolPaceMax: every endpoint benched by earlier
-// failures, or every worker reporting that its decoder cannot start. It is not
+// failures, every endpoint unreachable at the gate, or every worker reporting
+// that its decoder cannot start. It is not
 // a verdict about any file. The ops treat it like an outage: wait, re-send, and
 // stop the run if it persists.
 var ErrPoolUnavailable = errors.New("whisper pool unavailable")
