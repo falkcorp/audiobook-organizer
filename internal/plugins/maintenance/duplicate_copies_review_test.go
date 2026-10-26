@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -587,6 +587,14 @@ func keyOwnerFixture(t *testing.T) (d *dcFixture, path, aRow, bRow, xBook, xRow 
 
 func repointAndRevert(t *testing.T, d *dcFixture, xBook, xRow, path string, legacy bool) {
 	t.Helper()
+	was := repointOnto(t, d, xBook, xRow, path, legacy)
+	revertRepoint(t, d, d.s, xBook, xRow, was)
+}
+
+// repointOnto journals and applies the repoint of row xRow onto path (operation
+// "op-rp") and returns the location it moved from.
+func repointOnto(t *testing.T, d *dcFixture, xBook, xRow, path string, legacy bool) database.BookFileLocation {
+	t.Helper()
 	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-rp")
 	cur, err := d.s.GetBookFileByID(xBook, xRow)
 	require.NoError(t, err)
@@ -601,7 +609,14 @@ func repointAndRevert(t *testing.T, d *dcFixture, xBook, xRow, path string, lega
 	} else {
 		require.NoError(t, w.RepointBookFile(xBook, xRow, was, to))
 	}
-	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-rp")
+	return was
+}
+
+// revertRepoint reverts "op-rp" through store (d.s, or a wrapper of it) and
+// checks the row went back to where it was.
+func revertRepoint(t *testing.T, d *dcFixture, store database.Store, xBook, xRow string, was database.BookFileLocation) {
+	t.Helper()
+	_, err := audiobooks.NewRevertService(store).RevertOperation("op-rp")
 	require.NoError(t, err)
 	back, err := d.s.GetBookFileByID(xBook, xRow)
 	require.NoError(t, err)
