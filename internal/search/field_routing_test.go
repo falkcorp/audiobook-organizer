@@ -1,5 +1,5 @@
 // file: internal/search/field_routing_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 8d1f3a6c-5e27-4b90-9c14-2a7e6b0d4f83
 // last-edited: 2026-10-26
 
@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -29,7 +30,7 @@ func TestTranslate_DurationTargetsIndexedSecondsWithUnits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: parse: %v", q, err)
 		}
-		bq, _, err := Translate(ast)
+		bq, _, err := TranslateAt(ast, time.Now())
 		if err != nil {
 			t.Fatalf("%s: translate: %v", q, err)
 		}
@@ -41,7 +42,7 @@ func TestTranslate_DurationTargetsIndexedSecondsWithUnits(t *testing.T) {
 		}
 	}
 	ast, _ := ParseQuery("duration:>soon")
-	if _, _, err := Translate(ast); err == nil {
+	if _, _, err := TranslateAt(ast, time.Now()); err == nil {
 		t.Error("an unparseable duration must be an error, not a silent 0")
 	}
 }
@@ -172,7 +173,7 @@ func TestQueryMayUsePerUserField_AgreesWithTranslatorRouting(t *testing.T) {
 		if err != nil {
 			continue // refused by the evaluator before any state is read
 		}
-		_, perUser, err := Translate(ast)
+		_, perUser, err := TranslateAt(ast, time.Now())
 		if err != nil {
 			continue // likewise refused at translation
 		}

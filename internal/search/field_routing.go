@@ -1,5 +1,5 @@
 // file: internal/search/field_routing.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
 // last-edited: 2026-10-26
 
@@ -53,15 +53,6 @@ var fieldAliases = map[string]string{
 	"duration": "duration_seconds",
 	"added":    "date_added",
 	"modified": "date_modified",
-	// "tag" is what the library search box and GetBooksByTag call it; the index
-	// field is "tags". Without this alias a "tag:noir" term in search= named a
-	// field the index does not hold and matched no book, with no message.
-	//
-	// It is not the same match as the tags[] parameter. tags[] is exact
-	// (GetBooksByTag, case folded); the index analyses a tag into words (and folds
-	// case), so tag:dark also finds a book tagged "dark knight". The in-query
-	// spelling is the looser one; the facet and chip paths stay exact.
-	"tag": "tags",
 }
 
 // IsIndexedField reports whether the search index can answer a fielded term

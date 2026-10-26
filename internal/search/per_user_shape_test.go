@@ -1,5 +1,5 @@
 // file: internal/search/per_user_shape_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c7a2e5f8-31d6-4b94-8e07-6f1b3a9d5c42
 // last-edited: 2026-10-26
 
@@ -8,6 +8,7 @@ package search
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestCheckPerUserBoolean_RefusesTheShapesTheFlatPassGetsWrong(t *testing.T) {
@@ -88,7 +89,7 @@ func TestCheckPerUserBoolean_RefusedQueriesAreTheOnesTranslatedWithPerUserFilter
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, perUser, err := Translate(ast)
+		_, perUser, err := TranslateAt(ast, time.Now())
 		if err != nil || len(perUser) == 0 {
 			t.Errorf("%q: translate = %d per-user filters, err %v; the refusal guards a shape the translator does flatten", q, len(perUser), err)
 		}

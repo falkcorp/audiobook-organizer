@@ -1,5 +1,5 @@
 // file: internal/search/bleve_translator.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
 // last-edited: 2026-10-26
 //
@@ -55,19 +55,13 @@ var perUserFieldSet = map[string]struct{}{
 	"last_played":  {},
 }
 
-// Translate converts an AST into a Bleve query plus any per-user
-// filters. Returns an error if the AST references unknown operators
-// or if a range can't be parsed as numeric.
+// TranslateAt converts an AST into a Bleve query plus any per-user filters.
+// Returns an error if the AST references unknown operators or if a range can't
+// be parsed as numeric.
 //
-// Relative date terms (date_added:>-7d) resolve against the clock at the moment
-// of the call; use TranslateAt to supply the instant.
-func Translate(node Node) (query.Query, []PerUserFilter, error) {
-	return TranslateAt(node, time.Now())
-}
-
-// TranslateAt is Translate with the instant relative date terms resolve
-// against. A caller that also runs the per-user filters (MatchPerUserFilters)
-// passes the same now to both, so one evaluation sees one instant.
+// now is the instant relative date terms (date_added:>-7d) resolve against. A
+// caller that also runs the per-user filters (MatchPerUserFilters) passes the
+// same now to both, so one evaluation sees one instant.
 func TranslateAt(node Node, now time.Time) (query.Query, []PerUserFilter, error) {
 	if node == nil {
 		return bleve.NewMatchAllQuery(), nil, nil
@@ -182,7 +176,7 @@ func isStopwordOnly(term string) bool {
 // was unfindable, which is a large share of book titles. Single-word searches
 // worked, which is why this read as "spaces break search".
 //
-// The guard matters as much as the fix. A nil query from Translate becomes
+// The guard matters as much as the fix. A nil query from TranslateAt becomes
 // MatchAll, so unconditionally dropping stopwords would make a search for "of"
 // return the entire library. Requiring a surviving non-stopword term
 // means this only ever fires on the broken case; an all-stopword query keeps its
@@ -263,12 +257,10 @@ func translateField(n *FieldNode, tc *translateCtx, negated bool) (query.Query, 
 		return nil, nil
 	}
 
-	// tag: the singular is the name the search box and GetBooksByTag use; the
-	// indexed field is "tags" (see fieldAliases for how the two matches differ).
-	if target, ok := fieldAliases[n.Field]; ok && n.Field == "tag" {
-		aliased := *n
-		aliased.Field = target
-		n = &aliased
+	// tag: is an exact filter the caller applies (SplitTagTerms); the index cannot
+	// answer it exactly, so a term that reaches here was never split off.
+	if n.Field == TagField {
+		return nil, errTagUnsplit
 	}
 
 	// duration: human units (20m, 1h30m; bare = seconds) onto the indexed
@@ -480,14 +472,13 @@ func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Q
 		return bleve.NewDisjunctionQuery(dates...), nil
 	}
 
-	field := n.Field
-	if target, ok := fieldAliases[field]; ok && field == "tag" {
-		field = target
+	if n.Field == TagField {
+		return nil, errTagUnsplit
 	}
 	var children []query.Query
 	for _, v := range n.Values {
 		mq := bleve.NewMatchQuery(v)
-		mq.SetField(field)
+		mq.SetField(n.Field)
 		children = append(children, mq)
 	}
 	if len(children) == 0 {

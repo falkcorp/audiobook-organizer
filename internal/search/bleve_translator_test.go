@@ -1,13 +1,14 @@
 // file: internal/search/bleve_translator_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1a8c2f4d-5b9e-4f70-a7d6-2e8d0f1b9a57
-// last-edited: 2026-07-10
+// last-edited: 2026-10-26
 
 package search
 
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/blevesearch/bleve/v2/search/query"
 )
@@ -37,7 +38,7 @@ func translate(t *testing.T, q string) (hits []SearchResult, total uint64, filte
 	if err != nil {
 		t.Fatalf("parse %q: %v", q, err)
 	}
-	bq, pu, err := Translate(ast)
+	bq, pu, err := TranslateAt(ast, time.Now())
 	if err != nil {
 		t.Fatalf("translate %q: %v", q, err)
 	}
@@ -228,7 +229,7 @@ func TestTranslateFreeText_QuotedUnchanged(t *testing.T) {
 
 func TestTranslate_Empty(t *testing.T) {
 	// A completely empty / match-all query through the translator.
-	q, pu, err := Translate(nil)
+	q, pu, err := TranslateAt(nil, time.Now())
 	if err != nil {
 		t.Fatalf("translate nil: %v", err)
 	}

@@ -1,13 +1,14 @@
 // file: internal/search/zz_repro_alljobs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a1c7e93-0d62-4b58-9f31-6ad2c8b7e015
-// last-edited: 2026-08-13
+// last-edited: 2026-10-26
 
 package search
 
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // Throwaway repro for the 2026-08-13 report: searching "All Jobs and Classes"
@@ -44,7 +45,7 @@ func TestReproAllJobsAndClasses(t *testing.T) {
 				t.Logf("PARSE ERROR (falls back to substring SearchBooks): %v", err)
 				return
 			}
-			bq, _, err := Translate(ast)
+			bq, _, err := TranslateAt(ast, time.Now())
 			if err != nil {
 				t.Logf("TRANSLATE ERROR: %v", err)
 				return

@@ -1,5 +1,5 @@
 // file: internal/search/bleve_index.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 3c8e1a2f-4d9b-4f70-a5c6-2f8d0e1b9a47
 // last-edited: 2026-10-26
 //
@@ -733,7 +733,15 @@ func bookIndexMapping() mapping.IndexMapping {
 		f.IncludeInAll = true
 		return f
 	}
-	// Keyword (no analyzer, exact match)
+	// "Keyword" in name only: the field is analysed with the standard analyzer
+	// (Unicode word tokens, lower-cased, English stop words removed), so a term on
+	// it matches by WORD, not by whole value. tags is the field where that bites:
+	// a query term "to-read" reduces to the token "read", and "sci-fi" is two
+	// tokens that "hard sci-fi" also holds. The query side therefore never asks
+	// the index for an exact tag (tag: is applied by GetBooksByTag, see
+	// tag_terms.go). Making this a real keyword field (the keyword tokenizer plus a
+	// lower-case filter) changes the stored analysis and so needs a bump of
+	// bookMappingVersion and a full reindex; it is tracked in todo.d.
 	keyword := func() *mapping.FieldMapping {
 		f := bleve.NewTextFieldMapping()
 		f.Analyzer = standard.Name
