@@ -1,5 +1,5 @@
 // file: internal/batch/trash_grants_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 22c685fe-e807-4213-a039-f8dece0f9456
 // last-edited: 2026-10-25
 
@@ -141,12 +141,10 @@ func TestNilCallerFailsClosed(t *testing.T) {
 // library_state, so only the row's before/after comparison can see the restore.
 func TestBatchUpdate_ClearingTheDeletionFlagNeedsOrganize(t *testing.T) {
 	f, id := trashedLikeDeleteAudiobook(t)
-	b, err := f.S.GetBookByID(id)
-	require.NoError(t, err)
 	// Strip the label so the row is in the trash by its flag alone.
-	_, err = f.S.ModifyBook(id, func(b *database.Book) error { b.LibraryState = nil; return nil })
+	_, err := f.S.ModifyBook(id, func(b *database.Book) error { b.LibraryState = nil; return nil })
 	require.NoError(t, err)
-	b, err = f.S.GetBookByID(id)
+	b, err := f.S.GetBookByID(id)
 	require.NoError(t, err)
 	require.True(t, b.IsSoftDeleted() && database.IsInTrash(b), "fixture: in the trash by the flag alone")
 
