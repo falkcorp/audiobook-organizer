@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_round11_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4f7a52-3c1e-4b86-a0d5-6e21b8c7f390
 // last-edited: 2026-10-26
 
@@ -352,4 +352,62 @@ func TestRootGuard_ConcurrentCallersShareOneCheck(t *testing.T) {
 		assert.NoError(t, err, "caller %d", i)
 	}
 	assert.Equal(t, int32(1), counting.calls.Load(), "one sample for eight callers")
+}
+
+// n-1. A dataset that is not mounted leaves its mount point behind as an empty
+// directory, so a file directly in it reads ENOENT with its folder "there". An
+// empty folder is "cannot tell" too: the book stays in the trash, with a line
+// that says the folder is empty; once the folder holds something the file is
+// gone and the book purges.
+func TestRunPurge_MissingFileInAnEmptyFolderIsNotDecidedGone(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	libraryAppDirs(t)
+	liveBookWithFile(t, store, "present", filepath.Join(base, "lib", "Arkham", "year-one.m4b"))
+	folder := filepath.Join(base, "lib", "Gotham")
+	require.NoError(t, os.MkdirAll(folder, 0o755)) // the mount point of a share that is not up
+	softDeleted(t, store, "T", filepath.Join(folder, "hush.m4b"))
+
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Zero(t, res.Purged, "%+v", res)
+	assert.False(t, bookGone(t, store, "T"), "kept in the trash")
+	require.Len(t, res.Errors, 1, "%+v", res)
+	assert.Contains(t, res.Errors[0], "is there but empty")
+
+	writeFile(t, filepath.Join(folder, "knightfall.m4b")) // the share is up
+	res, err = svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Purged, "%+v", res)
+	assert.Empty(t, res.Errors, "%+v", res)
+	assert.True(t, bookGone(t, store, "T"))
+}
+
+// n-1. A file directly in the library root is exempt from the empty-folder rule:
+// the root check (libraryRootReady) is what vouches for the root. Here the root
+// is empty and no live book has a file under it, so there is nothing to
+// compare against and the root passes the check; the missing file is gone.
+func TestRunPurge_MissingFileDirectlyInTheRootIsGone(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	softDeleted(t, store, "T", filepath.Join(base, "lib", "hush.m4b"))
+
+	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Purged, "%+v", res)
+	assert.Empty(t, res.Errors, "%+v", res)
+}
+
+// n-1. The journal replays the same rule: a record whose folder is empty is
+// kept on every pass, and reported in the one aggregate line.
+func TestReplay_RecordWhoseFolderIsEmptyIsKept(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	folder := filepath.Join(base, "lib", "Gotham")
+	require.NoError(t, os.MkdirAll(folder, 0o755))
+	require.NoError(t, svc.journalPendingFile("T", purgeFileVerdict{remove: filepath.Join(folder, "hush.m4b"), id: fileIdentity{Known: true, Size: 1, MtimeNS: 1}}))
+
+	for pass := 1; pass <= 2*maxUnresolvableAttempts; pass++ {
+		_, errs := svc.replayPendingFileRemovals(context.Background())
+		require.Len(t, errs, 1, "pass %d: %v", pass, errs)
+		assert.Contains(t, errs[0], "waiting for a folder that is missing or empty")
+		require.Len(t, pendingJournal(t, store), 1, "pass %d", pass)
+	}
 }

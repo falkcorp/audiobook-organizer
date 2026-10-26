@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_root_ready.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e7b3d52-9a14-4c68-b2f7-5d1c8a4e6b93
 // last-edited: 2026-10-26
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -260,4 +261,84 @@ func folderIsThere(path string) (ok bool, err error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// dirSet is a set of folders shared by the workers of one removal run: the
+// folders a worker is about to unlink a file in. Safe for concurrent use; a nil
+// set is empty and ignores adds.
+type dirSet struct {
+	mu   sync.Mutex
+	dirs map[string]struct{}
+}
+
+func (s *dirSet) add(dir string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dirs == nil {
+		s.dirs = map[string]struct{}{}
+	}
+	s.dirs[filepath.Clean(dir)] = struct{}{}
+}
+
+func (s *dirSet) has(dir string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.dirs[filepath.Clean(dir)]
+	return ok
+}
+
+// folderCheck is what vouches for a missing file's ENOENT: its folder must be
+// there (folderIsThere) and must not be an EMPTY folder that nothing explains. A
+// dataset that is not mounted leaves its mount point behind as an empty
+// directory, so a file directly in it reads ENOENT with its folder "there"; an
+// empty folder is therefore "cannot tell" too, unless
+//
+//   - the folder is the library root itself (the root check, libraryRootReady,
+//     is what vouches for it: an empty root is a mount point that is not up and
+//     is refused there), or
+//   - this run is itself unlinking in it (emptied: the worker registers a folder
+//     before its first unlink there), which is how a folder comes to be empty
+//     between the first worker finishing and a neighbour's already-gone file
+//     being decided.
+//
+// missing: the folder is not there. empty: it is there, holds nothing, and
+// nothing explains that.
+func folderCheck(path, root string, emptied *dirSet) (missing, empty bool, err error) {
+	ok, err := folderIsThere(path)
+	if err != nil {
+		return false, false, err
+	}
+	if !ok {
+		return true, false, nil
+	}
+	dir := filepath.Dir(path)
+	if root != "" && filepath.Clean(dir) == filepath.Clean(root) {
+		return false, false, nil
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return true, false, nil
+		}
+		return false, false, err
+	}
+	defer f.Close()
+	if _, err := f.Readdirnames(1); err != nil {
+		if errors.Is(err, io.EOF) {
+			// Asked only AFTER the folder was seen empty: a worker registers a
+			// folder before its unlink, so a folder that this run emptied is
+			// already in the set by the time it can be seen empty. Asking before
+			// reading would race with that worker (set checked, then its unlink,
+			// then the read).
+			return false, !emptied.has(dir), nil
+		}
+		return false, false, err
+	}
+	return false, false, nil
 }

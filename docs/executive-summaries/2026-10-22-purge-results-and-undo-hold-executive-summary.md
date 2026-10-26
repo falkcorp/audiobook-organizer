@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.15.0 -->
+<!-- version: 1.16.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -210,11 +210,16 @@ undo above. Books that own files are still never purged.
   folder the purge itself has just emptied is not mistaken for a missing
   folder: the folders a purge empties are removed only after every file has been
   looked at, and each note of a removal is crossed off right after its own
-  file is deleted. The price: a library that has really lost most of its files
+  file is deleted. A missing file in a folder that is there but completely
+  empty is treated like a missing folder too, because a share that is not
+  mounted leaves exactly that behind; the library folder itself is exempt. The
+  price: a library that has really lost most of its files
   is refused the same way until they are back, because that looks exactly like
   an unmounted share; a trashed book whose whole folder has been removed cannot
-  be purged with "Also delete files" until the folder is readable again
-  (purging without that option still works); and a check on a library whose
+  be purged with "Also delete files" until the folder is readable again, and
+  so is a trashed book whose file was deleted by hand when its folder was left
+  empty, until something is in the folder or the folder is removed (purging
+  without that option still works for both); and a check on a library whose
   share hangs gives up after ten seconds and refuses instead of waiting.
 - Purging, or discarding progress and purging, a single book from its own page
   now follows the same order as the big purge: it decides about the file first

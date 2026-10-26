@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-26
 
@@ -925,6 +925,14 @@ type purgeFileVerdict struct {
 // on what the pass does with them, so it is given once the pass is decided
 // (removeDeferredFiles, and settlePreviewFiles for the preview).
 func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict {
+	return svc.planPurgeFileIn(book, nil)
+}
+
+// planPurgeFileIn is planPurgeFile for a removal run that is unlinking files
+// itself: emptied holds the folders its workers are unlinking in, so a folder
+// they have just emptied is not mistaken for a mount point that is not up
+// (folderCheck). Nil outside such a run.
+func (svc *AudiobookService) planPurgeFileIn(book *database.Book, emptied *dirSet) purgeFileVerdict {
 	if book.FilePath == "" {
 		return purgeFileVerdict{}
 	}
@@ -952,16 +960,20 @@ func (svc *AudiobookService) planPurgeFile(book *database.Book) purgeFileVerdict
 				return purgeFileVerdict{keptErr: fmt.Errorf("%s has a trailing path separator but names a file, so it is not removed; the file stays at %s", book.FilePath, clean)}
 			}
 		}
-		// ENOENT is "gone" only when the folder is there. With the folder missing
-		// too the library may simply not be mounted (errPathFolderMissing). ENOTDIR
+		// ENOENT is "gone" only when the folder is there and holds something. With
+		// the folder missing, or there but empty (the mount point of a dataset that
+		// is not mounted), the library may simply not be mounted
+		// (errPathFolderMissing; folderCheck says what exempts a folder). ENOTDIR
 		// needs no such check: a parent that is not a directory is there.
 		if errors.Is(statErr, fs.ErrNotExist) {
-			ok, ferr := folderIsThere(book.FilePath)
+			missing, empty, ferr := folderCheck(book.FilePath, root, emptied)
 			switch {
 			case ferr != nil:
 				return purgeFileVerdict{keptErr: statLookupError(filepath.Dir(book.FilePath), "stat of the folder", ferr)}
-			case !ok:
+			case missing:
 				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is missing too, which is also how a library that is not (fully) mounted looks: %w: %w", book.FilePath, filepath.Dir(book.FilePath), errPathLookupFailed, errPathFolderMissing)}
+			case empty:
+				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is there but empty, which is also how the mount point of a filesystem that is not mounted looks: %w: %w", book.FilePath, filepath.Dir(book.FilePath), errPathLookupFailed, errPathFolderMissing)}
 			}
 		}
 		return purgeFileVerdict{}

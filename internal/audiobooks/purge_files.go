@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
 // last-edited: 2026-10-26
 
@@ -279,6 +279,8 @@ func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pen
 		return 0, []string{fmt.Sprintf("%d file removal(s) not carried out, their records kept for a later pass: %v", len(pending), rootErr)}
 	}
 	out := make([]deferredOutcome, len(pending))
+	// The folders this run is unlinking in (see folderCheck).
+	emptied := &dirSet{}
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
 	for i, f := range pending {
@@ -287,7 +289,7 @@ func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pen
 				out[i] = deferredOutcome{retry: true, notReached: true}
 				return nil
 			}
-			o := svc.removeDeferredFile(f, root, preview)
+			o := svc.removeDeferredFile(f, root, preview, emptied)
 			// A decided path forgets its record at once, right after its own
 			// unlink: a crash then leaves a record only for the paths not yet
 			// reached, and not for every file the run had already removed (whose
@@ -333,7 +335,7 @@ func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pen
 	}
 	if folderMissing > 0 {
 		ex := pending[exampleMissing]
-		errs = append(errs, fmt.Sprintf("%d pending file removal(s) are waiting for a folder that is missing and are kept, to be looked at again on every pass; for example %s (book %s), whose folder %s is not there: the file may have been removed together with its folder, or that part of the library is not mounted", folderMissing, ex.path, ex.bookIDs[0], filepath.Dir(ex.path)))
+		errs = append(errs, fmt.Sprintf("%d pending file removal(s) are waiting for a folder that is missing or empty and are kept, to be looked at again on every pass; for example %s (book %s), whose folder %s is not there or holds nothing: the file may have been removed together with its folder, or that part of the library is not mounted", folderMissing, ex.path, ex.bookIDs[0], filepath.Dir(ex.path)))
 	}
 	if notReached > 0 {
 		errs = append(errs, fmt.Sprintf("stopped (%v): %d file removal(s) not looked at, their records kept for a later run", ctx.Err(), notReached))
@@ -374,9 +376,9 @@ type deferredOutcome struct {
 // (errPathFolderMissing) is different: it does resolve, by the library being
 // mounted again, and the record is the only thing left that names the file, so it
 // is kept however many passes go by.
-func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord) deferredOutcome {
+func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord, emptied *dirSet) deferredOutcome {
 	bookID := f.bookIDs[0]
-	v := svc.planPurgeFile(&database.Book{ID: bookID, FilePath: f.path})
+	v := svc.planPurgeFileIn(&database.Book{ID: bookID, FilePath: f.path}, emptied)
 	switch {
 	case v.protected:
 		singleLog.Debug("purge skipping file deletion: protected path %s (book %s)",
@@ -416,6 +418,9 @@ func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, pre
 	if !preview.listsFile(f.path) {
 		return deferredOutcome{errs: []string{fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path)}}
 	}
+	// Registered BEFORE the unlink: a neighbour's already-gone file that finds this
+	// folder empty must find it in the set (folderCheck).
+	emptied.add(filepath.Dir(f.path))
 	n, e := removePurgedFile(bookID, v)
 	o := deferredOutcome{removed: n, errs: e, retry: len(e) > 0}
 	if n > 0 {

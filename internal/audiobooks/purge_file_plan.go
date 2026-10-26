@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
 // last-edited: 2026-10-26
 
@@ -46,7 +46,8 @@ type filePlan struct {
 var errPathUnresolvable = errors.New("path cannot be resolved")
 
 // errPathFolderMissing marks a file that is not there while the folder it would
-// be in is not there either. That is what a file that was removed together with
+// be in is not there either, or is there but empty (the mount point a dataset
+// that is not mounted leaves behind; folderCheck says what exempts a folder). That is what a file that was removed together with
 // its folder looks like, and also what a file on a library that is not mounted
 // looks like (nested datasets mount apart from the root, so the root can be
 // populated and a folder under it still be absent). It cannot be told apart per

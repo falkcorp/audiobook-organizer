@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_replay_locks_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6371d518-2425-4a76-af03-de3aeb5ea7d3
 // last-edited: 2026-10-26
 
@@ -8,7 +8,6 @@ package audiobooks
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -336,7 +335,7 @@ func TestRunPurge_MissingFileInAMissingFolderIsNotDecidedGone(t *testing.T) {
 	assert.Contains(t, res.Errors[0], "its folder")
 	assert.Contains(t, res.Errors[0], "missing too")
 
-	require.NoError(t, os.MkdirAll(folder, 0o755))
+	writeFile(t, filepath.Join(folder, "knightfall.m4b")) // the folder is back, holding another book's file
 	res, err = svc.RunPurge(context.Background(), PurgeOptions{Unattended: true, DeleteFiles: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Purged, "%+v", res)
@@ -370,7 +369,7 @@ func TestReplay_RecordsWhoseFolderIsMissingAreKeptWithOneLinePerPass(t *testing.
 		require.Len(t, pendingJournal(t, store), 3, "pass %d: every record is kept", pass)
 	}
 
-	require.NoError(t, os.MkdirAll(folder, 0o755))
+	writeFile(t, filepath.Join(folder, "no-mans-land.m4b")) // the folder is back, holding another book's file
 	removed, errs := svc.replayPendingFileRemovals(context.Background())
 	assert.Zero(t, removed, "the files were already gone")
 	assert.Empty(t, errs, "%v", errs)
@@ -382,7 +381,7 @@ func TestReplay_RecordsWhoseFolderIsMissingAreKeptWithOneLinePerPass(t *testing.
 func TestReplay_MissingFileInAPresentFolderIsGone(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	folder := filepath.Join(base, "lib", "Gotham")
-	require.NoError(t, os.MkdirAll(folder, 0o755))
+	writeFile(t, filepath.Join(folder, "knightfall.m4b")) // a folder that holds another book's file
 	require.NoError(t, svc.journalPendingFile("T", purgeFileVerdict{remove: filepath.Join(folder, "hush.m4b"), id: fileIdentity{Known: true, Size: 1, MtimeNS: 1}}))
 
 	removed, errs := svc.replayPendingFileRemovals(context.Background())
