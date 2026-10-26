@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/search_per_user_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0d6f3a92-b814-4e57-9c20-a5e18d7b3f64
 // last-edited: 2026-10-26
 
@@ -137,6 +137,14 @@ func TestListAudiobooks_SearchSentWholeByTheWebBoxMeetsTheOtherRulesOfSearch(t *
 		{"read_status:finished OR duration:>20m", http.StatusBadRequest, "cannot be combined"},
 		{"(read_status:finished tag:noir)", http.StatusOK, ""},
 		{"read_status:finished AND tag:noir", http.StatusOK, ""},
+		// tag: is an exact filter, so it is refused where it cannot apply to the whole
+		// search, with a message that says where it can go
+		{"tag:noir", http.StatusOK, ""},
+		{`tag:"dark-knight" title:Hush`, http.StatusOK, ""},
+		{"tag:noir OR tag:gotham", http.StatusBadRequest, "tag: cannot be used inside an OR group"},
+		{"title:Hush -tag:noir", http.StatusBadRequest, "tag: cannot be used inside an OR group"},
+		{"tag:(noir|gotham)", http.StatusBadRequest, "tag: cannot be used inside an OR group"},
+		{"tag:noir*", http.StatusBadRequest, "takes one whole tag name"},
 		{"read_status:finished OR", http.StatusBadRequest, "could not be read"},
 		{"(read_status:finished author:kyle", http.StatusBadRequest, "could not be read"},
 		{"The (Long Halloween", http.StatusOK, ""},

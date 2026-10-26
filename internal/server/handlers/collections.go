@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections.go
-// version: 2.1.3
+// version: 2.1.4
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
 // last-edited: 2026-10-26
 
@@ -682,10 +682,10 @@ func validateCollectionQuery(query string) error {
 	now := time.Now()
 	// Not wrapped: the refusal is a sentence for the person who wrote the query,
 	// and callers put their own lead-in in front of it.
-	if err := search.CheckPerUserTerms(ast, now); err != nil {
+	if err := search.CheckQueryTerms(ast, now); err != nil {
 		return err
 	}
-	if _, _, err := search.TranslateAt(ast, now); err != nil {
+	if _, err := search.TranslateQuery(ast, now); err != nil {
 		return fmt.Errorf("translate query: %w", err)
 	}
 	return nil
@@ -759,8 +759,8 @@ func membersUnavailableMessage(col *database.Collection, err error) string {
 		// A refusal of the per-user terms is the same text the person got when
 		// they tried to save such a query, and says what to write instead; it
 		// names no user and no book. Any other query failure keeps the generic text.
-		if verr := validateCollectionQuery(col.Query); verr != nil && search.IsPerUserQueryError(verr) {
-			return "This collection's query can no longer be evaluated, so it shows no members: " + search.PerUserQueryReason(verr) + ". Edit the query to fix it."
+		if verr := validateCollectionQuery(col.Query); verr != nil && search.IsQueryTermError(verr) {
+			return "This collection's query can no longer be evaluated, so it shows no members: " + search.QueryTermReason(verr) + ". Edit the query to fix it."
 		}
 		return "This collection's query can no longer be evaluated, so it shows no members. Edit the query to fix it."
 	default:

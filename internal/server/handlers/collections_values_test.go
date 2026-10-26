@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_values_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c3a8e5d1-6b27-4f90-a1d4-52e7b09c6f38
 // last-edited: 2026-10-26
 
@@ -25,24 +25,32 @@ import (
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 )
 
-// perUserValueQueries are per-user terms whose VALUE the evaluator cannot give a
+// refusedTermQueries are per-user terms whose VALUE the evaluator cannot give a
 // meaning: "completed" is not a status (read_status:completed matched nothing,
 // -read_status:completed matched every book), a pattern is compared as plain text,
 // a number or a date that does not parse is not a bound, and a field name written
 // with capitals is not a per-user term to the translator at all.
-var perUserValueQueries = []string{
+//
+// The tag: terms are the other refused class: a tag: filter is exact and applies
+// to the whole query, so it is refused under an OR, a NOT or an alternation, and as
+// a prefix or fuzzy term (search.SplitTagTerms).
+var refusedTermQueries = []string{
 	"read_status:completed",
 	"-read_status:completed",
 	"read_status:fin*",
 	"progress_pct:>half",
 	"last_played:>soon",
 	"READ_STATUS:finished",
+	"title:Alpha OR tag:noir",
+	"-tag:noir",
+	"tag:(noir|gotham)",
+	"tag:noir*",
 }
 
 // B-alpha: creating or updating a dynamic collection with such a value is refused
 // with a 400 that names what is valid, and nothing is saved.
 func TestCollections_RefuseAPerUserValueTheEvaluatorCannotEvaluate(t *testing.T) {
-	for _, q := range perUserValueQueries {
+	for _, q := range refusedTermQueries {
 		t.Run("create "+q, func(t *testing.T) {
 			store := &colFakeStore{}
 			rig := newViewerRig(t, store, viewerStates())
@@ -80,6 +88,8 @@ func TestCollections_RefuseAPerUserValueTheEvaluatorCannotEvaluate(t *testing.T)
 		for _, q := range []string{
 			"read_status:finished", "-read_status:in_progress", "read_status:(finished|abandoned)",
 			"progress_pct:>50", "progress_pct:[10 TO 90]", "last_played:>-30d", "last_played:*", "-last_played:*",
+			// tag: is exact, as a conjunct of the whole query
+			"tag:noir", `tag:"dark-knight" title:Alpha`, "(read_status:finished tag:noir)",
 		} {
 			rig := newViewerRig(t, &colFakeStore{}, viewerStates())
 			w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
@@ -101,6 +111,11 @@ func TestCollections_AStoredValueTheEvaluatorRefusesReadsAsUnavailableWithGuidan
 		{"-read_status:completed", "read_status must be one of"},
 		{"progress_pct:>half", "progress_pct takes a number"},
 		{"read_status:finished OR title:Alpha", "cannot be combined"},
+		// A stored query that is not per-viewer serves its stored list and is judged when
+		// it is refreshed; one that is per-viewer is evaluated on every read, so a tag:
+		// term it cannot apply exactly reads as unavailable with the sentence from save.
+		{"read_status:finished (title:Alpha OR tag:noir)", "tag: cannot be used inside an OR group"},
+		{"read_status:finished -tag:noir", "tag: cannot be used inside an OR group"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {
@@ -218,7 +233,7 @@ func playlistRequest(t *testing.T, method, path, userID string, body any) (*gin.
 
 // B-alpha for smart playlists: the same values are refused on create and update.
 func TestPlaylists_RefuseAPerUserValueTheEvaluatorCannotEvaluate(t *testing.T) {
-	for _, q := range perUserValueQueries {
+	for _, q := range refusedTermQueries {
 		t.Run("create "+q, func(t *testing.T) {
 			store := handlersmocks.NewMockPlaylistStore(t) // no call may reach the store
 			h := handlers.NewPlaylistHandler(store, noSearchIndex)
@@ -245,7 +260,7 @@ func TestPlaylists_RefuseAPerUserValueTheEvaluatorCannotEvaluate(t *testing.T) {
 // the reason, and the list cached by the old evaluation is dropped (the ABS surface
 // serves that cache).
 func TestPlaylists_AStoredRefusedQueryReadsAsUnavailableAndClearsItsCache(t *testing.T) {
-	for _, q := range []string{"read_status:completed", "read_status:finished OR title:Alpha"} {
+	for _, q := range []string{"read_status:completed", "read_status:finished OR title:Alpha", "title:Alpha OR tag:noir"} {
 		t.Run(q, func(t *testing.T) {
 			pl := &database.UserPlaylist{ID: "pl-1", Name: "No Man's Land", Type: database.UserPlaylistTypeSmart,
 				Query: q, CreatedByUserID: "alice", MaterializedBookIDs: []string{"b1", "b2"}, MaterializedTotal: 2}

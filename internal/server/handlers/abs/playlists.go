@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/playlists.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: c41e97b2-0d85-4f36-a7e9-1b620c8ad573
 // last-edited: 2026-10-26
 
@@ -161,14 +161,14 @@ func (h *Handler) playlistDTO(c *gin.Context, pl *database.UserPlaylist) gin.H {
 }
 
 // smartQueryRefused reports whether a smart playlist's query is one whose per-user
-// terms the evaluator refuses (search.CheckPerUserTerms), by parsing alone: this
+// terms the evaluator refuses (search.CheckQueryTerms), by parsing alone: this
 // is a read path that must not depend on the index.
 func smartQueryRefused(query string) bool {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
 		return false
 	}
-	return search.CheckPerUserTerms(ast, time.Now()) != nil
+	return search.CheckQueryTerms(ast, time.Now()) != nil
 }
 
 // playlistItems expands the ordered book list into ABS playlist items.

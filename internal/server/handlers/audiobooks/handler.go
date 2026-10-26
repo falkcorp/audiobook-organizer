@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.39.1
+// version: 1.39.2
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-26
 
@@ -501,7 +501,7 @@ func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 		return listRequest{}, false
 	}
 	if err := audiobookspkg.SearchPerUserProblem(params.Search); err != nil {
-		httputil.RespondWithBadRequest(c, "invalid search: "+search.PerUserQueryReason(err))
+		httputil.RespondWithBadRequest(c, "invalid search: "+search.QueryTermReason(err))
 		return listRequest{}, false
 	}
 	authorID := httputil.ParseQueryIntPtr(c, "author_id")
@@ -1351,10 +1351,10 @@ func respondIdentIndexBuilding(c *gin.Context, err error) bool {
 }
 
 func respondSearchLimit(c *gin.Context, err error) bool {
-	// A per-user term the search cannot evaluate as written (the service refuses
+	// A per-user or tag: term the search cannot evaluate as written (the service refuses
 	// it for every caller; parseListRequest already did for this one).
-	if search.IsPerUserQueryError(err) {
-		httputil.RespondWithBadRequest(c, "invalid search: "+search.PerUserQueryReason(err))
+	if search.IsQueryTermError(err) {
+		httputil.RespondWithBadRequest(c, "invalid search: "+search.QueryTermReason(err))
 		return true
 	}
 	if slow, ok := errors.AsType[*querygrammar.TooSlowError](err); ok {

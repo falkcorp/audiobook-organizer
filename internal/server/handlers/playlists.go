@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.6
+// version: 2.6.7
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
 // last-edited: 2026-10-26
 
@@ -593,7 +593,7 @@ func validatePlaylistQuery(query string) error {
 	if err != nil {
 		return fmt.Errorf("invalid query: %w", err)
 	}
-	if err := search.CheckPerUserTerms(ast, time.Now()); err != nil {
+	if err := search.CheckQueryTerms(ast, time.Now()); err != nil {
 		return fmt.Errorf("invalid query: %w", err)
 	}
 	return nil
@@ -642,8 +642,8 @@ func sameBookSet(a, b []string) bool {
 // to write instead; any other failure keeps a generic text, without the internal
 // error.
 func playlistUnavailableMessage(err error) string {
-	if search.IsPerUserQueryError(err) {
-		return "This playlist's query can no longer be evaluated, so it shows no books: " + search.PerUserQueryReason(err) + ". Edit the query to fix it."
+	if search.IsQueryTermError(err) {
+		return "This playlist's query can no longer be evaluated, so it shows no books: " + search.QueryTermReason(err) + ". Edit the query to fix it."
 	}
 	return "This playlist's query or sort order can no longer be evaluated, so it shows no books. Edit the playlist to fix it."
 }
