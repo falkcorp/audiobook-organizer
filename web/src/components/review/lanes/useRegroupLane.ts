@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.ts
-// version: 1.14.1
+// version: 1.14.2
 // guid: 3f8b2c07-9d41-4e56-b8a3-1c7e05d9a264
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 /**
  * The regroup lane's data layer.
@@ -849,7 +849,7 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
             : code === 'REVIEW_ITEM_CHANGED'
               ? `This hold changed since it was shown, so nothing was done. It has been reloaded: check it and decide again.`
               : code === 'REVIEW_RETRY_LATER'
-                ? `Nothing was changed: the library index is still loading. Approve again once it has finished. (${message})`
+                ? `Nothing was moved: the combine was refused for now, usually because the library index is still loading. Approve again in a little while. (${message})`
                 : code === 'REVIEW_APPLY_PARTIAL'
                   ? `The apply changed part of the library before it failed; the item is held mid-apply. Retry or abandon it from the held list. (${message})`
                   : `Failed to ${action} item: ${message}`,

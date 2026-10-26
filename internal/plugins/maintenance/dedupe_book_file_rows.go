@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.4
+// version: 1.12.5
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -872,36 +872,39 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			mu.Unlock()
 		}
 
-		// One batched delete for the whole book. DeleteBookFilesByIDs is fail-closed
-		// on unresolvable IDs, so a partial delete cannot happen here — either every
-		// queued row goes or none do. If none do, the rows survive and the next run
-		// of this op re-reads them and collapses them again, so the failure costs a
-		// re-run and nothing else.
+		// One batched delete for the whole book. DeleteBookFilesByIDs decides every
+		// refusal over the whole call before it commits anything, so a book of up to
+		// 64 queued rows goes entirely or not at all. A larger one commits in chunks
+		// and a later chunk can still fail (a row changed or moved after the check),
+		// leaving the earlier chunks deleted: journalAndDeleteBookFiles then returns
+		// the ids that are gone, and only those are reported deleted, counted and
+		// recomputed. The rows that survive are re-read and collapsed by the next
+		// run, so the failure costs a re-run and nothing else.
 		if len(pendingDeletes) > 0 {
 			// Journal first, then one batched delete — journalAndDeleteBookFiles
 			// holds the ordering rationale. A failure leaves every queued row of
 			// this book intact; the op is idempotent, so the cost is one more
 			// run, and one book's failure must not abandon the others.
-			if derr := journalAndDeleteBookFiles(store, opID, bookID, pendingRows); derr != nil {
-				mu.Lock()
+			gone, derr := journalAndDeleteBookFiles(store, opID, bookID, pendingRows)
+			mu.Lock()
+			if derr != nil {
 				failed++
-				for _, d := range queuedDecisions {
-					d.Action, d.Reason = decisionFailed, derr.Error()
-					decisions = append(decisions, d)
-				}
-				mu.Unlock()
-				log.Warn("dedupe-book-file-rows: journal or batched delete failed; leaving this book's rows intact",
-					"book_id", bookID, "rows", len(pendingDeletes), "err", derr)
-			} else {
-				mu.Lock()
-				deleted += len(pendingDeletes)
-				for _, d := range queuedDecisions {
-					d.Action = decisionDeleted
-					decisions = append(decisions, d)
-				}
-				mu.Unlock()
-				changedThisBook = true
 			}
+			deleted += len(gone)
+			for _, d := range queuedDecisions {
+				if derr == nil || gone[d.RowID] {
+					d.Action = decisionDeleted
+				} else {
+					d.Action, d.Reason = decisionFailed, derr.Error()
+				}
+				decisions = append(decisions, d)
+			}
+			mu.Unlock()
+			if derr != nil {
+				log.Warn("dedupe-book-file-rows: journal or batched delete failed; the rows not listed as deleted are intact",
+					"book_id", bookID, "rows", len(pendingDeletes), "deleted", len(gone), "err", derr)
+			}
+			changedThisBook = len(gone) > 0
 		}
 
 		// Totals are a plain sum over the surviving rows, so they are only correct

@@ -1,7 +1,7 @@
 // file: web/src/pages/libraryCombineToast.test.ts
-// version: 1.4.0
+// version: 1.4.2
 // guid: c0c7ee3f-0536-48da-951a-b0bfa6e93857
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { describe, it, expect } from 'vitest';
 import { ApiError } from '../services/api';
@@ -43,6 +43,25 @@ describe('libraryCombineToast', () => {
     const p = describeCombineFailure(new ApiError('boom', 500, { error: 'boom' }));
     expect(p.message).toBe('boom');
     expect(p.undoOperationId).toBeUndefined();
+  });
+
+  it('a retry-later refusal says nothing moved and to try again, with no undo', () => {
+    const p = describeCombineFailure(
+      new ApiError('the row of book Hush was not taken', 503, { code: 'COMBINE_RETRY_LATER' })
+    );
+    expect(p.severity).toBe('warning');
+    expect(p.undoOperationId).toBeUndefined();
+    expect(p.actionLabel).toBeUndefined();
+    expect(p.message).toMatch(
+      /^The combine was refused before it moved any files from the other books\./
+    );
+    expect(p.message).toContain('Try again');
+    expect(p.message).toContain('was not taken');
+  });
+
+  it('a 503 without the retry-later code is still the plain failure', () => {
+    const p = describeCombineFailure(new ApiError('down', 503, { code: 'OTHER' }));
+    expect(p).toEqual({ message: 'down', severity: 'error' });
   });
 
   it('a pending journal without an operation id promises no undo', () => {

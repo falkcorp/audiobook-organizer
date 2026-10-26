@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/writer_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 1ec011de-862f-44e4-b916-1cdd06721d91
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package opswriter
 
@@ -729,4 +729,70 @@ func TestRefusalFlaggedOnTheItem(t *testing.T) {
 			t.Fatalf("err %v latch %v", err, latch.Err())
 		}
 	})
+}
+
+// retryingFiles stands in for a store whose ModifyBookFile lost a
+// compare-and-swap round: it runs the callback on a copy that is then discarded,
+// and runs it again on a fresh copy. The second run's result decides the write.
+type retryingFiles struct{ *recStore }
+
+func (s *retryingFiles) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.files[fileID]
+	if !ok || f.BookID != bookID {
+		return nil, nil
+	}
+	lost := *f
+	if err := fn(&lost); err != nil {
+		return nil, err
+	}
+	cp := *f
+	if err := fn(&cp); err != nil {
+		if errors.Is(err, database.ErrSkipBookFileWrite) {
+			kept := *f
+			return &kept, nil
+		}
+		return nil, err
+	}
+	s.files[fileID] = &cp
+	s.note("write book_file:%s", fileID)
+	return &cp, nil
+}
+
+// A callback that changes the row on a run the store discards and then declines
+// to write on the run that counts changed nothing: no history row may describe
+// the discarded run.
+func TestModifyBookFile_SkipAfterLostRoundJournalsNothing(t *testing.T) {
+	s := newRecStore()
+	s.files["f1"] = &database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/Gotham/a.m4b", TrackNumber: 1}
+	files := &retryingFiles{recStore: s}
+	w := New(Config{OpID: "op1", Mode: ops.Live, Intents: s, Books: s, Files: files, Authors: s, Journal: s,
+		History: NewBookHistory(s, "test", "bulk_update", "rp-", nil)})
+	runs := 0
+	ch, err := w.ModifyBookFile(context.Background(), "b1", "f1", func(f *database.BookFile) error {
+		runs++
+		if runs == 1 {
+			f.TrackNumber = 9
+			return nil
+		}
+		return database.ErrSkipBookFileWrite
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs != 2 {
+		t.Fatalf("callback ran %d times, want 2", runs)
+	}
+	if ch.Any() {
+		t.Fatalf("a skipped write reported changes: %v", ch.Fields)
+	}
+	for _, line := range s.logCopy() {
+		if strings.HasPrefix(line, "history") || strings.HasPrefix(line, "write book_file") {
+			t.Fatalf("a skipped write left %q in the log: %q", line, s.logCopy())
+		}
+	}
+	if got := s.files["f1"].TrackNumber; got != 1 {
+		t.Fatalf("row changed to track %d", got)
+	}
 }

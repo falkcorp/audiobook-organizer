@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/bookfile_seg_sweep_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5c7e9f1a-b3d5-4f7e-9a1c-b3d5f7e9a1c3
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 // Tests for dedup.bookfile-seg-drop op (T020).
 //
@@ -140,6 +140,22 @@ func TestBookfileSegDrop_Apply(t *testing.T) {
 	}
 	if ms.settings[bookfileSegDropDoneFlag] != "true" {
 		t.Error("completion flag must be set after apply=true")
+	}
+}
+
+// A sweep that gave up on busy rows must stay re-runnable: the done flag is what
+// makes every later run a no-op.
+func TestBookfileSegDrop_Apply_WithConflictsLeavesFlagUnset(t *testing.T) {
+	ms := newMockSegDropStore(database.SweepBookFileSegDropResult{
+		Total: 200, Rewrite: 79, Skipped: 120, Conflicts: 1,
+	})
+	p := newSegDropPlugin(ms)
+
+	if err := p.runBookfileSegDrop(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}); err != nil {
+		t.Fatalf("apply run failed: %v", err)
+	}
+	if ms.settings[bookfileSegDropDoneFlag] == "true" {
+		t.Error("completion flag must not be set while rows were left unswept")
 	}
 }
 

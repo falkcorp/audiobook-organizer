@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.100.0
+// version: 1.101.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -158,7 +158,7 @@ type opsBookFileMutator interface {
 // opsBookFileDeleter removes book_file rows.
 type opsBookFileDeleter interface {
 	DeleteBookFile(id string) error
-	DeleteBookFilesByIDs(ids []string) error
+	DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error)
 	// CarryOverFingerprintWindows moves the donors' fingerprint windows onto
 	// the keeper. Deleting a book_file row deletes its windows, so a row merge
 	// calls this once per group BEFORE deleting the donors. A group with no
