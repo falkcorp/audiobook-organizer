@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -254,13 +254,13 @@ func TestPool_ProductionFaultShapesConvergeOnPerClipVerdicts(t *testing.T) {
 	}
 }
 
-// S2's "plainly sick" rule: a worker that could not decode at all earlier in
-// this dispatch (a worker-level fault) is not believed about a lone timeout
-// either. Worker 0 (priority 1) answers j0 worker_misconfigured and times out
-// on everything else; worker 1 transcribes everything. Worker 0 gets j0-j2 plus
-// j6 in round 1 and faults on the first chunk; in round 2 it is handed j6 alone.
-// (A timeout-majority fault does not make a worker sick: see R2.)
-func TestPool_ASickWorkersLoneTimeoutIsWithheldAndTheJobGoesElsewhere(t *testing.T) {
+// S2's "plainly sick" rule, and B1 of review 3: a worker that faulted earlier
+// in this dispatch is not sent anything again while a worker that has not
+// faulted remains, and none of its timeouts become verdicts. Worker 0
+// (priority 1) answers j0 worker_misconfigured and times out on everything
+// else; worker 1 transcribes everything. Worker 0 gets j0-j2 plus j6 in round
+// 1 and faults on the first chunk; from then on only worker 1 is asked.
+func TestPool_ASickWorkerIsNotAskedAgainAndItsTimeoutsAreNoVerdict(t *testing.T) {
 	var p *faultPool
 	p = newFaultPool(t, 2, 3, func(url, id string) BatchResult {
 		if url == p.h.eps[0].URL {
@@ -277,14 +277,14 @@ func TestPool_ASickWorkersLoneTimeoutIsWithheldAndTheJobGoesElsewhere(t *testing
 		t.Fatalf("err = %v", err)
 	}
 	sick := p.h.eps[0].URL
-	loneOnSick := false
+	onSick := 0
 	for _, s := range p.sendLog() {
-		if s.url == sick && len(s.ids) < timeoutBreakerMin {
-			loneOnSick = true
+		if s.url == sick {
+			onSick++
 		}
 	}
-	if !loneOnSick {
-		t.Fatalf("the scenario did not put a small request on the sick worker: %v", p.sendLog())
+	if onSick != 1 {
+		t.Fatalf("the sick worker got %d requests, want only the one it faulted on: %v", onSick, p.sendLog())
 	}
 	for _, id := range ids {
 		if r := res[id]; r.Text != "T:"+id || r.Endpoint != p.h.eps[1].URL {
@@ -536,5 +536,117 @@ func TestPool_DecoderKilledIsAPerClipStrikeThatNeverDrainsTheBatch(t *testing.T)
 				t.Errorf("sends = %d for %d jobs: %v", n, len(ids), p.sendLog())
 			}
 		})
+	}
+}
+
+// B1 (review 3 of #4182): a sick worker (swapping under a CI job, or with its
+// decoder killed by jetsam) in a pool with sound workers. Before the fix the
+// sick worker kept getting requeued pairs and fresh chunks, and every timeout
+// or kill it answered for them was believed as a strike: 8 of 32 ordinary
+// files struck on two workers, 24 of 200 on two and 4 of 200 on six, for
+// timeouts and kills alike. Now a worker that faulted is
+// not asked again in that dispatch while a sound one remains, so no ordinary
+// file gets a strike and every one gets its transcript. Only when every
+// endpoint has faulted (the one-worker rows) are its answers believed.
+func TestPool_ASickWorkerGivesNoStrikesToHealthyFiles(t *testing.T) {
+	const killed = PathErrDecoderKilled + pathErrSeparator + "the decode process was killed from outside (exit code -9)"
+	for _, tc := range []struct {
+		workers, jobs int
+		kind          string
+	}{
+		{2, 32, "timeout"}, {2, 200, "timeout"}, {6, 200, "timeout"},
+		{2, 200, "kill"}, {6, 200, "kill"},
+		{1, 32, "timeout"}, {1, 32, "kill"},
+	} {
+		t.Run(fmt.Sprintf("%d workers %d jobs %s", tc.workers, tc.jobs, tc.kind), func(t *testing.T) {
+			sickErr := timeoutText
+			if tc.kind == "kill" {
+				sickErr = killed
+			}
+			var p *faultPool
+			p = newFaultPool(t, tc.workers, 16, func(url, id string) BatchResult {
+				if url == p.h.eps[0].URL {
+					return BatchResult{Error: sickErr}
+				}
+				return BatchResult{Text: "T:" + id}
+			})
+			sick := p.h.eps[0].URL
+			ids := loopers(tc.jobs, "chap")
+			res, err := p.run(t, ids...)
+			if err != nil {
+				t.Fatalf("err = %v, want none", err)
+			}
+			strikes := 0
+			for _, id := range ids {
+				r := res[id]
+				if IsStrikeError(r.Error) {
+					strikes++
+					if r.Endpoint != sick {
+						t.Errorf("%s = %+v: a strike that does not name the sick worker", id, r)
+					}
+					continue
+				}
+				if r.Text != "T:"+id || r.Endpoint == sick {
+					t.Errorf("%s = %+v, want the sound worker's transcript", id, r)
+				}
+			}
+			if tc.workers == 1 {
+				// Every endpoint faulted, so its answers are the only verdicts.
+				if strikes != tc.jobs {
+					t.Errorf("strikes = %d of %d, want every job struck by the only worker", strikes, tc.jobs)
+				}
+				return
+			}
+			if strikes != 0 {
+				t.Errorf("strikes = %d of %d ordinary files, want 0 while a sound worker remains", strikes, tc.jobs)
+			}
+			onSick := 0
+			for _, s := range p.sendLog() {
+				if s.url == sick {
+					onSick++
+				}
+			}
+			if onSick != 1 {
+				t.Errorf("the sick worker got %d requests, want only the one it faulted on", onSick)
+			}
+		})
+	}
+}
+
+// B1 (review 3 of #4182), the strike a sick worker answers before it faults:
+// a request of 16 is decoded in chunks of 4, the first chunk has one timeout
+// among sound answers (a minority, so a per-clip strike), and the next chunk
+// times out wholesale (a fault). The worker proved sick in the same request, so
+// that first timeout is no verdict either: it is withheld and the job goes to
+// the sound worker, which transcribes it.
+func TestPool_AStrikeASickWorkerAnsweredBeforeItFaultedIsWithheld(t *testing.T) {
+	var (
+		p     *faultPool
+		calls atomic.Int32
+	)
+	p = newFaultPool(t, 2, 4, func(url, id string) BatchResult {
+		if url != p.h.eps[0].URL {
+			return BatchResult{Text: "T:" + id}
+		}
+		switch n := calls.Add(1); {
+		case n == 1, n > 4:
+			return BatchResult{Error: timeoutText}
+		default:
+			return BatchResult{Text: "T:" + id}
+		}
+	})
+	useEndpoints(t, 16, endpointURLs(p.h.eps)...) // requests of 16, decoded in chunks of 4
+	ids := loopers(32, "chap")
+	res, err := p.run(t, ids...)
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if calls.Load() < 5 {
+		t.Fatalf("the sick worker decoded %d clips, so the scenario never reached its fault", calls.Load())
+	}
+	for _, id := range ids {
+		if r := res[id]; r.Text != "T:"+id {
+			t.Errorf("%s = %+v, want its transcript (a strike from a worker that then faulted is no verdict)", id, r)
+		}
 	}
 }

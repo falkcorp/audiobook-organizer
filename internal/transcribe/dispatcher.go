@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -343,13 +343,17 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	//   - A response that was mostly timeouts or crashes (a timeout-majority
 	//     fault) is as often the batch's own clips as the worker: a page whose
 	//     every chunk is mostly genuine loopers faults on EVERY endpoint at once.
-	//     Its jobs may go back to any endpoint, the one that faulted included,
-	//     and the endpoint is neither benched nor distrusted. Excluding it (an
-	//     earlier version did) left a pool whose endpoints all faulted in one
-	//     round with nowhere to send the loopers, so they were deferred with no
-	//     strike on every run and never converged. A sick worker's per-clip
-	//     strikes cannot make a file permanent on their own: the store requires
-	//     the second strike from a different worker (IntroTimeoutWorker).
+	//     So the endpoint is soft-benched for the rest of THIS dispatch
+	//     (sickHere: it gets no new work, its strikes are withheld and the jobs
+	//     re-queued) only while some endpoint has NOT faulted; the faulted jobs
+	//     go back in units to those endpoints. Once every endpoint has faulted
+	//     (the all-loopers page) the bench is lifted for all of them: units go to
+	//     any endpoint and their per-clip strikes are believed, so loopers still
+	//     converge. Excluding a faulted endpoint for good (an earlier version
+	//     did) left such a page with nowhere to go, deferred forever; believing
+	//     a sick endpoint while a healthy one was idle (another earlier version)
+	//     let one swapping Mac give first strikes to healthy files, which the
+	//     next night's routing then sent to the only other machine.
 	//   - Any other fault (worker_misconfigured: the worker cannot decode at
 	//     all; see WorkerFaultError.timeoutMajority) is about the endpoint only. faultedOn remembers, per job, every
 	//     endpoint whose worker-level fault held it; a job is never offered to
@@ -365,6 +369,25 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// response with none of them.
 	faultedOn := make(map[string]map[string]bool)
 	faultedHere := make(map[string]bool)
+	// sickHere is every endpoint that faulted in this dispatch, of either kind,
+	// with its error in sickErr. Never cleared within the dispatch: a worker
+	// that answered most of a chunk with timeouts is not trusted with fresh
+	// chunks again until the next dispatch (each costs a chunk of per-clip
+	// deadlines before it faults again). See trustSick.
+	sickHere := make(map[string]bool)
+	sickErr := make(map[string]error)
+	// trustSick is true once every endpoint of the dispatch has faulted: then
+	// there is no one better to ask, the bench is lifted, and per-clip strikes
+	// from faulted endpoints are believed (the all-loopers page).
+	trustSick := func() bool {
+		for _, ep := range ordered {
+			if !sickHere[ep.URL] {
+				return false
+			}
+		}
+		return true
+	}
+	distrusts := func(url string) bool { return faultedHere[url] || (sickHere[url] && !trustSick()) }
 	faultLimit := min(2, len(ordered))
 	isFaultJob := func(id string) bool { return len(faultedOn[id]) > 0 }
 	faultCandidate := func(id, url string) bool { return !faultedOn[id][url] && lastErr[url] == nil }
@@ -429,8 +452,8 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			here := probeByURL[ep.URL].workerID()
 			for _, id := range slices.Sorted(maps.Keys(asg[i])) {
 				set := avoidOf[id]
-				if here == "" || !set[here] {
-					continue
+				if _, still := asg[i][id]; !still || here == "" || !set[here] {
+					continue // (not still: a follower that already moved with its leader)
 				}
 				best := -1
 				for k, alt := range eps {
@@ -457,6 +480,21 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					logger.SanitizeLogValue(id), logger.SanitizeLogValue(ep.URL), logger.SanitizeLogValue(eps[best].URL))
 			}
 		}
+	}
+
+	// avoids reports whether url is on a machine some job in live should be
+	// routed away from (S2 of review 3): one in its avoid set, or one whose
+	// identity is unknown while the job carries an avoid set. The unit loop
+	// tries every other endpoint first, the same preference steerAway applies
+	// to normal allocation.
+	avoids := func(live []string, url string) bool {
+		wid := probeByURL[url].workerID()
+		for _, id := range live {
+			if set := avoidOf[id]; set != nil && (wid == "" || set[wid]) {
+				return true
+			}
+		}
+		return false
 	}
 
 	// canTake reports whether a split part may go to url.
@@ -491,9 +529,13 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		if len(remaining) == 0 {
 			break
 		}
+		// healthy is every endpoint that may take work this round: not in
+		// cooldown, and not soft-benched for a fault in this dispatch while an
+		// endpoint that has not faulted remains (see sickHere).
 		var healthy []Endpoint
+		trusted := trustSick()
 		for _, ep := range ordered {
-			if !endpointInCooldown(ep.URL) {
+			if !endpointInCooldown(ep.URL) && (trusted || !sickHere[ep.URL]) {
 				healthy = append(healthy, ep)
 			}
 		}
@@ -506,9 +548,18 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 			if len(lastErr) == 0 {
 				return results, classifyTransport(endpointURLs(ordered), fmt.Errorf(
-					"%w: all %d whisper endpoints in cooldown after waiting %s", ErrPoolUnavailable, len(ordered), poolPaceMax))
+					"%w: every whisper endpoint that has not faulted in this dispatch is in cooldown after waiting %s (%d of %d faulted)",
+					ErrPoolUnavailable, poolPaceMax, len(sickHere), len(ordered)))
 			}
-			return results, classifyTransport(endpointURLs(ordered), poolFailure(lastErr,
+			// The endpoints that faulted are not asked again while one that has
+			// not faulted might come back: their timeouts are not believed.
+			errs := maps.Clone(lastErr)
+			for url, e := range sickErr {
+				if errs[url] == nil {
+					errs[url] = e
+				}
+			}
+			return results, classifyTransport(endpointURLs(ordered), poolFailure(errs,
 				fmt.Errorf("all %d whisper endpoints in cooldown", len(ordered))))
 		}
 
@@ -534,21 +585,25 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					inUnit[id] = true
 				}
 				placed := false
-				for idx, ep := range healthy {
-					if assignments[idx] != nil || !canTake(live, ep.URL) {
-						continue
-					}
-					sub := make(map[string]J, len(live))
-					for _, id := range live {
-						sub[id] = remaining[id]
-						for _, f := range followersOf[id] {
-							if fj, ok := remaining[f]; ok {
-								sub[f] = fj
+				// Pass 0 skips the machines the unit's files were already struck
+				// by; pass 1 takes any endpoint canTake allows.
+				for pass := 0; pass < 2 && !placed; pass++ {
+					for idx, ep := range healthy {
+						if assignments[idx] != nil || !canTake(live, ep.URL) || (pass == 0 && avoids(live, ep.URL)) {
+							continue
+						}
+						sub := make(map[string]J, len(live))
+						for _, id := range live {
+							sub[id] = remaining[id]
+							for _, f := range followersOf[id] {
+								if fj, ok := remaining[f]; ok {
+									sub[f] = fj
+								}
 							}
 						}
+						assignments[idx], unitOf[idx], placed, placedAny = sub, live, true, true
+						break
 					}
-					assignments[idx], unitOf[idx], placed, placedAny = sub, live, true, true
-					break
 				}
 				if !placed {
 					left = append(left, live)
@@ -664,16 +719,17 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				if !fault.timeoutMajority() {
 					faultedHere[ep.URL] = true
 				}
+				sickHere[ep.URL], sickErr[ep.URL] = true, r.err
 			}
 			// Work the endpoint completed is valid whether or not the call as a
 			// whole failed: a sender returns the chunks that finished before the
 			// failing one alongside its error. The exception is a strike-type
-			// answer from a worker that faulted in this dispatch (faultedHere):
+			// answer from a worker that faulted in this dispatch (distrusts):
 			// it is withheld and the job re-queued, exactly like a faulted one.
 			var distrusted []string
 			settledHere := make(map[string]bool, len(r.res))
 			for id, br := range r.res {
-				if faultedHere[ep.URL] && IsStrikeError(br.Error) && !br.Condemned {
+				if distrusts(ep.URL) && IsStrikeError(br.Error) && !br.Condemned {
 					distrusted = append(distrusted, id)
 					continue
 				}
@@ -707,7 +763,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 						delete(remaining, id)
 					}
 				}
-				requeueFaulted(distrusted, ep.URL)
+				if faultedHere[ep.URL] {
+					requeueFaulted(distrusted, ep.URL)
+				} else {
+					requeueUnits(distrusted)
+				}
 				continue
 			}
 			for id := range settledHere {
@@ -721,7 +781,10 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				// bookkeeping above. The jobs its transport never sent stay in
 				// remaining as ordinary work.
 				faultedIDs := slices.Sorted(maps.Keys(fault.Faulted))
-				dispatchLog.Warn("worker fault (mostly timeouts): re-sending its jobs in units too small to fault: url=%s jobs=%d",
+				// Strikes it answered in earlier chunks of the same request are
+				// withheld too while it is not trusted (distrusts).
+				faultedIDs = append(faultedIDs, distrusted...)
+				dispatchLog.Warn("worker fault (mostly timeouts): benched for the rest of this dispatch unless every endpoint faults, its jobs re-sent in units too small to fault: url=%s jobs=%d",
 					logger.SanitizeLogValue(ep.URL), len(faultedIDs))
 				requeueUnits(faultedIDs)
 				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool {
@@ -734,12 +797,19 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 			requeued := make(map[string]bool)
 			if isFault || len(distrusted) > 0 {
-				ids := distrusted
+				var ids []string
 				if isFault {
-					ids = append(ids, slices.Collect(maps.Keys(fault.Faulted))...)
+					ids = slices.Collect(maps.Keys(fault.Faulted))
+				}
+				if faultedHere[ep.URL] {
+					ids = append(ids, distrusted...)
+				} else {
+					// Withheld only because the endpoint timeout-faulted in this
+					// dispatch: not a worker-level fault, so no faultedOn mark.
+					requeueUnits(distrusted)
 				}
 				requeueFaulted(ids, ep.URL)
-				for _, id := range ids {
+				for _, id := range append(ids, distrusted...) {
 					requeued[id] = true
 				}
 			}

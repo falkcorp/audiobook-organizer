@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
 // last-edited: 2026-10-26
 
@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -176,6 +177,51 @@ func TestPool_ACondemnationCountsMachinesNotPorts(t *testing.T) {
 		}
 		if strings.Contains(r.Worker, "127.0.0.1") || strings.Contains(r.Worker, "http") {
 			t.Fatalf("the stored identity carries an address: %q", r.Worker)
+		}
+	})
+}
+
+// S2 (review 3 of #4182): a split part (a unit) is placed by its own loop, not
+// by normal allocation, so steerAway never saw it and the unit loop took the
+// first endpoint by priority. A lone stuck job whose file B already struck went
+// to B next, and the condemnation named B again: a verdict the store cannot
+// count as a second machine. The unit loop now tries every endpoint off the
+// avoided machines first, and falls back to them rather than strand the job.
+func TestPool_AStuckUnitIsPlacedOffTheMachinesThatAlreadyStruckIt(t *testing.T) {
+	dispatch := func(t *testing.T, h *splitHarness, avoid string) BatchResult {
+		t.Helper()
+		h.wedgeOnPoison = true
+		useEndpoints(t, 16, endpointURLs(h.eps)...)
+		t.Cleanup(func() {
+			for _, ep := range h.eps {
+				clearCooldown(ep.URL)
+			}
+		})
+		res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j00": "x"},
+			poolOptions{avoid: map[string]string{"j00": avoid}}, h.send)
+		if err != nil {
+			t.Fatalf("err = %v, want a verdict", err)
+		}
+		return res["j00"]
+	}
+	t.Run("another machine is free", func(t *testing.T) {
+		h := machineHarness(t, []string{"aaaa0001", "bbbb0002", "cccc0003"}, "j00")
+		r := dispatch(t, h, "m:bbbb0002")
+		if got, want := h.sentTo("j00"), []string{h.eps[0].URL, h.eps[2].URL}; !slices.Equal(got, want) {
+			t.Fatalf("the job went to %v, want priority 1 and then the machine that has not struck it (skipping %s)", got, h.eps[1].URL)
+		}
+		if !r.Condemned || r.Worker != "m:aaaa0001 + m:cccc0003" {
+			t.Fatalf("verdict = %+v, want a condemnation by the two machines that had not struck the file", r)
+		}
+	})
+	t.Run("only the avoided machine is left", func(t *testing.T) {
+		h := machineHarness(t, []string{"aaaa0001", "bbbb0002"}, "j00")
+		r := dispatch(t, h, "m:bbbb0002")
+		if got, want := h.sentTo("j00"), []string{h.eps[0].URL, h.eps[1].URL}; !slices.Equal(got, want) {
+			t.Fatalf("the job went to %v, want it still sent to the avoided machine rather than stranded", got)
+		}
+		if !r.Condemned {
+			t.Fatalf("verdict = %+v, want a condemnation", r)
 		}
 	})
 }
