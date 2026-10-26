@@ -1,6 +1,6 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.6.0
-// last-edited: 2026-10-18
+// version: 1.7.2
+// last-edited: 2026-10-26
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
 /**
@@ -26,6 +26,99 @@ export interface FieldFilter {
 export interface ParsedSearch {
   freeText: string;
   fieldFilters: FieldFilter[];
+  /**
+   * Set when the query has boolean structure the field/value split below cannot
+   * carry (see hasBooleanStructure): an OR or AND, a parenthesised group or an
+   * alternation, a `|`, a `tag:` term under NOT or `-`, a `tag:` term that is not
+   * one whole tag name. The Library then sends this raw text as `search=` and no
+   * field filters for it, so the server's own parser reads it and answers it, or
+   * refuses it with a message the Library shows. Without it the flat split dropped
+   * `-tag:"to-read"`, turned `tag:noir OR tag:gotham` into a search for the word
+   * "OR" ANDed with both tags, and sent `tag:noir*` as a tag named "noir*": a
+   * list that looked narrowed and was not, with no message.
+   */
+  serverQuery?: string;
+}
+
+/**
+ * The fields whose value is the signed-in listener's own state. Kept in step
+ * with the Go side (internal/search PerUserFieldNames) by QueryHelp.test.tsx.
+ */
+export const PER_USER_SEARCH_FIELDS: readonly string[] = [
+  'read_status',
+  'progress_pct',
+  'last_played',
+] as const;
+
+/**
+ * The text a list request sends as `search=`: the raw query when the server must
+ * read it (ParsedSearch.serverQuery), otherwise the free text left after the
+ * field filters were taken out. One function for every request built from a
+ * parsed search, so the list, its tag facets and a select-all-across-pages
+ * cannot disagree.
+ */
+export function listSearchText(parsed: ParsedSearch | null, fallback: string): string {
+  return parsed ? (parsed.serverQuery ?? parsed.freeText) : fallback;
+}
+
+/**
+ * The field filters a list request sends as `filters=` for a parsed search: the
+ * parsed terms except `tag:` (those travel as tags[], see libraryTagsParam), and
+ * none at all when the server must read the query whole (serverQuery), because
+ * its terms are already inside `search=` and would be applied twice.
+ * `quoted` is carried so title:"a*" stays literal text while title:a* is a wildcard
+ * (see internal/querygrammar).
+ */
+export function listFieldFilters(
+  parsed: ParsedSearch | null
+): Array<{ field: string; value: string; negated: boolean; quoted?: boolean }> {
+  if (!parsed || parsed.serverQuery) return [];
+  return parsed.fieldFilters
+    .filter((ff) => ff.field !== 'tag')
+    .map((ff) => ({
+      field: ff.field,
+      value: ff.value,
+      negated: ff.negated,
+      ...(ff.quoted ? { quoted: true } : {}),
+    }));
+}
+
+/**
+ * The alternation of a per-user field, `read_status:(finished|in_progress)`. The
+ * field/value split below carries it as one filter value, so it is not structure.
+ * An alternation on any other field is: the split would send "(a|b)" as the value.
+ */
+const PER_USER_ALTERNATION = new RegExp(
+  `\\b(?:${PER_USER_SEARCH_FIELDS.join('|')}):\\([^()]*\\)`,
+  'g'
+);
+
+/**
+ * Reports whether input has a form the field/value split cannot carry, so the
+ * server must read it whole (ParsedSearch.serverQuery):
+ *  - an explicit operator, `OR`, `AND`, `||` or `&&` (the split would leave the word
+ *    in the free text, where the server never reads it as an operator);
+ *  - a parenthesis or a `|` (a group, or a `field:(a|b)` alternation), other than
+ *    the alternation of a per-user field;
+ *  - a `tag:` term under `NOT` or `-`: the split carries negated filters, but not a
+ *    negated tag (tags travel as tags[], which only narrows);
+ *  - a `tag:` term that is not one whole tag name (`tag:noir*`, `tag:no~`,
+ *    `tag:"noir"^2`, a comparison): the split would send it as a tag named so.
+ * Anything inside double quotes is a phrase, not structure.
+ *
+ * A negated field filter on any other field (`-title:x`, `NOT narrator:y`) is NOT
+ * structure: it is carried exactly as a filter, and fields that only the filter layer
+ * knows (metadata:, library_state:) cannot be sent in search= at all.
+ */
+export function hasBooleanStructure(input: string): boolean {
+  if (/(^|[\s(-])tag:"[^"]*"[\^~]/.test(input)) return true;
+  const bare = input.replace(/"[^"]*"?/g, ' ').replace(PER_USER_ALTERNATION, ' ');
+  return (
+    /(^|\s)(OR|AND|\|\||&&)(\s|$)/.test(bare) ||
+    /[()|]/.test(bare) ||
+    /(^|\s)(?:-|NOT\s+)tag:/.test(bare) ||
+    /(^|\s)tag:(?:[*<>=[]|[^\s]*[*~^])/.test(bare)
+  );
 }
 
 export const SEARCH_FIELDS: readonly string[] = [
@@ -123,10 +216,7 @@ export function parseSearch(input: string): ParsedSearch {
     let negated = false;
     const startPos = pos;
 
-    if (
-      str.substring(pos, pos + 4) === 'NOT ' &&
-      pos + 4 < str.length
-    ) {
+    if (str.substring(pos, pos + 4) === 'NOT ' && pos + 4 < str.length) {
       // Peek ahead to see if what follows is a valid field:value
       const afterNot = pos + 4;
       const fieldMatch = tryMatchFieldValue(str, afterNot);
@@ -195,13 +285,17 @@ export function parseSearch(input: string): ParsedSearch {
     }
   }
 
-  return {
+  const parsed: ParsedSearch = {
     freeText: freeTextParts
       .filter((p) => p.length > 0)
       .join(' ')
       .trim(),
     fieldFilters,
   };
+  if (hasBooleanStructure(input)) {
+    parsed.serverQuery = input.trim();
+  }
+  return parsed;
 }
 
 interface FieldValueMatch {
@@ -211,16 +305,10 @@ interface FieldValueMatch {
   endPos: number;
 }
 
-function tryMatchFieldValue(
-  str: string,
-  pos: number
-): FieldValueMatch | null {
+function tryMatchFieldValue(str: string, pos: number): FieldValueMatch | null {
   // Match field name (word chars and underscores)
   let fieldEnd = pos;
-  while (
-    fieldEnd < str.length &&
-    (isWordChar(str[fieldEnd]))
-  ) {
+  while (fieldEnd < str.length && isWordChar(str[fieldEnd])) {
     fieldEnd++;
   }
 
@@ -280,6 +368,22 @@ function tryMatchFieldValue(
     let end = close + 1;
     while (end < str.length && str[end] !== ' ') end++;
     return { field, value: str.substring(valueStart, end), quoted: false, endPos: end };
+  }
+
+  // A per-user alternation — `read_status:(finished | in_progress)` — may hold
+  // spaces too, and runs to its closing parenthesis. Only these fields have an
+  // alternation in a field filter; for any other field a `(` stays an ordinary
+  // character, as before.
+  if (str[valueStart] === '(' && PER_USER_SEARCH_FIELDS.includes(field)) {
+    const close = str.indexOf(')', valueStart + 1);
+    if (close !== -1) {
+      return {
+        field,
+        value: str.substring(valueStart, close + 1),
+        quoted: false,
+        endPos: close + 1,
+      };
+    }
   }
 
   // Bracketed range — `duration:[10m TO 2h]` contains spaces, so it runs to

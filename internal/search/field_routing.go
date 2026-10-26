@@ -1,7 +1,7 @@
 // file: internal/search/field_routing.go
-// version: 1.1.1
+// version: 1.4.3
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package search
 
@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"sort"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
@@ -71,24 +73,77 @@ func IsPerUserField(name string) bool {
 	return ok
 }
 
-// PerUserFieldNames lists the per-user fields, sorted. It reads the same set
-// the translator routes on, so a message that names them cannot drift from it.
-func PerUserFieldNames() []string {
-	out := make([]string, 0, len(perUserFieldSet))
-	for name := range perUserFieldSet {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// QueryUsesPerUserField reports whether the query text references any per-user
-// field. Text that does not parse reports false: it cannot be evaluated, so it
-// reads no one's state.
-func QueryUsesPerUserField(query string) bool {
+// QueryMayUsePerUserField reports whether the query text may reference a per-user
+// field, and answers true whenever it cannot show that it does not:
+//
+//   - the text does not parse;
+//   - the parsed query names a per-user field (read_status:finished, in any boolean
+//     shape);
+//   - the raw text contains a per-user field name as a word anywhere, even where
+//     the parser reads it as something else (author:read_status, a quoted
+//     "read_status:finished", a bare read_status). Such a query is not evaluated
+//     per user today, but it is one parser change away from being so, and the cost
+//     of the guess being wrong is asymmetric: a collection wrongly kept per-viewer
+//     shows each viewer their own answer, a collection wrongly kept shared would
+//     serve one user's listening state to everyone.
+//
+// It is the guard for stored member lists (is this collection evaluated per
+// viewer, is its stored list served or kept): a query it answers true for shows
+// nobody a stored list and has its stored list cleared. Callers that would evaluate
+// the query get their parse error from the evaluator, so for them "true" never
+// reads anyone's state.
+func QueryMayUsePerUserField(query string) bool {
 	ast, err := ParseQuery(query)
 	if err != nil {
+		return true
+	}
+	for _, name := range FieldNames(ast) {
+		if IsPerUserField(name) {
+			return true
+		}
+	}
+	return perUserNameInText.MatchString(query)
+}
+
+// perUserNameInText matches any per-user field name as a whole word in raw query
+// text. It is built from the translator's own set, so a field added there is
+// covered here (TestPerUserFieldNamesAgree pins the other copy of the list).
+var perUserNameInText = func() *regexp.Regexp {
+	names := make([]string, 0, len(perUserFieldSet))
+	for name := range perUserFieldSet {
+		names = append(names, regexp.QuoteMeta(name))
+	}
+	slices.Sort(names)
+	return regexp.MustCompile(`(?i)\b(?:` + strings.Join(names, "|") + `)\b`)
+}()
+
+// perUserTermInText matches a per-user field written as a term (read_status:...,
+// with optional space before the colon) anywhere in raw query text. Unlike
+// perUserNameInText it needs the colon, so a title that merely contains the word
+// does not count. It is for the one question asked of text the parser rejected:
+// did the person mean a per-user term.
+var perUserTermInText = func() *regexp.Regexp {
+	names := make([]string, 0, len(perUserFieldSet))
+	for name := range perUserFieldSet {
+		names = append(names, regexp.QuoteMeta(name))
+	}
+	slices.Sort(names)
+	return regexp.MustCompile(`(?i)\b(?:` + strings.Join(names, "|") + `)\s*:`)
+}()
+
+// QueryNamesPerUserTerm reports whether query text writes a per-user term
+// (read_status, progress_pct, last_played as a field term), by the parse when the
+// text parses and by the text itself when it does not. Unlike QueryMayUsePerUserField
+// it answers false for text that does not parse and writes none, so it suits a
+// caller that must REFUSE per-user terms it cannot evaluate (a background
+// operation with no viewer) without refusing every unparsable title.
+func QueryNamesPerUserTerm(query string) bool {
+	if strings.TrimSpace(query) == "" || !strings.Contains(query, ":") {
 		return false
+	}
+	ast, err := ParseQuery(query)
+	if err != nil {
+		return perUserTermInText.MatchString(query)
 	}
 	for _, name := range FieldNames(ast) {
 		if IsPerUserField(name) {
@@ -96,6 +151,13 @@ func QueryUsesPerUserField(query string) bool {
 		}
 	}
 	return false
+}
+
+// The store cannot import this package (it imports the store), so the fail-closed
+// detector is handed to it here: every collection write then drops the stored
+// member list of a per-viewer collection (database.SetCollectionPerViewerClassifier).
+func init() {
+	database.SetCollectionPerViewerClassifier(QueryMayUsePerUserField)
 }
 
 // FieldNames returns every field name referenced by a parsed query, in order

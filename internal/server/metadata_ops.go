@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.42.0
+// version: 1.42.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-15
+// last-edited: 2026-10-26
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -48,6 +48,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	ulid "github.com/oklog/ulid/v2"
@@ -560,8 +561,18 @@ func retryWhileSearchBusy(ctx context.Context, resolve func() ([]string, error))
 // If f.OnlyParsedTranscription is set, books whose Whisper intro produced no
 // parsed title (TranscribedTitle empty) are removed — this is safe against the
 // memdb projection because stripBookForMemdb does not clear TranscribedTitle.
-// Per-user FieldFilters are silently dropped (no user context in background ops).
+//
+// A per-user term (read_status, progress_pct, last_played) in the search text or in
+// FieldFilters is REFUSED, not dropped: this resolves with no viewer, so there is
+// no listening state to judge it by. Dropping it (what the field filters did until
+// 2026-10-26) widened "my finished books" to every book, and the search text path
+// ignores a per-user term when no user is present (searchWithBleve). The web
+// select-all filter can carry such terms (buildSelectAllFilter), so the refusal is
+// here, where the op's target set is decided, not only in the UI.
 func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.FilterSpec) ([]string, error) {
+	if err := refuseUnscopedPerUserTerms(f); err != nil {
+		return nil, err
+	}
 	trueVal := true
 	filters := ListFilters{
 		IsPrimaryVersion: &trueVal,
@@ -570,9 +581,6 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 		Tags:             f.Tags,
 	}
 	for _, ff := range f.FieldFilters {
-		if IsPerUserField(ff.Field) {
-			continue
-		}
 		// Refuse an empty value rather than resolving it. strings.Contains(x, "")
 		// is always true, so an empty-valued filter matches EVERY book — and this
 		// function resolves to concrete book IDs for a BACKGROUND OPERATION with
@@ -626,6 +634,25 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 		ids = filtered
 	}
 	return ids, nil
+}
+
+// refuseUnscopedPerUserTerms is resolveFilterToBookIDs's guard: a FilterSpec that
+// names a per-user field, in FieldFilters or in the search text, cannot be resolved
+// without a viewer, and resolving it anyway would target books the person never
+// selected.
+func refuseUnscopedPerUserTerms(f operations.FilterSpec) error {
+	for _, ff := range f.FieldFilters {
+		if IsPerUserField(ff.Field) {
+			return fmt.Errorf("filter on %q is a per-user field and a background operation has no "+
+				"viewer to read it for; refusing to resolve it rather than target the whole library", ff.Field)
+		}
+	}
+	if search.QueryNamesPerUserTerm(f.Search) {
+		return fmt.Errorf("the search %q names a per-user field (read_status, progress_pct, last_played) "+
+			"and a background operation has no viewer to read it for; refusing to resolve it rather "+
+			"than target the whole library", f.Search)
+	}
+	return nil
 }
 
 // RegisterBulkMetadataFetchOp registers the "library.bulk-metadata-fetch" v2

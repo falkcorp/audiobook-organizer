@@ -1,7 +1,7 @@
 // file: web/src/components/collections/queryHelpData.ts
-// version: 1.1.0
+// version: 1.2.1
 // guid: 7793a6b3-1c06-4470-ae92-563d9c29b9c4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { firstSearchError } from '../../utils/queryGrammar';
 import { parseSearch } from '../../utils/searchParser';
@@ -87,7 +87,7 @@ export const PER_USER_FIELDS: readonly string[] = QUERY_FIELD_HELP.filter(
 ).map((f) => f.name);
 
 export const PER_USER_NOTE =
-  'These fields use the reading state of the person who created this collection, for everyone, including the Audiobookshelf app.';
+  'These fields use the reading state of whoever is viewing the collection, so each person sees their own members, including in the Audiobookshelf app.';
 
 export interface WorkedExample {
   title: string;
@@ -186,9 +186,20 @@ export function applySortChoice(sortJson: string | undefined, choice: SortChoice
   return all.length > 0 ? JSON.stringify(all) : '';
 }
 
-/** True when the query text filters on a per-user field (negated or not). */
+/** A per-user field name as a whole word anywhere in the raw text. */
+const PER_USER_NAME_IN_TEXT = new RegExp(`\\b(?:${PER_USER_FIELDS.join('|')})\\b`, 'i');
+
+/**
+ * True when the query may be evaluated per viewer: it filters on a per-user field
+ * (negated or not), names one anywhere in its text, or has a parse error. The last
+ * two are the server's own fail-closed rule (search.QueryMayUsePerUserField): a
+ * query that cannot be shown to read no per-user state is treated as reading it,
+ * so the page never offers to store one viewer's members for everyone.
+ */
 export function usesPerUserField(query: string): boolean {
-  return parseSearch(query).fieldFilters.some((f) => PER_USER_FIELDS.includes(f.field));
+  if (parseSearch(query).fieldFilters.some((f) => PER_USER_FIELDS.includes(f.field))) return true;
+  if (queryError(query) !== null) return true;
+  return PER_USER_NAME_IN_TEXT.test(query);
 }
 
 /** The first certain parse error in the query, or null. The server stays the authority. */

@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.124.0
+// version: 2.124.2
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -505,6 +505,10 @@ type UserPlaylist struct {
 	// playlist for fast iTunes-sync pushes without re-running the
 	// query. Refreshed on every sync pass.
 	MaterializedBookIDs []string `json:"materialized_book_ids,omitempty"`
+	// MaterializedTotal is how many books the last evaluation matched when it
+	// matched more than MaxMaterializedMembers and MaterializedBookIDs holds only
+	// the first of them. Zero means the list is complete.
+	MaterializedTotal int `json:"materialized_total,omitempty"`
 	// ITunesPersistentID links the playlist to its iTunes row
 	// once it's been pushed. Null until first sync.
 	ITunesPersistentID string `json:"itunes_persistent_id,omitempty"`
@@ -552,17 +556,23 @@ type Collection struct {
 	// MaterializedBookIDs caches the last evaluation of a dynamic
 	// collection so a listing does not have to re-run the query.
 	// Advisory only: readers that need live results re-evaluate.
-	MaterializedBookIDs []string  `json:"materialized_book_ids,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
-	// CreatedByUserID records authorship AND, for a dynamic collection, names the
-	// evaluating user: the query's per-user fields (read_status, progress_pct,
-	// last_played) are answered from this user's state, whoever is reading the
-	// collection (D75). If that user no longer exists the first active admin is
-	// used instead, except that a query using a per-user field is then not
-	// evaluated at all (the stand-in's state would be published); the owner
-	// backfill leaves such a collection ownerless. It does NOT scope visibility -- collections are shared by
-	// definition, and a static collection never evaluates anything.
+	//
+	// It is EMPTY on the stored row for a collection whose query uses a
+	// per-user field (read_status, progress_pct, last_played): those members are
+	// evaluated for the viewer on every read and never stored, because a stored
+	// list would be one user's listening state served to everyone. A response may
+	// carry the viewer's own members here; it is never written back.
+	MaterializedBookIDs []string `json:"materialized_book_ids,omitempty"`
+	// MaterializedTotal is how many books the last evaluation matched when it
+	// matched more than MaxMaterializedMembers and MaterializedBookIDs holds only
+	// the first of them (a response for a per-viewer collection carries the
+	// viewer's own total here). Zero means the list is complete.
+	MaterializedTotal int       `json:"materialized_total,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	// CreatedByUserID records authorship only. It decides neither visibility
+	// (collections are shared by definition) nor who a per-user query is
+	// evaluated for: that is always the viewer, never the creator.
 	CreatedByUserID string `json:"created_by_user_id,omitempty"`
 	Version         int    `json:"version"`
 }

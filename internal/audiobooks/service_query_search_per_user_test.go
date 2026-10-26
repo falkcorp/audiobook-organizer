@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_per_user_test.go
-// version: 1.1.2
+// version: 1.1.4
 // guid: e3a7c1d9-4b2f-4a68-9c1e-5f8a2d3b7c40
-// last-edited: 2026-09-28
+// last-edited: 2026-10-26
 
 // Tests for the searchWithBleve per-user DSL filter fix (INIT-4 T2).
 // read_status / progress_pct / last_played filters are peeled off by
@@ -30,8 +30,8 @@ import (
 )
 
 // buildSearchTestIndex opens a throwaway on-disk Bleve index and seeds
-// it with docs all sharing Author "sanderson" so a single DSL clause
-// (author:sanderson) selects every seeded book, letting the per-user
+// it with docs all sharing Author "kyle" so a single DSL clause
+// (author:kyle) selects every seeded book, letting the per-user
 // clause do all the narrowing in each test below.
 func buildSearchTestIndex(t *testing.T, bookIDs ...string) *search.BleveIndex {
 	t.Helper()
@@ -43,7 +43,7 @@ func buildSearchTestIndex(t *testing.T, bookIDs ...string) *search.BleveIndex {
 
 	docs := make([]search.BookDocument, 0, len(bookIDs))
 	for _, id := range bookIDs {
-		docs = append(docs, search.BookDocument{BookID: id, Title: id, Author: "sanderson"})
+		docs = append(docs, search.BookDocument{BookID: id, Title: id, Author: "kyle"})
 	}
 	if err := idx.IndexBookBatch(docs); err != nil {
 		t.Fatalf("index batch: %v", err)
@@ -83,7 +83,7 @@ func TestSearchWithBleveAppliesReadStatusFilter(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson read_status:finished", nil, nil, ListFilters{UserID: "alice"})
+	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:kyle read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	if assert.Len(t, got, 1) {
 		assert.Equal(t, "b2", got[0].ID)
@@ -107,7 +107,7 @@ func TestSearchWithBleveNoFilterQueryUnchanged(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson", nil, nil, ListFilters{UserID: "alice"})
+	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:kyle", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	assert.Len(t, got, 3, "no per-user clause -> all 3 Bleve matches returned")
 }
@@ -143,7 +143,7 @@ func TestSearchWithBlevePaginationAfterFilter(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 2, 2, "author:sanderson read_status:in_progress", nil, nil, ListFilters{UserID: "alice"})
+	got, err := svc.GetAudiobooks(context.Background(), 2, 2, "author:kyle read_status:in_progress", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	assert.Len(t, got, 1, "5 raw hits, 3 post-filter matches, limit=2 offset=2 -> 1 book")
 }
@@ -170,7 +170,7 @@ func TestSearchWithBleveEmptyUserIDReturnsAllMatches(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson read_status:finished", nil, nil, ListFilters{})
+	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:kyle read_status:finished", nil, nil, ListFilters{})
 	assert.NoError(t, err)
 	assert.Len(t, got, 3, "empty userID must never produce an empty page when matches exist")
 	assert.Contains(t, buf.String(), "per-user filters dropped, no user context")
@@ -203,7 +203,7 @@ func TestSearchWithBleveStateErrorFailsOpen(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson -read_status:finished", nil, nil, ListFilters{UserID: "alice"})
+	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:kyle -read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	if assert.Len(t, got, 1, "erroring state read -> zero-value eval keeps b1 (not finished); b2 genuinely finished is excluded") {
 		assert.Equal(t, "b1", got[0].ID)
@@ -241,7 +241,7 @@ func TestSearchWithBleveWindowExhaustionWarns(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	_, err := svc.GetAudiobooks(context.Background(), 10, 0, "author:sanderson -read_status:finished", nil, nil, ListFilters{UserID: "alice"})
+	_, err := svc.GetAudiobooks(context.Background(), 10, 0, "author:kyle -read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	assert.Contains(t, buf.String(), "post-filter window exhausted; results beyond it are truncated")
 }
@@ -273,7 +273,7 @@ func TestSearchWithBleveKillSwitchDrops(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson read_status:finished", nil, nil, ListFilters{UserID: "alice"})
+	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:kyle read_status:finished", nil, nil, ListFilters{UserID: "alice"})
 	assert.NoError(t, err)
 	assert.Len(t, got, 3, "kill switch on -> today's unfiltered behavior restored")
 	assert.Contains(t, buf.String(), "per-user filters dropped, no user context")
@@ -293,4 +293,29 @@ func completedIndex(t testing.TB, idx *search.BleveIndex) *search.BleveIndex {
 		}
 	}
 	return idx
+}
+
+// S-D: every caller of the search, not only the HTTP list, gets the refusal. A
+// per-user term the flat post-filter cannot evaluate as written is an error the
+// handler maps to a 400, never an answer to a different question.
+func TestSearchWithBleveRefusesAPerUserTermItCannotEvaluate(t *testing.T) {
+	idx := buildSearchTestIndex(t, "b1", "b2")
+	mockStore := mocks.NewMockStore(t) // no state may be read for a refused query
+	svc := NewAudiobookService(mockStore)
+	svc.SetSearchIndex(completedIndex(t, idx))
+
+	for _, q := range []string{
+		"read_status:finished OR author:kyle",
+		"-(read_status:finished author:kyle)",
+		"read_status:completed",
+		"-read_status:completed author:kyle",
+		"progress_pct:>half",
+		"READ_STATUS:finished",
+	} {
+		got, err := svc.GetAudiobooks(context.Background(), 50, 0, q, nil, nil, ListFilters{UserID: "alice"})
+		if assert.Error(t, err, q) {
+			assert.True(t, search.IsPerUserQueryError(err), "%q: %v", q, err)
+		}
+		assert.Empty(t, got, q)
+	}
 }

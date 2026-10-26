@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playlists.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: b93ba897-1377-4cf7-9aea-ca57f135893e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package database
 
@@ -369,6 +369,14 @@ func (p *PebbleStore) updateUserPlaylist(pl *UserPlaylist, mark OperationMark) e
 			}
 		}
 	}
+	// A cut snapshot (MaterializePlaylist) keeps how many books its query matched in
+	// MaterializedTotal. That count is a statement about the books the snapshot was
+	// made from, so any change to which books it holds ends it, however the change
+	// is made (an add followed by a remove leaves the list as long as it was). A
+	// reorder keeps the same books, and the count stays true.
+	if pl.Type == UserPlaylistTypeStatic && pl.MaterializedTotal != 0 && !sameBookSet(pl.BookIDs, prev.BookIDs) {
+		pl.MaterializedTotal = 0
+	}
 	pl.CreatedAt = prev.CreatedAt
 	pl.UpdatedAt = time.Now()
 	pl.Version = prev.Version + 1
@@ -480,3 +488,21 @@ func (p *PebbleStore) ListDirtyUserPlaylists() ([]UserPlaylist, error) {
 }
 
 var _ UserPlaylistMarkStore = (*PebbleStore)(nil)
+
+// sameBookSet reports whether a and b hold the same books, in any order.
+func sameBookSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, id := range a {
+		seen[id]++
+	}
+	for _, id := range b {
+		if seen[id] == 0 {
+			return false
+		}
+		seen[id]--
+	}
+	return true
+}

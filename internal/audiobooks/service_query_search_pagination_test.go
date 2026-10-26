@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_pagination_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b1c4f27-9d3e-4a60-b5c8-1e70a2f43d96
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 
 // Regression tests for search + post-filter pagination.
 //
@@ -47,7 +47,7 @@ func paginationTestBookIDs(n int) []string {
 }
 
 // newPaginationTestService wires a throwaway Bleve index over n books that all
-// match author:sanderson, with every book flagged primary so the
+// match author:kyle, with every book flagged primary so the
 // is_primary_version post-filter keeps the whole set. That isolates the
 // pagination arithmetic: any row missing from a page is the slicing bug, not
 // the predicate.
@@ -92,7 +92,7 @@ func TestSearchWithPostFilterReturnsFullSecondPage(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, gotTotal, err := svc.GetAudiobooksWithTotal(
-				context.Background(), limit, tc.offset, "author:sanderson", nil, nil,
+				context.Background(), limit, tc.offset, "author:kyle", nil, nil,
 				ListFilters{IsPrimaryVersion: &primary},
 			)
 			assert.NoError(t, err)
@@ -117,7 +117,7 @@ func TestSearchCountDoesNotTrackLimit(t *testing.T) {
 	for _, limit := range []int{1, 3, 5, 50} {
 		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
 			got, gotTotal, err := svc.GetAudiobooksWithTotal(
-				context.Background(), limit, 0, "author:sanderson", nil, nil,
+				context.Background(), limit, 0, "author:kyle", nil, nil,
 				ListFilters{IsPrimaryVersion: &primary},
 			)
 			assert.NoError(t, err)
@@ -140,7 +140,7 @@ func TestSearchWithoutPostFilterStillPages(t *testing.T) {
 
 	for _, offset := range []int{0, limit} {
 		got, gotTotal, err := svc.GetAudiobooksWithTotal(
-			context.Background(), limit, offset, "author:sanderson", nil, nil, ListFilters{},
+			context.Background(), limit, offset, "author:kyle", nil, nil, ListFilters{},
 		)
 		assert.NoError(t, err)
 		assert.Len(t, got, limit, "unfiltered search paged correctly before the fix and must still")

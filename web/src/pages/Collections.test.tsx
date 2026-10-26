@@ -1,7 +1,7 @@
 // file: web/src/pages/Collections.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d8ec67b-e10a-4ac9-aecb-5a1adbff97f4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -97,6 +97,39 @@ describe('Collections list', () => {
       '2 books'
     );
     expect(m.listCollections).toHaveBeenCalledTimes(1);
+  });
+
+  it('says "members unavailable" instead of "0 books" when a viewer\'s members could not be worked out', async () => {
+    m.listCollections.mockResolvedValue({
+      collections: [
+        {
+          ...dynamicCol,
+          id: 'c-unavailable',
+          name: 'Year One',
+          query: 'read_status:finished',
+          materialized_book_ids: [],
+          members_unavailable: true,
+        },
+      ],
+      count: 1,
+    });
+    renderPage();
+    const button = await screen.findByRole('button', {
+      name: /Open Year One; its members could not/,
+    });
+    expect(button).toHaveTextContent('members unavailable');
+    expect(screen.queryByText(/\b0 books/)).toBeNull();
+  });
+
+  it('shows how many books a cut member list really has', async () => {
+    m.listCollections.mockResolvedValue({
+      collections: [{ ...dynamicCol, name: 'The Long Halloween', materialized_total: 12000 }],
+      count: 1,
+    });
+    renderPage();
+    expect(
+      await screen.findByRole('button', { name: /the 2 of 12,000 books in The Long Halloween/ })
+    ).toHaveTextContent('2 of 12,000 books');
   });
 
   it('shows loading, error with retry, and empty as different things', async () => {

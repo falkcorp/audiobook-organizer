@@ -1,6 +1,7 @@
 // file: internal/playlist/evaluator_prop_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: bcc094f5-1645-44d3-be21-3087888fdaea
+// last-edited: 2026-10-26
 
 // Property-based tests for the smart-playlist evaluator.
 //
@@ -15,11 +16,12 @@
 // PerUserFilterIsolation is the exception — it asserts len(aliceGot)==n for
 // THIS iteration's books only, which breaks when alice state from prior
 // iterations lingers. That test uses per-iteration fixtures with rt.Cleanup.
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 
 package playlist
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -84,7 +86,7 @@ func seedBooks(rt *rapid.T, store *database.PebbleStore, idx *search.BleveIndex,
 }
 
 // TestProp_LimitIsRespected verifies that
-// EvaluateSmartPlaylist(limit=N) returns at most N IDs for any query
+// EvaluateSmartPlaylist(context.Background(), limit=N) returns at most N IDs for any query
 // that produces a non-trivial candidate set.
 func TestProp_LimitIsRespected(t *testing.T) {
 	if testing.Short() {
@@ -97,7 +99,7 @@ func TestProp_LimitIsRespected(t *testing.T) {
 
 		seedBooks(rt, store, idx, n)
 
-		got, err := EvaluateSmartPlaylist(store, idx, "author:common-author", "", limit, "_local")
+		got, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:common-author", "", limit, "_local")
 		if err != nil {
 			rt.Fatalf("evaluate: %v", err)
 		}
@@ -120,7 +122,7 @@ func TestProp_EmptyQueryErrors(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		ws := rapid.StringMatching(`[ \t\n\r]{0,16}`).Draw(rt, "whitespace")
 
-		got, err := EvaluateSmartPlaylist(store, idx, ws, "", 0, "_local")
+		got, err := EvaluateSmartPlaylist(context.Background(), store, idx, ws, "", 0, "_local")
 		if err == nil {
 			rt.Fatalf("empty query %q should error, got %v", ws, got)
 		}
@@ -144,11 +146,11 @@ func TestProp_DeterministicEvaluation(t *testing.T) {
 
 		seedBooks(rt, store, idx, n)
 
-		first, err := EvaluateSmartPlaylist(store, idx, "author:common-author", "", limit, "_local")
+		first, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:common-author", "", limit, "_local")
 		if err != nil {
 			rt.Fatalf("first evaluate: %v", err)
 		}
-		second, err := EvaluateSmartPlaylist(store, idx, "author:common-author", "", limit, "_local")
+		second, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:common-author", "", limit, "_local")
 		if err != nil {
 			rt.Fatalf("second evaluate: %v", err)
 		}
@@ -181,11 +183,11 @@ func TestProp_SortIsStable(t *testing.T) {
 
 		seedBooks(rt, store, idx, n)
 
-		first, err := EvaluateSmartPlaylist(store, idx, "author:common-author", sortJSON, 0, "_local")
+		first, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:common-author", sortJSON, 0, "_local")
 		if err != nil {
 			rt.Fatalf("first evaluate: %v", err)
 		}
-		second, err := EvaluateSmartPlaylist(store, idx, "author:common-author", sortJSON, 0, "_local")
+		second, err := EvaluateSmartPlaylist(context.Background(), store, idx, "author:common-author", sortJSON, 0, "_local")
 		if err != nil {
 			rt.Fatalf("second evaluate: %v", err)
 		}
@@ -235,7 +237,7 @@ func TestProp_PerUserFilterIsolation(t *testing.T) {
 		}
 
 		aliceGot, err := EvaluateSmartPlaylist(
-			store, idx, "author:common-author read_status:finished", "", 0, aliceID)
+			context.Background(), store, idx, "author:common-author read_status:finished", "", 0, aliceID)
 		if err != nil {
 			rt.Fatalf("evaluate alice: %v", err)
 		}
@@ -245,7 +247,7 @@ func TestProp_PerUserFilterIsolation(t *testing.T) {
 		}
 
 		bobGot, err := EvaluateSmartPlaylist(
-			store, idx, "author:common-author read_status:finished", "", 0, bobID)
+			context.Background(), store, idx, "author:common-author read_status:finished", "", 0, bobID)
 		if err != nil {
 			rt.Fatalf("evaluate bob: %v", err)
 		}

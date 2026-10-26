@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_hydration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9f0a1b2c-3d4e-5f60-7182-93a4b5c6d7e8
-// last-edited: 2026-09-25
+// last-edited: 2026-10-26
 
 // Tests for the searchWithBleve batch-hydration fail-open path (INIT-4 T3).
 // GetBookByID's per-hit loop was replaced with a single GetBooksByIDs call
@@ -61,7 +61,7 @@ func TestSearchWithBleveHydrationErrorPartialPage(t *testing.T) {
 	svc := NewAudiobookService(mockStore)
 	svc.SetSearchIndex(completedIndex(t, idx))
 
-	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:sanderson", nil, nil, ListFilters{})
+	got, err := svc.GetAudiobooks(context.Background(), 50, 0, "author:kyle", nil, nil, ListFilters{})
 	assert.NoError(t, err, "hydration error must never fail the whole search request")
 	assert.Len(t, got, wantHydrated, "partial page: only rows hydrated before the corrupt row are served")
 	assert.Contains(t, buf.String(), "search: batch hydrate failed; serving partial page")

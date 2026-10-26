@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_collections.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4c9e2b71-6f83-4a15-9d02-7e5b1a83c064
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package database
 
@@ -67,6 +67,10 @@ func (p *PebbleStore) CreateCollection(col *Collection) (*Collection, error) {
 			return nil, fmt.Errorf("%w: %q", ErrCollectionNameInUse, col.Name)
 		}
 	}
+
+	// A per-viewer collection stores no member list, whoever writes it
+	// (see collection_perviewer.go).
+	scrubPerViewerMembers(col)
 
 	now := time.Now()
 	if col.CreatedAt.IsZero() {
@@ -278,6 +282,14 @@ func (p *PebbleStore) UpdateCollection(col *Collection) error {
 			}
 		}
 	}
+
+	// A per-viewer collection stores no member list, whoever writes it: the row
+	// the caller read may still carry a leftover list (the ABS PATCH handler
+	// writes back what it loaded), and writing it again would restore the
+	// creator's listening state at rest with a fresh Version. See
+	// collection_perviewer.go. The caller's col is cleared too, like the other
+	// fields this method stamps on it.
+	scrubPerViewerMembers(col)
 
 	col.CreatedAt = prev.CreatedAt
 	col.UpdatedAt = time.Now()

@@ -1,7 +1,7 @@
 // file: web/src/components/library/libraryContentState.test.ts
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b6f14ad-8c07-4d9e-9f31-5a70c8e2d4b6
-// last-edited: 2026-10-06
+// last-edited: 2026-10-26
 
 import { describe, expect, it } from 'vitest';
 
@@ -116,6 +116,23 @@ describe('libraryContentState: rejected query', () => {
       libraryContentState({ bookCount: 0, loading: false, loadError: badQuery, searchQuery: 'x' }),
     ).toBe('content');
     expect(queryErrorMessage(badQuery)).toContain('title:/(?=x)/');
+  });
+
+  // The search box sends a per-user query with an OR or a group to the server whole,
+  // so the person reads the server's refusal (with the spelling that works) there.
+  it('shows the per-user refusal the server gives for a query sent whole', () => {
+    const refusal = Object.assign(
+      new Error(
+        'invalid search: a per-user field (read_status, progress_pct, last_played) cannot be ' +
+          'combined with other terms using OR. To match several states of one field, write ' +
+          'read_status:(finished|in_progress)',
+      ),
+      { status: 400 },
+    );
+    expect(
+      libraryContentState({ bookCount: 0, loading: false, loadError: refusal, searchQuery: 'x' }),
+    ).toBe('content');
+    expect(queryErrorMessage(refusal)).toContain('read_status:(finished|in_progress)');
   });
 
   it('does not treat a network failure or a 5xx as a query error', () => {

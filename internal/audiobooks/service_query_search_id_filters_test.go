@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_id_filters_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: de1c4eca-5371-4c44-9c6e-8a7d61b37aeb
-// last-edited: 2026-09-28
+// last-edited: 2026-10-26
 
 // Regression tests for author_id / series_id surviving a search, and for
 // author_id + series_id intersecting instead of author winning.
@@ -40,8 +40,8 @@ import (
 )
 
 const (
-	idFilterSearch    = "author:sanderson" // Bleve: every indexed doc matches
-	idFilterSubstring = "idfilter"         // nil-index substring: every title but one
+	idFilterSearch    = "author:kyle" // Bleve: every indexed doc matches
+	idFilterSubstring = "idfilter"    // nil-index substring: every title but one
 )
 
 type idFilterFixture struct {

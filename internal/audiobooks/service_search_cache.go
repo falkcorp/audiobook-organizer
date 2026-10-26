@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.6.0
+// version: 2.6.2
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -378,16 +378,26 @@ func (svc *AudiobookService) searchCacheKey(search string, authorID, seriesID *i
 	return b.String(), true
 }
 
-// SearchHasPerUserFilters reports whether a search string carries per-user
-// DSL filters (read_status, progress_pct, last_played). A query that does not
-// parse or translate has none: it takes the substring fallback.
+// SearchHasPerUserFilters reports whether a search string names a per-user field
+// (read_status, progress_pct, last_played). A query that does not parse has none:
+// it takes the substring fallback.
+//
+// It is decided from the field names in the parsed query, never from whether the
+// query translates: this answer gates caches that are not keyed by user, so a
+// per-user query the translator refuses (a tag: term under an OR, a bad date) must
+// still answer true. Answering false for it would let a cache serve one viewer's
+// filtered list to another.
 func SearchHasPerUserFilters(q string) bool {
 	ast, err := search.ParseQuery(q)
 	if err != nil {
 		return false
 	}
-	_, perUser, err := search.Translate(ast)
-	return err == nil && len(perUser) > 0
+	for _, name := range search.FieldNames(ast) {
+		if search.IsPerUserField(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // SearchHasRelativeDate reports whether a search string carries a relative date

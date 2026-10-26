@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
+	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
 // filterCompiledLog carries this file's diagnostics through the log-injection barrier.
@@ -126,18 +127,14 @@ func compileFieldFilterAt(f FieldFilter, now time.Time) (compiledFilter, error) 
 			return cf, wrap(fmt.Errorf("value must be applied (or none)"))
 		}
 		return cf, nil
-	case f.Field == "read_status":
-		// Exact (EqualFold) match in matchesPerUserFilter: a pattern would be
-		// compared as literal text and match nothing, so reject it loudly.
-		if !querygrammar.IsPlainLiteral(f.Value, f.Quoted) {
-			return cf, wrap(fmt.Errorf("read_status takes an exact status (finished, in_progress, ...), not a pattern"))
-		}
-		return cf, nil
-	case f.Field == "last_played":
-		// A date term (>-30d, a..b, 2026-01-01) or last_played:* (ever played);
-		// matched by search.MatchPerUserFilters through perUserMatcher. Checked
-		// here so a malformed term is a 400, not a list that matches nothing.
-		if _, err := compileDateFilter(f, now); err != nil {
+	case IsPerUserField(f.Field):
+		// read_status, progress_pct and last_played are judged by
+		// search.MatchPerUserFilters (perUserMatcher), which compares exactly: a
+		// status, a number, a date. The same builder that makes the matcher's
+		// filter checks the value here, so a value it cannot evaluate is a 400
+		// instead of a list that matches nothing (and, negated, everything). It
+		// is the rule a query string gets from search.CheckPerUserValues.
+		if _, err := search.PerUserFilterForTerm(f.Field, f.Value, f.Quoted, f.Negated, now); err != nil {
 			return cf, wrap(err)
 		}
 		return cf, nil

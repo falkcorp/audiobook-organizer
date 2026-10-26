@@ -1,7 +1,7 @@
 // file: internal/search/bleve_index_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8e2c4a1d-5b9f-4f70-a7d6-2f8e0c1b9a58
-// last-edited: 2026-07-11
+// last-edited: 2026-10-26
 
 package search
 
@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func openTestIndex(t *testing.T) *BleveIndex {
@@ -162,7 +163,7 @@ func TestBleveIndex_FreeTextBoost_TitleRanksAboveDescription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	bq, _, err := Translate(ast)
+	bq, _, err := TranslateAt(ast, time.Now())
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestBleveIndex_FreeTextRecall_TagOnlyMatchStillReturned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	bq, _, err := Translate(ast)
+	bq, _, err := TranslateAt(ast, time.Now())
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}

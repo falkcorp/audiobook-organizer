@@ -1,12 +1,12 @@
 // file: internal/search/per_user_match.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a82911d7-d9dc-4f47-9863-1a7638e47194
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // Per-user DSL filter evaluation (INIT-4 T2). Moved here — verbatim —
 // from internal/playlist/evaluator.go so internal/search is the single
 // exported source of truth for matching a database.UserBookState
-// against the PerUserFilter slice Translate peels off the DSL AST.
+// against the PerUserFilter slice TranslateAt peels off the DSL AST.
 // Both the playlist evaluator and searchWithBleve delegate to
 // MatchPerUserFilters instead of each carrying their own copy.
 
