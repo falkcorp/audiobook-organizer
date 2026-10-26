@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-25-bulk-delete-progress-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 2d6f9b84-7a13-4c5e-b0d8-e4a1c37f5962 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Deleting books no longer takes your listening progress with it
 
@@ -76,9 +76,11 @@ one check, so they cannot disagree about what counts as "still has files".
   the message that the progress was erased and the book stayed, and the page
   refreshes so the book stops offering the discard.
 - A bulk edit sent without any permission information is now refused when it
-  would trash or restore a book, instead of being let through unchecked. Nothing
-  in the app sends such a request today; this closes a door a future feature
-  could otherwise walk through by accident.
+  would trash or restore a book, instead of being let through unchecked. This
+  covers bulk edits only: the separate bulk delete, permanent delete and restore
+  actions are guarded by the permission check on the request itself, not by
+  this fallback. Nothing in the app sends such a request today; this closes a
+  door a future feature could otherwise walk through by accident.
 - On the library page, the greyed-out bulk buttons now show their reason when you
   hover over them (before, the reason never appeared). On a brand-new install
   with no accounts yet, the buttons are enabled, as the server allows.

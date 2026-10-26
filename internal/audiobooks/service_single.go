@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -396,7 +396,9 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 	}
 	result.sortIDs()
 
-	if result.Purged > 0 {
+	// A carry followed by a refused delete purges nothing but still moved a
+	// sibling's progress, so it refreshes the cache like a purge does.
+	if result.Purged > 0 || result.stateMoved > 0 {
 		svc.InvalidateListCache()
 	}
 

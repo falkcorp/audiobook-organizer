@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryPermission.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1b4c472c-399a-43a3-8df5-25a5dbd4979e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useOptionalAuth } from '../contexts/AuthContext';
 
@@ -22,7 +22,7 @@ export interface PermissionAuth {
 /**
  * Whether the caller holds `permission`, for hiding or disabling a control the
  * server would refuse. Advisory only (every route enforces its own permission)
- * and fail-closed, like useCanManageCollections: until auth has initialised,
+ * and fail-closed: until auth has initialised,
  * when the server's auth setting is unknown, and when authentication is on but
  * nobody is signed in or the permission list is missing, the caller does not
  * hold it. Two cases are open because the server lets the caller through: when

@@ -1,7 +1,7 @@
 // file: internal/database/book_owned_files_check_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d52b8f6-93a1-4e7c-a4b0-1f6e8c3d7952
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -24,7 +24,7 @@ func TestCheckBookOwnsNoFiles_AgreesWithDeleteBook(t *testing.T) {
 	}
 	cases := []tc{
 		{"no rows", func(t *testing.T, fx *retiredFixture) string {
-			b, err := fx.ps.CreateBook(&Book{Title: "Plain Shell", FilePath: "/lib/Gotham/ret/plain"})
+			b, err := fx.ps.CreateBook(&Book{Title: "The Killing Joke", FilePath: "/lib/Gotham/ret/plain"})
 			require.NoError(t, err)
 			return b.ID
 		}, false, nil},

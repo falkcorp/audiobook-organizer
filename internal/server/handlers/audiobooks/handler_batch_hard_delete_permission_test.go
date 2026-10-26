@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_batch_hard_delete_permission_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e8602b33-8ac7-4a49-ab67-bc5184d0e660
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobookshandler_test
 
@@ -87,7 +87,7 @@ func batchCases() []batchCase {
 		},
 		{
 			name: "operations: a metadata update asks for nothing",
-			ops:  opsBody(map[string]any{"id": "b1", "action": "update", "updates": map[string]any{"title": "A Title"}}),
+			ops:  opsBody(map[string]any{"id": "b1", "action": "update", "updates": map[string]any{"title": "The Long Halloween"}}),
 			asks: nil,
 		},
 		{
@@ -107,7 +107,7 @@ func batchCases() []batchCase {
 		},
 		{
 			name:    "batch: a metadata edit asks for nothing",
-			updates: map[string]any{"title": "A Title", "genre": "Fantasy"},
+			updates: map[string]any{"title": "The Long Halloween", "genre": "Fantasy"},
 			asks:    nil,
 		},
 	}

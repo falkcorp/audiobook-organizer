@@ -1,7 +1,7 @@
 // file: internal/merge/progress_safety_followups_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e82a272-8905-49f4-b073-a818dfc67963
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
@@ -378,6 +378,22 @@ func TestDiscardUserState_DeleteFailureAfterClearingIsDiscardedBookKept(t *testi
 	require.Equal(t, res.Bookmarks, kept.Bookmarks)
 	require.Equal(t, 1, kept.Users)
 	require.Contains(t, err.Error(), "was erased and the book was kept")
+}
+
+// N2: when nothing was erased (the book held no state to discard), a failing
+// delete is an ordinary refusal, not "progress erased and the book kept".
+func TestDiscardUserState_DeleteFailureWithNothingErasedIsThePlainError(t *testing.T) {
+	s := setupTestStore(t).(*database.PebbleStore)
+	empty, _ := seedSyncBooks(t, s)
+	seedSyncUser(t, s)
+	cause := errors.New("delete refused")
+	res, err := DiscardUserStateThenHardDelete(s, empty, nil, func() error { return cause })
+	require.ErrorIs(t, err, cause)
+	require.NotErrorIs(t, err, ErrDiscardedBookKept)
+	var kept *DiscardedBookKeptError
+	require.False(t, errors.As(err, &kept))
+	require.Zero(t, res.Users)
+	require.Zero(t, res.Bookmarks)
 }
 
 // B: a bookmark under an alias of the book's id (an earlier merge loser

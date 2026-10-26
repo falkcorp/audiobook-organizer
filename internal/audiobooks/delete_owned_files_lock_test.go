@@ -1,7 +1,7 @@
 // file: internal/audiobooks/delete_owned_files_lock_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c41e7a92-6d05-4b38-8e1f-2a9d5b073c64
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -77,13 +77,13 @@ func (s *gainsFileStore) GetBookFilesIncludingRetired(id string) ([]database.Boo
 func retireRowInto(t *testing.T, store *database.PebbleStore, holderID string) {
 	t.Helper()
 	shell := "shell-" + holderID
-	_, err := store.CreateBook(&database.Book{ID: shell, Title: shell, Format: "m4b"})
+	_, err := store.CreateBook(&database.Book{ID: shell, Title: "The Dark Knight Returns", Format: "m4b"})
 	require.NoError(t, err)
 	row := &database.BookFile{ID: "retired-row-" + holderID, BookID: shell, FilePath: "/lib/Gotham/" + holderID + "-retired.m4b", Format: "m4b"}
 	require.NoError(t, store.CreateBookFile(row))
 	v, err := store.CreateBookVersion(&database.BookVersion{
 		BookID: holderID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
-		RetiredFromBookID: shell, RetireOpID: "op-1",
+		RetiredFromBookID: shell, RetireOpID: "op-1", RetiredAt: new(time.Now()),
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: shell}}, holderID, v.ID))
@@ -142,7 +142,7 @@ func TestDeleteAudiobook_HardDeleteFileGainedBeforeTheLockMovesNothing(t *testin
 func TestDeleteAudiobook_HardDeleteWithoutStateFileGainedBeforeTheLockBlocksNoHash(t *testing.T) {
 	_, store, _ := setupPurgeBoundary(t)
 	hash := "h-stateless"
-	_, err := store.CreateBook(&database.Book{ID: "plain", Title: "plain", Format: "m4b", FileHash: &hash})
+	_, err := store.CreateBook(&database.Book{ID: "plain", Title: "Hush", Format: "m4b", FileHash: &hash})
 	require.NoError(t, err)
 	wrapped := &gainsFileStore{PebbleStore: store, t: t, bookID: "plain", afterInclRetCall: 1}
 	svc := NewAudiobookService(wrapped)
@@ -325,6 +325,31 @@ func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryIsCountedOnce(t *testing.T) 
 	require.Zero(t, res.SkippedOwnsFiles, "result %+v", res)
 	require.Len(t, res.Errors, 1, "result %+v", res)
 	require.Contains(t, res.Errors[0], "listening state moved to keep")
+}
+
+// N5: a nightly run whose only change was a carry followed by a refused delete
+// purges nothing, but the sibling's progress moved, so cached lists are
+// dropped just as they are after "Purge now".
+func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryInvalidatesTheListCache(t *testing.T) {
+	prev := config.AppConfig.CacheInvalidateOnBookUpdate
+	config.AppConfig.CacheInvalidateOnBookUpdate = true
+	t.Cleanup(func() { config.AppConfig.CacheInvalidateOnBookUpdate = prev })
+
+	_, store, _ := setupPurgeBoundary(t)
+	groupBook(t, store, "keep", "g1", false, true)
+	groupBook(t, store, "dup", "g1", true, false)
+	purgeSeedProgress(t, store, "dup")
+	svc := NewAudiobookService(&gainsFileStore{PebbleStore: store, t: t, bookID: "dup", afterInclRetCall: 2})
+	svc.listCache.Set("probe", []database.Book{{ID: "cached"}})
+	_, warm := svc.listCache.Get("probe")
+	require.True(t, warm, "fixture: the probe entry is cached")
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+
+	require.NoError(t, err)
+	require.Zero(t, res.Purged, "the delete refused, so nothing was purged: %+v", res)
+	_, still := svc.listCache.Get("probe")
+	require.False(t, still, "state moved to the sibling, so cached lists are dropped")
 }
 
 // The file-row refusal under the lock (nothing moved) is counted once too:

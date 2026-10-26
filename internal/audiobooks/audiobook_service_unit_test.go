@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -47,6 +47,12 @@ func (m *retiredAwareMock) GetAllBookFilesCoreIncludingRetired() ([]database.Boo
 	return nil, nil
 }
 func (m *retiredAwareMock) GetRetiredVersionsFromBook(string) ([]database.BookVersion, error) {
+	return nil, nil
+}
+func (m *retiredAwareMock) GetBookFileByPIDIncludingRetired(string) (*database.BookFile, error) {
+	return nil, nil
+}
+func (m *retiredAwareMock) GetBookFileByPathIncludingRetired(string) (*database.BookFile, error) {
 	return nil, nil
 }
 
@@ -353,7 +359,7 @@ func TestAudiobookService_DeleteAudiobook_HardDelete(t *testing.T) {
 func TestAudiobookService_DeleteAudiobook_HardDeleteRefusedWhenBookOwnsFiles(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	svc := NewAudiobookService(&retiredAwareMock{MockStore: mockStore, rows: map[string][]database.BookFile{
-		"del-2": {{ID: "f1", BookID: "del-2", FilePath: "/lib/x.m4b"}},
+		"del-2": {{ID: "f1", BookID: "del-2", FilePath: "/lib/Gotham/x.m4b"}},
 	}})
 
 	hash := "h1"

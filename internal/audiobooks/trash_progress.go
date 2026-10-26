@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -84,7 +84,11 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 		r.CarryFailed++
 		r.CarryFailedIDs = append(r.CarryFailedIDs, bookID)
 	case purgeFailed:
-		// counted by its Errors lines
+		// counted by its Errors lines; a delete that failed after a carry
+		// also moved state to a sibling, which the cache refresh needs to know
+		if o.stateMovedTo != "" {
+			r.stateMoved++
+		}
 	case purgeNotInTrash:
 		// restored or purged meanwhile: nothing to count
 	}
