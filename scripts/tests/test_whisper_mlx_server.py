@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.9.0
+# version: 1.9.1
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-10-26
 #
@@ -988,7 +988,7 @@ def test_a_hung_upload_does_not_freeze_the_event_loop(childsrv):
 
     async def scenario():
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=mod.app), base_url="http://worker"
+            transport=httpx.ASGITransport(app=mod.app), base_url="http://192.0.2.10"
         ) as c:
             upload = asyncio.create_task(
                 c.post("/transcribe", files={"file": ("p.wav", b"HANGHANG", "audio/wav")})
