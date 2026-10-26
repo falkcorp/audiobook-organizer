@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -912,5 +913,94 @@ func TestCAS_BatchUpsert_BoundsRestagingUnderRotatingChurn(t *testing.T) {
 	}
 	if got, _ := f.s.GetBookFileByPath(paths[rows-1]); got == nil || got.Title != "" {
 		t.Errorf("the abandoned batch wrote a row: %+v", got)
+	}
+}
+
+// secondaryKeysOf lists every book_file secondary index key (hash, path, PID,
+// AcoustID) whose value names fileID. After a delete there must be none: a key
+// left behind points at a row that no longer exists.
+func secondaryKeysOf(t *testing.T, s *PebbleStore, fileID string) []string {
+	t.Helper()
+	var out []string
+	for _, prefix := range []string{"book_file_hash:", "book_file_path:", "book_file_pid:", "book_file_acoustid:"} {
+		iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: []byte(prefix), UpperBound: prefixEnd([]byte(prefix))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for ok := iter.First(); ok; ok = iter.Next() {
+			if strings.Contains(string(iter.Value()), fileID) {
+				out = append(out, string(iter.Key()))
+			}
+		}
+		if err := iter.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out
+}
+
+// The deletes derive their index deletes from the row they read. A batch upsert
+// takes no file stripe, so it can replace the row's hash and path between that
+// read and the commit; a delete that only checked the row still EXISTS would
+// delete the old value's keys and leave the new value's pointing at nothing.
+// Each case here is one injected rewrite; every delete path must notice, re-read
+// and finish with no index key naming the row.
+func TestCAS_Deletes_FollowARowChangedBetweenReadAndCommit(t *testing.T) {
+	rewrites := map[string]func(f *casFixture, t *testing.T){
+		"new hash": func(f *casFixture, t *testing.T) { f.upsertScan(t, "gotham-hash-rewritten", 250, 2500) },
+		"new path": func(f *casFixture, t *testing.T) {
+			err := f.s.BatchUpsertBookFiles([]*BookFile{{ID: f.file.ID, BookID: f.book.ID,
+				FilePath: "/lib/Gotham/Batman-Year-One/renamed.m4b", FileHash: "gotham-hash-renamed"}})
+			if err != nil {
+				t.Errorf("injected BatchUpsertBookFiles: %v", err)
+			}
+		},
+	}
+	deletes := map[string]func(f *casFixture) error{
+		"DeleteBookFile":         func(f *casFixture) error { return f.s.DeleteBookFile(f.file.ID) },
+		"DeleteBookFilesForBook": func(f *casFixture) error { return f.s.DeleteBookFilesForBook(f.book.ID) },
+		"DeleteBookFilesByIDs":   func(f *casFixture) error { return f.s.DeleteBookFilesByIDs([]string{f.file.ID}) },
+	}
+	for rname, rewrite := range rewrites {
+		for dname, del := range deletes {
+			t.Run(dname+"/"+rname, func(t *testing.T) {
+				f := newCASFixture(t)
+				n := injectBeforeCommit(t, 1, func(int) { rewrite(f, t) })
+
+				if err := del(f); err != nil {
+					t.Fatalf("%s: %v", dname, err)
+				}
+				if *n != 1 {
+					t.Fatalf("the concurrent rewrite ran %d times, want 1", *n)
+				}
+				if got, err := f.s.GetBookFileByID(f.book.ID, f.file.ID); err != nil || got != nil {
+					t.Errorf("row survived the delete: row=%+v err=%v", got, err)
+				}
+				if keys := secondaryKeysOf(t, f.s, f.file.ID); len(keys) > 0 {
+					t.Errorf("index keys left naming the deleted row: %v", keys)
+				}
+			})
+		}
+	}
+}
+
+// A delete-all whose rows keep changing under it gives up after the whole-batch
+// budget, deleting nothing, and says so with a conflict the caller can count.
+func TestCAS_DeleteBookFilesForBook_GivesUpUnderRotatingChurn(t *testing.T) {
+	f := newCASFixture(t)
+	n := injectBeforeCommit(t, 0, func(i int) { f.upsertScan(t, fmt.Sprintf("gotham-churn-%02d", i), 100+i, 1000) })
+
+	err := f.s.DeleteBookFilesForBook(f.book.ID)
+	if !errors.Is(err, ErrBookFileConflict) {
+		t.Fatalf("err = %v, want ErrBookFileConflict", err)
+	}
+	if *n != maxBatchStageRounds {
+		t.Errorf("staging rounds = %d, want the budget of %d", *n, maxBatchStageRounds)
+	}
+	if got := f.row(t); got.FilePath != casPath {
+		t.Errorf("the abandoned delete changed the row: %+v", got)
+	}
+	if ref := f.indexRef(t, fmt.Sprintf("book_file_hash:gotham-churn-%02d", maxBatchStageRounds)); ref != f.ref() {
+		t.Errorf("the surviving row lost its index key: %q", ref)
 	}
 }

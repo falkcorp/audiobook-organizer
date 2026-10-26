@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: d40d1916-5ea7-4ce8-9fb6-fab9d3d56026
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -381,58 +381,42 @@ func (s *PebbleStore) lockWindowRefs(refs ...FingerprintWindowRef) func() {
 	}
 }
 
-// commitWithWindowCascade stages the window cascade of files into batch and
-// commits it, holding those files' window stripes across stage AND commit and
-// releasing them before returning. The three book_file delete paths use it.
-// On error the batch is closed.
-// commitWithWindowCascadeIfPresent is commitWithWindowCascade for the delete
-// of ONE book_file row: under the window-ref locks and then the row's owner
-// stripe (innermost), it re-checks that key is still committed and returns
-// errBookFileRowVanished — applying nothing — when it is not (the row was
-// moved or deleted after it was read). The fsync runs after the owner stripe
-// is released (book_delete_owns_files.go).
-func (s *PebbleStore) commitWithWindowCascadeIfPresent(batch *GatedBatch, f *BookFile, key []byte) error {
-	unlockWin := s.lockWindowRefs(FileWindowRef(f.ID))
-	defer unlockWin()
-	if err := s.stageFileWindowCascade(batch, f); err != nil {
-		batch.Close()
-		return err
-	}
-	unlockOwner := s.lockBookOwners(f.BookID)
-	_, closer, err := s.db.Get(key)
-	if errors.Is(err, pebble.ErrNotFound) {
-		unlockOwner()
-		batch.Close()
-		return errBookFileRowVanished
-	}
-	if err != nil {
-		unlockOwner()
-		batch.Close()
-		return err
-	}
-	_ = closer.Close()
-	err = batch.Commit(pebble.NoSync)
-	unlockOwner()
-	if err != nil {
-		return err
-	}
-	return s.syncBookFileWAL()
-}
-
-func (s *PebbleStore) commitWithWindowCascade(batch *GatedBatch, files ...*BookFile) error {
-	refs := make([]FingerprintWindowRef, 0, len(files))
-	for _, f := range files {
-		if f != nil && f.ID != "" {
+// commitDeleteWithWindowCascade stages the window cascade of rows into batch and
+// commits it: the commit of every book_file delete path. rows are the rows the
+// batch deletes, decoded from the stored bytes raws[i] (same index) it staged
+// its index deletes from.
+//
+// Under the rows' window stripes (outer) and then their books' owner stripes
+// (innermost, commitBookFileBatch), it requires every row to still hold exactly
+// the bytes it was read as. A delete derives its index deletes from the row it
+// read (book_file_hash:<hash>, book_file_path:<crc>, book_file_pid:,
+// book_file_acoustid:), so a row a writer without a file stripe changed in
+// between (a batch upsert moving it to another hash or path) would be deleted
+// while the keys of its NEW value stayed behind, pointing at a row that is no
+// longer there. Existence alone, which is all this checked for a single row
+// before, does not rule that out. A row that vanished or changed returns
+// errBookFileRowVanished and applies nothing; the caller re-reads and re-stages.
+//
+// The WAL fsync runs after the owner stripes are released
+// (commitBookFileBatch); the window stripes are held across it. A nil or
+// ErrBookFileDurabilityUnknown result means the batch was applied
+// (bookFileApplied). On any other error the batch is closed.
+func (s *PebbleStore) commitDeleteWithWindowCascade(batch *GatedBatch, rows []*BookFile, raws [][]byte) error {
+	refs := make([]FingerprintWindowRef, 0, len(rows))
+	rewrites := make([]bookFileRewrite, 0, len(rows))
+	for i, f := range rows {
+		if f.ID != "" {
 			refs = append(refs, FileWindowRef(f.ID))
 		}
+		rewrites = append(rewrites, bookFileUnchanged(bookFileKey(f.BookID, f.ID), raws[i]))
 	}
 	unlock := s.lockWindowRefs(refs...)
 	defer unlock()
-	if err := s.stageFileWindowCascade(batch, files...); err != nil {
+	if err := s.stageFileWindowCascade(batch, rows...); err != nil {
 		batch.Close()
 		return err
 	}
-	return batch.Commit(pebble.Sync)
+	return s.commitBookFileBatch(batch, nil, nil, rewrites)
 }
 
 // stageFingerprintWindowDeletes stages a point delete for every stored window of
@@ -472,7 +456,7 @@ func (s *PebbleStore) stageFingerprintWindowDeletes(batch *GatedBatch, ref Finge
 
 // stageFileWindowCascade is the delete cascade for book_file rows: it stages
 // the windows of every file in files into batch. The caller holds their
-// window stripes (commitWithWindowCascade).
+// window stripes (commitDeleteWithWindowCascade).
 func (s *PebbleStore) stageFileWindowCascade(batch *GatedBatch, files ...*BookFile) error {
 	for _, f := range files {
 		if f == nil || f.ID == "" {

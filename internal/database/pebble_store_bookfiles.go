@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.47.2
+// version: 1.47.3
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-26
 
@@ -1597,49 +1597,74 @@ func (s *PebbleStore) deleteBookFileFrom(id string, found *BookFile) error {
 
 // deleteBookFileAt deletes the book_file row at the location found names,
 // with its secondary indexes and fingerprint-window cascade.
+//
+// found only names the key: commitBookFileDeletes reads the row again and
+// derives its index deletes from THAT read.
 func (s *PebbleStore) deleteBookFileAt(found *BookFile) error {
-	id := found.ID
-	if found.Retired {
-		return fmt.Errorf("delete book_file %s: %w", id, ErrBookFileRetired)
-	}
-	batch := s.db.NewIndexedBatch()
-
-	// Delete primary key, and tombstone the ID (bookFileGoneKey).
-	primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", found.BookID, found.ID))
-	if err := batch.Delete(primaryKey, nil); err != nil {
-		batch.Close()
-		return err
-	}
-	if err := stageBookFileTombstone(batch, found.ID); err != nil {
-		batch.Close()
-		return err
-	}
-
-	// Delete secondary indexes.
-	if err := s.deleteBookFileSecondaryIndexes(batch, found); err != nil {
-		batch.Close()
-		return err
-	}
-
-	// Cascade the row's fingerprint windows in the same batch and commit
-	// (pebble_store_fpwin.go). The file's window stripe is held across stage and
-	// commit so a concurrent window write cannot land between them and orphan
-	// itself; it is released before the post-commit work below.
-	// Commit under the row's owner stripe after re-checking its key, so a
-	// concurrent move (which re-checks the same key under the same stripe)
-	// and this delete are ordered: whichever commits second sees the other.
-	// The stripe is innermost, inside the window-ref locks.
-	durErr := s.commitWithWindowCascadeIfPresent(batch, found, primaryKey)
+	rows, durErr := s.commitBookFileDeletes([]*BookFile{found})
 	if !bookFileApplied(durErr) {
 		return durErr
 	}
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "delete_book_file")
-	s.DeleteBookFileFromMemDB(id)
+	s.DeleteBookFileFromMemDB(rows[0].ID)
 	// Recompute book-level Duration/FileSize aggregates now that a file was removed.
 	// Best-effort: the file delete already committed; don't fail on aggregate errors.
-	s.notifyBookFileChange(found.BookID)
+	s.notifyBookFileChange(rows[0].BookID)
 	return durErr
+}
+
+// commitBookFileDeletes deletes the book_file rows named by named (only their
+// book and id are used), with their secondary indexes, id tombstones and
+// fingerprint-window cascade, in ONE batch. It is the shared core of every
+// book_file delete path.
+//
+// Each row is read again here, and its index deletes are derived from THAT
+// read, whose stored bytes the commit then compares
+// (commitDeleteWithWindowCascade). Deriving them from the caller's earlier,
+// unlocked read would delete the keys of a value a concurrent batch upsert has
+// since replaced and leave the keys of the new one behind, pointing at a row
+// that is gone. A row that moved, vanished or changed since it was read returns
+// errBookFileRowVanished with nothing applied (the caller re-resolves and tries
+// again); a retired row returns ErrBookFileRetired. It returns the rows as
+// deleted, valid when bookFileApplied(err).
+func (s *PebbleStore) commitBookFileDeletes(named []*BookFile) ([]*BookFile, error) {
+	rows := make([]*BookFile, 0, len(named))
+	raws := make([][]byte, 0, len(named))
+	for _, n := range named {
+		row, raw, err := s.readBookFileRowAt(bookFileKey(n.BookID, n.ID))
+		if err != nil {
+			return nil, fmt.Errorf("delete book_file %s: read row: %w", n.ID, err)
+		}
+		if row == nil {
+			return nil, errBookFileRowVanished // moved or deleted since it was named
+		}
+		if row.Retired {
+			return nil, fmt.Errorf("delete book_file %s: %w", n.ID, ErrBookFileRetired)
+		}
+		rows, raws = append(rows, row), append(raws, raw)
+	}
+	batch := s.db.NewIndexedBatch()
+	for _, f := range rows {
+		// Delete the primary key, and tombstone the ID (bookFileGoneKey).
+		if err := batch.Delete(bookFileKey(f.BookID, f.ID), nil); err != nil {
+			batch.Close()
+			return nil, err
+		}
+		if err := stageBookFileTombstone(batch, f.ID); err != nil {
+			batch.Close()
+			return nil, err
+		}
+		if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	}
+	// The window cascade joins the same batch, under the rows' window stripes
+	// (held across stage and commit so a concurrent window write cannot land
+	// between them and orphan itself), and the commit re-checks the rows under
+	// their owner stripes, innermost.
+	return rows, s.commitDeleteWithWindowCascade(batch, rows, raws)
 }
 
 // DeleteBookFilesForBook removes all BookFile records for a given bookID,
@@ -1648,46 +1673,40 @@ func (s *PebbleStore) deleteBookFileAt(found *BookFile) error {
 // It refuses (ErrBookFileRetired, nothing deleted) a book that holds a retired
 // row: those rows are held by a retired version and are never deleted, so a
 // "delete every file of this book" that left them behind would not be that.
+//
+// The rows are read again under the commit's compare (commitBookFileDeletes): a
+// row that moved or changed since the list was read re-lists and re-stages the
+// whole delete (restageBookFileBatch), and after maxBatchStageRounds of that it
+// gives up with an error wrapping ErrBookFileConflict, deleting nothing.
 func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
-	files, err := s.bookFilesForBook(bookID, bookFilesAll)
-	if err != nil {
+	var deleted []*BookFile
+	err := restageBookFileBatch("DeleteBookFilesForBook "+bookID, func() error {
+		files, err := s.bookFilesForBook(bookID, bookFilesAll)
+		if err != nil {
+			return err
+		}
+		for i := range files {
+			if files[i].Retired {
+				return fmt.Errorf("delete book_files of %s: %s: %w", bookID, files[i].ID, ErrBookFileRetired)
+			}
+		}
+		named := make([]*BookFile, 0, len(files))
+		for i := range files {
+			named = append(named, &files[i])
+		}
+		deleted = nil
+		if len(named) == 0 {
+			return nil
+		}
+		var derr error
+		deleted, derr = s.commitBookFileDeletes(named)
+		return derr
+	})
+	if !bookFileApplied(err) {
 		return err
 	}
-	for i := range files {
-		if files[i].Retired {
-			return fmt.Errorf("delete book_files of %s: %s: %w", bookID, files[i].ID, ErrBookFileRetired)
-		}
-	}
-	if len(files) == 0 {
+	if len(deleted) == 0 {
 		return nil
-	}
-
-	batch := s.db.NewIndexedBatch()
-
-	for i := range files {
-		f := &files[i]
-		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
-		if err := batch.Delete(primaryKey, nil); err != nil {
-			batch.Close()
-			return err
-		}
-		if err := stageBookFileTombstone(batch, f.ID); err != nil {
-			batch.Close()
-			return err
-		}
-		if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
-			batch.Close()
-			return err
-		}
-	}
-
-	// Fingerprint-window cascade, same batch; see DeleteBookFile.
-	cascade := make([]*BookFile, 0, len(files))
-	for i := range files {
-		cascade = append(cascade, &files[i])
-	}
-	if err := s.commitWithWindowCascade(batch, cascade...); err != nil {
-		return err
 	}
 	// Derived state, mirroring DeleteBookFilesByIDs' pass 3 exactly. Until
 	// 2026-08-14 this method skipped the memdb delete and the quick-query
@@ -1698,9 +1717,9 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	// would have been mis-diagnosed as it.
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "delete_book_files_for_book")
-	fileIDs := make([]string, 0, len(files))
-	for i := range files {
-		fileIDs = append(fileIDs, files[i].ID)
+	fileIDs := make([]string, 0, len(deleted))
+	for _, f := range deleted {
+		fileIDs = append(fileIDs, f.ID)
 	}
 	s.DeleteBookFilesFromMemDB(fileIDs)
 	// Recompute book-level aggregates after bulk-deleting all files for this book.
@@ -1715,7 +1734,7 @@ func (s *PebbleStore) DeleteBookFilesForBook(bookID string) error {
 	// claimed the book "likely has Duration=0 after deletion, which is correct" —
 	// the opposite of what the code does, and believable enough to plan against.
 	s.notifyBookFileChange(bookID)
-	return nil
+	return err // nil, or only the fsync failed (ErrBookFileDurabilityUnknown)
 }
 
 // DeleteBookFilesByIDs removes many BookFile rows (and their secondary indexes)
@@ -1803,89 +1822,88 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 		return nil
 	}
 
-	// ── Pass 1: resolve everything. No mutation happens in this loop. ──
-	seen := make(map[string]struct{}, len(ids))
-	resolved := make([]*BookFile, 0, len(ids))
-	resolvedIDs := make([]string, 0, len(ids))
-	// Affected books in first-seen order, so notification order is deterministic
-	// and a test can assert on it.
+	var resolved []*BookFile
 	var affectedBooks []string
-	bookSeen := make(map[string]struct{})
-	var unresolved []string
+	// Passes 1 and 2 run as one attempt that restageBookFileBatch re-runs, from a
+	// fresh resolution, when pass 2's commit finds a row moved or changed since
+	// pass 1 read it (commitBookFileDeletes). A re-run that no longer resolves an
+	// id (someone else deleted it meanwhile) fails closed like any unresolvable
+	// id, deleting nothing.
+	err := restageBookFileBatch("DeleteBookFilesByIDs", func() error {
+		resolved, affectedBooks = nil, nil
+		// ── Pass 1: resolve everything. No mutation happens in this loop. ──
+		seen := make(map[string]struct{}, len(ids))
+		// Affected books in first-seen order, so notification order is deterministic
+		// and a test can assert on it.
+		bookSeen := make(map[string]struct{})
+		var unresolved []string
 
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		if _, dup := seen[id]; dup {
-			// A duplicate ID in the input would otherwise queue the same key for
-			// deletion twice. Harmless in Pebble, but it would also double-count
-			// the row, so drop it here.
-			continue
-		}
-		seen[id] = struct{}{}
+		for _, id := range ids {
+			if id == "" {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				// A duplicate ID in the input would otherwise queue the same key for
+				// deletion twice. Harmless in Pebble, but it would also double-count
+				// the row, so drop it here.
+				continue
+			}
+			seen[id] = struct{}{}
 
-		found := s.lookupBookFileByIDIndex(id)
-		if found == nil {
-			var err error
-			if found, err = s.scanForBookFileByID(id); err != nil {
-				return fmt.Errorf("DeleteBookFilesByIDs: %w", err)
+			found := s.lookupBookFileByIDIndex(id)
+			if found == nil {
+				var err error
+				if found, err = s.scanForBookFileByID(id); err != nil {
+					return fmt.Errorf("DeleteBookFilesByIDs: %w", err)
+				}
+			}
+			if found == nil {
+				unresolved = append(unresolved, id)
+				continue
+			}
+
+			if found.Retired {
+				// Fail closed before any mutation, like an unresolvable id: the
+				// caller's view of this row is wrong.
+				return fmt.Errorf("DeleteBookFilesByIDs: %s: %w", id, ErrBookFileRetired)
+			}
+			resolved = append(resolved, found)
+			if _, ok := bookSeen[found.BookID]; !ok {
+				bookSeen[found.BookID] = struct{}{}
+				affectedBooks = append(affectedBooks, found.BookID)
 			}
 		}
-		if found == nil {
-			unresolved = append(unresolved, id)
-			continue
+
+		if len(unresolved) > 0 {
+			// Name the offenders, but cap the list — a caller that hands us 500 stale
+			// IDs should not produce a 500-item error string in the op log.
+			shown := unresolved
+			suffix := ""
+			if len(shown) > 10 {
+				shown = shown[:10]
+				suffix = fmt.Sprintf(" (+%d more)", len(unresolved)-10)
+			}
+			return fmt.Errorf("DeleteBookFilesByIDs: %d of %d book_file id(s) did not resolve, nothing deleted: %s%s",
+				len(unresolved), len(ids), strings.Join(shown, ", "), suffix)
+		}
+		if len(resolved) == 0 {
+			return nil
 		}
 
-		if found.Retired {
-			// Fail closed before any mutation, like an unresolvable id: the
-			// caller's view of this row is wrong.
-			return fmt.Errorf("DeleteBookFilesByIDs: %s: %w", id, ErrBookFileRetired)
-		}
-		resolved = append(resolved, found)
-		resolvedIDs = append(resolvedIDs, id)
-		if _, ok := bookSeen[found.BookID]; !ok {
-			bookSeen[found.BookID] = struct{}{}
-			affectedBooks = append(affectedBooks, found.BookID)
-		}
-	}
-
-	if len(unresolved) > 0 {
-		// Name the offenders, but cap the list — a caller that hands us 500 stale
-		// IDs should not produce a 500-item error string in the op log.
-		shown := unresolved
-		suffix := ""
-		if len(shown) > 10 {
-			shown = shown[:10]
-			suffix = fmt.Sprintf(" (+%d more)", len(unresolved)-10)
-		}
-		return fmt.Errorf("DeleteBookFilesByIDs: %d of %d book_file id(s) did not resolve, nothing deleted: %s%s",
-			len(unresolved), len(ids), strings.Join(shown, ", "), suffix)
+		// ── Pass 2: one batch, one commit. ──
+		var derr error
+		resolved, derr = s.commitBookFileDeletes(resolved)
+		return derr
+	})
+	if !bookFileApplied(err) {
+		return err
 	}
 	if len(resolved) == 0 {
 		return nil
 	}
-
-	// ── Pass 2: one batch, one Sync commit. ──
-	batch := s.db.NewIndexedBatch()
+	resolvedIDs := make([]string, 0, len(resolved))
 	for _, f := range resolved {
-		primaryKey := []byte(fmt.Sprintf("book_file:%s:%s", f.BookID, f.ID))
-		if err := batch.Delete(primaryKey, nil); err != nil {
-			batch.Close()
-			return err
-		}
-		if err := stageBookFileTombstone(batch, f.ID); err != nil {
-			batch.Close()
-			return err
-		}
-		if err := s.deleteBookFileSecondaryIndexes(batch, f); err != nil {
-			batch.Close()
-			return err
-		}
-	}
-	// Fingerprint-window cascade, same batch; see DeleteBookFile.
-	if err := s.commitWithWindowCascade(batch, resolved...); err != nil {
-		return err
+		resolvedIDs = append(resolvedIDs, f.ID)
 	}
 
 	// ── Pass 3: derived state. Everything below is best-effort by design. ──
@@ -1899,7 +1917,7 @@ func (s *PebbleStore) DeleteBookFilesByIDs(ids []string) error {
 	// ONE recompute per affected book, not one per row. This is the actual fix —
 	// everything above is just what makes it safe to do.
 	s.notifyBookFileChanges(affectedBooks)
-	return nil
+	return err // nil, or only the fsync failed (ErrBookFileDurabilityUnknown)
 }
 
 // UpsertBookFile creates or updates a BookFile. Lookup order:
