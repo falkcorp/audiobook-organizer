@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.13.0
+# version: 1.14.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-10-26
 #
@@ -98,60 +98,125 @@ def test_health_advertises_batch_pipeline(srv):
     assert body["status"] == "ok"
 
 
-def test_health_reports_an_opaque_machine_id(srv):
+def _module_without_identity_thread(monkeypatch):
+    """The module loaded as the inference child loads it, so no machine-id
+    thread is running yet: a test patches the sources, then calls
+    start_machine_id() itself."""
+    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py", "--inference-child", "3", "4"])
+    mod = _load_module()
+    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
+    assert mod._machine_id_first is None
+    return mod
+
+
+def _wait_for_machine_id(client, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        mid = client.get("/health").json().get("machine_id")
+        if mid:
+            return mid
+        time.sleep(0.02)
+    raise AssertionError("machine_id never appeared in /health")
+
+
+def test_health_reports_an_opaque_machine_id(monkeypatch):
     """remote.go reads machine_id to tell machines apart: a file's timeout turns
     permanent only on two DIFFERENT machines, and two ports on one box must not
     count twice. It must be a short hex hash (the Go side stores it on the file
-    row and returns it in API responses), never the raw hostname."""
-    import socket
-
-    mod, client = srv
-    mid = client.get("/health").json().get("machine_id")
+    row and returns it in API responses), never the raw name."""
+    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-1")
+    mod = _module_without_identity_thread(monkeypatch)
+    mod.start_machine_id().result(timeout=10)
+    mid = TestClient(mod.app).get("/health").json().get("machine_id")
     assert isinstance(mid, str) and len(mid) == 16
     int(mid, 16)  # hex
-    assert socket.gethostname() not in mid
+    assert "gotham" not in mid
     assert mid == mod.machine_id(), "every process on one machine reports the same id"
 
 
-def test_machine_id_is_computed_once_off_the_event_loop(monkeypatch):
-    """The server process computes its machine id once, on a background thread
-    started at import, so /health never runs ioreg and the identity cannot
-    change mid-life. The inference child (which re-imports the module on every
+def test_the_server_process_starts_the_identity_thread_and_the_child_does_not(monkeypatch):
+    """The server process starts the machine-id thread at import, so /health
+    never runs ioreg. The inference child (which re-imports the module on every
     restart) never starts it."""
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py", "--inference-child", "3", "4"])
-    child = _load_module()
-    assert child._machine_id_future is None, "the inference child must not compute the id"
-
+    assert _load_module()._machine_id_first is None, "the inference child must not compute the id"
     monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
-    mod = _load_module()
-    assert mod._machine_id_future is not None, "the server process starts it at import"
-    first = mod._machine_id_future.result(timeout=10)
+    assert _load_module()._machine_id_first is not None, "the server process starts it at import"
+
+
+def test_a_machine_id_found_on_a_retry_is_reported_and_never_changes(monkeypatch):
+    """SF2 (review 4 of #4182): with no stable source the field is left out and
+    the thread keeps trying. The first id it finds is reported, and the id never
+    changes after, even if a later attempt would find another (a flip would
+    make one Mac two known machines on the Go side)."""
+    mod = _module_without_identity_thread(monkeypatch)
+    answers = [None, None, "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"]
     calls = []
-    monkeypatch.setattr(mod, "machine_id", lambda: calls.append(1) or "ffffffffffffffff")
+
+    def flaky():
+        calls.append(1)
+        return answers[min(len(calls), len(answers)) - 1]
+
+    monkeypatch.setattr(mod, "machine_id", flaky)
+    monkeypatch.setattr(mod, "MACHINE_ID_RETRY_S", 0.01)
+    mod.start_machine_id().result(timeout=10)
     client = TestClient(mod.app)
+    assert _wait_for_machine_id(client) == "aaaaaaaaaaaaaaaa"
+    time.sleep(0.1)
     for _ in range(3):
-        assert client.get("/health").json()["machine_id"] == first
-    assert calls == [], "the id is never recomputed (it would flip if a source came and went)"
+        assert client.get("/health").json()["machine_id"] == "aaaaaaaaaaaaaaaa"
+    assert len(calls) == 3, "the thread stops once an id is found"
 
 
-def test_health_does_not_wait_forever_for_the_machine_id(monkeypatch):
-    """If the id is not ready (ioreg hung), /health answers within
-    MACHINE_ID_WAIT_S without the field rather than blocking, and reports it
-    once it settles."""
-    import concurrent.futures
-
-    monkeypatch.setattr(sys, "argv", ["whisper_mlx_server.py"])
-    mod = _load_module()
-    pending = concurrent.futures.Future()
-    monkeypatch.setattr(mod, "_machine_id_future", pending)
+def test_a_slow_first_attempt_leaves_the_id_out_then_reports_it(monkeypatch):
+    """SF2 and N1: a /health that comes while ioreg is still running answers
+    within MACHINE_ID_WAIT_S without the field (the Go side then uses an
+    unknown-machine id), and reports the id once ioreg answers."""
+    mod = _module_without_identity_thread(monkeypatch)
+    gate = threading.Event()
+    monkeypatch.setattr(mod, "machine_id", lambda: "0123456789abcdef" if gate.wait(10) else None)
     monkeypatch.setattr(mod, "MACHINE_ID_WAIT_S", 0.2)
+    mod.start_machine_id()
     client = TestClient(mod.app)
-    start = time.monotonic()
-    body = client.get("/health").json()
-    assert time.monotonic() - start < 2
-    assert "machine_id" not in body and body["status"] == "ok"
-    pending.set_result("0123456789abcdef")
-    assert client.get("/health").json()["machine_id"] == "0123456789abcdef"
+    try:
+        start = time.monotonic()
+        body = client.get("/health").json()
+        assert time.monotonic() - start < 2
+        assert "machine_id" not in body and body["status"] == "ok"
+    finally:
+        gate.set()
+    assert _wait_for_machine_id(client) == "0123456789abcdef"
+
+
+def test_no_stable_source_gives_no_machine_id_never_the_hostname(monkeypatch, tmp_path):
+    """SF2: only WHISPER_MACHINE_ID, /etc/machine-id and the macOS platform UUID
+    are stable. With none of them (no override, no machine-id file, ioreg timing
+    out) there is no id at all: a hostname-derived id would be reported as a
+    KNOWN machine and could differ between two processes on one Mac."""
+    import hashlib
+    import subprocess as sp
+
+    mod = _module_without_identity_thread(monkeypatch)
+    monkeypatch.delenv("WHISPER_MACHINE_ID", raising=False)
+    monkeypatch.setattr(mod, "MACHINE_ID_FILE", str(tmp_path / "absent"))
+
+    def ioreg_times_out(*args, **kwargs):
+        raise sp.TimeoutExpired(args[0], mod.MACHINE_ID_IOREG_TIMEOUT_S)
+
+    monkeypatch.setattr(mod.subprocess, "run", ioreg_times_out)
+    for platform in ("linux", "darwin"):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert mod.machine_id() is None, platform
+
+    # Each stable source, when present, is what the id is made from.
+    def ioreg_answers(*args, **kwargs):
+        return sp.CompletedProcess(args[0], 0, stdout='  "IOPlatformUUID" = "WAYNE-0001"\n')
+
+    monkeypatch.setattr(mod.subprocess, "run", ioreg_answers)
+    assert mod.machine_id() == hashlib.sha256(b"platform-uuid:WAYNE-0001").hexdigest()[:16]
+    (tmp_path / "machine-id").write_text("batcave0001\n", encoding="ascii")
+    monkeypatch.setattr(mod, "MACHINE_ID_FILE", str(tmp_path / "machine-id"))
+    assert mod.machine_id() == hashlib.sha256(b"machine-id:batcave0001").hexdigest()[:16]
 
 
 def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypatch):
@@ -165,6 +230,29 @@ def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypat
     b = mod.machine_id()
     assert a != b
     assert "gotham" not in a and len(a) == 16
+
+
+def test_health_waits_for_the_filesystem_and_the_machine_id_side_by_side(monkeypatch):
+    """N4 (review 4 of #4182): the filesystem checks and the machine-id wait
+    each have their own deadline, and /health runs them at the same time, so it
+    answers within the longer one, not their sum. Both defaults sit under the
+    Go probe's 3 s."""
+    mod = _module_without_identity_thread(monkeypatch)
+    assert mod.MACHINE_ID_WAIT_S <= mod.HEALTH_PATH_TIMEOUT_S < 3.0
+    gate = threading.Event()
+    monkeypatch.setattr(mod, "machine_id", lambda: "0123456789abcdef" if gate.wait(10) else None)
+    monkeypatch.setattr(mod, "MACHINE_ID_WAIT_S", 1.0)
+    monkeypatch.setattr(mod, "HEALTH_PATH_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(mod, "_blocking_health_fields", lambda: time.sleep(1.5) or {})
+    mod.start_machine_id()
+    try:
+        start = time.monotonic()
+        body = TestClient(mod.app).get("/health").json()
+        elapsed = time.monotonic() - start
+    finally:
+        gate.set()
+    assert "path_health_error" in body and "machine_id" not in body
+    assert elapsed < 1.8, f"/health took {elapsed:.2f}s: the two waits ran one after the other"
 
 
 def test_health_reports_decode_fingerprint(srv):

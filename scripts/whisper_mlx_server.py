@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.13.0
+# version: 1.14.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-10-26
 #
@@ -110,7 +110,6 @@ import posixpath
 import select
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -161,25 +160,35 @@ DECODE_FINGERPRINT = hashlib.sha256(
 # processes on two ports, or two SSH tunnels to the same box), so the client
 # cannot tell machines apart by URL; /health reports machine_id instead. It is a
 # short hash, never the raw name: the Go side stores it on the file row and
-# shows it in API responses, and a hostname or machine UUID has no business
-# there. Every process on one machine reports the same value. Sources, first
-# that answers: WHISPER_MACHINE_ID (an operator override, hashed like the rest),
-# /etc/machine-id (Linux), the macOS IOPlatformUUID, then the hostname (last,
-# because a Mac's hostname can change with the network it joins).
+# shows it in API responses, and a machine UUID has no business there. Every
+# process on one machine reports the same value, and the Go side treats it as a
+# KNOWN machine, so only a source that is the same for every process on the box
+# and across restarts may produce it: WHISPER_MACHINE_ID (an operator override,
+# hashed like the rest), /etc/machine-id (Linux), or the macOS IOPlatformUUID.
+# The hostname is not one (a Mac's hostname can change with the network it
+# joins, and a process that fell back to it while its siblings did not would
+# make one Mac two known machines). With no stable source yet, /health leaves
+# machine_id out and the Go side names the worker by a hash of its URL, an
+# UNKNOWN machine whose strikes never count after a file's first; the
+# background thread keeps trying (ioreg is slowest exactly when a worker
+# restarts under memory pressure).
 
-
-# ioreg is given less time than /health waits for the id (MACHINE_ID_WAIT_S),
-# so the id is always settled, from ioreg or the hostname, by the time the
-# first /health gives up waiting; and both are inside the Go probe's 3 s.
+MACHINE_ID_FILE = "/etc/machine-id"
 MACHINE_ID_IOREG_TIMEOUT_S = 2.0
+# How long a /health waits for the FIRST attempt to finish (the attempt starts
+# at import, so this matters only for a /health in the first seconds of the
+# process). It runs alongside the filesystem checks, so it must stay within
+# HEALTH_PATH_TIMEOUT_S, and both under the Go probe's 3 s.
 MACHINE_ID_WAIT_S = 2.5
+MACHINE_ID_RETRY_S = 30.0
 
 
-def _machine_source() -> str:
+def _stable_machine_source() -> str | None:
+    """The first stable identity source that answers, or None (see above)."""
     override = os.environ.get("WHISPER_MACHINE_ID", "").strip()
     if override:
         return "override:" + override
-    with contextlib.suppress(OSError), open("/etc/machine-id", encoding="ascii") as f:
+    with contextlib.suppress(OSError), open(MACHINE_ID_FILE, encoding="ascii") as f:
         mid = f.read().strip()
         if mid:
             return "machine-id:" + mid
@@ -197,57 +206,95 @@ def _machine_source() -> str:
                     uuid = line.split("=", 1)[1].strip().strip('"')
                     if uuid:
                         return "platform-uuid:" + uuid
-    return "hostname:" + socket.gethostname()
+    return None
 
 
-def machine_id() -> str:
-    """The opaque identity of the machine this worker runs on (see above)."""
-    return hashlib.sha256(_machine_source().encode()).hexdigest()[:16]
+def machine_id() -> str | None:
+    """The opaque identity of the machine this worker runs on, or None when no
+    stable source answers (see WORKER IDENTITY)."""
+    source = _stable_machine_source()
+    if source is None:
+        return None
+    return hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
-_machine_id_future: concurrent.futures.Future | None = None
+# The process's reported id: set once, by the machine-id thread, and never
+# changed after (see _publish_machine_id).
+_machine_id_lock = threading.Lock()
+_machine_id_value: str | None = None
+# Resolved when the machine-id thread's FIRST attempt ends, whatever it found.
+_machine_id_first: concurrent.futures.Future | None = None
+
+
+def _publish_machine_id(mid: str) -> str:
+    """Record the process's id unless one is already recorded, and return the
+    one that stands. The first stable id wins for the life of the process."""
+    global _machine_id_value
+    with _machine_id_lock:
+        if _machine_id_value is None:
+            _machine_id_value = mid
+        return _machine_id_value
+
+
+def current_machine_id() -> str | None:
+    with _machine_id_lock:
+        return _machine_id_value
 
 
 def start_machine_id() -> concurrent.futures.Future:
-    """Compute machine_id() ONCE per server process, on a background thread,
-    and return its future. Called at import by the server process (never by the
-    inference child, which re-imports this module on every restart and has no
-    use for it). Once per process, so the identity can never change mid-life
-    (an ioreg that fails once and succeeds later would otherwise flip the id
-    from the hostname to the platform UUID, and the Go side would see a new
-    machine). Off the event loop, so /health never runs ioreg itself."""
-    global _machine_id_future
-    if _machine_id_future is None:
-        fut: concurrent.futures.Future = concurrent.futures.Future()
+    """Start the machine-id thread once per server process and return the
+    future of its first attempt. Called at import by the server process (never
+    by the inference child, which re-imports this module on every restart and
+    has no use for it). Off the event loop, so /health never runs ioreg itself.
+    The thread tries the stable sources until one answers, every
+    MACHINE_ID_RETRY_S, then publishes that id and stops: the id appears once
+    and never changes."""
+    global _machine_id_first
+    if _machine_id_first is None:
+        first: concurrent.futures.Future = concurrent.futures.Future()
 
         def run() -> None:
-            try:
-                fut.set_result(machine_id())
-            except Exception:  # never leave /health waiting on a failed source
-                fut.set_result(
-                    hashlib.sha256(("hostname:" + socket.gethostname()).encode()).hexdigest()[:16]
-                )
+            warned = False
+            while True:
+                try:
+                    mid = machine_id()
+                except Exception:  # a source that raises is a source that did not answer
+                    log.exception("machine_id source failed")
+                    mid = None
+                if mid:
+                    _publish_machine_id(mid)
+                if not first.done():
+                    first.set_result(None)
+                if mid:
+                    return
+                if not warned:
+                    log.warning(
+                        "no stable machine id yet; /health leaves machine_id out (the server "
+                        "treats this worker as an unknown machine) and it is retried every %.0fs",
+                        MACHINE_ID_RETRY_S,
+                    )
+                    warned = True
+                time.sleep(MACHINE_ID_RETRY_S)
 
         threading.Thread(target=run, name="machine-id", daemon=True).start()
-        _machine_id_future = fut
-    return _machine_id_future
+        _machine_id_first = first
+    return _machine_id_first
 
 
 async def reported_machine_id() -> str | None:
-    """The process's machine id for /health. Normally already computed; right
-    after start it waits for the background thread without blocking the event
-    loop, at most MACHINE_ID_WAIT_S, and answers None (the field is left out)
-    only if that passes."""
-    fut = start_machine_id()
-    if fut.done():
-        return fut.result()
-    try:
-        return await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)), MACHINE_ID_WAIT_S)
-    except asyncio.TimeoutError:
-        log.warning(
-            "machine_id not ready after %.1fs; /health leaves it out this time", MACHINE_ID_WAIT_S
-        )
-        return None
+    """The process's machine id for /health, or None (the field is left out).
+    Right after start it waits for the first attempt without blocking the event
+    loop, at most MACHINE_ID_WAIT_S; after that it never waits."""
+    first = start_machine_id()
+    if not first.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(first)), MACHINE_ID_WAIT_S)
+        except asyncio.TimeoutError:
+            log.warning(
+                "machine_id not ready after %.1fs; /health leaves it out this time",
+                MACHINE_ID_WAIT_S,
+            )
+    return current_machine_id()
 
 
 # Inference is serialized. MLX shares the Mac's unified memory with everything
@@ -1338,6 +1385,21 @@ def _blocking_health_fields() -> dict:
     return {"ffmpeg": shutil.which("ffmpeg"), **_path_health()}
 
 
+async def _bounded_blocking_health_fields() -> dict:
+    """_blocking_health_fields on _health_pool, or the fallback fields once
+    HEALTH_PATH_TIMEOUT_S passes (see _health_pool)."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(_health_pool, _blocking_health_fields), HEALTH_PATH_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        return {
+            **_path_health(probe=False),
+            "path_health_error": "filesystem checks did not answer in time",
+        }
+
+
 @app.get("/health")
 async def health():
     """Health probe.
@@ -1356,19 +1418,13 @@ async def health():
     pointer is non-nil. Reporting the model and backend makes a misconfigured
     worker visible to a health check rather than only to a log line.
     """
-    loop = asyncio.get_running_loop()
-    try:
-        blocking = await asyncio.wait_for(
-            loop.run_in_executor(_health_pool, _blocking_health_fields), HEALTH_PATH_TIMEOUT_S
-        )
-    except asyncio.TimeoutError:
-        blocking = {
-            **_path_health(probe=False),
-            "path_health_error": "filesystem checks did not answer in time",
-        }
+    # The two waits run side by side, so the reply comes within the longer of
+    # them (HEALTH_PATH_TIMEOUT_S), not their sum, and inside the Go probe's 3 s.
+    blocking, machine = await asyncio.gather(
+        _bounded_blocking_health_fields(), reported_machine_id()
+    )
     busy_seconds, busy_limit = _inference.busy()
     child_start_error = _inference.start_error()
-    machine = await reported_machine_id()
     return {
         "status": "ok",
         "model": MODEL_REPO,
@@ -1377,7 +1433,8 @@ async def health():
         "backend": "mlx",
         "decode_fingerprint": DECODE_FINGERPRINT,
         # Which machine this is, as an opaque hash (see WORKER IDENTITY).
-        # Absent only if it was not computed in time (see reported_machine_id).
+        # Absent while no stable source has answered, or before the first
+        # attempt ends (see WORKER IDENTITY and reported_machine_id).
         **({"machine_id": machine} if machine else {}),
         # Inference liveness, read WITHOUT touching _inference_lock (a wedged
         # job holds it). busy_seconds is how long the current clip has been
