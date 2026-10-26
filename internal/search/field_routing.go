@@ -1,5 +1,5 @@
 // file: internal/search/field_routing.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
 // last-edited: 2026-10-25
 
@@ -71,34 +71,15 @@ func IsPerUserField(name string) bool {
 	return ok
 }
 
-// QueryUsesPerUserField reports whether the query text references any per-user
-// field. Text that does not parse reports false: it cannot be evaluated, so it
-// reads no one's state.
-//
-// That is the right answer to "would evaluating this read someone's state?" and
-// the WRONG one to "may a stored member list of this collection be served?": a
-// row whose query stopped parsing (a grammar change, a hand-edited row) can still
-// hold the list its creator's state produced. Every gate that decides whether a
-// stored list may be shown or kept must ask QueryMayUsePerUserField instead.
-func QueryUsesPerUserField(query string) bool {
-	ast, err := ParseQuery(query)
-	if err != nil {
-		return false
-	}
-	for _, name := range FieldNames(ast) {
-		if IsPerUserField(name) {
-			return true
-		}
-	}
-	return false
-}
-
-// QueryMayUsePerUserField is the fail-closed form of QueryUsesPerUserField: it
-// also reports true for text that does not parse, because such a query cannot be
+// QueryMayUsePerUserField reports whether the query text references any per-user
+// field, and answers true for text that does not parse: such a query cannot be
 // shown to reference no per-user field. It is the guard for stored member lists
-// (is this collection evaluated per viewer, is its stored list served or kept):
-// an unparseable query then shows nobody any members and has its stored list
-// cleared, instead of serving whatever list it held when it last parsed.
+// (is this collection evaluated per viewer, is its stored list served or kept): an
+// unparseable query then shows nobody any members and has its stored list cleared,
+// instead of serving whatever list it held when it last parsed (a row whose query
+// stopped parsing, through a grammar change or a hand edit, can still hold the list
+// its creator's state produced). Callers that would evaluate the query get their
+// parse error from the evaluator, so for them "true" never reads anyone's state.
 func QueryMayUsePerUserField(query string) bool {
 	ast, err := ParseQuery(query)
 	if err != nil {
