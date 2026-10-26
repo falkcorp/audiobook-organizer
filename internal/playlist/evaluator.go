@@ -1,5 +1,5 @@
 // file: internal/playlist/evaluator.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
 // last-edited: 2026-10-26
 //
@@ -229,6 +229,12 @@ func evaluate(
 	if strings.TrimSpace(query) != "" {
 		var err error
 		if ast, err = search.ParseQuery(query); err != nil {
+			// A /regex/ holds parentheses and pipes the grammar cannot read
+			// (title:/^(the|a) /): a stored one reads as the regex refusal, not as
+			// a query that did not parse. Not wrapped, like the other term refusals.
+			if rerr := search.UnparsableRegexQuery(query, err, search.IsIndexedField); rerr != nil {
+				return nil, rerr
+			}
 			return nil, &definitionError{fmt.Errorf("parse query: %w", err)}
 		}
 		// A per-user term the per-user pass cannot evaluate as written (an OR

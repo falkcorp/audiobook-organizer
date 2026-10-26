@@ -1,5 +1,5 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.7
+// version: 2.6.8
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
 // last-edited: 2026-10-26
 
@@ -591,6 +591,11 @@ func validatePlaylistCreate(req *PlaylistCreateReq) error {
 func validatePlaylistQuery(query string) error {
 	ast, err := search.ParseQuery(query)
 	if err != nil {
+		// A /regex/ holds parentheses and pipes the grammar cannot read
+		// (title:/^(the|a) /): say what is wrong, not only that it did not parse.
+		if rerr := search.UnparsableRegexQuery(query, err, search.IsIndexedField); rerr != nil {
+			return fmt.Errorf("invalid query: %w", rerr)
+		}
 		return fmt.Errorf("invalid query: %w", err)
 	}
 	if err := search.CheckQueryTerms(ast, time.Now()); err != nil {

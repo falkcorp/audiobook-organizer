@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.8
+// version: 1.38.9
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-26
 
@@ -1320,12 +1320,13 @@ func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, 
 		for _, h := range hits {
 			ids = append(ids, h.BookID)
 		}
-		// Judge every candidate by id, load no book yet: the viewer's rows are read
-		// once (or one point read per id when the store cannot list them), the
-		// candidates that fail the per-user filters go, and only the page that is
-		// left is hydrated. A scope of tens of thousands of books (a system tag, an
-		// author) therefore costs one row scan and one page of books, not a book and
-		// a state row per candidate.
+		// Judge every candidate by id, load no book yet: a small candidate list is
+		// read one state row per id, a larger one (or any on a store that can list)
+		// by one scan of the viewer's rows (see perUserPointReadMax), the candidates
+		// that fail the per-user filters go, and only the page that is left is
+		// hydrated. A scope of tens of thousands of books (a system tag, an author)
+		// therefore costs one row scan and one page of books, not a book and a state
+		// row per candidate.
 		ids, err = svc.idsMatchingPerUser(ctx, userID, ids, perUser, now)
 		if err != nil {
 			return nil, 0, err
@@ -1432,10 +1433,20 @@ const perUserPointReadMax = 256
 // until someone looks. A library search is an interactive filter the viewer reads at
 // once and can change: failing it would break every per-user search that viewer runs
 // until the row is repaired, while the damage of an unreadable row is one book
-// judged as unstarted, and the warning names the book. The scan's all-or-nothing
-// failure on one undecodable row is not repeated here as a permanent slow path: the
-// point reads it falls back to cost a few microseconds each, about the cost of the
-// scan itself for the broadest scope, and no book is loaded for them.
+// judged as unstarted, and the warning names the book.
+//
+// The scan is all-or-nothing: one undecodable row fails it. The point reads it falls
+// back to are affordable only for a bounded candidate list. At 2 to 9 microseconds a
+// read, up to postFilterWindow() ids (10,000 by default, the cap on an unscoped
+// search's candidates) is 20 to 90 ms, the order of a scan. A scoped search has no
+// such cap (its window is every id of the scope), so 100,000 ids would be about 0.9 s
+// of reads on every request, against 30 ms for a scan of 20,000 rows, for as long as
+// one row stays undecodable. So the fallback runs only up to postFilterWindow() ids;
+// above it the scan's error is returned (wrapping database.ErrUserBookStateUndecodable,
+// which names the user and the book) and logged, never a wrong or partial answer. The
+// alternative, skipping the bad row inside the scan, would change
+// UserBookStateLister, whose contract (never skip a row) the collection evaluator
+// depends on to fail closed.
 //
 // Only a request that has gone away is an error, and it is checked before the scan
 // and between point reads, so a cancelled request stops reading.
@@ -1450,6 +1461,16 @@ func (svc *AudiobookService) idsMatchingPerUser(ctx context.Context, userID stri
 			var err error
 			rows, err = lister.ListUserBookStates(ctx, userID)
 			if err != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return nil, cerr
+				}
+				if len(ids) > postFilterWindow() {
+					// Too many ids to read one at a time on every request (see the
+					// doc comment): answer the error, and say why.
+					slog.Error("search: bulk per-user state read failed and the candidate list is too long to read one row per book",
+						"candidates", len(ids), "limit", postFilterWindow(), "err", err)
+					return nil, fmt.Errorf("read the viewer's book states: %w", err)
+				}
 				// A cancelled request fails the scan too; the point-read loop below
 				// returns the cancellation before it reads anything.
 				slog.Warn("search: bulk per-user state read failed; reading one row per book",

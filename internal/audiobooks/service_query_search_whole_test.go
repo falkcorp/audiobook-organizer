@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query_search_whole_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8b4e1f27-3a96-4c05-b7d2-6e0a9c5f1d38
 // last-edited: 2026-10-26
 
@@ -568,6 +568,43 @@ func TestIdsMatchingPerUser_AFailedScanFallsBackToPointReads(t *testing.T) {
 	assert.Equal(t, 1, stub.lists, "the scan was tried once")
 	assert.Equal(t, len(ids), stub.points, "then every id was read on its own")
 	assert.Len(t, got, (len(ids)+2)/3)
+}
+
+// N7: the fallback is affordable only for a bounded candidate list. A scoped search has
+// no cap on its candidates, so past postFilterWindow() ids a failed scan is answered
+// with its error (naming the cause), not with a point read per id on every request.
+// Exactly at the window it still falls back.
+func TestIdsMatchingPerUser_AFailedScanOnAHugeScopeIsAnErrorNotAThousandPointReads(t *testing.T) {
+	restore := SetSearchPostFilterWindowForTesting(400)
+	t.Cleanup(restore)
+	scanErr := fmt.Errorf("%w: alice/b0007: bad json", database.ErrUserBookStateUndecodable)
+
+	t.Run("one above the window", func(t *testing.T) {
+		ids, fin := stubIDs(401)
+		stub := &stateStub{finished: fin, listErr: scanErr}
+		_, err := NewAudiobookService(stub).idsMatchingPerUser(context.Background(), "alice", ids, finishedFilters(t), time.Now())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, database.ErrUserBookStateUndecodable)
+		assert.Equal(t, 1, stub.lists)
+		assert.Zero(t, stub.points, "no slow path of one read per id")
+	})
+	t.Run("exactly the window still falls back", func(t *testing.T) {
+		ids, fin := stubIDs(400)
+		stub := &stateStub{finished: fin, listErr: scanErr}
+		got, err := NewAudiobookService(stub).idsMatchingPerUser(context.Background(), "alice", ids, finishedFilters(t), time.Now())
+		require.NoError(t, err)
+		assert.Equal(t, 400, stub.points)
+		assert.Len(t, got, (400+2)/3)
+	})
+	t.Run("a cancelled request is its own error, not the scan's", func(t *testing.T) {
+		ids, fin := stubIDs(401)
+		ctx, cancel := context.WithCancel(context.Background())
+		stub := &stateStub{finished: fin, listErr: scanErr}
+		stub.onList = cancel
+		_, err := NewAudiobookService(stub).idsMatchingPerUser(ctx, "alice", ids, finishedFilters(t), time.Now())
+		require.ErrorIs(t, err, context.Canceled)
+		assert.NotErrorIs(t, err, database.ErrUserBookStateUndecodable)
+	})
 }
 
 // An unreadable point row is judged as an unstarted book, with a warning, and the

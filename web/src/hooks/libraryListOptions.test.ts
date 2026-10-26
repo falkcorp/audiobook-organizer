@@ -1,5 +1,5 @@
 // file: web/src/hooks/libraryListOptions.test.ts
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8b3e6d12-5f47-4a90-9c1d-2e7a0b4f6c35
 // last-edited: 2026-10-26
 
@@ -232,6 +232,29 @@ describe('a query with boolean structure reaches the server whole', () => {
       }))
     ).toEqual(expected);
   });
+
+  // B1': an operator among free words alone is the server's to read from search=; the
+  // field term beside it stays a filter, as it was on main
+  it.each([
+    ['title:bat NOT robin', 'title', 'bat', 'NOT robin'],
+    ['title:bat Batman (1987)', 'title', 'bat', 'Batman (1987)'],
+    ['title:/^the/ NOT robin', 'title', '/^the/', 'NOT robin'],
+    ['codec:aac NOT dramatized', 'codec', 'aac', 'NOT dramatized'],
+    ['ident:missing NOT batman', 'ident', 'missing', 'NOT batman'],
+  ])(
+    '%s splits: the %s filter stays a filter and the rest is search=',
+    (typed, field, value, rest) => {
+      const parsedSearch = parseSearch(typed);
+      const opts = buildLibraryListOptions({
+        ...base,
+        debouncedSearch: typed,
+        parsedSearch,
+        fieldFilters: listFieldFilters(parsedSearch),
+      });
+      expect(opts.search).toBe(rest);
+      expect(JSON.parse(opts.filters ?? '[]')).toEqual([{ field, value, negated: false }]);
+    }
+  );
 
   it('carries a regex beside a per-user term as filters too', () => {
     const typed = 'read_status:finished title:/^(the|a) /';
