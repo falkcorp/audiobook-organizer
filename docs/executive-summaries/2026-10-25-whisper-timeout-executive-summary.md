@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # One bad audio clip can no longer freeze all the listening helpers
 
@@ -20,7 +20,7 @@ the helpers were "unreachable" and sent the same batch of files to the next
 helper. Each one got stuck on the same file in turn, until all four were busy
 forever and the listening jobs made no progress.
 
-Three things changed:
+Five things changed:
 
 - Each helper now listens inside a separate worker process with a time limit
   (a minute, or four times the length of the clip if that is longer). If the
@@ -33,6 +33,14 @@ Three things changed:
 - A file that times out twice is set aside for good, so neither listening tool
   keeps trying it. It stays set aside until someone asks for a retry or the file
   itself is replaced. A file that timed out only once is tried again next time.
+- A file is blamed at most once per run, and only when the helper really looks
+  healthy. If most of the files in one request time out together, the helper is
+  the problem, not the files, so nothing is held against them and they are tried
+  again later. A file whose listening later succeeds has its earlier strikes
+  wiped.
+- When a request fails part-way, the files the helpers had already finished are
+  kept and saved, and only the unfinished ones are tried again. Before, a single
+  stall threw the finished ones away too.
 
 ## What changed for you
 
@@ -41,6 +49,12 @@ Three things changed:
   treated as unhealthy.
 - Both listening tools keep reporting progress while they wait on a long
   request, so a slow-but-alive request is not mistaken for a hung tool.
+- The tool now watches a long request by asking the helper how long it has been
+  working, rather than waiting a fixed ten minutes. A helper running the older
+  script cannot report that, so for it the old fixed wait still applies.
+- If a helper's worker process cannot start or keeps crashing, the files are
+  left alone ("worker problem") instead of being marked as failed. A worker that
+  crashes on every clip therefore leaves its files waiting until it is fixed.
 - If every helper stays stuck for three batches in a row, the tool stops and
   says so, instead of marking the whole library "not done" one batch at a time.
 - The new "timed out" count appears next to the other outcomes in the listening
