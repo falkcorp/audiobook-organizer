@@ -1,7 +1,7 @@
 // file: internal/server/diagnostics_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-08-22
+// last-edited: 2026-10-26
 
 // diagnostics_ops registers the diagnostics export OperationDef (v2 UOS).
 
@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
@@ -64,6 +66,7 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			// reports real (current, total) pairs, so wrapping it in a second
 			// counter would only let the two disagree.
 			zipPath, genErr := ds.GenerateExport(ctx, p.Category, p.Description,
+				s.diagnosticsExportOptions(opsregistry.ReporterOpID(reporter)),
 				func(current, total int, message string) {
 					_ = reporter.UpdateProgress(current, total, message)
 				})
@@ -84,6 +87,33 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			return nil
 		},
 	})
+}
+
+// diagnosticsExportOptions narrows the export queued as operation opID to what
+// the account that queued it may read (opActorAccess): operations.json leaves
+// out the Repairs runs it may not read, as every operations route does, and
+// blanks the params and result of an operation whose result names users
+// (opaccess.ResultUserDataDefs); logs.json leaves out the lines that name a
+// user and the user-id column. An account that holds users.manage and every
+// fixer's permissions (the admin role) gets the export whole.
+func (s *Server) diagnosticsExportOptions(opID string) diagnostics.ExportOptions {
+	reader := s.opActorAccess(opID)
+	seesUsers := reader.MayReadUserData()
+	return diagnostics.ExportOptions{
+		Operation: func(row database.OperationV2Row) (database.OperationV2Row, bool) {
+			if !reader.MayRead(&row) {
+				return row, false
+			}
+			return reader.WithoutResult(row), true
+		},
+		Log: func(l database.SystemActivityLog) (database.SystemActivityLog, bool) {
+			if seesUsers {
+				return l, true
+			}
+			l.UserID = ""
+			return l, !activity.NamesUserText(l.Message)
+		},
+	}
 }
 
 func init() {

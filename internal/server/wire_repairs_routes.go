@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package server
 
@@ -86,21 +86,58 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // route family cannot be left on a stale or differently built check.
 func (s *Server) repairsOpAccess() *opaccess.Repairs {
 	s.repairsOpAccessOnce.Do(func() {
-		// A nil *repairs.Registry must not become a non-nil interface: the check
-		// then refuses every repairs op rather than calling Get on nil.
-		var fixers opaccess.FixerLookup
-		if s.repairFixers != nil {
-			fixers = s.repairFixers
-		}
-		// The op lookup scopes a journal row journaled before Source stamping by
-		// its op row. Same typed-nil care: no store leaves the check unwired.
-		var ops opaccess.OpLookup
-		if s.store != nil {
-			ops = s.Ops()
-		}
-		s.repairsOpAccessCheck = opaccess.NewRepairs(fixers, ops, s.permHolds())
+		s.repairsOpAccessCheck = s.newRepairsOpAccess(s.permHolds())
 	})
 	return s.repairsOpAccessCheck
+}
+
+// newRepairsOpAccess builds the opaccess check over this server's fixers and
+// store for a given way of answering "does the caller hold p". repairsOpAccess
+// passes the request's own (permHolds); a job that runs after its request is
+// gone (the diagnostics export) passes the permissions of the account that
+// queued it (opActorAccess).
+func (s *Server) newRepairsOpAccess(holds func(c *gin.Context, p auth.Permission) bool) *opaccess.Repairs {
+	// A nil *repairs.Registry must not become a non-nil interface: the check
+	// then refuses every repairs op rather than calling Get on nil.
+	var fixers opaccess.FixerLookup
+	if s.repairFixers != nil {
+		fixers = s.repairFixers
+	}
+	// The op lookup scopes a journal row journaled before Source stamping by
+	// its op row. Same typed-nil care: no store leaves the check unwired.
+	var ops opaccess.OpLookup
+	if s.store != nil {
+		ops = s.Ops()
+	}
+	return opaccess.NewRepairs(fixers, ops, holds)
+}
+
+// opActorAccess is the opaccess reader for the account that queued operation
+// opID, for a job that runs after its request is gone. It reads what the
+// account holds now, from the actor stamped on the op row, never from the
+// job's params: params can be set by any caller of the generic start routes,
+// the stamped actor cannot. It fails closed: an op with no actor (started
+// through a route that does not stamp one), an actor that no longer exists or
+// holds no role, or a store failure, holds nothing, so every Repairs op and
+// every user-data result is refused. Auth disabled, and a first run with no
+// users yet, hold everything, as permHolds does.
+func (s *Server) opActorAccess(opID string) *opaccess.Reader {
+	if !config.AppConfig.EnableAuth {
+		return s.newRepairsOpAccess(func(*gin.Context, auth.Permission) bool { return true }).For(nil)
+	}
+	store := s.storeForWiring()
+	held := map[auth.Permission]bool{}
+	if n, err := store.CountUsers(); err == nil && n == 0 {
+		return s.newRepairsOpAccess(func(*gin.Context, auth.Permission) bool { return true }).For(nil)
+	}
+	if row, err := store.GetOperationV2(opID); err == nil && row != nil && row.ActorUserID != nil {
+		if user, err := store.GetUserByID(*row.ActorUserID); err == nil && user != nil {
+			for _, p := range servermiddleware.EffectivePermissionsFor(store, user) {
+				held[p] = true
+			}
+		}
+	}
+	return s.newRepairsOpAccess(func(_ *gin.Context, p auth.Permission) bool { return held[p] }).For(nil)
 }
 
 // othersUserDataAccess reports whether the request's caller may read other

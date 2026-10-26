@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
@@ -310,7 +311,16 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 	// Return the id EnqueueOp minted. The client polls this against
 	// GET /operations/v2/:id and passes it back to DownloadExport, so it has to
 	// be the v2 run's own id — a separately-minted legacy id resolves at neither.
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params)
+	//
+	// The caller is stamped on the op as its actor: the export runs after this
+	// request is gone and narrows its operation rows and log lines to what that
+	// account may read (server.diagnosticsExportOptions), re-read from the op
+	// row rather than taken from params, which a generic start can set.
+	var opts []opsregistry.EnqueueOption
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok && u != nil {
+		opts = append(opts, opsregistry.WithActor(u.ID), opsregistry.WithActorAuthMethod(string(auth.MethodFromContext(c.Request.Context()))))
+	}
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params, opts...)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
 		return
