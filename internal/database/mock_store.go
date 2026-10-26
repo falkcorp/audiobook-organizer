@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.154.0
+// version: 1.154.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-25
 
@@ -3555,17 +3555,23 @@ func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) err
 // ModifyBookFiles (BookFileBatchModifier) uses ModifyBookFilesFunc when set;
 // otherwise it applies the mock's ModifyBookFile to each id in turn and reports
 // the ids that were written, so a test that stubs only ModifyBookFile or
-// GetBookFiles/UpdateBookFile still works. It does no aggregate recompute and
-// is not atomic: the once-per-book recompute is a PebbleStore property, tested
-// there.
+// GetBookFiles/UpdateBookFile still works. Like the Pebble implementation it
+// continues past a failing row and returns the joined errors, so a test of a
+// caller's per-row error accounting sees the same shape production gives. It
+// does no aggregate recompute and is not atomic: the once-per-book recompute is
+// a PebbleStore property, tested there.
 func (m *MockStore) ModifyBookFiles(ctx context.Context, bookID string, fileIDs []string, fn func(*BookFile) error) ([]string, error) {
 	if m.ModifyBookFilesFunc != nil {
 		return m.ModifyBookFilesFunc(ctx, bookID, fileIDs, fn)
 	}
-	var changed []string
+	var (
+		changed []string
+		errs    []error
+	)
 	for _, id := range fileIDs {
 		if err := ctx.Err(); err != nil {
-			return changed, err
+			errs = append(errs, err)
+			break
 		}
 		wrote := false
 		if _, err := m.ModifyBookFile(bookID, id, func(row *BookFile) error {
@@ -3575,13 +3581,14 @@ func (m *MockStore) ModifyBookFiles(ctx context.Context, bookID string, fileIDs 
 			wrote = true
 			return nil
 		}); err != nil {
-			return changed, fmt.Errorf("book file %s: %w", id, err)
+			errs = append(errs, fmt.Errorf("book file %s: %w", id, err))
+			continue
 		}
 		if wrote {
 			changed = append(changed, id)
 		}
 	}
-	return changed, nil
+	return changed, errors.Join(errs...)
 }
 
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {

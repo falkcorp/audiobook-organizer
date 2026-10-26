@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.123.0
+// version: 2.124.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package database
 
@@ -1126,6 +1126,19 @@ type BookFile struct {
 	SkipScan                 bool       `json:"skip_scan"` // user-set: exclude file from scans/fingerprinting
 	CreatedAt                time.Time  `json:"created_at"`
 	UpdatedAt                time.Time  `json:"updated_at"`
+	// HashAbsentAt is when backfill-file-hashes last tried to hash this row and
+	// found its file not on disk (ENOENT/ENOTDIR). It exists so that job can stop
+	// retrying a file it already knows is gone; it is deliberately NOT Missing.
+	// Missing means "the bytes are not at this path" to the version-primary
+	// election, the organizer, purge-unknown-author-duplicates, the Broken Files
+	// tile and ~60 other readers, and the consolidation writers also use it as a
+	// superseded-row tombstone, so a mass write of it by a hash job would change
+	// elections and deletions. This field has exactly one reader, that job's
+	// skip decision, and even there it never decides alone: a marked row is
+	// stat'd again every run and hashed the moment the file is back. The library
+	// scanner clears it when its own stat finds the file (bfScanObserved, like
+	// Missing). Nil means never found absent by a hash attempt.
+	HashAbsentAt *time.Time `json:"hash_absent_at,omitempty"`
 	// Deluge integration fields (spec: deluge-protected-paths-design).
 	// DelugeHash is the torrent info-hash (40-char hex string).
 	// DelugeOriginalPath is the file path before copy-into-library.

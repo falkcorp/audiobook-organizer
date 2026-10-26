@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_batch_modify_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8a4c60-b9d1-4375-8f12-6d0a3b7c9e54
 // last-edited: 2026-10-25
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -160,4 +161,67 @@ func TestModifyBookFiles_UnknownIDIgnored(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, changed)
+}
+
+// The hash-absent marker is written and cleared through the same batch call the
+// backfill job uses, and a batch that only touches the marker does not disturb
+// Missing (the superseded/missing flag other readers own).
+func TestModifyBookFiles_HashAbsentMarkerRoundTrip(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	bookID, rows := seedUpdateBookFilesBook(t, s, 3)
+	ids := fileIDsOf(rows)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	changed, err := s.ModifyBookFiles(context.Background(), bookID, ids, func(r *BookFile) error {
+		r.HashAbsentAt = &now
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 3)
+	files, err := s.GetBookFiles(bookID)
+	require.NoError(t, err)
+	for _, f := range files {
+		require.NotNil(t, f.HashAbsentAt, "marker written on %s", f.ID)
+		require.True(t, f.HashAbsentAt.Equal(now))
+		require.False(t, f.Missing, "writing the marker must not set Missing on %s", f.ID)
+	}
+
+	changed, err = s.ModifyBookFiles(context.Background(), bookID, ids, func(r *BookFile) error {
+		r.HashAbsentAt = nil
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, changed, 3)
+	files, err = s.GetBookFiles(bookID)
+	require.NoError(t, err)
+	for _, f := range files {
+		require.Nil(t, f.HashAbsentAt, "marker cleared on %s", f.ID)
+	}
+}
+
+// MockStore.ModifyBookFiles must keep going after a failing row and join the
+// errors, as the Pebble implementation does (a caller's per-row error
+// accounting would otherwise be tested against a different contract).
+func TestMockStoreModifyBookFiles_ContinuesPastRowError(t *testing.T) {
+	boom := errors.New("boom")
+	rows := []BookFile{{ID: "f1", BookID: "b"}, {ID: "f2", BookID: "b"}, {ID: "f3", BookID: "b"}}
+	var written []string
+	m := &MockStore{
+		GetBookFilesFunc: func(string) ([]BookFile, error) { return append([]BookFile(nil), rows...), nil },
+		UpdateBookFileFunc: func(id string, _ *BookFile) error {
+			if id == "f2" {
+				return boom
+			}
+			written = append(written, id)
+			return nil
+		},
+	}
+	changed, err := m.ModifyBookFiles(context.Background(), "b", []string{"f1", "f2", "f3"}, func(r *BookFile) error {
+		now := time.Now()
+		r.HashAbsentAt = &now
+		return nil
+	})
+	require.ErrorIs(t, err, boom)
+	require.Equal(t, []string{"f1", "f3"}, changed)
+	require.Equal(t, []string{"f1", "f3"}, written)
 }

@@ -1,7 +1,7 @@
 // file: internal/database/bookfilecore.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 715f4b68-2d23-4f52-b1dd-1b3d0357a4f6
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package database
 
@@ -88,6 +88,7 @@ type BookFileCore struct {
 	AcoustIDOnlineLookedUpAt  *time.Time `json:"acoustid_online_looked_up_at,omitempty"`
 	OrganizeMethod            string     `json:"organize_method,omitempty"`
 	Missing                   bool       `json:"missing"`
+	HashAbsentAt              *time.Time `json:"hash_absent_at,omitempty"` // see BookFile.HashAbsentAt
 	SkipScan                  bool       `json:"skip_scan"`
 	CreatedAt                 time.Time  `json:"created_at"`
 	UpdatedAt                 time.Time  `json:"updated_at"`
@@ -170,6 +171,7 @@ func (f *BookFile) Core() BookFileCore {
 		AcoustIDOnlineLookedUpAt:       f.AcoustIDOnlineLookedUpAt,
 		OrganizeMethod:                 f.OrganizeMethod,
 		Missing:                        f.Missing,
+		HashAbsentAt:                   f.HashAbsentAt,
 		SkipScan:                       f.SkipScan,
 		CreatedAt:                      f.CreatedAt,
 		UpdatedAt:                      f.UpdatedAt,
@@ -238,6 +240,7 @@ func (c *BookFileCore) AsBookFile() BookFile {
 		AcoustIDOnlineLookedUpAt:       c.AcoustIDOnlineLookedUpAt,
 		OrganizeMethod:                 c.OrganizeMethod,
 		Missing:                        c.Missing,
+		HashAbsentAt:                   c.HashAbsentAt,
 		SkipScan:                       c.SkipScan,
 		CreatedAt:                      c.CreatedAt,
 		UpdatedAt:                      c.UpdatedAt,

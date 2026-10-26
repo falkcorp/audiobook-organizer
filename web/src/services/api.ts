@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.202.0
+// version: 2.203.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -7385,13 +7385,24 @@ export interface BackfillHashesResult {
   failed: number;
 }
 
+/**
+ * Params every one-click "hash the files" button sends to backfill-file-hashes.
+ * mark_absent=false makes the run a pure hash run: a file that is not found is
+ * counted but NOT recorded on its row. Recording absences (hash_absent_at, so
+ * later runs stat the file instead of retrying it) belongs to the
+ * preview-then-apply flow on the Manual Fixes card, which shows the dry-run
+ * counts and writes a per-row report first; a button that applies at once must
+ * not do it.
+ */
+export const HASH_ONLY_BACKFILL_PARAMS = { mark_absent: false } as const;
+
 export async function backfillFileHashes(dryRun = false): Promise<{ operation_id: string }> {
   const response = await apiFetch(
     `${API_BASE}/maintenance/jobs/${encodeURIComponent('backfill-file-hashes')}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dry_run: dryRun }),
+      body: JSON.stringify({ dry_run: dryRun, ...HASH_ONLY_BACKFILL_PARAMS }),
     }
   );
   if (!response.ok) {

@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_content_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3b8e1f52-6c4d-4a97-9e20-7d5b1c8a4f63
-// last-edited: 2026-10-03
+// last-edited: 2026-10-25
 
 package database
 
@@ -90,7 +90,13 @@ func TestBatchUpsertScannedBookFiles_StatSucceededClearsMissing(t *testing.T) {
 	if after.Missing {
 		t.Error("a successful scanner stat must clear Missing")
 	}
-	if ch := changedFields(before, &after, "Missing"); len(ch) > 0 {
+	if before.HashAbsentAt == nil {
+		t.Fatal("seed must carry a HashAbsentAt marker")
+	}
+	if after.HashAbsentAt != nil {
+		t.Error("a successful scanner stat must clear the hash-absent marker too")
+	}
+	if ch := changedFields(before, &after, "Missing", "HashAbsentAt"); len(ch) > 0 {
 		t.Errorf("scanner upsert changed fields it does not own: %v", ch)
 	}
 }
@@ -102,8 +108,12 @@ func TestBatchUpsertScannedBookFiles_StatFailedKeepsMissing(t *testing.T) {
 	if err := s.BatchUpsertScannedBookFiles([]ScannedBookFile{{File: scannerShapedRow(bookID, before.FilePath), Present: false}}); err != nil {
 		t.Fatalf("BatchUpsertScannedBookFiles: %v", err)
 	}
-	if after := onlyBookFile(t, s, bookID); !after.Missing {
+	after := onlyBookFile(t, s, bookID)
+	if !after.Missing {
 		t.Error("a scanned row without a successful stat cleared Missing")
+	}
+	if after.HashAbsentAt == nil {
+		t.Error("a scanned row without a successful stat cleared the hash-absent marker")
 	}
 }
 
@@ -130,6 +140,9 @@ func TestBatchUpsertBookFiles_ITunesShapedRowKeepsMissing(t *testing.T) {
 	if !after.Missing {
 		t.Error("an iTunes-shaped upsert cleared Missing without any disk evidence")
 	}
+	if after.HashAbsentAt == nil {
+		t.Error("an iTunes-shaped upsert cleared the hash-absent marker without any disk evidence")
+	}
 	if after.TranscribeStatus == nil || after.DelugeHash != before.DelugeHash {
 		t.Error("an iTunes-shaped upsert wiped fields it does not own")
 	}
@@ -148,7 +161,7 @@ func TestBatchUpsertScannedBookFiles_SameHashPreservesEverything(t *testing.T) {
 		t.Fatalf("BatchUpsertScannedBookFiles: %v", err)
 	}
 	after := onlyBookFile(t, s, bookID)
-	if ch := changedFields(before, &after, "Missing"); len(ch) > 0 {
+	if ch := changedFields(before, &after, "Missing", "HashAbsentAt"); len(ch) > 0 {
 		t.Errorf("same-hash rescan changed fields: %v", ch)
 	}
 }
@@ -353,7 +366,7 @@ func TestBatchUpsertScannedBookFiles_ChangedHashNoDurationDropsAudio(t *testing.
 		t.Fatalf("BatchUpsertScannedBookFiles: %v", err)
 	}
 	after := onlyBookFile(t, s, bookID)
-	expectAfterChange(t, before, &rowCopy, &after, true, "Missing")
+	expectAfterChange(t, before, &rowCopy, &after, true, "Missing", "HashAbsentAt")
 	if len(after.AcoustIDFingerprint) != 0 || after.IntroTranscription != nil || after.Duration != 0 || after.TranscribeStatus != nil {
 		t.Error("an unverified content change kept the old file's fingerprint, transcript or duration")
 	}
