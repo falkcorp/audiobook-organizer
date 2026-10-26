@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // Endpoint describes one Whisper server in the dispatch pool.
@@ -150,7 +151,8 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	}
 	for _, r := range refused {
 		if r.Stuck {
-			slog.Warn("transcribe: worker stuck, skipping it", "url", r.URL, "label", r.Label, "reason", r.Reason)
+			dispatchLog.Warn("worker stuck, skipping it: url=%s label=%s reason=%s",
+				logger.SanitizeLogValue(r.URL), logger.SanitizeLogValue(r.Label), logger.SanitizeLogValue(r.Reason))
 			continue
 		}
 		slog.Warn("transcribe: endpoint refused by capability requirements", "url", r.URL, "label", r.Label, "reason", r.Reason)
@@ -377,8 +379,8 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 			failed := slices.DeleteFunc(slices.Clone(stuck.Jobs), func(id string) bool { _, ok := remaining[id]; return !ok })
 			slices.Sort(failed)
-			slog.Warn("transcribe: worker stuck, splitting its request and retrying the parts",
-				"url", ep.URL, "after", stuck.After.Round(time.Second).String(), "jobs", len(failed))
+			dispatchLog.Warn("worker stuck, splitting its request and retrying the parts: url=%s after=%s jobs=%d",
+				logger.SanitizeLogValue(ep.URL), stuck.After.Round(time.Second), len(failed))
 			switch {
 			case len(failed) == 1:
 				id := failed[0]
@@ -434,6 +436,10 @@ func allStuck(refused []gpuRefusal) bool {
 // sends one small batch per call (the per-file intro op sends 8 jobs per call)
 // would put every batch on endpoint 0 while the others idle.
 var allocCursor atomic.Uint64
+
+// dispatchLog carries the dispatcher's stuck-worker warnings through the
+// logger package (which sanitizes line breaks), not log/slog directly.
+var dispatchLog = logger.New("transcribe-dispatch")
 
 // endpointFreeSlots is how many request slots url has free right now: its
 // Concurrency (values < 1 mean 1) minus the slots currently held.
