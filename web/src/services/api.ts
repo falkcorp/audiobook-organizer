@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.202.0
+// version: 2.205.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -10,6 +10,7 @@ import type { FilterOptions } from '../types';
 
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { apiFetch } from '../utils/apiFetch';
+import { followOperation } from '../utils/followOperation';
 import { isSettled } from '../generated/ops';
 import type { OperationV2Status } from '../generated/ops';
 import type {
@@ -106,7 +107,9 @@ export interface DeleteBookResponse {
   progress_moved?: boolean;
   // Hard delete of a live book: the copy its listening progress moved to.
   progress_moved_to?: string;
-  // Purge of a trashed book: problems after the book was purged.
+  // Problems that did not stop the delete: after a purge of a trashed book, or
+  // a block_hash request that was NOT honoured (a live book still holds the
+  // hash, or the holders could not be checked) with the reason.
   warnings?: string[];
 }
 
@@ -1503,7 +1506,12 @@ export async function getSoftDeletedBooks(
   limit = 100,
   offset = 0,
   olderThanDays?: number
-): Promise<{ items: Book[]; count: number }> {
+): Promise<{
+  items: Book[];
+  count: number;
+  purgeBreakdown: PurgeBreakdown | null;
+  pendingFileRemovals: number | null;
+}> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -1520,41 +1528,256 @@ export async function getSoftDeletedBooks(
   return {
     items: data.items || [],
     count: data.total ?? data.count ?? (data.items ? data.items.length : 0),
+    // null until a purge or preview has run since the server started.
+    purgeBreakdown: data.purge_breakdown ?? null,
+    // Files an earlier purge pass decided to remove and did not finish. They
+    // are the purge dialog's work even when the trash is empty. null = the
+    // server could not read the journal (unknown, which is not "none").
+    pendingFileRemovals: data.files_pending_from_earlier_pass ?? null,
   };
 }
 
-export async function purgeSoftDeletedBooks(
-  deleteFiles = false,
-  olderThanDays?: number
-): Promise<{
+/**
+ * The trash's purgeable-versus-blocked split as the last purge pass or preview
+ * measured it (GET /audiobooks/soft-deleted `purge_breakdown`). After a real
+ * pass the figures are what REMAINED in the trash.
+ */
+export interface PurgeBreakdown {
+  computed_at: string;
+  /** true when a preview produced it, false when a real pass did */
+  from_preview: boolean;
+  total: number;
+  /** how many a purge would remove now */
+  purgeable: number;
+  /** kept: the book still owns book_file rows */
+  owns_files: number;
+  /** kept: a trashed book an undo journal still needs (combine, operation-ledger soft-delete or auto-merge loser) */
+  undo_possible: number;
+  /** kept: a user has listening state and there is no live version to carry it to */
+  has_listening_state: number;
+  failed: number;
+}
+
+/**
+ * The result of the library.purge-soft-deleted operation (a preview or a real
+ * pass), read from GET /operations/:id/result. The counts are exact; the id
+ * lists are capped and `truncated` says when they were.
+ */
+export interface PurgeResult {
+  dry_run?: boolean;
   attempted: number;
+  /** books removed (always 0 for a preview) */
   purged: number;
+  /** preview only: how many a real pass would purge now */
+  purgeable?: number;
   files_deleted: number;
   skipped_owns_files?: number;
-  // Books holding users' listening progress: carried to a live version and
-  // purged, kept for lack of one, or kept because the carry failed.
-  carried_to_sibling?: number;
+  kept_undo_possible?: number;
   kept_has_progress?: number;
+  carried_to_sibling?: number;
   carry_failed?: number;
+  failed?: number;
+  truncated?: boolean;
+  /**
+   * The operation ended before it decided every book (cancelled, timed out or
+   * failed). The counts are still exact for the books decided so far; the
+   * server stores the result on the operation even then.
+   */
+  stopped_early?: boolean;
+  /** why it stopped: "cancelled", "timed out", or other short text */
+  stop_reason?: string;
+  /**
+   * The instant this pass was bound to (RFC 3339, an opaque string: send it back
+   * unchanged). A preview returns it; the purge started from that preview must
+   * carry it, and then takes no book trashed after it.
+   */
+  trashed_before?: string;
+  /** books trashed after `trashed_before`: left alone, so not in any count above */
+  trashed_after_preview?: number;
+  /** books still inside the retention window (not trashed long enough yet): left alone, counted in `attempted` */
+  not_yet_due?: number;
+  /**
+   * A purge only: books the preview it is bound to showed as kept that have
+   * since become purgeable. Left alone; a new preview lists them.
+   */
+  not_in_preview?: number;
+  /**
+   * Preview only: the files a purge with delete_files would remove from disk
+   * (capped; `files_to_delete_count` is exact). Listed whether or not the
+   * preview was asked for delete_files.
+   */
+  files_to_delete?: string[];
+  files_to_delete_count?: number;
+  /** preview only: files a purge keeps (outside the library, protected, or also named by another book, even one that stays in the trash) */
+  files_kept?: number;
+  /**
+   * Preview only: files an earlier purge decided to remove and never got to (it
+   * crashed or was stopped). A purge with delete_files removes those too, on top
+   * of `files_to_delete`; a purge without it never does.
+   */
+  files_pending_from_earlier_pass?: number;
+  /**
+   * A purge with delete_files: how many of those earlier files it removed. Not
+   * counted in `files_deleted`, which is this purge's own books.
+   */
+  files_replayed?: number;
   errors: string[];
-}> {
+}
+
+/** 202 answer of the purge and preview endpoints: the operation to follow. */
+export interface PurgeOperationHandle {
+  id: string;
+  type: string;
+  status: string;
+  dry_run: boolean;
+}
+
+async function startPurgeOperation(
+  path: string,
+  method: 'DELETE' | 'POST',
+  deleteFiles: boolean,
+  olderThanDays: number | undefined,
+  failure: string,
+  trashedBefore?: string
+): Promise<PurgeOperationHandle> {
   const params = new URLSearchParams({
     delete_files: String(deleteFiles),
   });
   if (olderThanDays && olderThanDays > 0) {
     params.set('older_than_days', String(olderThanDays));
   }
-  const response = await apiFetch(
-    `${API_BASE}/audiobooks/purge-soft-deleted?${params.toString()}`,
-    {
-      method: 'DELETE',
-    }
-  );
+  if (trashedBefore) {
+    params.set('trashed_before', trashedBefore);
+  }
+  const response = await apiFetch(`${API_BASE}${path}?${params.toString()}`, { method });
   if (!response.ok) {
-    throw await buildApiError(response, 'Failed to purge soft-deleted books');
+    throw await buildApiError(response, failure);
   }
   const body = await response.json();
   return body.data;
+}
+
+/**
+ * Starts the purge of the soft-deleted books. The server queues the
+ * library.purge-soft-deleted operation and answers 202 with its id; the purge
+ * runs there. Follow it with awaitPurgeResult. (It used to run inside the
+ * request and return the counts.)
+ *
+ * `trashedBefore` is the `trashed_before` the preview returned, sent back
+ * unchanged: the purge is bound to the books that preview showed and takes none
+ * trashed after it. The server answers 400 without it, so it is required here.
+ */
+export function purgeSoftDeletedBooks(
+  trashedBefore: string,
+  deleteFiles = false,
+  olderThanDays?: number
+): Promise<PurgeOperationHandle> {
+  return startPurgeOperation(
+    '/audiobooks/purge-soft-deleted',
+    'DELETE',
+    deleteFiles,
+    olderThanDays,
+    'Failed to purge soft-deleted books',
+    trashedBefore
+  );
+}
+
+/**
+ * Starts a dry run of the purge: it classifies every trashed book exactly as
+ * the purge would and changes nothing. Follow it with awaitPurgeResult.
+ */
+export function previewPurgeSoftDeleted(
+  deleteFiles = false,
+  olderThanDays?: number
+): Promise<PurgeOperationHandle> {
+  return startPurgeOperation(
+    '/audiobooks/purge-soft-deleted/preview',
+    'POST',
+    deleteFiles,
+    olderThanDays,
+    'Failed to preview the purge'
+  );
+}
+
+/**
+ * Waits for a purge or preview operation and returns its result. `onProgress`
+ * receives the operation's progress message and counts while it runs.
+ *
+ * An operation that ended cancelled, failed or timed out still has a stored
+ * result (exact counts for the books decided so far), so it is fetched here
+ * too and returned with `stopped_early` set (and `stop_reason` filled from the
+ * operation's status when the server did not say). When no result can be
+ * fetched for such an operation, this rejects with an error that says the
+ * outcome is unknown and names the operation. Rejects with an AbortError when
+ * `signal` aborts (the caller went away).
+ */
+export async function awaitPurgeResult(
+  operationId: string,
+  onProgress?: (p: { done: number; total: number; message: string }) => void,
+  opts?: {
+    signal?: AbortSignal;
+    intervalMs?: number;
+    /** Deadline of each poll request; a poll that takes longer counts as a failed poll. */
+    requestTimeoutMs?: number;
+    /**
+     * Opt in to "a failed poll is not a failed purge": instead of rejecting,
+     * keep polling with backoff until the operation ends, calling this once
+     * when contact is first lost. Without it a poll error rejects (the
+     * preview, which has nothing to protect, uses that).
+     */
+    onTrouble?: (error: unknown) => void;
+  }
+): Promise<PurgeResult> {
+  const pollOnce = (signal?: AbortSignal) =>
+    pollOperationV2(
+      operationId,
+      (o) =>
+        onProgress?.({
+          done: o.progress_current ?? 0,
+          total: o.progress_total ?? 0,
+          message: o.progress_message ?? '',
+        }),
+      opts?.intervalMs ?? 1000,
+      { signal, requestTimeoutMs: opts?.requestTimeoutMs }
+    );
+  const op = opts?.onTrouble
+    ? await followOperation(pollOnce, { signal: opts.signal, onTrouble: opts.onTrouble })
+    : await pollOnce(opts?.signal);
+  let stored: unknown = null;
+  let fetchError: unknown = null;
+  try {
+    stored = (await getOperationResult(operationId)).result_data;
+  } catch (e) {
+    fetchError = e;
+  }
+  const hasResult = stored !== null && typeof stored === 'object';
+  if (op.status === 'completed') {
+    if (!hasResult) {
+      throw fetchError instanceof Error
+        ? fetchError
+        : new Error('The purge finished but stored no result.');
+    }
+    return stored as PurgeResult;
+  }
+  if (hasResult) {
+    const r = stored as PurgeResult;
+    return {
+      ...r,
+      stopped_early: true,
+      stop_reason: r.stop_reason || stopReasonOfStatus(op.status, op.error_message),
+    };
+  }
+  throw new Error(
+    `The purge operation ended as ${op.status}${op.error_message ? ` (${op.error_message})` : ''} ` +
+      `and no result was stored, so what it did is unknown. Check operation ${operationId} ` +
+      'in the Operations page to see how far it got.'
+  );
+}
+
+function stopReasonOfStatus(status: string, errorMessage?: string | null): string {
+  if (status === 'cancelled' || status === 'canceled') return 'cancelled';
+  if (status === 'failed') return errorMessage || 'failed';
+  return errorMessage || status;
 }
 
 export async function quarantineBook(bookId: string, reason?: string): Promise<void> {
@@ -2109,26 +2332,19 @@ export async function linkBooks(keepId: string, mergeIds: string[]): Promise<Ope
   return body.data;
 }
 
-export interface CombineBooksResult {
-  primary_id: string;
-  files_moved: number;
-  books_deleted: number;
-  // Combine journal id (GET /merge/combine-journal lists it). POST
-  // /merge/undo/:journal_id, which used to take it, answers 410 Gone
-  // (01-P81h); revert operation_id instead.
-  journal_id?: string;
-  // Undo key: POST /operations/:id/revert with it reverses this combine. The
-  // combine journals its undo pointer under this id (a correlation id of its
-  // own: a manual combine runs in no operation).
-  operation_id?: string;
-  // Set when the combine applied but its undo journal could not be marked
-  // applied. It stays pending and names every step that ran, so reverting
-  // operation_id still replays it.
-  journal_pending?: string;
-  // What the combine did not do that was asked (an override it could not
-  // journal is not applied).
-  warnings?: string[];
-  message?: string;
+/**
+ * What POST /audiobooks/combine answers (202): the queued book-combine
+ * operation. The combine's outcome is the operation's result
+ * (BookCombineOpResult, src/utils/combineOutcome.ts), read with
+ * getOperationResult once the operation ends.
+ */
+export interface CombineBooksStarted {
+  /** the v2 operation id; follow it with pollOperationV2 */
+  id: string;
+  type: string;
+  status: string;
+  detail?: string;
+  created_at?: string;
 }
 
 export interface CombineOverride {
@@ -2137,16 +2353,21 @@ export interface CombineOverride {
   narrator?: string;
 }
 
-// combineBooks combines several single-file books into ONE multi-file book on the
-// survivor (keepId), soft-deleting the absorbed shells (undoable). Distinct from linkBooks,
-// which links them as alternate versions in a version group. Synchronous.
+// combineBooks queues a combine of several single-file books into ONE multi-file
+// book on the survivor (keepId), soft-deleting the absorbed shells (undoable).
+// Distinct from linkBooks, which links them as alternate versions in a version
+// group. It answers 202 with the operation descriptor; the combine runs there
+// (it used to run inside the request and answer 200 with the finished result).
+// Refusals made before queueing are ordinary errors: 400 (empty or repeated
+// ids), 404 (missing book), 409 (a soft-deleted or iTunes-protected book, with
+// the reason in the message).
 // override is optional: non-empty fields overwrite the survivor's metadata after
 // the combine (useful when all source books have per-chapter titles).
 export async function combineBooks(
   keepId: string,
   mergeIds: string[],
   override?: CombineOverride
-): Promise<CombineBooksResult> {
+): Promise<CombineBooksStarted> {
   const response = await apiFetch(`${API_BASE}/audiobooks/combine`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2156,7 +2377,7 @@ export async function combineBooks(
     throw await buildApiError(response, 'Failed to combine books');
   }
   const body = await response.json();
-  return body.data ?? body;
+  return body.data;
 }
 
 // Series
@@ -4611,9 +4832,7 @@ export type ReviewBucket = 'reviewable' | 'unreviewable';
  * caller, so they are not parameters; the page of rows is getReviewPage, and
  * the full-index view of this endpoint is retired (410 Gone, `view=index`).
  */
-export async function getCachedReviewResults(
-  ids: string[]
-): Promise<{
+export async function getCachedReviewResults(ids: string[]): Promise<{
   results: CandidateResult[];
   total_count: number;
   /**
@@ -5741,7 +5960,10 @@ export async function getAIScanResults(id: number, agreement?: string): Promise<
  * marked applied only once its merge succeeded. Refusals are 409 (superseded or
  * unfinished scan, result already applied) and 400 (not a merge, no keep author).
  */
-export async function applyAIScanResults(scanID: number, resultIDs: number[]): Promise<AIScanApplyStarted> {
+export async function applyAIScanResults(
+  scanID: number,
+  resultIDs: number[]
+): Promise<AIScanApplyStarted> {
   const response = await apiFetch(`${API_BASE}/ai/scans/${scanID}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -8060,13 +8282,7 @@ export type RepairRowsFilter =
 // internal/repairs/wire.go (tygo; `make generate-types`), so a renamed json tag
 // is a compile error here rather than a runtime surprise. Aliased to the names
 // the lane already imports.
-export type {
-  RepairApplyResult,
-  RepairRow,
-  RepairRowMember,
-  RepairRowResult,
-  RepairRowsPage,
-};
+export type { RepairApplyResult, RepairRow, RepairRowMember, RepairRowResult, RepairRowsPage };
 
 export interface RepairOpStarted {
   operation_id: string;

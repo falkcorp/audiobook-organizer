@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.60.5
+// version: 1.62.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-18
+// last-edited: 2026-10-25
 
 package merge
 
@@ -595,7 +595,7 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 
 	// Refuse soft-deleted participants. GetBookByID returns soft-deleted rows,
-	// and every stale index in the system (book:hash:, a review candidate
+	// and every stale index in the system (a file-hash index key, a review candidate
 	// written before a manual merge, a queued op) can hand one in. Merging INTO
 	// one produces a group whose primary is a deleted row; merging one AS a
 	// loser into a DIFFERENT group re-routes its external IDs a second time
@@ -832,16 +832,19 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// so a read failure aborts the merge with nothing written. Sorted by group
 	// then book ID so the writes (and Result.MovedSiblings) are deterministic.
 	//
-	// A sibling is a book this merge rewrites, so it gets the same pre-write
-	// guards as a participant: the scan-state refusal (ProvisionalScanError)
-	// and the iTunes-library refusal (GuardITunesProtectedLoaded; its doc
-	// requires it for every book a merge-family entry point mutates). This is
-	// not hypothetical: the organizer puts an iTunes organized_source original
-	// in the same group as its organized copy, so a merge whose loser is that
-	// copy would otherwise rewrite the iTunes row's group and demote it, and a
-	// later ITL rebuild drops non-primary PIDs. Each sibling is re-read with
-	// GetBookByID: GetBooksByVersionGroup may serve a slim projection, and the
-	// guard reads FilePath and the journal records the stored flag.
+	// A sibling is a book this merge rewrites, so it gets the pre-write guard
+	// for a book whose scan state could be provisional (ProvisionalScanError).
+	// It does NOT get the iTunes-library refusal (GuardITunesProtectedLoaded)
+	// that a participant gets: the merge writes a sibling's version_group_id
+	// and primary flag only (through ModifyBook, below), never a file, a path
+	// or a tag, so an iTunes sibling is a database-only change. The owner
+	// approved that on 2026-10-22; until then it refused the merge, which is
+	// how an iTunes organized_source original sharing a group with its
+	// organized copy (the organizer puts them in one group) blocked every
+	// merge whose loser was that copy. Each sibling is re-read with
+	// GetBookByID: GetBooksByVersionGroup may serve a slim projection, and
+	// the journal records the stored flag. Anything added later that moves,
+	// renames, retags or deletes a sibling's file must restore the guard.
 	var siblings []MovedSibling
 	var siblingBooks []*database.Book
 	siblingFiles := map[string][]database.BookFile{}
@@ -886,8 +889,9 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// The reused group's other live members (not participants). The demotion
 	// loop below rewrites every one whose flag is not already an explicit
 	// false, and the flag election next may crown one, so each one written
-	// gets the same pre-write guards as a sibling (scan state, iTunes
-	// library). Re-read with GetBookByID for the same reason as the siblings.
+	// gets the same pre-write guard as a sibling (scan state; no iTunes
+	// refusal, for the reason given there). Re-read with GetBookByID for the
+	// same reason as the siblings.
 	// Read and guarded BEFORE the journal write, so a refusal leaves no
 	// journal behind.
 	var memberBooks []*database.Book
@@ -926,12 +930,19 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// organized members; an organized copy with no audio route does not take
 	// the flag from a survivor that has one.
 	//
-	// Not when the survivor's files carry an iTunes persistent ID: the ITL
-	// clean-up (itunes.ComputeMergedTrackCleanup) removes every non-primary
-	// book_file's PID from the iTunes library unless a primary also owns it,
-	// so demoting such a survivor would take its live track out of iTunes.
-	// The participant iTunes guard does not cover this: it refuses files
-	// under the iTunes root, and a PID can sit on a file outside it.
+	// Not when the survivor's files carry an iTunes persistent ID. Nothing
+	// writes the iTunes library any more (the ITL writers, and with them
+	// itunes.ComputeMergedTrackCleanup, were removed), so this is not about a
+	// clean-up taking the track out of iTunes. It is a deliberate preference,
+	// kept as it was: the book that owns a live iTunes track stays the one
+	// the group lists. It is no longer needed to keep the PID integrity audit
+	// (itunes.pid_integrity) truthful: the audit files a PID on a live
+	// non-primary version as healthy when its version group has a live primary
+	// (a grouped version), and only calls it a stale owner when the group has
+	// none, so crowning an organized member over a PID-holding survivor does
+	// not misfile that track as a merge orphan. The participant iTunes guard
+	// does not cover this either: it refuses files under the iTunes root, and a
+	// PID can sit on a file outside it.
 	flagHolderID := resolvedPrimaryID
 	survivorHasPID := anyITunesPID(filesByID[books[bestIdx].ID])
 	if primaryID == "" && !isOrganized(books[bestIdx]) && !survivorHasPID {
@@ -970,8 +981,9 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		hiddenWhy = HiddenFromABSITunesSurvivor
 	}
 
-	guarded := slices.Clone(siblingBooks)
-	guardFiles := maps.Clone(siblingFiles)
+	// The members the merge would write get the scan-state guard too (no iTunes
+	// refusal: see the siblings above). A member already an explicit non-primary
+	// that is not crowned is not written, so it is skipped.
 	for _, mb := range memberBooks {
 		if mb.ID != flagHolderID && mb.IsPrimaryVersion != nil && !*mb.IsPrimaryVersion {
 			continue // not written: already an explicit false, and not crowned
@@ -979,11 +991,6 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if database.AnyProvisional(memberFiles[mb.ID]) {
 			return nil, &ProvisionalScanError{BookID: mb.ID}
 		}
-		guarded = append(guarded, mb)
-		guardFiles[mb.ID] = memberFiles[mb.ID]
-	}
-	if err := GuardITunesProtectedLoaded(guarded, guardFiles); err != nil {
-		return nil, err
 	}
 
 	// Journal the sibling move before the first write (see sibling_journal.go):
@@ -1748,6 +1755,28 @@ type CombineOptions struct {
 	// combine it made. Empty: a correlation id of its own, returned in
 	// CombineResult.OperationID.
 	OperationID string
+	// Context, when set, bounds how long the combine holds the merge lock (the
+	// op's timeout, or the server shutting down). It is honoured at two
+	// points, and never at one where stopping would strand a book:
+	//
+	//   - before the first write: a context already done refuses the combine
+	//     with nothing journaled or changed (a plain error, not a
+	//     *CombineIncompleteError);
+	//   - between the absorbed books, but only for a book whose files the
+	//     bulk move did NOT take. That move is one write and is not
+	//     interruptible, and it leaves every absorbed book that had files with
+	//     none of them until the per-book loop retires it, so every such book
+	//     is still finished (its progress followed, its shell retired) after
+	//     the context ends. The books the move did not touch are left exactly
+	//     as they were and dropped from the journal.
+	//
+	// A stop therefore leaves every absorbed book either fully combined or
+	// untouched, never live with no files. It returns a
+	// *CombineIncompleteError wrapping the context's error, the journal left
+	// Pending (reverting the operation puts back what ran); the aggregate
+	// recompute and version-group hand-off still run, the metadata override
+	// does not. nil never stops.
+	Context context.Context
 }
 
 // CombineOverride holds optional metadata fields to apply to the survivor book
@@ -1810,8 +1839,9 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 
 	// Serialize the entire read-modify-write against every other merge-family
 	// path (MergeBooks / CombineBooks / UndoCombine / split-book merge).
-	// CombineBooks is a synchronous HTTP handler with no concurrency key, so two
-	// combines — or a combine racing a MergeBooks on a shared book — can
+	// CombineBooks has callers outside any one op's concurrency key (the review
+	// queue calls it directly), so two combines — or a combine racing a
+	// MergeBooks on a shared book — can
 	// otherwise interleave GetBookByID -> MoveBookFilesToBook ->
 	// ReassignExternalIDs -> soft-delete -> UpdateBook and corrupt the same way
 	// #1930 fixed for MergeBooks. Scoped to the combine itself; only local DB
@@ -1856,6 +1886,14 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 	}
 	if err := GuardITunesProtected(ms.db, bookIDs); err != nil {
 		return nil, err
+	}
+
+	// The one point where a done context refuses the whole combine: nothing has
+	// been journaled or written yet (see CombineOptions.Context).
+	if opts.Context != nil {
+		if err := opts.Context.Err(); err != nil {
+			return nil, fmt.Errorf("combine not started: %w", err)
+		}
 	}
 
 	res := &CombineResult{PrimaryID: primaryID}
@@ -2031,7 +2069,33 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 		return nil
 	}
+	// stopErr is the context's error once it ended mid-loop. From then on only
+	// the books whose files the bulk move took are still processed: those
+	// have no files of their own until they are retired, so stopping before
+	// one would leave it live and empty. A book with nothing moved has not
+	// been touched, and stopping before it is safe.
+	var stopErr error
+	untouched := 0
 	for _, id := range absorbedOrder {
+		if stopErr == nil && opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				stopErr = err
+				mlog.Warn("combine: context ended before %s; finishing the books whose files already moved and leaving the rest untouched journal=%s err=%s",
+					logger.SanitizeLogValue(id), journal.ID, logger.SanitizeLogValue(fmt.Sprint(err)))
+			}
+		}
+		if stopErr != nil && len(movedFiles[id]) == 0 {
+			// Dropped in memory only. Nothing was written for this book, so
+			// the journal on disk is not wrong for naming it (the undo
+			// tolerates an entry that never ran), and the next persist, which
+			// a moved book's retirement makes, and the final one write the
+			// reduced list. A persist here could fail on a store error and
+			// return before the moved books later in the order are retired,
+			// which is the state this stop handling exists to prevent.
+			journal.Absorbed = slices.DeleteFunc(journal.Absorbed, func(e CombineAbsorbed) bool { return e.BookID == id })
+			untouched++
+			continue
+		}
 		a := entryOf(id)
 
 		// A book deleted by something else between validation and here is
@@ -2168,13 +2232,17 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 	}
 	journal.Absorbed = kept
-	// The body is complete: from here a caller may renumber the survivor's
-	// rows (regroup_apply stamps play order once this returns nil), so the
-	// undo must restore their numbers. Journaled before returning, or the
-	// combine stops: a renumbering the journal does not allow for would
-	// survive the undo.
-	journal.SurvivorNumbering = SurvivorNumberingMayChange
-	if err := persist("the end of the combine body (every file is moved and every absorbed book retired; the aggregate recompute, version-group hand-off and override did not run)"); err != nil {
+	if stopErr == nil {
+		// The body is complete: from here a caller may renumber the survivor's
+		// rows (regroup_apply stamps play order once this returns nil), so the
+		// undo must restore their numbers. Journaled before returning, or the
+		// combine stops: a renumbering the journal does not allow for would
+		// survive the undo.
+		journal.SurvivorNumbering = SurvivorNumberingMayChange
+		if err := persist("the end of the combine body (every file is moved and every absorbed book retired; the aggregate recompute, version-group hand-off and override did not run)"); err != nil {
+			return nil, err
+		}
+	} else if err := persist("the end of a combine its context stopped (every book whose files moved is retired; the aggregate recompute and version-group hand-off did not run)"); err != nil {
 		return nil, err
 	}
 
@@ -2195,6 +2263,16 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 		}
 	}
 	handOffLeftGroups(ms.db, leftGroups)
+
+	if stopErr != nil {
+		// Every absorbed book is complete or untouched, the survivor's
+		// aggregates and the groups' primaries are settled; the override and
+		// the Applied status are not written. No renumbering can have run
+		// (SurvivorNumbering is still Untouched), so a revert has nothing to
+		// restore there.
+		return nil, fmt.Errorf("combine stopped: %w (%d absorbed book(s) retired, %d left untouched; journal %s left %s, reverting the operation puts back what ran)",
+			stopErr, res.BooksDeleted, untouched, journal.ID, CombineJournalPending)
+	}
 
 	// The override is planned (every before-value read, the author looked
 	// up), journaled, and only then written, a new author row included
@@ -2248,8 +2326,8 @@ func (ms *Service) CombineBooksWithOptions(bookIDs []string, primaryID string, o
 // MarkedForDeletionAt stamp as the store kept it (read back).
 //
 // Clearing FilePath is what makes the soft delete safe: the path now belongs to
-// a file row the survivor owns, and PurgeSoftDeletedBooks (with delete-files
-// on) os.Remove()s a purged single-file book's FilePath. The journal keeps the
+// a file row the survivor owns, and a purge with delete_files (audiobooks.RunPurge, nightly
+// or manual) os.Remove()s a purged single-file book's FilePath. The journal keeps the
 // original for undo. A separate function from SoftDeleteBook because
 // MergeBooks' losers keep their own files and must keep their FilePath.
 func (ms *Service) softDeleteAbsorbed(bookID string, stamp time.Time) (*time.Time, error) {

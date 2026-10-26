@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.identMissing.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5933b47b-1eb7-4447-9cd1-6f441bc5d00e
-// last-edited: 2026-10-11
+// last-edited: 2026-10-22
 
 /**
  * Typing `ident:missing` in the Library search bar sends the ident field
@@ -19,6 +19,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Library } from './Library';
+import { OperationTrackerProvider } from '../components/operations/OperationTrackerProvider';
 import * as api from '../services/api';
 import parity from './__fixtures__/ident_missing_parity.json';
 
@@ -101,7 +102,9 @@ describe('Library: ident:missing', () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter initialEntries={['/library']}>
-        <Library />
+        <OperationTrackerProvider>
+          <Library />
+        </OperationTrackerProvider>
       </MemoryRouter>
     );
     await screen.findByText(PAGE[0].title);

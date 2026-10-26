@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-23
 
@@ -69,6 +69,8 @@ type fakeDeps struct {
 	labels DedupVerdictReader
 	// purgeCtx, when non-nil, records the ctx RunAutoPurgeSoftDeleted receives.
 	purgeCtx *context.Context
+	// purgeErr is what RunAutoPurgeSoftDeleted returns: a refused or stopped pass.
+	purgeErr error
 	// refreshCtx, when non-nil, records the ctx RunMetadataRefreshScan receives.
 	refreshCtx *context.Context
 	// splitCands backs SplitBookCandidates; nil means no embedding store.
@@ -287,10 +289,11 @@ func (d fakeDeps) RunMetadataRefreshScan(ctx context.Context, _ operations.Progr
 func (d fakeDeps) RunBulkWriteBack(_ context.Context, _ string, _ []string, _ bool, _ int, _ operations.ProgressReporter) error {
 	return nil
 }
-func (d fakeDeps) RunAutoPurgeSoftDeleted(ctx context.Context, _ string) {
+func (d fakeDeps) RunAutoPurgeSoftDeleted(ctx context.Context, _ string) error {
 	if d.purgeCtx != nil {
 		*d.purgeCtx = ctx
 	}
+	return d.purgeErr
 }
 func (d fakeDeps) BackfillExternalIDs(_ context.Context, _ bool, _ func(int, int, string)) (bool, error) {
 	return false, nil
@@ -507,6 +510,18 @@ func TestTitleBackfill_NilParamsDefaultsDryRun(t *testing.T) {
 	}
 	if len(*written) != 0 {
 		t.Errorf("nil params must default to dryRun=true, got %d writes", len(*written))
+	}
+}
+
+// A purge the server refused or stopped early (RunAutoPurgeSoftDeleted's error)
+// must fail the op. Until round 5 the helper returned nothing and the op ended
+// "completed" every night while doing nothing.
+func TestRunPurgeDeleted_ReturnsThePassError(t *testing.T) {
+	want := errors.New("purge refused: the undo records cannot be read")
+	p := New(fakeDeps{purgeErr: want})
+	err := p.runPurgeDeleted(context.Background(), nil, &fakeReporter{})
+	if !errors.Is(err, want) {
+		t.Fatalf("runPurgeDeleted = %v; want the pass error %v", err, want)
 	}
 }
 

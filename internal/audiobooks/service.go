@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.56.0
+// version: 1.59.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -19,6 +19,7 @@ package audiobooks
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -55,8 +56,17 @@ type bookReader interface {
 	GetBookAtVersion(id string, ts time.Time) (*database.Book, error)
 	CountPrimaryBooks() (int, error)
 	SearchBooks(query string, limit, offset int) ([]database.Book, error)
+	bookPathReader
+}
+
+// bookPathReader is the "who names this path" read the purge makes before it
+// removes a file from disk, kept apart from bookReader so neither grows past
+// the interface-width limit.
+type bookPathReader interface {
 	// LiveBookIDsAtPath backs the purge's "is this path still someone's"
-	// check before it removes a file from disk.
+	// check. The all-rows variant (trashed books included) is not here:
+	// database.BookRowPathReader is off Store, so the purge resolves it with
+	// database.AsCapability (purge_files.go, bookRowsAtPath).
 	LiveBookIDsAtPath(path string) ([]string, error)
 }
 
@@ -216,6 +226,22 @@ type AudiobookService struct {
 	// out of here, because InvalidateListCache skips listCache unless
 	// config.CacheInvalidateOnBookUpdate is on — and it is off by default.
 	libGen *cache.Generation
+	// purgeBreakdown is the last purge pass's purgeable-versus-blocked split
+	// (purge_run.go), for the trash listing. In memory only: it is a
+	// measurement, rebuilt by the next pass.
+	purgeBreakdownMu sync.Mutex
+	purgeBreakdown   *PurgeBreakdown
+	// purgePreviews are the last few finished previews (purge_files.go), so the
+	// purge that carries a preview's trashed_before is held to what that
+	// preview decided. In memory only.
+	purgePreviewMu sync.Mutex
+	purgePreviews  []*purgePreviewRecord
+	// pendingMu orders the writers and the replayers of the journal of pending
+	// file removals (purge_pending_journal.go): a purge holds it shared across a
+	// record's write and the row delete that follows (purgeDeleteRow), a replay
+	// holds it exclusively, so a replay never sees a record whose book is still
+	// in the trash because its purge is half way through.
+	pendingMu sync.RWMutex
 	// runtimeIdx caches canonical book runtimes for the duration: list
 	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
 	// stored Book.Duration aggregate.
@@ -224,6 +250,10 @@ type AudiobookService struct {
 	// audit rows DiscardProgressAndPurge writes. Tests only; nil in
 	// production, where activityService records them.
 	auditOverride activityRecorder
+	// purgeClock replaces time.Now as the moment a purge pass or preview
+	// began, so a test can put the purge a day after its preview without
+	// sleeping. Tests only; nil in production (purgeNow).
+	purgeClock func() time.Time
 	// tagFacets caches ScopedTagFacets answers and tagFacetsFlight collapses
 	// concurrent identical misses, cancelling a build its last waiter left
 	// (service_tag_facets.go). Per service, not package-global, so two

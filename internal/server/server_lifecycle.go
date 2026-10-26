@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.61.0
+// version: 4.63.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package server
 
@@ -376,6 +376,10 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// interrupted-ops list, which no longer has rows for this op.
 
 	s.startBackfills()
+
+	// File removals a purge pass journaled and never finished are carried out
+	// once, in the background (purge_replay_boot.go).
+	s.startPurgeJournalReplay()
 
 	// Stale transcode temp files under the import paths are swept by the
 	// hourly transcode_temp_cleanup scheduler task (maintenance.temp-file-cleanup
@@ -1141,6 +1145,55 @@ func (s *Server) seedRolesAndTokens() {
 	}
 }
 
+// purgeReplayRetryEvery and purgeReplayAttempts bound how long the boot replay of
+// the purge's journal waits for a library root that is mounted late: a remote
+// filesystem can come up after the service does (the unit does not order itself
+// after it). Eight tries two minutes apart; after that the records are kept for
+// the next purge with delete_files.
+const (
+	purgeReplayRetryEvery = 2 * time.Minute
+	purgeReplayAttempts   = 8
+)
+
+// startPurgeJournalReplay replays, once per boot, the file removals an earlier
+// purge pass journaled and did not finish (AudiobookService.
+// ReplayPendingFileRemovalsOnBoot), so they do not sit on disk waiting for a
+// purge to be asked for. A purge op the shutdown interrupted is resumed by the
+// operations registry and replays first thing too; the two serialize on the
+// service's replay lock. Background, bgWG-tracked and cancelled with bgCtx, and
+// it waits for the memdb warmup first: the removal checks read the book path
+// indexes. It never blocks startup.
+func (s *Server) startPurgeJournalReplay() {
+	if s.audiobookService == nil {
+		return
+	}
+	svc := s.audiobookService
+	s.bgWG.Go("purge-journal-replay", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		if w, ok := resolveWarmupWaiter(s.Ops()); ok {
+			warm := make(chan struct{})
+			go func() { w.WaitForWarmup(); close(warm) }()
+			select {
+			case <-warm:
+			case <-s.bgCtx.Done():
+				return
+			}
+		}
+		removed, errs, err := svc.ReplayPendingFileRemovalsOnBoot(s.bgCtx, purgeReplayRetryEvery, purgeReplayAttempts)
+		switch {
+		case err != nil:
+			lifecycleLog.Error("purge journal replay at boot: %v", err)
+		case removed > 0 || len(errs) > 0:
+			lifecycleLog.Info("purge journal replay at boot: %d removed, %d error line(s)", removed, len(errs))
+			for _, line := range errs {
+				lifecycleLog.Warn("purge journal replay at boot: %s", logger.SanitizeLogValue(line))
+			}
+		}
+	})
+}
+
 // startBackfills launches the one-time, idempotent backfill and maintenance
 // work. Each goroutine here is enrolled in s.bgWG so shutdown drains it before
 // the store closes (SYS-1); the work that runs as registered ops (bootOps,
@@ -1428,6 +1481,13 @@ type opStatusLookup interface {
 //     the sentinel cannot know, so the verify is the check. Until it trusts
 //     the index, GetBookChanges serves from the full journal scan. Without
 //     params the op previews.
+//   - book-hash-index-repair {"ensure": true}: writes every missing key of the
+//     multi-valued file-hash indexes (book_hash:, book_originalhash:,
+//     book_organizedhash:), then, when every book row decoded, sets the index's
+//     sentinel and deletes the retired single-valued keys. Enqueued on EVERY
+//     boot, like the opchange ensure: a rollback to a build that predates the
+//     index writes books with no keys and the sentinel cannot know. Until it
+//     finishes, GetBookByFileHash and its twins also consult the legacy keys.
 //   - book-atpath-index-backfill {"if_needed": true} (04-P6 part 2, was the
 //     book-atpath-backfill goroutine): the sentinel-gated BackfillBookAtPathIndex
 //     instead of the operator's forced RebuildBookAtPathIndex. Until it
@@ -1499,6 +1559,7 @@ var bootOps = []bootOp{
 	},
 	{id: "maintenance.opchange-book-index-rebuild", params: map[string]any{"ensure": true}},
 	{id: "maintenance.book-atpath-index-backfill", params: map[string]any{"if_needed": true}},
+	{id: "maintenance.book-hash-index-repair", params: map[string]any{"ensure": true}},
 	{
 		id: "maintenance.activity-filter-index-backfill", params: map[string]any{"reconcile": true},
 		paramsFor: activityFilterIndexBootParams,

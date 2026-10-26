@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.11.0
+// version: 1.14.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-23
 
 package batch
 
@@ -52,13 +52,38 @@ type batchBookStore interface {
 	versionprimary.EnsureStore
 }
 
-// BatchService handles bulk operations on audiobooks.
-type BatchService struct {
-	db batchBookStore
+// TrashPurger purges one book that is in the trash through the purge's own
+// path (the nightly purge and the trash page's "Purge now"): the undo hold,
+// the listening-state carry, the file-row refusal. *audiobooks.AudiobookService
+// implements it (PurgeTrashedBookLocked). The caller holds the merge lock
+// (merge.TryLockMergeRMWWithin) and the purge runs under that hold; the
+// method does not take it, so calling it without the lock is a bug, and it
+// has no unlocked twin here on purpose.
+type TrashPurger interface {
+	PurgeTrashedBookLocked(book *database.Book) error
 }
 
-func NewBatchService(db batchBookStore) *BatchService {
-	return &BatchService{db: db}
+// BatchService handles bulk operations on audiobooks.
+type BatchService struct {
+	db     batchBookStore
+	purger TrashPurger
+}
+
+// Option configures a BatchService.
+type Option func(*BatchService)
+
+// WithTrashPurger wires the purge path a hard delete of a trashed book takes.
+// Without it a batch hard delete of a trashed book is refused.
+func WithTrashPurger(p TrashPurger) Option {
+	return func(bs *BatchService) { bs.purger = p }
+}
+
+func NewBatchService(db batchBookStore, opts ...Option) *BatchService {
+	bs := &BatchService{db: db}
+	for _, o := range opts {
+		o(bs)
+	}
+	return bs
 }
 
 // ---------------------------------------------------------------------------
@@ -108,11 +133,38 @@ type BatchUpdateRequest struct {
 type BatchUpdateResult = BatchResult
 type BatchUpdateResponse = BatchResponse
 
+// newMergeGate returns the batch's bounded take of the merge lock, which a
+// restore and a hard delete run under and which a running combine holds for its
+// whole run. It is a synchronous request, so the first item that finds the lock
+// busy for merge.InteractiveMergeLockWait fails with merge.ErrMergeBusy, and
+// once one has, the rest of the batch's lock-taking items fail at once with the
+// same error instead of waiting again: the request costs one bounded wait
+// however many items it holds. An item that gets the lock keeps it (the
+// returned unlock) for its whole action, which runs through the ...Locked
+// functions, so a combine that starts after the wait cannot hang the request
+// either. The batch runs its items one after another, so the gate is not safe
+// for concurrent use and does not need to be.
+func newMergeGate() func() (unlock func(), err error) {
+	busy := false
+	return func() (func(), error) {
+		if busy {
+			return nil, merge.ErrMergeBusy
+		}
+		unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
+		if err != nil {
+			busy = true
+			return nil, err
+		}
+		return unlock, nil
+	}
+}
+
 func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse {
 	resp := newBatchResponse(len(req.IDs))
 	if len(req.IDs) == 0 {
 		return resp
 	}
+	mergeGate := newMergeGate()
 	for _, id := range req.IDs {
 		book, err := bs.db.GetBookByID(id)
 		if err != nil || book == nil {
@@ -128,13 +180,23 @@ func (bs *BatchService) UpdateAudiobooks(req *BatchUpdateRequest) *BatchResponse
 		var updated *database.Book
 		if isRestore(req.Updates) {
 			// marked_for_deletion=false is a restore like the "restore"
-			// action: the shared rule (merge.RestoreFromTrash) runs first, in
+			// action: the shared rule (merge.RestoreFromTrashLocked) runs first, in
 			// the same write as the rest of the payload. The payload's
 			// hand-off runs inside it too, before it decides the restored
 			// row's merge redirect, so it is not repeated below.
+			unlock, gerr := mergeGate()
+			if gerr != nil {
+				resp.addError(id, gerr.Error())
+				continue
+			}
 			var res merge.TrashRestoreResult
-			res, err = merge.RestoreFromTrash(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
-				func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) }, joinGroups(req.Updates)...)
+			func() {
+				// Released by defer: a panic in the restore must not leave the
+				// merge lock held for every later merge and purge.
+				defer unlock()
+				res, err = merge.RestoreFromTrashLocked(bs.db, id, func(b *database.Book) { applyUpdates(b, req.Updates) },
+					func(_, after *database.Book) { bs.handOffPrimary(book, after, req.Updates) }, joinGroups(req.Updates)...)
+			}()
 			pre, updated = res.Before, res.Book
 		} else {
 			updated, book, err = bs.lockedModify(id, book, req.Updates, func(b *database.Book) error {
@@ -196,6 +258,8 @@ type BatchOperationsRequest struct {
 
 func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchResponse {
 	resp := newBatchResponse(len(req.Operations))
+	// A restore and a hard delete run under the merge lock: see newMergeGate.
+	mergeGate := newMergeGate()
 	for _, op := range req.Operations {
 		switch op.Action {
 		case "update":
@@ -206,9 +270,17 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			}
 			var updated *database.Book
 			if isRestore(op.Updates) {
+				unlock, gerr := mergeGate()
+				if gerr != nil {
+					resp.addError(op.ID, gerr.Error())
+					continue
+				}
 				var res merge.TrashRestoreResult
-				res, err = merge.RestoreFromTrash(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
-					func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
+				func() {
+					defer unlock() // a panic in the restore must not strand the merge lock
+					res, err = merge.RestoreFromTrashLocked(bs.db, op.ID, func(b *database.Book) { applyUpdates(b, op.Updates) },
+						func(_, after *database.Book) { bs.handOffPrimary(book, after, op.Updates) }, joinGroups(op.Updates)...)
+				}()
 				updated = res.Book
 			} else {
 				updated, book, err = bs.lockedModify(op.ID, book, op.Updates, func(b *database.Book) error {
@@ -243,7 +315,17 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				continue
 			}
 			if op.HardDelete {
-				if err := bs.hardDelete(book); err != nil {
+				unlock, gerr := mergeGate()
+				if gerr != nil {
+					resp.addError(op.ID, gerr.Error())
+					continue
+				}
+				var err error
+				func() {
+					defer unlock() // a panic in the delete must not strand the merge lock
+					err = bs.hardDeleteLocked(book.ID)
+				}()
+				if err != nil {
 					resp.addError(op.ID, err.Error())
 				} else {
 					resp.addSuccess(op.ID)
@@ -277,7 +359,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				resp.addError(op.ID, "not found")
 				continue
 			}
-			// Restore: the shared rule (merge.RestoreFromTrash), the same as
+			// Restore: the shared rule (merge.RestoreFromTrashLocked), the same as
 			// the single-book restore. Until 2026-10-01 this cleared only the
 			// two deletion columns, so a book DeleteAudiobook had labelled
 			// "deleted" came back live but still labelled "deleted": hidden
@@ -288,7 +370,16 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 			// primary went through the restore and yielded its flag.
 			// It hands off the group's primary itself, before it decides the
 			// restored row's merge redirect.
-			res, err := merge.RestoreFromTrash(bs.db, op.ID, nil, nil)
+			unlock, gerr := mergeGate()
+			if gerr != nil {
+				resp.addError(op.ID, gerr.Error())
+				continue
+			}
+			var res merge.TrashRestoreResult
+			func() {
+				defer unlock() // a panic in the restore must not strand the merge lock
+				res, err = merge.RestoreFromTrashLocked(bs.db, op.ID, nil, nil)
+			}()
 			switch {
 			case err != nil:
 				resp.addError(op.ID, err.Error())
@@ -469,7 +560,7 @@ func applyUpdates(book *database.Book, updates map[string]any) {
 var batchLog = logger.New("batch")
 
 // joinGroups is the version group a batch payload moves its book into, for
-// merge.RestoreFromTrash to lock beside the row's current one; none when the
+// merge.RestoreFromTrashLocked to lock beside the row's current one; none when the
 // payload leaves the group alone.
 func joinGroups(updates map[string]any) []string {
 	if v, ok := updates["version_group_id"].(string); ok {
@@ -493,7 +584,7 @@ func joinGroups(updates map[string]any) []string {
 // returns the written row and the row the write was locked from, which the
 // caller's hand-off must use as "before".
 //
-// Not for a restore: merge.RestoreFromTrash takes the merge lock and then
+// Not for a restore: merge.RestoreFromTrashLocked takes the merge lock and then
 // the group locks itself (passed joinGroups), and taking a group lock first
 // would invert that.
 func (bs *BatchService) lockedModify(id string, before *database.Book, updates map[string]any, fn func(*database.Book) error) (*database.Book, *database.Book, error) {
@@ -584,23 +675,47 @@ func groupOf(b *database.Book) string {
 	return *b.VersionGroupID
 }
 
-// hardDelete is the batch's hard delete of one book. Like the single-book
-// delete and the trash page's "Purge now" (owner decision 2026-10-05), a
-// book users have listening state on (positions, status, progress, listened
-// time, hide, bookmarks) is deleted only after that state is carried to a
-// version Audiobookshelf lists, and is refused otherwise
-// (merge.HardDeleteKeepingUserState: merge.ErrBookHasListeningState). A
+// hardDeleteLocked is the batch's hard delete of one book. The caller holds
+// the merge lock (newMergeGate), and the whole delete runs under that hold.
+// Like the single-book delete and the trash page's "Purge now" (owner decision
+// 2026-10-05), a book users have listening state on (positions, status,
+// progress, listened time, hide, bookmarks) is deleted only after that state is
+// carried to a version Audiobookshelf lists, and is refused otherwise
+// (merge.HardDeleteKeepingUserStateLocked: merge.ErrBookHasListeningState). A
 // store that cannot check or carry the state refuses every hard delete.
+//
+// The book is read again here, under the lock: the row the caller read came
+// from before it, and a restore or a merge revert (both take the lock) may have
+// moved it in or out of the trash since, which decides the path below.
 //
 // The batch runs its operations one after another, and so this: each carry
 // holds the global merge lock for its whole check-carry-delete, so a worker
 // pool would only queue on that lock.
-func (bs *BatchService) hardDelete(book *database.Book) error {
+//
+// A book that is in the trash is not deleted here at all: it goes through the
+// purge's own path (TrashPurger), exactly as the single delete does, so a
+// combine's shell, a maintenance operation's soft-deleted shell and an
+// auto-merge's loser (undoHold) are refused instead of hard-deleted out from
+// under an undo that can still run. Without a wired purger the book is refused.
+func (bs *BatchService) hardDeleteLocked(id string) error {
+	book, err := bs.db.GetBookByID(id)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", id, err)
+	}
+	if book == nil {
+		return errors.New("not found")
+	}
+	if database.IsInTrash(book) {
+		if bs.purger == nil {
+			return errors.New("hard delete of a trashed book refused: the purge path is not wired, so an undo that still needs the book cannot be checked")
+		}
+		return bs.purger.PurgeTrashedBookLocked(book)
+	}
 	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
 	if !ok {
 		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
 	}
-	if _, err := merge.HardDeleteKeepingUserState(merger, bs.db, book, func() error { return bs.db.DeleteBook(book.ID) }); err != nil {
+	if _, err := merge.HardDeleteKeepingUserStateLocked(merger, bs.db, book, func() error { return bs.db.DeleteBook(book.ID) }); err != nil {
 		if errors.Is(err, merge.ErrBookHasListeningState) {
 			return fmt.Errorf("%w; soft-delete it and purge it from the trash instead, where the progress can be moved or discarded on purpose", err)
 		}

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.32.0
+// version: 1.32.4
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package merge
 
@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -157,8 +158,8 @@ type CombineJournal struct {
 	// journal states that explicitly: CombineBooks queues NO iTunes-library
 	// removals (only MergeBooks does). The absorbed books' PIDs are REASSIGNED
 	// to the survivor, which now owns that audio; undo moves them back via
-	// Absorbed[].ExternalIDs. Removal is deferred to PurgeSoftDeletedBooks,
-	// which enqueues removes for whatever PIDs a purged book still holds.
+	// Absorbed[].ExternalIDs. Removal is deferred to a purge (audiobooks.RunPurge,
+	// the nightly pass or the manual one), which enqueues removes for whatever PIDs a purged book still holds.
 	ITunesRemovals []string `json:"itunes_removals"`
 
 	UndoneAt  *time.Time `json:"undone_at,omitempty"`
@@ -171,7 +172,7 @@ type CombineAbsorbed struct {
 	BookID string `json:"book_id"`
 	// FilePath is the book row's pre-combine FilePath. The combine CLEARS it on
 	// the soft-deleted shell: that path now belongs to a file row the survivor
-	// owns, and PurgeSoftDeletedBooks with delete-files enabled os.Remove()s a
+	// owns, and a purge with delete_files (audiobooks.RunPurge) os.Remove()s a
 	// purged single-file book's FilePath. Leaving it set would let the purge
 	// delete the survivor's audio from disk 30 days later.
 	FilePath         string  `json:"file_path"`
@@ -397,8 +398,23 @@ func NewCombineJournal(survivorID string) *CombineJournal {
 	}
 }
 
+// combineJournalGen counts combine-journal writes in this process. It exists
+// for readers that cache a view of the journals (UndoShellIndex) and must know
+// when the cache may be missing a journal written after it was built.
+var combineJournalGen atomic.Uint64
+
+// CombineJournalGeneration is how many combine-journal writes this process has
+// made. It is bumped AFTER the write lands (and after a failed write too: a
+// failed SetRaw may still have persisted), so a reader that reads it, then
+// reads the journals, sees a changed value if any write finished after its
+// read. Every journal writer (merge.Service combine, dedup split-book merge)
+// holds the merge lock across the write, so a reader holding that lock reads
+// an exact answer; without it, a write still in flight can go unseen.
+func CombineJournalGeneration() uint64 { return combineJournalGen.Load() }
+
 // WriteCombineJournal persists j under its key.
 func WriteCombineJournal(db CombineJournalWriter, j *CombineJournal) error {
+	defer combineJournalGen.Add(1)
 	data, err := json.Marshal(j)
 	if err != nil {
 		return fmt.Errorf("marshal combine journal %s: %w", j.ID, err)
@@ -443,26 +459,105 @@ func (ms *Service) ListCombineJournals(limit int) ([]CombineJournal, error) {
 	return listCombineJournals(ms.db, limit)
 }
 
-// listCombineJournals is ListCombineJournals over any raw-key reader.
+// listCombineJournals is ListCombineJournals over any raw-key reader. It is
+// the LENIENT lister: a row it cannot decode is skipped with a warning, which
+// is right for a listing a person reads and for the pointer backfill. A caller
+// that must not act on "cannot tell" (the purge's undo hold) uses
+// scanCombineJournals and refuses on the unreadable rows.
 func listCombineJournals(kv journalKVReader, limit int) ([]CombineJournal, error) {
-	rows, err := kv.ScanPrefix(combineJournalPrefix)
+	out, unreadable, err := scanCombineJournals(kv)
 	if err != nil {
-		return nil, fmt.Errorf("list combine journals: %w", err)
+		return nil, err
 	}
-	out := make([]CombineJournal, 0, len(rows))
-	for _, r := range rows {
-		var j CombineJournal
-		if err := json.Unmarshal(r.Value, &j); err != nil {
-			mlog.Warn("combine journal: skipping undecodable row key=%s err=%s", logger.SanitizeLogValue(r.Key), logger.SanitizeLogValue(fmt.Sprint(err)))
-			continue
-		}
-		out = append(out, j)
+	for _, u := range unreadable {
+		mlog.Warn("combine journal: skipping undecodable row key=%s err=%s", logger.SanitizeLogValue(u.Key), logger.SanitizeLogValue(u.Err))
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].ID > out[k].ID })
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// UnreadableCombineJournal is a combine-journal row whose value cannot be
+// decoded, so nothing can be said about which shells its undo needs.
+type UnreadableCombineJournal struct {
+	// Key is the row's full store key (merge:combine-journal:<id>).
+	Key string `json:"key"`
+	// Err is the decode error.
+	Err string `json:"error"`
+}
+
+// scanCombineJournals reads every combine-journal row once and returns the
+// journals it could decode, unordered, and the rows it could not. An error is
+// the scan itself failing.
+func scanCombineJournals(kv journalKVReader) ([]CombineJournal, []UnreadableCombineJournal, error) {
+	rows, err := kv.ScanPrefix(combineJournalPrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list combine journals: %w", err)
+	}
+	out := make([]CombineJournal, 0, len(rows))
+	var unreadable []UnreadableCombineJournal
+	for _, r := range rows {
+		var j CombineJournal
+		if err := json.Unmarshal(r.Value, &j); err != nil {
+			unreadable = append(unreadable, UnreadableCombineJournal{Key: r.Key, Err: err.Error()})
+			continue
+		}
+		out = append(out, j)
+	}
+	return out, unreadable, nil
+}
+
+// CombineJournalCheckOp is the operation that lists unreadable combine-journal
+// rows. UnreadableCombineJournalsError names it so the person who sees the
+// purge refuse knows where to look.
+const CombineJournalCheckOp = "maintenance.combine-journal-check"
+
+// CombineJournalCheck is the outcome of CheckCombineJournals.
+type CombineJournalCheck struct {
+	// Rows is how many combine-journal rows exist.
+	Rows int `json:"rows"`
+	// Unreadable are the rows that cannot be decoded, by key.
+	Unreadable []UnreadableCombineJournal `json:"unreadable"`
+}
+
+// CheckCombineJournals reads every combine-journal row and reports the ones
+// that cannot be decoded. It writes nothing.
+func CheckCombineJournals(kv journalKVReader) (CombineJournalCheck, error) {
+	ok, unreadable, err := scanCombineJournals(kv)
+	if err != nil {
+		return CombineJournalCheck{}, err
+	}
+	sort.Slice(unreadable, func(i, k int) bool { return unreadable[i].Key < unreadable[k].Key })
+	return CombineJournalCheck{Rows: len(ok) + len(unreadable), Unreadable: unreadable}, nil
+}
+
+// UnreadableCombineJournalsError is why the purge refuses while a combine
+// journal row cannot be decoded: such a row may be an undo that still needs a
+// shell the purge would delete, and it cannot say which. It names the keys and
+// the operation that lists them. Repair is manual: fix or remove the row, then
+// purge again.
+type UnreadableCombineJournalsError struct {
+	Rows []UnreadableCombineJournal
+}
+
+func (e *UnreadableCombineJournalsError) Error() string {
+	const show = 5
+	keys := make([]string, 0, show)
+	for i, r := range e.Rows {
+		if i == show {
+			break
+		}
+		keys = append(keys, fmt.Sprintf("%q", r.Key))
+	}
+	more := ""
+	if n := len(e.Rows) - len(keys); n > 0 {
+		more = fmt.Sprintf(" and %d more", n)
+	}
+	return fmt.Sprintf("%d combine journal row(s) cannot be decoded (%s%s), so the purge cannot tell which trashed books a combine's undo still needs; "+
+		"every purge is refused until they are repaired. List every unreadable row with the %s operation, fix or remove them, then purge again",
+		len(e.Rows), strings.Join(keys, ", "), more, CombineJournalCheckOp)
 }
 
 // snapshotProgress captures every user's state and positions on one book.

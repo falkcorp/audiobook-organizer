@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_path_owner.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: 5d8a2f41-7c3e-4b96-a1d0-9e6b3c7f2a18
-// last-edited: 2026-10-11
+// last-edited: 2026-10-22
 
 package database
 
@@ -95,17 +95,35 @@ func (p *PebbleStore) setBookPathKeyIfFree(batch *GatedBatch, path, id string) e
 // or a delete, used to delete the key unconditionally, so leaving a path that
 // another book had since taken erased that book's lookup key.
 func (p *PebbleStore) deleteBookPathKeyIfOwned(batch *GatedBatch, path, id string) error {
-	value, closer, err := p.db.Get(bookPathKey(path))
+	if err := p.deleteKeyIfValueIs(batch, bookPathKey(path), id); err != nil {
+		return fmt.Errorf("path key %q: %w", path, err)
+	}
+	return nil
+}
+
+// deleteKeyIfValueIs stages a delete of the single-valued index key only when
+// it still holds id (compare-and-delete). The path index keeps ONE owner per
+// key, last writer wins, so two books at one path share a key, and a book
+// leaving it by a move or a delete must not erase the lookup key of the other
+// book that now owns it. (The file-hash indexes had the same shape and were
+// replaced by per-book keys, pebble_store_book_hash_index.go, because a
+// compare-and-delete cannot fix a key that can only name one of its holders.)
+//
+// Check-then-delete, not atomic: a writer that takes the key between the read
+// and the commit still loses its entry. Closing that needs a store-wide lock
+// on the key.
+func (p *PebbleStore) deleteKeyIfValueIs(batch *GatedBatch, key []byte, id string) error {
+	value, closer, err := p.db.Get(key)
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read path key %q: %w", path, err)
+		return fmt.Errorf("read index key %q: %w", key, err)
 	}
 	owned := string(value) == id
 	closer.Close()
 	if !owned {
 		return nil
 	}
-	return batch.Delete(bookPathKey(path), nil)
+	return batch.Delete(key, nil)
 }

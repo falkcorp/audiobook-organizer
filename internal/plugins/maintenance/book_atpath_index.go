@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -81,9 +81,10 @@ func (p *Plugin) bookAtPathIndexVerifyDef() sdk.OperationDef {
 		Plugin:      "maintenance",
 		DisplayName: "Book path-set index verify",
 		Description: "Diffs the book_atpath: index (every book at each path) against the book " +
-			"rows from one snapshot. Fails if any LIVE book has no index key at its path, which " +
-			"would let LiveBookIDsAtPath report a taken path as free. Extras and trashed-book " +
-			"gaps are reported but do not fail. REPORT-ONLY: modifies nothing.",
+			"rows from one snapshot. Fails if any book, live OR soft-deleted, has no index key at " +
+			"its path, which would let LiveBookIDsAtPath (live books) or BookIDsAtPath (every row; " +
+			"the purge's check before it removes a file) report a taken path as free. Extras are " +
+			"reported but do not fail. REPORT-ONLY: modifies nothing.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.book-atpath-index",
@@ -152,8 +153,16 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 
 	if rep.MissingLive > 0 {
 		return fmt.Errorf("book_atpath index is INCOMPLETE: %d live book(s) have no key at their "+
-			"path, so LiveBookIDsAtPath can report a taken path as free; run "+
+			"path, so LiveBookIDsAtPath and BookIDsAtPath can report a taken path as free; run "+
 			"maintenance.book-atpath-index-backfill (%s)", rep.MissingLive, summary)
+	}
+	if rep.MissingTrashed > 0 {
+		// A trashed book is restorable and wants its audio. BookIDsAtPath
+		// counts trashed rows, and a purge trusts it before removing a file.
+		return fmt.Errorf("book_atpath index is INCOMPLETE: %d soft-deleted book(s) have no key at "+
+			"their path, so BookIDsAtPath can report a path a restorable book names as free and a "+
+			"purge with delete_files would remove its file (sample: %v); run "+
+			"maintenance.book-atpath-index-backfill (%s)", rep.MissingTrashed, rep.SampleMissingTrashed, summary)
 	}
 	if rep.SentinelSet && rep.UnmarkedUndecodable > 0 {
 		return fmt.Errorf("book_atpath index cannot see %d undecodable book row(s) (no marker), so "+

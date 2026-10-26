@@ -1,7 +1,7 @@
 // file: internal/decisions/retention_test.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: 2c8e5b17-94d0-4f63-a1b2-7e03d6c58a49
-// last-edited: 2026-10-21
+// last-edited: 2026-10-24
 
 package decisions_test
 
@@ -49,7 +49,7 @@ import (
 // Scope of the canary: it sees methods of the four store types below whose
 // names start with Prune, Sweep, Purge, DeleteExpired or Cleanup. Sweeps that
 // live on other types (resultjournal.Journal.Prune,
-// audiobooks.AudiobookService.PurgeSoftDeletedBooks,
+// audiobooks.AudiobookService.PurgeSoftDeletedUnattended,
 // dedup.Engine.PurgeStaleCandidates) are in retentionEntries BY HAND, because
 // reflection over every type in the module is not practical: a new one is
 // found by review, and by the source guard, which fails for any non-test file
@@ -349,7 +349,7 @@ func otherSweepEntries(ctx context.Context) []retentionEntry {
 			},
 		},
 		{
-			name: "AudiobookService.PurgeSoftDeletedBooks", wantDeleted: true,
+			name: "AudiobookService.PurgeSoftDeletedUnattended", wantDeleted: true,
 			seed: func(t *testing.T, kv *database.PebbleStore) {
 				yes, at := true, time.Now().Add(-time.Hour)
 				_, err := kv.CreateBook(&database.Book{ID: "retention-trashed", Title: "Trashed", MarkedForDeletion: &yes, MarkedForDeletionAt: &at})
@@ -358,10 +358,14 @@ func otherSweepEntries(ctx context.Context) []retentionEntry {
 			run: func(t *testing.T, kv *database.PebbleStore) (int, error) {
 				// The purge's book_file check is fail-closed until memdb serves.
 				kv.WaitForWarmup()
+				// The undo hold refuses a purge until the by-book index is trusted.
+				res0, err := kv.EnsureOpChangeByBookIndex(ctx, nil)
+				require.NoError(t, err)
+				require.True(t, res0.Trusted, "ledger index not trusted: %+v", res0)
 				prev := config.AppConfig.RootDir
 				t.Cleanup(func() { config.AppConfig.RootDir = prev })
 				config.AppConfig.RootDir = t.TempDir()
-				res, err := audiobooks.NewAudiobookService(kv).PurgeSoftDeletedBooks(ctx, false, nil)
+				res, err := audiobooks.NewAudiobookService(kv).PurgeSoftDeletedUnattended(ctx, false, nil)
 				if err != nil {
 					return 0, err
 				}

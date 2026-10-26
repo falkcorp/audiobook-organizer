@@ -6,6 +6,9 @@
 package server
 
 import (
+	"context"
+	"fmt"
+
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -445,10 +448,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.metadataFetchService != nil {
 		dupMetadataSvc = s.metadataFetchService
 	}
-	var dupDedupEng duplicates.DedupEngine
-	if s.dedupEngine != nil {
-		dupDedupEng = s.dedupEngine
-	}
 	duplicatesH := duplicates.New(
 		s.Ops(),
 		s.dedupCache,
@@ -460,7 +459,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 			}
 			return merge.NewService(s.storeForWiring())
 		},
-		dupDedupEng,
 		func() (any, error) {
 			store := s.storeForWiring()
 			if store == nil {
@@ -610,6 +608,12 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// The same check the operations handlers got (repairsOps, above): a
 	// Repairs fixer's change-journal rows on a book need its permissions.
 	audiobooksH.WithRepairsOpAccess(repairsOps)
+	audiobooksH.SetPurgeEnqueuer(func(ctx context.Context, params any) (string, error) {
+		if s.opRegistry == nil {
+			return "", fmt.Errorf("operation registry not initialized")
+		}
+		return s.opRegistry.EnqueueOp(ctx, purgeSoftDeletedOpID, params)
+	})
 	audiobooksH.SetSearchResultCached(func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool {
 		return s.audiobookService != nil && s.audiobookService.SearchIsCached(search, authorID, seriesID, f)
 	})

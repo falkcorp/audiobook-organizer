@@ -1,12 +1,13 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-10-06
+// last-edited: 2026-10-25
 
 package audiobooks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// After purging a book's files, PurgeSoftDeletedBooks removes the parent
+// After purging a book's files, PurgeSoftDeletedUnattended removes the parent
 // directories it emptied, up to RootDir. A path in a SIBLING of the root
 // ("<base>/lib2" next to "<base>/lib") is not under RootDir. Until 2026-10-06
 // such a file was deleted (only its parents were spared); now nothing outside
@@ -25,6 +26,17 @@ import (
 // reports the file it kept.
 
 func setupPurgeBoundary(t *testing.T) (*AudiobookService, *database.PebbleStore, string) {
+	t.Helper()
+	svc, store, base := setupPurgeBoundaryUntrusted(t)
+	// The purge fails closed until the operation ledger's by-book index is
+	// trusted (ErrUndoLedgerNotReady); production builds it at boot.
+	trustLedgerIndex(t, store)
+	return svc, store, base
+}
+
+// setupPurgeBoundaryUntrusted is setupPurgeBoundary with the ledger index left
+// as a fresh store has it: not built, so a purge refuses to run.
+func setupPurgeBoundaryUntrusted(t *testing.T) (*AudiobookService, *database.PebbleStore, string) {
 	t.Helper()
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -42,7 +54,25 @@ func setupPurgeBoundary(t *testing.T) (*AudiobookService, *database.PebbleStore,
 	if err := os.MkdirAll(config.AppConfig.RootDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A library that is up holds something: a purge with delete_files refuses an
+	// empty root (libraryRootReady), which is what an unmounted library looks like.
+	if err := os.WriteFile(filepath.Join(config.AppConfig.RootDir, ".gotham-mounted"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return NewAudiobookService(store), store, base
+}
+
+// trustLedgerIndex builds and verifies the by-book index of the operation
+// ledger, as the boot-time ensure does, so a purge may read it.
+func trustLedgerIndex(t *testing.T, store *database.PebbleStore) {
+	t.Helper()
+	res, err := store.EnsureOpChangeByBookIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Trusted {
+		t.Fatalf("ledger index not trusted after ensure: %+v", res)
+	}
 }
 
 func softDeleted(t *testing.T, store *database.PebbleStore, id, path string) {
@@ -90,7 +120,7 @@ func TestPurge_SingleFileInSiblingIsKeptAndReported(t *testing.T) {
 	}
 	softDeleted(t, store, "single", file)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +135,7 @@ func TestPurge_DirectoryBookInSiblingIsKeptAndReported(t *testing.T) {
 	}
 	softDeleted(t, store, "dirbook", bookDir)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +155,7 @@ func TestPurge_FileOutsideRootIsKeptAndReported(t *testing.T) {
 	}
 	softDeleted(t, store, "outside", file)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +173,7 @@ func TestPurge_DotDotEscapeIsKeptAndReported(t *testing.T) {
 	escaped := config.AppConfig.RootDir + "/Author/../../secret.m4b"
 	softDeleted(t, store, "escape", escaped)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +198,7 @@ func TestPurge_SymlinkEscapeIsKeptAndReported(t *testing.T) {
 	}
 	softDeleted(t, store, "symlinked", filepath.Join(link, "a.m4b"))
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,14 +212,16 @@ func TestPurge_RootItselfIsKeptAndReported(t *testing.T) {
 	root := config.AppConfig.RootDir
 	softDeleted(t, store, "rootbook", root)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	requireKeptOutsideRoot(t, res, store, "rootbook", root, "is the library root itself")
 }
 
-// No RootDir configured: nothing is inside it, so nothing is deleted.
+// No RootDir configured: nothing is inside it, so nothing is deleted, and a
+// purge with delete_files is refused whole (libraryRootReady) with the book
+// still in the trash.
 func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	file := filepath.Join(base, "lib", "a.m4b")
@@ -199,11 +231,19 @@ func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
 	config.AppConfig.RootDir = ""
 	softDeleted(t, store, "noroot", file)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
-	if err != nil {
-		t.Fatal(err)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
+	if !errors.Is(err, ErrLibraryRootNotReady) {
+		t.Fatalf("err = %v, want ErrLibraryRootNotReady", err)
 	}
-	requireKeptOutsideRoot(t, res, store, "noroot", file, "no library root")
+	if res == nil || !res.StoppedEarly || res.Purged != 0 {
+		t.Fatalf("result = %+v, want a refused pass that purged nothing", res)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("%s removed from disk: %v", file, err)
+	}
+	if b, _ := store.GetBookByID("noroot"); b == nil {
+		t.Error("the book was purged although the pass was refused")
+	}
 }
 
 // Inside the root the file is removed, and the parents it emptied are
@@ -221,7 +261,7 @@ func TestPurge_InsideRootRemovesFileAndParentsUpToRoot(t *testing.T) {
 	}
 	softDeleted(t, store, "inside", file)
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +296,7 @@ func TestPurge_DirectoryBookOwningFilesIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

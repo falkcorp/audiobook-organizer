@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.43.1
+// version: 1.44.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-24
 
 package organizer
 
@@ -53,10 +53,16 @@ func (o *Organizer) SetHooks(hooks OrganizeHooks) {
 // whose Author struct was not populated organized into "Unknown Author/"
 // with its AuthorID sitting right there. That is the mechanism behind the
 // 2026-08-11 mass-reorganize (audit, open question 2 — answered).
+//
+// The same-hash duplicate check is NOT a method here: it needs every holder of
+// the hash, which is the database.FileHashHolderLookup capability, reached with
+// database.BooksHoldingFileHash on whatever store is wired (looking through
+// decorators) and failing closed when the store has none. GetBookByFileHash was
+// removed from this interface with it: it names ONE holder, which can be the
+// book being organized.
 type OrganizerStore interface {
 	GetAuthorByID(id int) (*database.Author, error)
 	GetSeriesByID(id int) (*database.Series, error)
-	GetBookByFileHash(hash string) (*database.Book, error)
 	GetBookByFilePath(path string) (*database.Book, error)
 	// GetBookAuthors reads the book_authors join table — the durable record of
 	// an applied author, which resolveAuthorName prefers over the scalar
@@ -158,30 +164,83 @@ func (o *Organizer) OrganizeBook(book *database.Book) (string, string, error) {
 	// content already exists at another path under root would hit the
 	// target-exists branch first (seeing the OLD organized version) and
 	// silently no-op. Order matters.
+	//
+	// It asks for EVERY holder of the hash (database.BooksHoldingFileHash), not
+	// the one book GetBookByFileHash picks: that picks the live holder with the
+	// smallest id, which for the oldest holder is the book being organized
+	// itself, so "another book holds this file" read as "no" and both the
+	// library-copy backstop and the duplicate refusal were skipped (round 4 of
+	// #4113). A holder that cannot be listed fails the organize: not knowing is
+	// not "no duplicate".
 	if book.FileHash != nil && *book.FileHash != "" && o.store != nil {
-		existingBook, err := o.store.GetBookByFileHash(*book.FileHash)
-		if err == nil && existingBook != nil && existingBook.ID != book.ID {
-			if pathutil.IsWithin(existingBook.FilePath, o.config.RootDir) {
-				// The hash twin is another version of THIS book -- in
-				// practice the library copy metafetch made for a protected
-				// original. It is not a duplicate, so no collision hook
-				// (that hook files a dedup candidate pairing the book with
-				// its own copy; the dedup engine suppresses same-group pairs
-				// everywhere else). It is not a success either: carrying on
-				// would reach the target-exists branch, find the copy owns
-				// the target, and write a second library copy at _copy1.
-				// Callers are expected to organize the copy instead; this
-				// is the backstop for one that did not.
-				if SameVersionGroup(book, existingBook) {
-					return "", "", &LibraryCopyExistsError{BookID: book.ID, CopyID: existingBook.ID, CopyPath: existingBook.FilePath}
-				}
-				// Content-identical book already organized under a
-				// different row. This is a true duplicate — fire the
-				// collision hook so the dedup tab picks it up.
-				if o.hooks != nil {
-					o.hooks.OnCollision(book.ID, existingBook.FilePath)
-				}
-				return existingBook.FilePath, "", fmt.Errorf("duplicate file already organized at: %s", existingBook.FilePath)
+		holders, err := database.BooksHoldingFileHash(o.store, *book.FileHash)
+		if err != nil {
+			return "", "", fmt.Errorf("cannot organize %q (id=%s): cannot tell whether another book already holds this file: %w", book.Title, book.ID, err)
+		}
+		// What the refusal protects: the library gaining a second copy of bytes
+		// it already holds under another row. A book still OUTSIDE the root
+		// (an import path, a protected original) would gain one by being
+		// organized, so a twin inside the root refuses it.
+		//
+		// A book already INSIDE the root is reached here only by the direct
+		// OrganizeSingleFile callers (the library clone and the iTunes
+		// importer). OrganizeBook itself never re-lays a file out in place: it
+		// writes a NEW file at the target. The in-root re-layout that follows a
+		// metadata edit is inPlaceLanding (OrganizeOneBook), which never gets
+		// here. For such a book the pair already exists whether or not this
+		// organize runs, so the twin is reported to dedup (inRootTwins) and the
+		// organize goes on, except where the twin occupies the very target
+		// (below): that would write a _copyN of identical bytes beside it.
+		// This branch rarely fires in production for that reason.
+		bookInRoot := pathutil.IsWithin(book.FilePath, o.config.RootDir)
+		var inRootTwins []string
+		for _, existingBook := range holders {
+			// Not this book; a trashed holder is not a library book to collide
+			// with (its file is not offered to anything); one outside the
+			// library root is not an organized copy.
+			if existingBook.ID == book.ID || database.IsInTrash(existingBook) ||
+				!pathutil.IsWithin(existingBook.FilePath, o.config.RootDir) {
+				continue
+			}
+			// Another row over the very file this book names: the same bytes
+			// at the same path, not a second copy anywhere. "Duplicate file
+			// already organized at <its own path>" would be the error, and
+			// nothing would be copied into the library by organizing.
+			if existingBook.FilePath == book.FilePath {
+				continue
+			}
+			// The hash twin is another version of THIS book -- in
+			// practice the library copy metafetch made for a protected
+			// original. It is not a duplicate, so no collision hook
+			// (that hook files a dedup candidate pairing the book with
+			// its own copy; the dedup engine suppresses same-group pairs
+			// everywhere else). It is not a success either: carrying on
+			// would reach the target-exists branch, find the copy owns
+			// the target, and write a second library copy at _copy1.
+			// Callers are expected to organize the copy instead; this
+			// is the backstop for one that did not.
+			if SameVersionGroup(book, existingBook) {
+				return "", "", &LibraryCopyExistsError{BookID: book.ID, CopyID: existingBook.ID, CopyPath: existingBook.FilePath}
+			}
+			// A book already in the root, organized by a direct caller to a
+			// path its twin does not hold: report the pair, keep going.
+			if bookInRoot && existingBook.FilePath != targetPath {
+				inRootTwins = append(inRootTwins, existingBook.FilePath)
+				continue
+			}
+			// Content-identical book already organized under a
+			// different row. This is a true duplicate — fire the
+			// collision hook so the dedup tab picks it up.
+			if o.hooks != nil {
+				o.hooks.OnCollision(book.ID, existingBook.FilePath)
+			}
+			return existingBook.FilePath, "", fmt.Errorf("duplicate file already organized at: %s", existingBook.FilePath)
+		}
+		// Reached only when nothing refused (a LibraryCopyExistsError or a
+		// duplicate refusal returned above), so the pairs are reported once.
+		if o.hooks != nil {
+			for _, twinPath := range inRootTwins {
+				o.hooks.OnCollision(book.ID, twinPath)
 			}
 		}
 	}

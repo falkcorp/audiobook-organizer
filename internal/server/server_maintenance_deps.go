@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.72.0
+// version: 1.73.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-23
 
@@ -241,8 +241,8 @@ func (s *Server) RunBulkWriteBack(ctx context.Context, opID string, bookIDs []st
 	return s.runBulkWriteBack(ctx, opID, bookIDs, doRename, startIdx, progress, nil)
 }
 
-func (s *Server) RunAutoPurgeSoftDeleted(ctx context.Context, opID string) {
-	s.runAutoPurgeSoftDeleted(ctx, opID)
+func (s *Server) RunAutoPurgeSoftDeleted(ctx context.Context, opID string) error {
+	return s.runAutoPurgeSoftDeleted(ctx, opID)
 }
 
 // ---- one-shot startup ops ----

@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.10.0
-// last-edited: 2026-10-05
+// version: 1.12.0
+// last-edited: 2026-10-22
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -739,3 +739,55 @@ func TestApplyUpdates_AbsentSeriesIDIsKept(t *testing.T) {
 // The version-group hand-off surface (versionprimary.EnsureStore).
 func (m *MockBookStore) GetBookFiles(string) ([]database.BookFile, error)      { return nil, nil }
 func (m *MockBookStore) GetChaptersForBook(string) ([]database.Chapter, error) { return nil, nil }
+
+type fakeTrashPurger struct {
+	called []string
+	err    error
+}
+
+func (f *fakeTrashPurger) PurgeTrashedBookLocked(b *database.Book) error {
+	f.called = append(f.called, b.ID)
+	return f.err
+}
+
+func trashedTestBook(id string) *database.Book {
+	b := testBook(id, id)
+	yes := true
+	now := time.Now().Add(-time.Hour)
+	b.MarkedForDeletion, b.MarkedForDeletionAt = &yes, &now
+	return b
+}
+
+// A batch hard delete of a book already in the trash takes the purge's own
+// path (so an undo that still needs the book refuses it), never DeleteBook.
+func TestExecuteOperations_HardDeleteOfATrashedBookGoesThroughThePurge(t *testing.T) {
+	store := NewMockBookStore()
+	store.books["held"] = trashedTestBook("held")
+	store.books["plain"] = trashedTestBook("plain")
+	p := &fakeTrashPurger{}
+	bs := NewBatchService(store, WithTrashPurger(p))
+	held := errors.New("still needed by an undo that can run")
+	p.err = nil
+	resp := bs.ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: "plain", Action: "delete", HardDelete: true}}})
+	if resp.Success != 1 || len(p.called) != 1 || p.called[0] != "plain" {
+		t.Fatalf("plain: resp=%+v called=%v", resp, p.called)
+	}
+	p.err = held
+	resp = bs.ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: "held", Action: "delete", HardDelete: true}}})
+	if resp.Failed != 1 || resp.Results[0].Error != held.Error() {
+		t.Fatalf("held: the purge's refusal must reach the result, got %+v", resp)
+	}
+	if store.delCnt != 0 {
+		t.Errorf("DeleteBook called %d times for trashed books; the purge path owns that delete", store.delCnt)
+	}
+}
+
+// With no purge wired a trashed book's hard delete is refused, not done raw.
+func TestExecuteOperations_HardDeleteOfATrashedBookWithoutAPurgerIsRefused(t *testing.T) {
+	store := NewMockBookStore()
+	store.books["t"] = trashedTestBook("t")
+	resp := NewBatchService(store).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: "t", Action: "delete", HardDelete: true}}})
+	if resp.Failed != 1 || store.delCnt != 0 {
+		t.Fatalf("resp=%+v delCnt=%d", resp, store.delCnt)
+	}
+}

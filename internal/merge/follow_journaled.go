@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.9.1
+// version: 1.9.3
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-10-21
+// last-edited: 2026-10-24
 
 package merge
 
@@ -240,7 +240,7 @@ type UserStateReader interface {
 // The automatic hard deletes refuse a book this reports true for, because
 // deleting it would drop state that never reached a live book (a follow that
 // failed with no repair record, a follow still pending repair, a duplicate no
-// merge ever followed): audiobooks.PurgeSoftDeletedBooks,
+// merge ever followed): audiobooks.PurgeSoftDeletedUnattended,
 // reconcile.CleanupDuplicateVersionGroups and the iTunes regroup apply. The
 // iTunes clone rollback carries the clone's state to its source first and
 // uses this to confirm the move finished.
@@ -249,9 +249,9 @@ type UserStateReader interface {
 // same way (owner decision 2026-10-05): the single-book delete / "Purge
 // now" (audiobooks DeleteAudiobook) and the batch hard delete
 // (batch/service.go) carry the state to a version Audiobookshelf lists and
-// then delete, or refuse (HardDeleteKeepingUserState); the owner drops
+// then delete, or refuse (HardDeleteKeepingUserStateLocked); the owner drops
 // state on purpose only through "Discard progress and purge"
-// (DiscardUserStateThenHardDelete). NOT guarded: the diagnostics CLI's
+// (DiscardUserStateThenHardDeleteLocked). NOT guarded: the diagnostics CLI's
 // confirmed delete of invalid records (cmd/diagnostics.go, an operator's
 // repair of rows too broken to list), and the rollbacks that delete a row a
 // request just created (organizer, the versions handlers), which no user
