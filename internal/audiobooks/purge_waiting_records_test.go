@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_waiting_records_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c27a90d3-61e4-4b58-8f0a-d3e19b6a7c42
 // last-edited: 2026-10-26
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -210,6 +211,56 @@ func TestForgetWaitingFileRecords_DeletesOnlyWaitingRecordsAndAudits(t *testing.
 	assert.Equal(t, 2, again.NoLongerWaiting, "the two forgotten paths are not waiting any more")
 	assert.Len(t, rec.entries, 1, "nothing forgotten, nothing recorded")
 	assert.ElementsMatch(t, []string{pendingFilePrefix + "C", pendingFilePrefix + "D"}, journalKeys(t, store))
+}
+
+// A waiting record whose path is not inside the library root as it is now (the
+// root setting changed after the record was journaled) is kept, with the reason,
+// and its path is never stat'ed or opened: the recheck confines the path on the
+// same terms a purge does before it looks at the disk. The folder outside the
+// root holds a file, so a recheck that did look would answer "its folder holds
+// files again" instead.
+func TestForgetWaitingFileRecords_APathOutsideTheCurrentRootIsKeptAndNeverStatted(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	svc.auditOverride = &fakeRecorder{}
+	lib := filepath.Join(base, "lib")
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(lib, "Gotham", "dark-victory.m4b"))
+
+	outside := filepath.Join(base, "elsewhere", "Wayne")
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+	writeFile(t, filepath.Join(outside, "bane.m4b"))
+	gone := journalGone(t, svc, "O", outside, "hush.m4b")
+	require.NoError(t, svc.setWaitingForFolder(&pendingFile{bookIDs: []string{"O"}}, true))
+	inside := journalGone(t, svc, "I", filepath.Join(lib, "Arkham"), "knightfall.m4b")
+	require.NoError(t, svc.setWaitingForFolder(&pendingFile{bookIDs: []string{"I"}}, true))
+	shown := listedWaiting(t, svc)
+	require.ElementsMatch(t, []string{gone, inside}, shown)
+
+	// The recheck stats from one goroutine per path, so the record is locked.
+	var mu sync.Mutex
+	var statted []string
+	prev := rootStat
+	rootStat = func(p string) (os.FileInfo, error) {
+		mu.Lock()
+		statted = append(statted, p)
+		mu.Unlock()
+		return prev(p)
+	}
+	t.Cleanup(func() { rootStat = prev })
+
+	res, err := svc.ForgetWaitingFileRecords(context.Background(), "owner", shown)
+	require.NoError(t, err)
+	require.Len(t, res.Kept, 1, "%+v", res)
+	assert.Equal(t, gone, res.Kept[0].Path)
+	assert.Contains(t, res.Kept[0].Reason, "no longer inside the library root")
+	assert.Equal(t, []string{inside}, res.ForgottenPaths, "the path inside the root is still forgotten")
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Contains(t, statted, inside, "the recheck did stat the path inside the root")
+	for _, p := range statted {
+		assert.NotContains(t, p, "elsewhere", "the path outside the root is never stat'ed")
+	}
+	assert.ElementsMatch(t, []string{pendingFilePrefix + "O"}, journalKeys(t, store), "only the outside record is left")
+	assert.True(t, fileExists(filepath.Join(outside, "bane.m4b")), "nothing outside the root is touched")
 }
 
 // A path with a record that is not marked is not "waiting" at all: it is not

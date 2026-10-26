@@ -1,10 +1,10 @@
 // file: web/src/utils/combineOutcome.test.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: a2d94f60-8b17-4c3e-b5d9-1e7c0a6f3b85
 // last-edited: 2026-10-26
 
 import { describe, expect, it } from 'vitest';
-import { describeCombineOutcome } from './combineOutcome';
+import { COMBINE_RETRY_LATER_MESSAGE, describeCombineOutcome } from './combineOutcome';
 
 const ok = { primary_id: 'book-a', files_moved: 3, books_deleted: 2 };
 
@@ -143,5 +143,60 @@ describe('describeCombineOutcome', () => {
     expect(p.message).toContain('operation op-c');
     expect(p.undoOperationId).toBe('op-c');
     expect(p.actionLabel).toBe('Undo');
+  });
+
+  it('a combine refused while the library loads is a warning to try again, with no Undo and no failure text', () => {
+    const p = describeCombineOutcome({
+      status: 'completed',
+      result: {
+        primary_id: 'book-a',
+        files_moved: 0,
+        books_deleted: 0,
+        retry_later: true,
+        retry_reason: 'try again once the library index has finished loading',
+        message: 'ignored: the web text is its own',
+      },
+      operationId: 'op-c',
+    });
+    expect(p.severity).toBe('warning');
+    expect(p.message).toBe(COMBINE_RETRY_LATER_MESSAGE);
+    expect(p.message).toContain('The library is still loading; try the combine again shortly');
+    expect(p.message).not.toMatch(/^Combined/);
+    expect(p.message).not.toContain('did not complete');
+    expect(p.message).not.toContain('refused before changing anything');
+    expect(p.undoOperationId).toBeUndefined();
+    expect(p.actionLabel).toBeUndefined();
+  });
+
+  it('retry-later is read before the status, so a status that is not "completed" still shows it', () => {
+    const p = describeCombineOutcome({
+      status: 'failed',
+      errorMessage: 'boom',
+      result: { ...ok, retry_later: true },
+      operationId: 'op-c',
+    });
+    expect(p.severity).toBe('warning');
+    expect(p.message).toBe(COMBINE_RETRY_LATER_MESSAGE);
+    expect(p.undoOperationId).toBeUndefined();
+  });
+
+  it('a result that is both failed and retry_later is still a failure (the server never sends it)', () => {
+    const p = describeCombineOutcome({
+      status: 'completed',
+      result: { ...ok, retry_later: true, failed: true, error: 'x' },
+      operationId: 'op-c',
+    });
+    expect(p.severity).toBe('error');
+    expect(p.message).not.toBe(COMBINE_RETRY_LATER_MESSAGE);
+  });
+
+  it('retry_later false or absent changes nothing about a plain success', () => {
+    const p = describeCombineOutcome({
+      status: 'completed',
+      result: { ...ok, operation_id: 'op-c', retry_later: false },
+      operationId: 'op-c',
+    });
+    expect(p.severity).toBe('success');
+    expect(p.undoOperationId).toBe('op-c');
   });
 });

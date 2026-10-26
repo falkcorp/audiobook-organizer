@@ -1,5 +1,5 @@
 // file: web/src/components/operations/OperationTrackerProvider.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d2f6b83-0a41-4c75-8e19-5b3a7c1d4e60
 // last-edited: 2026-10-26
 
@@ -235,6 +235,31 @@ describe('OperationTrackerProvider', () => {
     expect(screen.getByTestId('locked')).toHaveTextContent('a,b,c');
     await act(async () => finishFirst('completed'));
     await waitFor(() => expect(screen.getByTestId('locked')).toHaveTextContent('b,c'));
+  });
+
+  it('a combine that was refused while the library loads ends as a warning to try again: no Undo, the books are released', async () => {
+    const poll = deferPoll('op-2');
+    api.getOperationResult.mockResolvedValue({
+      result_data: {
+        primary_id: 'b',
+        files_moved: 0,
+        books_deleted: 0,
+        retry_later: true,
+        retry_reason: 'try again once the library index has finished loading',
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByText('combine'));
+    expect(screen.getByTestId('locked')).toHaveTextContent('b,c');
+    await act(async () => poll.resolve('completed'));
+    await waitFor(() => expect(screen.getByTestId('locked')).toHaveTextContent(''));
+    expect(lastToast().severity).toBe('warning');
+    expect(lastToast().message).toContain(
+      'The library is still loading; try the combine again shortly'
+    );
+    expect(lastToast().action?.label).toBe('View operation');
+    expect(api.revertOperation).not.toHaveBeenCalled();
   });
 
   it('stops following an operation the server no longer knows: says the outcome is unknown and releases the books', async () => {

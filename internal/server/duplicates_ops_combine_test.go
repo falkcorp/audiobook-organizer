@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops_combine_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d2e6b14-3a87-4c50-b1f9-7e0a5c3d8f26
 // last-edited: 2026-10-26
 
@@ -95,6 +95,72 @@ func TestBookCombineOpRun_IncompleteCarriesTheUndoIDs(t *testing.T) {
 	require.Contains(t, got.Error, "stopped part-way")
 	require.Contains(t, got.Error, "Revert operation op-combine-run")
 	require.NotContains(t, got.Error, "injected soft-delete failure", "the store error stays in the log")
+}
+
+// A combine refused only because the library index is still loading (its
+// complete holder list is not available yet) ends as "retry later": the op
+// returns no error, the result says retry_later with the reason, it is not
+// failed and carries nothing to undo, and nothing was written. The same combine
+// succeeds once the index serves.
+func TestBookCombineOpRun_WarmupRefusalIsRetryLaterNotAFailure(t *testing.T) {
+	store := newRerouteStore(t)
+	path := "/lib/Gotham/Dark Victory/dark-victory.m4b"
+	holder := createRerouteBook(t, store, "Dark Victory", nil)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "dark-victory-row", BookID: holder, FilePath: path, Format: "m4b"}))
+	keep := createRerouteBook(t, store, "The Long Halloween", nil)
+	absorbed, err := store.CreateBook(&database.Book{ID: "hush-absorbed", Title: "Hush", Format: "m4b", FilePath: path})
+	require.NoError(t, err)
+
+	// Let the async warmup publish memdb first, so flipping UseMemDB back on
+	// later is deterministic rather than racing it.
+	store.WaitForWarmup()
+	require.True(t, store.IsMemReady(), "fixture: memdb must have published")
+
+	// memdb is not serving, as in the minutes after a restart: the complete
+	// path lookup is unavailable.
+	store.UseMemDB = false
+	_, lerr := database.BookFileRowsAtPathStrict(store, "/lib/Gotham/probe.m4b")
+	require.ErrorIs(t, lerr, database.ErrOwnershipLookupIncomplete, "fixture: the complete lookup must be unavailable")
+
+	got, rep, runErr := runCombineOp(t, store, dedup.BookCombineParams{KeepID: keep, MergeIDs: []string{absorbed.ID}})
+	require.NoError(t, runErr, "a warmup refusal does not fail the op")
+	require.True(t, got.RetryLater)
+	require.False(t, got.Failed)
+	require.False(t, got.Incomplete)
+	require.Equal(t, keep, got.PrimaryID)
+	require.Contains(t, got.RetryReason, "once the library index has finished loading")
+	require.Contains(t, got.Message, "still loading")
+	require.Empty(t, got.OperationID, "nothing was journaled, so there is nothing to undo")
+	require.Empty(t, got.JournalID)
+	require.Zero(t, got.BooksDeleted)
+	require.Equal(t, got, rep.result)
+	require.False(t, isSoftDeleted(mustGetRerouteBook(t, store, absorbed.ID)), "the absorbed book is untouched")
+
+	raw, merr := json.Marshal(got)
+	require.NoError(t, merr)
+	require.Contains(t, string(raw), `"retry_later":true`)
+	require.NotContains(t, string(raw), `"failed"`)
+
+	store.UseMemDB = true
+	again, _, runErr := runCombineOp(t, store, dedup.BookCombineParams{KeepID: keep, MergeIDs: []string{absorbed.ID}})
+	require.NoError(t, runErr)
+	require.False(t, again.RetryLater, again.RetryReason)
+	require.False(t, again.Failed)
+	require.Equal(t, 1, again.BooksDeleted, "the same combine goes through once the index serves")
+}
+
+// A refusal that is not the warmup one stays a failure with a failed result.
+func TestBookCombineOpRun_OtherRefusalIsNotRetryLater(t *testing.T) {
+	store := newRerouteStore(t)
+	keep := createRerouteBook(t, store, "Keep", nil)
+	absorbed := createRerouteBook(t, store, "Absorbed", nil)
+	trashRerouteBook(t, store, absorbed)
+
+	got, _, err := runCombineOp(t, store, dedup.BookCombineParams{KeepID: keep, MergeIDs: []string{absorbed}})
+	require.Error(t, err)
+	require.True(t, got.Failed)
+	require.False(t, got.RetryLater)
+	require.Empty(t, got.RetryReason)
 }
 
 func TestBookCombineOpRun_RequiresKeepAndMergeIDs(t *testing.T) {

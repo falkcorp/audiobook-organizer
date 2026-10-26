@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-26
 
@@ -91,7 +91,7 @@ var errCarryCheckFailed = errors.New("check failed")
 var ErrCarryPrecheckRefused = errors.New("merge: carry refused by its precheck")
 
 // PrecheckRefusedError is the error CarryStateThenHardDelete (and the
-// no-state branch of HardDeleteKeepingUserState) returns when the caller's
+// no-state branch of HardDeleteKeepingUserStateLocked) returns when the caller's
 // precheck refused. It satisfies errors.Is for ErrCarryPrecheckRefused AND for
 // whatever the precheck itself returned, and PrecheckCause hands that cause
 // back unwrapped, so a caller can report the precheck's own message instead of

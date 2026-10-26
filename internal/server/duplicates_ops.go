@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.31.0
+// version: 2.31.1
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-26
 
@@ -329,6 +329,25 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 			// op, so reverting the op undoes the combine.
 			res, err := ms.CombineBooksWithOptions(append(append([]string{}, p.MergeIDs...), p.KeepID), p.KeepID, p.Override,
 				merge.CombineOptions{OperationID: opID, Context: ctx})
+			if err != nil && merge.IsRetryLater(err) {
+				// Refused before the journal, with nothing written, because the
+				// library index (the complete list of the rows holding a path) is
+				// still loading. Temporary, and the same combine succeeds once it
+				// has: the op ends as "retry later", not as a failure, and the
+				// result says so. The error text, which names the cause, is kept
+				// in retry_reason.
+				op.SetStatus("retry_later")
+				logging.Warn(ctx, "book combine not run: the library index is still loading; nothing changed", "err", err)
+				retry := BookCombineOpResult{PrimaryID: p.KeepID, RetryLater: true, RetryReason: err.Error(), Message: combineRetryLaterMessage}
+				if serr := opsregistry.ReporterSetResult(reporter, retry); serr != nil {
+					logging.Warn(ctx, "book combine: retry-later payload not stored", "err", serr)
+				}
+				if s.activityWriter != nil && opID != "" {
+					activity.FlushOperation(s.activityWriter, opID)
+					activity.EmitInfo(s.activityWriter, opID, "dedup.book-combine", "dedup", retry.Message, activity.AlwaysShow)
+				}
+				return nil
+			}
 			if err != nil {
 				op.SetStatus("failed")
 				failed := BookCombineOpResult{PrimaryID: p.KeepID, Failed: true, Error: err.Error()}
@@ -376,6 +395,11 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 // stored when the combine returned an error; Incomplete is set with it when the
 // combine had journaled its undo pointer first (merge.CombineIncompleteError):
 // it may have changed the library, and OperationID / JournalID undo that.
+//
+// RetryLater is the third ending: the combine was refused, with nothing written,
+// only because the library index is still loading (merge.IsRetryLater). The op
+// is not failed and there is nothing to undo; RetryReason is the refusal's text
+// and Message says to try again shortly. Failed and RetryLater are never both set.
 type BookCombineOpResult struct {
 	PrimaryID    string `json:"primary_id"`
 	FilesMoved   int    `json:"files_moved"`
@@ -392,7 +416,13 @@ type BookCombineOpResult struct {
 	Failed         bool     `json:"failed,omitempty"`
 	Incomplete     bool     `json:"incomplete,omitempty"`
 	Error          string   `json:"error,omitempty"`
+	RetryLater     bool     `json:"retry_later,omitempty"`
+	RetryReason    string   `json:"retry_reason,omitempty"`
 }
+
+// combineRetryLaterMessage is the result's message when the combine was not run
+// because the library index is still loading.
+const combineRetryLaterMessage = "The library is still loading; try the combine again shortly. Nothing was combined."
 
 // newBookCombineOpResult builds the success payload from the combine's result,
 // with the message the synchronous endpoint used to return.

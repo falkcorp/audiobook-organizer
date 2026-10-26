@@ -1,5 +1,5 @@
 // file: internal/batch/trash_grants.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5e7d5df1-473b-4136-b691-2798b1df7c12
 // last-edited: 2026-10-26
 
@@ -69,7 +69,7 @@ func libraryStateLeavesTrash(updates map[string]any) bool {
 // and needs library.organize; a book that was not in the trash and is after the
 // edit is a trash and needs library.delete. A nil receiver is a caller with
 // neither grant (see TrashGrants). An update that sets marked_for_deletion to
-// false never gets here: it is a restore through merge.RestoreFromTrash and is
+// false never gets here: it is a restore through merge.RestoreFromTrashLocked and is
 // judged by checkRestore.
 func (g *TrashGrants) checkRow(before, after *database.Book, updates map[string]any) error {
 	if g == nil {
@@ -91,7 +91,7 @@ func (g *TrashGrants) checkRow(before, after *database.Book, updates map[string]
 
 // checkRestore judges an update payload that sets marked_for_deletion=false for
 // one row, and the "restore" action: both are a restore
-// (merge.RestoreFromTrash), so a book in the trash needs library.organize, and
+// (merge.RestoreFromTrashLocked), so a book in the trash needs library.organize, and
 // a book that is not in it is a plain edit. This is the early refusal, on the
 // row the caller read before taking the restore's locks; judgeRestore repeats
 // the decision on the row as locked. A nil receiver is a caller holding
@@ -107,14 +107,14 @@ func (g *TrashGrants) checkRestore(book *database.Book) error {
 	return nil
 }
 
-// restoreJudge is the judge for merge.RestoreFromTrash for a restore carrying
+// restoreJudge is the judge for merge.RestoreFromTrashLocked for a restore carrying
 // updates (nil for the "restore" action): judgeRestore with the payload in hand,
 // so a refusal can say which of its causes applies.
 func (g *TrashGrants) restoreJudge(updates map[string]any) func(before, after *database.Book) error {
 	return func(before, after *database.Book) error { return g.judgeRestore(before, after, updates) }
 }
 
-// judgeRestore is the verdict merge.RestoreFromTrash asks for, before it
+// judgeRestore is the verdict merge.RestoreFromTrashLocked asks for, before it
 // touches the row's merge redirect and again inside its write: before is the
 // row as read (as locked, the second time), after the row as it would be
 // written (the restore and the payload applied). A book in the trash needs
@@ -129,7 +129,7 @@ func (g *TrashGrants) restoreJudge(updates map[string]any) func(before, after *d
 // meanwhile". Two inputs reach it. A payload that sets library_state "deleted"
 // while restoring (the handler already asks for library.delete for that label,
 // but cannot make the service honour both halves). And a row another writer
-// trashed between RestoreFromTrash's read and its write: the restore rule ran
+// trashed between RestoreFromTrashLocked's read and its write: the restore rule ran
 // on the live row it read, so only the payload's flag change lands on a row
 // that still carries the label. updates tells them apart for the message.
 //

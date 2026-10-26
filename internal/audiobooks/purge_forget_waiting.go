@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_forget_waiting.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a46786b9-1f13-4259-bd41-49644680434d
 // last-edited: 2026-10-26
 
@@ -132,6 +132,16 @@ func (svc *AudiobookService) lockReplayWithin(ctx context.Context, d time.Durati
 // "" when the file is still not there and its folder is still missing or empty,
 // otherwise the reason the record must stay (the next purge decides it).
 func stillWaitingReason(path, root string) string {
+	// The record's path was confined to the library root when it was journaled,
+	// but root_dir may have changed since. Confine it again, on the same terms a
+	// purge does, before anything is stat'ed or opened: a path that is no longer
+	// inside the root is never touched, and its record stays.
+	if err := purgePathInsideRoot(path, root); err != nil {
+		if errors.Is(err, errPathLookupFailed) {
+			return fmt.Sprintf("cannot tell whether it is inside the library root: %v", err)
+		}
+		return fmt.Sprintf("it is no longer inside the library root: %v", err)
+	}
 	if _, err := rootStat(path); err == nil {
 		return "the file is there again"
 	} else if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
@@ -270,7 +280,9 @@ func (svc *AudiobookService) ForgetWaitingFileRecords(ctx context.Context, actor
 			continue
 		}
 		candidates = append(candidates, f)
-		candidatePaths = append(candidatePaths, p)
+		// The stored path, not the request's string: the two are equal here, but
+		// only the stored one was journaled by the server.
+		candidatePaths = append(candidatePaths, f.path)
 	}
 	reasons := recheckWaiting(candidatePaths, root, rootStatTimeout)
 	var ids []string
