@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
 // last-edited: 2026-10-26
 //
@@ -8,6 +8,7 @@
 package scanner
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -135,7 +136,23 @@ func lookupScanExisting(book *Book, verdict fileOwnershipVerdict, fileHash *stri
 			// besides the vote this branch skips. Without it a tagged copy of
 			// a retired multi-file version has no hashes, reads as no match,
 			// and relinks the shell onto the copy with live rows of its own.
-			hashSegments(book)
+			//
+			// Content that could not be hashed is not content that does not
+			// match: a segment that cannot be read (a share that blinked, a
+			// file still being written) leaves the list short of hashes, and
+			// past 20% unreadable it falls under the 80% bar and reads as "not
+			// retired"; a single file whose hash failed has no hash to judge.
+			// Either way the shell would be relinked onto the copy with live
+			// rows of its own, so the book cannot be proven not to be a
+			// retired version's and the scan fails closed. The files are
+			// untouched and import on a later scan once they can be read, the
+			// same rule as a failing duplicate-hash lookup.
+			if herr := hashSegments(book); herr != nil {
+				return nil, fmt.Errorf("skipping import of %s: retired-version check undeterminable: %w", book.FilePath, herr)
+			}
+			if len(book.SegmentFiles) <= 1 && (fileHash == nil || *fileHash == "") {
+				return nil, fmt.Errorf("skipping import of %s: retired-version check undeterminable: the file could not be hashed", book.FilePath)
+			}
 			if err := e.lookupRetiredContent(book, fileHash); err != nil {
 				return nil, err
 			}
@@ -166,7 +183,7 @@ func lookupScanExisting(book *Book, verdict fileOwnershipVerdict, fileHash *stri
 // a copy of a retired version's bytes (the same file dropped in again, or a
 // re-download) was imported as a brand new book. A single file is judged by
 // its hash; a segment list by the segments' hashes (kept on book.SegmentHashes
-// by lookupSegments) at the same 80% bar the live segment vote uses.
+// by hashSegments) at the same 80% bar the live segment vote uses.
 //
 // database.RetiredHoldersOfHash is the lookup: it needs no memdb while no
 // retired version exists and reads Pebble while memdb is warming. It fails
@@ -302,22 +319,36 @@ func (e *scanExisting) lookupHashes(book *Book, fileHash *string) error {
 }
 
 // hashSegments hashes every segment file of a multi-file book into
-// book.SegmentHashes, skipping files already hashed. A file that cannot be read
-// gets no entry, so it casts no vote and counts toward no retired-content match.
-// It is the only writer of SegmentHashes: the live segment vote
+// book.SegmentHashes, skipping files already hashed (the hashes live as long as
+// the Book does). It is the only writer of SegmentHashes: the live segment vote
 // (lookupSegments) and the retired-content check (lookupRetiredContent) both
 // read what it leaves, and createBookFilesForBookWithAudio reuses it instead of
 // hashing again.
-func hashSegments(book *Book) {
+//
+// A file that cannot be read, or hashes to nothing, gets no entry, so it casts
+// no vote; the error names how many failed and the first. The live vote carries
+// on with what it has and ignores the error. The retired-content check cannot:
+// a segment list missing hashes can fall under the 80% bar by omission, so it
+// fails closed on the error (see lookupScanExisting).
+func hashSegments(book *Book) error {
 	if len(book.SegmentFiles) <= 1 {
-		return
+		return nil
 	}
+	failed := 0
+	var first error
 	for _, segFile := range book.SegmentFiles {
 		if book.SegmentHashes[segFile] != "" {
 			continue
 		}
 		h, herr := ComputeFileHash(segFile)
-		if herr != nil || h == "" {
+		if herr == nil && h == "" {
+			herr = errors.New("empty hash")
+		}
+		if herr != nil {
+			failed++
+			if first == nil {
+				first = fmt.Errorf("hash %s: %w", segFile, herr)
+			}
 			continue
 		}
 		if book.SegmentHashes == nil {
@@ -325,6 +356,10 @@ func hashSegments(book *Book) {
 		}
 		book.SegmentHashes[segFile] = h
 	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d segment(s) could not be hashed, first: %w", failed, len(book.SegmentFiles), first)
+	}
+	return nil
 }
 
 // lookupSegments runs the multi-file vote once: every segment file is hashed
@@ -342,7 +377,9 @@ func (e *scanExisting) lookupSegments(book *Book) {
 		return
 	}
 	store := getStore()
-	hashSegments(book)
+	// A segment that cannot be hashed casts no vote; hashSegments' error only
+	// matters to the retired-content check.
+	_ = hashSegments(book)
 	bookVotes := make(map[string]int)
 	bookCandidates := make(map[string]*database.Book)
 	for _, segFile := range book.SegmentFiles {

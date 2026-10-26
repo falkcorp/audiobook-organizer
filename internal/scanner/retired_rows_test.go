@@ -1,5 +1,5 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
 // last-edited: 2026-10-26
 
@@ -493,6 +493,54 @@ func TestRetiredShellOrganizerID_MultiFileTaggedFilesWithOtherContentAreNotAHit(
 	require.Nil(t, e.retired)
 	require.NotNil(t, e.byOrgID)
 	require.Len(t, book.SegmentHashes, 2, "the segment hashes are kept for the row minting")
+}
+
+// Content that cannot be hashed is not content that does not match. A segment
+// of a tagged copy that cannot be read leaves the segment list short of hashes;
+// with one of two missing the readable segment is a 1/2 match, under the 80%
+// bar, which read as "not a retired version" and relinked the shell onto the
+// copy with live rows of its own. The scan fails closed instead: nothing is
+// relinked and no live row is minted, and the files import once readable.
+func TestRetiredShellOrganizerID_MultiFileUnreadableSegmentFailsClosed(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, _ := f.retiredMultiShellAt("shellm3", "seg-one-bytes", "seg-two-bytes")
+	m1 := f.write("movedm3/01.mp3", "seg-one-bytes")
+	m2 := filepath.Join(f.root, "movedm3", "02.mp3") // listed, but gone before it could be hashed
+	dir := filepath.Dir(m1)
+	h1, err := ComputeFileHash(m1)
+	require.NoError(t, err)
+
+	_, lerr := lookupScanExisting(&Book{FilePath: dir, SegmentFiles: []string{m1, m2}, BookOrganizerID: shell.ID}, fileOwnershipVerdict{}, &h1)
+	require.Error(t, lerr)
+	require.Contains(t, lerr.Error(), "retired-version check undeterminable")
+	require.Contains(t, lerr.Error(), m2, "the unreadable segment is named")
+
+	serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: dir, SegmentFiles: []string{m1, m2}, FileHash: h1, BookOrganizerID: shell.ID})
+	require.Error(t, serr)
+	require.Contains(t, serr.Error(), "retired-version check undeterminable")
+	got, err := f.store.GetBookByID(shell.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, dir, got.FilePath, "the shell must not be relinked onto content that could not be judged")
+	require.Empty(t, f.liveRowsAt(m1))
+	require.Empty(t, f.liveRowsAt(m2))
+}
+
+// The single-file twin: a tagged copy whose hash could not be computed has
+// nothing to judge, so the shell is not accepted as its row.
+func TestRetiredShellOrganizerID_SingleFileWithoutHashFailsClosed(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	shell, _, _ := f.retiredShellAt("shell-tag2/B.mp3", "tagged-bytes")
+	moved := f.write("moved2/B.mp3", "tagged-bytes")
+	empty := ""
+
+	for name, fileHash := range map[string]*string{"nil": nil, "empty": &empty} {
+		t.Run(name, func(t *testing.T) {
+			_, lerr := lookupScanExisting(&Book{FilePath: moved, BookOrganizerID: shell.ID}, fileOwnershipVerdict{}, fileHash)
+			require.Error(t, lerr)
+			require.Contains(t, lerr.Error(), "retired-version check undeterminable")
+		})
+	}
+	require.Empty(t, f.liveRowsAt(moved))
 }
 
 // A shell's own folder rescanned after its files changed is judged by the path
