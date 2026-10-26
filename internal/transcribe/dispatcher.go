@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -438,6 +438,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// sick machine not yet asked: the first in priority order that is not
 	// misconfigured or in cooldown. A machine with no such endpoint fails.
 	runCanaries := func() {
+		if ctx.Err() != nil {
+			// A cancelled op is no evidence about any machine: ask none (and log
+			// none as sick). The round loop returns the cancellation next.
+			return
+		}
 		var (
 			wg sync.WaitGroup
 			mu sync.Mutex

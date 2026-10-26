@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -8,6 +8,7 @@ package transcribe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -721,5 +722,30 @@ func TestPool_ALoneSickWorkersEarlierStrikeIsWithheldWhenItFailsTheCanary(t *tes
 	}
 	if got := p.canaryLog(); len(got) != 1 {
 		t.Errorf("canaries = %v, want one", got)
+	}
+}
+
+// A dispatch cancelled while its canaries run ends with the cancellation, not
+// as ErrPoolUnavailable: a cancelled op is no verdict about any machine, and
+// the ops must not count it toward their unavailable streak.
+func TestPool_ACancelDuringTheCanaryIsACancellationNotAnUnavailablePool(t *testing.T) {
+	p := newFaultPool(t, 2, 16, func(_ string, id string) BatchResult {
+		if strings.HasPrefix(id, "loop") {
+			return BatchResult{Error: timeoutText}
+		}
+		return BatchResult{Text: "T:" + id}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := map[string]string{}
+	for _, id := range loopers(32, "loop") {
+		jobs[id] = "unused"
+	}
+	_, err := dispatchPool(ctx, p.h.eps, nil, jobs, poolOptions{canary: func(ctx context.Context, _ gatedEndpoint) error {
+		cancel()
+		return ctx.Err()
+	}}, p.send)
+	if !errors.Is(err, context.Canceled) || IsPoolUnavailable(err) {
+		t.Fatalf("err = %v, want the cancellation and not ErrPoolUnavailable", err)
 	}
 }

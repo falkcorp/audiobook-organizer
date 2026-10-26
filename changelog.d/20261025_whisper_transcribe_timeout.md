@@ -43,7 +43,8 @@
   machine is first sent a canary clip (`internal/transcribe/canary_clip.wav`:
   2.2 s of synthesised speech, "Welcome to Gotham City.", 16 kHz mono PCM, made
   with eSpeak NG by `scripts/make_canary_clip.sh`) through the worker's
-  `/transcribe` route: one port per machine, a 30 s limit, at most once per
+  `/transcribe` route: one port per machine, a 60 s limit (one clip's floor; the
+  model reload it pays measured about 7 s), at most once per
   machine per dispatch. A machine that answers it without an error is decoding,
   so its timeouts are about the clips: it is asked again and its answers are
   believed, and the jobs of a fault made of timeouts go back in requests of at

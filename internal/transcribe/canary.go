@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-26
 
@@ -36,12 +36,16 @@ var canaryClip []byte
 // canaryFileName is the upload name of the canary clip, the key a worker logs.
 const canaryFileName = "canary.wav"
 
-// canaryTimeout bounds one canary request. A sound worker answers the clip in
-// a few seconds; the allowance covers a decode child reloading its model after
-// the kill that ended its last timeout. A worker that cannot answer two
-// seconds of speech in that time is not one whose timeouts say anything about
-// the clips.
-var canaryTimeout = 30 * time.Second // a var so tests do not wait it out
+// canaryTimeout bounds one canary request. The canary follows a timeout fault,
+// and a worker restarts its decode child lazily, so the canary pays a model
+// load first: about 7 s for whisper-small.en on the production M1 Max (measured
+// from a cold worker, Hugging Face revision check included), then well under a
+// second for the clip. The allowance is the worker's own per-clip floor (60 s),
+// so the canary never gets more than one clip's time, with room for a slow
+// load. Deriving it from child_ready_timeout_s, as requestTimeout does, would
+// allow 360 s per canary; a machine that needs that long to load a model and
+// decode two seconds of speech is the sick machine the canary is there to find.
+var canaryTimeout = 60 * time.Second // a var so tests do not wait it out
 
 // canaryFunc sends the canary clip to one endpoint: nil when the worker
 // answered it without an error (any text, or none from a worker whose VAD
