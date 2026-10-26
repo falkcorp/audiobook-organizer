@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.25.0
+// version: 1.26.1
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: author / series
@@ -209,18 +209,21 @@ func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params 
 // because that message is the only place the user learns why their pick lost;
 // until 2026-09-02 both came back as a generic 500 and the reason was only in
 // the server log. A combine refused only because the library index is still
-// loading is 503 (COMBINE_RETRY_LATER) with Retry-After. Anything else is the 500
-// it always was.
+// loading, or because other writers kept changing its files, is 503
+// (COMBINE_RETRY_LATER) with Retry-After. Anything else is the 500 it always was.
 func respondMergeError(c *gin.Context, err error, fallback string) {
 	var notFound *merge.BookNotFoundError
 	switch {
 	case errors.As(err, &notFound):
 		httputil.RespondWithNotFound(c, "book", notFound.BookID)
 	case merge.IsRetryLater(err):
-		// Nothing was written: the complete holder list a combine needs is not
-		// available yet. The same request succeeds once the library index has
-		// loaded, so this is 503 with the reason, not the generic 500 that hid it.
-		logger.New("duplicates").Warn("merge refused until the library index loads path=%s err=%s",
+		// No absorbed file moved: the complete holder list a combine needs is not
+		// available yet, or other writers kept changing the files the combine
+		// moves. The survivor's own-file attach may already have run, which is
+		// harmless to repeat. The same request succeeds once the library index has
+		// loaded or the rows settle, so this is 503 with the reason, not the
+		// generic 500 that hid it.
+		logger.New("duplicates").Warn("merge refused for now, retry later path=%s err=%s",
 			logger.SanitizeLogValue(c.FullPath()), logger.SanitizeLogValue(fmt.Sprint(err)))
 		c.Header("Retry-After", "30")
 		httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "COMBINE_RETRY_LATER")

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_backfill.go
-// version: 2.8.5
+// version: 2.9.0
 // guid: 1f6b3d28-9a47-4c50-8e21-7b0c4a9d6e35
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // Package maintenance — op maintenance.tag-backfill.
 //
@@ -331,9 +331,17 @@ func (p *Plugin) runTagBackfill(ctx context.Context, raw json.RawMessage, report
 				if refused, ok := errors.AsType[*database.BookFileRowsRefusedError](err); ok {
 					written += refused.Committed
 					notWritten += len(refused.RefusedFileIDs)
+					// Two different causes, worded differently: a deleted book or
+					// row, or a row other writers kept changing (the scan's own
+					// upserts, a create claiming its iTunes ID), which is busy, not
+					// gone, and is picked up by the next run.
+					cause := "their book or the row itself was deleted during the run"
+					if errors.Is(err, database.ErrBookFileConflict) {
+						cause = "other writers kept changing the row while it was being written (it still exists; the next run picks it up)"
+					}
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
-						"%d row(s) not written: their book or the row itself was deleted during the run (missing books %v, reason by row %v); %d rows of the batch written",
-						len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.Reasons, refused.Committed))
+						"%d row(s) not written: %s (missing books %v, reason by row %v); %d rows of the batch written",
+						len(refused.RefusedFileIDs), cause, refused.MissingBookIDs, refused.Reasons, refused.Committed))
 					pending = pending[n:]
 					continue
 				}

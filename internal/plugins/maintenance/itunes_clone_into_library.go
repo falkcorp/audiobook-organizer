@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -1269,13 +1269,16 @@ func (r *icRunner) removeVersionClone(rec *icRecord) error {
 	for _, f := range rows {
 		present[f.ID] = true
 	}
-	var ids []string
+	var refs []database.BookFileRef
 	for _, pr := range rec.Pairs {
 		if present[pr.CloneFileID] {
-			ids = append(ids, pr.CloneFileID)
+			// The clone book is the one these rows were found under: a row a
+			// regroup moved off it meanwhile is refused, not deleted from
+			// wherever it went.
+			refs = append(refs, database.BookFileRef{BookID: rec.CloneBookID, FileID: pr.CloneFileID})
 		}
 	}
-	if err := r.store.DeleteBookFilesByIDs(ids); err != nil {
+	if _, err := r.store.DeleteBookFilesByIDs(refs); err != nil {
 		return fmt.Errorf("delete clone rows: %w", err)
 	}
 	clone, err := r.store.GetBookByID(rec.CloneBookID)

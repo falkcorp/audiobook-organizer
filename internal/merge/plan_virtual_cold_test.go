@@ -1,12 +1,13 @@
 // file: internal/merge/plan_virtual_cold_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 6f1b7c2e-3d54-4a8e-9b0c-2e7d5a4f1c83
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	ulid "github.com/oklog/ulid/v2"
@@ -283,6 +284,11 @@ func TestCombineBooks_UnreadableHolderOfAnAbsorbedPathRefusesBeforeJournaling(t 
 func TestIsRetryLater(t *testing.T) {
 	assert.True(t, IsRetryLater(&rowTakeUnconfirmedError{holderBookID: "Hush", cause: database.ErrOwnershipLookupIncomplete}))
 	assert.False(t, IsRetryLater(&CombineIncompleteError{JournalID: "journal-1", Err: database.ErrOwnershipLookupIncomplete}))
+	// A bulk move the store refused as busy (nothing written) is retry-later too,
+	// wrapped the way settleBusyCombine wraps it; a combine that stopped part-way
+	// is not, whatever it wraps.
+	assert.True(t, IsRetryLater(fmt.Errorf("combine refused: the files to move are being changed by another writer: %w", database.ErrBookFileConflict)))
+	assert.False(t, IsRetryLater(&CombineIncompleteError{JournalID: "journal-1", Err: database.ErrBookFileConflict}))
 	assert.False(t, IsRetryLater(errors.New("unrelated")))
 	assert.False(t, IsRetryLater(nil))
 }

@@ -1,13 +1,14 @@
 // file: internal/plugins/acoustid/reset_all.go
-// version: 1.10.0
+// version: 1.12.0
 // guid: f3b1e8c4-2d7a-4d62-aabb-1f1d6e2c4a01
-// last-edited: 2026-10-13
+// last-edited: 2026-10-26
 
 package acoustid
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -66,6 +67,9 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 	// cleared is an atomic: the slow-path RunItems pass below runs fn and the
 	// Label closure on a worker pool.
 	var cleared atomic.Int64
+	// busyRows counts rows the bulk clear left alone because other writers kept
+	// changing them (the slow path below has no such notion).
+	busyRows := 0
 
 	// Fast path: PebbleStore exposes a batched bulk-clear that fsyncs once
 	// per ~2000 records instead of once per UpdateBookFile call — ~100×
@@ -92,11 +96,23 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 				prog.StepN(processed,
 					fmt.Sprintf("Clearing fingerprints %d/%d (cleared=%d)", processed, t, c))
 			})
+		if sweepErr, busy := errors.AsType[*database.BookFileSweepConflictError](clearErr); busy {
+			// Every other row was cleared; these were left as stored because
+			// other writers kept changing them, and the store kept the LSH index
+			// so they stay findable. Dropping the poisoned candidates below is
+			// safe either way (the rescan regenerates them), so carry on and say
+			// so in the summary instead of failing a run that did almost all of
+			// its work. Re-running clears the rest and wipes the index.
+			busyRows = sweepErr.Rows
+			log.Warn("acoustid reset-all: rows left uncleared because they kept changing; LSH index kept",
+				"rows", busyRows, "cleared", c, "total", t)
+			clearErr = nil
+		}
 		if clearErr != nil {
 			return fmt.Errorf("bulk clear fingerprints: %w", clearErr)
 		}
 		cleared.Store(int64(c))
-		log.Info("acoustid reset-all: bulk clear done", "cleared", c, "total", t, "elapsed", time.Since(startedAt).Round(time.Second))
+		log.Info("acoustid reset-all: bulk clear done", "cleared", c, "total", t, "busy", busyRows, "elapsed", time.Since(startedAt).Round(time.Second))
 	} else {
 		// Per-row fallback (mock/sqlite tests). AcoustIDSeg0..6 are stripped
 		// from BookFileCore entirely (heavy fingerprint-diagnostic fields),
@@ -240,9 +256,17 @@ func (p *Plugin) runResetAll(ctx context.Context, _ json.RawMessage, reporter sd
 
 	summary := fmt.Sprintf("Reset complete: %d files cleared, %d candidates dropped, LSH index wiped (elapsed %s).",
 		cleared.Load(), deleted, time.Since(startedAt).Round(time.Second))
+	if busyRows > 0 {
+		summary = fmt.Sprintf("Reset INCOMPLETE: %d files cleared, %d candidates dropped, but %d files kept changing while the reset ran and were left as stored, so the LSH index was NOT wiped (elapsed %s). Run the reset again to clear them and wipe the index. A rescan already queued behind this reset is unaffected: it replaces each file's own index entries as it rewrites that file.",
+			cleared.Load(), deleted, busyRows, time.Since(startedAt).Round(time.Second))
+	}
 	if failedBatches > 0 {
 		summary += fmt.Sprintf(" WARNING: %d candidate batch(es) failed and %d poisoned candidates were left in the review queue; re-run to drop them.",
 			failedBatches, leftBehind)
+	}
+	if busyRows > 0 {
+		prog.Done(summary)
+		return nil
 	}
 	prog.Done(summary + " Now enqueue acoustid.fingerprint-rescan with scope=all force=true.")
 	return nil

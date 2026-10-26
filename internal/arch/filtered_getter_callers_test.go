@@ -1,5 +1,5 @@
 // file: internal/arch/filtered_getter_callers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c2f9d04-1b8e-4a73-85d6-e0a47b31c9f2
 // last-edited: 2026-10-26
 
@@ -54,9 +54,7 @@ var reviewedFilteredGetterCallers = map[string]string{
 	"internal/scanner/replaced_file_probe.go|storedBookFileAt|GetBookFileByPath":            liveByIntent + "nil only skips the replaced-file probe (the safe direction); the upsert it mirrors matches live rows only (retired rows are never an upsert match).",
 
 	// --- Inside internal/database: the getter's own plumbing and live-row writers.
-	"internal/database/pebble_store_bookfiles.go|PebbleStore.ClearITunesPID|GetBookFileByPID":                       liveByIntent + "Clears the PID on the LIVE row that carries it; a retired row keeps its PID by design (the retire hands the key to a live row when there is one).",
 	"internal/database/pebble_store_bookfiles.go|PebbleStore.GetBookFileByAcoustIDFuzzy|GetBookFileByAcoustIDFuzzy": "The store's own delegation to the memdb implementation of the same live-only reader.",
-	"internal/database/pebble_store_mark_import.go|PebbleStore.MarkFileImportedFromDeluge|GetBookFileByPath":        liveByIntent + "Stamps the Deluge import on the live row at the path; with no live row it falls through to the torrent-hash match or a documented no-op, and no row is created from nil.",
 	"internal/database/pebble_store_scancache.go|PebbleStore.UpdateBookFileScanCache|GetBookFileByPath":             liveByIntent + "Stamps mtime/size on the live row at the path; a retired row is not scanned, and no row is created from nil.",
 	"internal/database/retired_mock_store.go|MockStore.GetBookFileByPIDIncludingRetired|GetBookFileByPID":           "MockStore holds no retired rows, so its live reader is its including-retired reader.",
 	"internal/database/retired_mock_store.go|MockStore.GetBookFileByPathIncludingRetired|GetBookFileByPath":         "MockStore holds no retired rows, so its live reader is its including-retired reader.",

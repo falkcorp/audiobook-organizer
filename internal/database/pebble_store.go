@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.1
+// version: 1.234.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 package database
 
@@ -6479,4 +6479,9 @@ type SweepBookFileSegDropResult struct {
 	Rewrite int // rows rewritten (had at least one non-empty seg)
 	Skipped int // rows skipped (already clean)
 	Errors  int // rows skipped due to unmarshal/marshal errors (logged)
+	// Conflicts counts rows left un-rewritten because a concurrent writer kept
+	// changing them under the sweep (ErrBookFileConflict, each attempt re-read
+	// and re-judged the row). They still carry their segs; re-running the sweep
+	// picks them up.
+	Conflicts int
 }
