@@ -1,7 +1,7 @@
 // file: internal/database/collection_perviewer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2e5a91-3d48-4b06-8f1a-e4b9d0c63a57
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -49,5 +49,6 @@ func scrubPerViewerMembers(col *Collection) bool {
 		return false
 	}
 	col.MaterializedBookIDs = nil
+	col.MaterializedTotal = 0
 	return true
 }
