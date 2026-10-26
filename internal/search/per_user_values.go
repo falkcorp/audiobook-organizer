@@ -1,5 +1,5 @@
 // file: internal/search/per_user_values.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b7d2c1e-84a3-4f60-9e1d-2a6c0b9f3d47
 // last-edited: 2026-10-26
 
@@ -32,6 +32,23 @@ func (e *PerUserValueError) Error() string { return e.Reason }
 func IsPerUserQueryError(err error) bool {
 	var ve *PerUserValueError
 	return errors.Is(err, ErrPerUserBoolean) || errors.As(err, &ve)
+}
+
+// UnparsablePerUserQuery is the refusal for query text the parser rejected that
+// writes a per-user term (read_status:finished OR, an unbalanced parenthesis while
+// the person is still typing). Such text used to fall to a whole-text substring
+// match over title and author, which shows no rows and says nothing; the person
+// meant a listening-state filter, so say the query could not be read. It is nil
+// when the text names no per-user term, so an ordinary punctuation-heavy title
+// keeps its substring fallback. The error is a *PerUserValueError, so every
+// handler that answers one with a 400 answers this one the same way.
+func UnparsablePerUserQuery(q string, parseErr error) error {
+	if parseErr == nil || !perUserTermInText.MatchString(q) {
+		return nil
+	}
+	return &PerUserValueError{Reason: "this search could not be read (" + parseErr.Error() +
+		"), so its read_status, progress_pct or last_played term cannot be applied; " +
+		"finish the last term and balance any parentheses"}
 }
 
 // PerUserQueryReason is the text to show for an error IsPerUserQueryError

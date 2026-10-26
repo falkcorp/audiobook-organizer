@@ -1,5 +1,5 @@
 // file: internal/search/bleve_translator.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
 // last-edited: 2026-10-26
 //
@@ -263,6 +263,14 @@ func translateField(n *FieldNode, tc *translateCtx, negated bool) (query.Query, 
 		return nil, nil
 	}
 
+	// tag: the singular is the name the search box and GetBooksByTag use; the
+	// indexed field is "tags" (see fieldAliases for how the two matches differ).
+	if target, ok := fieldAliases[n.Field]; ok && n.Field == "tag" {
+		aliased := *n
+		aliased.Field = target
+		n = &aliased
+	}
+
 	// duration: human units (20m, 1h30m; bare = seconds) onto the indexed
 	// duration_seconds field. Before 2026-09-27 "duration" went to Bleve as-is,
 	// named no indexed field, and every comparison answered 0.
@@ -472,10 +480,14 @@ func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Q
 		return bleve.NewDisjunctionQuery(dates...), nil
 	}
 
+	field := n.Field
+	if target, ok := fieldAliases[field]; ok && field == "tag" {
+		field = target
+	}
 	var children []query.Query
 	for _, v := range n.Values {
 		mq := bleve.NewMatchQuery(v)
-		mq.SetField(n.Field)
+		mq.SetField(field)
 		children = append(children, mq)
 	}
 	if len(children) == 0 {

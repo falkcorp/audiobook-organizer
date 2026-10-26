@@ -1,5 +1,5 @@
 // file: internal/search/field_routing.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4e8a1d27-9b5c-4f63-a0d2-7c3b6e9f1a54
 // last-edited: 2026-10-26
 
@@ -53,6 +53,15 @@ var fieldAliases = map[string]string{
 	"duration": "duration_seconds",
 	"added":    "date_added",
 	"modified": "date_modified",
+	// "tag" is what the library search box and GetBooksByTag call it; the index
+	// field is "tags". Without this alias a "tag:noir" term in search= named a
+	// field the index does not hold and matched no book, with no message.
+	//
+	// It is not the same match as the tags[] parameter. tags[] is exact
+	// (GetBooksByTag, case folded); the index analyses a tag into words (and folds
+	// case), so tag:dark also finds a book tagged "dark knight". The in-query
+	// spelling is the looser one; the facet and chip paths stay exact.
+	"tag": "tags",
 }
 
 // IsIndexedField reports whether the search index can answer a fielded term
@@ -116,6 +125,42 @@ var perUserNameInText = func() *regexp.Regexp {
 	slices.Sort(names)
 	return regexp.MustCompile(`(?i)\b(?:` + strings.Join(names, "|") + `)\b`)
 }()
+
+// perUserTermInText matches a per-user field written as a term (read_status:...,
+// with optional space before the colon) anywhere in raw query text. Unlike
+// perUserNameInText it needs the colon, so a title that merely contains the word
+// does not count. It is for the one question asked of text the parser rejected:
+// did the person mean a per-user term.
+var perUserTermInText = func() *regexp.Regexp {
+	names := make([]string, 0, len(perUserFieldSet))
+	for name := range perUserFieldSet {
+		names = append(names, regexp.QuoteMeta(name))
+	}
+	slices.Sort(names)
+	return regexp.MustCompile(`(?i)\b(?:` + strings.Join(names, "|") + `)\s*:`)
+}()
+
+// QueryNamesPerUserTerm reports whether query text writes a per-user term
+// (read_status, progress_pct, last_played as a field term), by the parse when the
+// text parses and by the text itself when it does not. Unlike QueryMayUsePerUserField
+// it answers false for text that does not parse and writes none, so it suits a
+// caller that must REFUSE per-user terms it cannot evaluate (a background
+// operation with no viewer) without refusing every unparsable title.
+func QueryNamesPerUserTerm(query string) bool {
+	if strings.TrimSpace(query) == "" || !strings.Contains(query, ":") {
+		return false
+	}
+	ast, err := ParseQuery(query)
+	if err != nil {
+		return perUserTermInText.MatchString(query)
+	}
+	for _, name := range FieldNames(ast) {
+		if IsPerUserField(name) {
+			return true
+		}
+	}
+	return false
+}
 
 // The store cannot import this package (it imports the store), so the fail-closed
 // detector is handed to it here: every collection write then drops the stored
