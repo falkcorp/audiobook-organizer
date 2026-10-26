@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-26
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -1164,5 +1165,68 @@ func TestCAS_DeleteBookFile_GivesUpUnderRotatingChurn(t *testing.T) {
 	}
 	if got := f.row(t); got.FilePath != casPath {
 		t.Errorf("the abandoned delete changed the row: %+v", got)
+	}
+}
+
+// N7: real concurrent writers on one row, for -race and for the invariant the
+// compare-and-swap exists to keep: after any interleaving, the row's secondary
+// index keys are exactly the keys of the row as stored. Every other test injects
+// one writer at one point; this one lets ModifyBookFile (file stripe),
+// SetBookFileHash (file stripe) and the scanner's batch upsert (no file stripe)
+// race on the same row. A write that loses is allowed to give up with
+// ErrBookFileConflict; none may fail otherwise, and none may leave a key behind.
+func TestCAS_ConcurrentWriters_LeaveExactlyTheStoredRowsIndexKeys(t *testing.T) {
+	f := newCASFixture(t)
+	const rounds = 300
+	var wg sync.WaitGroup
+	failed := func(who string, i int, err error) {
+		if err != nil && !errors.Is(err, ErrBookFileConflict) {
+			t.Errorf("%s round %d: %v", who, i, err)
+		}
+	}
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			_, err := f.s.ModifyBookFile(f.book.ID, f.file.ID, func(r *BookFile) error {
+				r.Title = fmt.Sprintf("Batman: Year One, Part %02d", i)
+				return nil
+			})
+			failed("ModifyBookFile", i, err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			failed("SetBookFileHash", i, f.s.SetBookFileHash(f.file.ID, fmt.Sprintf("gotham-set-%03d", i)))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			failed("BatchUpsertBookFiles", i, f.s.BatchUpsertBookFiles([]*BookFile{{
+				BookID: f.book.ID, FilePath: casPath, FileHash: fmt.Sprintf("gotham-scan-%03d", i), Duration: 100 + i, FileSize: 1000,
+			}}))
+		}
+	}()
+	wg.Wait()
+
+	row := f.row(t)
+	want := map[string]bool{
+		"book_file_hash:" + row.FileHash:                  true,
+		"book_file_path:" + bookFilePathCRC(row.FilePath): true,
+		"book_file_pid:" + row.ITunesPersistentID:         true,
+	}
+	for _, key := range secondaryKeysOf(t, f.s, f.file.ID) {
+		if !want[key] {
+			t.Errorf("index key %s names the row but the stored row (hash %q, path %q, PID %q) does not own it", key, row.FileHash, row.FilePath, row.ITunesPersistentID)
+		}
+		delete(want, key)
+	}
+	for key := range want {
+		t.Errorf("the stored row's index key %s is missing", key)
+	}
+	if row.Title != fmt.Sprintf("Batman: Year One, Part %02d", rounds-1) {
+		t.Errorf("Title = %q: the last ModifyBookFile write was lost", row.Title)
 	}
 }
