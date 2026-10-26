@@ -1,5 +1,5 @@
 // file: internal/transcribe/path_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
 // last-edited: 2026-10-26
 
@@ -105,6 +105,10 @@ func pathHealth(extra map[string]any) map[string]any {
 
 func useEndpoints(t *testing.T, batchSize int, urls ...string) {
 	t.Helper()
+	// A machine that failed the canary clip is remembered for the life of the
+	// process, and tests reuse machine ids: start and end each test with none.
+	resetCanaryFailed()
+	t.Cleanup(resetCanaryFailed)
 	orig := config.Snapshot()
 	eps := make([]config.WhisperEndpoint, 0, len(urls))
 	for i, u := range urls {

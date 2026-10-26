@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-26
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -54,6 +55,39 @@ var canaryTimeout = 60 * time.Second // a var so tests do not wait it out
 // heard nothing: the question is whether it decodes in time, not what it
 // heard), else why not.
 type canaryFunc func(ctx context.Context, g gatedEndpoint) error
+
+// canaryFailed is every machine (machineKey) that failed the canary clip and
+// has not answered one since, for the life of the process (nit 1 of review 5
+// of #4182). Each dispatch starts with no memory of sickness, so without it
+// every page of the book op, and every try of the per-file op, sent a sick
+// machine a fresh chunk and paid a full chunk of per-clip deadlines (48 to 96
+// minutes) before it faulted again. A cooldown cannot carry this: the
+// dispatcher waits a cooldown out (poolPaceMax is longer than the longest
+// one) and then sends the chunk anyway. A machine in this set is sent the
+// canary first instead, which costs one clip, and gets work only once every
+// one of its ports answers it.
+var canaryFailed = struct {
+	mu sync.Mutex
+	m  map[string]bool
+}{m: make(map[string]bool)}
+
+func markCanaryFailed(key string) {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	canaryFailed.m[key] = true
+}
+
+func clearCanaryFailed(key string) {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	delete(canaryFailed.m, key)
+}
+
+func failedCanaryBefore(key string) bool {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	return canaryFailed.m[key]
+}
 
 // errCanarySlotBusy is a canary that was never sent: every request slot on its
 // endpoint stayed taken for canarySlotWait (SF1 of review 5 of #4182). That is
