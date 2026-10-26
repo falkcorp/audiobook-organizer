@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_root_and_single_book_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3e8a1d6-5f27-4b90-8d14-7a2b9e0f6c35
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,13 +22,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
+// batmanTitles are the book titles the purge fixtures use: Batman comic
+// storylines only, never anything from a real library.
+var batmanTitles = []string{"The Long Halloween", "Year One", "Hush", "Knightfall", "No Man's Land", "The Killing Joke", "Dark Victory", "A Death in the Family", "Court of Owls", "Zero Year"}
+
+// batmanTitle picks the title for a fixture book from its id, the same one every
+// time.
+func batmanTitle(id string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	return batmanTitles[int(h.Sum32())%len(batmanTitles)]
+}
+
 // liveBookWithFile adds a live (not trashed) book with one book_file row whose
 // file exists on disk, the evidence libraryRootReady samples to tell a mounted
 // library from a mount point that is not up.
 func liveBookWithFile(t *testing.T, store *database.PebbleStore, id, path string) {
 	t.Helper()
 	writeFile(t, path)
-	_, err := store.CreateBook(&database.Book{ID: id, Title: id, FilePath: path})
+	_, err := store.CreateBook(&database.Book{ID: id, Title: batmanTitle(id), FilePath: path})
 	require.NoError(t, err)
 	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: id + "-f", BookID: id, FilePath: path, Format: "m4b"}))
 }
@@ -138,7 +151,7 @@ func TestLibraryRootReady(t *testing.T) {
 		// none is sampled, so the library has nothing live to compare against.
 		softDeleted(t, store, "trashed", filepath.Join(base, "lib", "Gotham", "hush.m4b"))
 		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "trashed-f", BookID: "trashed", FilePath: filepath.Join(base, "lib", "Gotham", "hush.m4b"), Format: "m4b"}))
-		_, err := store.CreateBook(&database.Book{ID: "elsewhere", Title: "elsewhere", FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b")})
+		_, err := store.CreateBook(&database.Book{ID: "elsewhere", Title: batmanTitle("elsewhere"), FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b")})
 		require.NoError(t, err)
 		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "elsewhere-f", BookID: "elsewhere", FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b"), Format: "m4b"}))
 		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
@@ -153,11 +166,11 @@ func TestLibraryRootReady(t *testing.T) {
 	})
 }
 
-// failingSampleStore fails the read libraryRootReady's sample starts with.
+// failingSampleStore fails the sampling read libraryRootReady starts with.
 type failingSampleStore struct{ *database.PebbleStore }
 
-func (s *failingSampleStore) CountPrimaryBooks() (int, error) {
-	return 0, errors.New("batcave offline")
+func (s *failingSampleStore) SampleLiveBookFilePathsUnder(string, int) ([]string, error) {
+	return nil, errors.New("batcave offline")
 }
 
 // The pass's guard trusts a good check for rootGuardTTL and then checks again,
@@ -166,8 +179,7 @@ func (s *failingSampleStore) CountPrimaryBooks() (int, error) {
 func TestRootGuard_RechecksAfterTheTTLAndNeverCachesAFailure(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	now := time.Now()
-	g := newRootGuard(svc, config.AppConfig.RootDir)
-	g.okAt = now
+	g := newRootGuard(svc, config.AppConfig.RootDir, now)
 	g.now = func() time.Time { return now }
 
 	remount := unmountRoot(t, store)

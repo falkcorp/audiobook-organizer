@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9d4e7b21-6f38-4a05-8c12-0b5a3e9d7f46
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -125,8 +125,8 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
   }, [runPhase, queuedId, onClose]);
   const purgeable = preview?.purgeable ?? 0;
   // Files an earlier delete-files purge left waiting (it died before its
-  // removal). With nothing purgeable the delete-files box is not shown, so
-  // without its own button nothing in the product would ever drain them: the
+  // removal). With nothing purgeable the delete-files box is shown only while
+  // it is ticked, so without its own button nothing in the product would ever drain them: the
   // files would sit on disk, named by no book, until a library scan imported
   // them as new books. The run is the ordinary purge with delete files on,
   // bound to this preview; it purges no book here (none is purgeable) and
@@ -196,20 +196,25 @@ export function PurgeSoftDeletedDialog({ open, onClose, run }: PurgeSoftDeletedD
                   : ''}
               </Alert>
             )}
+            {/* Shown while the box is ticked even when the preview with files on
+                purges nothing: hiding it then would leave no way to untick it and
+                see the preview without it. */}
+            {(purgeable > 0 || deleteFiles) && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={deleteFiles}
+                    onChange={(e) => {
+                      setDeleteFiles(e.target.checked);
+                      void runPreview(e.target.checked);
+                    }}
+                  />
+                }
+                label="Also delete files from disk (if they still exist)"
+              />
+            )}
             {purgeable > 0 && (
               <>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={deleteFiles}
-                      onChange={(e) => {
-                        setDeleteFiles(e.target.checked);
-                        void runPreview(e.target.checked);
-                      }}
-                    />
-                  }
-                  label="Also delete files from disk (if they still exist)"
-                />
                 <Alert severity="warning" sx={{ mt: 2 }}>
                   This cannot be undone. The {books(purgeable)} above are removed for good
                   {deleteFiles ? ', and their files are deleted from disk' : ''}.

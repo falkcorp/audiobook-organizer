@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -620,6 +620,13 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 	if rec == nil {
 		return nil, ErrAuditUnavailable
 	}
+	// With delete_files, the library root is checked first, outside the lock (a
+	// check samples files and stats them, and the lock is global); the decisions
+	// made under the lock reuse that answer (rootGuard).
+	rg, rootErr := svc.preLockRoot()
+	if rootErr != nil {
+		return nil, fmt.Errorf("discard progress and purge %s refused, nothing discarded: %w", id, rootErr)
+	}
 	// Discarding clears every user's state under the merge lock, which a
 	// running combine holds for its whole run: take it with a bound and answer
 	// merge.ErrMergeBusy promptly instead of hanging the request. The lock is
@@ -708,7 +715,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// undecidable file refuses the whole action, with nothing discarded; the
 		// removal is journaled with the row delete (purgeDeleteRow).
 		if deleteFiles {
-			p, undecided := svc.decideFile(cur, purgeEnv{})
+			p, undecided := svc.decideFile(cur, purgeEnv{root: rg})
 			if undecided != nil {
 				return fmt.Errorf("discard progress and purge %s refused, nothing discarded: %s", id, strings.Join(undecided.errs, "; "))
 			}

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_replay_boot.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d4a6f13-2b95-4e07-a1c8-3f6e9b0d5c72
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -23,7 +23,7 @@ import (
 // same checks on every file, and it is safe to run at boot for the same reason:
 // records are written only by a purge that was deleting files, and a purge op
 // that was running when the server stopped is resumed at boot and replays too
-// (ResumeRestart). The replay lock (pendingMu) serializes the two.
+// (ResumeRestart). The replay lock (replayMu) serializes the two removal runs.
 //
 // It does nothing while the library root is not ready (libraryRootReady): a
 // library mounted late, as a remote filesystem can be, is retried every `every`,

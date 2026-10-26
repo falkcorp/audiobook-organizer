@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_pending_journal_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2e8a4c71-6d09-4b35-9f1a-c7d3b05e8a62
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -65,6 +65,13 @@ type opaqueStore struct{ database.Store }
 type unwrappingStore struct{ opaqueStore }
 
 func (u unwrappingStore) Unwrap() database.Store { return u.Store }
+
+// SampleLiveBookFilePathsUnder forwards the library-root sample, so the removal
+// under test reaches the all-rows lookup rather than being refused earlier for a
+// root it cannot vouch for.
+func (o opaqueStore) SampleLiveBookFilePathsUnder(root string, k int) ([]string, error) {
+	return o.Store.(database.LiveBookFileSampler).SampleLiveBookFilePathsUnder(root, k)
+}
 
 // The all-rows lookup is not on Store, so a store that cannot answer it must
 // make the removal fail closed: the file stays, and the line says why.

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -856,7 +856,7 @@ func (svc *AudiobookService) removeSingleBookFile(book *database.Book, v purgeFi
 		return nil
 	}
 	if plan.isFor(book) {
-		if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
+		if rootErr := svc.rootCheck(purgeEnv{root: plan.root}); rootErr != nil {
 			return 0, []string{fmt.Sprintf("%s: book purged, file kept (its record is kept for a later pass): %v", book.ID, rootErr)}
 		}
 		now := svc.planPurgeFile(book)
@@ -883,9 +883,13 @@ func (svc *AudiobookService) removeSingleBookFile(book *database.Book, v purgeFi
 		}
 		return 0, append(settle(), line)
 	}
-	removed, errs = removePurgedFile(book.ID, v, config.Snapshot().RootDir)
+	removed, errs = removePurgedFile(book.ID, v)
 	if len(errs) == 0 {
 		errs = settle()
+	}
+	if removed > 0 {
+		// One path, decided and removed: its emptied folders go now.
+		removeEmptyParentsUpToRoot(v.remove, config.Snapshot().RootDir)
 	}
 	return removed, errs
 }

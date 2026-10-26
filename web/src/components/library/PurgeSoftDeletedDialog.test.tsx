@@ -1,7 +1,7 @@
 // file: web/src/components/library/PurgeSoftDeletedDialog.test.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2f9a6c04-7d83-4e15-b0a8-4c1e5d9b3f72
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -291,6 +291,27 @@ describe('PurgeSoftDeletedDialog', () => {
     fireEvent.click(await screen.findByLabelText(box));
     await waitFor(() => expect(api.previewPurgeSoftDeleted).toHaveBeenCalledTimes(3));
     expect(api.previewPurgeSoftDeleted).toHaveBeenLastCalledWith(false);
+  });
+
+  it('keeps the delete-files box while it is ticked even when that preview purges nothing, so it can be cleared again', async () => {
+    // Ticking the box previews again with files on; the server then refuses every
+    // book (a library that is not mounted, say), so nothing is purgeable. The box
+    // must still be there: without it the owner is stuck with files on.
+    api.awaitPurgeResult
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce({ ...preview, purgeable: 0, files_deleted: 0 })
+      .mockResolvedValueOnce(preview);
+    setup();
+    await screen.findByTestId('purge-preview-headline');
+    const box = 'Also delete files from disk (if they still exist)';
+    fireEvent.click(screen.getByLabelText(box));
+    await waitFor(() => expect(api.previewPurgeSoftDeleted).toHaveBeenLastCalledWith(true));
+    expect(await screen.findByRole('button', { name: 'Nothing to purge' })).toBeDisabled();
+    const ticked = screen.getByLabelText(box);
+    expect(ticked).toBeChecked();
+    fireEvent.click(ticked);
+    await waitFor(() => expect(api.previewPurgeSoftDeleted).toHaveBeenLastCalledWith(false));
+    expect(await screen.findByRole('button', { name: 'Purge 3 books' })).toBeEnabled();
   });
 
   it('cannot purge from a preview that did not say what it covered', async () => {

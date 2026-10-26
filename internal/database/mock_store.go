@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.155.0
+// version: 1.156.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -48,6 +48,9 @@ type MockStore struct {
 	LiveBookIDsAtPathFunc     func(path string) ([]string, error)
 	BookIDsAtPathFunc         func(path string) ([]string, error)
 	LiveBookPathsUnderDirFunc func(dir string) (map[string]string, error)
+	// SampleLiveBookFilePathsUnderFunc backs SampleLiveBookFilePathsUnder (the
+	// LiveBookFileSampler capability, not a Store method).
+	SampleLiveBookFilePathsUnderFunc func(root string, k int) ([]string, error)
 	// GetAllBooksFunc is test-only plumbing (NOT a Store interface method —
 	// GetAllBooks was removed from the interface in STOREFID W5z). Several
 	// dedup tests set only this; GetAllBooksCoreFunc's default (see
@@ -1198,6 +1201,16 @@ func (m *MockStore) LiveBookIDsAtPath(path string) ([]string, error) {
 func (m *MockStore) BookIDsAtPath(path string) ([]string, error) {
 	if m.BookIDsAtPathFunc != nil {
 		return m.BookIDsAtPathFunc(path)
+	}
+	return nil, nil
+}
+
+// SampleLiveBookFilePathsUnder returns nil, nil when unconfigured: "no live
+// book has a file under root", which a root check reads as nothing to compare
+// against. A test of the check sets the Func.
+func (m *MockStore) SampleLiveBookFilePathsUnder(root string, k int) ([]string, error) {
+	if m.SampleLiveBookFilePathsUnderFunc != nil {
+		return m.SampleLiveBookFilePathsUnderFunc(root, k)
 	}
 	return nil, nil
 }

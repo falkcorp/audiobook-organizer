@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_replay_locks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6371d518-2425-4a76-af03-de3aeb5ea7d3
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -344,28 +344,37 @@ func TestRunPurge_MissingFileInAMissingFolderIsNotDecidedGone(t *testing.T) {
 	assert.True(t, bookGone(t, store, "T"))
 }
 
-// SH-1(c). A journal record for a file whose folder is missing is retried the
-// bounded number of passes and then cleared with a line that says so: a file
-// removed together with its folder (or a library that never comes back) must not
-// sit in the journal for ever.
-func TestReplay_RecordWhoseFolderIsMissingGetsBoundedPassesThenClears(t *testing.T) {
+// SH-2. A journal record for a file whose folder is missing is kept for as long
+// as the folder is missing, on every pass, with no cap: a cap turned "the library
+// was not mounted for three passes" into a deleted record and a leftover file.
+// The passes report ONE line for all such records (a count and an example), not
+// one line per record, and the records go the moment the folder is readable.
+func TestReplay_RecordsWhoseFolderIsMissingAreKeptWithOneLinePerPass(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	libraryAppDirs(t)
 	liveBookWithFile(t, store, "present", filepath.Join(base, "lib", "Arkham", "year-one.m4b"))
-	target := filepath.Join(base, "lib", "Gotham", "hush.m4b")
-	require.NoError(t, svc.journalPendingFile("T", purgeFileVerdict{remove: target, id: fileIdentity{Known: true, Size: 1, MtimeNS: 1}}))
-
-	for pass := 1; pass < maxUnresolvableAttempts; pass++ {
-		_, errs := svc.replayPendingFileRemovals(context.Background())
-		require.Len(t, errs, 1, "pass %d: %v", pass, errs)
-		assert.NotContains(t, errs[0], "gave up", "pass %d", pass)
-		require.Len(t, pendingJournal(t, store), 1, "pass %d: the record is kept", pass)
+	folder := filepath.Join(base, "lib", "Gotham")
+	ids := []string{"T", "U", "V"}
+	names := []string{"hush.m4b", "knightfall.m4b", "dark-victory.m4b"}
+	for i, id := range ids {
+		require.NoError(t, svc.journalPendingFile(id, purgeFileVerdict{remove: filepath.Join(folder, names[i]), id: fileIdentity{Known: true, Size: 1, MtimeNS: 1}}))
 	}
-	_, errs := svc.replayPendingFileRemovals(context.Background())
-	require.Len(t, errs, 1, "%v", errs)
-	assert.Contains(t, errs[0], "gave up")
-	assert.Contains(t, errs[0], "its folder is still missing")
-	assert.Empty(t, pendingJournal(t, store))
+
+	for pass := 1; pass <= 2*maxUnresolvableAttempts; pass++ {
+		removed, errs := svc.replayPendingFileRemovals(context.Background())
+		assert.Zero(t, removed, "pass %d", pass)
+		require.Len(t, errs, 1, "pass %d: one line for three records, got %v", pass, errs)
+		assert.Contains(t, errs[0], "3 pending file removal(s) are waiting for a folder that is missing", "pass %d", pass)
+		assert.Contains(t, errs[0], folder, "pass %d: the line names an example folder", pass)
+		assert.NotContains(t, errs[0], "gave up", "pass %d", pass)
+		require.Len(t, pendingJournal(t, store), 3, "pass %d: every record is kept", pass)
+	}
+
+	require.NoError(t, os.MkdirAll(folder, 0o755))
+	removed, errs := svc.replayPendingFileRemovals(context.Background())
+	assert.Zero(t, removed, "the files were already gone")
+	assert.Empty(t, errs, "%v", errs)
+	assert.Empty(t, pendingJournal(t, store), "the folder is readable: the files are gone, the records clear")
 }
 
 // SH-1(c). ENOENT with the folder there is still "already gone": the record is
@@ -394,8 +403,7 @@ func TestDecideFile_PassGuardChecksTheRootAgainAfterItsTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now()
-	g := newRootGuard(svc, config.AppConfig.RootDir)
-	g.okAt = now
+	g := newRootGuard(svc, config.AppConfig.RootDir, now)
 	g.now = func() time.Time { return now }
 	env := purgeEnv{root: g}
 

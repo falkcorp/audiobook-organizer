@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -282,11 +282,16 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	// own fields, apart from this pass's (FilesReplayed; Errors, last).
 	var replayed int
 	var replayErrs []string
+	// When the pass's own library-root check began: the guard that carries it to
+	// the book decisions (rootGuard) trusts it no longer than rootGuardTTL after
+	// THAT, not after the replay that follows it.
+	var rootCheckedAt time.Time
 	if !opts.DryRun && opts.DeleteFiles {
 		// Every part of a delete_files pass reads "no file at this path" as "the
 		// file is already gone", so it runs only with a library root that is
 		// there (libraryRootReady). Refused whole, with every journal record kept:
 		// the books stay in the trash, and the next pass tries again.
+		rootCheckedAt = time.Now()
 		if rootErr := svc.libraryRootReady(config.Snapshot().RootDir); rootErr != nil {
 			return &PurgeResult{
 				Errors:        []string{},
@@ -435,7 +440,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 		env.preview = preview
 		if !opts.DryRun && opts.DeleteFiles {
 			env.files = &pendingFiles{preview: preview}
-			env.root = newRootGuard(svc, config.Snapshot().RootDir) // checked above, before the replay
+			env.root = newRootGuard(svc, config.Snapshot().RootDir, rootCheckedAt) // checked above, before the replay
 		}
 	}
 

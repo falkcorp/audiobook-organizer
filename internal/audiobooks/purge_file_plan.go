@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_file_plan.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f2c9b14-7a35-4d80-91e6-3b8d0c5a7e42
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -31,6 +31,10 @@ type filePlan struct {
 	// A single-book purge (no pass, no preview: "Purge now", discard progress and
 	// purge) is the owner's explicit act on that one book and is always journaled.
 	journal bool
+	// root is the pass's (or the single-book action's) library-root guard, so the
+	// removal that follows the row delete reuses the check the decision made
+	// instead of sampling the library again (see preLockRoot).
+	root *rootGuard
 }
 
 // errPathUnresolvable marks a path lookup that failed because the path itself
@@ -48,7 +52,8 @@ var errPathUnresolvable = errors.New("path cannot be resolved")
 // populated and a folder under it still be absent). It cannot be told apart per
 // path, so it is "cannot tell": it always accompanies errPathLookupFailed, a
 // book stays in the trash for it (fileUndecided), and a journal record is kept
-// for a few passes (maxUnresolvableAttempts) and then cleared with a line.
+// for as long as the folder is missing (no cap: the record is the only thing
+// that still names the file) and reported as one aggregate line per pass.
 var errPathFolderMissing = errors.New("folder of the path is missing")
 
 // maxUnresolvableAttempts is how many passes a journal record whose path cannot
@@ -116,6 +121,7 @@ func (svc *AudiobookService) decideFile(book *database.Book, env purgeEnv) (*fil
 		path:    book.FilePath,
 		v:       v,
 		journal: v.remove != "" && (env.files == nil || env.files.preview.listsFile(v.remove)),
+		root:    env.root,
 	}, nil
 }
 

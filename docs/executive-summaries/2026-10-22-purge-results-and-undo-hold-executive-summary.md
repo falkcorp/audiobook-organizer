@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-22-purge-results-and-undo-hold-executive-summary.md -->
-<!-- version: 1.14.0 -->
+<!-- version: 1.15.0 -->
 <!-- guid: 7c1e9a3f-52d8-4b60-8e14-d3a09f6b2c75 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Merging, combining and purging no longer freeze the page, and purging no longer destroys undo
 
@@ -193,16 +193,29 @@ undo above. Books that own files are still never purged.
   ZFS share that has not mounted yet looks like an empty folder, and every file
   would have read as "already gone"; nothing is removed and every note of a
   pending removal is kept. "Looks mounted" is not "the folder has something in
-  it" (the program's own database and backups live inside it): the purge checks
-  up to fifty of the library's own book files and needs most of them to be
-  visible. A file that is missing while the folder it was in is missing too is
-  also not taken as gone: that book stays in the trash until the folder can be
-  read. The start-up clean-up retries for about fifteen minutes, then gives up
-  with an error and tries again at the next purge. The price: a library that
-  has really lost most of its files is refused the same way until they are back,
-  because that looks exactly like an unmounted share; and a trashed book whose
-  whole folder has been removed cannot be purged with "Also delete files" until
-  the folder is readable again (purging without that option still works).
+  it" (the program's own database and backups live inside it): the purge picks
+  up to fifty of the library's own book files, from spread-out places across the
+  whole library (not from the first few the database happens to list), and needs
+  more than half of them to be visible. If the library has no book file inside
+  the folder at all there is nothing to compare against and it counts as
+  mounted. The check is per library, not per batch of fifty: a library that is
+  mostly there but whose one share is not mounted can still pass it, which is
+  why a missing file is also checked on its own (next). A file that is missing
+  while the folder it was in is missing too is also not taken as gone: that book
+  stays in the trash, and a note of a pending removal stays in the list, for as
+  long as the folder is missing, with no limit on how many passes that takes;
+  each pass reports them as one line (how many, and one example) instead of one
+  line per file. The start-up clean-up retries for about fifteen minutes, then
+  gives up with an error and tries again at the next purge. A file whose
+  folder the purge itself has just emptied is not mistaken for a missing
+  folder: the folders a purge empties are removed only after every file has been
+  looked at, and each note of a removal is crossed off right after its own
+  file is deleted. The price: a library that has really lost most of its files
+  is refused the same way until they are back, because that looks exactly like
+  an unmounted share; a trashed book whose whole folder has been removed cannot
+  be purged with "Also delete files" until the folder is readable again
+  (purging without that option still works); and a check on a library whose
+  share hangs gives up after ten seconds and refuses instead of waiting.
 - Purging, or discarding progress and purging, a single book from its own page
   now follows the same order as the big purge: it decides about the file first
   and refuses with the reason if it cannot, writes down the file to remove

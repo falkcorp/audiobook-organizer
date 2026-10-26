@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_files.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e3a7c1d4-58b2-4f96-9d0e-6b4a2c8f1e57
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package audiobooks
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -151,9 +152,13 @@ func (p *pendingFiles) sorted() []*pendingFile {
 }
 
 // removePurgedFile removes the file or empty directory v names (v.remove is
-// set) and the now-empty parents inside root. It reports how many things it
-// removed and the error lines for bookID.
-func removePurgedFile(bookID string, v purgeFileVerdict, root string) (removed int, errs []string) {
+// set). It does NOT remove the folders that empties: that is the caller's, once
+// it has finished deciding every path it is going to decide, because a folder
+// removed in the middle of a run makes a sibling path's "not there" read as "its
+// folder is missing too" (errPathFolderMissing) depending on which worker got
+// there first. It reports how many things it removed and the error lines for
+// bookID.
+func removePurgedFile(bookID string, v purgeFileVerdict) (removed int, errs []string) {
 	if v.isDir {
 		// Directory-based book. It owns no file rows, so there is nothing of
 		// its own inside to remove: the directory goes only because it is
@@ -162,7 +167,6 @@ func removePurgedFile(bookID string, v purgeFileVerdict, root string) (removed i
 			errs = append(errs, fmt.Sprintf("%s: failed to remove empty dir %s: %v", bookID, v.remove, rmErr))
 		} else if rmErr == nil {
 			removed++
-			removeEmptyParentsUpToRoot(v.remove, root)
 		}
 		return removed, errs
 	}
@@ -176,7 +180,6 @@ func removePurgedFile(bookID string, v purgeFileVerdict, root string) (removed i
 		errs = append(errs, fmt.Sprintf("%s: book purged, but its file could not be removed: %v", bookID, err))
 	} else if err == nil {
 		removed++
-		removeEmptyParentsUpToRoot(v.remove, root)
 	}
 	return removed, errs
 }
@@ -256,15 +259,11 @@ func (svc *AudiobookService) bookRowsAtPath() (database.BookRowPathReader, error
 // (RunPurge): each path costs several store reads, a stat and a remove, and
 // there is one per purged book that owned a file, up to the size of the trash.
 // It is safe because the paths are distinct (pendingFiles keys them by path),
-// so no two workers read, remove or journal-settle the same file, and every
-// store read it makes is already used from RunPurge's concurrent workers. The
-// one thing workers can share is a parent directory: removeEmptyParentsUpToRoot
-// removes it only when it reads it empty, and of any set of workers removing
-// the files of one directory the last to read it sees every removal, so the
-// directory is never left empty. A worker that reads it before a sibling has
-// removed its file stops, and that sibling's own walk removes it. Each worker
-// writes only its own slot of out; the lines are merged in path order, so the
-// result is the same whatever the scheduling.
+// so no two workers read, remove or journal-settle the same file, and every store
+// read it makes is already used from RunPurge's concurrent workers. Workers only
+// unlink: the folders a removal empties are removed after every path is decided,
+// in path order, so the outcome does not depend on which worker ran first. Each
+// worker forgets its path's record as soon as it has decided it.
 func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pendingFiles, preview *purgePreviewRecord) (removed int, errs []string) {
 	pending := files.sorted()
 	if len(pending) == 0 {
@@ -279,43 +278,52 @@ func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pen
 	if rootErr := svc.libraryRootReady(root); rootErr != nil {
 		return 0, []string{fmt.Sprintf("%d file removal(s) not carried out, their records kept for a later pass: %v", len(pending), rootErr)}
 	}
-	type outcome struct {
-		removed int
-		errs    []string
-		retry   bool
-		// bump: the retry is for a path that cannot be resolved, which counts
-		// against its attempts (maxUnresolvableAttempts).
-		bump bool
-		// notReached: ctx was done before this path was looked at; its record is
-		// kept for the next run.
-		notReached bool
-	}
-	out := make([]outcome, len(pending))
+	out := make([]deferredOutcome, len(pending))
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
 	for i, f := range pending {
 		g.Go(func() error {
 			if ctx.Err() != nil {
-				out[i] = outcome{retry: true, notReached: true}
+				out[i] = deferredOutcome{retry: true, notReached: true}
 				return nil
 			}
-			n, e, retry, bump := svc.removeDeferredFile(f, root, preview)
-			out[i] = outcome{removed: n, errs: e, retry: retry, bump: bump}
+			o := svc.removeDeferredFile(f, root, preview)
+			// A decided path forgets its record at once, right after its own
+			// unlink: a crash then leaves a record only for the paths not yet
+			// reached, and not for every file the run had already removed (whose
+			// record a replay could only read as "gone, and its folder too").
+			if !o.retry {
+				if err := svc.forgetPendingFiles(f.bookIDs); err != nil {
+					o.errs = append(o.errs, fmt.Sprintf("the record of the removal of %s could not be cleared (a later pass will decide it again, which removes nothing twice): %v", f.path, err))
+				}
+			}
+			out[i] = o
 			return nil
 		})
 	}
 	_ = g.Wait() // the workers return nil: their outcomes are in out
-	var settled []string
-	notReached := 0
+	// Every path is decided; only now are the folders the removals emptied
+	// removed, in path order, so no decision above could see a folder this run
+	// took away.
+	notReached, folderMissing := 0, 0
+	exampleMissing := -1
 	for i, f := range pending {
-		if out[i].notReached {
+		o := out[i]
+		if o.removedPath != "" {
+			removeEmptyParentsUpToRoot(o.removedPath, root)
+		}
+		if o.notReached {
 			notReached++
 		}
-		removed += out[i].removed
-		errs = append(errs, out[i].errs...)
-		if !out[i].retry {
-			settled = append(settled, f.bookIDs...)
-		} else if out[i].bump {
+		if o.folderMissing {
+			if folderMissing == 0 {
+				exampleMissing = i
+			}
+			folderMissing++
+		}
+		removed += o.removed
+		errs = append(errs, o.errs...)
+		if o.retry && o.bump {
 			// Counted for the pass's own entry too: its record was journaled with
 			// no attempts used, and this pass is the first to try it.
 			if err := svc.recordUnresolvableAttempt(f); err != nil {
@@ -323,52 +331,75 @@ func (svc *AudiobookService) removeDeferredFiles(ctx context.Context, files *pen
 			}
 		}
 	}
+	if folderMissing > 0 {
+		ex := pending[exampleMissing]
+		errs = append(errs, fmt.Sprintf("%d pending file removal(s) are waiting for a folder that is missing and are kept, to be looked at again on every pass; for example %s (book %s), whose folder %s is not there: the file may have been removed together with its folder, or that part of the library is not mounted", folderMissing, ex.path, ex.bookIDs[0], filepath.Dir(ex.path)))
+	}
 	if notReached > 0 {
 		errs = append(errs, fmt.Sprintf("stopped (%v): %d file removal(s) not looked at, their records kept for a later run", ctx.Err(), notReached))
-	}
-	if err := svc.forgetPendingFiles(settled); err != nil {
-		errs = append(errs, fmt.Sprintf("the record of %d decided file removal(s) could not be cleared (a later pass will re-decide them, which removes nothing twice): %v", len(settled), err))
 	}
 	return removed, errs
 }
 
-// removeDeferredFile decides and does one pending path. retry is true when the
-// outcome may change on a later pass, so the journal keeps the record.
+// deferredOutcome is what removeDeferredFile decided about one pending path.
+type deferredOutcome struct {
+	removed int
+	errs    []string
+	// retry: the outcome may change on a later pass, so the journal keeps the
+	// record.
+	retry bool
+	// bump: the retry is for a path that cannot be resolved, which counts
+	// against its attempts (maxUnresolvableAttempts).
+	bump bool
+	// folderMissing: the file is not there and neither is its folder, which a
+	// removed folder and a library that is not mounted both look like. The record
+	// is kept for every later pass, with no line of its own: the pass reports all
+	// such records as one line (removeDeferredFiles).
+	folderMissing bool
+	// removedPath is the path this run unlinked, whose emptied parents are removed
+	// once every path is decided.
+	removedPath string
+	// notReached: ctx was done before this path was looked at; its record is
+	// kept for the next run.
+	notReached bool
+}
+
+// removeDeferredFile decides and does one pending path.
 //
-// A path that cannot be resolved at all (ELOOP, ENAMETOOLONG: errPathUnresolvable),
-// or whose folder is missing along with it (errPathFolderMissing: a file removed
-// with its folder, or a library not mounted, which cannot be told apart per path),
+// A path that cannot be resolved at all (ELOOP, ENAMETOOLONG: errPathUnresolvable)
 // is retried only maxUnresolvableAttempts passes, and then cleared with a line
 // saying so: it will not resolve by trying again, and a record that is never
 // cleared is a line in every purge report for ever. bump says the retry counts
-// against that limit.
-func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord) (removed int, errs []string, retry, bump bool) {
+// against that limit. A path whose folder is missing along with it
+// (errPathFolderMissing) is different: it does resolve, by the library being
+// mounted again, and the record is the only thing left that names the file, so it
+// is kept however many passes go by.
+func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, preview *purgePreviewRecord) deferredOutcome {
 	bookID := f.bookIDs[0]
 	v := svc.planPurgeFile(&database.Book{ID: bookID, FilePath: f.path})
 	switch {
 	case v.protected:
 		singleLog.Debug("purge skipping file deletion: protected path %s (book %s)",
 			logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
-		return 0, nil, false, false
+		return deferredOutcome{}
 	case v.keptErr != nil:
 		line := fmt.Sprintf("%s: book purged, file kept: %v", bookID, v.keptErr)
 		if !errors.Is(v.keptErr, errPathLookupFailed) {
-			return 0, []string{line}, false, false
+			return deferredOutcome{errs: []string{line}}
 		}
-		if errors.Is(v.keptErr, errPathUnresolvable) || errors.Is(v.keptErr, errPathFolderMissing) {
+		if errors.Is(v.keptErr, errPathFolderMissing) {
+			return deferredOutcome{retry: true, folderMissing: true}
+		}
+		if errors.Is(v.keptErr, errPathUnresolvable) {
 			if f.attempts+1 >= maxUnresolvableAttempts {
-				why := "the path cannot be resolved"
-				if errors.Is(v.keptErr, errPathFolderMissing) {
-					why = "its folder is still missing"
-				}
-				return 0, []string{fmt.Sprintf("%s (gave up after %d passes: %s, so the file is left where it is and its record is cleared)", line, maxUnresolvableAttempts, why)}, false, false
+				return deferredOutcome{errs: []string{fmt.Sprintf("%s (gave up after %d passes: the path cannot be resolved, so the file is left where it is and its record is cleared)", line, maxUnresolvableAttempts)}}
 			}
-			return 0, []string{line}, true, true
+			return deferredOutcome{errs: []string{line}, retry: true, bump: true}
 		}
-		return 0, []string{line}, true, false
+		return deferredOutcome{errs: []string{line}, retry: true}
 	case v.remove == "":
 		// Already gone, or a directory that is not empty.
-		return 0, nil, false, false
+		return deferredOutcome{}
 	}
 	// The path names a file, but is it the file the purge decided to remove?
 	// A different one (replaced, or changed, since: fileIdentity) is nobody's
@@ -377,16 +408,20 @@ func (svc *AudiobookService) removeDeferredFile(f *pendingFile, root string, pre
 	if f.idConflict || f.isDir != v.isDir || !f.id.matches(v.id, v.isDir) {
 		singleLog.Warn("purge keeping %s: it is not the file the purge decided to remove (replaced or changed since; book %s)",
 			logger.SanitizeLogValue(f.path), logger.SanitizeLogValue(bookID))
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %s is not the file this purge decided to remove (it was replaced or changed since)", bookID, f.path)}, false, false
+		return deferredOutcome{errs: []string{fmt.Sprintf("%s: book purged, file kept: %s is not the file this purge decided to remove (it was replaced or changed since)", bookID, f.path)}}
 	}
 	if err := svc.otherBookRowAt(f.path); err != nil {
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, err)}, errors.Is(err, errPathLookupFailed), false
+		return deferredOutcome{errs: []string{fmt.Sprintf("%s: book purged, file kept: %v", bookID, err)}, retry: errors.Is(err, errPathLookupFailed)}
 	}
 	if !preview.listsFile(f.path) {
-		return 0, []string{fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path)}, false, false
+		return deferredOutcome{errs: []string{fmt.Sprintf("%s: book purged, file kept: the preview this pass is bound to did not list %s for removal", bookID, f.path)}}
 	}
-	n, e := removePurgedFile(bookID, v, root)
-	return n, e, len(e) > 0, false
+	n, e := removePurgedFile(bookID, v)
+	o := deferredOutcome{removed: n, errs: e, retry: len(e) > 0}
+	if n > 0 {
+		o.removedPath = f.path
+	}
+	return o
 }
 
 // settlePreviewFiles finishes a preview's file account once every book is
