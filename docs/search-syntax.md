@@ -1,7 +1,7 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.1 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Search syntax
 
@@ -129,7 +129,31 @@ A stored collection whose query has since stopped parsing is treated as per-view
 it shows no members to anyone, with a message saying its query can no longer be
 evaluated, and never the list it may have held. Fix its query to bring it back.
 
-One known limit: an `OR` between a per-user term and an indexed term
-(`title:Alpha OR read_status:finished`) is evaluated as an `AND`, because the per-user
-part is applied afterwards to the books the index returned. Write such a search as two
-searches, or avoid mixing them, until that is fixed.
+A per-user term is always required together with the rest of the query: the index
+answers the other terms and the per-user part is applied afterwards to the books it
+returned. That is right for a plain search, for a term negated on its own
+(`-read_status:finished`) and for several states of one field
+(`read_status:(finished|in_progress)`), which is one term that matches any of them.
+It cannot express an `OR` between a per-user term and another term
+(`title:Alpha OR read_status:finished`), or a `NOT` over a group that holds one
+(`-(read_status:finished title:Alpha)`). Those used to be evaluated as an `AND`
+without a word, so a collection or smart playlist showed far fewer books than its
+query says. They are now refused with a 400 when a dynamic collection or a smart
+playlist is created or its query is changed, with a message that points at the
+`read_status:(finished|in_progress)` spelling, and a stored query of that shape
+shows no members, with a message saying its query can no longer be evaluated, until
+it is edited. The same shapes over indexed terms only (`title:Alpha OR title:Bravo`)
+are unaffected. The library search box still evaluates them as an `AND`; making it
+and the collection evaluator support them properly is tracked in `todo.d`.
+
+A query that names a per-user field anywhere in its text, even where the grammar reads
+it as something else (`author:read_status`, a quoted `"read_status:finished"`), is
+treated as per-viewer too: it shows each viewer their own answer and stores no list.
+A query the evaluator accepts is unaffected by that choice.
+
+A collection or smart playlist lists at most 10,000 books. A query that matches more
+(`read_status:unstarted` on a large library) is cut to the first 10,000 in its sort
+order and says how many it really matches (`materialized_total` on a collection,
+`book_ids_total` on a smart playlist, `totalBooks` on the Audiobookshelf collection
+row), and the server logs it once a minute. Add a sort and a limit to choose which
+books those are.

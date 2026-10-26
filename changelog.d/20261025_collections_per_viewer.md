@@ -47,3 +47,21 @@ candidate book per collection, and the 10,000-result window on a per-viewer eval
 is gone: a library of any size is evaluated in full. Evaluations are bounded across
 requests, and a failed state read is an error, not an empty history. The
 Audiobookshelf `lastUpdate` of a per-viewer collection is the time of the request.
+
+A per-user term (`read_status`, `progress_pct`, `last_played`) under an `OR` with another
+term, or under a `NOT` over a group, used to be evaluated as an `AND` without a word,
+so a dynamic collection or smart playlist showed far fewer books than its query said.
+Create and update now refuse such a query with a 400 that names the
+`read_status:(finished|in_progress)` spelling, and a stored one reads as
+`members_unavailable` (query-invalid) until it is edited.
+
+A member list is cut to 10,000 books, with the real count in `materialized_total` (a
+collection), `book_ids_total` (a smart playlist) or `totalBooks` (the Audiobookshelf
+collection row, whose `numBooks` stays the served count), so the removal of the
+10,000-result window no longer lets a broad query store, return and expand the whole
+library. A request cancelled while it waits for an evaluation slot is dropped instead
+of queuing behind other evaluations. The evaluation-failure log line no longer carries
+the store's error text, which can name a user and a book. A query that names a per-user
+field anywhere in its text is treated as per-viewer, in the web page as well as on the
+server. The collections list and detail pages say "members unavailable" instead of
+"0 books" when a viewer's members could not be worked out.

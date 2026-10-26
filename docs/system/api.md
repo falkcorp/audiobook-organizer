@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.18.0 -->
+<!-- version: 1.19.1 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # HTTP API
 
@@ -177,7 +177,9 @@ before 2026-10-25 held the creator's answer; they are cleared at start (the
 paths never serve a leftover list, and the store itself drops the list of such a
 collection on every create and update, whichever route writes it. A query that no
 longer parses counts as per-viewer (nobody can say it reads no per-user state), so a
-list it holds is never served either. An evaluation that cannot run (the search index
+list it holds is never served either; that includes a collection that never used a
+per-user field but whose query has since stopped parsing, whose stored list the start-up
+step and the store's writes drop along with the rest. An evaluation that cannot run (the search index
 is closed or rebuilding, the query no longer parses, or the caller's state could not
 be read) answers no members, never the stored list, and says so: the collection in the
 response carries `members_unavailable: true` and a `members_unavailable_message`
@@ -186,11 +188,29 @@ materialize responses), so "could not be worked out" is told apart from "nothing
 matches". The cause is logged once per kind per minute. A `PUT` on a per-viewer
 collection always answers with the caller's own members, including a rename-only one.
 The caller's listening state is read once per request and shared by every per-viewer
-collection on the page, and no result window applies: a library of any size is
-evaluated in full. On the Audiobookshelf surface such a collection has no flag to
-carry, so it shows no books, and its `lastUpdate` is the time of the request (its
-members move with the viewer's state and the library, none of which touches the row),
-which makes a client that caches by `lastUpdate` refetch it every time. A background or
+collection on the page, and the evaluation has no result window: a library of any size
+is evaluated in full, but a list is then cut to 10,000 members (see below). A request
+that is cancelled while it waits for an evaluation slot is dropped (`499`), not
+reported as an unavailable collection and not logged. A per-user term that cannot be
+evaluated as written (under an `OR` with another term, or under a `NOT` over a group)
+is refused with a `400` on create and update (and for a smart playlist), and a stored
+query of that shape reads as unavailable; see `docs/search-syntax.md`. The failure log
+line names the class of the failure and never a user id, a book id or store text.
+On the Audiobookshelf surface such a collection has no flag to carry, so it shows no
+books when its members could not be worked out (the failure is logged), and its
+`lastUpdate` is the time of the request (its members move with the viewer's state and
+the library, none of which touches the row), which makes a client that caches by
+`lastUpdate` refetch it every time, and also when its evaluation failed, so a client
+cannot use `lastUpdate` to tell a failed evaluation from an empty one.
+
+A dynamic collection or smart playlist carries at most 10,000 member ids: in the
+stored `materialized_book_ids`, in every native response, and in the library items the
+Audiobookshelf surface expands. When the query matches more, `materialized_total`
+(`book_ids_total` on `GET /playlists/:id`) holds the real count and the list is the
+first 10,000 in sort order; on the Audiobookshelf collection row `numBooks` stays the
+number of books served and `totalBooks` (present only when the list was cut) is the
+real count. The stored row is rewritten only when the cut list or the total changes.
+A static collection's list is not cut. A background or
 system evaluation with no viewer matches nothing for a per-user rule, and never falls
 back to the creator or an admin. With authentication off the one viewer is the
 synthetic `_local` user. A query with no per-user field is unchanged: evaluated with

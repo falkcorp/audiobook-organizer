@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-25-collections-per-viewer-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 5b8e2d71-3c4a-4f06-9a17-d2e6c0b94f83 -->
-<!-- last-edited: 2026-10-25 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Smart collections show each person their own listening
 
@@ -23,6 +23,15 @@ Pull request: https://github.com/falkcorp/audiobook-organizer/pull/4164 (merge c
 - When the system has to work out such a collection with nobody in particular
   watching, the answer is "nothing". It never quietly falls back to the creator.
 - Collections that do not mention listening are unchanged.
+- Smart collections and smart playlists that mention listening used to look at only
+  the oldest 10,000 books of the library when working out their answer, so on a large
+  library part of the answer was silently missing. That is fixed, and smart playlists
+  change with it: they now see the whole library. A list is still shown at 10,000 books
+  at most, and the page says how many books really match.
+- A search that put a listening term on one side of an "or" (for example "finished or
+  by this author") was quietly worked out as an "and", so it showed far fewer books than
+  it said. Such a search is now refused when it is saved, with a message that shows the
+  spelling that works, and a saved one shows "members unavailable" until it is edited.
 - If a collection's members cannot be worked out for someone (the search index is
   still starting, the saved search no longer makes sense, or their listening history
   could not be read), the page now says so instead of showing an empty list that looks
