@@ -1,9 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-25 -->
 
 # One bad audio clip can no longer freeze all the listening helpers
+
+Branch `fix/whisper-transcribe-timeout-r2`, [PR #4168](https://github.com/falkcorp/audiobook-organizer/pull/4168). No separate spec.
 
 ## Executive Summary
 
