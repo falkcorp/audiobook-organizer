@@ -1,5 +1,5 @@
 // file: internal/merge/plan_virtual_cold_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6f1b7c2e-3d54-4a8e-9b0c-2e7d5a4f1c83
 // last-edited: 2026-10-25
 
@@ -50,6 +50,8 @@ func requireRefusedBeforeJournaling(t *testing.T, ms *Service, store database.St
 	require.ErrorIs(t, err, database.ErrOwnershipLookupIncomplete, "the refusal must say the lookup is incomplete, so the caller retries")
 	var incomplete *CombineIncompleteError
 	assert.False(t, errors.As(err, &incomplete), "a refusal before the journal must not ask the user to revert: %v", err)
+	assert.True(t, IsRetryLater(err), "the HTTP and review layers answer this one as retry-later (503)")
+	assert.Contains(t, err.Error(), "once the library index has finished loading", "the message must not promise a fixed wait: the index may never load")
 	journals, jerr := ms.ListCombineJournals(0)
 	require.NoError(t, jerr)
 	assert.Empty(t, journals, "a refusal must leave no combine journal behind")
@@ -61,7 +63,7 @@ func requireRefusedBeforeJournaling(t *testing.T, ms *Service, store database.St
 // rowless survivor's own file is that path. The planner used to take that row off
 // its book for the survivor, which left a live book without its file and, worse,
 // chose the victim by key order. While the complete lookup is unavailable the
-// combine refuses before it writes anything (a retry a minute later has the list),
+// combine refuses before it writes anything (a retry once the index has loaded has the list),
 // and with the list the path held by two live books is reported, not guessed.
 func TestCombineBooks_ColdLookupSurvivorsHeldPathRefusesBeforeJournaling(t *testing.T) {
 	store := setupTestStore(t)
@@ -274,4 +276,13 @@ func TestCombineBooks_UnreadableHolderOfAnAbsorbedPathRefusesBeforeJournaling(t 
 	assert.Empty(t, journals, "a refusal must leave no combine journal behind")
 	assert.False(t, viewBook(t, store, absorbed.ID).SoftDel, "the absorbed book must not be soft-deleted")
 	assert.Empty(t, viewFiles(t, store, survivor.ID), "nothing was attached to the survivor")
+}
+
+// IsRetryLater is true for the pre-journal refusal and false for a combine that got
+// past its journal, even when that one wraps the same cause: it may have written.
+func TestIsRetryLater(t *testing.T) {
+	assert.True(t, IsRetryLater(&rowTakeUnconfirmedError{holderBookID: "Hush", cause: database.ErrOwnershipLookupIncomplete}))
+	assert.False(t, IsRetryLater(&CombineIncompleteError{JournalID: "journal-1", Err: database.ErrOwnershipLookupIncomplete}))
+	assert.False(t, IsRetryLater(errors.New("unrelated")))
+	assert.False(t, IsRetryLater(nil))
 }

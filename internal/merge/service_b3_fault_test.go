@@ -1,5 +1,5 @@
 // file: internal/merge/service_b3_fault_test.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: 9c1d3e7a-4b6f-4a2d-8c5e-1f0a3b7d9e42
 // last-edited: 2026-10-25
 
@@ -38,6 +38,12 @@ type b3FaultStore struct {
 	failCreateAuthor    bool
 	failSetBookAuthors  bool
 	failCreateBookFile  bool
+
+	// unknownMoveBookFilesToBook / unknownCreateBookFile perform the write for
+	// real and THEN return ErrBookFileDurabilityUnknown: the batch was applied and
+	// only its fsync failed, which is what the Pebble store reports.
+	unknownMoveBookFilesToBook bool
+	unknownCreateBookFile      bool
 
 	// stickyFilesFor forces GetBookFiles(id) to always report a fixed
 	// non-empty file list for id, regardless of the underlying store's real
@@ -105,7 +111,11 @@ func (f *b3FaultStore) MoveBookFilesToBook(fileIDs []string, sourceBookID, targe
 	if f.failMoveBookFilesToBookFor[sourceBookID] {
 		return fmt.Errorf("b3 injected MoveBookFilesToBook failure")
 	}
-	return f.Store.MoveBookFilesToBook(fileIDs, sourceBookID, targetBookID)
+	err := f.Store.MoveBookFilesToBook(fileIDs, sourceBookID, targetBookID)
+	if err == nil && f.unknownMoveBookFilesToBook {
+		return fmt.Errorf("%w: b3 injected fsync failure", database.ErrBookFileDurabilityUnknown)
+	}
+	return err
 }
 
 // MoveBookFilesToBookBulk must honour the SAME injection as the singular form.
@@ -206,7 +216,11 @@ func (f *b3FaultStore) CreateBookFile(file *database.BookFile) error {
 	if f.failCreateBookFile {
 		return fmt.Errorf("b3 injected CreateBookFile failure")
 	}
-	return f.Store.CreateBookFile(file)
+	err := f.Store.CreateBookFile(file)
+	if err == nil && f.unknownCreateBookFile {
+		return fmt.Errorf("%w: b3 injected fsync failure", database.ErrBookFileDurabilityUnknown)
+	}
+	return err
 }
 
 // ---------- MergeBooks warn-and-continue branches ----------

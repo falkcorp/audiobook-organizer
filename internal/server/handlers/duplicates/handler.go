@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-25
 
@@ -208,12 +208,22 @@ func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params 
 // soft-deleted, or one is still awaiting its deep scan — is 409 carrying the service's own message,
 // because that message is the only place the user learns why their pick lost;
 // until 2026-09-02 both came back as a generic 500 and the reason was only in
-// the server log. Anything else is the 500 it always was.
+// the server log. A combine refused only because the library index is still
+// loading is 503 (COMBINE_RETRY_LATER) with Retry-After. Anything else is the 500
+// it always was.
 func respondMergeError(c *gin.Context, err error, fallback string) {
 	var notFound *merge.BookNotFoundError
 	switch {
 	case errors.As(err, &notFound):
 		httputil.RespondWithNotFound(c, "book", notFound.BookID)
+	case merge.IsRetryLater(err):
+		// Nothing was written: the complete holder list a combine needs is not
+		// available yet. The same request succeeds once the library index has
+		// loaded, so this is 503 with the reason, not the generic 500 that hid it.
+		logger.New("duplicates").Warn("merge refused until the library index loads path=%s err=%s",
+			logger.SanitizeLogValue(c.FullPath()), logger.SanitizeLogValue(fmt.Sprint(err)))
+		c.Header("Retry-After", "30")
+		httputil.RespondWithError(c, http.StatusServiceUnavailable, err.Error(), "COMBINE_RETRY_LATER")
 	case merge.IsRefusal(err):
 		// RespondWithConflict does not log. A soft-deleted participant means
 		// the caller picked from a stale view of the library, so operators
