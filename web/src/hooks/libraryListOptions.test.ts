@@ -1,5 +1,5 @@
 // file: web/src/hooks/libraryListOptions.test.ts
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8b3e6d12-5f47-4a90-9c1d-2e7a0b4f6c35
 // last-edited: 2026-10-26
 
@@ -191,4 +191,79 @@ describe('a query with boolean structure reaches the server whole', () => {
       { field: 'title', value: 'Hush', negated: true },
     ]);
   });
+
+  // B1: a regex or a value holding ( ) or | is a filter. Sent whole it reached the search
+  // index, which has no regex, and answered 0 rows or the wrong rows with no message.
+  it.each([
+    [
+      'title:/^(the|a) /',
+      [{ field: 'title', value: '/^(the|a) /', negated: false, quoted: false }],
+    ],
+    ['-title:/^(?:\\d)/', [{ field: 'title', value: '/^(?:\\d)/', negated: true, quoted: false }]],
+    [
+      'description:/(?i)gotham/',
+      [{ field: 'description', value: '/(?i)gotham/', negated: false, quoted: false }],
+    ],
+    [
+      'metadata:/(audible|google)/',
+      [{ field: 'metadata', value: '/(audible|google)/', negated: false, quoted: false }],
+    ],
+    [
+      'title:/hush|knight/',
+      [{ field: 'title', value: '/hush|knight/', negated: false, quoted: false }],
+    ],
+    [
+      'title:Batman(1989)',
+      [{ field: 'title', value: 'Batman(1989)', negated: false, quoted: false }],
+    ],
+  ])('%s travels as a filter, with no search= text and no whole send', (typed, expected) => {
+    const parsedSearch = parseSearch(typed);
+    const opts = buildLibraryListOptions({
+      ...base,
+      debouncedSearch: typed,
+      parsedSearch,
+      fieldFilters: listFieldFilters(parsedSearch),
+    });
+    expect(opts.search).toBeUndefined();
+    expect(
+      (JSON.parse(opts.filters ?? '[]') as Array<Record<string, unknown>>).map((f) => ({
+        quoted: false,
+        ...f,
+      }))
+    ).toEqual(expected);
+  });
+
+  it('carries a regex beside a per-user term as filters too', () => {
+    const typed = 'read_status:finished title:/^(the|a) /';
+    const parsedSearch = parseSearch(typed);
+    const opts = buildLibraryListOptions({
+      ...base,
+      debouncedSearch: typed,
+      parsedSearch,
+      fieldFilters: listFieldFilters(parsedSearch),
+    });
+    expect(opts.search).toBeUndefined();
+    expect(JSON.parse(opts.filters ?? '[]')).toEqual([
+      { field: 'read_status', value: 'finished', negated: false },
+      { field: 'title', value: '/^(the|a) /', negated: false },
+    ]);
+  });
+
+  // N-N5: the tag chip reads `tag:noir ^2` as off, so the list must not be filtered by
+  // the tag while it says so: the whole text goes to the server, which refuses it.
+  it.each(['tag:noir ^2', 'tag:"noir" ^2', 'tag:noir ~'])(
+    '%s is search= as typed, with no tags=',
+    (typed) => {
+      const parsedSearch = parseSearch(typed);
+      const opts = buildLibraryListOptions({
+        ...base,
+        debouncedSearch: typed,
+        parsedSearch,
+        fieldFilters: listFieldFilters(parsedSearch),
+      });
+      expect(opts.search).toBe(typed);
+      expect(opts.tags).toBeUndefined();
+      expect(opts.filters).toBeUndefined();
+    }
+  );
 });

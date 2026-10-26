@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.13.4
+// version: 1.13.5
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
 // last-edited: 2026-10-26
 
@@ -100,9 +100,10 @@ function dedupe(tags: Iterable<string>): string[] {
  * `search=`, where the server applies them as the same exact filter; sending them
  * again as tags[] ANDs the same tag a second time, which changes nothing. A tag
  * term that does not narrow the whole query (under OR, under NOT or `-`, in an
- * alternation, with a pattern or a boost) is never sent as tags[]. It is not lost
- * on the way: any text with such a term has boolean structure, which the search
- * parser always sends whole (searchParser.ts, hasBooleanStructure), so the server
+ * alternation, with a pattern or a boost, glued to the tag or after a space) is never
+ * sent as tags[]. It is not lost on the way: any text with such a term has boolean
+ * structure, which the search parser always sends whole (searchParser.ts,
+ * hasBooleanStructure), so the server
  * refuses it with a message the Library shows under the search box. Only a plain
  * conjunct reaches the flat path below.
  */
