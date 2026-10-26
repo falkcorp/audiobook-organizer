@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-bookfile-write-race-executive-summary.md -->
-<!-- version: 1.0.5 -->
+<!-- version: 1.0.6 -->
 <!-- guid: 3e8f1a5c-6b72-4d09-9c4e-d2a7f0b1c853 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -87,7 +87,7 @@ incomplete state is reported.)
   meantime is left alone and the delete is refused, because the reason for
   deleting it (a duplicate inside the first book) no longer applies; it may now
   be the only copy of its file there. The duplicate-removal job also keeps its
-  undo log honest when a delete removed nothing, or removed a slightly different
+  undo log accurate when a delete removed nothing, or removed a slightly different
   version of a record than the one it logged.
 - **A busy batch no longer gives up completely.** When some of a batch's records
   keep changing, those are refused and the others are saved, instead of
