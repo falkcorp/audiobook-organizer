@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7f2a9c14-3b6d-4e81-9a05-2c8e1d4f6b73
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package database
 
@@ -51,6 +51,11 @@ type TranscribeStats struct {
 	NoAudio       int `json:"no_audio"`
 	FFmpegError   int `json:"ffmpeg_error"`
 	WhisperError  int `json:"whisper_error"`
+	// TranscribeTimeout counts books whose first file the Whisper worker's
+	// decoder ran past its deadline on at least the strike limit: a permanent
+	// verdict about the audio, skipped by selection until retry_failed. A book
+	// below the limit is counted in Deferred (it is retried next run).
+	TranscribeTimeout int `json:"transcribe_timeout"`
 	// PathUnmapped counts remote_extract books whose worker could not read the
 	// source file through its mount while this server could stat it: a worker
 	// path-map or NFS problem, not a book problem. Retried by the next run.

@@ -1,7 +1,7 @@
 // file: internal/transcribe/path_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -30,6 +30,7 @@ type pathWorker struct {
 	mu       sync.Mutex
 	requests []map[string]map[string]any // one decoded "jobs" object per POST
 	respond  func(key string, job map[string]any) map[string]any
+	canaries int // canary clips received on /transcribe, answered as a sound worker would
 }
 
 func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
@@ -59,6 +60,12 @@ func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
 			results[k] = respond(k, j)
 		}
 		_ = json.NewEncoder(rw).Encode(map[string]any{"results": results})
+	})
+	mux.HandleFunc("POST /transcribe", func(rw http.ResponseWriter, _ *http.Request) {
+		w.mu.Lock()
+		w.canaries++
+		w.mu.Unlock()
+		_ = json.NewEncoder(rw).Encode(map[string]any{"text": "Welcome to Gotham City.", "error": nil})
 	})
 	w.srv = httptest.NewServer(mux)
 	t.Cleanup(w.srv.Close)

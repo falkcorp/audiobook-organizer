@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.2.0
+// version: 1.7.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -53,11 +53,64 @@ const (
 	// PathErrContainerRejected: ffmpeg refused the container (not on the
 	// worker's format whitelist). The worker's policy, not a verdict on the file.
 	PathErrContainerRejected = "container_rejected"
-	pathErrSeparator         = ": "
+	// PathErrTranscribeTimeout: the decoder did not finish this clip inside the
+	// worker's per-clip deadline and its process was killed and restarted. A
+	// verdict about THIS file's audio (it sends the decoder into a loop), never
+	// an outage: the worker is healthy and answered. One strike is retried; the
+	// strike limit makes it permanent (see the maintenance ops).
+	PathErrTranscribeTimeout = "transcribe_timeout"
+	// PathErrDecoderCrashed: the worker's decode process DIED by itself while it
+	// held this clip (a Metal abort, a segfault, a non-zero exit). Like a timeout
+	// it is evidence about the clip, which the strike counter bounds so a clip
+	// that deterministically kills the decoder is not re-sent forever; unlike a
+	// decode process that cannot START (worker_misconfigured), which is the
+	// worker's fault.
+	PathErrDecoderCrashed = "decoder_crashed"
+	// PathErrDecoderKilled: the decode process was killed from OUTSIDE while it
+	// held this clip (SIGKILL or SIGTERM: macOS jetsam under memory pressure from
+	// another job on the box, an operator), or it could not be reaped to say how
+	// it died. One kill says little about the clip (it may be a decode that grew
+	// until jetsam took it, or another job's memory pressure), so it is counted
+	// like a timeout but can only make a file permanent with a second strike
+	// from a DIFFERENT worker (the store's IntroTimeoutWorker rule): kills on one
+	// host alone never settle a file, kills on two hosts do. It is a strike-type
+	// answer (IsStrikeError), so a response that is mostly kills is a worker
+	// fault judged like one that is mostly timeouts. whisper_mlx_server.py
+	// 1.11.0 and later.
+	PathErrDecoderKilled = "decoder_killed"
+	// PathErrRequestAbandoned: the worker did not start this clip because the
+	// client's request deadline (X-Whisper-Request-Timeout-S) had passed. The
+	// client normally stops listening first and never reads it; if it does, it is
+	// no answer at all, never a verdict.
+	PathErrRequestAbandoned = "request_abandoned"
+	// PathErrWorkerFault is made by the DISPATCHER, never sent by a worker: every
+	// worker this job was offered to answered it only inside a response that was
+	// the worker's fault (see WorkerFaultError), so nothing is known about the
+	// file. It is a deferral: the job is retried by a later run and never struck.
+	// It is an explicit result rather than a missing one so a caller that
+	// re-sends what is missing (an outage retry) cannot resend it into the same
+	// faults with its fault memory lost.
+	PathErrWorkerFault = "worker_fault"
+	pathErrSeparator   = ": "
 )
 
 var pathErrCodes = []string{
-	PathErrUnmapped, PathErrNotFound, PathErrFFmpeg, PathErrFFmpegTimeout, PathErrBadRequest, PathErrWhisper, PathErrWorkerMisconfigured, PathErrContainerRejected,
+	PathErrUnmapped, PathErrNotFound, PathErrFFmpeg, PathErrFFmpegTimeout, PathErrBadRequest, PathErrWhisper, PathErrWorkerMisconfigured, PathErrContainerRejected, PathErrTranscribeTimeout, PathErrDecoderCrashed,
+	PathErrDecoderKilled, PathErrRequestAbandoned, PathErrWorkerFault,
+}
+
+// IsNoAnswer reports whether a per-job error text means the job got NO answer
+// about its file: the worker could not do the job (worker_misconfigured), the request was abandoned
+// before the clip started (request_abandoned), or the dispatcher gave up on it
+// because only faulted workers answered it (worker_fault). Every caller defers
+// such a job (nothing written, retried by a later run) and never strikes it,
+// writes a status for it, or reads its empty text as silence.
+func IsNoAnswer(errText string) bool {
+	switch PathErrorCode(errText) {
+	case PathErrWorkerMisconfigured, PathErrRequestAbandoned, PathErrWorkerFault:
+		return true
+	}
+	return false
 }
 
 // PathErrorCode returns the worker error code that prefixes a path job's error
@@ -136,6 +189,10 @@ func PathPipelineAvailable(ctx context.Context) (ok bool, reason string) {
 // refusal, so the caller defers the page and writes no per-book status. As with
 // TranscribeBatchOpts, a per-file failure is a BatchResult.Error inside a
 // successful return, never an error here.
+//
+// On an error the returned map still holds every result that settled before
+// the failure (nil only when nothing did), so the caller applies those and
+// defers the rest instead of discarding finished work.
 func TranscribeByPathBatch(ctx context.Context, jobs map[string]PathJob, opts BatchOptions) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
@@ -150,7 +207,8 @@ func TranscribeByPathBatch(ctx context.Context, jobs map[string]PathJob, opts Ba
 	if journal != nil && opts.RefreshJournal {
 		journal = lookupBypass{journal}
 	}
-	return dispatchPool(ctx, endpoints, snap.WhisperRequires, jobs, opts.OnProgress, pathRefusal,
+	return dispatchPool(ctx, endpoints, snap.WhisperRequires, jobs,
+		poolOptions{onProgress: opts.OnProgress, extraRefusal: pathRefusal, avoid: opts.AvoidWorkers},
 		func(ctx context.Context, g gatedEndpoint, sub map[string]PathJob, progress ProgressFunc) (map[string]BatchResult, error) {
 			return transcribePathRemote(ctx, g, sub, progress, journal)
 		})
@@ -251,11 +309,13 @@ func transcribePathRemote(ctx context.Context, g gatedEndpoint, jobs map[string]
 
 	results := make(map[string]BatchResult, total)
 	if len(send) > 0 {
-		sent, err := transcribePathChunks(ctx, url, g.Endpoint.Concurrency, send, sigs, sendProgress, ej)
-		if err != nil {
-			return nil, err
-		}
+		sent, err := transcribePathChunks(ctx, url, g.Health, g.Endpoint.Concurrency, send, sigs, sendProgress, ej)
+		// A failed send still carries the chunks that completed before it.
 		maps.Copy(results, sent)
+		if err != nil {
+			maps.Copy(results, served)
+			return results, err
+		}
 	}
 	maps.Copy(results, served)
 	return results, nil
@@ -268,18 +328,15 @@ type pathJobEntry struct {
 
 // transcribePathChunks sends jobs in whisperBatchSize chunks to
 // /transcribe-path-batch. Same shape as transcribeRemoteBatched: a slot is held
-// per request, each chunk is journalled before its progress is reported, and
-// a failed chunk discards this endpoint's completed work for re-queue elsewhere.
-func transcribePathChunks(ctx context.Context, remoteURL string, limit int, jobs map[string]PathJob, sigs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
+// per request and each chunk is journalled before its progress is reported. A
+// failed chunk returns the chunks that completed before it alongside the error.
+func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth, limit int, jobs map[string]PathJob, sigs map[string]string, onProgress ProgressFunc, ej *endpointJournal) (map[string]BatchResult, error) {
 	ordered := make([]pathJobEntry, 0, len(jobs))
 	for id, j := range jobs {
 		ordered = append(ordered, pathJobEntry{id, j})
 	}
 	slices.SortFunc(ordered, func(a, b pathJobEntry) int { return strings.Compare(a.id, b.id) })
 
-	// Extraction plus inference both happen inside the request, so this is the
-	// same 600s ceiling the upload path uses for a full chunk.
-	client := &http.Client{Timeout: 600 * time.Second}
 	results := make(map[string]BatchResult, len(jobs))
 	total := len(jobs)
 	done := 0
@@ -292,27 +349,49 @@ func transcribePathChunks(ctx context.Context, remoteURL string, limit int, jobs
 
 		release, err := acquireInFlight(ctx, remoteURL, limit)
 		if err != nil {
-			return nil, err
+			// Chunks that completed before this one are valid: hand them up.
+			return results, err
 		}
-		batchResults, err := sendPathBatch(ctx, client, remoteURL, chunk)
+		// Extraction plus inference both happen inside the request, so the
+		// ceiling scales with the clips in THIS chunk (see requestTimeout).
+		secs := make([]float64, len(chunk))
+		ids := make([]string, len(chunk))
+		for i, e := range chunk {
+			secs[i], ids[i] = float64(e.job.Seconds), e.id
+		}
+		timeout := requestTimeout(h, secs, true)
+		client := &http.Client{Timeout: timeout}
+		var batchResults map[string]BatchResult
+		err = superviseRequest(ctx, remoteURL, h, timeout, ids, func(rctx context.Context) error {
+			var serr error
+			batchResults, serr = sendPathBatch(rctx, client, remoteURL, chunk)
+			return serr
+		})
 		release()
 		if err != nil {
-			pathLog.Warn("path chunk failed, discarding completed work from this endpoint: url=%s completed=%d total=%d chunk_start=%d",
-				remoteURL, done, total, start)
-			return nil, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, err)
+			pathLog.Warn("path chunk failed, keeping completed work from this endpoint: url=%s completed=%d total=%d chunk_start=%d stuck=%t err=%s",
+				remoteURL, done, total, start, IsWorkerStuck(err), err.Error())
+			return results, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, err)
 		}
-		ej.completePath(batchResults, sigs)
-		for id, r := range batchResults {
+		// One response is judged on its own (see workerFaultIn).
+		kept, fault := splitWorkerFault(remoteURL, batchResults)
+		ej.completePath(kept, sigs)
+		for id, r := range kept {
 			results[id] = r
 			done++
 			if onProgress != nil {
 				onProgress(done, total)
 			}
 		}
+		if fault != nil {
+			pathLog.Warn("path chunk: worker fault, keeping the sound results from this endpoint: url=%s kept=%d faulted=%d chunk_start=%d reason=%s",
+				logger.SanitizeLogValue(remoteURL), len(kept), len(fault.Faulted), start, logger.SanitizeLogValue(fault.Reason))
+			return results, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, fault)
+		}
 		if batchSleep > 0 && end < len(ordered) {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return results, ctx.Err()
 			case <-time.After(batchSleep):
 			}
 		}
@@ -339,6 +418,7 @@ func sendPathBatch(ctx context.Context, client *http.Client, remoteURL string, c
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	setRequestDeadlineHeader(req, client)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

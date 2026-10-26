@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db_test.go
-// version: 1.1.1
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 package registry_test
 
@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/gob"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -391,5 +393,130 @@ func TestReporter_TouchProgressFnCalledOnUpdate(t *testing.T) {
 	got := touchCount.Load()
 	if got != 3 {
 		t.Errorf("expected touchFn called 3 times, got %d", got)
+	}
+}
+
+// opaqueErr mimics *transcribe.TransportError: an error whose only field is an
+// unexported wrapped error, which encoding/json renders as {}.
+type opaqueErr struct {
+	endpoints []string
+	err       error
+}
+
+func (e *opaqueErr) Error() string { return fmt.Sprintf("tried %v: %v", e.endpoints, e.err) }
+
+// TestReporterDB_ErrorAttrsLogTheirText pins the op-log sink's rendering of
+// errors. The op log is the only place an operator sees why a batch deferred,
+// and it used to read `"Err":{}`: the sink json-marshalled the error value.
+// This goes through the real Logger() -> fanout handler -> Log path, not just
+// the encoder.
+func TestReporterDB_ErrorAttrsLogTheirText(t *testing.T) {
+	ctx := t.Context()
+	rep, store, opID := newTestReporter(t, ctx)
+
+	wrapped := fmt.Errorf("Post \"http://127.0.0.1:1/x\": %w", context.DeadlineExceeded)
+	rep.Logger().Warn("batch failed",
+		"err", &opaqueErr{endpoints: []string{"http://192.0.2.10"}, err: wrapped},
+		"cause", wrapped,
+		slog.Group("nested", slog.Any("inner", wrapped)),
+		"plain", "text", "n", 7)
+	for range 99 {
+		_ = rep.Log(slog.LevelDebug, "filler")
+	}
+
+	var attrs string
+	deadline := time.Now().Add(2 * time.Second)
+	for attrs == "" && time.Now().Before(deadline) {
+		for _, l := range store.logsFor(opID) {
+			if l.Message == "batch failed" {
+				attrs = l.Attrs
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if attrs == "" {
+		t.Fatal("'batch failed' op log entry not found")
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(attrs), &m); err != nil {
+		t.Fatalf("attrs JSON invalid: %v (%s)", err, attrs)
+	}
+	if got, _ := m["err"].(string); got != `tried [http://192.0.2.10]: Post "http://127.0.0.1:1/x": context deadline exceeded` {
+		t.Errorf("err attr = %#v, want the error text", m["err"])
+	}
+	if got, _ := m["cause"].(string); got == "" {
+		t.Errorf("cause attr = %#v, want the error text", m["cause"])
+	}
+	nested, _ := m["nested"].(map[string]any)
+	if got, _ := nested["inner"].(string); got == "" {
+		t.Errorf("nested.inner = %#v, want the error text", m["nested"])
+	}
+	if m["plain"] != "text" || m["n"] != float64(7) {
+		t.Errorf("non-error attrs changed: %s", attrs)
+	}
+}
+
+// logAttrsFor waits for the buffered op log entry with this message and returns
+// its decoded attrs.
+func logAttrsFor(t *testing.T, store *fakeStore, opID, message string) map[string]any {
+	t.Helper()
+	var attrs string
+	deadline := time.Now().Add(2 * time.Second)
+	for attrs == "" && time.Now().Before(deadline) {
+		for _, l := range store.logsFor(opID) {
+			if l.Message == message {
+				attrs = l.Attrs
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if attrs == "" {
+		t.Fatalf("%q op log entry not found", message)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(attrs), &m); err != nil {
+		t.Fatalf("attrs JSON invalid: %v (%s)", err, attrs)
+	}
+	return m
+}
+
+// panickyErr is an error whose Error method fails for a reason other than a nil
+// receiver.
+type panickyErr struct{}
+
+func (panickyErr) Error() string { panic("boom") }
+
+// TestReporterDB_ATypedNilErrorAttrDoesNotPanic pins that logging an error
+// variable holding a typed nil (non-nil interface, nil pointer) cannot take the
+// caller down: errorText renders it the way slog's text handler does, and an
+// Error method that panics for another reason is reported rather than lost.
+func TestReporterDB_ATypedNilErrorAttrDoesNotPanic(t *testing.T) {
+	ctx := t.Context()
+	rep, store, opID := newTestReporter(t, ctx)
+
+	var typedNil *opaqueErr
+	var asError error = typedNil // != nil as an interface
+	rep.Logger().Warn("nil attrs",
+		"err", asError,
+		slog.Group("nested", slog.Any("inner", asError)),
+		"broken", panickyErr{},
+		"after", "still logged")
+	for range 99 {
+		_ = rep.Log(slog.LevelDebug, "filler")
+	}
+
+	m := logAttrsFor(t, store, opID, "nil attrs")
+	if got, _ := m["err"].(string); got != "<nil>" {
+		t.Errorf("typed-nil err attr = %#v, want \"<nil>\"", m["err"])
+	}
+	nested, _ := m["nested"].(map[string]any)
+	if got, _ := nested["inner"].(string); got != "<nil>" {
+		t.Errorf("nested typed-nil = %#v, want \"<nil>\"", m["nested"])
+	}
+	if got, _ := m["broken"].(string); !strings.Contains(got, "PANIC=Error method: boom") {
+		t.Errorf("a panicking Error method = %#v, want the panic reported", m["broken"])
+	}
+	if m["after"] != "still logged" {
+		t.Errorf("attrs after the bad one were lost: %v", m)
 	}
 }

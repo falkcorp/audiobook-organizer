@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.18.0
+// version: 1.21.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -26,6 +26,27 @@ var batchWhisperPy []byte
 type BatchResult struct {
 	Text  string
 	Error string // non-empty means transcription failed for this item
+	// Condemned marks a result the DISPATCHER made, not a worker: this file was
+	// the only job in its request on distinct workers and each of them failed on
+	// it. It is the strongest evidence the pool can give about a file, so the
+	// callers' "do not strike what a failing pool reported" rule does not apply
+	// to it.
+	Condemned bool
+	// Endpoint is the URL of the endpoint whose answer this is, set by the
+	// dispatcher, for logs only: it is an internal address and is never stored.
+	// For a Condemned verdict it names every endpoint the file was stuck on
+	// alone, joined with WorkerSeparator. Empty for a result no worker gave (the
+	// local in-process path, a dispatcher deferral).
+	Endpoint string
+	// Worker is the opaque identity of the MACHINE that gave the answer (see
+	// workerid.go): two ports on one box are one worker. The maintenance ops
+	// store it with a transcribe_timeout strike, and a file is made permanent
+	// only by a strike from a machine that has not struck it before, so one sick
+	// machine cannot do it. For a Condemned verdict it names every distinct
+	// machine the file was stuck on alone, joined with WorkerSeparator. Empty
+	// when no worker gave the result, or the endpoint's /health could not be
+	// read (an unknown machine never earns a file another strike).
+	Worker string
 }
 
 // ProgressFunc is an optional callback invoked after each book finishes
@@ -74,6 +95,16 @@ type BatchOptions struct {
 	// different answer for the same audio (retry_silence after VAD/decoder
 	// tuning); serving the journal there would defeat the run.
 	RefreshJournal bool
+	// AvoidWorkers maps a job id to the stored worker value of the file's last
+	// counted timeout strike (BatchResult.Worker, possibly several joined with
+	// WorkerSeparator). The pool sends such a job to an endpoint on a DIFFERENT
+	// machine whenever one is healthy this round, because only another machine's
+	// strike can settle the file: priority routing otherwise hands a lone job to
+	// the same priority-1 worker every night, and the file is re-sent forever
+	// without ever becoming permanent. A preference, not a refusal: with no
+	// other machine available the job is sent anyway. Nil when no job carries a
+	// strike.
+	AvoidWorkers map[string]string
 }
 
 // TranscribeBatchOpts is TranscribeBatch with options. The journal applies to
@@ -96,7 +127,7 @@ func TranscribeBatchOpts(ctx context.Context, jobs map[string]string, opts Batch
 	// the historical direct path); else the local uv path below.
 	snap := config.Snapshot()
 	if endpoints := poolEndpoints(snap.WhisperEndpoints, snap.WhisperRemoteURL); len(endpoints) > 0 {
-		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress, journal)
+		results, err := transcribePool(ctx, endpoints, snap.WhisperRequires, jobs, onProgress, journal, opts.AvoidWorkers)
 		if err != nil {
 			// Do NOT fall back to the local uv path when remote endpoints are
 			// configured. The local subprocess loads the full Whisper model into
@@ -112,7 +143,14 @@ func TranscribeBatchOpts(ctx context.Context, jobs map[string]string, opts Batch
 			// of writing whisper_error to every book in it. Returning a bare
 			// error here is what turned the 2026-07-01 outage into ~34,000 false
 			// per-book verdicts.
-			return nil, err
+			//
+			// The results returned WITH the error are the jobs that settled
+			// before the batch failed (transcripts, and condemned
+			// transcribe_timeout verdicts). They are valid per-file answers: a
+			// caller applies them and then handles the error, because
+			// discarding them redoes the work and loses the verdict that a
+			// file wedges the decoder.
+			return results, err
 		}
 		return results, nil
 	}
