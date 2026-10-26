@@ -1,13 +1,13 @@
 // file: internal/database/pebble_store_booksig_migrate_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 9e51c0d3-2a87-4f16-b74e-5c8203f9a1d6
-// last-edited: 2026-10-15
+// last-edited: 2026-10-26
 
 package database
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
 	"testing"
@@ -393,10 +393,10 @@ func TestBookSigMigrate_IsIdempotent(t *testing.T) {
 
 // TestBookSigMigrate_SkipsRacedRow exercises the CAS directly.
 //
-// PebbleStore has no per-book write serialization, so a concurrent UpdateBook
-// between our read and our commit would otherwise see its ENTIRE update
-// reverted — title, path, everything — not merely the signature. The guard is a
-// byte compare immediately before commit. Here the `before` snapshot
+// A writer that does not take the book's write stripe, landing between our
+// read and our commit, would otherwise see its ENTIRE update reverted — title,
+// path, everything — not merely the signature. The second line of defence (the
+// first is the stripe) is a byte compare immediately before commit. Here the `before` snapshot
 // deliberately disagrees with what is stored, which is what a raced row looks
 // like from the committer's point of view.
 func TestBookSigMigrate_SkipsRacedRow(t *testing.T) {
@@ -422,44 +422,62 @@ func TestBookSigMigrate_SkipsRacedRow(t *testing.T) {
 		"a raced book must not get a sidecar either — the row and sidecar move together or not at all")
 }
 
-// TestBookSigMigrate_RaceKeepsBookAtPathKey reproduces the race the CAS cannot
-// close: the re-read passes, then an UpdateBook moves the book A->B (deleting
-// key A, setting key B) before the migration commits the row back at A. The
-// migration's batch must carry key A itself, or LiveBookIDsAtPath(A) reports a
-// path holding a live book as free.
-func TestBookSigMigrate_RaceKeepsBookAtPathKey(t *testing.T) {
+// TestBookSigMigrate_ConcurrentUpdateBookIsNotRevertedAndKeepsItsHashKey: an
+// UpdateBook that changes the file path and the file hash arrives while the
+// migration is between its re-read and its commit. The migration holds the
+// book's write stripe for the whole read-strip-write, so the update waits and
+// then applies on top of the stripped row. Before the stripe the migration
+// committed the row it had read back over the update: the row named the old
+// hash and path again while UpdateBook had already deleted the old keys and
+// set the new ones, so the book was not found under the hash its own row holds
+// (and LiveBookIDsAtPath reported the path of a live book as free).
+func TestBookSigMigrate_ConcurrentUpdateBookIsNotRevertedAndKeepsItsHashKey(t *testing.T) {
 	env := newBookSigEnv(t)
 	store := env.store
 
 	const id = "01MIGRATEATPATH000000000"
-	migrateSeedLegacyRow(t, store, id, "atpath", nil)
-	const pathA = "/tmp/migrate_atpath.m4b"
-	_, err := store.RebuildBookAtPathIndex(context.Background(), nil)
-	require.NoError(t, err)
+	migrateSeedLegacyRow(t, store, id, "atpath", map[string]any{"file_hash": "OLDH"})
+	const movedPath = "/tmp/migrate_atpath_moved.m4b"
 
+	updated := make(chan error, 1)
 	defer func() { bookSigMigrateAfterRecheckHook = nil }()
 	bookSigMigrateAfterRecheckHook = func(hid string) {
 		bookSigMigrateAfterRecheckHook = nil
-		b, err := store.GetBookByID(hid)
-		if err != nil || b == nil {
-			t.Errorf("hook read: %v %v", b, err)
-			return
-		}
-		b.FilePath = "/tmp/migrate_atpath_moved.m4b"
-		if _, err := store.UpdateBook(hid, b); err != nil {
-			t.Error(err)
-		}
+		go func() {
+			b, err := store.GetBookByID(hid)
+			if err != nil || b == nil {
+				updated <- fmt.Errorf("hook read: %v %v", b, err)
+				return
+			}
+			b.FilePath = movedPath
+			b.FileHash = new("NEWH")
+			_, err = store.UpdateBook(hid, b)
+			updated <- err
+		}()
+		// The update must be waiting on the stripe, not racing the commit
+		// below. Without the stripe it finishes in this window and the
+		// migration then writes the stale row over it.
+		time.Sleep(300 * time.Millisecond)
 	}
 	outcome, err := store.MigrateBookSigToSidecar(id, false)
 	require.NoError(t, err)
 	require.Equal(t, BookSigMigrateMigrated, outcome)
+	require.NoError(t, <-updated)
 
 	row, err := store.GetBookByID(id)
 	require.NoError(t, err)
-	require.Equal(t, pathA, row.FilePath, "precondition: the migration's lost update leaves the row at A")
-	ids, err := store.LiveBookIDsAtPath(pathA)
+	require.Equal(t, movedPath, row.FilePath, "the update was applied, not reverted by the migration")
+	require.NotNil(t, row.FileHash)
+	require.Equal(t, "NEWH", *row.FileHash)
+	require.NotNil(t, row.BookSigV1, "the signature is in the sidecar and hydrates")
+
+	got, err := store.GetBookByFileHash("NEWH")
 	require.NoError(t, err)
-	require.Equal(t, []string{id}, ids, "live book at A missing from the path set: a false free")
+	require.NotNil(t, got, "the book is found under the hash its own row holds")
+	require.Equal(t, id, got.ID)
+	ids, err := store.LiveBookIDsAtPath(movedPath)
+	require.NoError(t, err)
+	require.Equal(t, []string{id}, ids)
 }
 
 // TestBookSigMigrate_ConformancePairing is the invariant that makes the

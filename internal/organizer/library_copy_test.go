@@ -1,7 +1,7 @@
 // file: internal/organizer/library_copy_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 93a1faee-be59-4abb-ab7d-eb7996f3665e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package organizer
 
@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -51,12 +54,48 @@ type libraryCopyFixture struct {
 	hash     string
 }
 
+// idOrder is which of the two same-hash books has the smaller id. The hash
+// lookup (GetBookByFileHash) answers with the live holder with the smallest id,
+// so the order decides whether it names the book being organized (the original
+// older than its copy: the prod order, since the copy is made after the
+// original) or the other one. The organizer's duplicate check must give the
+// same answer under both; with ids that merely sort one way it passed only
+// because the lookup happened to name the copy.
+type idOrder struct {
+	name          string
+	originalOlder bool
+}
+
+var bothIDOrders = []idOrder{
+	{"original-id-smaller", true},
+	{"copy-id-smaller", false},
+}
+
+// mintBookIDs returns two ULIDs minted a minute apart, the older one first, so
+// the order is a fact of the ids and not of the clock.
+func mintBookIDs(t *testing.T, originalOlder bool) (origID, copyID string) {
+	t.Helper()
+	base := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	older := ulid.MustNew(ulid.Timestamp(base), zeroEntropy{}).String()
+	newer := ulid.MustNew(ulid.Timestamp(base.Add(time.Minute)), zeroEntropy{}).String()
+	if originalOlder {
+		return older, newer
+	}
+	return newer, older
+}
+
+// zeroEntropy makes a ULID a function of its timestamp alone.
+type zeroEntropy struct{}
+
+func (zeroEntropy) Read(p []byte) (int, error) { return len(p), nil }
+
 // newLibraryCopyFixture builds the original and a same-hash twin under root at
 // the original's computed target. copyGroup is the twin's version group: the
 // original's group ("vg-1") makes it the book's own library copy, anything
 // else makes it an unrelated duplicate.
-func newLibraryCopyFixture(t *testing.T, copyGroup string) *libraryCopyFixture {
+func newLibraryCopyFixture(t *testing.T, copyGroup string, order idOrder) *libraryCopyFixture {
 	t.Helper()
+	origID, copyID := mintBookIDs(t, order.originalOlder)
 	svc, store, root := setupInPlace(t)
 	author, err := store.CreateAuthor("Some Author")
 	if err != nil {
@@ -67,7 +106,7 @@ func newLibraryCopyFixture(t *testing.T, copyGroup string) *libraryCopyFixture {
 	group := "vg-1"
 
 	srcPath := filepath.Join(t.TempDir(), "newbooks", "Title.mp3")
-	orig := addInPlaceBook(t, store, "orig", "Title", srcPath, content, nil, 0)
+	orig := addInPlaceBook(t, store, origID, "Title", srcPath, content, nil, 0)
 	orig.Author = nil
 	orig.AuthorID = &author.ID
 	orig.FileHash = &hash
@@ -77,7 +116,7 @@ func newLibraryCopyFixture(t *testing.T, copyGroup string) *libraryCopyFixture {
 	}
 
 	target := filepath.Join(root, "Some Author", "Title", "Title.mp3")
-	cp := addInPlaceBook(t, store, "copy", "Title", target, content, nil, 0)
+	cp := addInPlaceBook(t, store, copyID, "Title", target, content, nil, 0)
 	cp.Author = nil
 	cp.AuthorID = &author.ID
 	cp.FileHash = &hash
@@ -88,11 +127,19 @@ func newLibraryCopyFixture(t *testing.T, copyGroup string) *libraryCopyFixture {
 		t.Fatal(err)
 	}
 
-	if hit, _ := store.GetBookByFileHash(hash); hit == nil || hit.ID != "copy" {
-		t.Fatalf("fixture: the hash lookup must name the copy (the prod shape), got %+v", hit)
+	// The id order is a fact of the fixture, so which book the single-answer
+	// hash lookup names (the smaller id) is known, and is not asserted to be
+	// the copy: the organizer must not depend on it.
+	holders, err := store.BooksByFileHash(hash)
+	if err != nil || len(holders) != 2 {
+		t.Fatalf("fixture: both books must hold the hash, got %d holders (err %v)", len(holders), err)
 	}
-	storedOrig, _ := store.GetBookByID("orig")
-	storedCopy, _ := store.GetBookByID("copy")
+	want := min(origID, copyID)
+	if hit, _ := store.GetBookByFileHash(hash); hit == nil || hit.ID != want {
+		t.Fatalf("fixture: the single-answer lookup must name the smaller id %s, got %+v", want, hit)
+	}
+	storedOrig, _ := store.GetBookByID(origID)
+	storedCopy, _ := store.GetBookByID(copyID)
 	return &libraryCopyFixture{svc: svc, store: store, root: root, original: storedOrig, libCopy: storedCopy, hash: hash}
 }
 
@@ -103,8 +150,8 @@ func (f *libraryCopyFixture) organizer(spy OrganizeHooks) *Organizer {
 	return org
 }
 
-func TestOrganizeBook_OwnLibraryCopyIsNotACollision(t *testing.T) {
-	f := newLibraryCopyFixture(t, "vg-1")
+func runOrganizeBook_OwnLibraryCopyIsNotACollision(t *testing.T, order idOrder) {
+	f := newLibraryCopyFixture(t, "vg-1", order)
 	spy := &collisionSpy{}
 
 	_, _, err := f.organizer(spy).OrganizeBook(f.original)
@@ -113,7 +160,7 @@ func TestOrganizeBook_OwnLibraryCopyIsNotACollision(t *testing.T) {
 	if !errors.As(err, &hasCopy) {
 		t.Fatalf("OrganizeBook(original) = %v; want *LibraryCopyExistsError", err)
 	}
-	if hasCopy.CopyID != "copy" || hasCopy.CopyPath != f.libCopy.FilePath {
+	if hasCopy.CopyID != f.libCopy.ID || hasCopy.CopyPath != f.libCopy.FilePath {
 		t.Errorf("error names copy %s at %s; want copy at %s", hasCopy.CopyID, hasCopy.CopyPath, f.libCopy.FilePath)
 	}
 	if !errors.Is(err, ErrLibraryCopyExists) {
@@ -133,8 +180,8 @@ func TestOrganizeBook_OwnLibraryCopyIsNotACollision(t *testing.T) {
 	}
 }
 
-func TestOrganizeBook_TrueDuplicateStillRefusedAndReported(t *testing.T) {
-	f := newLibraryCopyFixture(t, "vg-unrelated")
+func runOrganizeBook_TrueDuplicateStillRefusedAndReported(t *testing.T, order idOrder) {
+	f := newLibraryCopyFixture(t, "vg-unrelated", order)
 	spy := &collisionSpy{}
 
 	_, _, err := f.organizer(spy).OrganizeBook(f.original)
@@ -149,15 +196,15 @@ func TestOrganizeBook_TrueDuplicateStillRefusedAndReported(t *testing.T) {
 	if n := spy.count(); n != 1 {
 		t.Fatalf("OnCollision fired %d time(s); want exactly 1 for a real duplicate", n)
 	}
-	if got := spy.calls[0]; got[0] != "orig" || got[1] != f.libCopy.FilePath {
-		t.Errorf("OnCollision(%q, %q); want (orig, %q)", got[0], got[1], f.libCopy.FilePath)
+	if got := spy.calls[0]; got[0] != f.original.ID || got[1] != f.libCopy.FilePath {
+		t.Errorf("OnCollision(%q, %q); want (%s, %q)", got[0], got[1], f.original.ID, f.libCopy.FilePath)
 	}
 }
 
-func TestOrganizeBook_UngroupedHashTwinIsStillADuplicate(t *testing.T) {
+func runOrganizeBook_UngroupedHashTwinIsStillADuplicate(t *testing.T, order idOrder) {
 	// No version group on either side is not "the same group": two empty
 	// groups must not exempt a real duplicate.
-	f := newLibraryCopyFixture(t, "")
+	f := newLibraryCopyFixture(t, "", order)
 	empty := ""
 	f.original.VersionGroupID = &empty
 	spy := &collisionSpy{}
@@ -174,13 +221,13 @@ func TestOrganizeBook_UngroupedHashTwinIsStillADuplicate(t *testing.T) {
 // Preview and apply must act on the same row and report the same target. With
 // the resolver wired, both land on the library copy, which is already at its
 // target: the apply is an in-place no-op and nothing collides.
-func TestPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing.T) {
-	f := newLibraryCopyFixture(t, "vg-1")
+func runPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing.T, order idOrder) {
+	f := newLibraryCopyFixture(t, "vg-1", order)
 	spy := &collisionSpy{}
 	f.svc.SetOrganizeHooks(spy)
 	resolve := LibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
-		if b.ID == "orig" {
-			cp, err := f.store.GetBookByID("copy")
+		if b.ID == f.original.ID {
+			cp, err := f.store.GetBookByID(f.libCopy.ID)
 			return cp, err == nil && cp != nil
 		}
 		return b, true
@@ -188,12 +235,12 @@ func TestPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing
 
 	preview := NewPreviewService(f.store)
 	preview.ResolveLibraryCopy = resolve
-	resp, err := preview.PreviewOrganize("orig")
+	resp, err := preview.PreviewOrganize(f.original.ID)
 	if err != nil {
 		t.Fatalf("PreviewOrganize: %v", err)
 	}
-	if resp.BookID != "copy" || resp.LibraryCopyOf != "orig" {
-		t.Errorf("preview acts on %q (copy of %q); want copy of orig", resp.BookID, resp.LibraryCopyOf)
+	if resp.BookID != f.libCopy.ID || resp.LibraryCopyOf != f.original.ID {
+		t.Errorf("preview acts on %q (copy of %q); want copy %s of %s", resp.BookID, resp.LibraryCopyOf, f.libCopy.ID, f.original.ID)
 	}
 	if resp.NeedsCopy {
 		t.Errorf("preview proposes copying a book whose library copy exists: %+v", resp.Steps)
@@ -237,8 +284,8 @@ func TestResolveOrganizeSubject_FallsBackToTheBook(t *testing.T) {
 
 // library.organize batch: a book whose own library copy already exists is a
 // skip (counted under library_copy_exists), not a failure.
-func TestOrganizeBooks_OwnLibraryCopyCountsAsSkipped(t *testing.T) {
-	f := newLibraryCopyFixture(t, "vg-1")
+func runOrganizeBooks_OwnLibraryCopyCountsAsSkipped(t *testing.T, order idOrder) {
+	f := newLibraryCopyFixture(t, "vg-1", order)
 	stats := f.svc.organizeBooksOpts(context.Background(), []database.Book{*f.original}, nil, &noopLogger{}, "", false, nil)
 	if stats.Failed != 0 || stats.Skipped != 1 {
 		t.Errorf("stats failed=%d skipped=%d; want failed=0 skipped=1", stats.Failed, stats.Skipped)
@@ -272,4 +319,32 @@ func TestIsLibraryCopyOf(t *testing.T) {
 	if IsLibraryCopyOf(&database.Book{FileHash: s("")}, &database.Book{FileHash: s("")}) {
 		t.Error("two empty hashes matched")
 	}
+}
+
+// eachIDOrder runs fn once per id order (see idOrder).
+func eachIDOrder(t *testing.T, fn func(*testing.T, idOrder)) {
+	t.Helper()
+	for _, order := range bothIDOrders {
+		t.Run(order.name, func(t *testing.T) { fn(t, order) })
+	}
+}
+
+func TestOrganizeBook_OwnLibraryCopyIsNotACollision(t *testing.T) {
+	eachIDOrder(t, runOrganizeBook_OwnLibraryCopyIsNotACollision)
+}
+
+func TestOrganizeBook_TrueDuplicateStillRefusedAndReported(t *testing.T) {
+	eachIDOrder(t, runOrganizeBook_TrueDuplicateStillRefusedAndReported)
+}
+
+func TestOrganizeBook_UngroupedHashTwinIsStillADuplicate(t *testing.T) {
+	eachIDOrder(t, runOrganizeBook_UngroupedHashTwinIsStillADuplicate)
+}
+
+func TestPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy(t *testing.T) {
+	eachIDOrder(t, runPreviewAndOrganize_ProtectedOriginalResolveToSameLibraryCopy)
+}
+
+func TestOrganizeBooks_OwnLibraryCopyCountsAsSkipped(t *testing.T) {
+	eachIDOrder(t, runOrganizeBooks_OwnLibraryCopyCountsAsSkipped)
 }

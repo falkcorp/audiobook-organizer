@@ -1,7 +1,7 @@
 // file: internal/activity/user_data.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f75db40-9f7a-4cb3-ad7f-757dd64ea827
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package activity
 
@@ -15,6 +15,12 @@ import (
 // audiobooks.DiscardProgressAndPurge records when the owner drops every
 // user's listening state on a book in the trash and purges it.
 const TypeTrashDiscardProgressPurge = "trash_discard_progress_purge"
+
+// TypeTrashForgetPendingFileRecords is the audit entry
+// audiobooks.ForgetWaitingFileRecords records when the owner drops the journal
+// records of file removals that were waiting for a folder no pass could decide.
+// It names how many records and paths; no file and no book was touched.
+const TypeTrashForgetPendingFileRecords = "trash_forget_pending_file_records"
 
 // DetailProgressSummary is the Details key of a TypeTrashDiscardProgressPurge
 // entry that holds the discarded state: one line per user, with the user's

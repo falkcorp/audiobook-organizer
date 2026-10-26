@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package merge
 
@@ -32,6 +32,14 @@ import (
 // protects one lane. Review queues, candidate rows, bulk ops and HTTP merge
 // endpoints all reach the same mutating chokepoints by other routes, and a
 // candidate written before the source filter existed is still approvable.
+//
+// What the rule protects is the iTunes FILES: nothing may move, rename, retag
+// or delete one. A change to an iTunes book's database row that touches none
+// of that is allowed: MergeBooks re-homes a non-selected iTunes version-group
+// sibling or demotes a non-selected iTunes group member by writing its
+// version_group_id and primary flag only (owner decision 2026-10-22). The
+// books a caller selects (survivor and losers) are still guarded: a loser is
+// retired and a combine moves files.
 var ErrITunesProtected = errors.New("merge refused: a participating book has a file under the active iTunes library")
 
 // ITunesProtectedError names the book and path that caused a refusal. It is a

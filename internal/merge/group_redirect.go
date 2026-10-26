@@ -1,7 +1,7 @@
 // file: internal/merge/group_redirect.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6a0f4c2e-9b1d-4e57-8a3c-2d7e5f1b9c40
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package merge
 
@@ -26,7 +26,7 @@ import (
 // into G, a group with no live member, apart from the rest of its family.
 //
 // The merge therefore records G -> H before its first write, and
-// RestoreFromTrash follows it (TrashRestoreGroup): a row restored into a
+// RestoreFromTrashLocked follows it (TrashRestoreGroup): a row restored into a
 // group the merge emptied lands in the group that group went to.
 //
 // WHY A REDIRECT AND NOT MOVING THE TRASHED ROWS TOO. Moving them needs a
@@ -154,7 +154,7 @@ func (ms *Service) clearRestoredGroupRedirects(j *SiblingMoveJournal, restored [
 
 // trashRestoreTarget is the group a trashed row in gid should be restored
 // into instead of gid, or "" to restore it where it is (see "WHEN IT IS
-// FOLLOWED" above). It reads without locks; RestoreFromTrash locks the target
+// FOLLOWED" above). It reads without locks; RestoreFromTrashLocked locks the target
 // and calls it again under the locks before acting on it.
 func trashRestoreTarget(store TrashRestoreStore, row *database.Book) (string, error) {
 	if row == nil || row.VersionGroupID == nil {

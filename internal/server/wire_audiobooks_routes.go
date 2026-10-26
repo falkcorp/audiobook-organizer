@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package server
 
@@ -29,6 +29,17 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/facets", s.perm(auth.PermLibraryView), audiobooksH.AudiobookFacets)
 	protected.GET("/audiobooks/soft-deleted", s.perm(auth.PermLibraryView), audiobooksH.ListSoftDeletedAudiobooks)
 	protected.DELETE("/audiobooks/purge-soft-deleted", s.perm(auth.PermLibraryDelete), audiobooksH.PurgeSoftDeletedAudiobooks)
+	protected.POST("/audiobooks/purge-soft-deleted/preview", s.perm(auth.PermLibraryDelete), audiobooksH.PreviewPurgeSoftDeleted)
+	// Forget the journal records of file removals waiting for a folder that is
+	// missing or empty. Records only, audited; same permission as the purge that
+	// deletes files.
+	// The list the dialog shows first, and the body the forget then sends back.
+	protected.GET("/audiobooks/purge-soft-deleted/waiting-file-records", s.perm(auth.PermLibraryDelete), audiobooksH.ListWaitingPurgeFileRecords)
+	protected.POST("/audiobooks/purge-soft-deleted/forget-waiting-file-records", s.perm(auth.PermLibraryDelete), audiobooksH.ForgetWaitingPurgeFileRecords)
+	// Cancel a preview its requester abandoned. Same permission as the preview
+	// (library.delete), not settings.manage like the generic operation cancel,
+	// and only the requester's own preview op.
+	protected.DELETE("/audiobooks/purge-soft-deleted/preview/:id", s.perm(auth.PermLibraryDelete), s.cancelPurgePreview)
 	protected.POST("/audiobooks/:id/restore", s.perm(auth.PermLibraryOrganize), audiobooksH.RestoreAudiobook)
 	// The owner's explicit "discard progress and purge" for one trashed book
 	// the nightly purge keeps because a user has listening state on it.

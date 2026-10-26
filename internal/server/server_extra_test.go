@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-10-17
+// last-edited: 2026-10-26
 
 package server
 
@@ -94,10 +94,8 @@ func TestSoftDeleteEndpoints(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true", nil)
-	w = httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	res := purgeViaAPI(t, server, http.MethodDelete, "/api/v1/audiobooks/purge-soft-deleted?delete_files=true")
+	require.Equal(t, 1, res.Purged)
 	if _, err := os.Stat(softFile); !os.IsNotExist(err) {
 		t.Fatalf("expected soft deleted file to be removed, got %v", err)
 	}

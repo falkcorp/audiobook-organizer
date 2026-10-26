@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_legacy_seed.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 44f1e74c-758d-4e58-9c04-57e60cd237c6
-// last-edited: 2026-10-03
+// last-edited: 2026-10-26
 
 package database
 
@@ -20,10 +20,14 @@ var ErrLegacySeedOutsideTest = errors.New("SeedLegacyBookRowForTest called outsi
 // production, and the stale-series relink (internal/plugins/maintenance,
 // relink_stale_series_fixer.go) exists to repair them. The normal write path
 // now holds Series to SeriesID on every write (enforceSeriesInvariant, shared by CreateBook and the update path), so a test cannot build
-// that state through ModifyBook or UpdateBook any more.
+// that state through ModifyBook or UpdateBook any more. The same goes for the
+// trash stamp: every write that trashes a row now stamps it
+// (enforceTrashStamp), so a row older code trashed with no stamp, or restored
+// with the stamp left on, is seeded here too, with the trash columns exactly as
+// fn leaves them.
 //
 // It is the ordinary book update with one rule skipped: Series is written as
-// fn leaves it. Everything else is the same as ModifyBook: the write stripe is
+// fn leaves it, and so are the trash columns. Everything else is the same as ModifyBook: the write stripe is
 // held across the read and the write, a book_ver: snapshot is taken, the
 // secondary indexes are updated, the memdb row is written through, change
 // listeners are notified and the narrator junction is synced. So GetBookByID,
@@ -38,7 +42,7 @@ func (p *PebbleStore) SeedLegacyBookRowForTest(id string, fn func(*Book) error) 
 	if !testing.Testing() {
 		return nil, ErrLegacySeedOutsideTest
 	}
-	updated, before, err := p.modifyBookLockedMode(id, fn, bookWriteOpts{legacySeries: true})
+	updated, before, err := p.modifyBookLockedMode(id, fn, bookWriteOpts{legacySeries: true, legacyTrash: true})
 	if err == nil && updated != nil {
 		p.syncNarratorJunctionAfterWrite(id, before, updated)
 	}

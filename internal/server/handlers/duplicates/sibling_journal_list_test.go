@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/sibling_journal_list_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 97a7db00-9389-4cc7-a6fa-536c1ec63043
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package duplicates_test
 
@@ -30,7 +30,7 @@ func TestListSiblingMoveJournals_LimitCap(t *testing.T) {
 	}
 	ms := merge.NewService(f.S)
 	h := duplicates.New(f.S, nil, nil, nil,
-		func() duplicates.MergeService { return ms }, nil, nil)
+		func() duplicates.MergeService { return ms }, nil)
 	count := func(url string) int {
 		w := doReq(t, h.ListSiblingMoveJournals, http.MethodGet, url, nil)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -632,7 +632,13 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 						return database.ErrSkipBookWrite
 					}
 					yes := true
+					now := time.Now()
 					b.MarkedForDeletion = &yes
+					// Every trash writer stamps the row: the retention window
+					// and a purge's bound both read the stamp, and a row
+					// trashed without one is treated as trashed at its last
+					// write (database.Book.TrashedAt).
+					b.MarkedForDeletionAt = &now
 					return nil
 				})
 				if modErr != nil {

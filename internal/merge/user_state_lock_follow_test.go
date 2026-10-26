@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_lock_follow_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bd9bd3d5-42dd-4e0b-92dd-b5ab18ca5f90
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package merge
 
@@ -182,7 +182,7 @@ func TestDiscardUserStateThenHardDelete_HoldsUserStateLock(t *testing.T) {
 	unlock := database.LockUserBookState(user, loser)
 	done := make(chan error, 1)
 	go func() {
-		_, err := DiscardUserStateThenHardDelete(s, loser, nil, func() error { return nil })
+		_, err := discardUserStateThenHardDelete(s, loser, nil, func() error { return nil })
 		done <- err
 	}()
 	select {
@@ -236,7 +236,7 @@ func TestFollowAbsorbedJournaled_UserStateRaceAbsorbedWriteKeptByRestore(t *test
 func TestDiscardUserStateThenHardDelete_UserStateHeldThroughDelete(t *testing.T) {
 	s, _, loser, user := seedFollowPair(t)
 	var blocked bool
-	_, err := DiscardUserStateThenHardDelete(s, loser, nil, func() error {
+	_, err := discardUserStateThenHardDelete(s, loser, nil, func() error {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)

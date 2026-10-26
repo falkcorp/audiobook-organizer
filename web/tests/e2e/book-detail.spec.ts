@@ -1,7 +1,7 @@
 // file: tests/e2e/book-detail.spec.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-08-07
+// last-edited: 2026-10-26
 
 import { expect, test } from '@playwright/test';
 import { mockEventSource } from './utils/test-helpers';
@@ -426,14 +426,19 @@ test.describe('Book Detail page', () => {
 
     await page.getByRole('button', { name: 'Delete' }).click();
     await page.getByRole('button', { name: 'Soft Delete' }).click();
+    // The default dialog does not block the file's hash: the request must
+    // carry no block_hash at all (blocking is opt-in, see below).
     await page.waitForFunction(
       () =>
-        (
-          window as unknown as { __lastDeleteUrl?: string }
-        ).__lastDeleteUrl?.includes('block_hash=true'),
+        !!(window as unknown as { __lastDeleteUrl?: string }).__lastDeleteUrl,
       null,
       { timeout: 5000 }
     );
+    const defaultDeleteUrl = await page.evaluate(
+      () => (window as unknown as { __lastDeleteUrl?: string }).__lastDeleteUrl
+    );
+    expect(defaultDeleteUrl).toContain('soft_delete=true');
+    expect(defaultDeleteUrl).not.toContain('block_hash');
 
     await expect(
       page.getByText('Audiobook marked for deletion.')
@@ -447,9 +452,22 @@ test.describe('Book Detail page', () => {
     await expect(page.getByText('Audiobook restored.')).toBeVisible();
     await expect(page.getByText('Soft Deleted')).not.toBeVisible();
 
-    // Soft delete again to open purge dialog
+    // Soft delete again, this time ticking the block-hash checkbox: only then
+    // does the request carry block_hash=true. This also leaves the book in the
+    // trash so the purge dialog can be opened.
     await page.getByRole('button', { name: 'Delete' }).click();
+    await page
+      .getByLabel('Prevent reimporting this file (block hash)')
+      .check();
     await page.getByRole('button', { name: 'Soft Delete' }).click();
+    await page.waitForFunction(
+      () =>
+        (
+          window as unknown as { __lastDeleteUrl?: string }
+        ).__lastDeleteUrl?.includes('block_hash=true'),
+      null,
+      { timeout: 5000 }
+    );
     await page.getByRole('button', { name: 'Purge' }).click();
     await expect(
       page.getByRole('dialog', { name: 'Purge Audiobook' })

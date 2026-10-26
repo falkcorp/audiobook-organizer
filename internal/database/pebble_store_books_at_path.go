@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_books_at_path.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
-// last-edited: 2026-10-11
+// last-edited: 2026-10-26
 
 package database
 
@@ -41,53 +41,70 @@ var bookAtPathReadHook func(viaIndex bool)
 // Any read or decode error fails the call: a partial answer would report a
 // taken path as free.
 func (p *PebbleStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	return p.bookIDsAtPath(path, false)
+}
+
+// BookIDsAtPath returns the id of every book row, live or soft-deleted, whose
+// FilePath is exactly path, in id (key) order. It is LiveBookIDsAtPath without
+// the live filter: the answer to "does ANY book, a trashed one included, still
+// name this path?", which the purge asks at the moment it is about to remove a
+// file (a trashed book is restorable, and a restore wants its audio). Same
+// index, same fallback scan, same verification of every candidate against its
+// row, same fail-closed rule.
+func (p *PebbleStore) BookIDsAtPath(path string) ([]string, error) {
+	return p.bookIDsAtPath(path, true)
+}
+
+// bookIDsAtPath is the shared body: includeTrashed keeps soft-deleted rows.
+func (p *PebbleStore) bookIDsAtPath(path string, includeTrashed bool) ([]string, error) {
 	built, err := p.bookAtPathIndexBuilt()
 	if err != nil {
-		return nil, fmt.Errorf("live books at path: %w", err)
+		return nil, fmt.Errorf("books at path: %w", err)
 	}
 	if bookAtPathReadHook != nil {
 		bookAtPathReadHook(built)
 	}
 	if !built {
-		return p.liveBookIDsAtPathScan(path)
+		return p.bookIDsAtPathScan(path, includeTrashed)
 	}
-	return p.liveBookIDsAtPathIndex(path)
+	return p.bookIDsAtPathIndex(path, includeTrashed)
 }
 
-// liveBookIDsAtPathScan reads every book row. It is the pre-backfill fallback,
-// and the oracle the index reader and the verify op are tested against.
-func (p *PebbleStore) liveBookIDsAtPathScan(path string) ([]string, error) {
+// bookIDsAtPathScan reads every book row, keeping soft-deleted ones when
+// includeTrashed. It is the pre-backfill fallback, and the oracle the index
+// reader and the verify op are tested against.
+func (p *PebbleStore) bookIDsAtPathScan(path string, includeTrashed bool) ([]string, error) {
 	var ids []string
 	err := forEachBookRow(p.db, func(id string, v []byte) error {
 		var row bookAtPathRow
 		if err := json.Unmarshal(v, &row); err != nil {
 			return fmt.Errorf("decode book row %s: %w", id, err)
 		}
-		if row.FilePath == path && !markedForDeletionFlag(row.MarkedForDeletion) {
+		if row.FilePath == path && (includeTrashed || !markedForDeletionFlag(row.MarkedForDeletion)) {
 			ids = append(ids, id)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("live books at path: %w", err)
+		return nil, fmt.Errorf("books at path: %w", err)
 	}
 	return ids, nil
 }
 
-// liveBookIDsAtPathIndex reads path's index keys and point-verifies each
-// candidate row, all from one snapshot. An index key and its row are committed
-// in one batch, so a book moving into or out of path mid-lookup is seen
-// consistently.
-func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
+// bookIDsAtPathIndex reads path's index keys and point-verifies each candidate
+// row, all from one snapshot, keeping soft-deleted rows when includeTrashed. An
+// index key and its row are committed in one batch, so a book moving into or out
+// of path mid-lookup is seen consistently.
+func (p *PebbleStore) bookIDsAtPathIndex(path string, includeTrashed bool) ([]string, error) {
 	snap, markerIDs, err := p.undecodableMarkerSnapshot()
 	if err != nil {
-		return nil, fmt.Errorf("live books at path: %w", err)
+		return nil, fmt.Errorf("books at path: %w", err)
 	}
 	defer snap.Close()
 
-	repaired, err := undecodableMarkedAtPath(snap, markerIDs, path)
+	repaired, err := undecodableMarkedAtPath(snap, markerIDs, path, includeTrashed)
 	if err != nil {
-		return nil, fmt.Errorf("live books at path: %w", err)
+		return nil, fmt.Errorf("books at path: %w", err)
 	}
 
 	lower, upper := bookAtPathBounds(path)
@@ -107,7 +124,7 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("live books at path: %w", err)
+		return nil, fmt.Errorf("books at path: %w", err)
 	}
 
 	var ids []string
@@ -117,15 +134,15 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 			continue // extra: the book was hard-deleted
 		}
 		if err != nil {
-			return nil, fmt.Errorf("live books at path: read book %s: %w", id, err)
+			return nil, fmt.Errorf("books at path: read book %s: %w", id, err)
 		}
 		var row bookAtPathRow
 		decErr := json.Unmarshal(v, &row)
 		closer.Close()
 		if decErr != nil {
-			return nil, fmt.Errorf("live books at path: decode book row %s: %w", id, decErr)
+			return nil, fmt.Errorf("books at path: decode book row %s: %w", id, decErr)
 		}
-		if row.FilePath == path && !markedForDeletionFlag(row.MarkedForDeletion) {
+		if row.FilePath == path && (includeTrashed || !markedForDeletionFlag(row.MarkedForDeletion)) {
 			ids = append(ids, id)
 		}
 	}
@@ -149,15 +166,16 @@ func (p *PebbleStore) liveBookIDsAtPathIndex(path string) ([]string, error) {
 //     folder is free.
 //   - row now decodes (repaired out of band): it has NO book_atpath key yet,
 //     so ignoring it would report its folder free. It is a candidate: if it is
-//     live and at path, its id is returned for merging with the index result.
+//     live (or any state, with includeTrashed) and at path, its id is returned
+//     for merging with the index result.
 //
 // markerIDs is the in-memory marker set copied with snap
 // (undecodableMarkerSnapshot), a superset of the markers in snap. Normally it
 // is empty and this does no I/O at all; it never range-scans the marker family,
 // whose absent-key tombstones made that "empty seek" cost ~51s per cache-review
 // request on 2026-10-02 (pebble_store_atpath_markers.go).
-func undecodableMarkedAtPath(snap *GatedSnapshot, markerIDs []string, path string) ([]string, error) {
-	matched, err := undecodableMarkedMatching(snap, markerIDs, func(p string) bool { return p == path })
+func undecodableMarkedAtPath(snap *GatedSnapshot, markerIDs []string, path string, includeTrashed bool) ([]string, error) {
+	matched, err := undecodableMarkedMatching(snap, markerIDs, func(p string) bool { return p == path }, includeTrashed)
 	if err != nil {
 		return nil, err
 	}
@@ -171,9 +189,9 @@ func undecodableMarkedAtPath(snap *GatedSnapshot, markerIDs []string, path strin
 
 // undecodableMarkedMatching is undecodableMarkedAtPath for any path
 // predicate: it returns id -> path for each marked row that now decodes, is
-// live, and whose path matches, and fails closed on a row that still does not
-// decode.
-func undecodableMarkedMatching(snap *GatedSnapshot, markerIDs []string, match func(path string) bool) (map[string]string, error) {
+// live (any state, with includeTrashed), and whose path matches, and fails
+// closed on a row that still does not decode.
+func undecodableMarkedMatching(snap *GatedSnapshot, markerIDs []string, match func(path string) bool, includeTrashed bool) (map[string]string, error) {
 	atPath := map[string]string{}
 	if len(markerIDs) == 0 {
 		return atPath, nil
@@ -185,7 +203,7 @@ func undecodableMarkedMatching(snap *GatedSnapshot, markerIDs []string, match fu
 	slices.Sort(marked) // deterministic blocking[0] in the error below
 	var blocking []string
 	for _, id := range marked {
-		if err := undecodableMarkedVisit(snap, id, match, atPath, &blocking); err != nil {
+		if err := undecodableMarkedVisit(snap, id, match, includeTrashed, atPath, &blocking); err != nil {
 			return nil, err
 		}
 	}
@@ -196,8 +214,9 @@ func undecodableMarkedMatching(snap *GatedSnapshot, markerIDs []string, match fu
 }
 
 // undecodableMarkedVisit point-reads one marked row: gone is ignored, still
-// undecodable is appended to blocking, live and matching lands in atPath.
-func undecodableMarkedVisit(snap *GatedSnapshot, id string, match func(path string) bool,
+// undecodable is appended to blocking, live (or any state, with includeTrashed)
+// and matching lands in atPath.
+func undecodableMarkedVisit(snap *GatedSnapshot, id string, match func(path string) bool, includeTrashed bool,
 	atPath map[string]string, blocking *[]string) error {
 	v, closer, err := snap.Get([]byte("book:" + id))
 	if errors.Is(err, pebble.ErrNotFound) {
@@ -213,7 +232,7 @@ func undecodableMarkedVisit(snap *GatedSnapshot, id string, match func(path stri
 		*blocking = append(*blocking, id)
 		return nil
 	}
-	if match(row.FilePath) && !markedForDeletionFlag(row.MarkedForDeletion) {
+	if match(row.FilePath) && (includeTrashed || !markedForDeletionFlag(row.MarkedForDeletion)) {
 		atPath[id] = row.FilePath
 	}
 	return nil

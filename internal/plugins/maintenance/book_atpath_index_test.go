@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1b7e4c92-5a3d-4e68-9f02-c6d8a1b3e5f7
-// last-edited: 2026-10-15
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -58,10 +58,19 @@ func TestBookAtPathVerify_MarkersNotInSetFails(t *testing.T) {
 	}
 }
 
-func TestBookAtPathVerify_MissingTrashedDoesNotFail(t *testing.T) {
-	rep := database.BookAtPathIndexReport{MissingTrashed: 5}
-	if err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{}); err != nil {
-		t.Fatalf("a trashed-book gap cannot cause a false free and must not fail: %v", err)
+// TestBookAtPathVerify_MissingTrashedFails: BookIDsAtPath, which the purge asks
+// before it removes a file, keeps trashed rows, so a trashed book with no key
+// reads as a free path there. The verify op must fail on it and name the
+// rebuild, even when every other count is clean.
+func TestBookAtPathVerify_MissingTrashedFails(t *testing.T) {
+	rep := database.BookAtPathIndexReport{SentinelSet: true, BooksScanned: 3, IndexKeysScanned: 2,
+		MissingTrashed: 1, SampleMissingTrashed: []string{"01TRASHED /lib/a.m4b"}}
+	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{})
+	if err == nil || !strings.Contains(err.Error(), "INCOMPLETE") ||
+		!strings.Contains(err.Error(), "soft-deleted") ||
+		!strings.Contains(err.Error(), "01TRASHED") ||
+		!strings.Contains(err.Error(), "maintenance.book-atpath-index-backfill") {
+		t.Fatalf("a trashed book with no key must fail the op and name the rebuild, got %v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed author/series duplicate detection, async link / refresh
@@ -57,11 +57,21 @@ type DuplicatesStore interface {
 // POST /audiobooks/duplicates/link handler (03-PR12): version linking now runs
 // only as the dedup.book-merge op, which package server drives directly.
 type MergeService interface {
-	// CombineBooks combines several single-file books into ONE multi-file book
-	// on the survivor (primaryID) and soft-deletes the absorbed shells, writing
-	// an undo journal. Distinct from MergeBooks, which links them as alternate
-	// versions in a version group.
-	CombineBooks(bookIDs []string, primaryID string, override *merge.CombineOverride) (*merge.CombineResult, error)
+	// PreflightLink is the read-only pre-check POST /audiobooks/link runs
+	// before it queues dedup.book-merge: the refusals the merge would give
+	// after running (soft-deleted keep book, iTunes-protected selected book),
+	// answered as a 409 up front. A soft-deleted loser is skipped by the op
+	// and is not a refusal, except one already in a live participant's version
+	// group, which the merge admits and iTunes-guards like any participant.
+	// iTunes copies that were not selected (version-group siblings the merge
+	// re-homes) are not refused: they get database-only changes.
+	PreflightLink(keepID string, mergeIDs []string) error
+	// PreflightCombine is the read-only pre-check POST /audiobooks/combine
+	// runs before it queues dedup.book-combine: the refusals the combine
+	// gives before it writes anything (a missing book, a soft-deleted or
+	// iTunes-protected participant), answered up front. The combine itself
+	// runs in that op, which package server drives directly.
+	PreflightCombine(keepID string, mergeIDs []string) error
 	// ListCombineJournals lists the combine journals newest-first
 	// (GET /merge/combine-journal, a read-only diagnostic kept by D73). The
 	// POST /merge/undo/:journal_id route that reversed one is retired; the
@@ -83,15 +93,6 @@ type MetadataFetchService interface {
 	BuildSourceChain() []metadata.MetadataSource
 }
 
-// DedupEngine is the narrow *dedup.Engine subset used to sweep orphaned
-// dedup candidates after a merge/combine hard- or soft-deletes a book.
-// Mirrors the identically-named interface in the dedup handler package
-// (which has its own sweep after the Dedup page's per-candidate Merge
-// button). The concrete *dedup.Engine satisfies it.
-type DedupEngine interface {
-	CleanupCandidatesAfterMerge(mergedAwayBookIDs []string) int
-}
-
 // OperationsRegistry is the narrow operations-registry subset the duplicates
 // scan/merge/refresh/dedup/prune triggers require: only EnqueueOp.
 // The variadic opts param is preserved so the concrete *opsregistry.Registry
@@ -108,6 +109,7 @@ type OperationsRegistry interface {
 // aliases so handler.go reads identically to the original.
 type (
 	bookMergeOpParams       = dedup.BookMergeParams
+	bookCombineOpParams     = dedup.BookCombineParams
 	authorDedupScanOpParams = dedup.AuthorDedupScanParams
 	seriesDedupScanOpParams = dedup.SeriesDedupScanParams
 	seriesDedupOpParams     = dedup.SeriesDedupParams

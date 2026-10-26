@@ -1,7 +1,7 @@
 // file: internal/dedup/merge_journaled_siblings_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 92334d16-d043-4457-bdc3-273468cb5afc
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package dedup
 
@@ -120,4 +120,33 @@ func TestUnmergeAuto_LeavesSiblingThatMovedOn(t *testing.T) {
 	require.Contains(t, err.Error(), "sibling LS")
 	g, _, _ := groupAndFlag(t, store, "LS")
 	require.Equal(t, "OTHER", g, "a later move is not undone")
+}
+
+// A loser purged from the trash makes the undo impossible. It must say so and
+// write NOTHING: before this check the undo moved the loser's siblings back and
+// then failed on the missing loser, leaving a half-applied undo.
+func TestUnmergeAuto_PurgedLoserRefusesBeforeTouchingSiblings(t *testing.T) {
+	engine, store, _ := setupRealStoreEngine(t)
+	yes, no := true, false
+
+	seedGrouped(t, store, "K", "H", &yes)
+	seedGrouped(t, store, "L", "G", &no)
+	seedGrouped(t, store, "LS", "G", &yes)
+
+	_, keys, err := engine.MergeBooksJournaled(0, []string{"L", "K"}, "K", "dedup:merge-source:test")
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	g, _, _ := groupAndFlag(t, store, "LS")
+	require.Equal(t, "H", g, "the sibling moved with the loser")
+
+	require.NoError(t, store.DeleteBook("L"))
+
+	err = engine.UnmergeAuto(keys[0])
+	require.ErrorContains(t, err, "loser L no longer exists")
+	require.ErrorContains(t, err, "nothing reverted")
+	g, _, _ = groupAndFlag(t, store, "LS")
+	require.Equal(t, "H", g, "the sibling must not have been moved back")
+	g, _, deleted := groupAndFlag(t, store, "K")
+	require.Equal(t, "H", g)
+	require.False(t, deleted)
 }

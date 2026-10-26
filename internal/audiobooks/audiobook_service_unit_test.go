@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-26
 
@@ -21,7 +21,7 @@ import (
 // --- delete paths ---
 
 // expectNoUserState lets a mock store answer the hard delete's listening
-// state checks (merge.HardDeleteKeepingUserState) with "no users, no
+// state checks (merge.HardDeleteKeepingUserStateLocked) with "no users, no
 // pending repairs": nothing to carry, so the delete goes ahead.
 func expectNoUserState(m *mocks.MockStore) {
 	m.EXPECT().ListUsers().Return(nil, nil).Maybe()
@@ -449,7 +449,7 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 	prevRoot := config.AppConfig.RootDir
 	config.AppConfig.RootDir = "/lib"
 	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
-	// Five reads, in order: merge.RestoreFromTrash's read before the locks
+	// Five reads, in order: merge.RestoreFromTrashLocked's read before the locks
 	// (to find a group a merge emptied, which it would lock too; this row
 	// has no group, so nothing more is read); versionprimary.LockBookGroups' first read (to
 	// learn the row's version group, here the no-group sentinel) and its

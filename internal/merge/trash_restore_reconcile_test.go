@@ -1,5 +1,5 @@
 // file: internal/merge/trash_restore_reconcile_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b547034-881d-4b1b-b911-df20c1e6ce56
 // last-edited: 2026-10-26
 
@@ -64,7 +64,7 @@ func TestRestoreFromTrash_ReconcilePutsRedirectBackWhenHandOffDemotes(t *testing
 	f := combineUndoFixture(t)
 	loser, winner, pendingKey := trashedLoser(t, f, "nil")
 
-	res, err := RestoreFromTrash(f.S, loser, nil, nil, setFlag(t, f.S, false))
+	res, err := restoreFromTrash(f.S, loser, nil, nil, setFlag(t, f.S, false))
 	require.NoError(t, err)
 
 	require.True(t, res.Restored)
@@ -82,7 +82,7 @@ func TestRestoreFromTrash_ReconcileClearsRedirectLateWhenHandOffCrowns(t *testin
 	f := combineUndoFixture(t)
 	loser, winner, pendingKey := trashedLoser(t, f, "false")
 
-	res, err := RestoreFromTrash(f.S, loser, nil, nil, setFlag(t, f.S, true))
+	res, err := restoreFromTrash(f.S, loser, nil, nil, setFlag(t, f.S, true))
 	require.NoError(t, err)
 
 	require.True(t, res.Restored)
@@ -94,7 +94,7 @@ func TestRestoreFromTrash_ReconcileClearsRedirectLateWhenHandOffCrowns(t *testin
 }
 
 // untrashBeforeWrite is a store whose next ModifyBook first takes the row out
-// of the trash, as a restore that got there between RestoreFromTrash's read
+// of the trash, as a restore that got there between RestoreFromTrashLocked's read
 // and its write would.
 type untrashBeforeWrite struct {
 	*database.PebbleStore
@@ -121,7 +121,7 @@ func TestRestoreFromTrash_RowLeftTrashBeforeWritePutsRedirectBack(t *testing.T) 
 	f := combineUndoFixture(t)
 	loser, winner, _ := trashedLoser(t, f, "nil")
 
-	res, err := RestoreFromTrash(untrashBeforeWrite{f.S, t}, loser, nil, nil, func(_, _ *database.Book) {})
+	res, err := restoreFromTrash(untrashBeforeWrite{f.S, t}, loser, nil, nil, func(_, _ *database.Book) {})
 	require.NoError(t, err)
 
 	require.False(t, res.Restored, "the row was already out of the trash at the write")
@@ -145,7 +145,7 @@ func TestRestoreFromTrash_JudgeRefusalWritesNothingAndKeepsTheRedirect(t *testin
 	var sawBeforeInTrash, sawAfterLive bool
 	var redirectAtSecondCall string
 
-	res, err := RestoreFromTrash(f.S, loser, nil, func(before, after *database.Book) error {
+	res, err := restoreFromTrash(f.S, loser, nil, func(before, after *database.Book) error {
 		calls++
 		if calls == 1 {
 			return nil
@@ -171,7 +171,7 @@ func TestRestoreFromTrash_JudgeRefusalWritesNothingAndKeepsTheRedirect(t *testin
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
-	res, err = RestoreFromTrash(f.S, loser, nil, func(_, _ *database.Book) error { return nil }, nil)
+	res, err = restoreFromTrash(f.S, loser, nil, func(_, _ *database.Book) error { return nil }, nil)
 	require.NoError(t, err)
 	require.True(t, res.Restored)
 }
@@ -194,7 +194,7 @@ func TestRestoreFromTrash_FailedWritePutsTheRedirectBack(t *testing.T) {
 	loser, winner, pendingKey := trashedLoser(t, f, "nil")
 	boom := errors.New("synthetic store failure")
 
-	res, err := RestoreFromTrash(failingModify{f.S, boom}, loser, nil, nil, nil)
+	res, err := restoreFromTrash(failingModify{f.S, boom}, loser, nil, nil, nil)
 
 	require.ErrorIs(t, err, boom)
 	require.False(t, res.Restored)
@@ -221,7 +221,7 @@ func TestRestoreFromTrash_JudgeRefusesOnThePreviewBeforeTheRedirectIsTouched(t *
 	var redirectAtFirstCall string
 	var afterTitle string
 
-	res, err := RestoreFromTrash(f.S, loser,
+	res, err := restoreFromTrash(f.S, loser,
 		func(b *database.Book) { b.Title = "Hush" },
 		func(before, after *database.Book) error {
 			calls++

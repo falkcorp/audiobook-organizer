@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package versionprimary
 
@@ -373,7 +373,7 @@ func groupOfBook(b *database.Book) string {
 // LockGroups from a pre-read calls it first inside its ModifyBook callback,
 // under the book's write lock.
 //
-// Both sides are compared trimmed, as merge.RestoreFromTrash reads a group.
+// Both sides are compared trimmed, as merge.RestoreFromTrashLocked reads a group.
 func CheckMembership(cur *database.Book, lockedGID string) error {
 	g := groupOfBook(cur)
 	if g != strings.TrimSpace(lockedGID) {

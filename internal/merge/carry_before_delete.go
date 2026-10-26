@@ -1,7 +1,7 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package merge
 
@@ -152,6 +152,22 @@ func CarryStateThenHardDelete(db UserProgressMerger, keepID, doomedID string, pr
 	}
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
+	return carryThenDeleteLocked(db, keepID, doomedID, precheck, del)
+}
+
+// CarryStateThenHardDeleteLocked is CarryStateThenHardDelete for a caller that
+// already holds the merge lock (TryLockMergeRMWWithin). Same contract, same
+// errors; it does not take the lock.
+func CarryStateThenHardDeleteLocked(db UserProgressMerger, keepID, doomedID string, precheck, del func() error) error {
+	if keepID == "" || doomedID == "" || keepID == doomedID {
+		return fmt.Errorf("%w: invalid pair keep=%q doomed=%q", ErrStateCarryIncomplete, keepID, doomedID)
+	}
+	return carryThenDeleteLocked(db, keepID, doomedID, precheck, del)
+}
+
+// carryThenDeleteLocked is the body of both. The caller holds mergeSerializeMu
+// and has validated the pair.
+func carryThenDeleteLocked(db UserProgressMerger, keepID, doomedID string, precheck, del func() error) error {
 	if precheck != nil {
 		if err := precheck(); err != nil {
 			return &PrecheckRefusedError{DoomedID: doomedID, KeepID: keepID, Err: err}
@@ -181,6 +197,22 @@ func HardDeleteWithoutUserState(db UserProgressMerger, bookID string, del func()
 	}
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
+	return hardDeleteWithoutUserStateLocked(db, bookID, del)
+}
+
+// HardDeleteWithoutUserStateLocked is HardDeleteWithoutUserState for a caller
+// that already holds the merge lock (TryLockMergeRMWWithin). Same contract,
+// same errors; it does not take the lock.
+func HardDeleteWithoutUserStateLocked(db UserProgressMerger, bookID string, del func() error) error {
+	if bookID == "" {
+		return fmt.Errorf("%w: empty book id", ErrUserStateOnDoomedBook)
+	}
+	return hardDeleteWithoutUserStateLocked(db, bookID, del)
+}
+
+// hardDeleteWithoutUserStateLocked is the body of both. The caller holds
+// mergeSerializeMu and has checked bookID.
+func hardDeleteWithoutUserStateLocked(db UserProgressMerger, bookID string, del func() error) error {
 	if err := carryLeftover(db, bookID); err != nil {
 		if errors.Is(err, errCarryCheckFailed) {
 			return fmt.Errorf("%w: %s: %w", ErrUserStateCheckFailed, bookID, err)

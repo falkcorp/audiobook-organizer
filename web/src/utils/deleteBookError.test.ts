@@ -1,15 +1,17 @@
 // file: web/src/utils/deleteBookError.test.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2d5f9315-d0df-4666-81b5-9b5423eb3f77
 // last-edited: 2026-10-26
 
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../services/api';
 import {
+  describeBlockOutcome,
   describeDeleteBookError,
   isHasProgressRefusal,
   isOwnsFilesRefusal,
   isProgressDiscardedBookKeptRefusal,
+  isRootNotReadyRefusal,
   isStateMovedBookKeptRefusal,
 } from './deleteBookError';
 
@@ -163,5 +165,58 @@ describe('isOwnsFilesRefusal', () => {
     expect(isOwnsFilesRefusal(new ApiError('x', 409, { code: 'HAS_PROGRESS' }))).toBe(false);
     expect(isOwnsFilesRefusal(new ApiError('x', 500, { code: 'OWNS_FILES' }))).toBe(false);
     expect(isOwnsFilesRefusal(new Error('book still owns book_file rows'))).toBe(false);
+  });
+});
+
+describe('isRootNotReadyRefusal', () => {
+  it('recognises the 503 ROOT_NOT_READY refusal and explains it in plain words', () => {
+    const err = new ApiError('purge b1: the library root is not ready: not mounted', 503, {
+      code: 'ROOT_NOT_READY',
+    });
+    expect(isRootNotReadyRefusal(err)).toBe(true);
+    const text = describeDeleteBookError(err, 'f');
+    expect(text).toContain('Nothing was deleted');
+    expect(text).toContain("isn't mounted");
+    expect(text).toContain('the library root is not ready: not mounted');
+  });
+
+  it('is false for other 503s, other codes and plain errors', () => {
+    expect(isRootNotReadyRefusal(new ApiError('x', 503, { code: 'SERVICE_UNAVAILABLE' }))).toBe(
+      false
+    );
+    expect(isRootNotReadyRefusal(new ApiError('x', 500, { code: 'ROOT_NOT_READY' }))).toBe(false);
+    expect(isRootNotReadyRefusal(new Error('x'))).toBe(false);
+  });
+});
+
+describe('describeBlockOutcome', () => {
+  it('says nothing when no block was asked for', () => {
+    expect(describeBlockOutcome(false, { blocked: false })).toEqual({
+      notice: '',
+      severity: 'success',
+    });
+  });
+  it('confirms a block that happened', () => {
+    expect(describeBlockOutcome(true, { blocked: true })).toEqual({
+      notice: ' Hash blocked.',
+      severity: 'success',
+    });
+  });
+  it('shows why a requested block was skipped (a live book holds the file)', () => {
+    const r = describeBlockOutcome(true, {
+      blocked: false,
+      warnings: [
+        "the file's hash was not blocked, because 1 other live book(s) hold the same file (b2)",
+      ],
+    });
+    expect(r.severity).toBe('warning');
+    expect(r.notice).toContain('b2');
+    expect(r.notice).not.toContain('could not be blocked');
+  });
+  it('falls back to the generic text when the server gave no reason', () => {
+    expect(describeBlockOutcome(true, { blocked: false })).toEqual({
+      notice: ' Hash could not be blocked.',
+      severity: 'warning',
+    });
   });
 });

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -36,6 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
@@ -332,6 +333,8 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(12345, nil)
 	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
 		Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
+	d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
+	d.svc.EXPECT().PendingFileRemovals().Return(audiobookspkg.PendingFileCounts{}, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
@@ -371,14 +374,240 @@ func TestListSoftDeletedAudiobooks_CountErrorIs500(t *testing.T) {
 	}
 }
 
-func TestPurgeSoftDeletedAudiobooks(t *testing.T) {
-	h, d := newHandler(t)
-	d.svc.EXPECT().PurgeSoftDeletedBooks(mock.Anything, false, mock.Anything).
-		Return(&audiobookspkg.PurgeResult{Purged: 1}, nil)
+// purgeEnqueueRecorder is a PurgeEnqueuer stub that records the params the
+// handler sends and answers with a fixed op id (or error).
+type purgeEnqueueRecorder struct {
+	calls  int
+	actor  string
+	params []byte
+	err    error
+}
+
+func (r *purgeEnqueueRecorder) enqueue(_ context.Context, actorUserID string, params any) (string, error) {
+	r.calls++
+	r.actor = actorUserID
+	r.params, _ = json.Marshal(params)
+	if r.err != nil {
+		return "", r.err
+	}
+	return "op-purge-1", nil
+}
+
+// DELETE purge-soft-deleted queues the op (202 + id) and never purges inside
+// the request. It used to run synchronously and answer 200 with a breakdown the
+// UI discarded.
+func TestPurgeSoftDeletedAudiobooks_QueuesOpAndAnswers202(t *testing.T) {
+	h, _ := newHandler(t)
+	rec := &purgeEnqueueRecorder{}
+	h.SetPurgeEnqueuer(rec.enqueue)
+	c, w := newCtx("DELETE", "/audiobooks/purge-soft-deleted?delete_files=true&older_than_days=7&trashed_before=2026-10-23T12:00:00.123456789Z", nil, nil)
+	h.PurgeSoftDeletedAudiobooks(c)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	if rec.calls != 1 {
+		t.Fatalf("want exactly one enqueue, got %d", rec.calls)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(rec.params, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent["dry_run"] != false {
+		t.Fatalf("a purge must send dry_run=false explicitly (the op defaults to preview), got %v", sent["dry_run"])
+	}
+	if sent["delete_files"] != true || sent["older_than_days"] != float64(7) {
+		t.Fatalf("query params must reach the op, got %v", sent)
+	}
+	if sent["trashed_before"] != "2026-10-23T12:00:00.123456789Z" {
+		t.Fatalf("the preview's trashed_before must reach the op unchanged, got %v", sent["trashed_before"])
+	}
+	var body struct {
+		Data struct {
+			ID     string `json:"id"`
+			DryRun bool   `json:"dry_run"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.ID != "op-purge-1" || body.Data.DryRun {
+		t.Fatalf("unexpected response data: %+v", body.Data)
+	}
+}
+
+// A purge is bound to the preview before it: without that preview's
+// trashed_before the endpoint is a 400 that enqueues nothing, and so is a value
+// that is not an RFC 3339 instant.
+func TestPurgeSoftDeletedAudiobooks_RequiresThePreviewsTrashedBefore(t *testing.T) {
+	for _, target := range []string{
+		"/audiobooks/purge-soft-deleted",
+		"/audiobooks/purge-soft-deleted?delete_files=true",
+		"/audiobooks/purge-soft-deleted?trashed_before=yesterday",
+		"/audiobooks/purge-soft-deleted?trashed_before=1729684800",
+	} {
+		h, _ := newHandler(t)
+		rec := &purgeEnqueueRecorder{}
+		h.SetPurgeEnqueuer(rec.enqueue)
+		c, w := newCtx("DELETE", target, nil, nil)
+		h.PurgeSoftDeletedAudiobooks(c)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: want 400, got %d: %s", target, w.Code, w.Body.String())
+		}
+		if rec.calls != 0 {
+			t.Fatalf("%s: a refused request must enqueue nothing, got %d enqueue(s)", target, rec.calls)
+		}
+	}
+}
+
+// A preview takes no trashed_before: it is what produces it. One sent anyway is
+// not forwarded, and a malformed one is still refused.
+func TestPreviewPurgeSoftDeleted_DoesNotForwardTrashedBefore(t *testing.T) {
+	h, _ := newHandler(t)
+	rec := &purgeEnqueueRecorder{}
+	h.SetPurgeEnqueuer(rec.enqueue)
+	c, w := newCtx("POST", "/audiobooks/purge-soft-deleted/preview?trashed_before=2026-10-23T12:00:00Z", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(rec.params, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sent["trashed_before"]; ok {
+		t.Fatalf("a preview must not carry trashed_before, got %v", sent)
+	}
+	c, w = newCtx("POST", "/audiobooks/purge-soft-deleted/preview?trashed_before=nope", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed trashed_before: want 400, got %d", w.Code)
+	}
+}
+
+// The preview endpoint queues the SAME op as a dry run.
+func TestPreviewPurgeSoftDeleted_QueuesDryRun(t *testing.T) {
+	h, _ := newHandler(t)
+	rec := &purgeEnqueueRecorder{}
+	h.SetPurgeEnqueuer(rec.enqueue)
+	c, w := newCtx("POST", "/audiobooks/purge-soft-deleted/preview", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(rec.params, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent["dry_run"] != true {
+		t.Fatalf("preview must send dry_run=true, got %v", sent["dry_run"])
+	}
+}
+
+// Without a wired enqueuer the endpoints fail loudly instead of purging
+// inline; an enqueue error is a 500, not a silent 202.
+func TestPurgeSoftDeletedAudiobooks_NoEnqueuerOrEnqueueErrorIs500(t *testing.T) {
+	h, _ := newHandler(t)
 	c, w := newCtx("DELETE", "/audiobooks/purge-soft-deleted", nil, nil)
 	h.PurgeSoftDeletedAudiobooks(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("unwired enqueuer: want 500, got %d", w.Code)
+	}
+	rec := &purgeEnqueueRecorder{err: errString("registry down")}
+	h.SetPurgeEnqueuer(rec.enqueue)
+	c, w = newCtx("POST", "/audiobooks/purge-soft-deleted/preview", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("enqueue error: want 500, got %d", w.Code)
+	}
+}
+
+// The trash listing reports the last purge pass's purgeable-versus-blocked
+// split so the page can say how many a purge would actually remove.
+func TestListSoftDeletedAudiobooks_CarriesPurgeBreakdown(t *testing.T) {
+	h, d := newHandler(t)
+	d.svc.EXPECT().GetSoftDeletedBooks(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]database.Book{{ID: "b1"}}, nil)
+	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(10, nil)
+	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
+		Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
+	d.svc.EXPECT().LastPurgeBreakdown().Return(&audiobookspkg.PurgeBreakdown{
+		FromPreview: true, Total: 10, Purgeable: 4, OwnsFiles: 3, UndoPossible: 2, HasListeningState: 1,
+	})
+	d.svc.EXPECT().PendingFileRemovals().Return(audiobookspkg.PendingFileCounts{}, nil)
+	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
+	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var body struct {
+		Data struct {
+			Breakdown map[string]any `json:"purge_breakdown"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.Breakdown["purgeable"] != float64(4) || body.Data.Breakdown["undo_possible"] != float64(2) ||
+		body.Data.Breakdown["owns_files"] != float64(3) || body.Data.Breakdown["has_listening_state"] != float64(1) {
+		t.Fatalf("breakdown not carried through: %v", body.Data.Breakdown)
+	}
+}
+
+// The listing carries how many file removals an earlier purge left pending,
+// apart from the trash's own count, so the toolbar can offer to finish them
+// when the trash is empty. A failed read is null (unknown), never 0.
+func TestListSoftDeletedAudiobooks_CarriesPendingFileRemovals(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		counts      audiobookspkg.PendingFileCounts
+		err         error
+		want        any
+		wantWaiting any
+	}{
+		{"pending", audiobookspkg.PendingFileCounts{Pending: 7}, nil, float64(7), float64(0)},
+		{"none", audiobookspkg.PendingFileCounts{}, nil, float64(0), float64(0)},
+		// Records waiting for a missing or empty folder are a count of their
+		// own: they are not in the pending one, so the dialog never offers to
+		// "finish" them.
+		{"waiting apart from pending", audiobookspkg.PendingFileCounts{Pending: 2, WaitingForFolder: 5}, nil, float64(2), float64(5)},
+		{"only waiting", audiobookspkg.PendingFileCounts{WaitingForFolder: 3}, nil, float64(0), float64(3)},
+		{"unreadable is null not zero", audiobookspkg.PendingFileCounts{}, errString("journal unreadable"), nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.svc.EXPECT().GetSoftDeletedBooks(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return([]database.Book{{ID: "b1"}}, nil)
+			d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(1, nil)
+			d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
+				Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
+			d.svc.EXPECT().LastPurgeBreakdown().Return(nil)
+			d.svc.EXPECT().PendingFileRemovals().Return(tc.counts, tc.err)
+			c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
+			h.ListSoftDeletedAudiobooks(c)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", w.Code)
+			}
+			var body struct {
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			got, present := body.Data["files_pending_from_earlier_pass"]
+			if !present {
+				t.Fatalf("files_pending_from_earlier_pass missing: %v", body.Data)
+			}
+			if got != tc.want {
+				t.Fatalf("files_pending_from_earlier_pass = %v, want %v", got, tc.want)
+			}
+			waiting, present := body.Data["files_waiting_for_folder"]
+			if !present {
+				t.Fatalf("files_waiting_for_folder missing: %v", body.Data)
+			}
+			if waiting != tc.wantWaiting {
+				t.Fatalf("files_waiting_for_folder = %v, want %v", waiting, tc.wantWaiting)
+			}
+		})
 	}
 }
 
@@ -399,6 +628,21 @@ func TestRestoreAudiobook_NotFound(t *testing.T) {
 	h.RestoreAudiobook(c)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// A restore that finds a merge or combine running answers 409 MERGE_BUSY so
+// the page can say "try again" (it used to hang for the combine's whole run).
+func TestRestoreAudiobook_MergeBusyIs409(t *testing.T) {
+	h, d := newHandler(t)
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "b1").Return(nil, merge.ErrMergeBusy)
+	c, w := newCtx("POST", "/audiobooks/b1/restore", nil, p("id", "b1"))
+	h.RestoreAudiobook(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "MERGE_BUSY") {
+		t.Fatalf("want MERGE_BUSY code, got %s", w.Body.String())
 	}
 }
 
@@ -1062,5 +1306,26 @@ func TestBatchOperations_Success(t *testing.T) {
 	h.BatchOperations(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// N-3. The signed-in user's id reaches the enqueue, so the operation row names
+// who may cancel their own preview; with no user (auth off) it is empty.
+func TestPreviewPurgeSoftDeleted_PassesTheRequestingUserToTheEnqueue(t *testing.T) {
+	h, _ := newHandler(t)
+	rec := &purgeEnqueueRecorder{}
+	h.SetPurgeEnqueuer(rec.enqueue)
+
+	c, w := newCtx("POST", "/audiobooks/purge-soft-deleted/preview", nil, nil)
+	c.Set("auth_user", &database.User{ID: "user-bruce", Username: "bruce"})
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusAccepted || rec.actor != "user-bruce" {
+		t.Fatalf("code %d actor %q, want 202 and user-bruce", w.Code, rec.actor)
+	}
+
+	c, w = newCtx("POST", "/audiobooks/purge-soft-deleted/preview", nil, nil)
+	h.PreviewPurgeSoftDeleted(c)
+	if w.Code != http.StatusAccepted || rec.actor != "" {
+		t.Fatalf("code %d actor %q, want 202 and no actor", w.Code, rec.actor)
 	}
 }

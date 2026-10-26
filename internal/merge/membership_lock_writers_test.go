@@ -1,5 +1,5 @@
 // file: internal/merge/membership_lock_writers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c7e9a41-6b3d-4f18-8e05-a9d4b1c6f372
 // last-edited: 2026-10-26
 
@@ -29,7 +29,7 @@ func TestMergeMembershipWriters_WaitForGroupHolder(t *testing.T) {
 		held string
 		run  func(t *testing.T, f *vptest.Fixture) (write func() error, unchanged func() bool)
 	}{
-		// RestoreFromTrash: a restore whose apply moves the row from g into
+		// restoreFromTrash: a restore whose apply moves the row from g into
 		// h (a batch restore that also sets version_group_id).
 		{"trash restore leaves g", "g", restoreIntoH},
 		{"trash restore joins h", "h", restoreIntoH},
@@ -54,7 +54,7 @@ func restoreIntoH(t *testing.T, f *vptest.Fixture) (func() error, func() bool) {
 	r := f.Book(t, vptest.Spec{ID: "r", Group: "g", Primary: "false"})
 	f.SoftDelete(t, r)
 	write := func() error {
-		_, err := RestoreFromTrash(f.S, r, func(b *database.Book) {
+		_, err := restoreFromTrash(f.S, r, func(b *database.Book) {
 			h := "h"
 			b.VersionGroupID = &h
 		}, nil, func(_, _ *database.Book) {}, "h")
