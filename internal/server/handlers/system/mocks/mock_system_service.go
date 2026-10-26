@@ -46,8 +46,8 @@ func (_m *MockSystemService) EXPECT() *MockSystemService_Expecter {
 }
 
 // CollectSystemLogs provides a mock function for the type MockSystemService
-func (_mock *MockSystemService) CollectSystemLogs(level string, search string, limit int, offset int) ([]sysinfo.SystemLogEntry, int, error) {
-	ret := _mock.Called(level, search, limit, offset)
+func (_mock *MockSystemService) CollectSystemLogs(level string, search string, limit int, offset int, mayRead sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error) {
+	ret := _mock.Called(level, search, limit, offset, mayRead)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CollectSystemLogs")
@@ -56,23 +56,23 @@ func (_mock *MockSystemService) CollectSystemLogs(level string, search string, l
 	var r0 []sysinfo.SystemLogEntry
 	var r1 int
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) ([]sysinfo.SystemLogEntry, int, error)); ok {
-		return returnFunc(level, search, limit, offset)
+	if returnFunc, ok := ret.Get(0).(func(string, string, int, int, sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error)); ok {
+		return returnFunc(level, search, limit, offset, mayRead)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, int, int) []sysinfo.SystemLogEntry); ok {
-		r0 = returnFunc(level, search, limit, offset)
+	if returnFunc, ok := ret.Get(0).(func(string, string, int, int, sysinfo.LogReadCheck) []sysinfo.SystemLogEntry); ok {
+		r0 = returnFunc(level, search, limit, offset, mayRead)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]sysinfo.SystemLogEntry)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, string, int, int) int); ok {
-		r1 = returnFunc(level, search, limit, offset)
+	if returnFunc, ok := ret.Get(1).(func(string, string, int, int, sysinfo.LogReadCheck) int); ok {
+		r1 = returnFunc(level, search, limit, offset, mayRead)
 	} else {
 		r1 = ret.Get(1).(int)
 	}
-	if returnFunc, ok := ret.Get(2).(func(string, string, int, int) error); ok {
-		r2 = returnFunc(level, search, limit, offset)
+	if returnFunc, ok := ret.Get(2).(func(string, string, int, int, sysinfo.LogReadCheck) error); ok {
+		r2 = returnFunc(level, search, limit, offset, mayRead)
 	} else {
 		r2 = ret.Error(2)
 	}
@@ -89,11 +89,12 @@ type MockSystemService_CollectSystemLogs_Call struct {
 //   - search string
 //   - limit int
 //   - offset int
-func (_e *MockSystemService_Expecter) CollectSystemLogs(level any, search any, limit any, offset any) *MockSystemService_CollectSystemLogs_Call {
-	return &MockSystemService_CollectSystemLogs_Call{Call: _e.mock.On("CollectSystemLogs", level, search, limit, offset)}
+//   - mayRead sysinfo.LogReadCheck
+func (_e *MockSystemService_Expecter) CollectSystemLogs(level any, search any, limit any, offset any, mayRead any) *MockSystemService_CollectSystemLogs_Call {
+	return &MockSystemService_CollectSystemLogs_Call{Call: _e.mock.On("CollectSystemLogs", level, search, limit, offset, mayRead)}
 }
 
-func (_c *MockSystemService_CollectSystemLogs_Call) Run(run func(level string, search string, limit int, offset int)) *MockSystemService_CollectSystemLogs_Call {
+func (_c *MockSystemService_CollectSystemLogs_Call) Run(run func(level string, search string, limit int, offset int, mayRead sysinfo.LogReadCheck)) *MockSystemService_CollectSystemLogs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -111,11 +112,16 @@ func (_c *MockSystemService_CollectSystemLogs_Call) Run(run func(level string, s
 		if args[3] != nil {
 			arg3 = args[3].(int)
 		}
+		var arg4 sysinfo.LogReadCheck
+		if args[4] != nil {
+			arg4 = args[4].(sysinfo.LogReadCheck)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -126,14 +132,14 @@ func (_c *MockSystemService_CollectSystemLogs_Call) Return(systemLogEntrys []sys
 	return _c
 }
 
-func (_c *MockSystemService_CollectSystemLogs_Call) RunAndReturn(run func(level string, search string, limit int, offset int) ([]sysinfo.SystemLogEntry, int, error)) *MockSystemService_CollectSystemLogs_Call {
+func (_c *MockSystemService_CollectSystemLogs_Call) RunAndReturn(run func(level string, search string, limit int, offset int, mayRead sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error)) *MockSystemService_CollectSystemLogs_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CollectSystemStatus provides a mock function for the type MockSystemService
-func (_mock *MockSystemService) CollectSystemStatus() (*sysinfo.SystemStatus, error) {
-	ret := _mock.Called()
+func (_mock *MockSystemService) CollectSystemStatus(mayRead sysinfo.OperationReadCheck) (*sysinfo.SystemStatus, error) {
+	ret := _mock.Called(mayRead)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CollectSystemStatus")
@@ -141,18 +147,18 @@ func (_mock *MockSystemService) CollectSystemStatus() (*sysinfo.SystemStatus, er
 
 	var r0 *sysinfo.SystemStatus
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (*sysinfo.SystemStatus, error)); ok {
-		return returnFunc()
+	if returnFunc, ok := ret.Get(0).(func(sysinfo.OperationReadCheck) (*sysinfo.SystemStatus, error)); ok {
+		return returnFunc(mayRead)
 	}
-	if returnFunc, ok := ret.Get(0).(func() *sysinfo.SystemStatus); ok {
-		r0 = returnFunc()
+	if returnFunc, ok := ret.Get(0).(func(sysinfo.OperationReadCheck) *sysinfo.SystemStatus); ok {
+		r0 = returnFunc(mayRead)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*sysinfo.SystemStatus)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func() error); ok {
-		r1 = returnFunc()
+	if returnFunc, ok := ret.Get(1).(func(sysinfo.OperationReadCheck) error); ok {
+		r1 = returnFunc(mayRead)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -165,13 +171,20 @@ type MockSystemService_CollectSystemStatus_Call struct {
 }
 
 // CollectSystemStatus is a helper method to define mock.On call
-func (_e *MockSystemService_Expecter) CollectSystemStatus() *MockSystemService_CollectSystemStatus_Call {
-	return &MockSystemService_CollectSystemStatus_Call{Call: _e.mock.On("CollectSystemStatus")}
+//   - mayRead sysinfo.OperationReadCheck
+func (_e *MockSystemService_Expecter) CollectSystemStatus(mayRead any) *MockSystemService_CollectSystemStatus_Call {
+	return &MockSystemService_CollectSystemStatus_Call{Call: _e.mock.On("CollectSystemStatus", mayRead)}
 }
 
-func (_c *MockSystemService_CollectSystemStatus_Call) Run(run func()) *MockSystemService_CollectSystemStatus_Call {
+func (_c *MockSystemService_CollectSystemStatus_Call) Run(run func(mayRead sysinfo.OperationReadCheck)) *MockSystemService_CollectSystemStatus_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		var arg0 sysinfo.OperationReadCheck
+		if args[0] != nil {
+			arg0 = args[0].(sysinfo.OperationReadCheck)
+		}
+		run(
+			arg0,
+		)
 	})
 	return _c
 }
@@ -181,7 +194,7 @@ func (_c *MockSystemService_CollectSystemStatus_Call) Return(systemStatus *sysin
 	return _c
 }
 
-func (_c *MockSystemService_CollectSystemStatus_Call) RunAndReturn(run func() (*sysinfo.SystemStatus, error)) *MockSystemService_CollectSystemStatus_Call {
+func (_c *MockSystemService_CollectSystemStatus_Call) RunAndReturn(run func(mayRead sysinfo.OperationReadCheck) (*sysinfo.SystemStatus, error)) *MockSystemService_CollectSystemStatus_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.7.2
+// version: 1.9.0
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -907,12 +907,12 @@ func (s *PebbleActivityStore) queryByFilterIndex(ctx context.Context, f Activity
 	}
 	chosen, others := s.pickFilterFamily(fams, f, all)
 
-	probe := f.Offset + f.Limit + 1
+	probe := activityPageProbe(f)
 	w := &pactFilterWalk{
 		s: s, f: f, chosen: chosen, others: others,
 		probeAt:      probe,
 		page:         make([]ActivityEntry, 0, max(f.Limit, 0)),
-		decodeBudget: activityQueryScanBudget + probe,
+		decodeBudget: activityDecodeBudget(f),
 		keyBudget:    activityFilterIndexKeyBudget,
 	}
 	defer w.close()
@@ -951,6 +951,48 @@ func (s *PebbleActivityStore) queryByFilterIndex(ctx context.Context, f Activity
 // pages of the UI's 25 rows; anything deeper should narrow the filter or the
 // time range instead.
 const activityQueryMaxOffset = 100_000
+
+// activityQueryMaxLimit caps one page. A caller-supplied Limit larger than this
+// is clamped, not refused: the largest page any route asks for is the
+// operation transcript's 10,000 (operationActivityLimitMax), so no caller
+// loses rows to it. With activityQueryMaxOffset it is what keeps
+// activityDecodeBudget bounded by constants.
+const activityQueryMaxLimit = 10_000
+
+// normalizeActivityFilter applies the defaults and caps every query path
+// shares, before any path is chosen: a zero Limit is 50, a Limit above
+// activityQueryMaxLimit is clamped to it, and an Offset above
+// activityQueryMaxOffset is refused with ErrActivityOffsetTooDeep. The
+// operation and book index paths used to run before the offset check and took
+// a caller's Offset and Limit unbounded into their decode budget, which made
+// the budget no cap at all.
+func normalizeActivityFilter(f ActivityFilter) (ActivityFilter, error) {
+	if f.Limit == 0 {
+		f.Limit = 50
+	}
+	if f.Limit > activityQueryMaxLimit {
+		f.Limit = activityQueryMaxLimit
+	}
+	if f.Offset > activityQueryMaxOffset {
+		return f, ErrActivityOffsetTooDeep
+	}
+	return f, nil
+}
+
+// activityPageProbe is one row past the page the filter asks for: collecting
+// it is what says another page exists without counting the rest of the log.
+func activityPageProbe(f ActivityFilter) int {
+	return f.Offset + f.Limit + 1
+}
+
+// activityDecodeBudget is how many entries a query over the index paths may
+// decode: the scan budget plus the page probe, so a filter whose every
+// candidate matches still fills its page. f must be normalized
+// (normalizeActivityFilter), which is what bounds it: the scan budget plus
+// activityQueryMaxOffset, activityQueryMaxLimit and one.
+func activityDecodeBudget(f ActivityFilter) int {
+	return activityQueryScanBudget + activityPageProbe(f)
+}
 
 // ErrActivityOffsetTooDeep is returned for an offset above
 // activityQueryMaxOffset. GET /activity maps it to 400.

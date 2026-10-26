@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.28.3
+// version: 4.29.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -587,7 +587,7 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 	// Resolve from EITHER keyspace. A v1-only lookup 404s on every run started
 	// since the handler stopped minting a v1 row — the client would hold an id
 	// the results endpoint refuses to acknowledge.
-	op := metabatch.ResolveCandidateFetch(store, opID)
+	op := s.opTextFor(c, metabatch.ResolveCandidateFetch(store, opID))
 	if op == nil {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return

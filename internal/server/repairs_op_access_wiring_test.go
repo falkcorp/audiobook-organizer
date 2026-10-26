@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // The generic operations routes as the server wires them, driven through the
 // real router: a Repairs operation's data (repairs.plan, repairs.apply) is
@@ -251,6 +251,13 @@ func TestRepairsOpData_ReadRoutesNeedTheFixersPermissions(t *testing.T) {
 	} {
 		for route, path := range opReadPaths(tc.op) {
 			w := getAs(f.srv, tc.token, path)
+			if tc.who == "editor" && tc.op == f.defaultApply && route == "undo preflight" {
+				// The editor may run this fixer, but its journal holds user-state
+				// rows, and undoing those needs users.manage (MayUndoChange).
+				require.Equal(t, http.StatusForbidden, w.Code, "%s %s %s: %s", tc.who, tc.op, route, w.Body.String())
+				require.NotContains(t, w.Body.String(), secondaryUserID)
+				continue
+			}
 			if tc.allowed {
 				requireReadShape(t, route, tc.op, w, "%s %s %s", tc.who, tc.op, route)
 				continue
@@ -379,8 +386,7 @@ func TestRepairsOpData_DiscardedOpJournalStaysScoped(t *testing.T) {
 	require.NotContains(t, w.Body.String(), secondaryUserID)
 
 	w = getAs(f.srv, f.editor, preflight)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), `"total_changes":1`, "the editor keeps Undo on a fixer he may run")
+	require.Equal(t, http.StatusForbidden, w.Code, "the editor may run the fixer but not undo a user's state: %s", w.Body.String())
 	require.NotContains(t, w.Body.String(), secondaryUserID)
 
 	w = getAs(f.srv, f.admin, changes)
@@ -399,8 +405,8 @@ func TestRepairsOpData_DiscardedOpJournalStaysScoped(t *testing.T) {
 //
 //   - The default fixer's apply (op row present): a viewer is refused the op;
 //     the editor reads its file move but none of its user state, unstamped
-//     follow or playlist carry, and keeps the undo report; the admin reads
-//     every row.
+//     follow or playlist carry, and is refused the undo report (it would
+//     offer an undo of those rows); the admin reads every row.
 //   - The removed fixer's op: its follow row names a fixer this build does not
 //     register; only the admin reads the op and the row.
 //   - A discarded apply from before Source stamping: its unstamped follow row
@@ -408,8 +414,8 @@ func TestRepairsOpData_DiscardedOpJournalStaysScoped(t *testing.T) {
 //     viewer and the editor get its changes empty and its undo report
 //     refused; the admin gets both.
 //   - A discarded apply of a removed fixer: its follow row names a fixer this
-//     build does not register, so even the undo report (which skips the
-//     users.manage leg) needs every permission; the same answers.
+//     build does not register, so the undo report needs every permission; the
+//     same answers.
 //
 // Not parallel: it swaps the process-wide config.
 func TestRepairsOpData_UserDataRowsNeedUsersManage(t *testing.T) {
@@ -430,10 +436,9 @@ func TestRepairsOpData_UserDataRowsNeedUsersManage(t *testing.T) {
 		require.NotContains(t, w.Body.String(), marker, "the editor reads no user data")
 	}
 	w = getAs(f.srv, f.editor, preflight(f.defaultApply))
-	require.Equal(t, http.StatusOK, w.Code, "the editor keeps Undo: %s", w.Body.String())
-	require.Contains(t, w.Body.String(), `"total_changes":`)
+	require.Equal(t, http.StatusForbidden, w.Code, "the journal holds user rows the editor may not undo: %s", w.Body.String())
 	for _, marker := range defaultUserData {
-		require.NotContains(t, w.Body.String(), marker, "the undo report carries no user data")
+		require.NotContains(t, w.Body.String(), marker, "the refusal carries no user data")
 	}
 	w = getAs(f.srv, f.admin, changes(f.defaultApply))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

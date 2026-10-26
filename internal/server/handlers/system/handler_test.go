@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-10-15
+// last-edited: 2026-10-25
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -154,7 +154,7 @@ func TestHealthCheck_PartialError(t *testing.T) {
 
 func TestGetSystemStatus_OK(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.sysSvc.EXPECT().CollectSystemStatus().Return(&sysinfo.SystemStatus{}, nil)
+	d.sysSvc.EXPECT().CollectSystemStatus(mock.Anything).Return(&sysinfo.SystemStatus{}, nil)
 	d.plugins.EXPECT().HealthCheckAll().Return(map[string]error{
 		"acoustid": nil,
 		"itunes":   errors.New("offline"),
@@ -168,7 +168,7 @@ func TestGetSystemStatus_OK(t *testing.T) {
 
 func TestGetSystemStatus_Error(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.sysSvc.EXPECT().CollectSystemStatus().Return(nil, errors.New("boom"))
+	d.sysSvc.EXPECT().CollectSystemStatus(mock.Anything).Return(nil, errors.New("boom"))
 
 	w := run(http.MethodGet, "/system/status", "/system/status", nil, func(r *gin.Engine) {
 		r.GET("/system/status", h.GetSystemStatus)
@@ -268,7 +268,7 @@ func TestGetSystemLogs_DelegatesToOperationLogs(t *testing.T) {
 
 func TestGetSystemLogs_Collect(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.sysSvc.EXPECT().CollectSystemLogs(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	d.sysSvc.EXPECT().CollectSystemLogs(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return([]sysinfo.SystemLogEntry{{Message: "hello"}}, 1, nil)
 
 	w := run(http.MethodGet, "/system/logs", "/system/logs", nil, func(r *gin.Engine) {
@@ -719,7 +719,7 @@ func TestDeleteBackup_RequiresFilename(t *testing.T) {
 func TestGetDashboard_OK(t *testing.T) {
 	h, d := newTestHandler(t)
 	d.store.EXPECT().GetDashboardStats().Return(&database.DashboardStats{TotalBooks: 3}, nil)
-	d.store.EXPECT().ListOperationsV2Since(mock.Anything, 5).Return(nil, nil)
+	d.store.EXPECT().ListOperationsV2Since(mock.Anything, system.RecentOperationsWindow).Return(nil, nil)
 
 	w := run(http.MethodGet, "/dashboard", "/dashboard", nil, func(r *gin.Engine) {
 		r.GET("/dashboard", h.GetDashboard)

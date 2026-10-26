@@ -1,5 +1,5 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
 // last-edited: 2026-10-26
 
@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -613,7 +614,7 @@ func (h *Handler) patch(c *gin.Context, entity, id, bookID string) {
 			resp["book_aggregates"] = gin.H{"before": aggregatesOf(bookBefore), "after": aggregatesOf(after)}
 		}
 	}
-	if err := h.audit(c, "admin_debug_edit", &rec, rec.Changes, nil); err != nil {
+	if err := h.audit(c, activity.TypeAdminDebugEdit, &rec, rec.Changes, nil); err != nil {
 		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
 			"edit applied and undo image saved, but the audit row failed: "+err.Error(), "audit_failed",
 			map[string]any{"edit_id": rec.EditID, "diff": diff})
@@ -677,7 +678,7 @@ func (h *Handler) audit(c *gin.Context, typ string, rec *editRecord, changes []d
 	}
 	maps.Copy(details, extra)
 	verb := "edit"
-	if typ == "admin_debug_undo" {
+	if typ == activity.TypeAdminDebugUndo {
 		verb = "undo of edit " + rec.EditID
 	}
 	return h.activity.Record(database.ActivityEntry{
@@ -854,7 +855,7 @@ func (h *Handler) UndoEdit(c *gin.Context) {
 	for i, ch := range rec.Changes {
 		undoChanges[i] = diffEntry{Field: ch.Field, Before: ch.After, After: ch.Before}
 	}
-	if err := h.audit(c, "admin_debug_undo", rec, undoChanges, map[string]any{"forced": rec.UndoForced}); err != nil {
+	if err := h.audit(c, activity.TypeAdminDebugUndo, rec, undoChanges, map[string]any{"forced": rec.UndoForced}); err != nil {
 		httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
 			"undo applied, but the audit row failed: "+err.Error(), "audit_failed", resp)
 		return
