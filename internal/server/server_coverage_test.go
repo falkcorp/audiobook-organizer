@@ -1,5 +1,5 @@
 // file: internal/server/server_coverage_test.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-18
 
@@ -21,6 +21,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// requireBatchItemSucceeded asserts the batch response (the {"data": ...}
+// envelope) holds exactly one result, for id, that succeeded without an error,
+// and that the response counts one success and no failure.
+func requireBatchItemSucceeded(t *testing.T, body []byte, id string) {
+	t.Helper()
+	var resp struct {
+		Data struct {
+			Results []struct {
+				ID      string `json:"id"`
+				Success bool   `json:"success"`
+				Error   string `json:"error"`
+			} `json:"results"`
+			Success int `json:"success"`
+			Failed  int `json:"failed"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &resp), string(body))
+	require.Len(t, resp.Data.Results, 1, string(body))
+	require.Equal(t, id, resp.Data.Results[0].ID, string(body))
+	require.True(t, resp.Data.Results[0].Success, "item error %q: %s", resp.Data.Results[0].Error, string(body))
+	require.Empty(t, resp.Data.Results[0].Error)
+	require.Equal(t, 1, resp.Data.Success, string(body))
+	require.Zero(t, resp.Data.Failed, string(body))
+}
 
 // ---------------------------------------------------------------------------
 // Helper: create a book with a specific format
@@ -712,7 +737,14 @@ func TestCoverageBatchOperations(t *testing.T) {
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
+		// The batch routes answer 200 even when every item fails, so the
+		// item's own result and the row decide.
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		requireBatchItemSucceeded(t, w.Body.Bytes(), book.ID)
+		got, err := database.GetGlobalStore().GetBookByID(book.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.True(t, database.IsInTrash(got), "the delete action moved the book to the trash")
 	})
 
 	t.Run("batch restore operation", func(t *testing.T) {
@@ -721,6 +753,10 @@ func TestCoverageBatchOperations(t *testing.T) {
 		delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/"+book.ID+"?soft_delete=true", nil)
 		delW := httptest.NewRecorder()
 		server.router.ServeHTTP(delW, delReq)
+		require.Equal(t, http.StatusOK, delW.Code, delW.Body.String())
+		trashed, err := database.GetGlobalStore().GetBookByID(book.ID)
+		require.NoError(t, err)
+		require.True(t, database.IsInTrash(trashed), "fixture: the book is in the trash before the restore")
 
 		payload := map[string]any{
 			"operations": []map[string]any{
@@ -736,7 +772,12 @@ func TestCoverageBatchOperations(t *testing.T) {
 		w := httptest.NewRecorder()
 		server.router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		requireBatchItemSucceeded(t, w.Body.Bytes(), book.ID)
+		got, err := database.GetGlobalStore().GetBookByID(book.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.False(t, database.IsInTrash(got), "the restore action took the book out of the trash")
 	})
 
 	t.Run("batch with non-existent book", func(t *testing.T) {
