@@ -1,5 +1,5 @@
 // file: internal/server/handlers/collections_values_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c3a8e5d1-6b27-4f90-a1d4-52e7b09c6f38
 // last-edited: 2026-10-26
 
@@ -33,7 +33,8 @@ import (
 //
 // The tag: terms are the other refused class: a tag: filter is exact and applies
 // to the whole query, so it is refused under an OR, a NOT or an alternation, and as
-// a prefix or fuzzy term (search.SplitTagTerms).
+// a prefix or fuzzy term (search.SplitTagTerms). A /regex/ value is the third: the
+// search index has no regular expressions (search.CheckRegexTerms).
 var refusedTermQueries = []string{
 	"read_status:completed",
 	"-read_status:completed",
@@ -47,6 +48,8 @@ var refusedTermQueries = []string{
 	"tag:noir*",
 	"tag:no*ir",
 	`tag:"noir"^2`,
+	// a /regex/ is a filter-layer form; the index would read it as the words in it
+	"title:/hush|knight/",
 }
 
 // B-alpha: creating or updating a dynamic collection with such a value is refused
