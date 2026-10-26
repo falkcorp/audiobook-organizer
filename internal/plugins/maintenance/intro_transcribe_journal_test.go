@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_journal_test.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 0b42d884-b844-4201-ba60-046bfb995928
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -394,7 +394,7 @@ func TestProcessTranscribePage_RetrySilenceRefreshesJournal(t *testing.T) {
 		})
 		p := New(fakeDeps{store: store})
 		accum := newTranscribeStatsAccum(nil, "op", 0, time.Now())
-		p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false,
+		p.processTranscribePage(context.Background(), store, slog.Default(), books, rootDir, nil, accum, false, false,
 			pageJournal{refresh: refresh}, extractLocal)
 		if len(got) != 1 || got[0] != refresh {
 			t.Errorf("refresh=%v: RefreshJournal passed = %v", refresh, got)

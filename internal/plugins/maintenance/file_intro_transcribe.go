@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.0.8
+// version: 1.1.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -487,15 +487,15 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	st := accum.snapshot()
 	log.Info("transcribe-file-intros: finished",
 		"run_id", runID, "attempted", st.Attempted, "ok", st.OK, "unparsed", st.Unparsed, "silence", st.Silence,
-		"whisper_error", st.WhisperError, "ffmpeg_error", st.FFmpegError, "source_missing", st.SourceMissing, "reused", st.Reused,
+		"whisper_error", st.WhisperError, "ffmpeg_error", st.FFmpegError, "transcribe_timeout", st.TranscribeTimeout, "source_missing", st.SourceMissing, "reused", st.Reused,
 		"deferred", st.Deferred, "stale", st.Stale, "already_had", st.AlreadyHad, "book_fills", st.BookFills,
 		"coverage_now", st.TranscribedNow, "eligible", st.Eligible, "err", err)
 	if err != nil {
 		return err
 	}
 	_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
-		"Done — run %s: %d ok, %d unparsed, %d silent, %d whisper-err, %d ffmpeg-err, %d source-missing, %d reused, %d deferred, %d stale; %d book transcripts filled; coverage %d/%d files",
-		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.FFmpegError, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
+		"Done — run %s: %d ok, %d unparsed, %d silent, %d whisper-err, %d ffmpeg-err, %d decode-timeout, %d source-missing, %d reused, %d deferred, %d stale; %d book transcripts filled; coverage %d/%d files",
+		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.FFmpegError, st.TranscribeTimeout, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
 		st.BookFills, st.TranscribedNow, st.Eligible))
 	return nil
 }
@@ -546,6 +546,9 @@ type fileIntroWorker struct {
 	accum       *fileIntroAccum
 	runID       string
 	onlyMissing bool
+	// stuck counts consecutive batches the pool answered "worker stuck"; see
+	// whisperStuckMaxBatches.
+	stuck stuckStreak
 	// batchesDone / batchesTotal let a paused run re-announce itself at its real
 	// position instead of resetting the progress bar to zero on every tick.
 	batchesDone  atomic.Int64
@@ -682,7 +685,23 @@ var errFileIntroOutage = errors.New("whisper endpoints unreachable")
 func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileIntroJob) (map[string]fileIntroWhisperResult, error) {
 	log := w.reporter.Logger()
 	for try := 1; ; try++ {
+		// A request can outlast the watchdog's progress budget (a chunk of clips
+		// each allowed up to the worker's per-clip deadline), so say the run is
+		// alive while it waits.
+		stopTicks := tickWhileWaiting(whisperWaitTickInterval, func(elapsed time.Duration) {
+			w.progress(introLiveMarker + fmt.Sprintf("waiting on whisper: %d files in flight for %s",
+				len(jobs), elapsed.Round(time.Second)))
+		})
 		out, err := fileIntroWhisperFn(ctx, jobs, nil)
+		stopTicks()
+		// A worker that is reachable but wedged is not an outage: waiting and
+		// re-sending the same batch parks it behind the stuck clip, which is how
+		// one bad file took out the whole pool. The pool already split the batch
+		// and retried the parts (transcribe.dispatchPool); what is left here is
+		// a batch that could not be settled, so hand it back to runBatch.
+		if transcribe.IsWorkerStuck(err) {
+			return out, err
+		}
 		var te *transcribe.TransportError
 		// Only a RECOGNIZED network failure (refused, reset, timeout, DNS) is an
 		// outage worth waiting out. An unrecognized batch failure (a 5xx, a
@@ -698,7 +717,7 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 		}
 		wait := time.Duration(try) * fileIntroOutageInterval
 		log.Warn("transcribe-file-intros: endpoints unreachable, retrying the batch (nothing written)",
-			"jobs", len(jobs), "try", try, "of", fileIntroOutageMaxTries, "retry_in", wait.String(), "endpoints", te.Endpoints, "err", te.Err)
+			"jobs", len(jobs), "try", try, "of", fileIntroOutageMaxTries, "retry_in", wait.String(), "endpoints", te.Endpoints, "err", te.Err.Error())
 		w.progress(introLiveMarker + fmt.Sprintf("whisper endpoints unreachable (try %d of %d); retrying in %s",
 			try, fileIntroOutageMaxTries, wait.Round(time.Second)))
 		t := time.NewTimer(wait)
@@ -758,11 +777,25 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 			return 0, err
 		case ctx.Err() != nil:
 			return 0, ctx.Err()
+		case transcribe.IsWorkerStuck(err):
+			// Reachable but wedged, and the pool could not narrow it to a file:
+			// nothing is written and the files stay undone. Several in a row
+			// means the pool itself is wedged, which a run cannot wait out.
+			n := w.stuck.hit()
+			log.Warn("transcribe-file-intros: whisper worker stuck, batch deferred (nothing written)",
+				"jobs", len(jobs), "stuck_batches_in_a_row", n, "of", whisperStuckMaxBatches, "err", err.Error())
+			if n >= whisperStuckMaxBatches {
+				return 0, fmt.Errorf("%s: %w: %d batches in a row; stopping the run, nothing was written for them and the files stay undone (restart the stuck workers): %w",
+					fileIntroOpID, errWhisperStuck, n, err)
+			}
+			for _, gi := range jobGroup {
+				results[gi] = groupResult{kind: "deferred", hasResult: true}
+			}
 		case transcribe.IsTransport(err):
 			// A batch-level failure that is not a recognized outage (so it was
 			// not retried): it says nothing about any file, so nothing is
 			// written and the files stay undone for the next run.
-			log.Warn("transcribe-file-intros: whisper batch failed at batch level, deferred (nothing written)", "jobs", len(jobs), "err", err)
+			log.Warn("transcribe-file-intros: whisper batch failed at batch level, deferred (nothing written)", "jobs", len(jobs), "err", err.Error())
 			for _, gi := range jobGroup {
 				results[gi] = groupResult{kind: "deferred", hasResult: true}
 			}
@@ -775,6 +808,7 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 				}}
 			}
 		default:
+			w.stuck.reset() // the pool answered
 			now := time.Now()
 			for key, gi := range jobGroup {
 				r, ok := out[key]
@@ -821,6 +855,9 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		//   ffmpeg_error -> the worker could not decode it: a verdict about the
 		//                   file, held until retry_failed (so a corrupt file is
 		//                   not re-sent by every run);
+		//   transcribe_timeout -> the decoder ran past its deadline on it: one
+		//                   strike is retried, transcribeTimeoutStrikeLimit make it
+		//                   permanent like ffmpeg_error;
 		//   path_unmapped, ffmpeg_timeout, worker_misconfigured,
 		//   container_rejected -> the mount, the share or the worker's own
 		//                   setup or policy, not the file: written as nothing,
@@ -835,6 +872,14 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		case transcribe.PathErrFFmpeg:
 			return groupResult{kind: "ffmpeg_error", hasResult: true, res: database.BookFileIntroResult{
 				Status: statusFFmpegError, Error: detail, At: now}}
+		case transcribe.PathErrTranscribeTimeout:
+			// The worker's decoder ran past its per-clip deadline on this file
+			// and was killed and restarted. A verdict about the audio, but only
+			// after transcribeTimeoutStrikeLimit of them: applyGroup counts the
+			// strike (below the limit the file is deferred, at it the status
+			// becomes permanent).
+			return groupResult{kind: "transcribe_timeout", hasResult: true, res: database.BookFileIntroResult{
+				Status: statusTranscribeTimeout, Error: detail, At: now}}
 		case transcribe.PathErrUnmapped, transcribe.PathErrFFmpegTimeout,
 			transcribe.PathErrWorkerMisconfigured, transcribe.PathErrContainerRejected:
 			// The mount, the share or the worker's own setup or policy, not a
@@ -917,6 +962,11 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 			settled++
 			continue
 		}
+		if gr.kind == "transcribe_timeout" {
+			w.recordTimeout(g, m, gr)
+			settled++
+			continue
+		}
 		r := gr.res
 		r.SourceHash = g.Hash
 		r.RunOpID = w.runID
@@ -940,6 +990,38 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 		}
 	}
 	return settled, nil
+}
+
+// recordTimeout counts one transcribe_timeout strike against a member file.
+// Below the limit the file is deferred (retried next run, nothing about it
+// written but the strike); at the limit it carries the permanent
+// transcribe_timeout status, which selection skips.
+func (w *fileIntroWorker) recordTimeout(g fileIntroGroup, m fileIntroItem, gr groupResult) {
+	log := w.reporter.Logger()
+	out, err := w.intros.RecordIntroTimeout(m.BookID, m.FileID, database.IntroTimeoutStrike{
+		SourceHash: g.Hash, RunOpID: w.runID, Detail: gr.res.Error, At: gr.res.At,
+		Limit: transcribeTimeoutStrikeLimit,
+	})
+	switch {
+	case err != nil:
+		log.Warn("transcribe-file-intros: recording a transcribe_timeout strike failed", "file_id", m.FileID, "err", err.Error())
+		w.accum.update(func(s *database.FileIntroStats) { s.WriteErrors++ })
+	case out.Stale:
+		w.accum.update(func(s *database.FileIntroStats) { s.Stale++ })
+	case out.Skipped:
+		w.accum.update(func(s *database.FileIntroStats) { s.AlreadyHad++ })
+	case out.Permanent:
+		log.Warn("transcribe-file-intros: transcribe_timeout is now permanent for this file",
+			"file_id", m.FileID, "strikes", out.Strikes, "limit", transcribeTimeoutStrikeLimit)
+		w.accum.update(func(s *database.FileIntroStats) {
+			s.Attempted++
+			s.TranscribeTimeout++
+		})
+	default:
+		log.Warn("transcribe-file-intros: transcribe_timeout strike recorded, file deferred to the next run",
+			"file_id", m.FileID, "strikes", out.Strikes, "limit", transcribeTimeoutStrikeLimit)
+		w.accum.update(func(s *database.FileIntroStats) { s.Deferred++ })
+	}
 }
 
 func (w *fileIntroWorker) count(gr groupResult, wrote database.BookFileIntroWrite) {

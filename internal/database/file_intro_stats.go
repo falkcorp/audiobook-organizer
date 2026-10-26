@@ -1,7 +1,7 @@
 // file: internal/database/file_intro_stats.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: b4d7e2a9-6c15-4f38-8e0b-5a1d9c3f7e62
-// last-edited: 2026-10-22
+// last-edited: 2026-10-25
 
 package database
 
@@ -55,6 +55,10 @@ type FileIntroStats struct {
 	// retry_failed.
 	FFmpegError   int `json:"ffmpeg_error"`
 	SourceMissing int `json:"source_file_missing"`
+	// TranscribeTimeout counts files whose decode ran past the worker's
+	// per-clip deadline at least the strike limit: permanent until retry_failed
+	// or the file changes. A file below the limit is counted in Deferred.
+	TranscribeTimeout int `json:"transcribe_timeout"`
 	// Reused counts files that took a transcript from another file with the
 	// same FileHash instead of being sent to whisper.
 	Reused int `json:"reused"`

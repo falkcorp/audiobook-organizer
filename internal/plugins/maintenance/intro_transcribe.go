@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.38.0
+// version: 3.39.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package maintenance
 
@@ -386,6 +386,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// thread-safe. processed uses atomic arithmetic; lastID uses a mutex because
 	// string assignment is not atomic (pointer + length, two words).
 	var processed atomic.Int64
+	accum.heartbeat = func(msg string) {
+		_ = reporter.UpdateProgress(int(processed.Load()), max(total, 1), mark+msg)
+	}
 	var lastIDMu sync.Mutex
 	var lastID string
 
@@ -448,9 +451,16 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				mark+fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, pj, mode)
+		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, retryFailed, pj, mode)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
+		if n := accum.stuck.n.Load(); n >= whisperStuckMaxBatches {
+			// Every one of these pages was deferred with nothing written. A pool
+			// that stays wedged would otherwise defer the whole library one page
+			// at a time and report a clean run.
+			return fmt.Errorf("%s: %w: %d pages in a row; stopping the run, nothing was written for them and the books stay undone (restart the stuck workers)",
+				"maintenance.transcribe-book-intros", errWhisperStuck, n)
+		}
 		log.Info("transcribe-book-intros: page complete",
 			"page_books", done, "cumulative_processed", cum, "total_books", total)
 		return nil
@@ -840,12 +850,13 @@ func needsTranscribeWork(b *database.Book, sel transcribeSelect) bool {
 
 // isDurableTranscribeFailure reports whether a stored TranscribeStatus means the
 // last attempt failed for a reason that re-running the exact same input cannot
-// fix: the source file is gone, the book has no audio file, or ffmpeg could not
-// decode the bytes. Selection skips these (needsTranscribeWork) and only
+// fix: the source file is gone, the book has no audio file, ffmpeg could not
+// decode the bytes, or the Whisper decoder timed out on the audio on every one
+// of its allowed attempts (transcribe_timeout). Selection skips these (needsTranscribeWork) and only
 // re-attempts them when transcribeInputChanged sees the underlying file back.
 func isDurableTranscribeFailure(status string) bool {
 	switch status {
-	case statusSourceMissing, statusNoAudio, statusFFmpegError:
+	case statusSourceMissing, statusNoAudio, statusFFmpegError, statusTranscribeTimeout:
 		return true
 	default:
 		return false
@@ -894,7 +905,7 @@ func hasTranscriptAlready(b *database.Book, sel transcribeSelect) bool {
 // stat failure) means "still broken, keep skipping".
 //
 // For source_file_missing / no_audio the file being present again IS the change.
-// For ffmpeg_error the file was present at failure time too, so require the bytes
+// For ffmpeg_error and transcribe_timeout the file was present at failure time too, so require the bytes
 // to have changed — mtime after the failed attempt (a re-encode or replace).
 // TranscribeAttemptedAt holds the FIRST-failure time (applyOutcome's change-guard
 // does not refresh it on a repeat, and selection skips the book on later runs so
@@ -917,7 +928,7 @@ func transcribeInputChanged(store bookFileLister, b *database.Book) bool {
 	if err != nil {
 		return false // source still absent
 	}
-	if *b.TranscribeStatus == statusFFmpegError {
+	if *b.TranscribeStatus == statusFFmpegError || *b.TranscribeStatus == statusTranscribeTimeout {
 		if b.TranscribeAttemptedAt == nil {
 			return false
 		}
@@ -1074,6 +1085,7 @@ func (p *Plugin) processTranscribePage(
 	onBook transcribe.ProgressFunc,
 	accum *transcribeStatsAccum,
 	extractOnly bool,
+	retryDurable bool, // retry_failed: re-attempt durable failures instead of skipping them
 	pj pageJournal,
 	mode extractMode,
 ) (processed int) {
@@ -1112,8 +1124,22 @@ func (p *Plugin) processTranscribePage(
 		fileHash string // empty → no cache key available
 	}
 	jobs := make([]bookJob, 0, len(books))
+	// refByID keeps each book's first-file reference: step 4 needs its row id and
+	// stored hash to count a transcribe_timeout strike against the right file.
+	refByID := make(map[string]audioFileRef, len(books))
 	for _, b := range books {
 		ref, _ := firstAudioFile(store, b)
+		if !retryDurable && !extractOnly && ref.TranscribeStatus == statusTranscribeTimeout {
+			// The per-file op (or an earlier run) already made this file's
+			// decoder timeout permanent. Do not send it again: stamp the verdict
+			// on the book so selection skips it from now on, and move on.
+			log.Warn("transcribe: first file is a permanent transcribe_timeout, book not sent",
+				"book_id", b.ID, "file_id", ref.BookFileID)
+			p.applyOutcome(store, log, &b, statusTranscribeTimeout,
+				"first audio file is a permanent transcribe_timeout (decoder ran past its deadline)", "", transcribe.IntroFields{}, now, accum)
+			continue
+		}
+		refByID[b.ID] = ref
 		src, hash := ref.Path, ref.CacheKey
 		jobs = append(jobs, bookJob{book: b, audioSrc: src, fileHash: hash})
 	}
@@ -1258,10 +1284,20 @@ func (p *Plugin) processTranscribePage(
 	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: pj.journal, RefreshJournal: pj.refresh}
 	var batchResults map[string]transcribe.BatchResult
 	var err error
+	// A request can outlast the watchdog's progress budget (a chunk of clips each
+	// allowed up to the worker's per-clip deadline), so say the run is alive
+	// while it waits.
+	stopTicks := tickWhileWaiting(whisperWaitTickInterval, func(elapsed time.Duration) {
+		accum.beat(fmt.Sprintf("waiting on whisper: %d books in flight for %s", len(submitted), elapsed.Round(time.Second)))
+	})
 	if remote {
 		batchResults, err = transcribePathBatchFn(ctx, pathJobs, batchOpts)
 	} else {
 		batchResults, err = transcribeBatchFn(ctx, batchJobs, batchOpts)
+	}
+	stopTicks()
+	if err == nil || !transcribe.IsWorkerStuck(err) {
+		accum.stuck.reset() // the pool answered (or failed some other way)
 	}
 	var te *transcribe.TransportError
 	switch {
@@ -1270,8 +1306,16 @@ func (p *Plugin) processTranscribePage(
 		// deferred and will be retried next run. On 2026-07-01 this exact
 		// branch's absence recorded a day-long endpoint outage as ~34,000
 		// false per-book whisper_error verdicts.
-		log.Warn("transcribe: endpoints unreachable, page deferred (no status written)",
-			"jobs", len(submitted), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err)
+		if transcribe.IsWorkerStuck(err) {
+			// Reachable but wedged: not an outage, and not a verdict on any book.
+			// The run loop stops the run after whisperStuckMaxBatches in a row.
+			log.Warn("transcribe: whisper worker stuck, page deferred (no status written)",
+				"jobs", len(submitted), "stuck_pages_in_a_row", accum.stuck.hit(), "of", whisperStuckMaxBatches,
+				"endpoints", te.Endpoints, "err", te.Err.Error())
+		} else {
+			log.Warn("transcribe: endpoints unreachable, page deferred (no status written)",
+				"jobs", len(submitted), "endpoints", te.Endpoints, "recognized", te.Recognized, "err", te.Err.Error())
+		}
 		accum.recordDeferred(len(submitted))
 		return 0
 	case err != nil:
@@ -1499,6 +1543,10 @@ func (p *Plugin) processTranscribePage(
 			// write nothing and defer, like an unreachable endpoint.
 			log.Warn("transcribe: worker misconfigured, book deferred (no status written)", "book_id", bookID, "err", result.Error)
 			accum.recordDeferred(1)
+		case ok && transcribe.PathErrorCode(result.Error) == transcribe.PathErrTranscribeTimeout:
+			// The worker killed its decoder on this clip. Counted per file, and
+			// permanent only at the strike limit; see recordBookTimeout.
+			p.recordBookTimeout(store, log, &book, refByID[bookID], result.Error, now, accum)
 		case !ok || result.Error != "":
 			status, detail := statusWhisperError, "no whisper result"
 			if ok {
@@ -1674,6 +1722,55 @@ func classifyTranscribeError(remote bool, src, errText string) (status, detail s
 	}
 }
 
+// recordBookTimeout handles one book whose first file the worker reported as a
+// transcribe_timeout. The strike is counted on the FILE row (so the per-file op
+// shares it, and a replaced file starts again); only when the file reaches the
+// strike limit does the book itself get the permanent status. Below the limit
+// the book is deferred: nothing about it is written and the next run retries.
+//
+// A book with no book_file row (the Book.FilePath fallback) or no stored hash
+// has nowhere to keep a strike, so it can never become permanent here: it is
+// deferred and logged, and every run will send it again. The worker's own
+// deadline bounds the cost of each attempt, which is why that is tolerable.
+func (p *Plugin) recordBookTimeout(
+	store transcribePageStore,
+	log interface {
+		Info(string, ...any)
+		Warn(string, ...any)
+	},
+	book *database.Book, ref audioFileRef, errText string, now time.Time, accum *transcribeStatsAccum,
+) {
+	intros, hasCap := database.AsCapability[database.BookFileIntroStore](store)
+	if !hasCap || ref.BookFileID == "" || ref.StoredHash == "" {
+		log.Warn("transcribe: transcribe_timeout but no book_file row/hash to count strikes on, book deferred (no status written)",
+			"book_id", book.ID, "has_row", ref.BookFileID != "", "has_hash", ref.StoredHash != "", "has_capability", hasCap)
+		accum.recordDeferred(1)
+		return
+	}
+	detail := truncateDetail(errText)
+	out, err := intros.RecordIntroTimeout(book.ID, ref.BookFileID, database.IntroTimeoutStrike{
+		SourceHash: ref.StoredHash, RunOpID: accum.snapshot().RunOpID, Detail: detail, At: now,
+		Limit: transcribeTimeoutStrikeLimit,
+	})
+	switch {
+	case err != nil:
+		log.Warn("transcribe: recording a transcribe_timeout strike failed, book deferred", "book_id", book.ID, "file_id", ref.BookFileID, "err", err.Error())
+		accum.recordDeferred(1)
+	case out.Stale || out.Skipped:
+		log.Warn("transcribe: transcribe_timeout strike not recorded (file changed or already has a result), book deferred",
+			"book_id", book.ID, "file_id", ref.BookFileID, "stale", out.Stale)
+		accum.recordDeferred(1)
+	case out.Permanent:
+		log.Warn("transcribe: transcribe_timeout is now permanent for this book",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "limit", transcribeTimeoutStrikeLimit)
+		p.applyOutcome(store, log, book, statusTranscribeTimeout, detail, "", transcribe.IntroFields{}, now, accum)
+	default:
+		log.Warn("transcribe: transcribe_timeout strike recorded, book deferred to the next run",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "limit", transcribeTimeoutStrikeLimit)
+		accum.recordDeferred(1)
+	}
+}
+
 // ffmpegErrorTail returns the most diagnostic tail of ffmpeg stderr. ffmpeg
 // prints a long build banner before the actual error; the real reason is on the
 // last non-empty line(s). Returns at most ~200 chars.
@@ -1733,6 +1830,10 @@ type audioFileRef struct {
 	// value that disagrees with filehash.BookFileHash is a corrupted row, not a
 	// signal to rewrite.
 	StoredHash string
+	// TranscribeStatus is the per-file transcription status stored on the row
+	// ("" when none, and always "" for the Book.FilePath fallback). The book op
+	// reads it to honour a permanent per-file verdict the per-file op wrote.
+	TranscribeStatus string
 }
 
 // firstAudioFile returns the first (lowest disc/track) audio file of book.
@@ -1824,7 +1925,11 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (audioFileRef
 		h := sha256.Sum256([]byte(f.FilePath))
 		key = "path:" + hex.EncodeToString(h[:])
 	}
-	return audioFileRef{Path: f.FilePath, CacheKey: key, BookFileID: f.ID, StoredHash: f.FileHash}, nil
+	ref := audioFileRef{Path: f.FilePath, CacheKey: key, BookFileID: f.ID, StoredHash: f.FileHash}
+	if f.TranscribeStatus != nil {
+		ref.TranscribeStatus = *f.TranscribeStatus
+	}
+	return ref, nil
 }
 
 // wavCacheDir returns the directory used to cache extracted 90s WAV clips.
