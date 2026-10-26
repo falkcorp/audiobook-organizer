@@ -1,7 +1,7 @@
 // file: web/src/utils/revertResult.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 05f380f7-79a1-4953-8339-85979484c6a2
-// last-edited: 2026-09-12
+// last-edited: 2026-10-26
 
 import type { RevertOperationResult } from '../services/api';
 import type { UndoConflictReport } from '../services/versionApi';
@@ -20,6 +20,19 @@ export function describeRevertResult(result: Partial<RevertOperationResult> | nu
   }
   if (result?.message) return capitalize(result.message);
   return 'Operation reverted';
+}
+
+/**
+ * Whether an undo call (the preflight or the revert) was refused because the
+ * caller lacks a permission it needs: HTTP 403. The server refuses an undo of
+ * an operation the caller may not read, and of one whose journal carries one
+ * user's own data unless the caller may manage users, so a refused Undo stays
+ * refused and the control that offers it should go away rather than fail again
+ * on every click.
+ */
+export function isUndoRefused(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } } | null | undefined)?.response?.status;
+  return status === 403;
 }
 
 const formatTypeCounts = (counts: Record<string, number> | undefined): string =>

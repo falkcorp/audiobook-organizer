@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // Moves user state stranded under merged-away books onto their survivors.
 //
@@ -51,7 +51,7 @@ type repairMergedUserStateParams struct {
 
 func (p *Plugin) repairMergedUserStateDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              "maintenance.repair-merged-user-state",
+		ID:              merge.UserStateRepairOpID,
 		Preview:         sdk.PreviewSpec{Params: repairMergedUserStateParams{}},
 		Liveness:        sdk.LivenessNone,
 		ProgressTimeout: 30 * time.Minute,
@@ -60,7 +60,7 @@ func (p *Plugin) repairMergedUserStateDef() sdk.OperationDef {
 		Description:     "Finds listening state (position, finished, progress, last played, hide flag, bookmarks) still stored under merged-away or deleted books whose surviving book is known, and moves it onto the survivor with the merge conflict rule (finished sticky, newest position wins, last played = max, hide kept). Also completes the pending-repair records a failed merge left. Preview by default; apply=true moves. pending_only=true limits it to those records.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.repair-merged-user-state",
+		ConcurrencyKey:  merge.UserStateRepairOpID,
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         30 * time.Minute,

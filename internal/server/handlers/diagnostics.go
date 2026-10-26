@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.24.0
+// version: 1.30.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"log/slog"
 	"os"
 	"runtime/debug"
@@ -37,6 +38,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
@@ -78,6 +80,19 @@ type diagnosticsExportOpParams struct {
 // DiagnosticsAIDefID is the registry id of the AI-diagnostics OperationDef,
 // shared with its registration in package server so the two cannot drift.
 const DiagnosticsAIDefID = "diagnostics.ai-analyze"
+
+// DiagnosticsExportDefID is the registry id of the diagnostics export
+// OperationDef: the only operation whose result DownloadExport serves.
+const DiagnosticsExportDefID = "diagnostics.export"
+
+// ExportDownloadCheck decides whether the caller may be served the archive of
+// the export row, whose parsed result is res. DownloadExport calls it on the
+// very row (and result) it is about to serve, after reading both once, so the
+// verdict and the file cannot come from two different reads of the row. It
+// returns a non-empty refusal to answer 403 with that text, an error for a
+// failure to decide (answered 500: the archive is not served), or ("", nil) to
+// allow it.
+type ExportDownloadCheck func(c *gin.Context, row *database.OperationV2Row, res diagnostics.ExportResult) (refusal string, err error)
 
 // DiagnosticsAIOpParams is the param shape for DiagnosticsAIDefID.
 //
@@ -244,6 +259,31 @@ type DiagnosticsHandler struct {
 	registry       OperationsRegistry       // shared ops registry (EnqueueOp only)
 	expired        expiredCounter           // ?deep=true expired-row count: single-flight + short cache
 	pcache         pcacheCounter            // ?deep=true shared provider-answer cache count
+
+	// downloadCheck decides, per export row, who may be served the archive
+	// (WithDownloadCheck). With auth on, DownloadExport refuses every download
+	// while it is nil.
+	downloadCheck ExportDownloadCheck
+	// access reads an operation's free text the way the operation routes serve
+	// it (WithOpAccess); nil withholds text that could name a user.
+	access *opaccess.Repairs
+}
+
+// WithDownloadCheck wires the per-row scope check of DownloadExport. It is
+// required when auth is enabled: without it every download is refused (403), so
+// an unwired handler cannot serve an archive to a caller whose scope it never
+// compared with the export's.
+func (h *DiagnosticsHandler) WithDownloadCheck(check ExportDownloadCheck) *DiagnosticsHandler {
+	h.downloadCheck = check
+	return h
+}
+
+// WithOpAccess wires the reader of an operation's free text (its progress
+// message, which DownloadExport serves while the export runs). Unwired, such
+// text is withheld when it could name a user.
+func (h *DiagnosticsHandler) WithOpAccess(a *opaccess.Repairs) *DiagnosticsHandler {
+	h.access = a
+	return h
 }
 
 // NewDiagnosticsHandler constructs a DiagnosticsHandler. Field/param order:
@@ -310,7 +350,13 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 	// Return the id EnqueueOp minted. The client polls this against
 	// GET /operations/v2/:id and passes it back to DownloadExport, so it has to
 	// be the v2 run's own id — a separately-minted legacy id resolves at neither.
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params)
+	//
+	// The caller is stamped on the op as its actor: the export runs after this
+	// request is gone and narrows its operation rows and log lines to what that
+	// account may read (server.diagnosticsExportOptionsFor), re-read from the op
+	// row rather than taken from params, which a generic start can set.
+	opts := servermiddleware.ActorOptions(c)
+	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "diagnostics.export", params, opts...)
 	if enqErr != nil {
 		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
 		return
@@ -344,7 +390,10 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 		httputil.InternalError(c, "failed to load export operation", err)
 		return
 	}
-	if op == nil {
+	// Only a diagnostics export answers here. The id in the URL is any
+	// operation's, and a status, progress message or result path of another one
+	// (a Repairs run the caller may not read, say) is not this route's to serve.
+	if op == nil || op.DefID != DiagnosticsExportDefID {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
@@ -368,7 +417,7 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 		httputil.RespondWithSuccess(c, 202, gin.H{
 			"operation_id": opID,
 			"status":       op.Status,
-			"message":      op.ProgressMessage,
+			"message":      h.access.For(c).UserText(op.ProgressMessage),
 		})
 		return
 	}
@@ -378,13 +427,32 @@ func (h *DiagnosticsHandler) DownloadExport(c *gin.Context) {
 		return
 	}
 
-	var result map[string]string
-	if err := json.Unmarshal([]byte(*op.ResultData), &result); err != nil {
+	result, err := diagnostics.ParseExportResult(*op.ResultData)
+	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to parse result data")
 		return
 	}
 
-	zipPath := result["zip_path"]
+	// The scope decision is made here, on the row just read and parsed and no
+	// other: a check run earlier (a middleware that read the row itself) can see
+	// a different state than the one served, and one that cannot decide must not
+	// pass. With auth on, no check wired is a refusal.
+	if h.downloadCheck != nil {
+		refusal, err := h.downloadCheck(c, op, result)
+		if err != nil {
+			httputil.InternalError(c, "failed to check who this export was built for", err)
+			return
+		}
+		if refusal != "" {
+			httputil.RespondWithForbidden(c, refusal)
+			return
+		}
+	} else if config.AppConfig.EnableAuth {
+		httputil.RespondWithForbidden(c, "diagnostics export downloads are not available: no scope check is wired")
+		return
+	}
+
+	zipPath := result.ZipPath
 	if zipPath == "" {
 		httputil.RespondWithInternalError(c, "zip path not found in result")
 		return
@@ -455,7 +523,10 @@ func (h *DiagnosticsHandler) GetAIResults(c *gin.Context) {
 	}
 
 	op, err := store.GetOperationV2(opID)
-	if err != nil || op == nil {
+	// Only a diagnostics AI run answers here. The id in the URL is any
+	// operation's, and a status, progress message and result of another one
+	// (a Repairs run the caller may not read, say) is not this route's to serve.
+	if err != nil || op == nil || op.DefID != DiagnosticsAIDefID {
 		httputil.RespondWithNotFound(c, "operation", opID)
 		return
 	}
@@ -521,8 +592,18 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 	}
 
 	op, err := store.GetOperationV2(req.OperationID)
-	if err != nil || op == nil {
+	// Only a diagnostics AI run answers here, as GetAIResults does: the id in
+	// the body is any operation's, and another one's result (a Repairs run's
+	// rows, say) is not a list of suggestions to read or apply.
+	if err != nil || op == nil || op.DefID != DiagnosticsAIDefID {
 		httputil.RespondWithNotFound(c, "operation", req.OperationID)
+		return
+	}
+	// Suggestions exist only once the run has finished; a queued, running,
+	// failed or canceled run has none, and a half-written result must not be
+	// applied.
+	if op.Status != "completed" {
+		httputil.RespondWithConflict(c, "the analysis has not completed")
 		return
 	}
 

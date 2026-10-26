@@ -1,5 +1,5 @@
 // file: internal/undo/user_data_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f9c2d71-6a4e-4b8f-9e15-0d7a2c6b4e83
 // last-edited: 2026-10-25
 
@@ -17,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // TestIsUserDataChangeType pins the user-data set: the types whose rows carry
@@ -42,6 +44,33 @@ func TestIsUserDataChangeType(t *testing.T) {
 	}
 	for _, ct := range []string{ChangeTypeBookFileMove, ChangeTypeMergeCombineJournal, "metadata_update", "", "invented_type"} {
 		assert.False(t, IsUserDataChangeType(ct), ct)
+	}
+}
+
+// TestClassifyChangeType: every constant this package classifies is known,
+// with its user-data answer; the library-data literals other packages journal
+// are known and not user data; anything else is unknown, which is what
+// repairs.Writer refuses.
+func TestClassifyChangeType(t *testing.T) {
+	for ct, want := range changeTypeHoldsUserData {
+		userData, known := ClassifyChangeType(ct)
+		assert.True(t, known, ct)
+		assert.Equal(t, want, userData, ct)
+		assert.Equal(t, want, IsUserDataChangeType(ct), ct)
+	}
+	for _, ct := range []string{"metadata_update", "series_merge", "series_delete", database.ChangeTypeBookFileRepoint} {
+		userData, known := ClassifyChangeType(ct)
+		assert.True(t, known, ct)
+		assert.False(t, userData, ct)
+	}
+	for ct := range libraryDataLiteralChangeTypes {
+		_, isConst := changeTypeHoldsUserData[ct]
+		assert.False(t, isConst, "%s is a constant of this package: classify it there, not as a literal", ct)
+	}
+	for _, ct := range []string{"", "invented_type", "unclassified_batman_edit"} {
+		userData, known := ClassifyChangeType(ct)
+		assert.False(t, known, ct)
+		assert.False(t, userData, ct)
 	}
 }
 

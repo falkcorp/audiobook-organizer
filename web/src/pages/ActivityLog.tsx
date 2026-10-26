@@ -1,9 +1,9 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.37.0
+// version: 2.38.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { describeRevertResult, describeUndoPreflight } from '../utils/revertResult';
+import { describeRevertResult, describeUndoPreflight, isUndoRefused } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -354,6 +354,9 @@ export default function ActivityLog() {
 
   // Revert dialog
   const [revertEntry, setRevertEntry] = useState<ActivityEntry | null>(null);
+  // Operations the server refused to preflight an undo for (403): their Undo
+  // control is not offered again, since the same caller is refused every time.
+  const [undoRefused, setUndoRefused] = useState<ReadonlySet<string>>(() => new Set());
   // The preflight-derived confirmation for revertEntry: the real restorable
   // count and the record-only rows, never a blanket "undo all changes".
   const [revertPlan, setRevertPlan] = useState('');
@@ -974,6 +977,10 @@ export default function ActivityLog() {
       setRevertEntry(target);
     } catch (err) {
       console.error('Failed to load undo preflight', err);
+      if (isUndoRefused(err)) {
+        const id = target.operation_id;
+        setUndoRefused((prev) => new Set(prev).add(id));
+      }
       setToast(describeError(err));
     }
   };
@@ -1687,6 +1694,7 @@ export default function ActivityLog() {
         )}
         <TableCell>
           {entry.operation_id &&
+            !undoRefused.has(entry.operation_id) &&
             (entry.type === 'organize_completed' || entry.type === 'metadata_applied') && (
               <Tooltip title="Revert operation">
                 <IconButton size="small" onClick={() => void openRevert(entry)}>

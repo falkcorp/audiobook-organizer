@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package repairs
 
@@ -50,6 +50,9 @@ type enqueued struct {
 	// actorMethod its opsregistry.WithActorAuthMethod.
 	actor       string
 	actorMethod string
+	// ownerApply is whether the op carries opsregistry.WithOwnerApply, the mark
+	// repairs.apply's owner grant is redeemed under.
+	ownerApply bool
 }
 
 type fakeEnqueuer struct {
@@ -70,7 +73,7 @@ func (e *fakeEnqueuer) EnqueueOp(_ context.Context, defID string, params any, op
 	for _, o := range opts {
 		o(&eo)
 	}
-	e.calls = append(e.calls, enqueued{defID: defID, params: data, actor: eo.ActorUserID, actorMethod: eo.ActorAuthMethod})
+	e.calls = append(e.calls, enqueued{defID: defID, params: data, actor: eo.ActorUserID, actorMethod: eo.ActorAuthMethod, ownerApply: eo.OwnerApply})
 	if e.fixedID != "" {
 		return e.fixedID, nil
 	}

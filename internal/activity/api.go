@@ -1,7 +1,7 @@
 // file: internal/activity/api.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 9a4f2e1b-3c7d-4b8e-a6f0-5d2c8e1b7a3f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-25
 
 package activity
 
@@ -34,17 +34,24 @@ func LogBatch(w *Writer, operationID, batchType, source string, item BatchItem) 
 	if w == nil {
 		return
 	}
+	// An item that names a user keeps its own batch (BatchKey.UserData) and the
+	// flushed entry is tagged TagUserData; see Writer.sendEntry.
+	userData := NamesUserText(item.Name) || NamesUserText(item.Detail)
 	if operationID == "" || !batchableTypes[batchType] {
 		// Fallback: emit as a plain debug entry; non-blocking.
-		select {
-		case w.ch <- database.ActivityEntry{
+		entry := database.ActivityEntry{
 			Tier:        "debug",
 			Type:        batchType,
 			Level:       "info",
 			Source:      source,
 			OperationID: operationID,
 			Summary:     item.Name,
-		}:
+		}
+		if userData {
+			entry.Tags = append(entry.Tags, TagUserData)
+		}
+		select {
+		case w.ch <- entry:
 		default:
 			// channel full — drop silently, same policy as sendEntry for debug
 		}
@@ -54,6 +61,7 @@ func LogBatch(w *Writer, operationID, batchType, source string, item BatchItem) 
 		Type:        batchType,
 		Source:      source,
 		OperationID: operationID,
+		UserData:    userData,
 	}, item)
 }
 

@@ -1,6 +1,7 @@
 // file: internal/activity/batcher.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f3c1a2e-8b4d-4e9f-a5c6-2d0e3b7f9a1c
+// last-edited: 2026-10-25
 
 package activity
 
@@ -21,10 +22,16 @@ type BatchItem struct {
 }
 
 // BatchKey identifies a group of related entries to merge.
+//
+// UserData is part of the key so a group of lines that name a user (the
+// TagUserData lines Writer withholds from callers without users.manage) never
+// shares a batch with lines that do not: the flushed entry carries one tag set,
+// so a mixed batch would either leak the user lines or hide the plain ones.
 type BatchKey struct {
 	Type        string
 	Source      string
 	OperationID string
+	UserData    bool
 }
 
 // BatchDetails is stored in ActivityEntry.Details for batched entries.
@@ -183,6 +190,11 @@ func (b *ActivityBatcher) flushKey(key BatchKey) {
 		OperationID: key.OperationID,
 		Summary:     summary,
 		Details:     details,
+	}
+	if key.UserData {
+		// Details.Items holds the lines themselves, so the entry is user data
+		// even though the summary ("Batched N ...") names nobody.
+		entry.Tags = append(entry.Tags, TagUserData)
 	}
 
 	select {

@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.19.0
+// version: 2.22.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-10
+// last-edited: 2026-10-26
 
 package database
 
@@ -47,7 +47,23 @@ type OperationV2Row struct {
 	// registry.WithActorAuthMethod; "" for ops enqueued without one and for
 	// every row written before 2026-10-07. Repairs owner grants are honoured
 	// only in an op enqueued by a verified Cloudflare Access request.
-	ActorAuthMethod   string `json:",omitempty"`
+	ActorAuthMethod string `json:",omitempty"`
+	// ActorPermissions is the permission set the request that enqueued the op
+	// held (an API key's scopes already intersected with its account's roles),
+	// stamped by registry.WithActorPermissions and never read from params. A job
+	// that runs after its request is gone (the diagnostics export) caps what it
+	// reads at this set, so a narrowly scoped key does not get the whole account's
+	// reach. nil means no set was recorded (an op enqueued without one, and every
+	// row written before 2026-10-26); a non-nil empty slice is a recorded set
+	// that held nothing, which caps the job at nothing, so the field is stored
+	// without omitempty and the two read back differently (null and []).
+	ActorPermissions []string
+	// OwnerApply is true only for the op the Repairs owner-apply handler
+	// enqueued (registry.WithOwnerApply), after the owner's own click through
+	// Cloudflare Access. A repairs.apply op's owner grant is redeemed only on a
+	// row that has it; an op enqueued by any other route, the generic start and
+	// retry routes included, never does, whatever its params or actor.
+	OwnerApply        bool `json:",omitempty"`
 	TraceID           string
 	SpanID            string
 	ParentSpanID      *string

@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.113.1
+// version: 2.114.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-23
+// last-edited: 2026-10-25
 
 package server
 
@@ -79,6 +79,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/fpworker"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
@@ -331,6 +332,11 @@ type Server struct {
 	// repairFixers is the Repairs lane's fixer registry (internal/repairs),
 	// owned by the maintenance plugin.
 	repairFixers *repairs.Registry
+	// repairsOpAccessCheck is the one opaccess.Repairs every operations route
+	// shares (v1 handlers, /api/v3/ops, the activity reads): built on first use
+	// by repairsOpAccess, never twice.
+	repairsOpAccessCheck *opaccess.Repairs
+	repairsOpAccessOnce  sync.Once
 	// scanStandDownGateOverride replaces the scan stand-down gate in tests; nil
 	// in production (see scanGate in metadata_scan_standdown.go).
 	scanStandDownGateOverride opsregistry.ScanStandDownGate

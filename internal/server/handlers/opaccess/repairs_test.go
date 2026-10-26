@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.3.0
+// version: 1.7.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package opaccess
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -247,8 +248,11 @@ func TestReader_MayReadChange(t *testing.T) {
 	}
 }
 
-// MayUndoChange is MayReadChange without the user-data leg: the undo report
-// names rows, never their values, so a caller who may run the fixer keeps it.
+// MayUndoChange is the predicate the undo report and the revert both apply, and
+// MayReadChange is the same one: a row that carries one user's own data needs
+// users.manage on top of the fixer's permissions, because undoing it writes
+// another user's listening state back. An editor who may run the fixer is
+// refused its user-data rows (the revert used to let him undo them).
 func TestReader_MayUndoChange(t *testing.T) {
 	reg := fixers{"plain": scopedFixer{}}
 	ops := &opRows{rows: map[string]*database.OperationV2Row{
@@ -256,14 +260,19 @@ func TestReader_MayUndoChange(t *testing.T) {
 	}}
 	view := []auth.Permission{auth.PermLibraryView}
 	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	editUsers := append([]auth.Permission{auth.PermUsersManage}, edit...)
 	for name, tc := range map[string]struct {
 		ch   *database.OperationChange
 		held []auth.Permission
 		want bool
 	}{
-		"stamped follow, editor":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, edit, true},
+		"stamped follow, editor":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, edit, false},
+		"stamped follow, editor+users":      {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, editUsers, true},
+		"stamped content follow, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserContentFollow, Source: "plain"}, edit, false},
+		"stamped file move, editor":         {&database.OperationChange{ChangeType: undo.ChangeTypeBookFileMove, Source: "plain"}, edit, true},
 		"stamped follow, viewer":            {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "plain"}, view, false},
-		"unstamped follow of op, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, edit, true},
+		"unstamped follow of op, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, edit, false},
+		"unstamped follow of op, ed+users":  {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, editUsers, true},
 		"unstamped follow of op, viewer":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-plain-apply"}, view, false},
 		"unstamped follow, no op, editor":   {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, OperationID: "op-gone"}, edit, false},
 		"removed fixer's follow, editor":    {&database.OperationChange{ChangeType: undo.ChangeTypeUserStateFollow, Source: "gone"}, edit, false},
@@ -357,4 +366,180 @@ func TestReader_LookupError(t *testing.T) {
 	require.False(t, r.MayUndoChange(&database.OperationChange{OperationID: "op-unreadable", ChangeType: "metadata_update"}))
 	require.False(t, r.MayReadChange(&database.OperationChange{OperationID: "op-unreadable", ChangeType: "metadata_update"}))
 	require.ErrorContains(t, r.LookupError(), "invented store failure")
+}
+
+// The v3 run record states its fixer the way a v2 row does (params, else
+// result), and the two surfaces give one verdict.
+func TestReader_MayReadRunAgreesWithRows(t *testing.T) {
+	reg := fixers{"scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
+	edit := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata}
+	admin := []auth.Permission{auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage}
+	for name, tc := range map[string]struct {
+		rec  *database.RunRecord
+		held []auth.Permission
+		want bool
+	}{
+		"nil":                       {nil, edit, true},
+		"non-repairs":               {&database.RunRecord{DefID: "library.scan"}, nil, true},
+		"params, editor":            {&database.RunRecord{DefID: repairs.PlanOpID, Params: []byte(`{"fixer_id":"scoped"}`)}, edit, false},
+		"params, admin":             {&database.RunRecord{DefID: repairs.PlanOpID, Params: []byte(`{"fixer_id":"scoped"}`)}, admin, true},
+		"result only, admin":        {&database.RunRecord{DefID: repairs.ApplyOpID, Result: []byte(`{"fixer_id":"scoped"}`)}, admin, true},
+		"no fixer, admin":           {&database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`{}`)}, admin, false},
+		"unparseable params, admin": {&database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`nope`)}, admin, false},
+	} {
+		c, _ := ctxHolding()
+		require.Equal(t, tc.want, NewRepairs(reg, noOps, holdsOnly(tc.held...)).For(c).MayReadRun(tc.rec), name)
+	}
+}
+
+// The fixer-level verdict the event broker carries on a message: a fixer id of
+// a non-repairs def is never asked about, and an empty fixer of a repairs def is
+// refused.
+func TestReader_MayReadFixer(t *testing.T) {
+	a := NewRepairs(fixers{"plain": scopedFixer{}}, noOps, holdsOnly(auth.PermLibraryEditMetadata))
+	c, _ := ctxHolding()
+	r := a.For(c)
+	require.True(t, r.MayReadFixer("library.scan", ""))
+	require.False(t, r.MayReadFixer(repairs.ApplyOpID, ""))
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.False(t, r.MayReadFixer(repairs.PlanOpID, "gone"))
+}
+
+// A stream reader asks the live check, not the connect-time one, and Refresh
+// makes it ask again: a permission lost after the reader was made is lost for
+// the next verdict. A request reader (For) keeps what it was given.
+func TestReader_ForStreamAsksTheLiveCheckAgainAfterRefresh(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}}
+	ops := &opRows{rows: map[string]*database.OperationV2Row{}}
+	connected := func(*gin.Context, auth.Permission) bool { return true }
+	lost := false
+	live := func(_ *gin.Context, p auth.Permission) bool { return !lost }
+	access := NewRepairs(reg, ops, connected).WithLiveHolds(live)
+	c, _ := ctxHolding()
+
+	stream := access.ForStream(c)
+	request := access.For(c)
+	require.True(t, stream.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.True(t, stream.MayReadUserData())
+	require.True(t, request.MayReadFixer(repairs.ApplyOpID, "plain"))
+
+	lost = true
+	require.True(t, stream.MayReadFixer(repairs.ApplyOpID, "plain"), "the verdict is cached until Refresh")
+	stream.Refresh()
+	require.False(t, stream.MayReadFixer(repairs.ApplyOpID, "plain"), "the live check says the permission is gone")
+	require.False(t, stream.MayReadUserData())
+	require.True(t, request.MayReadFixer(repairs.ApplyOpID, "plain"), "a request reader keeps its connect-time answer")
+
+	// With no live check set, a stream reader falls back to the one it has.
+	plain := NewRepairs(reg, ops, connected).ForStream(c)
+	plain.Refresh()
+	require.True(t, plain.MayReadFixer(repairs.ApplyOpID, "plain"))
+}
+
+// fakeClock is a clock a test moves by hand.
+type fakeClock struct{ t time.Time }
+
+func (f *fakeClock) now() time.Time          { return f.t }
+func (f *fakeClock) advance(d time.Duration) { f.t = f.t.Add(d) }
+
+// A stream's progress events each refresh the reader, and each refresh used to
+// cost a live question to the store per permission. With a recheck bound the
+// questions are asked once per bound, not once per event, and what was last
+// answered stands in between: a role lowered inside the window is served until
+// it passes, and not a refresh longer.
+func TestReader_StreamRecheckBoundsTheLiveQuestions(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}}
+	ops := &opRows{rows: map[string]*database.OperationV2Row{}}
+	connected := func(*gin.Context, auth.Permission) bool { return true }
+	asked := 0
+	lost := false
+	live := func(_ *gin.Context, _ auth.Permission) bool { asked++; return !lost }
+	clock := &fakeClock{t: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
+	access := NewRepairs(reg, ops, connected).WithLiveHolds(live).WithLiveRecheck(5*time.Second, clock.now)
+	c, _ := ctxHolding()
+	r := access.ForStream(c)
+
+	r.Refresh()
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.True(t, r.MayReadUserData())
+	first := asked
+	require.Positive(t, first, "the first verdicts are asked live")
+
+	// A burst of events inside the window: no new questions, verdicts stand.
+	lost = true
+	for i := 0; i < 50; i++ {
+		clock.advance(50 * time.Millisecond)
+		r.Refresh()
+		require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"), "event %d is inside the window", i)
+		require.True(t, r.MayReadUserData())
+	}
+	require.Equal(t, first, asked, "50 events inside the window put no question to the store")
+
+	// Past the window the next refresh asks again and the demotion lands.
+	clock.advance(5 * time.Second)
+	r.Refresh()
+	require.False(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.False(t, r.MayReadUserData())
+	require.Greater(t, asked, first)
+	afterDemotion := asked
+
+	// And it is bounded again from there.
+	r.Refresh()
+	require.False(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.Equal(t, afterDemotion, asked)
+}
+
+// A verdict is asked live once per permission between refreshes, however many
+// fixers ask for it (each fixer's own verdict is cached, but two fixers that
+// need the same permission are two verdicts).
+func TestReader_StreamAsksEachPermissionOncePerRefresh(t *testing.T) {
+	need := []auth.Permission{auth.PermLibraryEditMetadata}
+	reg := fixers{"a": scopedFixer{perms: need}, "b": scopedFixer{perms: need}}
+	ops := &opRows{rows: map[string]*database.OperationV2Row{}}
+	connected := func(*gin.Context, auth.Permission) bool { return true }
+	asked := map[auth.Permission]int{}
+	live := func(_ *gin.Context, p auth.Permission) bool { asked[p]++; return true }
+	access := NewRepairs(reg, ops, connected).WithLiveHolds(live)
+	c, _ := ctxHolding()
+	r := access.ForStream(c)
+
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "a"))
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "b"))
+	require.Equal(t, 1, asked[auth.PermLibraryEditMetadata], "two fixers needing one permission ask it once")
+	r.Refresh()
+	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "b"))
+	require.Equal(t, 2, asked[auth.PermLibraryEditMetadata], "and again after a refresh")
+}
+
+// StreamOpen is the stream's question "does my caller still exist": false once
+// the session check says no, asked at the recheck bound like the permissions, and
+// always true for a reader with no session check or one that is not a stream's.
+func TestReader_StreamOpenEndsAStreamWhoseCredentialIsGone(t *testing.T) {
+	reg := fixers{}
+	ops := &opRows{rows: map[string]*database.OperationV2Row{}}
+	connected := func(*gin.Context, auth.Permission) bool { return true }
+	standing := true
+	asked := 0
+	alive := func(*gin.Context) bool { asked++; return standing }
+	clock := &fakeClock{t: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
+	access := NewRepairs(reg, ops, connected).WithLiveSession(alive).WithLiveRecheck(5*time.Second, clock.now)
+	c, _ := ctxHolding()
+	stream := access.ForStream(c)
+
+	require.True(t, stream.StreamOpen())
+	standing = false
+	for i := 0; i < 20; i++ {
+		clock.advance(100 * time.Millisecond)
+		require.True(t, stream.StreamOpen(), "inside the window the answer stands")
+	}
+	require.Equal(t, 1, asked, "20 events inside the window ask once")
+	clock.advance(5 * time.Second)
+	require.False(t, stream.StreamOpen(), "past the window the credential is asked again and the stream ends")
+	require.False(t, stream.StreamOpen(), "and it stays ended")
+
+	// Nothing to ask: open. A request reader is never ended by it.
+	require.True(t, NewRepairs(reg, ops, connected).ForStream(c).StreamOpen(), "no session check set")
+	require.True(t, access.For(c).StreamOpen(), "a request reader is not a stream")
+	var none *Reader
+	require.True(t, none.StreamOpen(), "an unwired reader does not end a stream")
 }
