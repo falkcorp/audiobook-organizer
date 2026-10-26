@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-26
 
@@ -967,7 +967,7 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 	c.Writer.Flush()
 
 	notify := c.Request.Context().Done()
-	feed := &opEventFilter{h: h, reader: h.repairsAccess.For(c), seen: map[string]bool{}}
+	feed := &opEventFilter{h: h, reader: h.repairsAccess.ForStream(c), seen: map[string]opEventScope{}}
 	for {
 		select {
 		case <-notify:
@@ -991,14 +991,29 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 	}
 }
 
-// opEventFilter keeps the events of a Repairs op the caller may not read off
-// their /operations/events stream: an op.created or op.terminal event names the
-// op and its def, and op.log carries the engine's log lines (the owner's user id
-// on an owner apply). The verdict for an op is read once per stream.
+// opEventFilter keeps what the caller may not read off their /operations/events
+// stream: the events of a Repairs op (op.created and op.terminal name the op
+// and its def, op.log carries the engine's log lines) and any op.log line that
+// names a user (activity.NamesOthersUserLog), for a caller without users.manage.
+//
+// The stream stays open for hours, so no verdict about the caller outlives its
+// event: each decision refreshes the reader (opaccess.Reader.Refresh) and asks
+// the live permission check, so a caller whose role was lowered or whose
+// account was disabled after the stream opened stops receiving them at the next
+// event. What is remembered per op (seen) is only what the op is -- not a Repairs
+// op, or a Repairs op's definition and fixer -- never what the caller may do.
 type opEventFilter struct {
 	h      *OperationsV2Handler
 	reader *opaccess.Reader
-	seen   map[string]bool // op id -> may receive
+	seen   map[string]opEventScope // op id -> what the op is
+}
+
+// opEventScope is what an op's row says about it: not a Repairs op, or a
+// Repairs op of a definition and a fixer ("" when it states none).
+type opEventScope struct {
+	repairs bool
+	defID   string
+	fixerID string
 }
 
 // mayReceive reports whether ev may go to this stream. An event that names no
@@ -1012,11 +1027,14 @@ func (f *opEventFilter) mayReceive(ev opsregistry.Event) bool {
 		return true
 	}
 	// An op.log line that carries other users' own data goes to a stream whose
-	// caller may read it. This is the line's verdict, not its op's, so it is not
-	// cached in seen and it covers the log of every operation.
+	// caller may read it. This is the line's verdict, not its op's, and it covers
+	// the log of every operation.
 	if ev.Name == "op.log" {
-		if msg, _ := m["message"].(string); activity.NamesOthersUserLog("", msg) && !f.reader.MayReadUserData() {
-			return false
+		if msg, _ := m["message"].(string); activity.NamesOthersUserLog("", msg) {
+			f.reader.Refresh()
+			if !f.reader.MayReadUserData() {
+				return false
+			}
 		}
 	}
 	id, _ := m["op_id"].(string)
@@ -1026,24 +1044,32 @@ func (f *opEventFilter) mayReceive(ev opsregistry.Event) bool {
 	if id == "" {
 		return true
 	}
-	if v, ok := f.seen[id]; ok {
-		return v
+	sc, ok := f.seen[id]
+	if !ok {
+		if defID, _ := m["def_id"].(string); defID != "" && !opaccess.IsRepairsOp(defID) {
+			f.seen[id] = opEventScope{}
+			return true
+		}
+		if f.h.opsStore == nil {
+			// No store, so no repairs op row exists to protect.
+			return true
+		}
+		row, err := f.h.opsStore.GetOperationV2(id)
+		if err != nil || row == nil {
+			return false
+		}
+		sc = opEventScope{repairs: opaccess.IsRepairsOp(row.DefID), defID: row.DefID, fixerID: opaccess.RowFixerID(row)}
+		// A Repairs op that names no fixer yet may name it once it has a result,
+		// so only a settled scope is remembered.
+		if !sc.repairs || sc.fixerID != "" {
+			f.seen[id] = sc
+		}
 	}
-	if defID, _ := m["def_id"].(string); defID != "" && !opaccess.IsRepairsOp(defID) {
-		f.seen[id] = true
+	if !sc.repairs {
 		return true
 	}
-	if f.h.opsStore == nil {
-		// No store, so no repairs op row exists to protect.
-		return true
-	}
-	row, err := f.h.opsStore.GetOperationV2(id)
-	if err != nil || row == nil {
-		return false
-	}
-	v := f.reader.MayRead(row)
-	f.seen[id] = v
-	return v
+	f.reader.Refresh()
+	return f.reader.MayReadFixer(sc.defID, sc.fixerID)
 }
 
 // --- helpers ---

@@ -1,11 +1,14 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
 // last-edited: 2026-10-26
 
 package server
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -76,6 +79,43 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 	}
 }
 
+// permHoldsLive is permHolds for a request that outlives its permission check:
+// an event stream, which stays open for hours. It answers permHolds' question
+// (the permissions the request was authenticated with, which for an API key are
+// already narrowed to the key's scopes) and then asks the account's current
+// roles, so a caller whose role was lowered, or whose account was disabled or
+// removed after the stream opened, stops holding what it lost. It can only
+// narrow: a permission granted after the stream opened is not held until the
+// caller reconnects. Auth disabled and a first run hold everything, as
+// permHolds does.
+func (s *Server) permHoldsLive() repairshandler.PermissionCheck {
+	connected := s.permHolds()
+	if !config.AppConfig.EnableAuth {
+		return connected
+	}
+	store := s.storeForWiring()
+	return func(c *gin.Context, p auth.Permission) bool {
+		if !connected(c, p) {
+			return false
+		}
+		if n, err := store.CountUsers(); err == nil && n == 0 {
+			return true
+		}
+		u, ok := auth.UserFromContext(c.Request.Context())
+		if !ok || u == nil {
+			return false
+		}
+		fresh, err := store.GetUserByID(u.ID)
+		if err != nil || fresh == nil {
+			return false
+		}
+		if status := strings.ToLower(strings.TrimSpace(fresh.Status)); status != "" && status != "active" {
+			return false
+		}
+		return slices.Contains(servermiddleware.EffectivePermissionsFor(store, fresh), p)
+	}
+}
+
 // repairsOpAccess is the check the generic operations routes apply to a
 // Repairs operation's data (result, logs, change journal, listings): the
 // caller must hold the op's fixer's permissions, as the Repairs routes require
@@ -86,7 +126,7 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // route family cannot be left on a stale or differently built check.
 func (s *Server) repairsOpAccess() *opaccess.Repairs {
 	s.repairsOpAccessOnce.Do(func() {
-		s.repairsOpAccessCheck = s.newRepairsOpAccess(s.permHolds())
+		s.repairsOpAccessCheck = s.newRepairsOpAccess(s.permHolds()).WithLiveHolds(s.permHoldsLive())
 	})
 	return s.repairsOpAccessCheck
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-26
 
@@ -70,6 +70,9 @@ type Repairs struct {
 	fixers FixerLookup
 	ops    OpLookup
 	holds  func(c *gin.Context, p auth.Permission) bool
+	// live, when set, answers holds again from the account's current state, for
+	// a reader that outlives its request (WithLiveHolds, ForStream).
+	live func(c *gin.Context, p auth.Permission) bool
 }
 
 // FixerLookup is the part of *repairs.Registry the access check needs.
@@ -146,11 +149,56 @@ type Reader struct {
 	userData *bool
 	// lookupErr is the first op-row read that failed (unstampedOpVerdict).
 	lookupErr error
+	// live makes the reader ask a.live instead of a.holds (ForStream).
+	live bool
 }
 
 // For binds the check to one request.
 func (a *Repairs) For(c *gin.Context) *Reader {
 	return &Reader{a: a, c: c, verdict: map[string]bool{}, opVerdict: map[string]opScope{}}
+}
+
+// WithLiveHolds sets the way a stream asks "does the caller hold p now": the
+// connect-time answer (holds) narrowed by what the account holds at the moment
+// of asking, so a caller whose role was lowered or whose account was disabled
+// after the stream opened stops being served (server.permHoldsLive). It returns
+// a.
+func (a *Repairs) WithLiveHolds(live func(c *gin.Context, p auth.Permission) bool) *Repairs {
+	a.live = live
+	return a
+}
+
+// ForStream is For for a reader that lives as long as an event stream: its
+// questions go to the live check when one is set (WithLiveHolds), and the
+// caller calls Refresh before each verdict, so a stream cannot keep serving what
+// the account lost the right to read after it connected.
+func (a *Repairs) ForStream(c *gin.Context) *Reader {
+	r := a.For(c)
+	r.live = a != nil && a.live != nil
+	return r
+}
+
+// Refresh forgets every verdict the reader has cached (per fixer, per
+// operation row, users.manage), so the next question is asked again. A stream
+// calls it before each event it decides on; a reader of one request never
+// needs it.
+func (r *Reader) Refresh() {
+	if r == nil {
+		return
+	}
+	r.verdict = map[string]bool{}
+	r.opVerdict = map[string]opScope{}
+	r.userData = nil
+	r.lookupErr = nil
+}
+
+// held asks whether the caller holds p: the live check for a stream reader,
+// else the connect-time one.
+func (r *Reader) held(p auth.Permission) bool {
+	if r.live {
+		return r.a.live(r.c, p)
+	}
+	return r.a.holds(r.c, p)
 }
 
 // MayRead reports whether the caller may read row's data: always for an
@@ -328,7 +376,7 @@ func (r *Reader) MayReadUserData() bool {
 // admin every account.
 func (r *Reader) mayReadUserData() bool {
 	if r.userData == nil {
-		v := r.a.holds(r.c, auth.PermUsersManage)
+		v := r.held(auth.PermUsersManage)
 		r.userData = &v
 	}
 	return *r.userData
@@ -368,7 +416,7 @@ func (r *Reader) fixerPermitted(id string) bool {
 	}
 	ok := true
 	for _, p := range perms {
-		if !r.a.holds(r.c, p) {
+		if !r.held(p) {
 			ok = false
 			break
 		}
@@ -438,7 +486,7 @@ func (r *Reader) CheckStart(defID string, params []byte) *StartRefusal {
 		return &StartRefusal{Status: 404, Message: id}
 	}
 	for _, p := range repairs.RequiredPermissions(f) {
-		if !r.a.holds(r.c, p) {
+		if !r.held(p) {
 			return &StartRefusal{Missing: p}
 		}
 	}

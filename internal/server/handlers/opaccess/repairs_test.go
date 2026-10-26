@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
 // last-edited: 2026-10-26
 
@@ -402,4 +402,35 @@ func TestReader_MayReadFixer(t *testing.T) {
 	require.False(t, r.MayReadFixer(repairs.ApplyOpID, ""))
 	require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"))
 	require.False(t, r.MayReadFixer(repairs.PlanOpID, "gone"))
+}
+
+// A stream reader asks the live check, not the connect-time one, and Refresh
+// makes it ask again: a permission lost after the reader was made is lost for
+// the next verdict. A request reader (For) keeps what it was given.
+func TestReader_ForStreamAsksTheLiveCheckAgainAfterRefresh(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}}
+	ops := &opRows{rows: map[string]*database.OperationV2Row{}}
+	connected := func(*gin.Context, auth.Permission) bool { return true }
+	lost := false
+	live := func(_ *gin.Context, p auth.Permission) bool { return !lost }
+	access := NewRepairs(reg, ops, connected).WithLiveHolds(live)
+	c, _ := ctxHolding()
+
+	stream := access.ForStream(c)
+	request := access.For(c)
+	require.True(t, stream.MayReadFixer(repairs.ApplyOpID, "plain"))
+	require.True(t, stream.MayReadUserData())
+	require.True(t, request.MayReadFixer(repairs.ApplyOpID, "plain"))
+
+	lost = true
+	require.True(t, stream.MayReadFixer(repairs.ApplyOpID, "plain"), "the verdict is cached until Refresh")
+	stream.Refresh()
+	require.False(t, stream.MayReadFixer(repairs.ApplyOpID, "plain"), "the live check says the permission is gone")
+	require.False(t, stream.MayReadUserData())
+	require.True(t, request.MayReadFixer(repairs.ApplyOpID, "plain"), "a request reader keeps its connect-time answer")
+
+	// With no live check set, a stream reader falls back to the one it has.
+	plain := NewRepairs(reg, ops, connected).ForStream(c)
+	plain.Refresh()
+	require.True(t, plain.MayReadFixer(repairs.ApplyOpID, "plain"))
 }

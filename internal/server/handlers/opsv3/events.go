@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package opsv3
 
@@ -331,10 +331,6 @@ func (b *Broker) recheckWatched() {
 	}
 }
 
-// publish numbers v, stores it in the ring and offers it to every client
-// without blocking.
-func (b *Broker) publish(v RunView) { b.publishScoped(v, runScope{}) }
-
 // runScope is the Repairs fixer a published run belongs to; the zero value is a
 // run that is not a Repairs run.
 type runScope struct {
@@ -352,6 +348,9 @@ func scopeOf(rec *database.RunRecord) runScope {
 	return runScope{repairs: true, defID: rec.DefID, fixerID: opaccess.RunFixerID(rec)}
 }
 
+// publishScoped numbers v, stores it in the ring with the Repairs scope sc it
+// is checked against per client, and offers it to every client without
+// blocking.
 func (b *Broker) publishScoped(v RunView, sc runScope) {
 	b.mu.Lock()
 	b.seq++
@@ -553,8 +552,11 @@ func (h *Handler) Events(c *gin.Context) {
 	done := c.Request.Context().Done()
 	closing := h.d.Closing // nil blocks forever
 	// A Repairs run the caller may not read never goes to this stream, whether it
-	// is live or replayed from the ring. The verdict is per fixer, read once.
-	reader := h.d.RepairsAccess.For(c)
+	// is live or replayed from the ring. The verdict is asked again for every
+	// run event (live, opaccess.Repairs.ForStream): the stream stays open for
+	// hours, and a caller whose role was lowered, or whose account was disabled,
+	// after it opened must stop receiving what it may no longer read.
+	reader := h.d.RepairsAccess.ForStream(c)
 	// A subscribe that queued a replay or a resync has something to send now.
 	cl.signal()
 	for {
@@ -576,8 +578,11 @@ func (h *Handler) Events(c *gin.Context) {
 				}
 			}
 			for _, m := range msgs {
-				if m.repairs && !reader.MayReadFixer(m.defID, m.fixerID) {
-					continue
+				if m.repairs {
+					reader.Refresh()
+					if !reader.MayReadFixer(m.defID, m.fixerID) {
+						continue
+					}
 				}
 				data, err := json.Marshal(m.view)
 				if err != nil {
