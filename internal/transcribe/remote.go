@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-10-26
 
@@ -121,8 +121,9 @@ type remoteHealth struct {
 	ChildStartError string `json:"child_start_error"`
 	// MachineID is the worker's opaque machine identity (whisper_mlx_server.py
 	// 1.12.0+): every process on one machine reports the same value, so two
-	// ports on one box are one worker. Empty for an older worker; see
-	// gatedEndpoint.workerID.
+	// ports on one box are one worker. Empty for an older worker, and for a
+	// newer one that has no stable machine id yet (whisper_mlx_server.py
+	// 1.14.0 never reports a hostname-derived one); see gatedEndpoint.workerID.
 	MachineID string `json:"machine_id"`
 }
 

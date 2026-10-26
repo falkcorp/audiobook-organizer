@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-whisper-timeout-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 3e5a91c4-72d8-4b06-8f1e-a4c2d70b95e6 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -35,8 +35,11 @@ Five things changed:
   count once, because that machine may be the one that is ill. Each updated
   helper now reports which machine it runs on, as a code that does not reveal
   the machine's name or address, so two helpers running on one Mac count as one
-  machine. A helper that cannot report this (an older helper, or the other kind
-  of listening program) is an unknown machine: its timeout can be a file's
+  machine. The code comes only from the machine's own fixed built-in
+  identifier, never from its network name, which can change; a helper that
+  cannot read that identifier yet leaves the code out and keeps trying. A
+  helper that cannot report a code (an older helper, the other kind of
+  listening program, or one still trying) is an unknown machine: its timeout can be a file's
   first, but never the second. A file that has timed out once is sent to a
   different machine next time whenever one is available, even if that machine
   is normally used less, and the same holds when the server re-sends a file on
@@ -111,7 +114,8 @@ replies an older server does not know, and it would wrongly record those as
 failures for the files. A helper that is updated starts reporting which machine
 it runs on. The first time the server sees that new code on a file it only
 notes it and counts nothing, so the update cannot count a file against the same
-machine twice. The new server works with old and new helpers alike:
+machine twice, and a different machine must then wait the usual twelve hours
+before its timeout counts. The new server works with old and new helpers alike:
 an older helper simply does not report how long it has been busy. Then restart
 the helpers one at a time and check that each one reports itself idle.
 

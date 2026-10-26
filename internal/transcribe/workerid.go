@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-26
 
@@ -21,10 +21,10 @@ import (
 // two server processes on the same box. A URL says nothing about which machine
 // answers it.
 //
-// The worker reports machine_id in /health (an opaque hash it computes from its
-// machine id, never a raw hostname). The identity stored on a file row and
+// The worker reports machine_id in /health (an opaque hash it computes from a
+// stable machine id, never a hostname). The identity stored on a file row and
 // returned in API responses is built from that, or, for a worker too old to
-// report it, from a hash of the URL. It is never the URL itself: the row is
+// report it or one with no stable machine id yet, from a hash of the URL. It is never the URL itself: the row is
 // served to API clients, and endpoint addresses are internal.
 
 // WorkerSeparator joins the identities of several workers in one value: a

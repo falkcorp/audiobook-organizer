@@ -112,10 +112,11 @@
   gave it (`IntroTimeoutWorker`, the machines that struck the file). One sick
   Mac can no longer make a clip's timeout permanent by itself. A worker is
   identified by the `machine_id` its `/health` reports (`whisper_mlx_server.py`
-  1.12.0: a hash of `WHISPER_MACHINE_ID`, `/etc/machine-id`, the macOS platform
-  UUID, or the hostname, computed once on a background thread at start-up so
-  `/health` never runs `ioreg` on the event loop), stored as `m:<hash>`, a known
-  machine. A worker that does not report one (an MLX worker older than 1.12.0,
+  1.14.0: a hash of `WHISPER_MACHINE_ID`, `/etc/machine-id` or the macOS
+  platform UUID, never the hostname, found on a background thread so `/health`
+  never runs `ioreg` on the event loop; with none of them yet the field is left
+  out and the thread retries every 30 s, and the first id found never changes),
+  stored as `m:<hash>`, a known machine. A worker that does not report one (an MLX worker older than 1.12.0,
   or the faster-whisper `whisper_server.py`, which does not report it) is
   identified by a hash of its URL, `u:<hash>`: an unknown machine, since two
   such ports may be one box. An endpoint whose `/health` could not be read
@@ -125,7 +126,8 @@
   as one machine once the workers report `machine_id`, and before that their
   second strike does not count. The first known machine to strike a file
   struck only by unknown ones is recorded, not counted, because it may be one of
-  them under its new identity. A condemnation by the dispatcher needs a lone
+  them under its new identity; its time starts the 12-hour minimum gap like a
+  counted strike, so a second known machine within that window is too soon. A condemnation by the dispatcher needs a lone
   clip stuck on two different machines; it counts as two machines, and as a
   strike even when the same pair condemned the file before, only when it names
   two distinct known machines. What is stored, and returned in API responses,
@@ -230,6 +232,12 @@ that hangs one (deferred at retry 1, see above).
   two machines. Identities that are not `m:` now never give a counted later
   strike, the first known one after them is recorded only, and a condemnation
   counts as two machines only with two distinct known ones.
+- The different-machine entry listed the hostname as a `machine_id` source. A
+  worker that fell back to it while its sibling ports read the platform UUID
+  made one Mac two known machines; the hostname is no longer a source, and a
+  worker with no stable source reports no id.
+- Recording the first known machine on a file did not start the minimum gap, so
+  a second known machine an hour later made the file permanent the same night.
 - The routing entry covered only ordinary allocation. The requests re-sent
   after a split or a worker fault took the first endpoint by priority, the
   machine that had already struck the file included.
