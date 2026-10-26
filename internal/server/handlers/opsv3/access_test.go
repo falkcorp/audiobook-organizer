@@ -1,11 +1,12 @@
 // file: internal/server/handlers/opsv3/access_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c4e7a2-5d38-4b06-a2f1-6e0b8d3c7a95
 // last-edited: 2026-10-25
 
 package opsv3
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -144,13 +145,17 @@ func TestRepairsRun_ApproveNeedsToReadTheRun(t *testing.T) {
 	}
 }
 
-// keepRuns is a RunReader whose listing applies RunQuery.Keep to a fixed list the
-// way the store does (Total counts what Keep accepts, the page holds the first
-// Limit of them) and remembers each query it was asked.
+// keepRuns is a RunReader whose listing applies RunQuery.SkipID, Keep and
+// OnUndecodable to a fixed list the way the store does (a skipped id is never
+// read, Total counts what Keep accepts, the page holds the first Limit of them, a
+// corrupt id fails the listing unless the query has a handler for it) and
+// remembers each query it was asked.
 type keepRuns struct {
 	*memRuns
-	recs  []database.RunRecord
-	calls []database.RunQuery
+	recs    []database.RunRecord
+	corrupt map[string]bool
+	calls   []database.RunQuery
+	read    []string // ids whose record the fake "loaded", in order
 }
 
 func (k *keepRuns) ListRunsV3(q database.RunQuery) (database.RunPage, error) {
@@ -159,6 +164,17 @@ func (k *keepRuns) ListRunsV3(q database.RunQuery) (database.RunPage, error) {
 	for i := range k.recs {
 		r := k.recs[i]
 		if q.DefID != "" && r.DefID != q.DefID {
+			continue
+		}
+		if q.SkipID != nil && q.SkipID(r.ID) {
+			continue
+		}
+		k.read = append(k.read, r.ID)
+		if k.corrupt[r.ID] {
+			if q.OnUndecodable == nil {
+				return database.RunPage{}, errors.New("opv3: run record " + r.ID + " does not decode")
+			}
+			q.OnUndecodable(r.ID, errors.New("does not decode"))
 			continue
 		}
 		if q.Keep != nil && !q.Keep(&r) {
@@ -172,12 +188,14 @@ func (k *keepRuns) ListRunsV3(q database.RunQuery) (database.RunPage, error) {
 	return page, nil
 }
 
-// A run listing is one store call whose Keep decides, per record, who may read
-// it: the page and total the store returns are the caller's own (no refill, no
-// separate census), a viewer gets the plain run and not a hidden one even though
-// the hidden ones come first, and a def filter that names no Repairs definition
-// leaves Keep unset so the store can count keys alone.
-func TestRepairsRun_ListAsksTheStoreOnceWithAKeepThatHidesUnreadableRuns(t *testing.T) {
+// A run listing censuses the Repairs definitions' indexes for the runs the caller
+// may not read, then asks the store for the page with those ids in SkipID (their
+// keys are skipped before a record is read) and a Keep that judges every record
+// it does read. The page and total the store returns are the caller's own (no
+// refill), a viewer gets the plain run and not a hidden one even though the hidden
+// ones come first, and a def filter that names no Repairs definition sets neither
+// so the store can count keys alone.
+func TestRepairsRun_ListSkipsUnreadableRunsByIDAndKeepsJudgingRecords(t *testing.T) {
 	kr := &keepRuns{
 		memRuns: &memRuns{runs: map[string]database.RunRecord{}},
 		recs: []database.RunRecord{
@@ -199,28 +217,66 @@ func TestRepairsRun_ListAsksTheStoreOnceWithAKeepThatHidesUnreadableRuns(t *test
 	if strings.Contains(body, "hidden-") || !strings.Contains(body, `"plain"`) || !strings.Contains(body, `"total":1`) {
 		t.Fatalf("viewer's list = %s, want the plain run alone and total 1", body)
 	}
-	if len(kr.calls) != 1 || kr.calls[0].Keep == nil {
-		t.Fatalf("a viewer's list made %d store calls (first with Keep set: %v), want one with Keep", len(kr.calls),
-			len(kr.calls) > 0 && kr.calls[0].Keep != nil)
+	// One census pass per Repairs definition, then the list itself.
+	if len(kr.calls) != len(repairsDefs)+1 {
+		t.Fatalf("a viewer's list made %d store calls, want %d (a census per Repairs definition and the list)", len(kr.calls), len(repairsDefs)+1)
+	}
+	list := kr.calls[len(kr.calls)-1]
+	if list.Keep == nil || list.SkipID == nil || list.OnUndecodable == nil {
+		t.Fatalf("the list query lacks Keep/SkipID/OnUndecodable: %+v", list)
+	}
+	if !list.SkipID("hidden-1") || !list.SkipID("hidden-2") || list.SkipID("plain") {
+		t.Errorf("SkipID must name exactly the runs the viewer may not read")
 	}
 
 	kr.calls = nil
 	admin := caller{perms: auth.PermLibraryView + "," + auth.PermUsersManage, user: "u-adm", method: string(auth.MethodSession)}
 	w = do(t, r, admin, http.MethodGet, "/api/v3/ops/runs?limit=1", nil)
-	if !strings.Contains(w.Body.String(), `"total":3`) || len(kr.calls) != 1 {
-		t.Fatalf("permitted caller's list = %s after %d store calls, want total 3 after one", w.Body.String(), len(kr.calls))
+	if !strings.Contains(w.Body.String(), `"total":3`) || kr.calls[len(kr.calls)-1].SkipID("hidden-1") {
+		t.Fatalf("permitted caller's list = %s, want total 3 and nothing skipped", w.Body.String())
 	}
 
 	kr.calls = nil
 	w = do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs?def_id=library.scan", nil)
-	if w.Code != http.StatusOK || len(kr.calls) != 1 || kr.calls[0].Keep != nil {
-		t.Fatalf("a def filter naming no repairs definition = %d after %d store calls (Keep set: %v), want one without Keep",
-			w.Code, len(kr.calls), len(kr.calls) > 0 && kr.calls[0].Keep != nil)
+	if w.Code != http.StatusOK || len(kr.calls) != 1 || kr.calls[0].Keep != nil || kr.calls[0].SkipID != nil {
+		t.Fatalf("a def filter naming no repairs definition = %d after %d store calls, want one with no Keep or SkipID", w.Code, len(kr.calls))
 	}
 	kr.calls = nil
 	w = do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs?def_id="+repairs.ApplyOpID, nil)
-	if w.Code != http.StatusOK || len(kr.calls) != 1 || kr.calls[0].Keep == nil || strings.Contains(w.Body.String(), "hidden-") {
-		t.Fatalf("a def filter naming a repairs definition = %d %s after %d store calls, want one with Keep", w.Code, w.Body.String(), len(kr.calls))
+	if w.Code != http.StatusOK || len(kr.calls) != 2 || kr.calls[1].Keep == nil || strings.Contains(w.Body.String(), "hidden-") {
+		t.Fatalf("a def filter naming a repairs definition = %d %s after %d store calls, want a census and a list", w.Code, w.Body.String(), len(kr.calls))
+	}
+}
+
+// A corrupt record of a run the caller may not read must not fail the list the
+// caller is allowed to see: the census hides it (its fixer is unknown), the list
+// skips its key and never reads the record. A corrupt record of a run that was
+// not in the census is skipped and logged instead of a 500. Without the
+// RunQuery.SkipID/OnUndecodable wiring both were a 500 for every caller.
+func TestRepairsRun_ListSurvivesACorruptRecord(t *testing.T) {
+	kr := &keepRuns{
+		memRuns: &memRuns{runs: map[string]database.RunRecord{}},
+		recs: []database.RunRecord{
+			repairsRun("hidden-corrupt", "needs.users", state.V3Running, "x"),
+			{ID: "plain-1", DefID: "library.scan", State: state.V3Succeeded},
+			{ID: "plain-corrupt", DefID: "library.scan", State: state.V3Succeeded},
+			{ID: "plain-2", DefID: "library.scan", State: state.V3Succeeded},
+		},
+		corrupt: map[string]bool{"hidden-corrupt": true, "plain-corrupt": true},
+	}
+	r := newRouter(New(Deps{
+		Runs:          kr,
+		RepairsAccess: opaccess.NewRepairs(fixerSet{"needs.users": usersManageFixer{}}, noOpRows{}, holdsHeader),
+	}))
+	w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/runs", nil)
+	body := w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, `"plain-1"`) || !strings.Contains(body, `"plain-2"`) ||
+		strings.Contains(body, "corrupt") || !strings.Contains(body, `"total":2`) {
+		t.Fatalf("list with corrupt records = %d %s, want the two readable runs and total 2", w.Code, body)
+	}
+	list := kr.calls[len(kr.calls)-1]
+	if !list.SkipID("hidden-corrupt") {
+		t.Errorf("the corrupt repairs record is not in the hidden set")
 	}
 }
 

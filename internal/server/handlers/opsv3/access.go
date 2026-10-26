@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/access.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6c1b9e-7a43-4d85-b0e1-93c5a8d47f20
 // last-edited: 2026-10-25
 
@@ -10,8 +10,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 )
 
 // A Repairs run (repairs.plan, repairs.apply) names the fixer it belongs to, its
@@ -42,6 +44,55 @@ type hiddenRuns struct {
 	byState map[state.V3]int64
 	byDef   map[string]int64
 	total   int64
+}
+
+// accessLog reports runs the access check had to skip.
+var accessLog = logger.New("handlers.opsv3.access")
+
+// hiddenIDs is the id of every run of the given definitions (the Repairs ones
+// when defID is "" or names one, see runDefs) the caller may not read, from the
+// store's by-definition index. A run listing hands it to RunQuery.SkipID so those
+// runs are skipped before their records are read: a corrupt record of a hidden
+// run then cannot fail a list the caller is allowed to see, and a run listing
+// does not decode records only to refuse them. The set is a snapshot; the
+// listing's own Keep still judges each record it reads, so a run created since
+// is not served by mistake.
+//
+// A record that cannot be decoded cannot be judged (its fixer is unknown), so it
+// is hidden, as a run that states no fixer is, and is logged once per pass.
+func (h *Handler) hiddenIDs(reader *opaccess.Reader, rd RunReader, defID string) (map[string]struct{}, error) {
+	hidden := map[string]struct{}{}
+	var current string
+	census := func(r *database.RunRecord) bool {
+		if !reader.MayReadRun(r) {
+			hidden[r.ID] = struct{}{}
+		}
+		return false
+	}
+	for _, def := range runDefs(defID) {
+		current = def
+		_, err := rd.ListRunsV3(database.RunQuery{
+			DefID: def, Limit: 1, Keep: census,
+			OnUndecodable: func(id string, err error) {
+				hidden[id] = struct{}{}
+				accessLog.Warn("run %s of %s cannot be read and is left out of listings: %v",
+					logger.SanitizeLogValue(id), logger.SanitizeLogValue(current), err)
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return hidden, nil
+}
+
+// runDefs is the Repairs definitions a listing for defID has to census: both
+// when defID is empty, the one it names otherwise.
+func runDefs(defID string) []string {
+	if defID == "" {
+		return repairsDefs
+	}
+	return []string{defID}
 }
 
 // hiddenFor counts every repairs run (both definitions, through the store's

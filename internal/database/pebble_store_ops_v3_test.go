@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-25
 
@@ -1319,5 +1319,78 @@ func TestSchedStateV3RoundTrip(t *testing.T) {
 	}
 	if err := p.PutSchedV3(SchedState{}); err == nil {
 		t.Error("PutSchedV3 accepted an empty def id")
+	}
+}
+
+// ── TestListRunsSkipIDAndUndecodable ────────────────────────────────────────
+
+// TestListRunsSkipIDAndUndecodable: RunQuery.SkipID leaves a run out by its
+// index key before its record is read, so a corrupt record of a skipped run
+// does not fail the listing, is not counted and never reaches Keep; with
+// OnUndecodable a corrupt record the caller did not skip is reported and left
+// out instead of failing the page; with neither, the first corrupt record fails
+// the listing (an exact census still needs that).
+func TestListRunsSkipIDAndUndecodable(t *testing.T) {
+	p := newTimelineStore(t)
+	var hidden []string
+	for range 5 {
+		insertV3(t, p, "test.show", "")
+	}
+	for range 3 {
+		hidden = append(hidden, insertV3(t, p, "test.hide", ""))
+	}
+	corrupt := hidden[1]
+	if err := p.db.Set(opv3RunKey(corrupt), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	skip := func(id string) bool { return slices.Contains(hidden, id) }
+
+	if _, err := p.ListRunsV3(RunQuery{Limit: 50, Keep: func(*RunRecord) bool { return true }}); !errors.Is(err, errOpsV3Undecodable) {
+		t.Fatalf("a corrupt record with no handler must fail the listing, got %v", err)
+	}
+
+	kept := 0
+	page, err := p.ListRunsV3(RunQuery{
+		Limit: 3, SkipID: skip,
+		Keep: func(r *RunRecord) bool { kept++; return true },
+	})
+	if err != nil {
+		t.Fatalf("a corrupt record of a skipped run failed the listing: %v", err)
+	}
+	if page.Total != 5 || len(page.Runs) != 3 || page.Next == "" {
+		t.Errorf("Total/page/next = %d/%d/%q, want 5/3/non-empty", page.Total, len(page.Runs), page.Next)
+	}
+	if kept != 5 {
+		t.Errorf("Keep judged %d records, want the 5 shown ones only", kept)
+	}
+	for _, r := range page.Runs {
+		if slices.Contains(hidden, r.ID) {
+			t.Errorf("skipped run %s was returned", r.ID)
+		}
+	}
+
+	// The key-only path (no Keep) also leaves skipped keys out of Total.
+	page, err = p.ListRunsV3(RunQuery{Limit: 50, SkipID: skip})
+	if err != nil || page.Total != 5 || len(page.Runs) != 5 {
+		t.Errorf("no-Keep listing with SkipID = %d total, %d runs, %v; want 5, 5", page.Total, len(page.Runs), err)
+	}
+
+	// Not skipped, but a handler: the corrupt run is reported and left out; the
+	// others are listed and counted.
+	var reported []string
+	page, err = p.ListRunsV3(RunQuery{
+		Limit: 50, Keep: func(*RunRecord) bool { return true },
+		OnUndecodable: func(id string, err error) {
+			if !errors.Is(err, errOpsV3Undecodable) {
+				t.Errorf("handler got %v", err)
+			}
+			reported = append(reported, id)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(reported, []string{corrupt}) || page.Total != 7 || len(page.Runs) != 7 {
+		t.Errorf("reported %v, total %d, runs %d; want [%s], 7, 7", reported, page.Total, len(page.Runs), corrupt)
 	}
 }

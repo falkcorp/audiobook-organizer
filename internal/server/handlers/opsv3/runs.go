@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
 // last-edited: 2026-10-25
 
@@ -50,7 +50,21 @@ func (h *Handler) ListRuns(c *gin.Context) {
 	// keeps the store's key-only count; otherwise every record is judged once.
 	if q.DefID == "" || opaccess.IsRepairsOp(q.DefID) {
 		reader := h.d.RepairsAccess.For(c)
+		// The runs the caller may not read are known from the def indexes, so the
+		// store skips their keys before it reads a record: a corrupt record of a
+		// hidden run cannot fail this list. Keep still judges every record it
+		// reads (a run created since the census), and a visible record that cannot
+		// be decoded is skipped and logged rather than failing the page.
+		hidden, err := h.hiddenIDs(reader, rd, q.DefID)
+		if err != nil {
+			storeErr(c, "list runs", err)
+			return
+		}
+		q.SkipID = func(id string) bool { _, ok := hidden[id]; return ok }
 		q.Keep = reader.MayReadRun
+		q.OnUndecodable = func(id string, err error) {
+			accessLog.Warn("run %s cannot be read and is left out of this list: %v", logger.SanitizeLogValue(id), err)
+		}
 	}
 	page, err := rd.ListRunsV3(q)
 	if err != nil {
