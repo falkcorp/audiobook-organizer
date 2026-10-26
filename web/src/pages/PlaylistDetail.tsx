@@ -1,10 +1,12 @@
 // file: web/src/pages/PlaylistDetail.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7a5b6c4d-8e9f-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-26
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -38,6 +40,8 @@ export default function PlaylistDetail() {
   const navigate = useNavigate();
   const [playlist, setPlaylist] = useState<UserPlaylist | null>(null);
   const [bookIds, setBookIds] = useState<string[]>([]);
+  const [bookTotal, setBookTotal] = useState(0);
+  const [unavailableMessage, setUnavailableMessage] = useState<string | null>(null);
   const [books, setBooks] = useState<Map<string, Book>>(new Map());
   const [editName, setEditName] = useState('');
   const [editQuery, setEditQuery] = useState('');
@@ -51,6 +55,13 @@ export default function PlaylistDetail() {
       const data = await getPlaylist(id);
       setPlaylist(data.playlist);
       setBookIds(data.book_ids || []);
+      setBookTotal(data.book_ids_total ?? 0);
+      setUnavailableMessage(
+        data.members_unavailable
+          ? (data.members_unavailable_message ??
+              "This playlist's books could not be worked out right now.")
+          : null
+      );
       setEditName(data.playlist.name);
       setEditQuery(data.playlist.query || '');
       setEditDescription(data.playlist.description || '');
@@ -192,8 +203,15 @@ export default function PlaylistDetail() {
       )}
 
       <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>
-        Books ({bookIds.length})
+        {bookTotal > bookIds.length
+          ? `Books (${bookIds.length.toLocaleString()} of ${bookTotal.toLocaleString()})`
+          : `Books (${bookIds.length})`}
       </Typography>
+      {unavailableMessage && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          {unavailableMessage}
+        </Alert>
+      )}
 
       <Paper variant="outlined">
         <List dense>

@@ -1,5 +1,5 @@
 // file: web/src/components/collections/QueryHelp.test.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: d07cc1a4-a7f6-4e0f-986a-580430c3a670
 // last-edited: 2026-10-26
 
@@ -55,6 +55,44 @@ describe('query help field list', () => {
     ]);
     expect(PER_USER_FIELDS).toEqual(['read_status', 'progress_pct', 'last_played']);
     for (const f of QUERY_FIELD_HELP) expect(f.example.startsWith(`${f.name}:`)).toBe(true);
+  });
+
+  // The web list is derived from the help table, a third copy of what the Go
+  // search package (the translator) and the library list filter (audiobooks) each
+  // keep. A field in one list only is a query evaluated as one thing in one place and
+  // another elsewhere, and for a collection it decides whether the page offers the
+  // per-viewer behaviour at all. Go holds its two copies equal (TestPerUserFieldNamesAgree);
+  // this holds the third equal to both, and to what docs/search-syntax.md promises.
+  it('keeps the per-user field list equal to the Go copies and to the docs', () => {
+    const goMapKeys = (src: string, decl: string) => {
+      const body = new RegExp(`${decl}[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(src)?.[1] ?? '';
+      return [...body.matchAll(/"([a-z_]+)":/g)].map((m) => m[1]).sort();
+    };
+    const web = [...PER_USER_FIELDS].sort();
+    const translator = goMapKeys(
+      repoFile('internal/search/bleve_translator.go'),
+      'var perUserFieldSet = map\\[string\\]struct\\{\\}'
+    );
+    const listFilter = goMapKeys(
+      repoFile('internal/audiobooks/service_types.go'),
+      'var PerUserFieldNames = map\\[string\\]struct\\{\\}'
+    );
+    expect(translator.length, 'the Go list was found').toBeGreaterThan(0);
+    expect(web).toEqual(translator);
+    expect(web).toEqual(listFilter);
+
+    const docs = repoFile('docs/search-syntax.md');
+    // "`last_played`, `read_status` and `progress_pct` describe one listener."
+    const sentence =
+      /((?:`[a-z_]+`(?:, | and ))+`[a-z_]+`) describe one listener/.exec(docs)?.[1] ?? '';
+    const documented = [...sentence.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]).sort();
+    expect(documented, 'the docs name the per-user fields').toEqual(web);
+    // Every field the docs table marks "Per user" is one of them.
+    const tableRows = [...docs.matchAll(/^\| `([a-z_]+)`[^|\n]*\|[^|\n]*\| Per user \|$/gm)].map(
+      (m) => m[1]
+    );
+    expect(tableRows.length).toBeGreaterThan(0);
+    for (const name of tableRows) expect(web).toContain(name);
   });
 
   it('names only fields the Go search code really answers', () => {
