@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-25-bookfile-write-race-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 3e8f1a5c-6b72-4d09-9c4e-d2a7f0b1c853 -->
 <!-- last-edited: 2026-10-26 -->
 
@@ -57,7 +57,10 @@ read, while holding the lock. A mismatch makes the job start over from the
 current record; the lookup entries are always worked out from that current
 record. The same rule now covers every job that updates a file record: hash
 and metadata updates, field patches, intro transcripts, scan bookkeeping, file
-moves between books, and retiring or restoring old versions.
+moves between books, and retiring or restoring old versions. It also covers
+deleting file records, which had the same gap in the other direction: a delete
+that worked from an older copy could remove the old lookup entries and leave the
+newer ones pointing at a record that no longer existed.
 
 ## The whole-library sweeps
 
@@ -68,6 +71,10 @@ the record was unchanged.
 **Why it mattered.** Over a run of several minutes, any record a scan touched
 meanwhile could be reverted to its state at the start of the run.
 
-**The fix.** The sweeps now save in groups of a few hundred under the book
-locks with the same check, re-read and re-judge any record that changed, and
-leave alone and count any record that keeps changing.
+**The fix.** The sweeps now save in small groups under the book locks with the
+same check, re-read and re-judge any record that changed (following it if it was
+moved to another book meanwhile), and give a record that keeps changing one more
+pass at the end. A record still busy after that is left as it was and counted. If
+the fingerprint reset is left with such records it says the reset is incomplete,
+keeps its search index, and asks for it to be run again, rather than reporting
+success.
