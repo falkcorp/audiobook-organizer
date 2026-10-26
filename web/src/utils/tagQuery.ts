@@ -1,5 +1,5 @@
 // file: web/src/utils/tagQuery.ts
-// version: 2.0.1
+// version: 2.0.2
 // guid: 1c8e4a6f-9b3d-4f27-a5e0-7d2b9c6f1e58
 // last-edited: 2026-10-26
 
@@ -117,7 +117,7 @@ function plainTagValue(rest: string): string | null {
   // An unquoted value holds none of * ~ ^ (the server refuses them anywhere in it:
   // a prefix, a wildcard, fuzziness or a boost is not "that tag"; quote the name if
   // it contains one), nor starts a comparison or an alternation.
-  if (rest === '' || /^[<>=(\[]/.test(rest) || /[*~^]/.test(rest)) return null;
+  if (rest === '' || /^[<>=([]/.test(rest) || /[*~^]/.test(rest)) return null;
   return rest;
 }
 

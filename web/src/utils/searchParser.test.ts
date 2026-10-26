@@ -1,10 +1,10 @@
 // file: web/src/utils/searchParser.test.ts
-// version: 1.2.3
+// version: 1.2.4
 // guid: 3c7e9a15-6d2f-4b84-a0e3-9f1b5c8d2e47
 // last-edited: 2026-10-26
 
 import { describe, it, expect } from 'vitest';
-import { listFieldFilters, listSearchText, parseSearch } from './searchParser';
+import { hasBooleanStructure, listFieldFilters, listSearchText, parseSearch } from './searchParser';
 
 describe('parseSearch: metadata backlog filters', () => {
   it('turns the owner query into two server-side field filters', () => {
@@ -235,6 +235,158 @@ describe('parseSearch: any boolean structure is sent whole (serverQuery)', () =>
       { field: 'tag', value: 'to-read', negated: false, quoted: true },
     ]);
     expect(listFieldFilters(parsed)).toEqual([]);
+  });
+});
+
+// B1 (PR #4181 review 4): structure is decided from the tokens the parser cuts out, so
+// the parentheses, pipes and spaces INSIDE a field's value are text. A regex value
+// (title:/^(the|a) /) is evaluated by the filter layer; sent whole it reached a search
+// index with no regex and answered 0 rows or the wrong rows without a message. Each
+// case asserts serverQuery AND the filters the flat path sends.
+describe('parseSearch: a field value is never structure (B1)', () => {
+  const flat: Array<
+    [string, Array<{ field: string; value: string; negated: boolean; quoted: boolean }>, string]
+  > = [
+    [
+      'title:/^(the|a) /',
+      [{ field: 'title', value: '/^(the|a) /', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      '-title:/^(?:\\d)/',
+      [{ field: 'title', value: '/^(?:\\d)/', negated: true, quoted: false }],
+      '',
+    ],
+    [
+      'description:/(?i)gotham/',
+      [{ field: 'description', value: '/(?i)gotham/', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      'metadata:/(audible|google)/',
+      [{ field: 'metadata', value: '/(audible|google)/', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      'title:/hush|knight/',
+      [{ field: 'title', value: '/hush|knight/', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      'library_state:/organ|import/',
+      [{ field: 'library_state', value: '/organ|import/', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      'title:Batman(1989)',
+      [{ field: 'title', value: 'Batman(1989)', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      'title:Batman|Robin',
+      [{ field: 'title', value: 'Batman|Robin', negated: false, quoted: false }],
+      '',
+    ],
+    [
+      'title:"Year (One)"',
+      [{ field: 'title', value: 'Year (One)', negated: false, quoted: true }],
+      '',
+    ],
+    [
+      'NOT title:/^(a|b)/',
+      [{ field: 'title', value: '/^(a|b)/', negated: true, quoted: false }],
+      '',
+    ],
+    [
+      'read_status:finished title:/^(the|a) /',
+      [
+        { field: 'read_status', value: 'finished', negated: false, quoted: false },
+        { field: 'title', value: '/^(the|a) /', negated: false, quoted: false },
+      ],
+      '',
+    ],
+    [
+      'read_status:finished title:/hush|knight/',
+      [
+        { field: 'read_status', value: 'finished', negated: false, quoted: false },
+        { field: 'title', value: '/hush|knight/', negated: false, quoted: false },
+      ],
+      '',
+    ],
+    [
+      'Hush title:/(a|b)/ Batman(1989)',
+      [{ field: 'title', value: '/(a|b)/', negated: false, quoted: false }],
+      'Hush Batman(1989)',
+    ],
+  ];
+
+  it.each(flat)(
+    '%s stays on the flat path: no serverQuery, the filters carry the value',
+    (typed, filters, free) => {
+      const parsed = parseSearch(typed);
+      expect(parsed.serverQuery).toBeUndefined();
+      expect(parsed.fieldFilters).toEqual(filters);
+      expect(parsed.freeText).toBe(free);
+      expect(hasBooleanStructure(typed)).toBe(false);
+      expect(listSearchText(parsed, 'ignored')).toBe(free);
+      expect(listFieldFilters(parsed)).toHaveLength(
+        filters.filter((f) => f.field !== 'tag').length
+      );
+    }
+  );
+
+  it.each([
+    // a regex that is genuinely inside boolean structure goes whole; the server refuses
+    // it with a message (search.RegexValueError) instead of answering it as words
+    'title:/x/ OR author:kyle',
+    '(title:/^k/ author:kyle)',
+    'title:/x/ AND author:kyle',
+    '-(title:/x/ author:kyle)',
+    // a group or an alternation around a value is structure
+    'title:(Hush|Knightfall)',
+    'Hush (title:Year OR title:Zero)',
+    'Batman || Robin',
+    'Batman && Robin',
+    'Batman | Robin',
+    // a bare NOT: the split leaves it in the free text
+    'NOT Batman',
+    'Hush NOT foo:bar',
+  ])('%s is sent whole', (typed) => {
+    const parsed = parseSearch(typed);
+    expect(parsed.serverQuery).toBe(typed);
+    expect(listFieldFilters(parsed)).toEqual([]);
+    expect(listSearchText(parsed, 'ignored')).toBe(typed);
+  });
+
+  it.each([
+    'Batman "this OR that"',
+    'Batman "Dark (Knight)"',
+    'Hush "a | b" Knightfall',
+    'title:"x (y) OR z"',
+    'Batman(1989) Hush',
+  ])('%s: a quoted phrase, or a parenthesis that opens no group, is text', (typed) => {
+    expect(parseSearch(typed).serverQuery).toBeUndefined();
+    expect(hasBooleanStructure(typed)).toBe(false);
+  });
+
+  // N-N5: a boost or fuzzy marker after a tag term is the tag's, with or without a space
+  it.each([
+    'tag:noir ^2',
+    'tag:"noir" ^2',
+    'tag:"noir"^2',
+    'tag:noir ~',
+    'tag:"noir" ~2',
+    'Hush tag:noir ^1.5',
+  ])('%s is sent whole: the server refuses the boosted tag with a message', (typed) => {
+    const parsed = parseSearch(typed);
+    expect(parsed.serverQuery).toBe(typed);
+    expect(listFieldFilters(parsed)).toEqual([]);
+  });
+
+  it('does not read a number or a caret that follows a plain word as a tag modifier', () => {
+    expect(parseSearch('tag:noir 2').serverQuery).toBeUndefined();
+    expect(parseSearch('Hush ^2 tag:noir').serverQuery).toBeUndefined();
+    expect(parseSearch('tag:noir title:Hush ^2').serverQuery).toBeUndefined();
   });
 });
 

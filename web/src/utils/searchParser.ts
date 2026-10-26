@@ -1,5 +1,5 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.7.2
+// version: 1.7.3
 // last-edited: 2026-10-26
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
@@ -83,42 +83,72 @@ export function listFieldFilters(
     }));
 }
 
+/** A boost or fuzzy marker left on its own: `^2`, `~`, `~2`, `^1.5`. */
+const TAG_MODIFIER_WORD = /^[\^~]\d*(\.\d+)?$/;
+
+/** The closed alternation of a per-user field, `(finished|in_progress)`. */
+const PER_USER_ALTERNATION_VALUE = /^\([^()]*\)$/;
+
 /**
- * The alternation of a per-user field, `read_status:(finished|in_progress)`. The
- * field/value split below carries it as one filter value, so it is not structure.
- * An alternation on any other field is: the split would send "(a|b)" as the value.
+ * Whether one field term (already cut out of the input by tryMatchFieldValue, so its
+ * value is exactly what the field filter would carry) is boolean structure the
+ * field/value split cannot carry. The value of a field is never scanned for
+ * parentheses or pipes: a `/regex/` (`title:/^(the|a) /`), a quoted value
+ * (`title:"Year (One)"`) and a plain value (`title:Batman(1989)`) hold them as text,
+ * and the filter layer reads them as such. What counts is only:
+ *  - a `tag:` term under NOT or `-`: tags travel as tags[], which only narrows;
+ *  - a `tag:` value that is not one whole name: an unquoted `*`, `~` or `^` anywhere in
+ *    it, or one that opens with a comparison, a range or a group;
+ *  - a non-tag unquoted value that opens a group, `title:(a|b)`, other than the
+ *    closed alternation of a per-user field, which the split carries as one filter.
  */
-const PER_USER_ALTERNATION = new RegExp(
-  `\\b(?:${PER_USER_SEARCH_FIELDS.join('|')}):\\([^()]*\\)`,
-  'g'
-);
+function fieldTermIsStructure(
+  field: string,
+  value: string,
+  quoted: boolean,
+  negated: boolean
+): boolean {
+  if (field === 'tag') {
+    if (negated) return true;
+    if (quoted) return false;
+    return /^[*<>=[(]/.test(value) || /[*~^]/.test(value);
+  }
+  if (quoted || !value.startsWith('(')) return false;
+  return !(PER_USER_SEARCH_FIELDS.includes(field) && PER_USER_ALTERNATION_VALUE.test(value));
+}
+
+/**
+ * Whether one free word (a token that is not a known `field:value`) is boolean
+ * structure: a bare OR, AND, NOT, `||` or `&&`, a `|`, or the opening of a group,
+ * `(a`, `-(a`. The split leaves such a word in the free text, where the server never
+ * reads it as an operator. A parenthesis inside or after a word (`Batman(1989)`,
+ * `Year (One)` closing) is not a group: the server reads it as text.
+ */
+function freeWordIsStructure(word: string): boolean {
+  if (word === 'OR' || word === 'AND' || word === 'NOT' || word === '&&') return true;
+  if (word.includes('|')) return true;
+  return word.replace(/^-/, '').startsWith('(');
+}
 
 /**
  * Reports whether input has a form the field/value split cannot carry, so the
- * server must read it whole (ParsedSearch.serverQuery):
- *  - an explicit operator, `OR`, `AND`, `||` or `&&` (the split would leave the word
- *    in the free text, where the server never reads it as an operator);
- *  - a parenthesis or a `|` (a group, or a `field:(a|b)` alternation), other than
- *    the alternation of a per-user field;
- *  - a `tag:` term under `NOT` or `-`: the split carries negated filters, but not a
- *    negated tag (tags travel as tags[], which only narrows);
- *  - a `tag:` term that is not one whole tag name (`tag:noir*`, `tag:no~`,
- *    `tag:"noir"^2`, a comparison): the split would send it as a tag named so.
- * Anything inside double quotes is a phrase, not structure.
+ * server must read it whole (ParsedSearch.serverQuery). It is decided from the same
+ * tokens parseSearch cuts the input into, never from a second pass over the raw text
+ * (a second grammar drifted: it counted the `(`, `)` and `|` inside a `/regex/` or
+ * a plain value as groups, and sent `title:/^(the|a) /` to a search index that has no
+ * regex). See fieldTermIsStructure and freeWordIsStructure for what counts.
+ *
+ * A boost or fuzzy marker that follows a tag term, glued (`tag:"noir"^2`) or after a
+ * space (`tag:noir ^2`), is the tag's: the server refuses it as one.
  *
  * A negated field filter on any other field (`-title:x`, `NOT narrator:y`) is NOT
- * structure: it is carried exactly as a filter, and fields that only the filter layer
- * knows (metadata:, library_state:) cannot be sent in search= at all.
+ * structure: it is carried exactly as a filter, with the substring, glob and regex
+ * matching of the filter layer. Sent whole it would change meaning: `-title:bat` would
+ * stop excluding "Batman" (the index matches words), and the fields only the filter
+ * layer knows (metadata:, ident:, codec:) would be refused in search=.
  */
 export function hasBooleanStructure(input: string): boolean {
-  if (/(^|[\s(-])tag:"[^"]*"[\^~]/.test(input)) return true;
-  const bare = input.replace(/"[^"]*"?/g, ' ').replace(PER_USER_ALTERNATION, ' ');
-  return (
-    /(^|\s)(OR|AND|\|\||&&)(\s|$)/.test(bare) ||
-    /[()|]/.test(bare) ||
-    /(^|\s)(?:-|NOT\s+)tag:/.test(bare) ||
-    /(^|\s)tag:(?:[*<>=[]|[^\s]*[*~^])/.test(bare)
-  );
+  return scanSearch(input).structure;
 }
 
 export const SEARCH_FIELDS: readonly string[] = [
@@ -195,11 +225,47 @@ function isKnownField(field: string): boolean {
  * - Mixed: `great books author:smith NOT tag:romance`
  */
 export function parseSearch(input: string): ParsedSearch {
+  const { freeText, fieldFilters, structure } = scanSearch(input);
+  const parsed: ParsedSearch = { freeText, fieldFilters };
+  if (structure) {
+    parsed.serverQuery = input.trim();
+  }
+  return parsed;
+}
+
+/**
+ * The one tokenizer: cuts input into field filters and free words, and decides from
+ * those same tokens whether the input has boolean structure (hasBooleanStructure).
+ */
+function scanSearch(input: string): {
+  freeText: string;
+  fieldFilters: FieldFilter[];
+  structure: boolean;
+} {
   const fieldFilters: FieldFilter[] = [];
   const freeTextParts: string[] = [];
+  let structure = false;
+  // The previous token was a tag: term, so a modifier word right after it is the tag's.
+  let afterTag = false;
+  // Inside a double-quoted phrase that began in an earlier free word
+  // (`"Dark (Knight)"` is two words here): a phrase is text, never structure.
+  let inQuote = false;
+  const freeWord = (word: string) => {
+    freeTextParts.push(word);
+    let bare = word;
+    if (inQuote) {
+      const close = word.indexOf('"');
+      bare = close < 0 ? '' : word.slice(close + 1);
+    }
+    if ((word.match(/"/g) ?? []).length % 2 === 1) inQuote = !inQuote;
+    bare = bare.replace(/"[^"]*"?/g, '');
+    if (freeWordIsStructure(bare)) structure = true;
+    if (afterTag && TAG_MODIFIER_WORD.test(word)) structure = true;
+    afterTag = false;
+  };
 
   if (!input.trim()) {
-    return { freeText: '', fieldFilters: [] };
+    return { freeText: '', fieldFilters: [], structure: false };
   }
 
   let pos = 0;
@@ -240,6 +306,13 @@ export function parseSearch(input: string): ParsedSearch {
 
     if (fieldMatch && isKnownField(fieldMatch.field)) {
       const trimmedValue = fieldMatch.value.trim();
+      if (
+        !inQuote &&
+        fieldTermIsStructure(fieldMatch.field, trimmedValue, fieldMatch.quoted, negated)
+      ) {
+        structure = true;
+      }
+      afterTag = !inQuote && fieldMatch.field === 'tag';
       if (trimmedValue) {
         fieldFilters.push({
           field: fieldMatch.field,
@@ -256,7 +329,7 @@ export function parseSearch(input: string): ParsedSearch {
       const wordEnd = str.indexOf(' ', pos);
       if (wordEnd === -1) {
         // Check if this word is "NOT" and the rest after it is a non-field token
-        freeTextParts.push(str.substring(pos));
+        freeWord(str.substring(pos));
         pos = str.length;
       } else {
         const word = str.substring(pos, wordEnd);
@@ -272,30 +345,27 @@ export function parseSearch(input: string): ParsedSearch {
             const field = nextWord.substring(0, colonIdx);
             if (!isKnownField(field)) {
               // NOT + unknown field — push both as free text
-              freeTextParts.push(word);
-              freeTextParts.push(nextWord);
+              freeWord(word);
+              freeWord(nextWord);
               pos = nextWordEnd === -1 ? str.length : nextWordEnd;
               continue;
             }
           }
         }
-        freeTextParts.push(word);
+        freeWord(word);
         pos = wordEnd;
       }
     }
   }
 
-  const parsed: ParsedSearch = {
+  return {
     freeText: freeTextParts
       .filter((p) => p.length > 0)
       .join(' ')
       .trim(),
     fieldFilters,
+    structure,
   };
-  if (hasBooleanStructure(input)) {
-    parsed.serverQuery = input.trim();
-  }
-  return parsed;
 }
 
 interface FieldValueMatch {

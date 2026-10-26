@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tagTermQueries.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: ba4d9425-349f-45d9-94a5-c8b56faf4856
 // last-edited: 2026-10-26
 
@@ -151,4 +151,22 @@ describe('the Library sends a query with boolean structure whole and shows the 4
     expect(screen.queryByText(SHAPE)).toBeNull();
     expect(screen.queryByText(VALUE)).toBeNull();
   });
+
+  // B1: the parentheses and pipes inside a regex are text. The Library sends the term as a
+  // filter, where the filter layer matches the regex, not whole to a search index that has
+  // none.
+  it.each(['title:/^(the|a) /', 'title:/hush|knight/', 'title:Batman(1989)'])(
+    '%s is a filter, not a whole send, and shows no error',
+    async (typed) => {
+      open(typed);
+      await waitFor(() => expect(lastBooksCall()?.filters).toBeDefined(), { timeout: 3000 });
+      expect(lastBooksCall()?.search).toBeUndefined();
+      expect(JSON.parse(lastBooksCall()?.filters ?? '[]')).toEqual([
+        expect.objectContaining({ field: 'title', negated: false }),
+      ]);
+      expect(await screen.findByText('Hush', {}, { timeout: 3000 })).toBeInTheDocument();
+      expect(screen.queryByText(SHAPE)).toBeNull();
+      expect(screen.queryByText(VALUE)).toBeNull();
+    }
+  );
 });
