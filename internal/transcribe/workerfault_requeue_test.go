@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-26
 
@@ -103,7 +103,7 @@ func (p *faultPool) run(t *testing.T, ids ...string) (map[string]BatchResult, er
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := dispatchPool(ctx, p.h.eps, nil, jobs, nil, nil, p.send)
+	res, err := dispatchPool(ctx, p.h.eps, nil, jobs, poolOptions{}, p.send)
 	if ctx.Err() != nil {
 		log := p.sendLog()
 		t.Fatalf("the dispatch only ended because the test cancelled it, after %d sends (first: %v)", len(log), log[:min(len(log), 4)])
@@ -311,7 +311,7 @@ func TestPool_EveryEndpointBenchedByAnEarlierDispatchIsWaitedOut(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		clearCooldown(h.eps[1].URL) // the bench ends
 	}()
-	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"a": "x", "b": "x"}, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"a": "x", "b": "x"}, poolOptions{}, send)
 	if err != nil || len(res) != 2 || sends.Load() == 0 {
 		t.Fatalf("res=%d sends=%d err=%v, want the dispatch to wait for the bench to end and then send", len(res), sends.Load(), err)
 	}
@@ -328,7 +328,7 @@ func TestPool_ABenchThatOutlastsThePacingAllowanceIsPoolUnavailable(t *testing.T
 		t.Fatal("nothing may be sent to a benched pool")
 		return nil, nil
 	}
-	_, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"a": "x"}, nil, nil, send)
+	_, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"a": "x"}, poolOptions{}, send)
 	if !IsPoolUnavailable(err) || !IsTransport(err) || IsWorkerStuck(err) {
 		t.Fatalf("err = %v, want a pool-unavailable transport error", err)
 	}

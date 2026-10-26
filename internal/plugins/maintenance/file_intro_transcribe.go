@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-10-26
 
@@ -151,6 +151,11 @@ type fileIntroItem struct {
 	FileID  string
 	Path    string
 	Ordinal int // 0 = the book's first audio file
+	// StruckBy is the row's IntroTimeoutWorker when its timeout strikes were
+	// counted against its current bytes: the machines that already struck the
+	// file, which the job is routed away from (see fileIntroJob.AvoidWorkers).
+	// Empty when the row carries no strike on these bytes.
+	StruckBy string
 }
 
 // fileIntroGroup is every selected file sharing one FileHash: one whisper job
@@ -282,9 +287,11 @@ func selectFileIntroWork(cores []database.BookFileCore, opts fileIntroSelectOpts
 				byHash[f.FileHash] = g
 				order = append(order, f.FileHash)
 			}
-			g.Members = append(g.Members, fileIntroItem{
-				BookID: bookID, FileID: f.ID, Path: f.FilePath, Ordinal: ord,
-			})
+			item := fileIntroItem{BookID: bookID, FileID: f.ID, Path: f.FilePath, Ordinal: ord}
+			if f.IntroTimeouts > 0 && f.IntroTimeoutHash == f.FileHash {
+				item.StruckBy = f.IntroTimeoutWorker
+			}
+			g.Members = append(g.Members, item)
 			sel.selected++
 			if g.DonorFileID != "" {
 				sel.reuseFiles++
@@ -693,7 +700,8 @@ type groupResult struct {
 	fillable  bool                         // a real transcript (not the silence sentinel, not a failure)
 	reuse     bool
 	hasResult bool
-	// worker is the endpoint that answered a transcribe_timeout, for its strike.
+	// worker is the opaque identity of the machine that answered a
+	// transcribe_timeout (transcribe.BatchResult.Worker), for its strike.
 	worker string
 }
 
@@ -842,7 +850,15 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 			continue
 		}
 		key := g.Members[0].FileID
-		jobs[key] = fileIntroJob{Path: path, Seconds: fileIntroClipSeconds}
+		// Every member has the same bytes, so a machine that struck any of them
+		// struck this audio: route the job away from all of them.
+		var struck []string
+		for _, m := range g.Members {
+			if m.StruckBy != "" {
+				struck = append(struck, m.StruckBy)
+			}
+		}
+		jobs[key] = fileIntroJob{Path: path, Seconds: fileIntroClipSeconds, AvoidWorkers: strings.Join(struck, database.IntroTimeoutWorkerSeparator)}
 		jobGroup[key] = gi
 	}
 
@@ -991,13 +1007,15 @@ func whisperGroupResult(r fileIntroWhisperResult, now time.Time) groupResult {
 		case transcribe.PathErrFFmpeg:
 			return groupResult{kind: "ffmpeg_error", hasResult: true, res: database.BookFileIntroResult{
 				Status: statusFFmpegError, Error: detail, At: now}}
-		case transcribe.PathErrTranscribeTimeout, transcribe.PathErrDecoderCrashed:
+		case transcribe.PathErrTranscribeTimeout, transcribe.PathErrDecoderCrashed, transcribe.PathErrDecoderKilled:
 			// The worker's decoder ran past its per-clip deadline on this file
-			// and was killed and restarted, or died while it held the clip. A
-			// verdict about the audio, but only after transcribeTimeoutStrikeLimit
-			// of them: applyGroup counts the strike (below the limit the file is
-			// deferred, at it the status becomes permanent).
-			return groupResult{kind: "transcribe_timeout", hasResult: true, worker: r.Endpoint, res: database.BookFileIntroResult{
+			// and was killed and restarted, died while it held the clip, or was
+			// killed from outside while it held it. A verdict about the audio,
+			// but only after transcribeTimeoutStrikeLimit of them, each after
+			// the first from a machine that has not struck the file: applyGroup
+			// counts the strike (below the limit the file is deferred, at it the
+			// status becomes permanent).
+			return groupResult{kind: "transcribe_timeout", hasResult: true, worker: r.Worker, res: database.BookFileIntroResult{
 				Status: statusTranscribeTimeout, Error: detail, At: now}}
 		case transcribe.PathErrUnmapped, transcribe.PathErrFFmpegTimeout, transcribe.PathErrContainerRejected:
 			// The mount, the share or the worker's own setup or policy, not a

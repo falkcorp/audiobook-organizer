@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.11.0
+# version: 1.12.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-10-26
 #
@@ -96,6 +96,34 @@ def test_health_advertises_batch_pipeline(srv):
     assert "batch_pipeline" in body, "absent key demotes the worker to per-file"
     assert body["batch_pipeline"] is True
     assert body["status"] == "ok"
+
+
+def test_health_reports_an_opaque_machine_id(srv):
+    """remote.go reads machine_id to tell machines apart: a file's timeout turns
+    permanent only on two DIFFERENT machines, and two ports on one box must not
+    count twice. It must be a short hex hash (the Go side stores it on the file
+    row and returns it in API responses), never the raw hostname."""
+    import socket
+
+    mod, client = srv
+    mid = client.get("/health").json().get("machine_id")
+    assert isinstance(mid, str) and len(mid) == 16
+    int(mid, 16)  # hex
+    assert socket.gethostname() not in mid
+    assert mid == mod.machine_id(), "every process on one machine reports the same id"
+
+
+def test_machine_id_override_is_hashed_and_distinguishes_machines(srv, monkeypatch):
+    """WHISPER_MACHINE_ID lets an operator name a machine (two boxes cloned from
+    one image share /etc/machine-id). The value is hashed like every other
+    source, and two names give two ids."""
+    mod, _ = srv
+    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-1")
+    a = mod.machine_id()
+    monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-gpu-2")
+    b = mod.machine_id()
+    assert a != b
+    assert "gotham" not in a and len(a) == 16
 
 
 def test_health_reports_decode_fingerprint(srv):
@@ -1110,9 +1138,11 @@ def test_a_child_that_dies_mid_clip_is_a_decoder_crash_on_the_single_upload(chil
     assert r["text"] == "" and r["error"].startswith("decoder_crashed: ")
 
 
-def test_a_child_sigkilled_mid_clip_is_decoder_killed_not_a_verdict(childsrv):
-    """A SIGKILL comes from outside the decoder (jetsam, an operator): a fault of
-    the worker, so the Go side must not strike the file. Path and upload batches."""
+def test_a_child_sigkilled_mid_clip_is_decoder_killed_not_a_crash(childsrv):
+    """A SIGKILL comes from outside the decoder (jetsam, an operator), so it is
+    decoder_killed, not decoder_crashed: the Go side strikes it like a timeout
+    that only a second, different machine can make permanent, where a crash is a
+    verdict about the clip. Path and upload batches."""
     _, client, put, _ = childsrv
     res = client.post(
         "/transcribe-path-batch",

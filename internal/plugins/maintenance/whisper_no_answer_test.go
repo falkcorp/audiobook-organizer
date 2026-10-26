@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/whisper_no_answer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a97db0f2-8212-49bc-b646-6b4c39e34a80
 // last-edited: 2026-10-26
 
@@ -90,7 +90,7 @@ func TestBookPage_AOneFileBookWhoseLongClipIsCondemnedIsDeferredNotSilent(t *tes
 	fx := newIntroFx(t)
 	b := fx.book("Knightquest")
 	id1, _ := fx.file(b, "01.m4b", 1, "kq-1", false)
-	condemned := transcribe.BatchResult{Condemned: true, Endpoint: "http://192.0.2.10:8000 + http://192.0.2.11:8000",
+	condemned := transcribe.BatchResult{Condemned: true, Endpoint: "http://192.0.2.10:8000 + http://192.0.2.11:8000", Worker: "m:0000000a + m:0000000b",
 		Error: transcribe.PathErrTranscribeTimeout + ": no result: this file alone left 2 worker(s) stuck past their deadline"}
 	fn, _ := scriptedPath(silentAnswer, condemned)
 	swapPathSeams(t, true, "", fn)
@@ -457,8 +457,8 @@ func TestBookPage_ASecondStrikeFromTheSameWorkerIsNotCounted(t *testing.T) {
 	fx := newIntroFx(t)
 	b := fx.book("The Killing Joke")
 	id1, _ := fx.file(b, "01.m4b", 1, "kj-1", false)
-	const sick = "http://192.0.2.50:8000"
-	fn, _ := scriptedPath(transcribe.BatchResult{Error: decoderTimeoutText, Endpoint: sick})
+	const sick = "m:00000050"
+	fn, _ := scriptedPath(transcribe.BatchResult{Error: decoderTimeoutText, Worker: sick})
 	swapPathSeams(t, true, "", fn)
 	fx.bookPage(t, false, b) // strike 1, from the sick worker
 
@@ -470,11 +470,11 @@ func TestBookPage_ASecondStrikeFromTheSameWorkerIsNotCounted(t *testing.T) {
 	if st := accum.snapshot(); st.Deferred != 1 || st.TranscribeTimeout != 0 {
 		t.Fatalf("the book must be deferred: %+v", st)
 	}
-	if !strings.Contains(logs, "same worker") {
+	if !strings.Contains(logs, "already struck the file") {
 		t.Fatalf("the log must say why the strike was not counted:\n%s", logs)
 	}
 
-	fn, _ = scriptedPath(transcribe.BatchResult{Error: decoderTimeoutText, Endpoint: "http://192.0.2.51:8000"})
+	fn, _ = scriptedPath(transcribe.BatchResult{Error: decoderTimeoutText, Worker: "m:00000051"})
 	swapPathSeams(t, true, "", fn)
 	fx.bookPage(t, false, b) // a second worker agrees
 	if r := fx.row(b, id1); r.TranscribeStatus == nil || *r.TranscribeStatus != statusTranscribeTimeout {
@@ -489,7 +489,7 @@ func TestFileIntroRun_ASecondStrikeFromTheSameWorkerIsNotCounted(t *testing.T) {
 	fx := newIntroFx(t)
 	b := fx.book("A Death in the Family")
 	id, _ := fx.timeoutFile(b, "01.m4b", 1, "df-1")
-	fx.whisp.worker = "http://192.0.2.60:8000"
+	fx.whisp.worker = "m:00000060"
 	for _, run := range []string{"run-1", "run-2"} {
 		if _, err := fx.runAs(&fileIntroRep{id: run}, ""); err != nil {
 			t.Fatal(err)
@@ -502,7 +502,7 @@ func TestFileIntroRun_ASecondStrikeFromTheSameWorkerIsNotCounted(t *testing.T) {
 		t.Fatalf("stats: %+v", st)
 	}
 
-	fx.whisp.worker = "http://192.0.2.61:8000"
+	fx.whisp.worker = "m:00000061"
 	if _, err := fx.runAs(&fileIntroRep{id: "run-3"}, ""); err != nil {
 		t.Fatal(err)
 	}

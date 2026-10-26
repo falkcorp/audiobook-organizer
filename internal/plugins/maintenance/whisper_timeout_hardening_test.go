@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/whisper_timeout_hardening_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c9d7e41-5b28-4f06-a1d3-8e2f60b4c715
 // last-edited: 2026-10-26
 
@@ -66,7 +66,7 @@ func (fx *introFx) strikeLast(bookID, fileID, hash string, n int, lastAgo time.D
 	for i := range n {
 		at := time.Now().Add(-lastAgo - time.Duration(n-1-i)*24*time.Hour)
 		if _, err := fx.s.RecordIntroTimeout(bookID, fileID, database.IntroTimeoutStrike{
-			SourceHash: hash, RunOpID: fmt.Sprintf("earlier-run-%d", i), Worker: fmt.Sprintf("http://192.0.2.%d:9000", 100+i), Detail: decoderTimeoutText,
+			SourceHash: hash, RunOpID: fmt.Sprintf("earlier-run-%d", i), Worker: fmt.Sprintf("m:%08d", 100+i), Detail: decoderTimeoutText,
 			At: at, Limit: transcribeTimeoutStrikeLimit, MinGap: transcribeStrikeMinGap,
 		}); err != nil {
 			fx.t.Fatal(err)

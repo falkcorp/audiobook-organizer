@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.11.0
+# version: 1.12.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-10-26
 #
@@ -86,7 +86,10 @@
 # "transcribe_timeout: ...". The next request starts a fresh child. A child that
 # DIES on a clip is reported as "decoder_crashed: ..." and restarted the same way,
 # unless it was killed from OUTSIDE (SIGKILL/SIGTERM, or never reaped): that is
-# "decoder_killed: ...", a fault of this worker and not a verdict about the clip.
+# "decoder_killed: ...". One kill says nothing certain about the clip (macOS
+# jetsam, an operator), but a clip whose decode grows until it is killed does so
+# on every worker, so the Go side counts a kill as a timeout strike that turns
+# permanent only when a second, DIFFERENT machine also fails on the clip.
 #
 # A batch request may carry X-Whisper-Request-Timeout-S: the ceiling after which
 # the client gives up on it. Once that passes the worker stops starting clips for
@@ -107,6 +110,7 @@ import posixpath
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -150,6 +154,51 @@ DECODE_SETTINGS = {
 DECODE_FINGERPRINT = hashlib.sha256(
     json.dumps(DECODE_SETTINGS, sort_keys=True).encode()
 ).hexdigest()[:16]
+
+# WORKER IDENTITY. The Go client makes a file's decoder-timeout result
+# permanent only when two DIFFERENT machines fail on it, so one sick worker can
+# never condemn a file. Several endpoints can be one machine (two server
+# processes on two ports, or two SSH tunnels to the same box), so the client
+# cannot tell machines apart by URL; /health reports machine_id instead. It is a
+# short hash, never the raw name: the Go side stores it on the file row and
+# shows it in API responses, and a hostname or machine UUID has no business
+# there. Every process on one machine reports the same value. Sources, first
+# that answers: WHISPER_MACHINE_ID (an operator override, hashed like the rest),
+# /etc/machine-id (Linux), the macOS IOPlatformUUID, then the hostname (last,
+# because a Mac's hostname can change with the network it joins).
+
+
+def _machine_source() -> str:
+    override = os.environ.get("WHISPER_MACHINE_ID", "").strip()
+    if override:
+        return "override:" + override
+    with contextlib.suppress(OSError), open("/etc/machine-id", encoding="ascii") as f:
+        mid = f.read().strip()
+        if mid:
+            return "machine-id:" + mid
+    if sys.platform == "darwin":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            out = subprocess.run(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout
+            for line in out.splitlines():
+                if "IOPlatformUUID" in line and "=" in line:
+                    uuid = line.split("=", 1)[1].strip().strip('"')
+                    if uuid:
+                        return "platform-uuid:" + uuid
+    return "hostname:" + socket.gethostname()
+
+
+def machine_id() -> str:
+    """The opaque identity of the machine this worker runs on (see above)."""
+    return hashlib.sha256(_machine_source().encode()).hexdigest()[:16]
+
+
+MACHINE_ID = machine_id()
 
 # Inference is serialized. MLX shares the Mac's unified memory with everything
 # else the desktop is doing, so two concurrent transcriptions do not run twice
@@ -241,7 +290,7 @@ class ChildFaultError(RuntimeError):
     clips. A child that DIES while decoding a clip is not this: that is a verdict
     about the clip (PathJobError, decoder_crashed), because a clip that
     deterministically kills the child must be able to settle. (A child killed from
-    outside is PathJobError decoder_killed, a worker fault but not a start fault.) The flag stays so
+    outside is PathJobError decoder_killed, a strike that needs a second machine, not a start fault.) The flag stays so
     a handler can tell the two apart if a start-less fault is ever raised again."""
 
     def __init__(self, message: str, *, starting: bool):
@@ -449,9 +498,10 @@ class InferenceChild:
                 # SIGTERM comes from OUTSIDE the decoder (macOS jetsam under
                 # memory pressure from another job on this box, an operator),
                 # and a child that could not be reaped (code None) is not
-                # evidence the clip killed it either. That is a fault of this
-                # worker: the Go side gives the file no strike and re-sends the
-                # job to another worker or defers it.
+                # evidence the clip killed it either. But a decode that grows
+                # until jetsam kills it does so on every machine, so the Go side
+                # counts this as a timeout strike that only a second, DIFFERENT
+                # machine can make permanent (one sick worker never can).
                 if code is None or code in (-signal.SIGKILL, -signal.SIGTERM):
                     raise PathJobError(
                         ERR_DECODER_KILLED,
@@ -741,9 +791,10 @@ EXTRACT_WORKERS = max(1, int(os.environ.get("WHISPER_EXTRACT_WORKERS", "4")))
 #   decoder_killed  the inference child process was killed from OUTSIDE while on
 #                   this clip (SIGKILL or SIGTERM: macOS jetsam under memory
 #                   pressure from another job, an operator), or could not be
-#                   reaped to tell. A fault of the WORKER, NOT a verdict about the
-#                   clip: no strike against the file; the Go side re-sends the job
-#                   to another worker or defers it.
+#                   reaped to tell. Not a verdict on its own: the Go side counts it
+#                   as a timeout strike, and the file turns permanent only when a
+#                   second, DIFFERENT machine (see machine_id in /health) also
+#                   times out or is killed on it.
 #   request_abandoned  the client's request timeout (X-Whisper-Request-Timeout-S)
 #                   passed before this clip started, so it was never run. Not a
 #                   verdict about the book: the client has already left, and the
@@ -1272,6 +1323,8 @@ async def health():
         "device": "metal",
         "backend": "mlx",
         "decode_fingerprint": DECODE_FINGERPRINT,
+        # Which machine this is, as an opaque hash (see WORKER IDENTITY).
+        "machine_id": MACHINE_ID,
         # Inference liveness, read WITHOUT touching _inference_lock (a wedged
         # job holds it). busy_seconds is how long the current clip has been
         # running (0 when idle); busy_limit_seconds is that clip's own limit. A

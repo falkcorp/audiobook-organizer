@@ -1,5 +1,5 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
 // last-edited: 2026-10-26
 
@@ -349,7 +349,7 @@ func TestUploadPath_UnansweredRequestIsStuck(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 
-	_, err := transcribePool(context.Background(), []Endpoint{{URL: srv.URL, Concurrency: 1}}, nil, tempWAVJobs(t, 2), nil, nil)
+	_, err := transcribePool(context.Background(), []Endpoint{{URL: srv.URL, Concurrency: 1}}, nil, tempWAVJobs(t, 2), nil, nil, nil)
 	requireTransport(t, err, "worker stuck")
 	if !IsWorkerStuck(err) {
 		t.Fatalf("upload path: not classified stuck: %v", err)
@@ -441,7 +441,7 @@ func (h *splitHarness) run(t *testing.T, n int) (map[string]BatchResult, error) 
 	for i := range n {
 		jobs[fmt.Sprintf("j%02d", i)] = "unused"
 	}
-	return dispatchPool(context.Background(), h.eps, nil, jobs, nil, nil, h.send)
+	return dispatchPool(context.Background(), h.eps, nil, jobs, poolOptions{}, h.send)
 }
 
 var aliveHealth = map[string]any{"status": "ok", "device": "metal", "batch_pipeline": true, "busy_seconds": 0.0, "busy_limit_seconds": nil}
@@ -624,7 +624,7 @@ func TestPoolKeepsChunksThatCompletedBeforeANonStuckFailure(t *testing.T) {
 	}
 	useEndpoints(t, 3, endpointURLs(good.eps)...)
 	jobs := map[string]string{"j0": "x", "j1": "x", "j2": "x", "j3": "x", "j4": "x", "j5": "x"}
-	res, err := dispatchPool(context.Background(), good.eps, nil, jobs, nil, nil, send)
+	res, err := dispatchPool(context.Background(), good.eps, nil, jobs, poolOptions{}, send)
 	if err != nil || len(res) != 6 {
 		t.Fatalf("res=%d err=%v", len(res), err)
 	}

@@ -394,7 +394,8 @@ export interface BookFileCore {
    */
   intro_timeout_at?: string;
   /**
-   * IntroTimeoutWorker is the worker that gave the latest strike; see BookFile.
+   * IntroTimeoutWorker is the opaque identity of the machines that gave the
+   * counted strikes (never an endpoint address); see BookFile.
    */
   intro_timeout_worker?: string;
   /**

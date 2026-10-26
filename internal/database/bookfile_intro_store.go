@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
 // last-edited: 2026-10-26
 
@@ -7,6 +7,9 @@ package database
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -78,20 +81,29 @@ type IntroTimeoutStrike struct {
 	// each have their own ids, so a single stall that both of them hit would
 	// otherwise count twice. 0 disables the check.
 	MinGap time.Duration
-	// Worker names the worker whose answer this strike is (its endpoint URL;
-	// several joined with " + " for a dispatcher condemnation, which already
-	// stands for more than one worker). A strike after the first counts only when
-	// Worker is non-empty and differs from the worker of the previous counted
-	// strike (SameWorker otherwise): two strikes from one worker can be one sick
-	// machine on two nights, not two pieces of evidence about the audio. A first
-	// strike counts from any worker, named or not, and a previous strike stored
-	// with no worker (written before workers were recorded) counts as different
-	// from any named one.
+	// Worker names the machine whose answer this strike is: the transcribe
+	// package's opaque worker identity (transcribe.BatchResult.Worker), never an
+	// endpoint URL, because the value is stored on the row and returned in API
+	// responses and endpoint addresses are internal. A dispatcher condemnation
+	// names every machine the file was stuck on alone, joined with
+	// IntroTimeoutWorkerSeparator.
 	//
-	// So a pool of ONE worker never makes a timeout permanent: the file is
-	// deferred and re-sent every run, each attempt bounded by the worker's
-	// per-clip deadline. That is the price of the rule, paid only by single-worker
-	// setups.
+	// A strike after the first counts only when it brings a machine that has
+	// not struck these bytes before, or is itself a condemnation by two or more
+	// machines (SameWorker otherwise): two strikes from one machine can be one
+	// sick box on two nights, not two pieces of evidence about the audio. A
+	// first strike counts from any worker, named or not; a later strike that
+	// names no worker (its endpoint's /health could not be read, so its machine
+	// is unknown) never counts. The row keeps the union of the machines that
+	// struck it, so a third machine is needed after A then B, not A again.
+	//
+	// So any pool whose routing sends the file to the same machine each time
+	// never makes a timeout permanent: the file is deferred and re-sent every
+	// run, each attempt bounded by the worker's per-clip deadline. The
+	// dispatcher routes a job carrying a strike to a different machine when one
+	// is healthy (transcribe.BatchOptions.AvoidWorkers), so in practice the
+	// price is paid by single-machine pools, and by a night on which every
+	// other machine is down.
 	Worker string
 }
 
@@ -448,9 +460,15 @@ func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutS
 			}
 			return ErrSkipBookFileWrite
 		}
-		// One worker cannot supply two strikes: the second must name a different
-		// worker than the first (see IntroTimeoutStrike.Worker).
-		if counted && row.IntroTimeouts > 0 && (st.Worker == "" || st.Worker == row.IntroTimeoutWorker) {
+		// One machine cannot supply two strikes: a later strike must bring a
+		// machine that has not struck these bytes, or be a condemnation by two or
+		// more machines (see IntroTimeoutStrike.Worker).
+		struckBy := introTimeoutWorkers(row.IntroTimeoutWorker)
+		if !counted {
+			struckBy = nil
+		}
+		newBy := introTimeoutWorkers(st.Worker)
+		if counted && row.IntroTimeouts > 0 && !independentStrike(struckBy, newBy) {
 			out = IntroTimeoutOutcome{
 				Strikes:    row.IntroTimeouts,
 				Permanent:  row.IntroTimeouts >= st.Limit,
@@ -463,7 +481,7 @@ func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutS
 			strikes = row.IntroTimeouts + 1
 		}
 		row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID = strikes, st.SourceHash, st.RunOpID
-		row.IntroTimeoutWorker = st.Worker
+		row.IntroTimeoutWorker = joinIntroTimeoutWorkers(struckBy, newBy)
 		struck := st.At
 		row.IntroTimeoutAt = &struck
 		attempted := st.At
@@ -541,4 +559,48 @@ func (s *PebbleStore) writeIntroRow(bookID, fileID string, row *BookFile, who st
 		return IntroWriteWrote, fmt.Errorf("%s: %s: %w", who, fileID, err)
 	}
 	return IntroWriteWrote, nil
+}
+
+// IntroTimeoutWorkerSeparator joins several machine identities in one
+// IntroTimeoutWorker value. It is the transcribe package's WorkerSeparator;
+// the database cannot import that package, so the two literals must agree.
+const IntroTimeoutWorkerSeparator = " + "
+
+// introTimeoutWorkers is the set of machine identities in a stored or new
+// worker value.
+func introTimeoutWorkers(v string) map[string]bool {
+	out := make(map[string]bool)
+	for _, id := range strings.Split(v, IntroTimeoutWorkerSeparator) {
+		if id = strings.TrimSpace(id); id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// independentStrike reports whether a strike by newBy is evidence the strikes
+// by struckBy are not: it names a machine that has not struck these bytes, or
+// it is a condemnation by two or more machines (each of which was stuck on the
+// file alone in that one dispatch). A strike that names no machine is never
+// independent.
+func independentStrike(struckBy, newBy map[string]bool) bool {
+	if len(newBy) >= 2 {
+		return true
+	}
+	for id := range newBy {
+		if !struckBy[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// joinIntroTimeoutWorkers is the stored union of two identity sets, sorted.
+func joinIntroTimeoutWorkers(a, b map[string]bool) string {
+	all := maps.Clone(a)
+	if all == nil {
+		all = make(map[string]bool, len(b))
+	}
+	maps.Copy(all, b)
+	return strings.Join(slices.Sorted(maps.Keys(all)), IntroTimeoutWorkerSeparator)
 }

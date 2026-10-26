@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_timeout_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a7d1f58-c2e6-4b09-8d41-6f0b9e2a7c35
 // last-edited: 2026-10-26
 
@@ -19,17 +19,17 @@ func strike(hash, run string, limit int) IntroTimeoutStrike {
 		SourceHash: hash, RunOpID: run, Limit: limit,
 		Detail: "transcribe_timeout: no result within 90s",
 		At:     time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC),
-		Worker: "http://192.0.2.10:8000/" + run,
+		Worker: "m:" + run,
 	}
 }
 
 // S2 (review of #4176): a file becomes permanent only on a second strike from a
-// DIFFERENT worker. One worker that is sick on two nights (the same Mac under the
-// same CI load each evening) is not two pieces of evidence about the audio.
+// DIFFERENT machine. One machine that is sick on two nights (the same Mac under
+// the same CI load each evening) is not two pieces of evidence about the audio.
 func TestRecordIntroTimeout_TheSecondStrikeMustComeFromADifferentWorker(t *testing.T) {
 	s, f := newIntroStoreFixture(t)
 	first := strike("hash-a", "run-1", 2)
-	first.Worker = "http://192.0.2.11:8000"
+	first.Worker = "m:a1a1a1a1"
 	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, first); err != nil || out.Strikes != 1 {
 		t.Fatalf("strike 1: out=%+v err=%v", out, err)
 	}
@@ -54,30 +54,68 @@ func TestRecordIntroTimeout_TheSecondStrikeMustComeFromADifferentWorker(t *testi
 	}
 
 	other := strike("hash-a", "run-4", 2)
-	other.Worker = "http://192.0.2.12:8000"
+	other.Worker = "m:b2b2b2b2"
 	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, other); err != nil || out.Strikes != 2 || !out.Permanent {
 		t.Fatalf("different worker: out=%+v err=%v, want the second strike and the permanent verdict", out, err)
 	}
 }
 
-// A dispatcher condemnation names every worker it was stuck on; as a second
-// strike it is different from the single worker of the first.
+// A dispatcher condemnation names every machine it was stuck on; as a second
+// strike it is evidence from more than the single machine of the first.
 func TestRecordIntroTimeout_ACondemnationAfterOneWorkersStrikeCounts(t *testing.T) {
 	s, f := newIntroStoreFixture(t)
 	first := strike("hash-a", "run-1", 2)
-	first.Worker = "http://192.0.2.11:8000"
+	first.Worker = "m:a1a1a1a1"
 	if _, err := s.RecordIntroTimeout(f.BookID, f.ID, first); err != nil {
 		t.Fatal(err)
 	}
 	condemned := strike("hash-a", "run-2", 2)
-	condemned.Worker = "http://192.0.2.11:8000 + http://192.0.2.12:8000"
+	condemned.Worker = "m:a1a1a1a1 + m:b2b2b2b2"
 	if out, err := s.RecordIntroTimeout(f.BookID, f.ID, condemned); err != nil || !out.Permanent {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }
 
-// A first strike counts from any worker, named or not; a stored strike with no
-// worker (written before workers were recorded) is different from any named one.
+// R4 (review of #4182): two condemnations by the same pair of machines are two
+// verdicts, each from two machines that were stuck on the file alone. Comparing
+// the stored string counted the second as "the same worker" and the file never
+// settled.
+func TestRecordIntroTimeout_TheSameCondemnationPairCountsAgain(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	for i, want := range []bool{false, true} {
+		c := strike("hash-a", fmt.Sprintf("run-%d", i+1), 2)
+		c.Worker = "m:a1a1a1a1 + m:b2b2b2b2"
+		out, err := s.RecordIntroTimeout(f.BookID, f.ID, c)
+		if err != nil || out.SameWorker || out.Permanent != want || out.Strikes != i+1 {
+			t.Fatalf("condemnation %d: out=%+v err=%v", i+1, out, err)
+		}
+	}
+}
+
+// The row keeps every machine that struck it, so after A and B a strike from A
+// again is not new evidence; a third machine is.
+func TestRecordIntroTimeout_TheRowRemembersEveryMachineThatStruck(t *testing.T) {
+	s, f := newIntroStoreFixture(t)
+	for i, tc := range []struct {
+		worker  string
+		strikes int
+		same    bool
+	}{{"m:a1a1a1a1", 1, false}, {"m:b2b2b2b2", 2, false}, {"m:a1a1a1a1", 2, true}, {"m:c3c3c3c3", 3, false}} {
+		st := strike("hash-a", fmt.Sprintf("run-%d", i+1), 3)
+		st.Worker = tc.worker
+		out, err := s.RecordIntroTimeout(f.BookID, f.ID, st)
+		if err != nil || out.Strikes != tc.strikes || out.SameWorker != tc.same {
+			t.Fatalf("strike %d by %s: out=%+v err=%v", i+1, tc.worker, out, err)
+		}
+	}
+	if got := reread(t, s, f); got.IntroTimeoutWorker != "m:a1a1a1a1 + m:b2b2b2b2 + m:c3c3c3c3" || got.TranscribeStatus == nil {
+		t.Fatalf("worker=%q status=%v", got.IntroTimeoutWorker, got.TranscribeStatus)
+	}
+}
+
+// A first strike counts from any worker, named or not (an unnamed one came
+// from an endpoint whose /health could not be read); a later named strike is
+// then a machine the row has not seen.
 func TestRecordIntroTimeout_AnUnnamedFirstStrikeAndANamedSecondCount(t *testing.T) {
 	s, f := newIntroStoreFixture(t)
 	first := strike("hash-a", "run-1", 2)
@@ -278,7 +316,7 @@ func TestRecordIntroTimeout_AnEmptyRunIDCannotBeDeduplicated(t *testing.T) {
 	s, f := newIntroStoreFixture(t)
 	for want := 1; want <= 2; want++ {
 		st := strike("hash-a", "", 5)
-		st.Worker = fmt.Sprintf("http://192.0.2.%d:8000", 10+want)
+		st.Worker = fmt.Sprintf("m:%08d", want)
 		out, err := s.RecordIntroTimeout(f.BookID, f.ID, st)
 		if err != nil || out.SameRun || out.Strikes != want {
 			t.Fatalf("strike %d: out=%+v err=%v", want, out, err)

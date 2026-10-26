@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transport.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e17c4a92-5b08-4d63-a1f7-92d3b6c80e45
 // last-edited: 2026-10-26
 
@@ -29,6 +29,12 @@ const fileIntroClipSeconds = 90
 type fileIntroJob struct {
 	Path    string
 	Seconds int
+	// AvoidWorkers names the machines that already struck this audio with a
+	// decoder timeout (their opaque identities, joined with
+	// database.IntroTimeoutWorkerSeparator). The pool sends the job to another
+	// machine when one is healthy, since only another machine's strike can
+	// settle the file (transcribe.BatchOptions.AvoidWorkers). Empty when none.
+	AvoidWorkers string
 }
 
 // fileIntroWhisperResult is the worker's answer for one job. Model and
@@ -42,9 +48,13 @@ type fileIntroWhisperResult struct {
 	// workers stuck), carried from transcribe.BatchResult: the one kind of
 	// timeout that is still struck when the dispatch it came from failed.
 	Condemned bool
-	// Endpoint is the worker that gave the answer (transcribe.BatchResult.Endpoint),
-	// stored with a timeout strike: a second strike must come from another worker.
+	// Endpoint is the URL of the endpoint that gave the answer, for logs only
+	// (transcribe.BatchResult.Endpoint): an internal address, never stored.
 	Endpoint string
+	// Worker is the opaque identity of the machine that gave the answer
+	// (transcribe.BatchResult.Worker), stored with a timeout strike: a later
+	// strike must come from a machine that has not struck the file.
+	Worker string
 }
 
 // fileIntroWhisperFn sends jobs (keyed by an id the op chooses) to the whisper
@@ -66,15 +76,29 @@ var fileIntroWhisperFn = transcribeFilesByPath
 // on each file row, written right after each batch returns, so a kill loses at
 // most the batches in flight.
 func transcribeFilesByPath(ctx context.Context, jobs map[string]fileIntroJob, onProgress func(done, total int)) (map[string]fileIntroWhisperResult, error) {
-	pj := make(map[string]transcribe.PathJob, len(jobs))
-	for k, j := range jobs {
-		pj[k] = transcribe.PathJob{Path: j.Path, Seconds: j.Seconds}
-	}
-	res, err := transcribe.TranscribeByPathBatch(ctx, pj, transcribe.BatchOptions{OnProgress: onProgress})
+	pj, avoid := fileIntroPathJobs(jobs)
+	res, err := transcribe.TranscribeByPathBatch(ctx, pj, transcribe.BatchOptions{OnProgress: onProgress, AvoidWorkers: avoid})
 	// The results that settled before a failure are converted and returned WITH
 	// the error: the caller applies them and defers the rest, instead of
 	// throwing away clips the workers already finished.
 	return fileIntroResultsFromBatch(res), err
+}
+
+// fileIntroPathJobs converts the op's jobs to the transport's, with the
+// machines each job's file was already struck by (nil when none was).
+func fileIntroPathJobs(jobs map[string]fileIntroJob) (map[string]transcribe.PathJob, map[string]string) {
+	pj := make(map[string]transcribe.PathJob, len(jobs))
+	var avoid map[string]string
+	for k, j := range jobs {
+		pj[k] = transcribe.PathJob{Path: j.Path, Seconds: j.Seconds}
+		if j.AvoidWorkers != "" {
+			if avoid == nil {
+				avoid = make(map[string]string)
+			}
+			avoid[k] = j.AvoidWorkers
+		}
+	}
+	return pj, avoid
 }
 
 // fileIntroResultsFromBatch converts the transport's results to the op's type,
@@ -87,7 +111,7 @@ func fileIntroResultsFromBatch(res map[string]transcribe.BatchResult) map[string
 	for k, r := range res {
 		// BatchResult carries no model or language; IntroMeta records them when
 		// the transport starts reporting them.
-		out[k] = fileIntroWhisperResult{Text: r.Text, Error: r.Error, Condemned: r.Condemned, Endpoint: r.Endpoint}
+		out[k] = fileIntroWhisperResult{Text: r.Text, Error: r.Error, Condemned: r.Condemned, Endpoint: r.Endpoint, Worker: r.Worker}
 	}
 	return out
 }

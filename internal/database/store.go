@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.126.0
+// version: 2.127.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-26
 
@@ -1244,11 +1244,14 @@ type BookFile struct {
 	// is also refused while the previous one is closer than the caller's MinGap.
 	// Travels with the strikes; zero (never recorded) means "long ago".
 	IntroTimeoutAt *time.Time `json:"intro_timeout_at,omitempty"`
-	// IntroTimeoutWorker names the worker (its endpoint URL) whose answer was the
-	// latest counted strike. A further strike counts only from a DIFFERENT, named
-	// worker, so one sick worker -- a Mac sharing its box with a CI job on two
-	// different nights -- cannot make a file permanent by itself. Empty on a
-	// strike no worker was named for.
+	// IntroTimeoutWorker names the machines whose answers were the counted
+	// strikes, as opaque worker identities ("m:" + a hash the worker reports, or
+	// "u:" + a hash of its URL for an old worker) joined with " + ". Never an
+	// endpoint address: this field is returned in API responses, and endpoint
+	// URLs are internal. A further strike counts only from a machine not named
+	// here, so one sick machine -- a Mac sharing its box with a CI job on two
+	// different nights, or two server ports on that one box -- cannot make a
+	// file permanent by itself. Empty on a strike no machine was named for.
 	IntroTimeoutWorker string `json:"intro_timeout_worker,omitempty"`
 	// IntroMeta is how the clip was made and which model heard it. Not queried by
 	// any filter, so stripBookFileForMemdb clears it like IntroTranscription.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.43.0
+// version: 3.44.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-26
 
@@ -1350,6 +1350,20 @@ func (p *Plugin) processTranscribePage(
 	// Step 3: one whisper batch for the whole page.
 	log.Info("transcribe-book-intros: calling whisper batch", "jobs", len(submitted), "remote_extract", remote)
 	batchOpts := transcribe.BatchOptions{OnProgress: onBook, Journal: pj.journal, RefreshJournal: pj.refresh}
+	// The first pass is the only dispatch whose timeouts are struck, so it alone
+	// routes a book whose first file already carries a strike away from the
+	// machines that gave it (R4 of the #4182 review): only another machine's
+	// strike can settle the file, and priority routing would otherwise send it
+	// to the same priority-1 worker every night.
+	firstPassOpts := batchOpts
+	for bookID := range submitted {
+		if w := sentRef[bookID].struckBy(); w != "" {
+			if firstPassOpts.AvoidWorkers == nil {
+				firstPassOpts.AvoidWorkers = make(map[string]string)
+			}
+			firstPassOpts.AvoidWorkers[bookID] = w
+		}
+	}
 	var batchResults map[string]transcribe.BatchResult
 	var err error
 	// A request can outlast the watchdog's progress budget (a chunk of clips each
@@ -1361,9 +1375,9 @@ func (p *Plugin) processTranscribePage(
 			accum.beat(fmt.Sprintf("waiting on whisper: %d books in flight for %s", len(submitted), elapsed.Round(time.Second)))
 		})()
 		if remote {
-			batchResults, err = transcribePathBatchFn(ctx, pathJobs, batchOpts)
+			batchResults, err = transcribePathBatchFn(ctx, pathJobs, firstPassOpts)
 		} else {
-			batchResults, err = transcribeBatchFn(ctx, batchJobs, batchOpts)
+			batchResults, err = transcribeBatchFn(ctx, batchJobs, firstPassOpts)
 		}
 	}()
 	// A cancelled run writes nothing: whatever the pool answered before the cancel
@@ -2112,7 +2126,7 @@ func (p *Plugin) recordBookTimeout(
 	detail := truncateDetail(errText)
 	out, err := intros.RecordIntroTimeout(book.ID, ref.BookFileID, database.IntroTimeoutStrike{
 		SourceHash: ref.StoredHash, RunOpID: accum.snapshot().RunOpID, Detail: detail, At: now,
-		Limit: transcribeTimeoutStrikeLimit, MinGap: transcribeStrikeMinGap, Worker: result.Endpoint,
+		Limit: transcribeTimeoutStrikeLimit, MinGap: transcribeStrikeMinGap, Worker: result.Worker,
 	})
 	switch {
 	case err != nil:
@@ -2127,8 +2141,8 @@ func (p *Plugin) recordBookTimeout(
 			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "min_gap", transcribeStrikeMinGap.String())
 		accum.recordDeferred(1)
 	case out.SameWorker:
-		log.Info("transcribe: transcribe_timeout from the same worker as the file's last strike, book deferred without a second strike",
-			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "worker", result.Endpoint)
+		log.Info("transcribe: transcribe_timeout from a machine that already struck the file, book deferred without a second strike",
+			"book_id", book.ID, "file_id", ref.BookFileID, "strikes", out.Strikes, "worker", result.Worker, "endpoint", result.Endpoint)
 		accum.recordDeferred(1)
 	case out.Stale:
 		log.Warn("transcribe: transcribe_timeout strike not recorded (file changed), book deferred",
@@ -2241,12 +2255,24 @@ type audioFileRef struct {
 	TranscribeStatus string
 	// IntroTimeouts and IntroTimeoutHash are the decoder-timeout strikes the row
 	// carries and the FileHash they were counted against (zero/"" when none).
-	IntroTimeouts    int
-	IntroTimeoutHash string
+	// IntroTimeoutWorker is the machines that gave them (see struckBy).
+	IntroTimeouts      int
+	IntroTimeoutHash   string
+	IntroTimeoutWorker string
 	// HeldSilence is true when the row already holds the per-file op's silence
 	// result for its CURRENT bytes (status empty, provenance hash equal to the
 	// stored FileHash): the first 90 s of this file were heard and are silent.
 	HeldSilence bool
+}
+
+// struckBy is the machines that struck this file's CURRENT bytes with a
+// decoder timeout (the stored IntroTimeoutWorker), or "" when the row carries
+// no strike on them. A strike counted against older bytes is void.
+func (r audioFileRef) struckBy() string {
+	if r.IntroTimeouts == 0 || r.StoredHash == "" || r.IntroTimeoutHash != r.StoredHash {
+		return ""
+	}
+	return r.IntroTimeoutWorker
 }
 
 // firstAudioFile returns the first (lowest disc/track) audio file of book.
@@ -2342,7 +2368,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (audioFileRef
 	if f.TranscribeStatus != nil {
 		ref.TranscribeStatus = *f.TranscribeStatus
 	}
-	ref.IntroTimeouts, ref.IntroTimeoutHash = f.IntroTimeouts, f.IntroTimeoutHash
+	ref.IntroTimeouts, ref.IntroTimeoutHash, ref.IntroTimeoutWorker = f.IntroTimeouts, f.IntroTimeoutHash, f.IntroTimeoutWorker
 	ref.HeldSilence = f.FileHash != "" && f.IntroSourceHash == f.FileHash && ref.TranscribeStatus == statusEmpty
 	return ref, nil
 }

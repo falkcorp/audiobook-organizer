@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
 // last-edited: 2026-10-26
 
@@ -8,7 +8,6 @@ package maintenance
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -80,14 +79,7 @@ func swapTranscribeBatchFn(t *testing.T, fn func(context.Context, map[string]str
 	transcribeBatchFn = func(ctx context.Context, jobs map[string]string, opts transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 		// Name the answering worker as the dispatcher does; see stampWorkers.
 		out, err := fn(ctx, jobs, opts)
-		n := stampedWorkerCalls.Add(1)
-		worker := fmt.Sprintf("http://192.0.2.%d:%d", 10+n%200, 8000+n/200)
-		for k, r := range out {
-			if r.Endpoint == "" {
-				r.Endpoint = worker
-				out[k] = r
-			}
-		}
+		stampWorker(out)
 		return out, err
 	}
 	t.Cleanup(func() { transcribeBatchFn = orig })

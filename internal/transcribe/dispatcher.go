@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -96,8 +96,8 @@ func endpointInCooldown(url string) bool {
 // ONLY when jobs remain and no healthy endpoint is left — per the locked
 // decision in PLAN.md, that error carries no per-file meaning and callers
 // must write nothing.
-func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]string, onProgress ProgressFunc, journal ResultJournal) (map[string]BatchResult, error) {
-	return dispatchPool(ctx, endpoints, requires, jobs, onProgress, nil,
+func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]string, onProgress ProgressFunc, journal ResultJournal, avoid map[string]string) (map[string]BatchResult, error) {
+	return dispatchPool(ctx, endpoints, requires, jobs, poolOptions{onProgress: onProgress, avoid: avoid},
 		func(ctx context.Context, g gatedEndpoint, sub map[string]string, progress ProgressFunc) (map[string]BatchResult, error) {
 			return transcribeRemoteWithHealth(ctx, g.Endpoint.URL, g.Health, g.Probed, g.Endpoint.Concurrency, sub, progress, journal)
 		})
@@ -109,12 +109,23 @@ func transcribePool(ctx context.Context, endpoints []Endpoint, requires []string
 // generic over the job type instead of being copied per kind of job.
 type endpointSender[J any] func(ctx context.Context, g gatedEndpoint, jobs map[string]J, onProgress ProgressFunc) (map[string]BatchResult, error)
 
+// poolOptions are dispatchPool's per-call settings. Every field may be zero.
+type poolOptions struct {
+	// onProgress: see ProgressFunc.
+	onProgress ProgressFunc
+	// extraRefusal lets a caller refuse endpoints the label gate cannot
+	// express -- the path pipeline refuses a worker whose mapped NFS root is
+	// unreadable right now. A non-empty return is the operator-facing reason
+	// and is reported like any capability refusal.
+	extraRefusal func(gatedEndpoint) string
+	// avoid is BatchOptions.AvoidWorkers: job id -> the machines whose strike
+	// the file already carries. See steerAway.
+	avoid map[string]string
+}
+
 // dispatchPool is the pool round loop shared by every kind of job: gate,
 // priority-ordered allocation, concurrent per-endpoint sends, cooldown on
-// failure, re-queue to survivors. extraRefusal (may be nil) lets a caller
-// refuse endpoints the label gate cannot express -- the path pipeline refuses
-// a worker whose mapped NFS root is unreadable right now. A non-empty return is
-// the operator-facing reason and is reported like any capability refusal.
+// failure, re-queue to survivors. See poolOptions for the per-call settings.
 //
 // Pacing. A dispatch that finds no endpoint it can use because of something an
 // EARLIER dispatch saw (every endpoint benched by a previous page's failures,
@@ -125,7 +136,8 @@ type endpointSender[J any] func(ctx context.Context, g gatedEndpoint, jobs map[s
 // A dispatch gives up early only on evidence of its own: every endpoint failed
 // in THIS dispatch. When the pacing allowance runs out the error wraps
 // ErrPoolUnavailable.
-func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]J, onProgress ProgressFunc, extraRefusal func(gatedEndpoint) string, send endpointSender[J]) (map[string]BatchResult, error) {
+func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []string, jobs map[string]J, opts poolOptions, send endpointSender[J]) (map[string]BatchResult, error) {
+	onProgress, extraRefusal := opts.onProgress, opts.extraRefusal
 	if len(jobs) == 0 {
 		return nil, nil
 	}
@@ -272,20 +284,31 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// says nothing about WHICH of its jobs is to blame, so the failed request
 	// is split and the parts retried (units); every stuck part is smaller than
 	// the request it came from, so the splitting terminates. A job is only
-	// condemned when it was stuck ALONE, on soloLimit distinct endpoints: an
+	// condemned when it was stuck ALONE, on soloLimit distinct MACHINES: an
 	// innocent job that shared a request with the culprit was stuck in a batch,
 	// never alone, so it is never condemned for the culprit's sake -- and for
 	// the same reason a part may be retried on a worker it was stuck on in a
 	// larger batch (that says nothing about the part itself).
-	soloStuck := make(map[string]map[string]bool) // job -> endpoints it was stuck on alone
+	//
+	// Machines, not endpoints (see workerid.go): two ports on one box failing on
+	// a file are one sick machine, and a condemnation is the one timeout that is
+	// struck even when the dispatch failed, so it must not be earned that way.
+	keyOf := func(url string) string { return probeByURL[url].machineKey() }
+	soloStuck := make(map[string]map[string]string) // job -> machine key -> the endpoint it was stuck on alone there
 	// soloOverran is the weaker record: a lone job's request outlived its
 	// ceiling on a worker that, when asked, was NOT wedged (it answered /health
 	// and was inside its own decode deadline), so the request most likely waited
 	// behind another one. That is no evidence about the job, so it never counts
 	// toward a verdict; it only keeps the job from being placed on the same
-	// worker again straight away.
+	// endpoint again straight away. Keyed by endpoint, not machine: what it
+	// records is that endpoint's queue, and another port on the same box has a
+	// queue of its own.
 	soloOverran := make(map[string]map[string]bool)
-	soloLimit := min(2, len(ordered))
+	machines := make(map[string]bool, len(ordered))
+	for _, ep := range ordered {
+		machines[keyOf(ep.URL)] = true
+	}
+	soloLimit := min(2, len(machines))
 	var units [][]string
 	// followerOf is the journal's content dedup seen from here: a follower was
 	// never sent (its audio is byte-identical to its leader's) and shares the
@@ -380,9 +403,65 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		requeueUnits(ids)
 	}
+	// steerAway is R4 of the #4182 review. A job whose file already carries a
+	// timeout strike can only be settled by a strike from a machine that has
+	// not struck it, but allocation fills the lowest priority tier first, so a
+	// lone job went to the same priority-1 worker every night and the file was
+	// re-sent forever without ever becoming permanent. After allocation, each
+	// such job sitting on an endpoint of a machine in its avoid set moves to the
+	// least-loaded endpoint in eps on a machine known (probed) to be different.
+	// With no such endpoint it stays where it is: the worst outcome is a strike
+	// the store does not count, never a job stranded with nowhere to go. The
+	// moved job's byte-identical followers move with it.
+	avoidOf := make(map[string]map[string]bool, len(opts.avoid))
+	for id, v := range opts.avoid {
+		if _, ok := jobs[id]; ok {
+			if set := splitWorkers(v); len(set) > 0 {
+				avoidOf[id] = set
+			}
+		}
+	}
+	steerAway := func(eps []Endpoint, asg []map[string]J) {
+		if len(avoidOf) == 0 {
+			return
+		}
+		for i, ep := range eps {
+			here := probeByURL[ep.URL].workerID()
+			for _, id := range slices.Sorted(maps.Keys(asg[i])) {
+				set := avoidOf[id]
+				if here == "" || !set[here] {
+					continue
+				}
+				best := -1
+				for k, alt := range eps {
+					if wid := probeByURL[alt.URL].workerID(); k == i || wid == "" || set[wid] {
+						continue
+					}
+					if best < 0 || len(asg[k]) < len(asg[best]) {
+						best = k
+					}
+				}
+				if best < 0 {
+					continue
+				}
+				if asg[best] == nil {
+					asg[best] = make(map[string]J)
+				}
+				for _, cid := range append([]string{id}, followersOf[id]...) {
+					if j, ok := asg[i][cid]; ok {
+						asg[best][cid] = j
+						delete(asg[i], cid)
+					}
+				}
+				dispatchLog.Info("routing a job away from the machine that already struck it: job=%s from=%s to=%s",
+					logger.SanitizeLogValue(id), logger.SanitizeLogValue(ep.URL), logger.SanitizeLogValue(eps[best].URL))
+			}
+		}
+	}
+
 	// canTake reports whether a split part may go to url.
 	canTake := func(live []string, url string) bool {
-		if len(live) == 1 && (soloStuck[live[0]][url] || soloOverran[live[0]][url]) {
+		if len(live) == 1 && (soloStuck[live[0]][keyOf(url)] != "" || soloOverran[live[0]][url]) {
 			return false
 		}
 		for _, id := range live {
@@ -503,7 +582,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				}
 			}
 			if len(free) > 0 && len(idle) > 0 {
-				for k, sub := range allocateJobs(idle, free) {
+				idleAsg := allocateJobs(idle, free)
+				steerAway(idle, idleAsg)
+				for k, sub := range idleAsg {
 					if len(sub) > 0 {
 						// A leader that was never part of a stuck request (it sat
 						// in a later chunk) can still have followers: send them in
@@ -551,6 +632,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 		} else {
 			assignments = allocateJobs(healthy, remaining)
+			steerAway(healthy, assignments)
 		}
 
 		type epResult struct {
@@ -597,6 +679,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				}
 				if br.Endpoint == "" {
 					br.Endpoint = ep.URL
+					br.Worker = probeByURL[ep.URL].workerID()
 				}
 				results[id] = br
 				settledHere[id] = true
@@ -725,19 +808,20 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			case len(failed) == 1:
 				id := failed[0]
 				if soloStuck[id] == nil {
-					soloStuck[id] = make(map[string]bool)
+					soloStuck[id] = make(map[string]string)
 				}
-				soloStuck[id][ep.URL] = true
+				soloStuck[id][keyOf(ep.URL)] = ep.URL
 				if len(soloStuck[id]) >= soloLimit {
-					// Stuck by itself on soloLimit different workers: a verdict
+					// Stuck by itself on soloLimit different machines: a verdict
 					// about this file, not about any worker. Byte-identical
 					// followers are the same audio and get the same verdict. It
-					// names every worker involved: as a strike it already stands
-					// for more than one worker (see BatchResult.Endpoint).
+					// names every machine involved: as a strike it stands for
+					// each of them (see BatchResult.Worker).
 					verdict := BatchResult{Condemned: true, Error: fmt.Sprintf(
 						"%s%sno result: this file alone left %d worker(s) stuck past their deadline",
 						PathErrTranscribeTimeout, pathErrSeparator, len(soloStuck[id])),
-						Endpoint: strings.Join(slices.Sorted(maps.Keys(soloStuck[id])), " + ")}
+						Endpoint: strings.Join(slices.Sorted(maps.Values(soloStuck[id])), WorkerSeparator),
+						Worker:   joinWorkers(slices.Collect(maps.Keys(soloStuck[id])))}
 					settled := 0
 					for _, cid := range append([]string{id}, followersOf[id]...) {
 						if _, ok := remaining[cid]; !ok {
@@ -802,6 +886,7 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string
 			// (a deferral) is unnamed.
 			if br.Endpoint == "" {
 				br.Endpoint = url
+				br.Worker = g.workerID()
 			}
 			results[id] = br
 		}

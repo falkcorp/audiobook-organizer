@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b4e1c73-d2a6-4f58-8e10-b7c35a9d2e64
 // last-edited: 2026-10-26
 
@@ -148,7 +148,7 @@ type stubWhisper struct {
 	inFlight    atomic.Int32
 	maxSeen     atomic.Int32
 	delay       time.Duration
-	worker      string // names the answering worker; "" = a new worker per call, as a rotating pool
+	worker      string // names the answering machine (its opaque identity); "" = a new machine per call, as a rotating pool
 }
 
 func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ func(int, int)) (map[string]fileIntroWhisperResult, error) {
@@ -190,14 +190,15 @@ func (w *stubWhisper) fn(ctx context.Context, jobs map[string]fileIntroJob, _ fu
 	worker := w.worker
 	if worker == "" {
 		n := stampedWorkerCalls.Add(1) // shared with stampWorkers: never a repeat, even after calls = nil
-		worker = fmt.Sprintf("http://192.0.2.%d:%d", 10+n%200, 8000+n/200)
+		worker = fmt.Sprintf("m:%08x", n)
 	}
+	endpoint := "http://192.0.2.10:8000"
 	for k, j := range jobs {
 		if e, ok := w.errs[j.Path]; ok {
-			out[k] = fileIntroWhisperResult{Error: e, Endpoint: worker}
+			out[k] = fileIntroWhisperResult{Error: e, Endpoint: endpoint, Worker: worker}
 			continue
 		}
-		out[k] = fileIntroWhisperResult{Text: w.texts[j.Path], Model: "model-x", Language: "en", Endpoint: worker}
+		out[k] = fileIntroWhisperResult{Text: w.texts[j.Path], Model: "model-x", Language: "en", Endpoint: endpoint, Worker: worker}
 	}
 	return out, w.alsoErr
 }

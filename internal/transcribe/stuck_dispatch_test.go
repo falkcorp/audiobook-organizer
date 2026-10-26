@@ -1,5 +1,5 @@
 // file: internal/transcribe/stuck_dispatch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e3a91c5-2b64-4d08-a5f7-1c9d0e8b6a32
 // last-edited: 2026-10-26
 
@@ -93,7 +93,7 @@ func TestDispatchClassificationIsIndependentOfResultArrivalOrder(t *testing.T) {
 				return nil, errors.New("connection reset by peer")
 			}
 			useEndpoints(t, 1, endpointURLs(h.eps)...)
-			_, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, nil, nil, send)
+			_, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, poolOptions{}, send)
 			if err == nil || !IsTransport(err) {
 				t.Fatalf("err = %v, want a transport error", err)
 			}
@@ -117,7 +117,7 @@ func TestUnansweredRequestFromAWorkerThatVanishedIsAnOutageNotStuck(t *testing.T
 			return nil, &WorkerStuckError{URL: g.Endpoint.URL, After: time.Minute, Jobs: sortedIDs(sub)}
 		}
 		useEndpoints(t, 4, endpointURLs(h.eps)...)
-		_, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, nil, nil, send)
+		_, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, poolOptions{}, send)
 		if !IsTransport(err) {
 			t.Fatalf("err = %v", err)
 		}
@@ -144,7 +144,7 @@ func TestUnansweredRequestFromAWorkerThatVanishedIsAnOutageNotStuck(t *testing.T
 		}
 		useEndpoints(t, 2, endpointURLs(h.eps)...)
 		jobs := map[string]string{"j0": "x", "j1": "x", "j2": "x", "j3": "x"}
-		res, err := dispatchPool(context.Background(), h.eps, nil, jobs, nil, nil, send)
+		res, err := dispatchPool(context.Background(), h.eps, nil, jobs, poolOptions{}, send)
 		if err != nil || len(res) != 4 {
 			t.Fatalf("res=%d err=%v", len(res), err)
 		}
@@ -173,7 +173,7 @@ func TestCancelledOpDoesNotBenchTheEndpoint(t *testing.T) {
 		return nil, &WorkerStuckError{URL: g.Endpoint.URL, After: time.Minute, Jobs: sortedIDs(sub)}
 	}
 	useEndpoints(t, 1, endpointURLs(h.eps)...)
-	_, err := dispatchPool(ctx, h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, nil, nil, send)
+	_, err := dispatchPool(ctx, h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, poolOptions{}, send)
 	if err == nil {
 		t.Fatal("want an error")
 	}
@@ -193,7 +193,7 @@ func TestDispatchReturnsSettledResultsWithTheError(t *testing.T) {
 			return map[string]BatchResult{"j0": {Text: "done"}}, errors.New("connection reset by peer")
 		}
 		useEndpoints(t, 4, endpointURLs(h.eps)...)
-		res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, nil, nil, send)
+		res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, poolOptions{}, send)
 		if err == nil || res["j0"].Text != "done" {
 			t.Fatalf("res=%v err=%v: the finished job must come back with the error", res, err)
 		}
@@ -206,7 +206,7 @@ func TestDispatchReturnsSettledResultsWithTheError(t *testing.T) {
 		}
 		useEndpoints(t, 2, endpointURLs(h.eps)...)
 		jobs := map[string]string{"j0": "x", "j1": "x", "j2": "x", "j3": "x"}
-		res, err := dispatchPool(context.Background(), h.eps, nil, jobs, nil, nil, send)
+		res, err := dispatchPool(context.Background(), h.eps, nil, jobs, poolOptions{}, send)
 		if err == nil || !IsTransport(err) {
 			t.Fatalf("err = %v", err)
 		}
@@ -225,7 +225,7 @@ func TestDispatchReturnsSettledResultsWithTheError(t *testing.T) {
 		useEndpoints(t, 1, endpointURLs(h.eps)...)
 		// j0 and j1 run first (one chunk each); j1 is the culprit and gets
 		// condemned while j9 can only fail.
-		res, _ := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, nil, nil, send)
+		res, _ := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, poolOptions{}, send)
 		if PathErrorCode(res["j1"].Error) != PathErrTranscribeTimeout {
 			t.Fatalf("j1 = %+v, want its transcribe_timeout verdict", res["j1"])
 		}
@@ -359,7 +359,7 @@ func TestFollowersAreCondemnedWithTheirLeaderAndNeverSentAlone(t *testing.T) {
 	}
 	useEndpoints(t, 4, endpointURLs(h.eps)...)
 	jobs := map[string]string{"j0": "x", "j1": "x", "j1b": "x", "j2": "x"}
-	res, err := dispatchPool(context.Background(), h.eps, nil, jobs, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, jobs, poolOptions{}, send)
 	if err != nil || len(res) != 4 {
 		t.Fatalf("res=%d err=%v", len(res), err)
 	}
@@ -408,7 +408,7 @@ func TestARecoveredLeaderIsRetriedWithItsFollowersNotWithoutThem(t *testing.T) {
 	}
 	useEndpoints(t, 4, endpointURLs(h.eps)...)
 	jobs := map[string]string{"j0": "x", "j1": "x", "j1b": "x", "j2": "x"}
-	res, err := dispatchPool(context.Background(), h.eps, nil, jobs, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, jobs, poolOptions{}, send)
 	if err != nil || len(res) != 4 {
 		t.Fatalf("res=%d err=%v", len(res), err)
 	}
@@ -463,7 +463,7 @@ func TestFreeJobsRunOnIdleEndpointsWhileASplitPartRuns(t *testing.T) {
 	for i := range 6 {
 		jobs[fmt.Sprintf("j%02d", i)] = "x"
 	}
-	res, err := dispatchPool(context.Background(), h.eps, nil, jobs, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, jobs, poolOptions{}, send)
 	if err != nil || len(res) != 6 {
 		t.Fatalf("res=%d err=%v", len(res), err)
 	}
@@ -495,7 +495,7 @@ func TestAFreeLeaderFromALaterChunkIsSentWithItsFollowers(t *testing.T) {
 		return okResults(sub), nil
 	}
 	useEndpoints(t, 4, endpointURLs(h.eps)...)
-	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"a": "x", "b": "x", "b2": "x", "c": "x"}, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"a": "x", "b": "x", "b2": "x", "c": "x"}, poolOptions{}, send)
 	if err != nil || len(res) != 4 {
 		t.Fatalf("res=%d err=%v", len(res), err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/transcribe/path.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
 // last-edited: 2026-10-26
 
@@ -207,7 +207,8 @@ func TranscribeByPathBatch(ctx context.Context, jobs map[string]PathJob, opts Ba
 	if journal != nil && opts.RefreshJournal {
 		journal = lookupBypass{journal}
 	}
-	return dispatchPool(ctx, endpoints, snap.WhisperRequires, jobs, opts.OnProgress, pathRefusal,
+	return dispatchPool(ctx, endpoints, snap.WhisperRequires, jobs,
+		poolOptions{onProgress: opts.OnProgress, extraRefusal: pathRefusal, avoid: opts.AvoidWorkers},
 		func(ctx context.Context, g gatedEndpoint, sub map[string]PathJob, progress ProgressFunc) (map[string]BatchResult, error) {
 			return transcribePathRemote(ctx, g, sub, progress, journal)
 		})

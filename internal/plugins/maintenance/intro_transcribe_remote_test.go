@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
 // last-edited: 2026-10-26
 
@@ -48,23 +48,31 @@ func swapPathSeams(t *testing.T, available bool, reason string, fn pathBatchFn) 
 // so no two calls (even under two swaps in one test) share a worker name.
 var stampedWorkerCalls atomic.Int64
 
-// stampWorkers names the answering worker on every result that does not name
-// one, as the real dispatcher always does (BatchResult.Endpoint): each call is
-// answered by its own worker, so successive runs' timeout strikes come from
-// different workers the way a rotating pool's would. A test that needs one
-// worker to answer twice sets Endpoint itself.
+// stampWorkers names the answering machine on every result that does not name
+// one, as the real dispatcher always does (BatchResult.Worker, with Endpoint):
+// each call is answered by its own machine, so successive runs' timeout strikes
+// come from different machines the way a rotating pool's would. A test that
+// needs one machine to answer twice sets Worker itself.
 func stampWorkers(fn pathBatchFn) pathBatchFn {
 	return func(ctx context.Context, jobs map[string]transcribe.PathJob, opts transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 		out, err := fn(ctx, jobs, opts)
-		n := stampedWorkerCalls.Add(1)
-		worker := fmt.Sprintf("http://192.0.2.%d:%d", 10+n%200, 8000+n/200)
-		for k, r := range out {
-			if r.Endpoint == "" {
-				r.Endpoint = worker
-				out[k] = r
-			}
-		}
+		stampWorker(out)
 		return out, err
+	}
+}
+
+// stampWorker gives every result in out that names no machine a new one (and
+// an endpoint URL, as the dispatcher does). Shared by every seam wrapper.
+func stampWorker(out map[string]transcribe.BatchResult) {
+	n := stampedWorkerCalls.Add(1)
+	for k, r := range out {
+		if r.Worker == "" {
+			r.Worker = fmt.Sprintf("m:%08x", n)
+		}
+		if r.Endpoint == "" {
+			r.Endpoint = "http://192.0.2.10:8000"
+		}
+		out[k] = r
 	}
 }
 

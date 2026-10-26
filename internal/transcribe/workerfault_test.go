@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4503544-1899-4765-aa15-eda9489b6832
 // last-edited: 2026-10-26
 
@@ -258,7 +258,7 @@ func TestUploadBatch_AResponseOfMostlyTimeoutsIsAWorkerFault(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	useEndpoints(t, 4, srv.URL)
-	res, err := transcribePool(context.Background(), []Endpoint{{URL: srv.URL, Concurrency: 1}}, nil, tempWAVJobs(t, 8), nil, nil)
+	res, err := transcribePool(context.Background(), []Endpoint{{URL: srv.URL, Concurrency: 1}}, nil, tempWAVJobs(t, 8), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("err = %v, want none: the faulted jobs are re-sent in requests too small to fault", err)
 	}
@@ -291,7 +291,7 @@ func TestPool_AFaultedWorkersJobsGoToAnotherWorkerAndItIsBenched(t *testing.T) {
 		return okResults(sub), nil
 	}
 	useEndpoints(t, 2, endpointURLs(h.eps)...)
-	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x", "j2": "x", "j3": "x"}, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x", "j2": "x", "j3": "x"}, poolOptions{}, send)
 	if err != nil || len(res) != 4 {
 		t.Fatalf("res=%d err=%v: the healthy worker must finish the faulted worker's jobs", len(res), err)
 	}
@@ -314,7 +314,7 @@ func TestPool_EveryWorkerFaultedIsAnErrorNotVerdicts(t *testing.T) {
 		return map[string]BatchResult{"j0": {Text: "kept"}}, &WorkerFaultError{URL: g.Endpoint.URL, Reason: "test"}
 	}
 	useEndpoints(t, 1, endpointURLs(h.eps)...)
-	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, nil, nil, send)
+	res, err := dispatchPool(context.Background(), h.eps, nil, map[string]string{"j0": "x", "j1": "x"}, poolOptions{}, send)
 	if err == nil || !IsTransport(err) || IsWorkerStuck(err) {
 		t.Fatalf("err = %v, want a transport error that is not stuck", err)
 	}
