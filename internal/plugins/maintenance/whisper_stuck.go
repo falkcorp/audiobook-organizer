@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_stuck.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e81a07-6d3f-4b52-a9e8-2f7d05b3c61a
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
 // Shared handling for the two transcription ops when the Whisper worker's
@@ -24,6 +26,48 @@ import (
 // run costs a worker its decoder each time (the worker restarts it, but the
 // clip's whole time budget is spent).
 const transcribeTimeoutStrikeLimit = 2
+
+// timeoutBreakerMin is the fewest transcribe_timeout results in one response
+// that can be read as a worker fault rather than as verdicts about clips.
+const timeoutBreakerMin = 2
+
+// timeoutsAreWorkerFault reports whether one response's timeouts are the
+// worker's fault. A decoder that hangs on one clip is a verdict about that
+// clip; a response in which most of the clips (and at least two) timed out is
+// a worker that cannot decode anything right now (a starved GPU, a wedged
+// model), and counting a strike against every file in it would walk healthy
+// audio to the permanent limit. Distinct-worker evidence is not available (a
+// BatchResult does not say which worker answered), so the shape of the one
+// response is the signal. Callers defer such results: no strike, no status.
+func timeoutsAreWorkerFault(timeouts, clips int) bool {
+	return timeouts >= timeoutBreakerMin && 2*timeouts > clips
+}
+
+// isTimeoutResult reports whether a per-file error is the worker's
+// transcribe_timeout.
+func isTimeoutResult(errText string) bool {
+	return errText != "" && transcribe.PathErrorCode(errText) == transcribe.PathErrTranscribeTimeout
+}
+
+// workerFaultTimeouts returns the ids in one response whose transcribe_timeout
+// must be deferred because the response as a whole trips the breaker, or nil
+// when it does not.
+func workerFaultTimeouts(res map[string]transcribe.BatchResult) map[string]bool {
+	var ids []string
+	for id, r := range res {
+		if isTimeoutResult(r.Error) {
+			ids = append(ids, id)
+		}
+	}
+	if !timeoutsAreWorkerFault(len(ids), len(res)) {
+		return nil
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
 
 // whisperStuckMaxBatches is how many batches in a row may come back "worker
 // stuck" before a run stops. Every one of them was deferred with nothing

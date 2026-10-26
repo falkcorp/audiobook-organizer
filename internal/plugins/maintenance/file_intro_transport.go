@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transport.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e17c4a92-5b08-4d63-a1f7-92d3b6c80e45
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -42,7 +42,9 @@ type fileIntroWhisperResult struct {
 
 // fileIntroWhisperFn sends jobs (keyed by an id the op chooses) to the whisper
 // pool and returns one result per key. An endpoint-level outage is returned as
-// a *transcribe.TransportError so the op defers instead of failing files.
+// a *transcribe.TransportError so the op defers instead of failing files. On an
+// error the returned map may still hold the results that settled before it
+// (nil when none did); a key missing from it was not answered.
 // Production uses transcribeFilesByPath; tests substitute a stub.
 var fileIntroWhisperFn = transcribeFilesByPath
 
@@ -62,8 +64,17 @@ func transcribeFilesByPath(ctx context.Context, jobs map[string]fileIntroJob, on
 		pj[k] = transcribe.PathJob{Path: j.Path, Seconds: j.Seconds}
 	}
 	res, err := transcribe.TranscribeByPathBatch(ctx, pj, transcribe.BatchOptions{OnProgress: onProgress})
-	if err != nil {
-		return nil, err
+	// The results that settled before a failure are converted and returned WITH
+	// the error: the caller applies them and defers the rest, instead of
+	// throwing away clips the workers already finished.
+	return fileIntroResultsFromBatch(res), err
+}
+
+// fileIntroResultsFromBatch converts the transport's results to the op's type,
+// nil when there are none (an error return that answered nothing).
+func fileIntroResultsFromBatch(res map[string]transcribe.BatchResult) map[string]fileIntroWhisperResult {
+	if len(res) == 0 {
+		return nil
 	}
 	out := make(map[string]fileIntroWhisperResult, len(res))
 	for k, r := range res {
@@ -71,7 +82,7 @@ func transcribeFilesByPath(ctx context.Context, jobs map[string]fileIntroJob, on
 		// the transport starts reporting them.
 		out[k] = fileIntroWhisperResult{Text: r.Text, Error: r.Error}
 	}
-	return out, nil
+	return out
 }
 
 // fileIntroPreflight reports whether any configured worker can take path jobs

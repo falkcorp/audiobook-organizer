@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/whisper_stuck_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b0e3d52-41c8-4f6a-9d2b-e85a1c4f7390
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -389,8 +389,21 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 }
 func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
-// bookPage runs one remote-mode page for the given books on the fx store.
+// bookPageRuns numbers the runs bookPage simulates.
+var bookPageRuns atomic.Int64
+
+// bookPage runs one remote-mode page for the given books on the fx store, as a
+// run of its own.
 func (fx *introFx) bookPage(t *testing.T, retryDurable bool, ids ...string) (int, *transcribeStatsAccum, string) {
+	t.Helper()
+	// Each page is its own run: a strike counts once per (file, run), so two
+	// pages sharing a run id would be one run seeing the file time out twice.
+	return fx.bookPageAs(t, fmt.Sprintf("op-book-%d", bookPageRuns.Add(1)), retryDurable, nil, ids...)
+}
+
+// bookPageAs is bookPage under an explicit run id, with setup applied to the
+// accumulator before the page runs (to install a write gate, for one).
+func (fx *introFx) bookPageAs(t *testing.T, runID string, retryDurable bool, setup func(*transcribeStatsAccum), ids ...string) (int, *transcribeStatsAccum, string) {
 	t.Helper()
 	books := make([]database.Book, 0, len(ids))
 	for _, id := range ids {
@@ -399,7 +412,10 @@ func (fx *introFx) bookPage(t *testing.T, retryDurable bool, ids ...string) (int
 	rootDir, _ := noClipWrites(t)
 	logs := &syncBuf{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	accum := newTranscribeStatsAccum(nil, "op-book", len(ids), time.Now())
+	accum := newTranscribeStatsAccum(nil, runID, len(ids), time.Now())
+	if setup != nil {
+		setup(accum)
+	}
 	n := fx.p.processTranscribePage(context.Background(), fx.s, log, books, rootDir, nil, accum, false, retryDurable, pageJournal{}, extractRemote)
 	return n, accum, logs.String()
 }
@@ -465,13 +481,7 @@ func TestBookPage_SkipsAFirstFileThatIsAlreadyPermanent(t *testing.T) {
 	fx := newIntroFx(t)
 	b := fx.book("Year One Deluxe")
 	id, _ := fx.file(b, "01.m4b", 1, "perm-1", false)
-	for range transcribeTimeoutStrikeLimit {
-		if _, err := fx.s.RecordIntroTimeout(b, id, database.IntroTimeoutStrike{
-			SourceHash: "perm-1", RunOpID: "file-op", Detail: decoderTimeoutText, At: time.Now(), Limit: transcribeTimeoutStrikeLimit,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	fx.strike(b, id, "perm-1", transcribeTimeoutStrikeLimit) // earlier runs of the per-file op
 	if r := fx.row(b, id); r.TranscribeStatus == nil || *r.TranscribeStatus != statusTranscribeTimeout {
 		t.Fatalf("setup: file not permanent: %+v", r)
 	}
@@ -485,8 +495,10 @@ func TestBookPage_SkipsAFirstFileThatIsAlreadyPermanent(t *testing.T) {
 	if bk := fx.bookRow(b); bk.TranscribeStatus == nil || *bk.TranscribeStatus != statusTranscribeTimeout {
 		t.Fatalf("the verdict must be stamped on the book so selection skips it: %v", bk.TranscribeStatus)
 	}
-	if st := accum.snapshot(); st.TranscribeTimeout != 1 {
-		t.Fatalf("stats: %+v", st)
+	// Not sent, so not an attempt: the stamp must not inflate Attempted or the
+	// per-status counter (it did, once per run, and again on every forced run).
+	if st := accum.snapshot(); st.TranscribeTimeout != 0 || st.Attempted != 0 || st.SkippedExisting != 1 {
+		t.Fatalf("a book that was never sent was counted as an attempt: %+v", st)
 	}
 
 	fx.bookPage(t, true, b)

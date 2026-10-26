@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package maintenance
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -58,6 +59,19 @@ type transcribeStatsAccum struct {
 	// a whisper request is outstanding (see tickWhileWaiting). Set once before
 	// the pages start.
 	heartbeat func(msg string)
+	// gate, when set, blocks until no library scan is running and fails when
+	// that cannot be established or ctx ends. The per-book op calls it before a
+	// book_file write (a timeout strike), which a scan's unlocked batch upsert
+	// could otherwise race. Set once before the pages start; nil runs ungated.
+	gate func(ctx context.Context) error
+}
+
+// gateWrite waits for the write gate; nil when none is set.
+func (a *transcribeStatsAccum) gateWrite(ctx context.Context) error {
+	if a.gate == nil {
+		return nil
+	}
+	return a.gate(ctx)
 }
 
 // beat reports liveness through the run's heartbeat; a no-op when none is set.
