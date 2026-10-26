@@ -1,7 +1,7 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -31,21 +31,29 @@ func TestRequestTimeout(t *testing.T) {
 		}
 		return out
 	}
-	worker := remoteHealth{ClipTimeoutFloorS: 60, ClipTimeoutFactor: 4}
+	// A current worker reports the two waits that precede a clip as well.
+	worker := remoteHealth{ClipTimeoutFloorS: 60, ClipTimeoutFactor: 4, ChildReadyTimeoutS: 300, ExtractTimeoutS: 120}
+	// A 1.8.0 worker reports the deadline formula but not the two waits.
+	worker18 := remoteHealth{ClipTimeoutFloorS: 60, ClipTimeoutFactor: 4}
 	cases := []struct {
-		name string
-		h    remoteHealth
-		c    []float64
-		want time.Duration
+		name    string
+		h       remoteHealth
+		c       []float64
+		extract bool
+		want    time.Duration
 	}{
-		{"worker reports nothing: historical ceiling", remoteHealth{}, clips(16, 90), 600 * time.Second},
-		{"full chunk of 90s clips: sum of 360s limits + slack", worker, clips(16, 90), (16*360 + 60) * time.Second},
-		{"short clips use the 60s floor", worker, clips(16, 5), (16*60 + 60) * time.Second},
-		{"small request never drops below the historical ceiling", worker, clips(2, 5), 600 * time.Second},
-		{"floor only", remoteHealth{ClipTimeoutFloorS: 100}, clips(10, 90), (10*100 + 60) * time.Second},
+		{"worker reports nothing: historical ceiling", remoteHealth{}, clips(16, 90), false, 600 * time.Second},
+		{"worker reports nothing, path request: historical ceiling", remoteHealth{}, clips(16, 90), true, 600 * time.Second},
+		{"full upload chunk: clip limits + slack + one model load", worker, clips(16, 90), false, (16*360 + 60 + 300) * time.Second},
+		{"full path chunk adds one ffmpeg allowance", worker, clips(16, 90), true, (16*360 + 60 + 300 + 120) * time.Second},
+		{"short clips use the 60s floor", worker, clips(16, 5), false, (16*60 + 60 + 300) * time.Second},
+		// No 600 s floor: a one-clip request is bounded by its own limit.
+		{"one short clip is NOT floored at the historical ceiling", worker, clips(1, 5), false, (60 + 60 + 300) * time.Second},
+		{"floor only", remoteHealth{ClipTimeoutFloorS: 100, ChildReadyTimeoutS: 10}, clips(10, 90), false, (10*100 + 60 + 10) * time.Second},
+		{"1.8.0 worker: the allowances default to its own defaults", worker18, clips(2, 5), true, (2*60 + 60 + 300 + 120) * time.Second},
 	}
 	for _, tc := range cases {
-		if got := requestTimeout(tc.h, tc.c); got != tc.want {
+		if got := requestTimeout(tc.h, tc.c, tc.extract); got != tc.want {
 			t.Errorf("%s: requestTimeout = %s, want %s", tc.name, got, tc.want)
 		}
 	}
@@ -53,15 +61,17 @@ func TestRequestTimeout(t *testing.T) {
 
 func TestRequestTimeoutOutlastsTheWorkersOwnVerdict(t *testing.T) {
 	// The invariant the formula exists for: whatever the worker spends on a
-	// request (every clip hitting its deadline), the client is still waiting.
-	h := remoteHealth{ClipTimeoutFloorS: 60, ClipTimeoutFactor: 4}
+	// request when every clip hits its deadline, the client is still waiting.
+	h := remoteHealth{ClipTimeoutFloorS: 60, ClipTimeoutFactor: 4, ChildReadyTimeoutS: 300, ExtractTimeoutS: 120}
 	secs := []float64{90, 10, 300, 5, 90}
 	var workerWorst time.Duration
 	for _, s := range secs {
 		workerWorst += time.Duration(max(h.ClipTimeoutFloorS, h.ClipTimeoutFactor*s) * float64(time.Second))
 	}
-	if got := requestTimeout(h, secs); got <= workerWorst {
-		t.Fatalf("ceiling %s does not outlast the worker's worst case %s", got, workerWorst)
+	for _, extract := range []bool{false, true} {
+		if got := requestTimeout(h, secs, extract); got <= workerWorst {
+			t.Fatalf("extract=%v: ceiling %s does not outlast the worker's worst case %s", extract, got, workerWorst)
+		}
 	}
 }
 
@@ -78,31 +88,31 @@ func TestStuckFromHTTP(t *testing.T) {
 	}
 
 	t.Run("client timeout on an accepted request is stuck", func(t *testing.T) {
-		got := stuckFromHTTP(context.Background(), timeoutErr, "http://w", time.Second, ids)
+		got := stuckFromHTTP(context.Background(), timeoutErr, "http://192.0.2.1", time.Second, ids)
 		if !IsWorkerStuck(got) {
 			t.Fatalf("got %v, want a stuck error", got)
 		}
 		se, ok := errors.AsType[*WorkerStuckError](got)
-		if !ok || !slices.Equal(se.Jobs, ids) || se.URL != "http://w" {
+		if !ok || !slices.Equal(se.Jobs, ids) || se.URL != "http://192.0.2.1" {
 			t.Fatalf("stuck error = %+v", se)
 		}
 	})
 	t.Run("a cancelled caller is not stuck", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if got := stuckFromHTTP(ctx, timeoutErr, "http://w", time.Second, ids); IsWorkerStuck(got) {
+		if got := stuckFromHTTP(ctx, timeoutErr, "http://192.0.2.1", time.Second, ids); IsWorkerStuck(got) {
 			t.Fatalf("operator cancellation read as a stuck worker: %v", got)
 		}
 	})
 	t.Run("a dial timeout is an outage, not stuck", func(t *testing.T) {
-		dialErr := &url.Error{Op: "Post", URL: "http://w", Err: &net.OpError{Op: "dial", Net: "tcp", Err: timeoutNetErr{}}}
-		if got := stuckFromHTTP(context.Background(), dialErr, "http://w", time.Second, ids); IsWorkerStuck(got) {
+		dialErr := &url.Error{Op: "Post", URL: "http://192.0.2.1", Err: &net.OpError{Op: "dial", Net: "tcp", Err: timeoutNetErr{}}}
+		if got := stuckFromHTTP(context.Background(), dialErr, "http://192.0.2.1", time.Second, ids); IsWorkerStuck(got) {
 			t.Fatalf("dial timeout read as a stuck worker: %v", got)
 		}
 	})
 	t.Run("a refused connection is not stuck", func(t *testing.T) {
 		_, err := http.Get(deadServerURL(t))
-		if got := stuckFromHTTP(context.Background(), err, "http://w", time.Second, ids); IsWorkerStuck(got) {
+		if got := stuckFromHTTP(context.Background(), err, "http://192.0.2.1", time.Second, ids); IsWorkerStuck(got) {
 			t.Fatalf("connection refused read as stuck: %v", got)
 		}
 	})
@@ -120,7 +130,7 @@ func (timeoutNetErr) Timeout() bool   { return true }
 func (timeoutNetErr) Temporary() bool { return true }
 
 func TestStuckTransportErrorSaysWorkerStuckNotUnreachable(t *testing.T) {
-	err := classifyTransport([]string{"http://w"}, &WorkerStuckError{URL: "http://w", After: 10 * time.Minute, Jobs: []string{"a"}})
+	err := classifyTransport([]string{"http://192.0.2.1"}, &WorkerStuckError{URL: "http://192.0.2.1", After: 10 * time.Minute, Jobs: []string{"a"}})
 	if !IsTransport(err) || !IsWorkerStuck(err) {
 		t.Fatalf("want a transport error that is stuck, got %v", err)
 	}
@@ -146,6 +156,10 @@ func TestStuckRefusal(t *testing.T) {
 		{"idle current worker", g(f64(0), nil, true), false},
 		{"inside its deadline", g(f64(50), f64(60), true), false},
 		{"past the deadline but inside the grace", g(f64(80), f64(60), true), false},
+		// stuckGrace is 45 s: the parent reaps a killed decoder for up to 30 s
+		// (InferenceChild._kill) and busy_seconds keeps climbing meanwhile.
+		{"inside the grace that covers a 30 s reap", g(f64(100), f64(60), true), false},
+		{"just past the grace", g(f64(106), f64(60), true), true},
 		{"past deadline and grace", g(f64(500), f64(60), true), true},
 		{"old worker reports nothing", g(nil, nil, true), false},
 		{"unprobed endpoint is not judged", g(f64(500), f64(60), false), false},
@@ -351,6 +365,7 @@ type splitHarness struct {
 	sends  []sendRecord
 	poison map[string]bool
 	eps    []Endpoint
+	srvs   []*httptest.Server // the fake workers' /health servers, index-aligned with eps
 }
 
 type sendRecord struct {
@@ -370,6 +385,7 @@ func newSplitHarness(t *testing.T, workers int, health map[string]any, poison ..
 			_ = json.NewEncoder(rw).Encode(hh)
 		}))
 		t.Cleanup(srv.Close)
+		h.srvs = append(h.srvs, srv)
 		h.eps = append(h.eps, Endpoint{URL: srv.URL, Concurrency: 1, Priority: i + 1, Label: fmt.Sprintf("w%d", i)})
 	}
 	return h

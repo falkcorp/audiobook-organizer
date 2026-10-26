@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -303,10 +303,13 @@ func describeRefusals(refused []gpuRefusal) string {
 }
 
 // stuckGrace is how far past its own per-clip deadline a worker's current
-// inference may run before the gate calls it stuck. The worker kills a decode
-// that blows its deadline and respawns the decoder, which takes seconds; the
-// grace keeps a worker mid-recovery from being refused.
-const stuckGrace = 30.0
+// inference may run before the gate calls it stuck. When the deadline fires the
+// worker SIGKILLs the decoder's process group and then reaps it, waiting up to
+// 30 s (whisper_mlx_server.py, InferenceChild._kill), during which busy_seconds
+// keeps climbing; the grace is that wait plus 15 s, so a worker that is in the
+// middle of a clean recovery is never refused, and a worker whose decoder will
+// not die (the reap gives up after 30 s) is.
+const stuckGrace = 45.0
 
 // stuckRefusal is the reason a worker is refused because it is wedged, or "".
 // busy_seconds is how long its current inference has run and busy_limit_seconds

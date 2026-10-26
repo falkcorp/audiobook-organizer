@@ -1,14 +1,16 @@
 // file: internal/transcribe/remote.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package transcribe
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -103,6 +105,13 @@ type remoteHealth struct {
 	// deadline formula, max(floor, factor x audio seconds); see requestTimeout.
 	ClipTimeoutFloorS float64 `json:"clip_timeout_floor_s"`
 	ClipTimeoutFactor float64 `json:"clip_timeout_factor"`
+	// ChildReadyTimeoutS is how long the worker waits for a freshly started
+	// inference process to load the model, and ExtractTimeoutS how long it gives
+	// ffmpeg to cut a path job's clip. Both elapse BEFORE a clip's own clock
+	// starts, so neither is inside max(floor, factor x seconds); 0 means the
+	// worker predates the field (see requestTimeout).
+	ChildReadyTimeoutS float64 `json:"child_ready_timeout_s"`
+	ExtractTimeoutS    float64 `json:"extract_timeout_s"`
 }
 
 // defaultRequestTimeout is the ceiling on one batch request when the worker
@@ -114,14 +123,39 @@ var defaultRequestTimeout = 600 * time.Second
 // per-clip verdict always arrives before the client gives up on the request.
 const requestSlack = 60 * time.Second
 
+// Allowances for a worker that reports its clip deadline but not the two waits
+// that precede a clip (whisper_mlx_server.py 1.8.x): its own defaults, so the
+// ceiling is never SHORTER than the worker's real worst case for these.
+const (
+	defaultChildReadyAllowance = 300 * time.Second
+	defaultExtractAllowance    = 120 * time.Second
+)
+
 // requestTimeout is the HTTP ceiling for one batch request holding clips of the
-// given lengths. A current worker bounds EVERY clip by max(floor, factor x
-// seconds) and answers a clip that blows it with a per-file transcribe_timeout,
-// so the request is guaranteed to end by the sum of those limits. The client
-// must wait at least that long: a shorter ceiling would preempt the worker's
-// verdict and turn a per-file outcome into a batch-level "stuck" one. When the
-// worker reports no deadline formula the historical 600s ceiling stands.
-func requestTimeout(h remoteHealth, clipSeconds []float64) time.Duration {
+// given lengths; extract is true for a path request, where the worker also cuts
+// each clip with ffmpeg inside the request.
+//
+// A worker that reports its deadline formula bounds every clip by
+// max(floor, factor x seconds) and answers a clip that blows it with a per-file
+// transcribe_timeout. The ceiling is the sum of those limits plus slack, plus
+// ONE allowance for each wait that is outside the clip clock and happens once
+// per request on a healthy worker: loading the model into a cold child, and (for
+// a path request) ffmpeg. There is no 600 s floor: a one-clip request from a
+// current worker is bounded by its own limit, not by a number chosen for the
+// old in-process decoder.
+//
+// This is a BACKSTOP, not a guarantee, and the sum is not a proof the request
+// ends: it does not count queueing on the worker's inference lock behind another
+// request, a model reload after EVERY timed-out clip (each can take up to the
+// child-ready timeout), or ffmpeg runs that outlast the pool they share. What
+// catches a worker that has stopped answering is superviseRequest, which polls
+// /health during the request and does not wait for this ceiling. A request that
+// does reach it is read as stuck, and the dispatcher splits it and probes the
+// worker again, so an overrun by a healthy but busy worker costs a retry, not a
+// verdict.
+//
+// A worker that reports no formula keeps the historical ceiling.
+func requestTimeout(h remoteHealth, clipSeconds []float64, extract bool) time.Duration {
 	if h.ClipTimeoutFloorS <= 0 && h.ClipTimeoutFactor <= 0 {
 		return defaultRequestTimeout
 	}
@@ -129,7 +163,12 @@ func requestTimeout(h remoteHealth, clipSeconds []float64) time.Duration {
 	for _, secs := range clipSeconds {
 		worst += max(h.ClipTimeoutFloorS, h.ClipTimeoutFactor*secs)
 	}
-	return max(defaultRequestTimeout, time.Duration(worst*float64(time.Second))+requestSlack)
+	total := time.Duration(worst*float64(time.Second)) + requestSlack
+	total += cmp.Or(time.Duration(h.ChildReadyTimeoutS*float64(time.Second)), defaultChildReadyAllowance)
+	if extract {
+		total += cmp.Or(time.Duration(h.ExtractTimeoutS*float64(time.Second)), defaultExtractAllowance)
+	}
+	return total
 }
 
 // wavBytesPerSecond is the worker's 16 kHz mono 16-bit extraction format; an
@@ -225,6 +264,13 @@ func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteH
 		maps.Copy(results, sent)
 		if err != nil {
 			fanOut(results, followers)
+			// Journal-served results are as valid as the sent ones; dropping
+			// them here would force every later run to re-read them.
+			maps.Copy(results, served)
+			if stuck, ok := errors.AsType[*WorkerStuckError](err); ok && len(followers) > 0 {
+				// The followers' leader is stuck; they share its fate.
+				stuck.Followers = followers
+			}
 			return results, err
 		}
 	}
@@ -270,20 +316,30 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, h remoteHeal
 		// feeding.
 		release, err := acquireInFlight(ctx, remoteURL, limit)
 		if err != nil {
-			return nil, err
+			// Chunks that completed before this one are valid: hand them up.
+			return results, err
 		}
 		secs := make([]float64, len(chunk))
 		ids := make([]string, len(chunk))
 		for i, e := range chunk {
 			secs[i], ids[i] = wavSeconds(e.path), e.id
 		}
-		timeout := requestTimeout(h, secs)
+		timeout := requestTimeout(h, secs, false)
 		// The ceiling is per request: it scales with the clips in THIS chunk.
 		client := &http.Client{Timeout: timeout}
-		batchResults, uploaded, err := sendBatch(ctx, client, remoteURL, chunk)
+		var (
+			batchResults map[string]BatchResult
+			uploaded     map[string]string
+		)
+		// superviseRequest watches the worker from the side and ends the
+		// request early when it stops answering; see its doc comment.
+		err = superviseRequest(ctx, remoteURL, h, timeout, ids, func(rctx context.Context) error {
+			var serr error
+			batchResults, uploaded, serr = sendBatch(rctx, client, remoteURL, chunk)
+			return serr
+		})
 		release()
 		if err != nil {
-			err = stuckFromHTTP(ctx, err, remoteURL, timeout, ids)
 			// Chunks that completed before this one stay in results and are
 			// returned with the error: they are valid, so the dispatcher keeps
 			// them rather than re-sending them elsewhere.
@@ -305,7 +361,7 @@ func transcribeRemoteBatched(ctx context.Context, remoteURL string, h remoteHeal
 		if batchSleep > 0 && end < len(ordered) {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return results, ctx.Err()
 			case <-time.After(batchSleep):
 			}
 		}
@@ -474,7 +530,8 @@ func transcribeRemotePerFile(ctx context.Context, remoteURL string, limit int, j
 		}
 	}
 	if firstErr != nil {
-		return nil, firstErr
+		// The files that finished are valid (and already journalled).
+		return results, firstErr
 	}
 	return results, nil
 }

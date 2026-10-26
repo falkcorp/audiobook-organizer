@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -112,7 +112,14 @@ func TranscribeBatchOpts(ctx context.Context, jobs map[string]string, opts Batch
 			// of writing whisper_error to every book in it. Returning a bare
 			// error here is what turned the 2026-07-01 outage into ~34,000 false
 			// per-book verdicts.
-			return nil, err
+			//
+			// The results returned WITH the error are the jobs that settled
+			// before the batch failed (transcripts, and condemned
+			// transcribe_timeout verdicts). They are valid per-file answers: a
+			// caller applies them and then handles the error, because
+			// discarding them redoes the work and loses the verdict that a
+			// file wedges the decoder.
+			return results, err
 		}
 		return results, nil
 	}

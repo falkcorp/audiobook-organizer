@@ -1,7 +1,7 @@
 // file: internal/transcribe/errors.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e630c83e-990b-47c4-ac80-dea9e41b20c5
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -34,6 +34,12 @@ type WorkerStuckError struct {
 	After time.Duration
 	// Jobs are the ids of the jobs in the stuck request.
 	Jobs []string
+	// Followers maps a job in Jobs to the ids that were NOT sent because their
+	// audio is byte-identical to it (the journal's content dedup). They share
+	// its fate: the dispatcher splits and condemns them with it instead of
+	// re-sending each one alone as if it were an unrelated file. Nil for path
+	// jobs, which are never assumed identical without reading them.
+	Followers map[string][]string
 }
 
 func (e *WorkerStuckError) Error() string {

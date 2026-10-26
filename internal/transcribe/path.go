@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package transcribe
 
@@ -142,6 +142,10 @@ func PathPipelineAvailable(ctx context.Context) (ok bool, reason string) {
 // refusal, so the caller defers the page and writes no per-book status. As with
 // TranscribeBatchOpts, a per-file failure is a BatchResult.Error inside a
 // successful return, never an error here.
+//
+// On an error the returned map still holds every result that settled before
+// the failure (nil only when nothing did), so the caller applies those and
+// defers the rest instead of discarding finished work.
 func TranscribeByPathBatch(ctx context.Context, jobs map[string]PathJob, opts BatchOptions) (map[string]BatchResult, error) {
 	if len(jobs) == 0 {
 		return nil, nil
@@ -297,7 +301,8 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 
 		release, err := acquireInFlight(ctx, remoteURL, limit)
 		if err != nil {
-			return nil, err
+			// Chunks that completed before this one are valid: hand them up.
+			return results, err
 		}
 		// Extraction plus inference both happen inside the request, so the
 		// ceiling scales with the clips in THIS chunk (see requestTimeout).
@@ -306,12 +311,16 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 		for i, e := range chunk {
 			secs[i], ids[i] = float64(e.job.Seconds), e.id
 		}
-		timeout := requestTimeout(h, secs)
+		timeout := requestTimeout(h, secs, true)
 		client := &http.Client{Timeout: timeout}
-		batchResults, err := sendPathBatch(ctx, client, remoteURL, chunk)
+		var batchResults map[string]BatchResult
+		err = superviseRequest(ctx, remoteURL, h, timeout, ids, func(rctx context.Context) error {
+			var serr error
+			batchResults, serr = sendPathBatch(rctx, client, remoteURL, chunk)
+			return serr
+		})
 		release()
 		if err != nil {
-			err = stuckFromHTTP(ctx, err, remoteURL, timeout, ids)
 			pathLog.Warn("path chunk failed, keeping completed work from this endpoint: url=%s completed=%d total=%d chunk_start=%d stuck=%t err=%s",
 				remoteURL, done, total, start, IsWorkerStuck(err), err.Error())
 			return results, fmt.Errorf("transcribe-path-batch chunk %d-%d: %w", start, end, err)
@@ -327,7 +336,7 @@ func transcribePathChunks(ctx context.Context, remoteURL string, h remoteHealth,
 		if batchSleep > 0 && end < len(ordered) {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return results, ctx.Err()
 			case <-time.After(batchSleep):
 			}
 		}
