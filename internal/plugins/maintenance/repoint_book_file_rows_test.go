@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c8e1a57-92d3-4f6b-b0a4-6e3f9d2c7b18
 // last-edited: 2026-10-26
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -460,6 +461,31 @@ func (s *casRetryStore) ModifyBookFile(bookID, fileID string, fn func(*database.
 		}
 		return nil
 	})
+}
+
+// A write whose fsync failed was still applied: the row is repointed, so its
+// journal row must keep standing, or the repoint could not be undone.
+func TestRepointBookFileRows_DurabilityUnknownKeepsItsJournalRow(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	opID := "01RBFOPDURAB0000000000000Z"
+	rep := runRBF(t, &durabilityUnknownStore{PebbleStore: f.s}, true, &opIDReporter{id: opID}, f.item())
+	require.Equal(t, 1, rep.Failed)
+	require.Equal(t, f.newPath, f.storedRow(t).FilePath, "the write was applied")
+
+	standing, voided := repointJournalRows(t, f.s, opID)
+	require.Len(t, standing, 1, "the repoint happened, so its undo row stands")
+	require.Empty(t, voided)
+}
+
+// durabilityUnknownStore applies the write for real, then reports that its
+// fsync failed, the way the store does (database.ErrBookFileDurabilityUnknown).
+type durabilityUnknownStore struct{ *database.PebbleStore }
+
+func (s *durabilityUnknownStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if _, err := s.PebbleStore.ModifyBookFile(bookID, fileID, fn); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("ModifyBookFile: write %s: %w: fsync", fileID, database.ErrBookFileDurabilityUnknown)
 }
 
 // repointJournalRows returns the repoint rows of one op, split into the ones

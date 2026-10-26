@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
 // last-edited: 2026-10-26
 
@@ -726,8 +726,13 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 		// Nothing was written, but an earlier run of the callback may have
 		// journaled the repoint (a lost CAS round, then a refusal or a conflict
 		// on the next one). Take the row back so the undo ledger never claims a
-		// repoint that did not happen.
-		voidErr := rbfVoidJournal(env.store, journaled)
+		// repoint that did not happen. Not when only the fsync failed
+		// (database.ErrBookFileDurabilityUnknown): that write WAS applied, and its
+		// journal row is what undoes it.
+		var voidErr error
+		if !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
+			voidErr = rbfVoidJournal(env.store, journaled)
+		}
 		if err != nil {
 			if voidErr != nil {
 				return err.Error() + "; " + voidErr.Error()
