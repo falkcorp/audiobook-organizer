@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.4.0
+// version: 4.4.1
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -793,9 +793,9 @@ func hbSameRow(row *database.BookFile, bf database.BookFileCore) bool {
 // an error: it is counted as busy and retried next run. A row that already has a
 // hash keeps it and counts as hashed.
 //
-// When the run has a journal, the store call is the variant that does NOT
-// recompute the book's aggregates (a run with no journal uses ModifyBookFile, see
-// below): that would decode every file row of the book once per stored hash (a
+// When the run has a journal and the store offers the deferred writer, the store
+// call is the variant that does NOT recompute the book's aggregates (otherwise it
+// uses ModifyBookFile, see below): that would decode every file row of the book once per stored hash (a
 // 400-chapter book: 400 recomputes, 160k row decodes). The hash does feed the
 // stored aggregate (a missing row whose hash matches a present row is absorbed
 // into it, book_runtime.go), so the book IS recomputed, once per chunk, by
@@ -1191,7 +1191,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 			run.journalID = hbJournalStateID(opID)
 			if ds, ok := database.AsCapability[hbDeferredStore](store); ok {
 				run.deferStore = ds
-			} else {
+			} else if !dryRun {
 				// Correct but slow: every stored hash recomputes its book.
 				run.log("warn", "This store cannot defer book aggregate recomputes; each hash is stored with its own recompute, which is slower on books with many files", nil)
 			}
