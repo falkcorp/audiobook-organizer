@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.2.2 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -564,7 +564,12 @@ the row above:
   with an EMPTY join whose snapshot names a live author other than `AuthorID`: the
   organizer files such a book under the snapshot, so filling the join from
   `AuthorID` would flip the filing author, and the snapshot is never refreshed in
-  that case. Where there is no such signal, this rule above applies unchanged and the
+  that case. A snapshot whose id is 0 or resolves to no record still carries a name:
+  it is compared with `AuthorID`'s own record name (normalized), and a different name
+  is the same conflict (`author_id_snapshot_conflict`, nothing written, snapshot not
+  refreshed). That is a comparison of two names the book carries, never a lookup: no
+  author is searched for or credited by name. Tested in
+  `TestCreditsBackfill_SnapshotWithoutAResolvableIDIsComparedByName`. Where there is no such signal, this rule above applies unchanged and the
   prepend is written and listed in `filing_author_changes`. The same snapshot check
   guards the all-zero tie-break when the tie-break reorders the join; all-zero
   positions with no contradicting snapshot are renumbered with `AuthorID` first, as
@@ -623,17 +628,37 @@ the row above:
   (`registry.RunItems` with `Concurrency` set). Books are disjoint, so two workers
   never write the same row. Narrator records the run creates are serialised and shared
   by accent-folded name, so two books naming one new narrator get one record.
-- **Narrator names.** A narrator name is matched exactly first, then by an
-  accent- and case-folded key (`authorjunk.FoldKey`) when exactly one record has it.
-  A fold key that matches two records sends the book to `narrator_name_ambiguous`.
+- **Narrator names.** A narrator name is matched exactly first, then by its fold key
+  (`authorjunk.FoldKey`: case, accents, punctuation and spaces) when exactly one record
+  has it. A fold key that matches two records sends the book to `narrator_name_ambiguous`.
+  A name linked to a record under another spelling is credited under the RECORD's
+  spelling, and only that name is respelled inside the Narrator column as stored (a
+  "Read by" prefix, a role credit and a co-narrating author stay) and inside the
+  `NarratorsJSON` entries that carry it, in the same journaled write
+  (`narrator_column_respelled`, `narrators_json_respelled`; the revert restores both).
+  The respelled column must read back through `CleanNarratorCredit` as exactly the
+  record's names and the respelled JSON must still match the junction or the column,
+  or the book is listed for review (`narrator_spelling_unreconcilable`,
+  `narrator_spelling_json_conflict`). When several books of the cohort name one NEW
+  narrator under spellings of one fold key, the record takes the most frequent
+  spelling among them (ties: the lexically smallest), chosen before the first write, so
+  a dry run predicts it. A rescan with an unlocked narrator field reads the tag's
+  spelling back and the column-to-junction sync can mint an unaccented duplicate
+  record; that is a separate change (`todo.d/2026-10-27-narrator-sync-fold-match.md`).
   Junk names ("N/A", "Various", "Unknown", "Narrator", "Full Cast", a placeholder and
   the like) are never turned into a record: the book goes to `narrator_junk_name`. The
   check runs on the raw entry before the narrator cleaner splits it, because "N/A"
   splits on the slash.
 - **Result payload.** The class lists are not capped: every count in the result clicks
-  through to its book ids, and the repo has no separate per-operation list endpoint. At
-  the census numbers (about 55,000 books) a class with every book in it is roughly
-  40 bytes per id, so a few megabytes at most. A resumed apply loads the operation's
+  through to its book ids. A book sits in several classes at once, so at the census
+  numbers (about 55,000 books) the lists are 150,000 to 300,000 ids, 5 to 12 MB at
+  about 40 bytes an id. Kept inside the operation's own row that was read whole by every
+  reader of an operation row (`GetOperationV2`, the `/system/status` poll, the boot
+  scan, the diagnostics bundle) and mirrored to v3, so the result keeps the summary, the
+  counts and the samples, and the ids are stored as op rows (`database.OpRowStore`, one
+  row per 1,000 ids, `database.SaveClassLists`; the repairs plan moved out of its result
+  the same way). A client pages one class with
+  `GET /operations/:id/class-lists/:class?offset=&limit=`. A resumed apply loads the operation's
   journal rows once to verify them (`GetOperationChanges`); there is no per-operation
   iterator, and `ScanOperationChanges` walks the whole journal, so it is not used.
   `limit` keeps each run's write count bounded in any case.

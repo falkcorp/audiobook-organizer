@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-27
 
@@ -78,7 +78,10 @@ import (
 //     other than AuthorID where AuthorID would be prepended or would win the
 //     tie-break of tied positions that it reorders, and, where the join is
 //     empty (the organizer then files under the snapshot), any live author
-//     other than AuthorID. The signal is the SNAPSHOT only. The join's stored
+//     other than AuthorID: by id when the snapshot's id resolves, and by the
+//     snapshot's NAME compared with AuthorID's record name when it does not
+//     (id 0, or no such record; a comparison of two names the book carries,
+//     not a lookup). The signal is the SNAPSHOT only. The join's stored
 //     order alone is not one: a book with all-zero positions and no
 //     contradicting snapshot is renumbered with AuthorID first, as the plan's
 //     tie-break rule says, and listed in filing_author_changes when that moves
@@ -149,27 +152,44 @@ import (
 // below it from the result, and every count here must click through.
 //
 // EVERY COUNT CLICKS THROUGH. The result (GET /operations/:id/result) carries
-// every class with its sorted book ids, plus a few before/after samples per
-// write class. A dry run writes nothing at all, not even journal rows.
+// every class with its count and a few before/after samples per write class;
+// the sorted book ids of each class are paged from
+// GET /operations/:id/class-lists/:class?offset=&limit=. A dry run writes
+// nothing at all, not even journal rows (the stored result's id lists are the
+// one exception: they are the run's output).
 //
 // RESULT SIZE. The id lists are deliberately not capped: a cap would break
-// "every count clicks through", and the repo has no per-operation list
-// endpoint to page the rest from (the per-book op_result keyspace is the
-// metadata-candidate store, read through its own paged handler). The sibling
-// maintenance.credit-census stores its class lists the same way: whole, in the
-// operation's own opv2 row (registry.ReporterSetResult), with no size cap in
-// SetOperationV2Result. The size is NOT small, though. A book sits in several
-// classes at once: a write class or two (a fill plus a snapshot refresh or a
-// narrator fill), usually filing_author_changes or search_identity_changes,
-// and any census-derived review or held class, so a full apply over the 55,000
-// book census lists roughly 150,000 to 300,000 ids. At about 30-40 bytes an id
-// that is about 5-9 MB (up to 12 MB) in one row, read whole by
-// GET /operations/:id/result. The first estimate here, 2 MB, counted one class
-// per book. If that row ever has to shrink, page the lists out of it (a
-// per-class list endpoint) rather than cap them. A resumed apply reads this
-// operation's journal rows once (GetOperationChanges, one operation's rows);
-// there is no per-operation iterator, and ScanOperationChanges walks the whole
-// journal, so it is not used.
+// "every count clicks through". A book sits in several classes at once (a write
+// class or two, usually filing_author_changes or search_identity_changes, and
+// any census-derived review or held class), so a full apply over the 55,000 book
+// census lists roughly 150,000 to 300,000 ids: about 5-9 MB, up to 12 MB. Kept
+// in the operation's own opv2 row that was read whole by GetOperationV2, by the
+// /system/status poll (ListRecentOperationsV2 decodes every row of the last
+// hour), by the boot scan and by the diagnostics bundle, and the v3 mirror
+// stored it a second time. So the lists are stored as op rows
+// (database.OpRowStore, the way internal/repairs/planstore.go keeps a plan's
+// rows; database.SaveClassLists, one row per 1,000 ids) and the operation's
+// result keeps the summary, the counts and the samples only
+// (storeCreditsBackfillResult). The store must be able to keep op rows: the run
+// refuses to start without it. A run with a limit still plans every book, so it
+// stores the full-library review and held lists again for its own operation id;
+// that is deliberate (they are that run's evidence, and a row set is deleted
+// with its operation), and a limited run's lists are the same size as a full
+// run's. A resumed apply reads this operation's journal rows once
+// (GetOperationChanges, one operation's rows); there is no per-operation
+// iterator, and ScanOperationChanges walks the whole journal, so it is not used.
+//
+// DURABILITY OF A SPELLING MOVE. A narrator name linked to a record under
+// another spelling ("Renee" to "Renée") is respelled inside the Narrator column
+// (and NarratorsJSON) so the written book plans clean. The tag still says what
+// it said: a rescan with an UNLOCKED narrator field reads the tag's spelling back
+// into the column, and the column -> junction sync
+// (database.syncNarratorJunctionAfterWrite, narrator_credit_sync.go) resolves
+// names by exact name, so it can mint a second, unaccented record for the name
+// and re-credit the book to it. This op does not change the scanner or the sync
+// (a separate change: todo.d/2026-10-27-narrator-sync-fold-match.md); until
+// then the census after a rescan is the check, and re-running this op finds the
+// book again.
 
 const creditsBackfillOpID = "maintenance.credits-backfill"
 
@@ -210,6 +230,10 @@ const (
 	cbNarratorFillFromColumn        = "narrator_fill_from_column"
 	cbNarratorFillFromNarratorsJSON = "narrator_fill_from_narrators_json"
 	cbNarratorPositionsRenumbered   = "narrator_positions_renumbered"
+	// informational: a spelling move (a name linked to a record under another
+	// spelling) respelled the Narrator column or NarratorsJSON in place.
+	cbNarratorColumnRespelled = "narrator_column_respelled"
+	cbNarratorsJSONRespelled  = "narrators_json_respelled"
 	// opt-in (write when allowed, review otherwise)
 	cbNarratorSelfRead     = cbAllowSelfRead
 	cbNarratorNewFromSplit = cbAllowNewFromSplit
@@ -220,6 +244,12 @@ const (
 	cbAuthorJoinNoAuthorRole   = "author_join_no_author_role"
 	cbNarratorsJSONNotPeople   = "narrators_json_not_people"
 	cbNarratorsJSONUnjoinable  = "narrators_json_unjoinable"
+	// cbNarratorSpellingUnreconcilable and cbNarratorSpellingJSONConflict are
+	// this op's own refusals of a spelling move. They used to reuse the census
+	// keys narrators_json_disagrees_both and narrators_json_unjoinable, which
+	// a dry run could not tell apart from the books the census already counts.
+	cbNarratorSpellingUnreconcilable = "narrator_spelling_unreconcilable"
+	cbNarratorSpellingJSONConflict   = "narrator_spelling_json_conflict"
 	// cbAuthorPlaceholder: the author the write would credit or file under is
 	// the placeholder ("Unknown Author").
 	cbAuthorPlaceholder = "author_placeholder"
@@ -287,15 +317,27 @@ var creditsBackfillClasses = []cbClassDef{
 	{cbNarratorFillFromColumn, cbKindWrite,
 		"book_narrators was empty and the Narrator column is a list of people: the junction becomes " +
 			"util.CleanNarratorCredit(column, the book's authors), the rule the column->junction sync uses (first row " +
-			"'narrator', the rest 'co-narrator'). A name that matches an existing record only without its accents " +
-			"(\"Renee\" for \"Renée\") is linked to that record, and the column is then rewritten to the record's " +
-			"spelling in the same write, so the book plans clean. Fixes census narrator_column_no_junction."},
+			"'narrator', the rest 'co-narrator'). A name that matches an existing record only by its fold key (case, " +
+			"accents, punctuation, spaces: \"Renee\" for \"Renée\", \"Jean Paul\" for \"Jean-Paul\") is linked to " +
+			"that record, and only that name inside the column is respelled to the record's spelling in the same write " +
+			"(narrator_column_respelled); the rest of the column (a \"Read by\" prefix, a role credit, the book's own " +
+			"author) is left as it was, so the book plans clean. Fixes census narrator_column_no_junction."},
 	{cbNarratorFillFromNarratorsJSON, cbKindWrite,
 		"book_narrators and the Narrator column were empty and NarratorsJSON names narrators: the junction is filled " +
 			"from it (each entry one person, the book's own authors dropped) and the column is set to the entries joined " +
 			"(\"A and B\"), so the column, the junction and the JSON agree. An entry that links to a record under " +
-			"another spelling is listed for review instead (narrators_json_disagrees_both). Fixes census " +
-			"narrators_json_junction_empty."},
+			"another spelling (fold key: case, accents, punctuation, spaces) is credited under the record's spelling, " +
+			"and the matching NarratorsJSON entry is respelled in the same write (narrators_json_respelled). Fixes " +
+			"census narrators_json_junction_empty."},
+	{cbNarratorColumnRespelled, cbKindInformational,
+		"A narrator name linked to an existing record under another spelling (fold key: case, accents, punctuation, " +
+			"spaces), so the name inside the Narrator column was replaced with the record's spelling. Only that name " +
+			"changes: a \"Read by\" prefix, role credits (\"- translator\") and a co-narrating author stay. The journal " +
+			"keeps the old column; the revert restores it. A dry run lists the books an apply would respell."},
+	{cbNarratorsJSONRespelled, cbKindInformational,
+		"A spelling move also respelled the matching NarratorsJSON entries to the record's spelling in the same " +
+			"write, so the JSON still matches the junction and the column. The journal keeps the old JSON; the revert " +
+			"restores it."},
 	{cbNarratorPositionsRenumbered, cbKindWrite,
 		"book_narrators positions were not 0..n-1: renumbered in position order. Fixes census narrator_positions_not_normalized."},
 	{cbNarratorSelfRead, cbKindReview,
@@ -340,10 +382,7 @@ var creditsBackfillClasses = []cbClassDef{
 		"book_narrators is not empty and the Narrator column is empty: a cleared column or a junction written directly. " +
 			"Narrator side not written."},
 	{ccNarratorsJSONDisagrees, cbKindReview,
-		"NarratorsJSON names narrators that match neither book_narrators nor the column. Narrator side not written. " +
-			"Also used when a narrator name links to an existing record under another spelling (\"Renee\" to \"Renée\"): " +
-			"the column would be rewritten to the record's spelling, which would leave NarratorsJSON (the old spelling, " +
-			"which this op does not rewrite) matching neither."},
+		"NarratorsJSON names narrators that match neither book_narrators nor the column. Narrator side not written."},
 	{ccNarratorIDDangling, cbKindReview,
 		"A book_narrators row names a narrator id that resolves to no record. Narrator side not written."},
 	{ccNarratorJunctionCombined, cbKindReview,
@@ -362,7 +401,9 @@ var creditsBackfillClasses = []cbClassDef{
 			"tied positions it reorders would put it ahead of that author; or the join is empty, the organizer files " +
 			"the book under the snapshot, and the snapshot names a live author other than AuthorID, so filling the join " +
 			"from AuthorID (author_fill_from_author_id) would flip the filing author and the snapshot refresh would " +
-			"overwrite the evidence. The signal is the snapshot only: all-zero positions with no contradicting " +
+			"overwrite the evidence. A snapshot whose id is 0 or resolves to no record is compared by name with " +
+			"AuthorID's record name (a comparison, never a lookup); a different name is the same conflict. The " +
+			"signal is the snapshot only: all-zero positions with no contradicting " +
 			"snapshot are renumbered with AuthorID first. A rescan reverts AuthorID from file tags when the author is " +
 			"unlocked and never touches the join or the snapshot, so AuthorID is the signal most likely to be the " +
 			"stale one. Author side not written, snapshot not refreshed."},
@@ -376,8 +417,16 @@ var creditsBackfillClasses = []cbClassDef{
 			"Narrator side not written."},
 	{cbNarratorsJSONUnjoinable, cbKindReview,
 		"The NarratorsJSON fill was refused: an entry contains a separator (\",\", \"&\", \"and\"), so the joined column " +
-			"would not split back into the same people. Also used when a name links to a record under another spelling " +
-			"(\"Renee\" to \"Renée\") and the column rewritten to that spelling would not read back as the same people."},
+			"would not split back into the same people."},
+	{cbNarratorSpellingUnreconcilable, cbKindReview,
+		"A narrator name links to an existing record under another spelling (fold key: case, accents, punctuation, " +
+			"spaces), but replacing it inside the Narrator column does not read back as the record's names through " +
+			"util.CleanNarratorCredit (the name is not found in the column as written, or the record's name carries a " +
+			"separator). Writing it would leave the census counting the book. Narrator side not written."},
+	{cbNarratorSpellingJSONConflict, cbKindReview,
+		"A narrator name links to an existing record under another spelling and the book has NarratorsJSON, but " +
+			"respelling the matching JSON entries would still leave it matching neither the junction nor the column. " +
+			"Narrator side not written."},
 	{cbHeldOwnerManual, cbKindHeld,
 		"Doctor Who / Big Finish / Torchwood (path, series, title, credits, transcription or franchise tag): the owner " +
 			"applies author/narrator fixes on these by hand. Not written."},
@@ -504,12 +553,16 @@ type cbSample struct {
 
 // cbClass is one class in the result.
 type cbClass struct {
-	Key        string      `json:"key"`
-	Kind       string      `json:"kind"`
-	Definition string      `json:"definition"`
-	Count      int         `json:"count"`
-	BookIDs    []string    `json:"book_ids"`
-	Samples    []*cbSample `json:"samples,omitempty"`
+	Key        string `json:"key"`
+	Kind       string `json:"kind"`
+	Definition string `json:"definition"`
+	Count      int    `json:"count"`
+	// BookIDs are the class's book ids, sorted. The scan returns them whole;
+	// the stored result leaves them out (the lists live in op rows, see
+	// storeCreditsBackfillResult) and a client pages them from
+	// GET /operations/:id/class-lists/:class.
+	BookIDs []string    `json:"book_ids,omitempty"`
+	Samples []*cbSample `json:"samples,omitempty"`
 }
 
 // creditsBackfillResult is the op's result payload.
@@ -554,9 +607,13 @@ type creditsBackfillResult struct {
 	CensusBefore map[string]int `json:"census_before"`
 	Counts       map[string]int `json:"counts"`
 	Classes      []cbClass      `json:"classes"`
-	StartedAt    time.Time      `json:"started_at"`
-	FinishedAt   time.Time      `json:"finished_at"`
-	Error        string         `json:"error,omitempty"`
+	// ClassLists says where the stored result's class id lists are (op rows
+	// beside the operation) and how many ids each class has; set on the stored
+	// result only.
+	ClassLists *database.ClassListSummary `json:"class_lists,omitempty"`
+	StartedAt  time.Time                  `json:"started_at"`
+	FinishedAt time.Time                  `json:"finished_at"`
+	Error      string                     `json:"error,omitempty"`
 }
 
 // cbSamplesPerClass bounds the before/after samples kept per write class:
@@ -587,8 +644,9 @@ func (p *Plugin) creditsBackfillDef() sdk.OperationDef {
 			"narrator credits and junction/column disagreements are listed for review, not written. Doctor Who / Big " +
 			"Finish / Torchwood books are held; iTunes books are held unless allow:[\"itunes\"]. Every write is journaled " +
 			"(pre-image of both lists and the four flat fields) and undone by the operation's revert. book_ids and limit " +
-			"apply a cohort first (the first limit eligible ids in sorted order, dry run and apply alike). Every class " +
-			"lists its book ids in GET /operations/:id/result, with before/after samples; books_to_reidentify counts the " +
+			"apply a cohort first (the first limit eligible ids in sorted order, dry run and apply alike). The result " +
+			"(GET /operations/:id/result) carries every class's count and before/after samples, and each class's book ids " +
+			"are paged from GET /operations/:id/class-lists/:class; books_to_reidentify counts the " +
 			"books whose AuthorID change makes the store re-identify them (provider quota). Declares a books write, so " +
 			"the dispatcher runs it alone against other book-writing operations (scan, organize, metadata apply), a dry " +
 			"run included (the registry declares writes per operation, not per mode); a full apply can hold that gate " +
@@ -631,6 +689,14 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 	if ops == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	// The class id lists are stored beside the operation, not in its result
+	// (storeCreditsBackfillResult), so the store must be able to keep them:
+	// found out here, before an apply writes a book, not after hours of it.
+	rows, ok := database.AsCapability[database.OpRowStore](p.deps.OperationQueueStore())
+	if !ok {
+		return fmt.Errorf("credits backfill: the operation store %T cannot keep the class id lists (database.OpRowStore)",
+			p.deps.OperationQueueStore())
+	}
 	var store creditsBackfillStore = ops
 	var mod database.BookCreditsModifier
 	if params.Apply {
@@ -654,7 +720,7 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 		if params.Apply && res.Counts != nil && res.BooksToWrite > 0 {
 			p.deps.InvalidateAuthorsCache()
 		}
-		if serr := registry.ReporterSetResult(reporter, res); serr != nil {
+		if serr := storeCreditsBackfillResult(reporter, rows, env.opID, res); serr != nil {
 			if err == nil {
 				return fmt.Errorf("store credits backfill result: %w", serr)
 			}
@@ -662,6 +728,46 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 		}
 	}
 	return err
+}
+
+// storeCreditsBackfillResult stores the run's result: the class id lists as op
+// rows under the operation's id (database.SaveClassLists), then the summary (the
+// result without the lists, carrying their ClassListSummary) as the operation's
+// result. The rows go first, so a stored result that names the row store has all
+// of its rows; a summary that fails to store takes the rows back.
+func storeCreditsBackfillResult(reporter sdk.Reporter, rows database.OpRowStore, opID string, res *creditsBackfillResult) error {
+	if rows == nil || opID == "" {
+		return errors.New("no operation id or row store to keep the class id lists under")
+	}
+	lists := make(map[string][]string, len(res.Classes))
+	for _, c := range res.Classes {
+		lists[c.Key] = c.BookIDs
+	}
+	sum, err := database.SaveClassLists(rows, opID, lists)
+	if err != nil {
+		return err
+	}
+	if err := registry.ReporterSetResult(reporter, res.summary(sum)); err != nil {
+		if cerr := database.ClearClassLists(rows, opID); cerr != nil {
+			_ = reporter.Log(slog.LevelWarn, "credits-backfill: class lists not cleared after a failed result write",
+				slog.String("error", cerr.Error()))
+		}
+		return err
+	}
+	return nil
+}
+
+// summary is res as the operation stores it: the classes without their id
+// lists (counts and samples stay), and the summary of where the lists are.
+func (res *creditsBackfillResult) summary(lists *database.ClassListSummary) *creditsBackfillResult {
+	out := *res
+	out.Classes = make([]cbClass, len(res.Classes))
+	for i, c := range res.Classes {
+		c.BookIDs = nil
+		out.Classes[i] = c
+	}
+	out.ClassLists = lists
+	return &out
 }
 
 // creditsBackfillEnv is what one run needs besides its params.
@@ -878,6 +984,31 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("credits-backfill: start (%s, attempt %d)", mode, params.Attempt))
 	_ = reporter.UpdateProgress(0, 1, "Indexing authors and narrators…")
 
+	// The scan stand-down is held for the whole apply, reading and planning
+	// included: the plan is made from rows a running scan could rewrite, and a
+	// full-library phase 1 outlasts the registry's 5-minute lease. The hold
+	// renews the lease on every item (registry.RunItems beats a hold its
+	// context carries) and on every progress stamp; work ctx and work reporter
+	// below are the hold's, so a lapsed lease cancels the run with
+	// registry.ErrScanStandDownLost. A dry run writes nothing and holds
+	// nothing.
+	//
+	// The hold comes BEFORE the author and narrator index is built: the index
+	// is a frozen copy of every record, and one built before the hold could be
+	// stale by the time the scan is down (a scan that was still running
+	// creates authors and narrators).
+	workCtx, workRep := ctx, reporter
+	var hold *registry.ScanStandDownHold
+	if params.Apply {
+		h, sdErr := registry.HoldScanStandDown(ctx, env.scan, reporter, "credits-backfill apply")
+		if sdErr != nil {
+			return nil, sdErr
+		}
+		hold = h
+		defer hold.Release()
+		workCtx, workRep = hold.Context(), hold.Reporter()
+	}
+
 	idx, err := buildCreditCensusIndex(env.store)
 	if err != nil {
 		return nil, err
@@ -937,24 +1068,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	sort.Strings(ids)
 	ids = slices.Compact(ids)
 
-	// The scan stand-down is held for the whole apply, reading and planning
-	// included: the plan is made from rows a running scan could rewrite, and a
-	// full-library phase 1 outlasts the registry's 5-minute lease. The hold
-	// renews the lease on every item (registry.RunItems beats a hold its
-	// context carries) and on every progress stamp; work ctx and work reporter
-	// below are the hold's, so a lapsed lease cancels the run with
-	// registry.ErrScanStandDownLost. A dry run writes nothing and holds
-	// nothing.
-	workCtx, workRep := ctx, reporter
-	var hold *registry.ScanStandDownHold
 	if params.Apply {
-		h, sdErr := registry.HoldScanStandDown(ctx, env.scan, reporter, "credits-backfill apply")
-		if sdErr != nil {
-			return nil, sdErr
-		}
-		hold = h
-		defer hold.Release()
-		workCtx, workRep = hold.Context(), hold.Reporter()
 		if perr := run.verifyPriorAttempts(workCtx); perr != nil {
 			return nil, perr
 		}
@@ -1314,12 +1428,28 @@ type cbPlan struct {
 	columnChanged bool
 	// newNames are the narrator names the write creates.
 	newNames []string
+	// json is the NarratorsJSON the write leaves when a spelling move
+	// respelled its entries (jsonChanged).
+	json        *string
+	jsonChanged bool
 	// authorNames and jsonNames are what the narrator side planned against
 	// (the book's live authors after the write; NarratorsJSON's names). The
-	// write re-derives the column from them when a record's spelling turns
-	// out to differ from the name the plan asked for (settleNarratorSpelling).
+	// write re-derives the column and NarratorsJSON from them when a record's
+	// spelling turns out to differ from the name the plan asked for
+	// (settleNarratorSpelling).
 	authorNames []string
 	jsonNames   []string
+	// requested are the names the plan asked for, aligned with narrators and
+	// never changed afterwards: a slot whose Name no longer matches its
+	// requested name (normalized) is a spelling move. columnText is the
+	// Narrator column exactly as stored when the fill came from it (the text a
+	// spelling move edits in place); empty when the column is built from
+	// NarratorsJSON. selfRead: the fill is the opt-in self-read. rawJSON is
+	// NarratorsJSON as stored.
+	requested  []string
+	columnText string
+	selfRead   bool
+	rawJSON    *string
 
 	filingChanges bool
 }
@@ -1469,6 +1599,7 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 			}
 		}
 	}
+	selected = r.settleNewSpellings(selected)
 	if r.params.Apply {
 		return selected
 	}
@@ -1481,6 +1612,82 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 		r.acc.sample(r.sampleOf(pb), pb.plan.writes)
 	}
 	return selected
+}
+
+// settleNewSpellings is the second half of phase 2: when books of the cohort
+// name one NEW narrator under spellings of one fold key ("Renee Montoya",
+// "Renée Montoya"), the record the run creates takes the most frequent spelling
+// among those books (ties broken by the lexically smallest), and every book
+// whose own spelling differs has that name respelled in its column and
+// NarratorsJSON (settleNarratorSpelling), exactly as for a name linked to an
+// existing record. Before this the record took whichever spelling the first
+// worker to reach it happened to carry, so a dry run could not say which, and
+// two runs over one library could disagree. It runs serially, after the cohort
+// is chosen and before the first write, in a dry run and an apply alike.
+//
+// A book whose respelling cannot be settled is filed under the review class
+// that says why and leaves the cohort; like a book that fails, it keeps its
+// place in a limited cohort (the cohort was decided before this).
+func (r *cbRun) settleNewSpellings(selected []string) []string {
+	counts := map[string]map[string]int{} // fold key -> spelling -> books
+	for _, id := range selected {
+		pl := r.plans[id].plan
+		if !pl.narratorWrite {
+			continue
+		}
+		for _, slot := range pl.narrators {
+			if k := authorjunk.FoldKey(slot.Name); slot.ID == 0 && k != "" {
+				if counts[k] == nil {
+					counts[k] = map[string]int{}
+				}
+				counts[k][slot.Name]++
+			}
+		}
+	}
+	canon := map[string]string{}
+	for k, spellings := range counts {
+		if len(spellings) < 2 {
+			continue
+		}
+		best, most := "", 0
+		for spelling, n := range spellings {
+			if n > most || (n == most && spelling < best) {
+				best, most = spelling, n
+			}
+		}
+		canon[k] = best
+	}
+	if len(canon) == 0 {
+		return selected
+	}
+	kept := make([]string, 0, len(selected))
+	for _, id := range selected {
+		pl := r.plans[id].plan
+		changed := false
+		for i := range pl.narrators {
+			slot := &pl.narrators[i]
+			if c, ok := canon[authorjunk.FoldKey(slot.Name)]; ok && slot.ID == 0 && slot.Name != c {
+				slot.Name, changed = c, true
+			}
+		}
+		if changed {
+			pl.newNames = pl.newNames[:0]
+			for _, slot := range pl.narrators {
+				if slot.ID == 0 {
+					pl.newNames = append(pl.newNames, slot.Name)
+				}
+			}
+			if refuse := pl.applySpelling(pl.narrators); refuse != "" {
+				r.plansMu.Lock()
+				delete(r.plans, id)
+				r.plansMu.Unlock()
+				r.acc.add(id, refuse)
+				continue
+			}
+		}
+		kept = append(kept, id)
+	}
+	return kept
 }
 
 // failPlan records a phase-1 failure: the book is filed under read_error and
@@ -1656,8 +1863,12 @@ func (r *cbRun) voidJournal(row *database.OperationChange) error {
 func (r *cbRun) apply(pb *cbPlanned) {
 	id, plan, before := pb.id, pb.plan, pb.before
 	// A lock a person set after the plan holds the side: checked here, before
-	// anything is created or journaled, and again under the book's stripes
-	// right before the write (a lock can land in between).
+	// anything is created or journaled, and again inside the write's callback
+	// right before the commit (a lock can land in between). The callback runs
+	// under the book's stripes, but a lock is written by UpsertMetadataFieldState,
+	// which takes no book stripe, so the second check narrows the window and
+	// does not close it: a lock set after it lands after this write, and a
+	// re-run holds the book.
 	if held, err := r.lockedSince(id, plan); err != nil {
 		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: read field locks (book NOT written): %w", id, err))
 		return
@@ -1693,12 +1904,10 @@ func (r *cbRun) apply(pb *cbPlanned) {
 		}
 		created = r.acc.claimCreated(created)
 		if spellingMoved {
-			column, refuse := settleNarratorSpelling(plan, plan.narrators)
-			if refuse != "" {
+			if refuse := plan.applySpelling(plan.narrators); refuse != "" {
 				r.fail(id, cbWriteFailed, fmt.Errorf("book %s: narrator record spelling (%s): not written, a re-run lists it for review", id, refuse))
 				return
 			}
-			plan.column, plan.columnChanged = &column, true
 		}
 	}
 
@@ -1829,6 +2038,9 @@ func (r *cbRun) afterState(before undo.CreditsBackfillState, plan *cbPlan, bookI
 		if plan.columnChanged {
 			after.Narrator = plan.column
 		}
+		if plan.jsonChanged {
+			after.NarratorsJSON = plan.json
+		}
 	}
 	after = after.Canonical()
 	for i := range after.Authors {
@@ -1884,6 +2096,9 @@ func (r *cbRun) sampleOf(pb *cbPlanned) *cbSample {
 		}
 		if plan.columnChanged {
 			after.Narrator = plan.column
+		}
+		if plan.jsonChanged {
+			after.NarratorsJSON = plan.json
 		}
 	}
 	s.After = r.viewOf(after, names)
@@ -2020,6 +2235,10 @@ func planAuthorSide(idx *creditCensusIndex, plan *cbPlan, book *database.Book, j
 		// fill would credit the reverted value and the refresh below would
 		// overwrite the snapshot, destroying the only evidence of who the
 		// book is filed under. Held for review, the snapshot never refreshed.
+		// A snapshot whose id resolves to nothing (id 0, or a dangling id) still
+		// carries a name: snapshotNamesOtherAuthor compares it with AuthorID's
+		// record name, so a snapshot naming someone else without a usable id is
+		// held too.
 		if conflict, err := snapshotNamesOtherAuthor(idx, book.Author, authorID); err != nil {
 			return nil, nil, err
 		} else if conflict {
@@ -2257,26 +2476,47 @@ func canonicalAuthorID(idx *creditCensusIndex, id int) (int, error) {
 	return a.ID, nil
 }
 
-// snapshotNamesOtherAuthor reports whether the Book.Author snapshot carries the
-// id of a live author other than authorID (compared as canonical records, so
-// a tombstoned id counts as the author it was merged into). It is the
-// empty-join form of snapshotNamesOtherJoinMember: there is no join to be a
-// member of, and the snapshot is what the organizer files the book under. A
-// snapshot with no id (or an id that resolves to nothing) is not compared:
-// the plan matches the snapshot by id only, never by name.
+// snapshotNamesOtherAuthor reports whether the Book.Author snapshot names a
+// live author other than authorID. It is the empty-join form of
+// snapshotNamesOtherJoinMember: there is no join to be a member of, and the
+// snapshot is what the organizer files the book under.
+//
+// A snapshot id that resolves to a live author is compared by record (as
+// canonical records, so a tombstoned id counts as the author it was merged
+// into). A snapshot whose id does not resolve (no id, id 0, or an id with no
+// record: the only evidence left is the name the snapshot carries) is compared
+// by NAME against AuthorID's own record: a different normalized name is the
+// same contradiction, and the fill would flip the filing author onto AuthorID
+// and the refresh would overwrite the snapshot. That is a comparison of two
+// names the book already carries, never a name lookup: no author is searched
+// for or matched by name, and none is credited because of it. A blank snapshot
+// name is no signal.
 func snapshotNamesOtherAuthor(idx *creditCensusIndex, snap *database.Author, authorID int) (bool, error) {
-	if snap == nil || snap.ID <= 0 {
+	if snap == nil {
 		return false, nil
-	}
-	snapID, err := canonicalAuthorID(idx, snap.ID)
-	if err != nil || snapID == 0 {
-		return false, err
 	}
 	primary, err := canonicalAuthorID(idx, authorID)
 	if err != nil {
 		return false, err
 	}
-	return snapID != primary, nil
+	if snap.ID > 0 {
+		snapID, err := canonicalAuthorID(idx, snap.ID)
+		if err != nil {
+			return false, err
+		}
+		if snapID != 0 {
+			return snapID != primary, nil
+		}
+	}
+	snapName := util.NormalizeAuthor(strings.TrimSpace(snap.Name))
+	if snapName == "" || primary == 0 {
+		return false, nil
+	}
+	a, _, err := idx.resolveAuthor(primary)
+	if err != nil {
+		return false, err
+	}
+	return snapName != util.NormalizeAuthor(strings.TrimSpace(a.Name)), nil
 }
 
 // tieBreakReorders reports whether breaking position ties with authorID
@@ -2515,20 +2755,28 @@ func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, allow map[s
 		}
 		plan.authorNames, plan.jsonNames = authorNames, jsonNames
 		plan.narrators = slots
+		plan.requested = fillNames
+		plan.rawJSON = book.NarratorsJSON
+		plan.selfRead = fillClass == cbNarratorSelfRead
+		if (fillClass == cbNarratorFillFromColumn || plan.selfRead) && book.Narrator != nil {
+			plan.columnText = *book.Narrator
+		}
 		// A name linked to a record by its fold key ("Renee" to the record
 		// "Renée") is credited under the RECORD's spelling, and the census
-		// compares column and junction by normalized spelling, so the column
-		// is rewritten to the record's spelling in the same write or the book
-		// would plan as narrator_column_differs_junction after it.
+		// compares column and junction by normalized spelling, so the name is
+		// respelled inside the column (and the NarratorsJSON entries that carry
+		// it) in the same write, or the book would plan as
+		// narrator_column_differs_junction after it. Only the matched name
+		// changes; the rest of the column stays as written.
 		if moved := narratorSpellingMoved(slots, fillNames); moved {
-			column, refuse := settleNarratorSpelling(plan, slots)
-			if refuse != "" {
+			if refuse := plan.applySpelling(slots); refuse != "" {
 				plan.reviews = append(plan.reviews, refuse)
 				plan.infos = removeClass(plan.infos, cbNarratorCleanDroppedAuthor)
 				plan.narrators, plan.authorNames, plan.jsonNames = nil, nil, nil
+				plan.requested, plan.rawJSON, plan.columnText = nil, nil, ""
 				return nil
 			}
-			newColumn = &column
+			newColumn = plan.column
 		}
 		plan.narratorWrite = true
 		plan.newNames = newNames
@@ -2563,29 +2811,129 @@ func narratorSpellingMoved(slots []cbNarratorSlot, requested []string) bool {
 	return false
 }
 
-// settleNarratorSpelling returns the Narrator column a write leaves when the
-// junction credits slots under their records' spellings, or the review class
-// that refuses the book. The column is the slot names joined ("A and B"); the
-// book is refused when that text would not read back as exactly these people
-// (a record name with a separator in it) or when NarratorsJSON would then
-// match neither the junction nor the column (ccNarratorsJSONDisagrees: its
-// spelling is the old one and the op does not rewrite NarratorsJSON). Either
-// way the census would keep counting the book after the write.
-func settleNarratorSpelling(plan *cbPlan, slots []cbNarratorSlot) (column, refuse string) {
+// applySpelling settles a spelling move on the plan: it sets the plan's column
+// and NarratorsJSON to what the write leaves and files the informational
+// classes, or returns the review class that refuses the book (the plan is left
+// as it was then).
+func (pl *cbPlan) applySpelling(slots []cbNarratorSlot) (refuse string) {
+	column, newJSON, refuse := settleNarratorSpelling(pl, slots)
+	if refuse != "" {
+		return refuse
+	}
+	pl.column, pl.columnChanged = &column, true
+	pl.json, pl.jsonChanged = newJSON, newJSON != nil
+	pl.infos = removeClass(removeClass(pl.infos, cbNarratorColumnRespelled), cbNarratorsJSONRespelled)
+	if pl.columnText != "" {
+		pl.infos = append(pl.infos, cbNarratorColumnRespelled)
+	}
+	if newJSON != nil {
+		pl.infos = append(pl.infos, cbNarratorsJSONRespelled)
+	}
+	return ""
+}
+
+// settleNarratorSpelling returns the Narrator column and NarratorsJSON a write
+// leaves when the junction credits slots under their records' spellings, or the
+// review class that refuses the book.
+//
+// A slot whose name differs (normalized, as the census compares) from the name
+// the plan asked for is a spelling move. Only that name changes: it is replaced
+// inside the column as stored (a fill from the column keeps its "Read by"
+// prefix, its role credits and a co-narrating author), and inside the
+// NarratorsJSON entries that carry it (newJSON is nil when nothing changed). A
+// column built from NarratorsJSON has no text to preserve and is the slot names
+// joined ("A and B").
+//
+// The respelled column must read back, through the same util.CleanNarratorCredit
+// call the census makes, as exactly the slot names: otherwise the census would
+// keep counting the book after the write (cbNarratorSpellingUnreconcilable: the
+// name is not in the column as written, or the record's name carries a
+// separator). The respelled NarratorsJSON must still match the junction or the
+// column (cbNarratorSpellingJSONConflict).
+func settleNarratorSpelling(plan *cbPlan, slots []cbNarratorSlot) (column string, newJSON *string, refuse string) {
 	names := make([]string, len(slots))
+	var pairs [][2]string
 	for i, slot := range slots {
 		names[i] = slot.Name
+		if i < len(plan.requested) &&
+			util.NormalizeAuthor(strings.TrimSpace(slot.Name)) != util.NormalizeAuthor(strings.TrimSpace(plan.requested[i])) {
+			pairs = append(pairs, [2]string{plan.requested[i], slot.Name})
+		}
 	}
-	column = database.JoinCreditNames(names)
-	people, verdict := util.CleanNarratorCredit(column, plan.authorNames)
+	authors := plan.authorNames
+	if plan.selfRead {
+		// A self-read names only the book's own authors: the cleaner would drop
+		// every one of them, so it reads the column without them.
+		authors = nil
+	}
+	fromColumn := plan.columnText != ""
+	if fromColumn {
+		column = respellCreditText(plan.columnText, pairs)
+	} else {
+		column = database.JoinCreditNames(names)
+	}
+	people, verdict := util.CleanNarratorCredit(column, authors)
 	if verdict != util.NarratorCreditPeople || !sameOrderedNames(people, names) ||
-		!sameOrderedNames(util.SplitCreditNames(column), names) {
-		return "", cbNarratorsJSONUnjoinable
+		(!fromColumn && !sameOrderedNames(util.SplitCreditNames(column), names)) {
+		return "", nil, cbNarratorSpellingUnreconcilable
 	}
-	if len(plan.jsonNames) > 0 && !sameNameSet(plan.jsonNames, names) {
-		return "", ccNarratorsJSONDisagrees
+	if plan.rawJSON == nil || len(plan.jsonNames) == 0 {
+		return column, nil, ""
 	}
-	return column, ""
+	respelled := respellNarratorsJSON(*plan.rawJSON, pairs)
+	jsonNames := plan.jsonNames
+	if respelled != *plan.rawJSON {
+		newJSON = &respelled
+		jsonNames = parseCreditCensusNarratorsJSON(respelled)
+	}
+	agrees := sameNameSet(jsonNames, names)
+	if fromColumn {
+		agrees = agrees || sameNameSet(jsonNames, util.SplitCreditNames(column)) || sameNameSet(jsonNames, people)
+	}
+	if !agrees {
+		return "", nil, cbNarratorSpellingJSONConflict
+	}
+	return column, newJSON, ""
+}
+
+// respellCreditText replaces the first occurrence of each pair's old name in
+// text with its new one. A name not found leaves the text as it was; the caller
+// verifies the result reads back (settleNarratorSpelling).
+func respellCreditText(text string, pairs [][2]string) string {
+	for _, p := range pairs {
+		if i := strings.Index(text, p[0]); i >= 0 {
+			text = text[:i] + p[1] + text[i+len(p[0]):]
+		}
+	}
+	return text
+}
+
+// respellNarratorsJSON respells the names inside NarratorsJSON: each entry of a
+// JSON array of strings, else the bare credit string (the two forms the census
+// parses, parseCreditCensusNarratorsJSON).
+func respellNarratorsJSON(raw string, pairs [][2]string) string {
+	var arr []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &arr); err != nil {
+		return respellCreditText(raw, pairs)
+	}
+	changed := false
+	for i := range arr {
+		if r := respellCreditText(arr[i], pairs); r != arr[i] {
+			arr[i], changed = r, true
+		}
+	}
+	if !changed {
+		// Untouched, byte for byte: no re-encoding of an array that holds
+		// none of the names.
+		return raw
+	}
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(arr); err != nil {
+		return raw
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 // narratorJunkNames are the stand-ins a narrator credit can carry instead of a

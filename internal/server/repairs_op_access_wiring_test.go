@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
-// last-edited: 2026-10-25
+// last-edited: 2026-10-27
 
 // The generic operations routes as the server wires them, driven through the
 // real router: a Repairs operation's data (repairs.plan, repairs.apply) is
@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -267,6 +268,60 @@ func TestRepairsOpData_ReadRoutesNeedTheFixersPermissions(t *testing.T) {
 	w := getAs(f.srv, f.viewer, "/api/v1/operations/"+f.plainScan+"/result")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"scanned":3`)
+}
+
+// TestRepairsOpData_ClassListsFollowTheResultReadGate: the paged class-list
+// route (GET /operations/:id/class-lists/:class) reads ids out of op rows
+// stored beside any operation, through the real store the server wires, and
+// answers the same callers as GET /operations/:id/result: a repairs op's rows
+// are refused (403, no id in the body) to a caller who may not read its
+// result, and a plain op's are served to a viewer.
+// Not parallel: it swaps the process-wide config.
+func TestRepairsOpData_ClassListsFollowTheResultReadGate(t *testing.T) {
+	f := newRepairsOpAccessFixture(t)
+	store, ok := f.srv.storeForWiring().(*database.PebbleStore)
+	require.True(t, ok)
+	const marker = "book-invented-class-list-id"
+	for _, op := range append([]string{f.plainScan}, f.allRepairsOps...) {
+		row, err := store.GetOperationV2(op)
+		require.NoError(t, err)
+		require.NotNil(t, row)
+		var result map[string]any
+		require.NoError(t, json.Unmarshal([]byte(*row.ResultData), &result))
+		sum, err := database.SaveClassLists(store, op, map[string][]string{"x": {marker + "-1", marker + "-2", marker + "-3"}})
+		require.NoError(t, err)
+		result["class_lists"] = sum
+		data, err := json.Marshal(result)
+		require.NoError(t, err)
+		require.NoError(t, store.SetOperationV2Result(op, string(data)))
+	}
+	for _, tc := range []struct {
+		who, token string
+		op         string
+		allowed    bool
+	}{
+		{"viewer", f.viewer, f.plainScan, true},
+		{"viewer", f.viewer, f.defaultApply, false},
+		{"viewer", f.viewer, f.scopedPlan, false},
+		{"editor", f.editor, f.defaultApply, true},
+		{"editor", f.editor, f.scopedPlan, false},
+		{"editor", f.editor, f.unknownFixer, false},
+		{"admin", f.admin, f.scopedPlan, true},
+		{"admin", f.admin, f.unknownFixer, true},
+		{"admin", f.admin, f.noFixerApply, false},
+	} {
+		w := getAs(f.srv, tc.token, "/api/v1/operations/"+tc.op+"/class-lists/x?offset=1&limit=2")
+		if tc.allowed {
+			require.Equal(t, http.StatusOK, w.Code, "%s %s: %s", tc.who, tc.op, w.Body.String())
+			require.Contains(t, w.Body.String(), marker+"-2", "%s %s", tc.who, tc.op)
+			require.Contains(t, w.Body.String(), marker+"-3", "%s %s", tc.who, tc.op)
+			require.NotContains(t, w.Body.String(), marker+"-1", "%s %s: the page starts at offset 1", tc.who, tc.op)
+			continue
+		}
+		require.Equal(t, http.StatusForbidden, w.Code, "%s %s: %s", tc.who, tc.op, w.Body.String())
+		require.NotContains(t, w.Body.String(), marker, "%s %s", tc.who, tc.op)
+		require.NotContains(t, w.Body.String(), secondaryUserID, "%s %s", tc.who, tc.op)
+	}
 }
 
 // requireReadShape asserts a permitted read of op on route answered 200 with
