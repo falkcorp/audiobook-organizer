@@ -190,7 +190,8 @@ machine and not only the one the hash was made from. A wrong match only steers a
 file further away.
 
 The identity stored with the answers of an endpoint that is probed again after a
-wait is the one the dispatch began with, on the pool and the lone-endpoint path.
+wait is the one the dispatch began with, on the pool and the lone-endpoint path,
+except when another worker answers at the port (below).
 The check for a port of a machine that did not answer the canary reads the same
 identity the rest of the dispatch uses.
 
@@ -198,3 +199,22 @@ The single-Mac tunnel template (`deploy/launchd/com.jdfalk.whisper-tunnel.plist`
 and `scripts/setup_mac_ai_worker.py` host index 0 both use server port 19848, so
 a Mac on each race for one port. Both files and the Whisper docs now say so; the
 ports are unchanged.
+
+A port that changes hands while a dispatch waits out a cooldown is no longer
+credited to the machine that used to be behind it. The probe after the wait is
+compared with the identity the dispatch froze for the port: the same identity
+stands; a worker that only gained its machine id since is stored under the
+identity the dispatch knew it by with the machine it reports beside it, so the
+store can still learn the machine; any other difference (one machine for another,
+a machine's port that was refused and now answers weakly, a worker that cannot
+report an id) drops the port from the dispatch like a refusal. It is not asked the
+old machine's canary clip, so its answer cannot forget that machine, and it is
+sent no work and given no timeout strike under the old machine's name, which
+let one machine make a file permanent on its own. A lone endpoint that changed
+hands defers its jobs. The next dispatch's gate keys the port by what it reports.
+The condemnation of a file by two machines names the identity of the worker that
+answered at each endpoint.
+
+A file struck by a machine is steered away from a port of that machine that
+answers as a weak identity after a refused probe, as it already was away from
+one the link still named. A wrong match only steers a file further away.
