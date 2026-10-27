@@ -10,7 +10,7 @@
 # Stage 1: Build frontend
 # SHA pinned 2026-06-23 (node:26-alpine manifest-list). Refresh with:
 #   docker buildx imagetools inspect node:26-alpine --format '{{.Manifest.Digest}}'
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797 AS frontend-builder
 
 WORKDIR /build/web
 
@@ -79,7 +79,7 @@ RUN CGO_ENABLED=1 go build \
 
 # Stage 3: Minimal runtime image (scratch-compatible since binary is static)
 # SHA pinned 2026-06-23 (alpine:3.24 manifest-list).
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 RUN apk add --no-cache ca-certificates tzdata ffmpeg \
     && addgroup -g 1000 audiobook \

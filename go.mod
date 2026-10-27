@@ -19,11 +19,11 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/oklog/ulid/v2 v2.1.2
-	github.com/openai/openai-go/v3 v3.79.0
+	github.com/openai/openai-go/v3 v3.86.0
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
-	github.com/quic-go/quic-go v0.64.0
+	github.com/quic-go/quic-go v0.64.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
