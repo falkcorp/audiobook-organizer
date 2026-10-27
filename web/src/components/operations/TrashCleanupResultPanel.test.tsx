@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6255d3b3-6c19-482d-a750-5e14a4ad74e5
 // last-edited: 2026-10-27
 
@@ -108,6 +108,31 @@ describe('TrashCleanupResultPanel', () => {
     expect(text).toHaveTextContent('left for the next run');
     expect(text).toHaveTextContent('Nothing failed');
     expect(text.closest('a')).toBeNull();
+  });
+
+  it('warns, without a link or a failure, when the run has stopped for the merge lock night after night', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: {
+        purged: 0,
+        stopped_for_merge: true,
+        stopped_for_merge_nights: 4,
+        stopped_for_merge_repeatedly: true,
+      },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-stuck" />);
+    const warn = await screen.findByTestId('trash-cleanup-merge-stuck');
+    expect(warn).toHaveTextContent('4 nights in a row');
+    expect(warn).toHaveTextContent('the trash is not being purged');
+    expect(warn.closest('a')).toBeNull();
+  });
+
+  it('says nothing about a streak on a single stopped night', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: { purged: 2, stopped_for_merge: true, stopped_for_merge_nights: 1 },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-once" />);
+    await screen.findByText(/Stopped early: a merge or combine was running/);
+    expect(screen.queryByTestId('trash-cleanup-merge-stuck')).not.toBeInTheDocument();
   });
 
   it('says how many failed and points at the log, not at a link it cannot back', async () => {

@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -45,6 +45,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -65,6 +66,14 @@ var lifecycleLog = logger.New("versions.lifecycle")
 // nothing was deleted. It is not a failure of the purge, the user's restore
 // won; the nightly cleanup skips such a version, and purge-now answers 409.
 var ErrVersionNotInTrash = errors.New("version is no longer in the trash")
+
+// ErrVersionAlreadyPurged accompanies ErrVersionNotInTrash (errors.Is sees both)
+// when the version the caller meant to purge is already inactive_purged: another
+// purge (the nightly cleanup, a second purge-now) finished it after the caller
+// read it. Nothing was deleted by this call and nothing is left to delete, which
+// is not the same news as "the version was restored", so purge-now words it
+// differently.
+var ErrVersionAlreadyPurged = errors.New("version was already purged")
 
 // ErrRetiredVersion is returned by the lifecycle steps that refuse a retired
 // version: MarkTrashed, MarkRestored and PurgeVersion. Callers branch on it
@@ -224,10 +233,14 @@ type PurgeGuard interface {
 // path is left alone and the version is retried.
 type PurgeDecider interface {
 	Decide(path string) (decision PurgeDecision, reason string, err error)
-	// Unlinking is called just before the purge unlinks path, so the folder it
-	// is about to empty is not mistaken for an unmounted mount point when a
-	// neighbour that is already gone is decided.
-	Unlinking(path string)
+	// Unlinked is called after the purge took path off the disk (or found it
+	// already gone with the folder vouching for that), so the folder it emptied
+	// is not mistaken for an unmounted mount point when a neighbour that is
+	// already gone is decided. It is called AFTER the removal, not before: a
+	// removal that answers "not there" is decided again (Decide) before it
+	// counts as removed, and a folder registered ahead of that answer would
+	// vouch for itself.
+	Unlinked(path string)
 }
 
 // ErrPurgeFailed is returned by PurgeVersion when a file could not be removed
@@ -240,7 +253,30 @@ var ErrPurgeFailed = errors.New("a file of the version cannot be removed and ret
 // for a running merge or combine to release the merge lock before it gives up
 // on that version for the night (merge.ErrMergeBusy; the next run retries it).
 // A var only so a test can shorten it.
+//
+// The wait is a ceiling, not a guarantee. merge.TryLockMergeRMWWithin polls
+// sync.Mutex.TryLock every 10ms, and TryLock never takes a mutex that is in
+// starvation mode (the runtime switches to it once a blocked Lock() caller has
+// waited more than 1ms, and then hands the mutex straight to the head of the
+// queue). While blocking callers keep queuing on the merge lock, a poller can
+// fail for the whole wait even though the lock changes hands many times, and
+// the night is reported as StoppedForMerge. That is why the cleanup counts
+// consecutive stopped nights (MergeStopEscalateAfter) and raises them instead
+// of trusting the next night to get through.
 var BackgroundMergeLockWait = 10 * time.Minute
+
+// MergeStopEscalateAfter is how many nights in a row the cleanup may stop for
+// the merge lock before it reports the pattern (CleanupResult.MergeStopStreak)
+// as a warning in the operation result and log. One busy night is a combine
+// that ran long; three is something holding the lock at 06:00 every day, and
+// the trash is not being purged. It is a warning, not a failure: the op stays
+// green, as StoppedForMerge always has.
+const MergeStopEscalateAfter = 3
+
+// mergeStopStreakKey is where the cleanup keeps the number of consecutive
+// nights it stopped for the merge lock (a decimal integer in the store's raw
+// key-value space, found with database.AsCapability[database.RawKVStore]).
+const mergeStopStreakKey = "versions:trash_cleanup:merge_stop_streak"
 
 // removeFile is os.Remove; a variable so a test can make a removal fail the
 // way a read-only filesystem does.
@@ -310,7 +346,7 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGua
 // attempt already removed is simply gone then. It is purging, not trash,
 // because some of its files are already gone and a restore would hand back an
 // alt that names them. When every failure is one retrying will not change
-// (permission, a read-only filesystem, a directory that is not empty:
+// (permission, a read-only filesystem, a directory where a file was expected:
 // removeErrorIsPermanent) the version ends in
 // database.BookVersionStatusPurgeFailed instead, with the paths and reasons
 // recorded, and the error wraps ErrPurgeFailed; the nightly cleanup does not
@@ -343,11 +379,45 @@ func PurgeVersionWithin(store versionPurger, ver *database.BookVersion, guard Pu
 		return fmt.Errorf("purge version %s: %w", ver.ID, err)
 	}
 	defer unlock()
+	// The first check above ran before a wait that can last ten minutes: the
+	// library can be unmounted in that time (or a mount point that was up goes
+	// down), and every path would then fail to resolve inside a root that is not
+	// there. It is asked again with the lock held, so a purge that waited does
+	// not decide a single path on a mount that is no longer ready.
+	if err := guard.RootReady(); err != nil {
+		return fmt.Errorf("purge version %s: %w", ver.ID, err)
+	}
 	return purgeVersionLocked(store, ver, guard)
 }
 
 // purgeVersionLocked is PurgeVersionWithin with the merge lock held.
+//
+// The caller's copy of the version was read before the lock wait, which can
+// last minutes, so it is read again here and ver is refreshed from the stored
+// row: the status that decides whether this is a retry, the PurgeUnlinked
+// record a retry seeds its folders from, and the row the claim writes back all
+// come from after the wait, not from before it. A version that is no longer
+// the trash's by then is refused with ErrVersionNotInTrash (and
+// ErrVersionAlreadyPurged when another purge finished it).
 func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard PurgeGuard) error {
+	fresh, err := store.GetBookVersion(ver.ID)
+	if err != nil {
+		return fmt.Errorf("purge version %s: read it again under the merge lock: %w", ver.ID, err)
+	}
+	if fresh == nil {
+		return fmt.Errorf("purge version %s: %w (it no longer exists)", ver.ID, ErrVersionNotInTrash)
+	}
+	if err := refuseRetired(fresh, "purge"); err != nil {
+		return err
+	}
+	switch fresh.Status {
+	case database.BookVersionStatusTrash, database.BookVersionStatusPurging, database.BookVersionStatusPurgeFailed:
+	case database.BookVersionStatusInactivePurged:
+		return fmt.Errorf("purge version %s: %w: %w (it was purged while this purge waited for the merge lock)", ver.ID, ErrVersionNotInTrash, ErrVersionAlreadyPurged)
+	default:
+		return fmt.Errorf("purge version %s: %w (it is %s now)", ver.ID, ErrVersionNotInTrash, fresh.Status)
+	}
+	*ver = *fresh
 	retry := ver.Status == database.BookVersionStatusPurging || ver.Status == database.BookVersionStatusPurgeFailed
 	book, err := store.GetBookByID(ver.BookID)
 	if err != nil {
@@ -418,14 +488,35 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 		return err
 	}
 
-	// A retry may find folders empty that its own earlier attempt emptied.
+	// A retry may find folders empty that its own earlier attempt emptied, and
+	// only those: the folders of the paths the earlier attempts RECORDED as
+	// unlinked (BookVersion.PurgeUnlinked). Seeding every doomed path's folder
+	// instead would exempt the empty mount point of a dataset that is not
+	// mounted, where nothing was ever unlinked, and its files would read as
+	// gone on the second run for the same mount state the first run refused.
 	var seeds []string
 	if retry {
-		for _, p := range doomed {
+		for _, p := range ver.PurgeUnlinked {
 			seeds = append(seeds, filepath.Dir(p))
 		}
 	}
 	decider := guard.NewDecider(seeds)
+	// recordUnlinked persists the removal of p before anything else happens to
+	// the version: after every removal, not once at the end, because the record
+	// is what a retry trusts. Written AFTER the unlink, so a crash between the
+	// two leaves an unrecorded path (the retry then cannot vouch for its empty
+	// folder and the version stays purging, which is the safe direction) and
+	// can never leave an unremoved path recorded. A version holds a handful of
+	// files, so a write each is cheap next to the unlink it follows.
+	recordUnlinked := func(p string) error {
+		if !slices.Contains(ver.PurgeUnlinked, p) {
+			ver.PurgeUnlinked = append(ver.PurgeUnlinked, p)
+		}
+		if err := store.UpdateBookVersion(ver); err != nil {
+			return fmt.Errorf("%s was removed but recording that failed: %w", p, err)
+		}
+		return nil
+	}
 	var transient, permanent []error
 	var failedNotes []database.PurgeFileNote
 	for _, p := range doomed {
@@ -455,8 +546,32 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 			kept[p] = why
 			continue
 		}
-		decider.Unlinking(p)
-		if err := removeFile(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		err = removeFile(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			// Decide said the file was there and the unlink says it is not: it
+			// was removed by someone else in between, or the filesystem under it
+			// went away. Only the first is "removed", and only the folder can
+			// tell them apart, so the decision is asked again (the folder is not
+			// registered as emptied yet: Unlinked comes after) before the path
+			// counts as gone.
+			again, why, derr := decider.Decide(p)
+			switch {
+			case derr != nil:
+				lifecycleLog.Warn("purge version %s: %s was not there to remove and its folder cannot vouch for that yet: %v", ver.ID, p, derr)
+				transient = append(transient, fmt.Errorf("%s: not there to remove, and cannot tell whether it is gone: %w", p, derr))
+				continue
+			case again == PurgeKeep:
+				lifecycleLog.Warn("purge version %s: keeping %s: %s", ver.ID, p, why)
+				kept[p] = why
+				continue
+			case again == PurgeRemove:
+				lifecycleLog.Warn("purge version %s: %s was not there to remove, but is there now; retrying it", ver.ID, p)
+				transient = append(transient, fmt.Errorf("%s: not there to remove, but there again", p))
+				continue
+			}
+			err = nil
+		}
+		if err != nil {
 			lifecycleLog.Warn("purge version %s: remove %s failed: %v", ver.ID, p, err)
 			e := fmt.Errorf("remove %s: %w", p, err)
 			if removeErrorIsPermanent(err) {
@@ -465,6 +580,12 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 			} else {
 				transient = append(transient, e)
 			}
+			continue
+		}
+		decider.Unlinked(p)
+		if err := recordUnlinked(p); err != nil {
+			lifecycleLog.Warn("purge version %s: %v", ver.ID, err)
+			transient = append(transient, err)
 		}
 	}
 
@@ -534,14 +655,19 @@ func keptNotes(kept map[string]string) []database.PurgeFileNote {
 
 // removeErrorIsPermanent says whether a failed removal will fail the same way
 // every time it is retried: no permission, a read-only filesystem, a directory
-// that still holds something (POSIX lets rmdir answer ENOTEMPTY or EEXIST), a
-// directory where a file was expected. Anything else (EIO, ESTALE, EBUSY, a
-// timeout) may pass, and is retried.
+// where a file was expected. Anything else (EIO, ESTALE, EBUSY, a timeout) may
+// pass, and is retried. So may a directory that still holds something (POSIX
+// lets rmdir answer ENOTEMPTY or EEXIST): the decider already keeps a directory
+// it saw holding files, so this one means something was written into it between
+// that look and the unlink, and the next attempt sees the directory as it is
+// then (kept, or empty and removable). That is a race passing, not a refusal
+// that stays, and calling it permanent would park the version in purge_failed
+// until the owner retries it by hand.
 func removeErrorIsPermanent(err error) bool {
 	if errors.Is(err, fs.ErrPermission) {
 		return true
 	}
-	for _, e := range []error{syscall.EROFS, syscall.ENOTEMPTY, syscall.EEXIST, syscall.EISDIR, syscall.EPERM, syscall.EACCES} {
+	for _, e := range []error{syscall.EROFS, syscall.EISDIR, syscall.EPERM, syscall.EACCES} {
 		if errors.Is(err, e) {
 			return true
 		}
@@ -582,6 +708,11 @@ func claimPurge(store versionPurger, ver *database.BookVersion) error {
 	if err := store.UpdateBookVersion(ver); err != nil {
 		ver.Status = was
 		if errors.Is(err, database.ErrVersionPurgeClaimLost) {
+			// Lost to a restore, or to a purge that finished since the re-read:
+			// the caller words those differently.
+			if cur, rerr := store.GetBookVersion(ver.ID); rerr == nil && cur != nil && cur.Status == database.BookVersionStatusInactivePurged {
+				return fmt.Errorf("purge version %s: %w: %w (%v)", ver.ID, ErrVersionNotInTrash, ErrVersionAlreadyPurged, err)
+			}
 			return fmt.Errorf("purge version %s: %w (%v)", ver.ID, ErrVersionNotInTrash, err)
 		}
 		return fmt.Errorf("purge version %s: claim it: %w", ver.ID, err)
@@ -597,6 +728,7 @@ func markPurged(store versionPurger, ver *database.BookVersion) error {
 	ver.PurgedDate = &now
 	ver.PurgeFailed = nil
 	ver.PurgeFailedAt = nil
+	ver.PurgeUnlinked = nil
 	return store.UpdateBookVersion(ver)
 }
 
@@ -670,7 +802,15 @@ func versionSlotFiles(bookDir, versionID string) ([]string, error) {
 // pruneEmptyDirs removes dir and its subdirectories bottom-up, but only the
 // empty ones: a directory that still holds a kept file stays, and so do its
 // parents. Idempotent when dir does not exist.
+//
+// A symlink is never entered, whatever it points at: ReadDir would follow a
+// slot that was replaced by a link and the walk would remove empty directories
+// of the link's target. os.Lstat looks at the entry itself, and the link is
+// left where it is (it names nothing this purge owns).
 func pruneEmptyDirs(dir string) {
+	if info, err := os.Lstat(dir); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -709,6 +849,13 @@ type CleanupResult struct {
 	// version) and does not count in Failed; waiting the same time for every
 	// remaining version would hold the 06:00 job for N times the wait.
 	StoppedForMerge bool
+	// MergeStopStreak is how many nights in a row, this one included, the
+	// cleanup stopped for the merge lock (0 when this run did not). The count
+	// is kept in the store (mergeStopStreakKey) between runs; a run that gets
+	// past the lock resets it. At MergeStopEscalateAfter or more it is reported
+	// as a warning, never a failure: the trash is not being purged and nothing
+	// else says so.
+	MergeStopStreak int
 }
 
 // KeptVersion names a version and its book, with the files a purge left or
@@ -728,7 +875,18 @@ type KeptVersion struct {
 // removed) must not read as "purged 0" to the operation that called it: the
 // versions stay in the trash past their window and only the error says so.
 func CleanupTrashedVersions(store TrashedVersionCleaner, guard PurgeGuard) (CleanupResult, error) {
-	return cleanupTrashedVersionsAt(store, time.Now(), guard)
+	res, err := cleanupTrashedVersionsAt(store, time.Now(), guard)
+	// A run that could not even list the trash (err with nothing failed) says
+	// nothing about the lock, so the streak stays as it was. Every other run
+	// either stopped for the merge lock or got past it.
+	if err == nil || res.Failed > 0 {
+		res.MergeStopStreak = recordMergeStopStreak(store, res.StoppedForMerge)
+		if res.MergeStopStreak >= MergeStopEscalateAfter {
+			lifecycleLog.Warn("trash cleanup: stopped for the merge lock %d nights in a row; something holds it when this job runs (a combine that never ends, or blocked lock waiters starving the poll), and the trash is not being purged",
+				res.MergeStopStreak)
+		}
+	}
+	return res, err
 }
 
 // cleanupTrashedVersionsAt is CleanupTrashedVersions with the clock passed in.
@@ -885,6 +1043,44 @@ trashLoop:
 			res.Failed, len(trashed), res.Purged, strings.Join(failedIDs, ", "), errors.Join(failures...))
 	}
 	return res, nil
+}
+
+// recordMergeStopStreak updates the number of consecutive nights the cleanup
+// stopped for the merge lock and returns it (0 after a night that did not stop).
+// A store that cannot keep it (no raw key-value space, or a read or write that
+// fails) never fails the run: the streak is then this night alone, 1 when it
+// stopped, and the failure is logged.
+func recordMergeStopStreak(store any, stopped bool) int {
+	kv, ok := database.AsCapability[database.RawKVStore](store)
+	if !ok {
+		if stopped {
+			return 1
+		}
+		return 0
+	}
+	prev := 0
+	raw, err := kv.GetRaw(mergeStopStreakKey)
+	if err != nil {
+		lifecycleLog.Warn("trash cleanup: cannot read the merge-stop streak, counting this night alone: %v", err)
+	} else if len(raw) > 0 {
+		if n, perr := strconv.Atoi(string(raw)); perr == nil && n > 0 {
+			prev = n
+		}
+	}
+	streak := 0
+	if stopped {
+		streak = prev + 1
+	}
+	switch {
+	case streak > 0:
+		err = kv.SetRaw(mergeStopStreakKey, []byte(strconv.Itoa(streak)))
+	case prev > 0:
+		err = kv.DeleteRaw(mergeStopStreakKey)
+	}
+	if err != nil {
+		lifecycleLog.Warn("trash cleanup: cannot store the merge-stop streak: %v", err)
+	}
+	return streak
 }
 
 // notePaths joins the paths of notes for a log line.

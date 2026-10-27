@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-10-20
+// last-edited: 2026-10-27
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -333,16 +333,34 @@ func cachedImportPathsForHelper(store importPathLister) ([]database.ImportPath, 
 // reference rather than reaching for the package global
 // (SERVER-GLOBAL-STORE-AUDIT phase 6). Pass nil to skip the import-path
 // check; the iTunes / .failed checks still apply.
+//
+// An import-path list that cannot be read is treated as "no import paths" here,
+// which is right for the callers that only decide whether to touch a file's
+// tags or show it in a preview and wrong for one that deletes: those use
+// protectedPathChecked, which reports the failed read instead.
 func isProtectedPath(store importPathLister, filePath string) bool {
+	protected, _ := protectedPathChecked(store, filePath)
+	return protected
+}
+
+// protectedPathChecked is isProtectedPath that says when it could not tell. err
+// is non-nil when the import paths could not be listed; protected is then what
+// the other checks (iTunes, .failed) found, which may be false for a path that
+// an import path covers. A caller that deletes must not read that false as "not
+// protected": it treats the error as a question it could not answer and leaves
+// the file alone (planPurgePathIn).
+func protectedPathChecked(store importPathLister, filePath string) (protected bool, err error) {
 	absPath, _ := filepath.Abs(filePath)
 
 	if store != nil {
-		importPaths, err := cachedImportPathsForHelper(store)
-		if err == nil {
+		importPaths, lerr := cachedImportPathsForHelper(store)
+		if lerr != nil {
+			err = lerr
+		} else {
 			for _, ip := range importPaths {
 				ipAbs, _ := filepath.Abs(ip.Path)
 				if strings.HasPrefix(absPath, ipAbs+"/") || absPath == ipAbs {
-					return true
+					return true, nil
 				}
 			}
 		}
@@ -352,26 +370,26 @@ func isProtectedPath(store importPathLister, filePath string) bool {
 		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
-			return true
+			return true, nil
 		}
 	}
 	if config.AppConfig.ITunes.LibraryITLPath != "" {
 		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryITLPath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
-			return true
+			return true, nil
 		}
 	}
 
 	if strings.Contains(absPath, "iTunes Media") || strings.Contains(absPath, "iTunes%20Media") {
-		return true
+		return true, nil
 	}
 
 	if strings.Contains(filepath.ToSlash(absPath), "/.failed/") {
-		return true
+		return true, nil
 	}
 
-	return false
+	return false, err
 }
 
 // resolveAuthorAndSeriesNames returns the author name and series name

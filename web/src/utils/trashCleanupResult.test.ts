@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.test.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: 63a5ee65-33c3-4d7d-b8dc-cc5de376cdcd
 // last-edited: 2026-10-27
 
@@ -28,6 +28,8 @@ describe('parseTrashCleanupResult', () => {
       needs_attention_version_ids: [],
       needs_attention_book_ids: [],
       stopped_for_merge: false,
+      stopped_for_merge_nights: 0,
+      stopped_for_merge_repeatedly: false,
     });
   });
 
@@ -43,7 +45,11 @@ describe('parseTrashCleanupResult', () => {
       needs_attention_version_ids: ['v9'],
       needs_attention_book_ids: ['b9'],
       stopped_for_merge: true,
+      stopped_for_merge_nights: 3,
+      stopped_for_merge_repeatedly: true,
     });
+    expect(r?.stopped_for_merge_nights).toBe(3);
+    expect(r?.stopped_for_merge_repeatedly).toBe(true);
     expect(r?.kept_file_paths).toEqual(['/lib/Gotham/Year One/part1.m4b']);
     expect(r?.stopped_for_merge).toBe(true);
     expect(cleanupVersionIds(r!, 'kept')).toEqual(['v1', 'v2']);

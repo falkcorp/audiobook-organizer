@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: 142d4823-4f1c-4c19-95fe-7a3c0f9f05b4
 // last-edited: 2026-10-27
 
@@ -166,6 +166,17 @@ export default function TrashCleanupResultPanel({ opId }: { opId: string }) {
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
           Stopped early: a merge or combine was running the whole time the cleanup waited, so the
           remaining versions are left for the next run. Nothing failed.
+        </Typography>
+      )}
+      {result.stopped_for_merge_repeatedly && (
+        <Typography
+          variant="body2"
+          sx={{ color: 'warning.main' }}
+          data-testid="trash-cleanup-merge-stuck"
+        >
+          The cleanup has now stopped for this reason {result.stopped_for_merge_nights} nights in a
+          row (a merge or combine was running), so the trash is not being purged. Check what is
+          holding the library busy around this time.
         </Typography>
       )}
     </Box>

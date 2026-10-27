@@ -85,3 +85,41 @@ partial purges as complete.
 - The Trash and Purged tabs of the version page work: `GET
   /api/v1/audiobooks/trashed-versions` and `/purged-versions` were called by
   the page but never registered.
+
+#### Version purge: a retry trusts only what it removed, a vanished root is transient, hard delete refuses a running purge
+
+A second review of the version purge found three ways it could still go wrong,
+and several smaller ones.
+
+- A retried purge used to treat the folder of every path still to be deleted as
+  a folder the earlier attempt had emptied, so a nested folder on an unmounted
+  drive read as legitimately gone. `database.BookVersion` now records
+  `purge_unlinked` (each path actually removed, written after the removal and
+  cleared when the purge finishes), and a retry seeds only those folders. A
+  crash between the removal and the record leaves a path unrecorded, which only
+  makes the retry stricter.
+- `guard.RootReady()` runs again once the merge lock is held, and a
+  `PurgeDecider.Decide` that cannot resolve the library root (the path vanished,
+  `fs.ErrNotExist`) answers with a transient error instead of a permanent keep,
+  so the version stays `purging` and the next run decides again. The rename of
+  `PurgeDecider.Unlinking` to `Unlinked` reflects that it is now called after
+  the removal.
+- `PebbleStore.DeleteBookVersion` refuses a `purging` version
+  (`ErrVersionPurging`); the hard-delete route answers 409 for it.
+- `purgeVersionLocked` re-reads the version after taking the lock, so a version
+  restored or purged between the read and the lock is not purged from a stale
+  copy. Purge now answers 409 "already purged" (`ErrVersionAlreadyPurged`) when
+  the nightly cleanup got there first, instead of saying it was restored.
+- ENOTEMPTY and EEXIST are transient removal errors, not permanent ones.
+  `pruneEmptyDirs` no longer enters a symlink. An ENOENT from a removal the
+  decider had approved re-runs the decider before the file counts as removed.
+  The import-path lookup failing now keeps the file (`isProtectedPath` fails
+  closed on the deletion paths).
+- The trash cleanup counts consecutive nights it stopped for the merge lock
+  (`MergeStopStreak`, kept in the raw KV store). At
+  `versions.MergeStopEscalateAfter` (3) the operation logs a warning and sets
+  `stopped_for_merge_repeatedly` and `stopped_for_merge_nights` on its result,
+  which the operation panel shows; the operation still completes. The wait is
+  `sync.Mutex.TryLock` based, which can starve under Go's starvation mode; that
+  limit is documented on `BackgroundMergeLockWait`. A failed run now logs the
+  same summary line a successful one does.

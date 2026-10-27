@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/trash_cleanup_failure_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9e2c4a17-5b83-4d60-a1f9-0c7d3e8b5a42
 // last-edited: 2026-10-27
 
@@ -150,5 +150,71 @@ func TestRunTrashCleanup_StoppedForMergeIsReportedAndDoesNotFailTheOp(t *testing
 	}
 	if !strings.Contains(strings.Join(rep.logs, "\n"), "stopped early: a merge or combine was running, the rest runs next night") {
 		t.Errorf("logs %v do not say the run stopped early", rep.logs)
+	}
+}
+
+// The night's summary is logged whether or not it failed: a run that failed one
+// purge has still purged others, kept files, and stopped for the merge lock, and
+// the log of the failing night is the one that gets read.
+func TestRunTrashCleanup_FailedRunStillLogsTheWholeSummary(t *testing.T) {
+	cause := errors.New("book_file lookup incomplete")
+	res := versions.CleanupResult{
+		Purged: 2, Failed: 1, StoppedForMerge: true,
+		KeptFiles:      []versions.KeptVersion{{VersionID: "ver-hush", BookID: "book-hush", Files: []database.PurgeFileNote{{Path: "/lib/Gotham/Hush/hush.m4b", Reason: "kept"}}}},
+		NeedsAttention: []versions.KeptVersion{{VersionID: "ver-asylum", BookID: "book-asylum"}},
+	}
+	p := &Plugin{deps: trashCleanupDeps{res: res, err: cause}}
+	rep := &levelReporter{}
+
+	if err := p.runTrashCleanup(context.Background(), nil, rep); !errors.Is(err, cause) {
+		t.Fatalf("runTrashCleanup = %v, want the cleanup's error", err)
+	}
+	joined := strings.Join(rep.logs, "\n")
+	for _, want := range []string{"purged 2", "1 of them with files kept", "ver-hush", "need attention (versions ver-asylum)", "stopped early: a merge or combine was running", "1 failed", "book_file lookup incomplete"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("logs %q do not contain %q", joined, want)
+		}
+	}
+}
+
+// One or two stopped nights are reported as they always were. The streak is on
+// the result, but nothing is escalated.
+func TestRunTrashCleanup_ShortMergeStopStreakIsNotEscalated(t *testing.T) {
+	p := &Plugin{deps: trashCleanupDeps{res: versions.CleanupResult{StoppedForMerge: true, MergeStopStreak: versions.MergeStopEscalateAfter - 1}}}
+	rep := &levelReporter{}
+	if err := p.runTrashCleanup(context.Background(), nil, rep); err != nil {
+		t.Fatalf("runTrashCleanup = %v", err)
+	}
+	got := rep.result.(TrashCleanupResult)
+	if got.StoppedForMergeRepeatedly || got.StoppedForMergeNights != versions.MergeStopEscalateAfter-1 {
+		t.Errorf("result = %#v, want the streak recorded and not flagged as repeated", got)
+	}
+	for i, l := range rep.levels {
+		if l >= slog.LevelWarn {
+			t.Errorf("log %q is at %v, want Info", rep.logs[i], l)
+		}
+	}
+}
+
+// Several stopped nights in a row are a warning in the log and a flag on the
+// result, and still not a failure: the op completes.
+func TestRunTrashCleanup_RepeatedMergeStopsWarnWithoutFailingTheOp(t *testing.T) {
+	p := &Plugin{deps: trashCleanupDeps{res: versions.CleanupResult{StoppedForMerge: true, MergeStopStreak: versions.MergeStopEscalateAfter}}}
+	rep := &levelReporter{}
+	if err := p.runTrashCleanup(context.Background(), nil, rep); err != nil {
+		t.Fatalf("runTrashCleanup = %v, want nil: the op stays green", err)
+	}
+	got := rep.result.(TrashCleanupResult)
+	if !got.StoppedForMergeRepeatedly || got.StoppedForMergeNights != versions.MergeStopEscalateAfter {
+		t.Errorf("result = %#v, want the streak flagged as repeated", got)
+	}
+	warned := false
+	for i, l := range rep.levels {
+		if l >= slog.LevelWarn && strings.Contains(rep.logs[i], "nights in a row") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("no warning about the repeated stops in %v (levels %v)", rep.logs, rep.levels)
 	}
 }

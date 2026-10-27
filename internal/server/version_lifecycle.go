@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -198,6 +198,10 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		}
 		// Restored after the read above: the claim was refused, nothing was
 		// deleted, and the restore stands.
+		if errors.Is(err, versions.ErrVersionAlreadyPurged) {
+			httputil.RespondWithConflict(c, "the version was already purged (by the nightly cleanup or another purge) while this purge was starting; nothing more was deleted: "+err.Error())
+			return
+		}
 		if errors.Is(err, versions.ErrVersionNotInTrash) {
 			httputil.RespondWithConflict(c, "the version was restored while the purge was starting; nothing was deleted: "+err.Error())
 			return
@@ -300,6 +304,11 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 	}
 
 	if err := s.Ops().DeleteBookVersion(ver.ID); err != nil {
+		// A purge-now that claimed the version after the read above: its purge
+		// is running, so the record stays until it ends (database.ErrVersionPurging).
+		if respondIfPurgingVersion(c, err) {
+			return
+		}
 		httputil.InternalError(c, "hard delete version", err)
 		return
 	}

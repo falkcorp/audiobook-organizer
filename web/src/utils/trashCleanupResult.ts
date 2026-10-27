@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
 // last-edited: 2026-10-27
 
@@ -32,6 +32,10 @@ export interface TrashCleanupResult {
   needs_attention_book_ids: string[];
   /** a merge or combine held the merge lock for the whole wait, so the run stopped and left the rest for the next night */
   stopped_for_merge: boolean;
+  /** how many nights in a row, this one included, the run stopped for the merge lock */
+  stopped_for_merge_nights: number;
+  /** the run has stopped for the merge lock several nights in a row (a warning, not a failure) */
+  stopped_for_merge_repeatedly: boolean;
 }
 
 /** The two groups of versions the result points at. */
@@ -60,6 +64,8 @@ export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null
     needs_attention_version_ids: strings(r.needs_attention_version_ids),
     needs_attention_book_ids: strings(r.needs_attention_book_ids),
     stopped_for_merge: r.stopped_for_merge === true,
+    stopped_for_merge_nights: num(r.stopped_for_merge_nights),
+    stopped_for_merge_repeatedly: r.stopped_for_merge_repeatedly === true,
   };
 }
 

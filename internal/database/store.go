@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.128.3
+// version: 2.128.4
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-27
 
@@ -833,10 +833,21 @@ type BookVersion struct {
 	// BookVersionStatusPurgeFailed. Empty in every other status.
 	PurgeFailed   []PurgeFileNote `json:"purge_failed,omitempty"`
 	PurgeFailedAt *time.Time      `json:"purge_failed_at,omitempty"`
-	MetadataJSON  string          `json:"metadata_json,omitempty"` // source-specific catch-all
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-	Version       int             `json:"version"`
+	// PurgeUnlinked lists the paths an attempt of the purge actually took off
+	// the disk (or found gone with its folder vouching for it), written one by
+	// one AFTER each removal, while the version is purging or purge_failed;
+	// cleared when the purge finishes. A retry reads it to know which folders
+	// its own earlier attempt emptied (versions.PurgeVersion): a folder that is
+	// empty only because the purge emptied it is not a mount point whose
+	// dataset is down. It is written after the removal, never before, so a
+	// crash between the two leaves a path unrecorded (the retry then refuses to
+	// call it gone and the version stays purging) and can never leave an
+	// unremoved path recorded as unlinked.
+	PurgeUnlinked []string  `json:"purge_unlinked,omitempty"`
+	MetadataJSON  string    `json:"metadata_json,omitempty"` // source-specific catch-all
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	Version       int       `json:"version"`
 }
 
 // PurgeFileNote is one file a purge left on disk (BookVersion.PurgeKept) or
@@ -890,7 +901,9 @@ const (
 // ErrVersionPurging is returned by UpdateBookVersion when the stored version
 // is purging (or purge_failed) and the write would move it anywhere but the
 // purge states or inactive_purged: a restore, a re-trash, a swap, or a stale
-// writer putting back a copy it read before the claim.
+// writer putting back a copy it read before the claim. DeleteBookVersion
+// returns it too for a version that is purging (a hard delete in the middle of
+// a purge would strand the files it has not removed yet).
 var ErrVersionPurging = errors.New("version is being purged and cannot change status")
 
 // ErrVersionPurgeClaimLost is returned by UpdateBookVersion when a write sets

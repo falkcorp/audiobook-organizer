@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.2
+// version: 1.234.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-27
 
@@ -5354,6 +5354,20 @@ func refusePurgeTransition(prev, v *BookVersion) error {
 	return nil
 }
 
+// refusePurgingVersionDelete is refusePurgeTransition's counterpart for a hard
+// delete, under the same stripe: a version in the purging status has a purge
+// running (or interrupted) that is still reading its record to know which files
+// it owes a removal and which it has already taken, so deleting the record in
+// the middle would strand the rest of its files on disk with nothing naming
+// them. purge_failed is not refused: a purge that gave up is exactly what the
+// owner hard-deletes, and its files are named in the record the owner was shown.
+func refusePurgingVersionDelete(v *BookVersion) error {
+	if v.Status == BookVersionStatusPurging {
+		return fmt.Errorf("book version %s: cannot delete it while its purge is running: %w", v.ID, ErrVersionPurging)
+	}
+	return nil
+}
+
 // maintainTrashedAt keeps BookVersion.TrashedAt consistent with Status on
 // every write. It is bookkeeping, like UpdatedAt -- not a transition rule
 // (those stay in the server layer, see the BookVersionStatus comment) -- and
@@ -5399,6 +5413,9 @@ func (p *PebbleStore) DeleteBookVersion(id string) error {
 		return nil
 	}
 	if err := p.refuseRetiredVersionDelete(v); err != nil {
+		return err
+	}
+	if err := refusePurgingVersionDelete(v); err != nil {
 		return err
 	}
 	b := p.db.NewBatch()

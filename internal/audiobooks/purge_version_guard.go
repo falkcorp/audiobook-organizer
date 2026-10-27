@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_version_guard.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c8e1f5a-9d27-4b60-a4e3-7f1b2c9d6e58
 // last-edited: 2026-10-27
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -53,7 +54,7 @@ type versionPurgeDecider struct {
 	emptied *dirSet
 }
 
-func (d *versionPurgeDecider) Unlinking(path string) { d.emptied.add(filepath.Dir(path)) }
+func (d *versionPurgeDecider) Unlinked(path string) { d.emptied.add(filepath.Dir(path)) }
 
 func (d *versionPurgeDecider) Decide(path string) (versions.PurgeDecision, string, error) {
 	v := d.svc.planPurgePathIn(path, d.emptied, nil)
@@ -67,6 +68,17 @@ func (d *versionPurgeDecider) Decide(path string) (versions.PurgeDecision, strin
 		// library root, a root that does not resolve, a trailing separator) will
 		// not change by asking again.
 		if errors.Is(v.keptErr, errPathLookupFailed) && !errors.Is(v.keptErr, errPathUnresolvable) {
+			return versions.PurgeKeep, "", v.keptErr
+		}
+		// The library root itself is not there (fs.ErrNotExist out of resolving
+		// it in purgePathInsideRoot): the library went away after RootReady
+		// passed, an unmount, which a remount undoes. The book purge leaves this
+		// to libraryRootReady; a version purge that has already passed that check
+		// can meet it between the check and a path, and "kept for good" would
+		// record every file as kept and end the version while its files sit on
+		// the disk that comes back. It is the same question as an empty mount
+		// point: cannot tell yet, so transient.
+		if errors.Is(v.keptErr, fs.ErrNotExist) {
 			return versions.PurgeKeep, "", v.keptErr
 		}
 		return versions.PurgeKeep, v.keptErr.Error(), nil

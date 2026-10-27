@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_review_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7b1e4c92-5d38-4a06-b9f7-2c6a8d0e3f15
 // last-edited: 2026-10-27
 
@@ -39,7 +39,7 @@ func (g *fsGuard) NewDecider(seedDirs []string) PurgeDecider { return &fsDecider
 
 type fsDecider struct{ g *fsGuard }
 
-func (d *fsDecider) Unlinking(string) {}
+func (d *fsDecider) Unlinked(string) {}
 
 func (d *fsDecider) Decide(path string) (PurgeDecision, string, error) {
 	if d.g.protected != nil && d.g.protected(path) {

@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.7.5
+// version: 1.7.6
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-27
 
@@ -54,6 +54,10 @@ type versionPurger interface {
 	// it with database.AsCapability and fails closed without it.
 
 	GetBookByID(id string) (*database.Book, error)
+
+	// GetBookVersion re-reads the version under the merge lock, after a wait
+	// that can last minutes (purgeVersionLocked).
+	GetBookVersion(id string) (*database.BookVersion, error)
 }
 
 type TrashedVersionCleaner interface {
@@ -64,9 +68,9 @@ type TrashedVersionCleaner interface {
 	// the purges that gave up (status purge_failed), which it counts as
 	// needing attention and does not retry.
 	ListTrashedBookVersions() ([]database.BookVersion, error)
-	// GetBookVersion re-reads each listed row before it is stamped or
-	// purged, narrowing the window in which a mid-run restore is undone.
-	GetBookVersion(id string) (*database.BookVersion, error)
+	// GetBookVersion (from versionPurger) also re-reads each listed row before
+	// it is stamped or purged, narrowing the window in which a mid-run restore
+	// is undone.
 }
 
 // Exported: internal/importer forwards its store into CreateIngestVersion.

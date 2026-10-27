@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.27.3
+// version: 1.28.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-27
 
@@ -23,6 +23,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -527,11 +528,19 @@ type TrashCleanupResult struct {
 	// the whole wait, so the run stopped there and left the remaining versions
 	// for the next night. It is not a failure and does not turn the op red.
 	StoppedForMerge bool `json:"stopped_for_merge,omitempty"`
+	// StoppedForMergeNights is how many nights in a row, this one included, the
+	// run stopped for the merge lock. At versions.MergeStopEscalateAfter or more
+	// the page and the log say the trash is not being purged; it is still not a
+	// failure and does not turn the op red.
+	StoppedForMergeNights int `json:"stopped_for_merge_nights,omitempty"`
+	// StoppedForMergeRepeatedly is StoppedForMergeNights >= versions.MergeStopEscalateAfter,
+	// decided here so the page does not repeat the threshold.
+	StoppedForMergeRepeatedly bool `json:"stopped_for_merge_repeatedly,omitempty"`
 }
 
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	res, err := p.deps.CleanupTrashedVersions()
-	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), StoppedForMerge: res.StoppedForMerge}
+	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
 	for _, k := range res.KeptFiles {
 		payload.KeptVersionIDs = append(payload.KeptVersionIDs, k.VersionID)
 		payload.KeptBookIDs = append(payload.KeptBookIDs, k.BookID)
@@ -555,13 +564,9 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) cannot be purged (a file cannot be removed: permission or a read-only filesystem) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
 			len(res.NeedsAttention), strings.Join(payload.NeedsAttentionVersionIDs, ", "), strings.Join(payload.NeedsAttentionBookIDs, ", ")))
 	}
-	if err != nil {
-		// Some due purges failed (or the trash could not be listed): say so in
-		// the operation log and fail the op, so a night in which nothing could
-		// be purged does not read as "purged 0 versions" with a success status.
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: purged %d versions, %d failed: %v", res.Purged, res.Failed, err))
-		return err
-	}
+	// The summary line is built before the error is looked at: a run that failed
+	// some purges has still purged, kept, deferred and stopped for the lock, and
+	// the log of the night it failed is the one the owner reads.
 	msg := fmt.Sprintf("Trash cleanup: purged %d versions", res.Purged)
 	if n := len(res.KeptFiles); n > 0 {
 		msg = fmt.Sprintf("Trash cleanup: purged %d versions, %d of them with files kept (versions %s)", res.Purged, n, strings.Join(payload.KeptVersionIDs, ", "))
@@ -571,6 +576,19 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	}
 	if res.StoppedForMerge {
 		msg += "; stopped early: a merge or combine was running, the rest runs next night"
+	}
+	if res.MergeStopStreak >= versions.MergeStopEscalateAfter {
+		// Not a failure (the op stays green), but three nights of nothing purged
+		// because the merge lock was never free is something to go and look at.
+		warn := fmt.Sprintf("Trash cleanup: stopped for the merge lock %d nights in a row, so the trash is not being purged; check what holds the merge lock around this time (a long combine, or merges queuing on it)", res.MergeStopStreak)
+		_ = reporter.Log(slog.LevelWarn, warn)
+	}
+	if err != nil {
+		// Some due purges failed (or the trash could not be listed): say so in
+		// the operation log and fail the op, so a night in which nothing could
+		// be purged does not read as "purged 0 versions" with a success status.
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%s; %d failed: %v", msg, res.Failed, err))
+		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, msg)
 	if setErr != nil {

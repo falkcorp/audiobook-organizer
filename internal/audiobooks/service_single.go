@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.2
+// version: 1.27.3
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-27
 
@@ -979,8 +979,16 @@ func (svc *AudiobookService) planPurgeFileIn(book *database.Book, emptied *dirSe
 // library root, or an unmounted folder.
 func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, referenced func(path string) error) purgeFileVerdict {
 	root := config.Snapshot().RootDir
-	if isProtectedPath(svc.store, path) {
+	// A deletion decision: an import-path list that cannot be read is not "no
+	// import paths". The protected answer still wins when the other checks found
+	// one; otherwise the question could not be answered and the file stays
+	// (errPathLookupFailed: transient, retried).
+	protected, protErr := protectedPathChecked(svc.store, path)
+	if protected {
 		return purgeFileVerdict{protected: true}
+	}
+	if protErr != nil {
+		return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is not under an import path: import-path lookup: %w: %w", path, errPathLookupFailed, protErr)}
 	}
 	if rootErr := purgePathInsideRoot(path, root); rootErr != nil {
 		return purgeFileVerdict{keptErr: rootErr}
