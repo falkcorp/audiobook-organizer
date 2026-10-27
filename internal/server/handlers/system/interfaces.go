@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-09-07
+// last-edited: 2026-10-26
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -121,8 +121,8 @@ type SystemStore interface {
 // SystemService is the narrow *sysinfo.SystemService subset used by
 // getSystemStatus / getSystemLogs.
 type SystemService interface {
-	CollectSystemStatus() (*sysinfo.SystemStatus, error)
-	CollectSystemLogs(level, search string, limit, offset int) ([]sysinfo.SystemLogEntry, int, error)
+	CollectSystemStatus(mayRead sysinfo.OperationReadCheck) (*sysinfo.SystemStatus, error)
+	CollectSystemLogs(level, search string, limit, offset int, mayRead sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error)
 }
 
 // ConfigUpdateService is the narrow *config.UpdateService subset used by

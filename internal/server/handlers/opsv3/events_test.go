@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package opsv3
 
@@ -163,7 +163,7 @@ func TestSSEHeartbeatAndResumeFromLastEventID(t *testing.T) {
 	// which TestSSEPerUserCap covers.
 	br := NewBroker(mem, nil, nil, BrokerOptions{Heartbeat: 20 * time.Millisecond, RingSize: 4, MaxClientsPerUser: 16})
 	for i := range 6 {
-		br.publish(RunView{ID: string(rune('a' + i)), State: "running"})
+		br.publishScoped(RunView{ID: string(rune('a' + i)), State: "running"}, runScope{})
 	}
 	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
 	t.Cleanup(srv.Close)
@@ -443,7 +443,7 @@ func TestSSESlowClientGetsResyncNotBlocking(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		for i := range 500 {
-			br.publish(RunView{ID: "r", State: "running", Progress: ProgressView{Done: int64(i)}})
+			br.publishScoped(RunView{ID: "r", State: "running", Progress: ProgressView{Done: int64(i)}}, runScope{})
 		}
 		close(finished)
 	}()
@@ -484,7 +484,7 @@ func TestSSESlowClientGetsResyncNotBlocking(t *testing.T) {
 		t.Fatal("connection did not register")
 	}
 	for i := range 20 {
-		br.publish(RunView{ID: "w", State: "running", Progress: ProgressView{Done: int64(i)}})
+		br.publishScoped(RunView{ID: "w", State: "running", Progress: ProgressView{Done: int64(i)}}, runScope{})
 	}
 	sawResync := false
 	for range 25 {
@@ -571,7 +571,7 @@ func TestSSEStreamEndsWhenAWriteFails(t *testing.T) {
 					}
 					time.Sleep(time.Millisecond)
 				}
-				br.publish(RunView{ID: "r1"})
+				br.publishScoped(RunView{ID: "r1"}, runScope{})
 			}
 			select {
 			case <-returned:

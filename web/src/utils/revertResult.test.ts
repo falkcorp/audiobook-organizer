@@ -1,10 +1,10 @@
 // file: web/src/utils/revertResult.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9b1f4c2e-6d3a-4e8b-a7f0-2c5d8e1b4a63
-// last-edited: 2026-09-12
+// last-edited: 2026-10-26
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { describeRevertResult, describeUndoPreflight } from './revertResult';
+import { describeRevertResult, describeUndoPreflight, isUndoRefused } from './revertResult';
 import { revertOperation } from '../services/versionApi';
 
 describe('describeRevertResult', () => {
@@ -149,5 +149,22 @@ describe('describeUndoPreflight', () => {
     expect(plan.canUndo).toBe(true);
     expect(plan.message).toMatch(/^Undo 1 change\(s\)/);
     expect(plan.message).toContain('1 change(s) will be refused (1 series deleted row)');
+  });
+});
+
+describe('isUndoRefused', () => {
+  const failure = (status: number) => Object.assign(new Error('refused'), { response: { status, data: {} } });
+
+  it('is true only for a 403', () => {
+    expect(isUndoRefused(failure(403))).toBe(true);
+    expect(isUndoRefused(failure(409))).toBe(false);
+    expect(isUndoRefused(failure(500))).toBe(false);
+  });
+
+  it('is false for an error with no response and for a non-error', () => {
+    expect(isUndoRefused(new Error('network down'))).toBe(false);
+    expect(isUndoRefused(null)).toBe(false);
+    expect(isUndoRefused(undefined)).toBe(false);
+    expect(isUndoRefused('403')).toBe(false);
   });
 });

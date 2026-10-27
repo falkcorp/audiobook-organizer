@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.14.0
+// version: 1.22.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -367,9 +369,10 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 		if len(resp) >= limit {
 			continue
 		}
-		item := rowToResponse(r, h.displayNameFor(r.DefID), h.notifyLevelFor(r.DefID))
+		item := rowToResponse(r, h.displayNameFor(r.DefID), h.notifyLevelFor(r.DefID), repairsReader.UserText)
 		if r.Status == "running" && h.registry != nil {
 			if ci := h.registry.GetCurrentItem(r.ID); ci != "" {
+				ci = repairsReader.UserText(ci)
 				item.CurrentItem = &ci
 			}
 		}
@@ -440,15 +443,17 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 		// Non-fatal: return the op without logs.
 		logs = nil
 	}
+	logs = h.readableLogs(c, logs)
 
 	logResp := make([]OpLogV2Response, 0, len(logs))
 	for _, l := range logs {
 		logResp = append(logResp, logRowToResponse(l))
 	}
 
-	opResp := rowToResponse(*row, h.displayNameFor(row.DefID), h.notifyLevelFor(row.DefID))
+	opResp := rowToResponse(*row, h.displayNameFor(row.DefID), h.notifyLevelFor(row.DefID), h.repairsAccess.For(c).UserText)
 	if row.Status == "running" && h.registry != nil {
 		if ci := h.registry.GetCurrentItem(id); ci != "" {
+			ci = h.repairsAccess.For(c).UserText(ci)
 			opResp.CurrentItem = &ci
 		}
 	}
@@ -477,6 +482,7 @@ func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
 		httputil.InternalError(c, "failed to fetch operation logs", err)
 		return
 	}
+	logs = h.readableLogs(c, logs)
 
 	filename := "operation-" + id + ".log.gz"
 	c.Header("Content-Type", "application/gzip")
@@ -534,6 +540,7 @@ func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
 		httputil.InternalError(c, "failed to fetch operation logs", err)
 		return
 	}
+	logs = h.readableLogs(c, logs)
 	resp := make([]OpLogV2Response, 0, len(logs))
 	for _, l := range logs {
 		resp = append(resp, logRowToResponse(l))
@@ -555,6 +562,29 @@ func (h *OperationsV2Handler) mayReadLogsOf(c *gin.Context, id string) bool {
 		return false
 	}
 	return h.repairsAccess.For(c).Require(row)
+}
+
+// readableLogs is logs without the lines that carry other users' own data
+// (activity.NamesOthersUserLog) when the caller may not read it (users.manage).
+// It applies to the log of every operation, not only a Repairs one: the engine
+// writes "owner apply by user <id>" to its own run's log, and any other op may
+// log an account the same way. A line the caller may not read is dropped, not
+// blanked, so a withheld line leaves no row to count; a line that is kept is
+// served without the attributes that name a user (activity.WithoutUserAttrs).
+func (h *OperationsV2Handler) readableLogs(c *gin.Context, logs []database.OpLogV2Row) []database.OpLogV2Row {
+	if len(logs) == 0 || h.repairsAccess.For(c).MayReadUserData() {
+		return logs
+	}
+	out := make([]database.OpLogV2Row, 0, len(logs))
+	for _, l := range logs {
+		if activity.NamesOthersUserLog("", l.Message) {
+			continue
+		}
+		// A clean message can carry user_id, username or email as attributes.
+		l.Attrs = activity.WithoutUserAttrs(l.Attrs)
+		out = append(out, l)
+	}
+	return out
 }
 
 // CancelOperationV2 implements DELETE /api/v1/operations/v2/:id.
@@ -661,14 +691,37 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 	if !h.defPermissionsHeld(c, body.DefID) {
 		return
 	}
+	if opaccess.IsRepairsOp(body.DefID) {
+		raw, merr := json.Marshal(body.Params)
+		if merr != nil {
+			httputil.RespondWithBadRequest(c, "params must be JSON")
+			return
+		}
+		if !h.repairsStartAllowed(c, body.DefID, raw) {
+			return
+		}
+	}
 
-	opID, err := h.registry.EnqueueOp(c.Request.Context(), body.DefID, body.Params)
+	opID, err := h.registry.EnqueueOp(c.Request.Context(), body.DefID, body.Params, servermiddleware.ActorOptions(c)...)
 	if err != nil {
 		httputil.InternalError(c, "enqueue failed", err)
 		return
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"op_id": opID})
+}
+
+// repairsStartAllowed is the fixer check a start of a Repairs definition
+// (repairs.plan, repairs.apply) adds to defPermissionsHeld: the caller must hold
+// every permission of the fixer the params name, as the Repairs routes require
+// (opaccess.Reader.CheckStart). It writes the refusal and returns false when not.
+// Trigger and retry both ask it, with the params the run will carry.
+func (h *OperationsV2Handler) repairsStartAllowed(c *gin.Context, defID string, params []byte) bool {
+	if ref := h.repairsAccess.For(c).CheckStart(defID, params); ref != nil {
+		ref.Respond(c)
+		return false
+	}
+	return true
 }
 
 // defPermissionsHeld enforces the def's declared Permissions for the caller,
@@ -790,6 +843,11 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 	if !h.defPermissionsHeld(c, row.DefID) {
 		return
 	}
+	// A retry starts a run with the old run's params, so a Repairs run is
+	// retried only by a caller who may start its fixer.
+	if !h.repairsStartAllowed(c, row.DefID, []byte(row.Params)) {
+		return
+	}
 
 	if opsregistry.IsInterruptedStatus(row.Status) {
 		h.retryInterruptedInPlace(c, row)
@@ -805,7 +863,7 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 		params = json.RawMessage(row.Params)
 	}
 
-	newID, err := h.registry.EnqueueOp(c.Request.Context(), row.DefID, params)
+	newID, err := h.registry.EnqueueOp(c.Request.Context(), row.DefID, params, servermiddleware.ActorOptions(c)...)
 	if err != nil {
 		httputil.InternalError(c, "enqueue failed", err)
 		return
@@ -912,7 +970,7 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 	c.Writer.Flush()
 
 	notify := c.Request.Context().Done()
-	feed := &opEventFilter{h: h, reader: h.repairsAccess.For(c), seen: map[string]bool{}}
+	feed := &opEventFilter{h: h, reader: h.repairsAccess.ForStream(c), seen: map[string]opEventScope{}}
 	for {
 		select {
 		case <-notify:
@@ -923,9 +981,16 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 				// Hub closed the channel (server shutdown).
 				return
 			}
+			// A stream whose credential no longer stands (its account was
+			// disabled or removed, its API key revoked or expired) ends here,
+			// whatever the event is, rather than at its next reconnect.
+			if !feed.reader.StreamOpen() {
+				return
+			}
 			if !feed.mayReceive(ev) {
 				continue
 			}
+			ev = feed.withoutUserText(ev)
 			b, err := json.Marshal(ev.Payload)
 			if err != nil {
 				continue
@@ -936,14 +1001,31 @@ func (h *OperationsV2Handler) OperationsSSE(c *gin.Context) {
 	}
 }
 
-// opEventFilter keeps the events of a Repairs op the caller may not read off
-// their /operations/events stream: an op.created or op.terminal event names the
-// op and its def, and op.log carries the engine's log lines (the owner's user id
-// on an owner apply). The verdict for an op is read once per stream.
+// opEventFilter keeps what the caller may not read off their /operations/events
+// stream: the events of a Repairs op (op.created and op.terminal name the op
+// and its def, op.log carries the engine's log lines) and any op.log line that
+// names a user (activity.NamesOthersUserLog), for a caller without users.manage.
+//
+// The stream stays open for hours, so no verdict about the caller outlives the
+// recheck bound: each decision refreshes the reader (opaccess.Reader.Refresh,
+// which asks the store again only once per opaccess.Repairs.WithLiveRecheck) and
+// asks the live permission check, so a caller whose role was lowered after the
+// stream opened stops receiving them within that bound, and one whose account was
+// disabled or whose key was revoked has the stream ended (Reader.StreamOpen).
+// What is remembered per op (seen) is only what the op is -- not a Repairs op,
+// or a Repairs op's definition and fixer -- never what the caller may do.
 type opEventFilter struct {
 	h      *OperationsV2Handler
 	reader *opaccess.Reader
-	seen   map[string]bool // op id -> may receive
+	seen   map[string]opEventScope // op id -> what the op is
+}
+
+// opEventScope is what an op's row says about it: not a Repairs op, or a
+// Repairs op of a definition and a fixer ("" when it states none).
+type opEventScope struct {
+	repairs bool
+	defID   string
+	fixerID string
 }
 
 // mayReceive reports whether ev may go to this stream. An event that names no
@@ -956,6 +1038,26 @@ func (f *opEventFilter) mayReceive(ev opsregistry.Event) bool {
 	if !ok {
 		return true
 	}
+	// An op.log line that carries other users' own data goes to a stream whose
+	// caller may read it. This is the line's verdict, not its op's, and it covers
+	// the log of every operation.
+	// One refresh serves every verdict of this event (the reader bounds how
+	// often it actually asks the store: opaccess.Repairs.WithLiveRecheck).
+	refreshed := false
+	refresh := func() {
+		if !refreshed {
+			f.reader.Refresh()
+			refreshed = true
+		}
+	}
+	if ev.Name == "op.log" {
+		if msg, _ := m["message"].(string); activity.NamesOthersUserLog("", msg) {
+			refresh()
+			if !f.reader.MayReadUserData() {
+				return false
+			}
+		}
+	}
 	id, _ := m["op_id"].(string)
 	if id == "" {
 		id, _ = m["parent_id"].(string)
@@ -963,24 +1065,60 @@ func (f *opEventFilter) mayReceive(ev opsregistry.Event) bool {
 	if id == "" {
 		return true
 	}
-	if v, ok := f.seen[id]; ok {
-		return v
+	sc, ok := f.seen[id]
+	if !ok {
+		if defID, _ := m["def_id"].(string); defID != "" && !opaccess.IsRepairsOp(defID) {
+			f.seen[id] = opEventScope{}
+			return true
+		}
+		if f.h.opsStore == nil {
+			// No store, so no repairs op row exists to protect.
+			return true
+		}
+		row, err := f.h.opsStore.GetOperationV2(id)
+		if err != nil || row == nil {
+			return false
+		}
+		sc = opEventScope{repairs: opaccess.IsRepairsOp(row.DefID), defID: row.DefID, fixerID: opaccess.RowFixerID(row)}
+		// A Repairs op that names no fixer yet may name it once it has a result,
+		// so only a settled scope is remembered.
+		if !sc.repairs || sc.fixerID != "" {
+			f.seen[id] = sc
+		}
 	}
-	if defID, _ := m["def_id"].(string); defID != "" && !opaccess.IsRepairsOp(defID) {
-		f.seen[id] = true
+	if !sc.repairs {
 		return true
 	}
-	if f.h.opsStore == nil {
-		// No store, so no repairs op row exists to protect.
-		return true
+	refresh()
+	return f.reader.MayReadFixer(sc.defID, sc.fixerID)
+}
+
+// withoutUserText is ev with the label of an op.current_item event replaced by
+// activity.WithheldUserText when it names a user and the caller may not read
+// other users' data. The event's payload is shared with every other stream, so
+// a redacted event carries a copy of it; any other event is returned as it is.
+func (f *opEventFilter) withoutUserText(ev opsregistry.Event) opsregistry.Event {
+	if ev.Name != "op.current_item" {
+		return ev
 	}
-	row, err := f.h.opsStore.GetOperationV2(id)
-	if err != nil || row == nil {
-		return false
+	m, ok := ev.Payload.(map[string]any)
+	if !ok {
+		return ev
 	}
-	v := f.reader.MayRead(row)
-	f.seen[id] = v
-	return v
+	label, _ := m["label"].(string)
+	if !activity.NamesOthersUserLog("", label) {
+		return ev
+	}
+	f.reader.Refresh()
+	if f.reader.MayReadUserData() {
+		return ev
+	}
+	cp := make(map[string]any, len(m))
+	for k, val := range m {
+		cp[k] = val
+	}
+	cp["label"] = activity.WithheldUserText
+	return opsregistry.Event{Name: ev.Name, Payload: cp}
 }
 
 // --- helpers ---
@@ -1038,7 +1176,14 @@ func (h *OperationsV2Handler) notifyLevelFor(defID string) int {
 }
 
 // rowToResponse converts a database.OperationV2Row to the HTTP response shape.
-func rowToResponse(r database.OperationV2Row, displayName string, notifyLevel int) OperationV2Response {
+// userText is applied to the row's free text, its error and its progress
+// message, which can name a user (opaccess.Reader.UserText).
+func rowToResponse(r database.OperationV2Row, displayName string, notifyLevel int, userText func(string) string) OperationV2Response {
+	var errorMessage *string
+	if r.ErrorMessage != nil {
+		msg := userText(*r.ErrorMessage)
+		errorMessage = &msg
+	}
 	resp := OperationV2Response{
 		ID:           r.ID,
 		DefID:        r.DefID,
@@ -1052,7 +1197,7 @@ func rowToResponse(r database.OperationV2Row, displayName string, notifyLevel in
 		QueuedAt:     r.QueuedAt,
 		StartedAt:    r.StartedAt,
 		CompletedAt:  r.CompletedAt,
-		ErrorMessage: r.ErrorMessage,
+		ErrorMessage: errorMessage,
 		ResumeCount:  r.ResumeCount,
 		TraceID:      r.TraceID,
 		SpanID:       r.SpanID,
@@ -1064,7 +1209,8 @@ func rowToResponse(r database.OperationV2Row, displayName string, notifyLevel in
 	tot := r.ProgressTotal
 	resp.ProgressTotal = &tot
 	if r.ProgressMessage != "" {
-		resp.ProgressMessage = &r.ProgressMessage
+		msg := userText(r.ProgressMessage)
+		resp.ProgressMessage = &msg
 	}
 	return resp
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.22.9
+// version: 1.26.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-22
+// last-edited: 2026-10-26
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -37,6 +37,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -46,7 +47,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/gin-gonic/gin"
 )
 
@@ -106,6 +109,23 @@ type Handler struct {
 	// server stores its startup runner in Start, after the handlers are
 	// wired. Nil, or a provider yielding nil, means no step is degraded.
 	getDegraded func() DegradedSource
+
+	// repairsAccess decides which Repairs operations (repairs.plan,
+	// repairs.apply) the caller may see in GET /dashboard's recent_operations.
+	// Unset (nil) hides every Repairs operation: see WithRepairsOpAccess.
+	repairsAccess *opaccess.Repairs
+}
+
+// WithRepairsOpAccess installs the check that keeps a Repairs operation out of
+// GET /dashboard's recent_operations for callers who do not hold the
+// permissions of the operation's fixer, as every other generic operations read
+// does (opaccess). A setter rather than a New parameter because New already
+// has twelve and many test call sites; omitting it fails closed (every Repairs
+// operation is left out), and TestDashboard_RecentOperationsLeaveOutRepairsRuns
+// pins the server's wiring.
+func (h *Handler) WithRepairsOpAccess(a *opaccess.Repairs) *Handler {
+	h.repairsAccess = a
+	return h
 }
 
 // DegradedSource reports the fixed tokens of startup steps that failed but
@@ -255,7 +275,9 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 
 // GetSystemStatus implements GET /system/status.
 func (h *Handler) GetSystemStatus(c *gin.Context) {
-	status, err := h.systemSvc.CollectSystemStatus()
+	// The recent-operations panel is judged per caller: a Repairs operation the
+	// caller may not read is left out and no operation's result_data is served.
+	status, err := h.systemSvc.CollectSystemStatus(h.repairsAccess.For(c).MayRead)
 	if err != nil {
 		httputil.InternalError(c, "failed to get system status", err)
 		return
@@ -380,7 +402,19 @@ func (h *Handler) GetSystemLogs(c *gin.Context) {
 	level := c.Query("level")
 	params := httputil.ParsePaginationParams(c)
 
-	logs, total, err := h.systemSvc.CollectSystemLogs(level, params.Search, params.Limit, params.Offset)
+	// A line that names other users' own data (the predicate the activity log,
+	// the diagnostics export and /system/activity-log use) is left out unless the
+	// caller holds users.manage, and the total counts only what is served.
+	mayRead := func(sysinfo.SystemLogEntry) bool { return true }
+	if !h.repairsAccess.For(c).MayReadUserData() {
+		mayRead = func(e sysinfo.SystemLogEntry) bool {
+			if activity.NamesOthersUserLog("", e.Message) {
+				return false
+			}
+			return e.Details == nil || !activity.NamesOthersUserLog("", *e.Details)
+		}
+	}
+	logs, total, err := h.systemSvc.CollectSystemLogs(level, params.Search, params.Limit, params.Offset, mayRead)
 	if err != nil {
 		httputil.InternalError(c, "failed to get system logs", err)
 		return
@@ -405,6 +439,21 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 	if err != nil {
 		httputil.InternalError(c, "failed to get activity log", err)
 		return
+	}
+	// settings.manage reads this route, and the table holds the abs, merge,
+	// invite and auth subsystems' lines: other users' listening state and
+	// accounts. Without users.manage those lines and the user-id column are left
+	// out, by the predicate the diagnostics export and the activity filter use.
+	if !h.repairsAccess.For(c).MayReadUserData() {
+		readable := make([]database.SystemActivityLog, 0, len(logs))
+		for _, l := range logs {
+			if activity.NamesOthersUserLog(l.Source, l.Message) {
+				continue
+			}
+			l.UserID = ""
+			readable = append(readable, l)
+		}
+		logs = readable
 	}
 	httputil.RespondWithOK(c, gin.H{"items": logs, "count": len(logs)})
 }
@@ -871,6 +920,10 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"message": "backup deleted successfully"})
 }
 
+// RecentOperationsWindow is how many of the newest operations GET /dashboard
+// reads to find the ones it lists (sysinfo.RecentOperations).
+const RecentOperationsWindow = sysinfo.RecentOperationsWindow
+
 // GetDashboard returns dashboard statistics. The store handles caching
 // internally (PebbleDB: stats:library key with 10-min TTL; SQLite: SQL
 // aggregation directly). Implements GET /dashboard.
@@ -887,20 +940,13 @@ func (h *Handler) GetDashboard(c *gin.Context) {
 		return
 	}
 
-	// Same freeze as the dashboard panel in sysinfo.CollectSystemStatus: this read
-	// the v1 `operation:` keyspace, nothing has minted a v1 row since that minter
-	// was retired on 2026-08-23, and production was serving five rows dated
-	// 2026-08-16 to 2026-08-21 with nothing to say they were stale.
-	//
-	// Repointed rather than removed even though no frontend code reads
-	// `recent_operations` from this endpoint (grepped 2026-09-07) — it is a public
-	// response field, and serving correct data costs one call.
-	recentOps := []database.Operation{}
-	if rows, err := store.ListOperationsV2Since(time.Time{}, 5); err == nil {
-		for i := range rows {
-			recentOps = append(recentOps, *rows[i].AsLegacyOperation(rows[i].DefID))
-		}
-	}
+	// Same panel as GET /system/status (sysinfo.RecentOperations): a Repairs
+	// operation the caller may not read is left out, and result_data is not
+	// served. Repointed from the frozen v1 keyspace rather than removed even
+	// though no frontend code reads `recent_operations` from this endpoint
+	// (grepped 2026-10-25: the Dashboard page reads /system/status): it is a
+	// public response field, and serving correct data costs one call.
+	recentOps := sysinfo.RecentOperations(store, time.Now(), h.repairsAccess.For(c).MayRead)
 
 	// Try to read broken file count from underlying store (PebbleStore)
 	brokenFileCount := 0
