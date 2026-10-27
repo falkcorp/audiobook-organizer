@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.22.2
+// version: 1.22.3
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -255,6 +255,16 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			return classifyTransport(endpointURLs(endpoints), fmt.Errorf(
 				"%w: all %d whisper endpoint(s) still unreachable or unable to start their decoder after waiting %s: %s",
 				ErrPoolUnavailable, len(endpoints), poolPaceMax, describeRefusals(refused)))
+		}
+		if allChangedHands(refused) {
+			// Every port the dispatch had was a remembered machine's that
+			// another worker answers at now (resolvePending). No verdict on
+			// anyone and no outage: the same answer as the lone endpoint's, which
+			// the ops defer on without counting toward stopping the run (it is
+			// not a recognised transport failure).
+			return classifyTransport(endpointURLs(endpoints), fmt.Errorf(
+				"all %d whisper endpoint(s) answer as a different worker than the machine that failed the canary clip in an earlier dispatch: %w, so they are sent no work and the jobs are deferred: %s",
+				len(endpoints), errPortChangedHands, describeRefusals(refused)))
 		}
 		// Distinct from "no whisper endpoints configured": that sends an
 		// operator hunting a config typo, when the real answer is that the
@@ -867,13 +877,32 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					// never asked the old machine's canary clip (its answer would
 					// count toward forgetting that machine) and never given its
 					// work (B-1 of review 6 of #4201).
+					//
+					// A worker that gained a machine id is the one case reprobed
+					// cannot judge alone: the port is grouped (groupOf) under the
+					// machine that is remembered at it, and that may be a strong
+					// "m:" other than the one the worker reports now. The group is
+					// what the canary is asked of, what a verdict is credited to and
+					// what a failure is remembered for, so asking would send the old
+					// machine's clip to the new one, and its answer would forget (or
+					// fail to remember) the wrong machine (review 7 of #4201). The
+					// port changed hands like any other: dropped. The lone-endpoint
+					// path has no group to disagree with and keeps such a worker
+					// (dispatchSingle).
 					u := g.Endpoint.URL
 					fresh, ok := g.reprobed(keyOf(u), capableFor[u])
+					if ok && fresh.learned != "" {
+						if grp := groupOf(u); isStrongKey(grp) && grp != fresh.learned {
+							ok = false
+						}
+					}
 					if !ok {
-						refused = append(refused, newRefusal(g, "answers as a different worker than the machine the dispatch waited for (its port changed hands during the wait), so it is sent no work in this dispatch"))
+						r := newRefusal(g, "answers as a different worker than the machine the dispatch waited for (its port changed hands during the wait), so it is sent no work in this dispatch")
+						r.ChangedHands = true
+						refused = append(refused, r)
 						gone[u] = true
-						dispatchLog.Warn("a whisper port waited for after its machine failed the canary clip answers as a different worker now, so it is dropped from this dispatch: url=%s was=%s now=%s",
-							logger.SanitizeLogValue(u), logger.SanitizeLogValue(keyOf(u)), logger.SanitizeLogValue(g.identityKey()))
+						dispatchLog.Warn("a whisper port waited for after its machine failed the canary clip answers as a different worker now, so it is dropped from this dispatch: url=%s was=%s group=%s now=%s",
+							logger.SanitizeLogValue(u), logger.SanitizeLogValue(keyOf(u)), logger.SanitizeLogValue(groupOf(u)), logger.SanitizeLogValue(g.identityKey()))
 						continue
 					}
 					probeByURL[u] = fresh
@@ -2199,6 +2228,20 @@ func afterStuck(ctx context.Context, url string, stuckErr error) (out error, wed
 		}, true
 	}
 	return stuckErr, wedged
+}
+
+// allChangedHands reports whether every refusal is a port that changed hands
+// while the dispatch waited out a cooldown (gpuRefusal.ChangedHands).
+func allChangedHands(refused []gpuRefusal) bool {
+	if len(refused) == 0 {
+		return false
+	}
+	for _, r := range refused {
+		if !r.ChangedHands {
+			return false
+		}
+	}
+	return true
 }
 
 func allStuck(refused []gpuRefusal) bool {

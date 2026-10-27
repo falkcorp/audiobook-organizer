@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.17.0
+// version: 2.17.1
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -233,6 +233,11 @@ type pathRoot struct {
 // Present in v2 server; absent means old server.
 func (h remoteHealth) supportsBatch() bool { return h.BatchPipeline != nil }
 
+// healthProbeTimeout is how long a /health probe waits for an answer before the
+// endpoint counts as unreachable. A variable only so a test can wait it out in
+// milliseconds; nothing else changes it.
+var healthProbeTimeout = 3 * time.Second
+
 // probeRemoteHealth performs the single /health GET. ok=false means the probe
 // itself did not complete (connection error, a status other than 200, non-JSON
 // body); callers must not read the returned struct in that case. A non-200 body
@@ -242,7 +247,7 @@ func (h remoteHealth) supportsBatch() bool { return h.BatchPipeline != nil }
 // return: the batch decision degrades to the per-file path on failure, which
 // is the historical behaviour and must be preserved.
 func probeRemoteHealth(ctx context.Context, remoteURL string) (remoteHealth, bool) {
-	hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	hctx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
 	defer cancel()
 	var h remoteHealth
 	req, err := http.NewRequestWithContext(hctx, http.MethodGet, remoteURL+"/health", nil)
