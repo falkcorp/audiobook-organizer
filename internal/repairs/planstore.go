@@ -1,7 +1,7 @@
 // file: internal/repairs/planstore.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package repairs
 
@@ -30,14 +30,29 @@ import (
 // and owner flag). Page scans only those small keys and reads the rows of the
 // page it returns; Select reads only the rows an apply names.
 //
+// NAMESPACE. A plan's rows are stored under PlanRowPrefix, and SavePlan and
+// ClearPlanRows replace that namespace only (ReplaceOpRowsPrefix), so a plan
+// never deletes another kind of row kept under the same operation id (a
+// result's class lists, database.ClassListRowPrefix). A row's stored id is
+// PlanRowPrefix + its RowID; the readers strip it.
+//
 // CUT-OVER, NO BACKWARD COMPATIBILITY. A plan stored the old way carries no
-// RowStore marker and LoadPlan refuses it with ErrPlanLegacyFormat: run the
-// plan again. Its rows stay inside its operation row until that operation is
-// deleted; nothing rewrites them.
+// RowStore marker (rows inside its operation row), and one stored before the
+// namespace carries PlanRowStoreV1 (rows under their bare RowID). LoadPlan
+// refuses both with ErrPlanLegacyFormat: run the plan again. Their rows stay
+// where they are until the operation is deleted; nothing rewrites them.
 
-// PlanRowStoreV1 is the PlanResult.RowStore of a plan whose rows SavePlan wrote
-// beside the operation.
+// PlanRowPrefix begins the stored id of every plan row.
+const PlanRowPrefix = "plan/"
+
+// PlanRowStoreV1 was the PlanResult.RowStore of a plan whose rows SavePlan
+// wrote beside the operation under their bare RowID. LoadPlan no longer reads
+// such a plan.
 const PlanRowStoreV1 = "op_rows.v1"
+
+// PlanRowStoreV2 is the PlanResult.RowStore of a plan whose rows SavePlan wrote
+// beside the operation under PlanRowPrefix.
+const PlanRowStoreV2 = "op_rows.v2"
 
 // PlanNeedsRerun reports whether err means the stored plan cannot be read
 // (any of ErrPlanLegacyFormat, ErrPlanRowsIncomplete, ErrPlanRowsUnreadable,
@@ -54,8 +69,9 @@ func PlanNeedsRerun(err error) bool {
 // Errors of reading a stored plan's rows.
 var (
 	// ErrPlanLegacyFormat: the plan was stored before plans kept their rows
-	// beside the operation, so its rows are not where LoadPlan looks.
-	ErrPlanLegacyFormat = errors.New("repairs: this plan was stored in the old format (rows inside the operation result), which is no longer read; run the plan again")
+	// under their own PlanRowPrefix (inside the operation's result, or beside
+	// it under bare ids), so its rows are not where LoadPlan looks.
+	ErrPlanLegacyFormat = errors.New("repairs: this plan was stored in an older row layout, which is no longer read; run the plan again")
 	// ErrPlanRowsIncomplete: the rows found under the plan op's id are not the
 	// rows its summary says it has.
 	ErrPlanRowsIncomplete = errors.New("repairs: the stored plan rows do not match the plan summary; run the plan again")
@@ -90,7 +106,7 @@ type storedRows struct {
 // SavePlan writes p.Rows under the plan op's id and marks p as stored there
 // (p.RowStore). The caller then stores p as the operation's result, which
 // carries the summary only. Every row is written before this returns, so a
-// completed operation whose summary says PlanRowStoreV1 has all of its rows.
+// completed operation whose summary says PlanRowStoreV2 has all of its rows.
 //
 // On a failure it clears whatever it wrote and leaves p unmarked; a caller
 // whose later write of the summary fails calls ClearPlanRows itself.
@@ -98,25 +114,26 @@ func SavePlan(rs database.OpRowStore, opID string, p *PlanResult) error {
 	if rs == nil || opID == "" {
 		return fmt.Errorf("repairs: save plan: %w", ErrNoPlanRowStore)
 	}
-	err := rs.ReplaceOpRows(opID, len(p.Rows), func(i int) (database.OpRow, error) {
+	err := rs.ReplaceOpRowsPrefix(opID, PlanRowPrefix, len(p.Rows), func(i int) (database.OpRow, error) {
 		row := &p.Rows[i]
 		data, err := json.Marshal(row)
 		if err != nil {
 			return database.OpRow{}, fmt.Errorf("encode row %q: %w", row.RowID, err)
 		}
-		return database.OpRow{ID: row.RowID, Index: encodeRowIndex(row), Data: data}, nil
+		return database.OpRow{ID: PlanRowPrefix + row.RowID, Index: encodeRowIndex(row), Data: data}, nil
 	})
 	if err != nil {
 		_ = ClearPlanRows(rs, opID)
 		return fmt.Errorf("repairs: save plan %s: %w", opID, err)
 	}
-	p.RowStore = PlanRowStoreV1
+	p.RowStore = PlanRowStoreV2
 	return nil
 }
 
-// ClearPlanRows deletes the rows stored under a plan op's id.
+// ClearPlanRows deletes the plan rows stored under a plan op's id (the rows of
+// any other kind stored under it stay).
 func ClearPlanRows(rs database.OpRowStore, opID string) error {
-	return rs.ReplaceOpRows(opID, 0, nil)
+	return rs.ReplaceOpRowsPrefix(opID, PlanRowPrefix, 0, nil)
 }
 
 // A row's index entry is "class NUL skip-kind NUL 0|1 NUL flags" (the third
@@ -178,6 +195,10 @@ func (p *PlanResult) refs() ([]rowRef, error) {
 	}
 	out := make([]rowRef, 0, p.Total)
 	err := p.stored.rs.ScanOpRowIndex(p.stored.opID, func(id string, ix []byte) error {
+		id, ok := strings.CutPrefix(id, PlanRowPrefix)
+		if !ok {
+			return nil // another kind of row stored under the plan op's id
+		}
 		ref, err := decodeRowIndex(id, ix)
 		if err != nil {
 			return err
@@ -224,7 +245,11 @@ func (p *PlanResult) Select(ids []string) (*PlanResult, error) {
 
 // readRows reads the rows with these ids, skipping one that has none.
 func (s *storedRows) readRows(ids []string) ([]Row, error) {
-	datas, err := s.rs.GetOpRows(s.opID, ids)
+	stored := make([]string, len(ids))
+	for i, id := range ids {
+		stored[i] = PlanRowPrefix + id
+	}
+	datas, err := s.rs.GetOpRows(s.opID, stored)
 	if err != nil {
 		return nil, fmt.Errorf("repairs: read plan %s rows: %w", s.opID, err)
 	}
