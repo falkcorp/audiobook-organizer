@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_cooldown_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 768f5a2c-e381-4b86-8e01-15df198a14cb
 // last-edited: 2026-10-26
 
@@ -24,8 +24,8 @@ const batMachine = "aaaa0001"
 
 // rememberedMachine is a pool of `ports` ports of one machine that failed the
 // canary clip in an earlier dispatch, every worker answering every clip with a
-// transcript. Two ports at least: a lone port goes through dispatchSingle,
-// which never looks at a cooldown.
+// transcript. Two ports at least: a lone port goes through dispatchSingle (see
+// TestSingle_*), which has no stand-in to consider.
 func rememberedMachine(t *testing.T, ports int) *faultPool {
 	t.Helper()
 	machines := slices.Repeat([]string{batMachine}, ports)
@@ -305,46 +305,112 @@ func TestPreflight_ARefusedPortOfAnotherMachineDoesNotKeepAMachineRemembered(t *
 }
 
 func TestHasUnheardPort(t *testing.T) {
-	refused := []gpuRefusal{{URL: "a", Machine: "m:bbbb0002"}}
-	if hasUnheardPort(refused, "m:aaaa0001") {
-		t.Error("a refusal that names another machine is not a port of this one")
+	const (
+		bat    = "m:aaaa0001"
+		robin  = "m:bbbb0002"
+		portA  = "http://gotham-a:8000"
+		portB  = "http://gotham-b:8000"
+		portC  = "http://gotham-c:8000"
+		nobody = ""
+	)
+	resetCanaryFailed()
+	t.Cleanup(resetCanaryFailed)
+	markCanaryFailed(bat, portA)
+	refuse := func(url, machine string) gpuRefusal { return gpuRefusal{URL: url, Machine: machine} }
+	unprobedKept := func(url string) gatedEndpoint { return gatedEndpoint{Endpoint: Endpoint{URL: url}} }
+	for _, tc := range []struct {
+		name    string
+		refused []gpuRefusal
+		kept    []gatedEndpoint
+		want    bool
+	}{
+		{"no refusals", nil, nil, false},
+		{"a refusal that names another machine", []gpuRefusal{refuse(portB, robin)}, nil, false},
+		{"a refusal that names this machine", []gpuRefusal{refuse(portB, bat)}, nil, true},
+		{"an unprobed refusal that is a known port of this machine", []gpuRefusal{refuse(portA, nobody)}, nil, true},
+		{"an unprobed refusal nothing has tied to this machine", []gpuRefusal{refuse(portC, nobody)}, nil, false},
+		{"an unprobed kept endpoint that is a known port of this machine", nil, []gatedEndpoint{unprobedKept(portA)}, true},
+		{"an unprobed kept endpoint nothing has tied to this machine", nil, []gatedEndpoint{unprobedKept(portC)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasUnheardPort(bat, tc.refused, tc.kept); got != tc.want {
+				t.Errorf("hasUnheardPort = %v, want %v", got, tc.want)
+			}
+		})
 	}
-	if !hasUnheardPort(refused, "m:bbbb0002") {
-		t.Error("a refusal that names this machine is one of its ports")
-	}
-	refused = append(refused, gpuRefusal{URL: "c"}) // /health unreadable: machine unknown
-	if !hasUnheardPort(refused, "m:aaaa0001") {
-		t.Error("an unprobed refused endpoint may be any machine's port")
-	}
-	if hasUnheardPort(nil, "m:aaaa0001") {
-		t.Error("no refusals, no unheard port")
+	if hasUnheardPort(robin, []gpuRefusal{refuse(portA, nobody)}, nil) {
+		t.Error("a machine that is not remembered has no ports to wait for")
 	}
 }
 
-// N3: an entry under an identity the endpoint no longer has is dropped once the
-// worker reports a machine_id, so canaryFailed cannot grow with dead identities.
-// Nothing but the pruning removes it: the endpoint's key is now "m:...", so no
-// preflight or canary ever names the old one again. Another endpoint's entries
-// stay.
-func TestPool_StaleCanaryIdentitiesAreDroppedWhenTheWorkerReportsAMachineID(t *testing.T) {
+// N3 and B1: an entry under an identity the endpoint no longer has moves to the
+// identity it has now once the worker reports a machine_id, so canaryFailed
+// cannot grow with dead identities, and the failure goes with it: the worker
+// switches from "u:" to "m:" inside one process (it leaves machine_id out of
+// /health until its first lookup succeeds), so a machine that failed the canary
+// a moment ago may report a new identity with nothing repaired. Another
+// endpoint's entries stay, and so does an endpoint nothing was remembered for.
+func TestPool_StaleCanaryIdentitiesMoveToTheWorkersNewIdentity(t *testing.T) {
 	p := machineFaultPool(t, []string{batMachine, "cccc0003"}, func(_ string, id string) BatchResult { return BatchResult{Text: "T:" + id} })
 	h := shortHash(p.h.eps[0].URL)
 	markCanaryFailed("u:" + h)      // the worker's identity before it reported a machine_id
 	markCanaryFailed("?" + h)       // and before its /health could be read
 	markCanaryFailed("u:unrelated") // another endpoint's
 	markCanaryFailed("m:dddd0004")  // another machine's
+	// Every machine fails the canary, so a remembered one is asked and stays
+	// remembered; the other worker takes the page.
+	rec := &canaryRecorder{err: errors.New("canary clip: " + timeoutText)}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := dispatchWith(ctx, p, (&canaryRecorder{}).fn, 8); err != nil {
-		t.Fatalf("err = %v", err)
+	if _, err := dispatchWith(ctx, p, rec.fn, 8); err != nil {
+		t.Fatalf("err = %v, want the other machine to take the page", err)
 	}
-	for key, want := range map[string]bool{"u:" + h: false, "?" + h: false, "u:unrelated": true, "m:dddd0004": true} {
+	if want := []string{p.h.eps[0].URL}; !slices.Equal(rec.asked, want) {
+		t.Fatalf("canaries = %v, want only the worker whose failure was carried (%v)", rec.asked, want)
+	}
+	for key, want := range map[string]bool{
+		"u:" + h: false, "?" + h: false, // dead identities
+		"m:" + batMachine: true,  // where the failure went
+		"m:cccc0003":      false, // never failed
+		"u:unrelated":     true, "m:dddd0004": true,
+	} {
 		if got := failedCanaryBefore(key); got != want {
 			t.Errorf("remembered(%q) = %v, want %v", key, got, want)
 		}
 	}
-	if n := rememberedCanaryFailures(); n != 2 {
-		t.Errorf("%d entries remain, want only the two that are not this endpoint's", n)
+	if n := rememberedCanaryFailures(); n != 3 {
+		t.Errorf("%d entries remain, want the carried one and the two that are not this endpoint's", n)
+	}
+}
+
+// pruneStaleCanaryIdentities on its own: the carried entry has a new generation
+// and keeps the old entry's ports, and an endpoint with nothing remembered under
+// an old identity gets no entry.
+func TestPruneStaleCanaryIdentities_CarriesTheFailureAndItsPorts(t *testing.T) {
+	resetCanaryFailed()
+	t.Cleanup(resetCanaryFailed)
+	const url = "http://gotham-a:8000"
+	h := shortHash(url)
+	probed := gatedEndpoint{Endpoint: Endpoint{URL: url}, Probed: true, Health: remoteHealth{MachineID: batMachine}}
+
+	pruneStaleCanaryIdentities(probed)
+	if n := rememberedCanaryFailures(); n != 0 {
+		t.Fatalf("%d entries after pruning with nothing remembered, want none", n)
+	}
+
+	markCanaryFailed("u:"+h, "http://gotham-b:8000")
+	before := canaryGeneration("u:" + h)
+	pruneStaleCanaryIdentities(probed)
+	if failedCanaryBefore("u:" + h) {
+		t.Error("the old identity was kept")
+	}
+	if got := canaryGeneration("m:" + batMachine); got <= before {
+		t.Errorf("generation = %d, want a new one after %d: a carried failure is a new record", got, before)
+	}
+	for _, port := range []string{url, "http://gotham-b:8000"} {
+		if !hasUnheardPort("m:"+batMachine, []gpuRefusal{{URL: port}}, nil) {
+			t.Errorf("%s was not carried as a port of the new identity", port)
+		}
 	}
 }
 

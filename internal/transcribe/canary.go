@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-26
 
@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -67,20 +68,58 @@ type canaryFunc func(ctx context.Context, g gatedEndpoint) error
 // one) and then sends the chunk anyway. A machine in this set is sent the
 // canary first instead, which costs one clip, and gets work only once every
 // one of its ports answers it. (A port in cooldown is waited for, not skipped:
-// see preflight in dispatchPool.)
+// see resolvePending in dispatchPool.)
 //
-// Keys are machineKey values. An entry is dropped when its machine answers,
-// and an entry for an identity the endpoint no longer has is dropped by
-// pruneStaleCanaryIdentities, so the set cannot grow with dead identities.
+// Keys are machineKey values. An entry is dropped when its machine answers (if
+// nothing newer was recorded meanwhile: see canaryEntry.gen), and an entry for
+// an identity the endpoint no longer has is moved to the endpoint's new
+// identity by pruneStaleCanaryIdentities, so the set cannot grow with dead
+// identities.
 var canaryFailed = struct {
 	mu sync.Mutex
-	m  map[string]bool
-}{m: make(map[string]bool)}
+	// seq is the last generation handed out. It only ever grows, and it is not
+	// per entry: a counter that restarted when an entry was deleted would let a
+	// dispatch that snapshotted generation 1, an answer that cleared the entry
+	// and a later failure that re-created it (generation 1 again) look like
+	// nothing happened in between.
+	seq uint64
+	m   map[string]*canaryEntry
+}{m: make(map[string]*canaryEntry)}
 
-func markCanaryFailed(key string) {
+// canaryEntry is what is remembered about one machine that failed the canary.
+type canaryEntry struct {
+	// gen is the generation of the latest failure recorded for the machine.
+	// Every markCanaryFailed assigns a new one, even when the machine was
+	// already remembered, so a dispatch that asked the machine and saw it
+	// answer can tell that another dispatch recorded a newer failure while it
+	// waited, and must not forget it (forgetCanaryIf).
+	gen uint64
+	// ports is every endpoint URL that a /health probe has reported as a port
+	// of this machine, as far as this process has seen. An endpoint whose
+	// /health cannot be read is a port of this machine only if it is in here:
+	// see hasUnheardPort.
+	ports map[string]bool
+}
+
+// markCanaryFailed records that machine key failed the canary clip, with the
+// URLs of the ports known to belong to it. It always assigns a new generation.
+func markCanaryFailed(key string, ports ...string) {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
-	canaryFailed.m[key] = true
+	markCanaryFailedLocked(key, ports)
+}
+
+func markCanaryFailedLocked(key string, ports []string) {
+	canaryFailed.seq++
+	e := canaryFailed.m[key]
+	if e == nil {
+		e = &canaryEntry{ports: make(map[string]bool)}
+		canaryFailed.m[key] = e
+	}
+	e.gen = canaryFailed.seq
+	for _, u := range ports {
+		e.ports[u] = true
+	}
 }
 
 func clearCanaryFailed(key string) {
@@ -89,30 +128,115 @@ func clearCanaryFailed(key string) {
 	delete(canaryFailed.m, key)
 }
 
-// hasUnheardPort reports whether the gate refused an endpoint that is, or may
-// be, a port of machine key: one whose machine was recorded as key, or one whose
-// /health could not be read at all (its machine is unknown, so it may be any).
-// Such a port has not answered the canary, so the machine must not be
-// forgotten as sick on the strength of its other ports alone (nit 2 of review 6
-// of #4193): the pool's next dispatch asks every port that is eligible, and
-// would otherwise give the refused one work with no question asked when it
-// came back.
-func hasUnheardPort(refused []gpuRefusal, key string) bool {
-	return slices.ContainsFunc(refused, func(r gpuRefusal) bool {
-		return r.Machine == "" || r.Machine == key
-	})
+// canaryGeneration is the generation of key's entry, or 0 when the machine is
+// not remembered (generations start at 1). A dispatch takes it before it asks
+// the machine the canary clip and hands it back to forgetCanaryIf.
+func canaryGeneration(key string) uint64 {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	if e := canaryFailed.m[key]; e != nil {
+		return e.gen
+	}
+	return 0
 }
 
-// pruneStaleCanaryIdentities drops the entries of canaryFailed that name g's
-// endpoint under an identity it no longer has (nit 3 of review 6 of #4193). A
-// worker too old to report machine_id is keyed "u:" + a hash of its URL, and
-// an endpoint that could not be probed "?" + the same hash; once the worker
-// reports a machine_id its key is "m:...", a different key, so the old entry
-// would never be read or cleared again. Only the worker's own earlier keys are
-// dropped, and only once it has a better one, so another machine's memory is
-// never touched. The failure is not carried over to the new identity: a worker
-// that began to report machine_id was upgraded and restarted, and a restart is
-// the usual cure for the sickness the entry remembers.
+// forgetCanaryIf drops machine key from the remembered failures after it
+// answered the canary clip, but only if (a) its entry is still the one the
+// dispatch saw when it began to ask (gen), so a failure another dispatch
+// recorded in the meantime is not erased by this dispatch's older answer, and
+// (b) no port of it is unheard (hasUnheardPort). Both are decided under one
+// lock. It reports whether the machine was forgotten.
+func forgetCanaryIf(key string, gen uint64, refused []gpuRefusal, kept []gatedEndpoint) bool {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	e := canaryFailed.m[key]
+	if e == nil || e.gen != gen || e.hasUnheardPort(key, refused, kept) {
+		return false
+	}
+	delete(canaryFailed.m, key)
+	return true
+}
+
+// noteCanaryPort records that a probe reported url as a port of machine key.
+// A URL belongs to one machine at a time, so it leaves every other entry's set;
+// it joins key's only if the machine is remembered.
+func noteCanaryPort(key, url string) {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	for k, e := range canaryFailed.m {
+		if k != key {
+			delete(e.ports, url)
+		}
+	}
+	if e := canaryFailed.m[key]; e != nil {
+		e.ports[url] = true
+	}
+}
+
+// hasUnheardPort reports whether the dispatch has an endpoint that is, or may
+// be, a port of machine key and did not answer the canary clip with the others
+// (nit 2 of review 6 of #4193): the machine must not be forgotten as sick on
+// the strength of its other ports alone, because the pool's next dispatch asks
+// every port that is eligible, and would otherwise give the refused one work
+// with no question asked when it came back.
+//
+// Such an endpoint is one the gate refused whose machine was recorded as key,
+// or one whose /health could not be read at all and that is a known port of key
+// (S1 of the review of #4193's follow-up). Its machine is unknown, so it could
+// be anyone's, but it is key's only if a probe once reported it as a port of
+// key: on a production pool every endpoint sets require_gpu, so a dead tunnel
+// of an unrelated machine is refused with no machine, and counting it against
+// every remembered machine kept all of them remembered for as long as it stayed
+// down. An unprobed endpoint the gate KEPT (a pool with no requirement) is
+// asked under its own "?" key, not as a port of key, so it counts the same way.
+func hasUnheardPort(key string, refused []gpuRefusal, kept []gatedEndpoint) bool {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	e := canaryFailed.m[key]
+	return e != nil && e.hasUnheardPort(key, refused, kept)
+}
+
+func (e *canaryEntry) hasUnheardPort(key string, refused []gpuRefusal, kept []gatedEndpoint) bool {
+	for _, r := range refused {
+		if r.Machine == key || (r.Machine == "" && e.ports[r.URL]) {
+			return true
+		}
+	}
+	for _, g := range kept {
+		if !g.Probed && g.machineKey() != key && e.ports[g.Endpoint.URL] {
+			return true
+		}
+	}
+	return false
+}
+
+// refusedPorts is the URL of every refusal recorded as a port of machine key.
+func refusedPorts(refused []gpuRefusal, key string) []string {
+	var out []string
+	for _, r := range refused {
+		if r.Machine == key {
+			out = append(out, r.URL)
+		}
+	}
+	return out
+}
+
+// pruneStaleCanaryIdentities moves the entries of canaryFailed that name g's
+// endpoint under an identity it no longer has to the identity it has now (nit 3
+// of review 6 of #4193, B1 of its follow-up). A worker too old to report
+// machine_id is keyed "u:" + a hash of its URL, and an endpoint that could not
+// be probed "?" + the same hash; once the worker reports a machine_id its key
+// is "m:...", a different key, so the old entry would never be read or cleared
+// again.
+//
+// The failure is carried to the new key, not forgotten. The switch does not
+// need a restart: scripts/whisper_mlx_server.py leaves machine_id out of
+// /health when its first lookup misses MACHINE_ID_WAIT_S (2.5 s) and keeps
+// retrying every MACHINE_ID_RETRY_S (30 s) in the same process, so a worker
+// that failed the canary a moment ago can report an id on its next /health
+// with nothing about it repaired. Dropping the entry then sent the sick machine
+// a fresh chunk. Only the worker's own earlier keys are touched, and only once
+// it has a better one, so another machine's memory is never read or changed.
 func pruneStaleCanaryIdentities(g gatedEndpoint) {
 	if !g.Probed {
 		return
@@ -124,15 +248,27 @@ func pruneStaleCanaryIdentities(g gatedEndpoint) {
 	}
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
+	var carried bool
+	ports := []string{g.Endpoint.URL}
 	for _, k := range stale {
-		delete(canaryFailed.m, k)
+		if k == g.machineKey() {
+			continue
+		}
+		if e := canaryFailed.m[k]; e != nil {
+			carried = true
+			ports = append(ports, slices.Collect(maps.Keys(e.ports))...)
+			delete(canaryFailed.m, k)
+		}
+	}
+	if carried {
+		markCanaryFailedLocked(g.machineKey(), ports)
 	}
 }
 
 func failedCanaryBefore(key string) bool {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
-	return canaryFailed.m[key]
+	return canaryFailed.m[key] != nil
 }
 
 // errCanarySlotBusy is a canary that was never sent: every request slot on its

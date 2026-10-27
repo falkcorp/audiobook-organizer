@@ -10,13 +10,31 @@ book op counts that toward its five-page stop, so six pages in flight could end
 the night's run inside one cooldown (at most five minutes) for a Mac that would
 have passed the canary afterwards. The dispatch now waits the cooldown out,
 bounded by the same pacing allowance as the round loop (`poolPaceMax`, in steps
-of `poolPaceInterval`), then asks every port. A cooldown longer than the
-allowance is no verdict, like a canary that could not get a request slot: the
-dispatch defers the jobs without counting toward the ops' stop limits, and it
-is never `ErrPoolUnavailable` for this case. A cancelled op returns the
-cancellation from the wait. When another machine that is not known to be sick
-is in the pool, the remembered machine is still benched without being asked and
-the page does not wait.
+of `poolPaceInterval`), then asks every port. A cooldown that ends after the
+allowance is no verdict, like a canary that could not get a request slot, and is
+deferred at once rather than slept through: the dispatch defers the jobs without
+counting toward the ops' stop limits, and it is never `ErrPoolUnavailable` for
+this case. A cancelled op returns the cancellation from the wait. The lone
+endpoint path waits the same way, and its warning reports how long it really
+waited.
+
+When another machine that is out of cooldown and whose `/health` was read can
+take the work, the remembered machine is set aside, not benched for good: if
+that machine then fails its own canary clip and nothing else can work, the
+remembered machine is asked (after its cooldown, within the same allowance)
+before the dispatch concludes anything, so a pool is never reported as "no
+machine answered the canary" about a machine that was never asked. A machine
+another dispatch has already forgotten while this one waited is not asked.
+
+After the wait the machine's ports are probed again before the canary is sent.
+A port that wedged in the meantime is dropped from the dispatch (and, with
+nothing left, the dispatch ends as a stuck pool, not as a sick machine); a port
+whose decoder is restarting or that cannot be reached is waited for like a
+cooldown, then dropped. That probe judges ports and nothing else: the identities
+the dispatch started with stay as they are, so a worker that begins to report a
+machine id during the wait does not make the machine being waited for look as if
+another dispatch had forgotten it, and the next dispatch's own gate moves the
+memory.
 
 #### A whisper machine is forgotten as sick only when every port of it has answered
 
@@ -25,14 +43,29 @@ passed the gate answered the canary clip, although its siblings had been refused
 (wedged, decoder restarting, mount unreadable) and had not been asked. When they
 came back, the pool sent them work with no question asked. The pool path had the
 same hole whenever a sibling was refused. A machine is now forgotten only when
-no endpoint the gate refused is, or may be (its `/health` could not be read), a
-port of it; until then it stays remembered and the next dispatch asks every port
-that is eligible.
+no endpoint the gate refused, and no unprobed endpoint it kept, is a port of it,
+so it stays remembered until the next dispatch has asked every port. An
+endpoint whose `/health` cannot be read counts as a port of a remembered machine
+only if a probe once reported it as one: on a production pool every endpoint sets
+`require_gpu`, so an unrelated machine's dead tunnel is refused with no machine
+and used to keep every remembered machine remembered for as long as it was down.
 
-#### Stale canary-failure entries no longer accumulate
+#### A failure another dispatch records is not erased by an older answer
 
-`canaryFailed` is keyed by machine identity. When a worker that reported no
+Two dispatches asking the same machine could lose an update: one dispatch's pass
+cleared the failure the other had just recorded. Each recorded failure now has
+its own generation, taken from a counter that never repeats, and a pass forgets
+the machine only if no newer failure was recorded since it began to ask. A
+preflight canary that fails is recorded again, so a concurrent clear cannot
+lose it.
+
+#### Whisper canary failures follow a worker that starts to report a machine id
+
+`canaryFailed` is keyed by machine identity. A worker that reported no
 `machine_id` (keyed `u:` plus a hash of its URL) or could not be probed (keyed
-`?` plus the same hash) starts to report one (`m:`), its old entry named an
-identity that is never seen again and was never removed. The dispatcher now
-drops those entries when it sees the worker's new identity.
+`?` plus the same hash) can start to report one (`m:`) inside the same process,
+with nothing repaired: the worker retries its machine-id lookup every 30 s after
+a first miss. Its old entry named an identity that is never seen again and was
+never removed, and dropping it would have forgotten a machine that had just
+failed the canary. The dispatcher now moves the entry, with the ports known for
+it, to the worker's new identity.
