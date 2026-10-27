@@ -1,7 +1,7 @@
 // file: internal/server/server_plan_row_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e8c5a14-9b73-4d06-a1f2-6c0d3e7b5a98
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package server
 
@@ -32,8 +32,8 @@ func TestOperationQueueStoreResolvesThePlanRowStore(t *testing.T) {
 	plan := &repairs.PlanResult{FixerID: "f", Total: 1, Rows: []repairs.Row{{RowID: "r1", BookIDs: []string{"r1"}, Fingerprint: "x"}}}
 	require.NoError(t, repairs.SavePlan(rs, "op-seam", plan))
 	t.Cleanup(func() { _ = repairs.ClearPlanRows(rs, "op-seam") })
-	require.Equal(t, repairs.PlanRowStoreV1, plan.RowStore)
-	got, err := rs.GetOpRows("op-seam", []string{"r1"})
+	require.Equal(t, repairs.PlanRowStoreV2, plan.RowStore)
+	got, err := rs.GetOpRows("op-seam", []string{repairs.PlanRowPrefix + "r1"})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.NotEmpty(t, got[0])

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/class_lists_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4f1c7a92-0b3e-4d68-8a15-d27e6c9b30f1
 // last-edited: 2026-10-27
 
@@ -11,9 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"sort"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -22,72 +19,12 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	operationsmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations/mocks"
 )
-
-// memOpRows is an in-memory database.OpRowStore.
-type memOpRows struct {
-	mu   sync.Mutex
-	rows map[string]map[string]database.OpRow
-}
-
-func (m *memOpRows) ReplaceOpRows(opID string, n int, at func(i int) (database.OpRow, error)) error {
-	return m.ReplaceOpRowsPrefix(opID, "", n, at)
-}
-
-func (m *memOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.rows == nil {
-		m.rows = map[string]map[string]database.OpRow{}
-	}
-	kept := map[string]database.OpRow{}
-	for id, r := range m.rows[opID] {
-		if !strings.HasPrefix(id, rowPrefix) {
-			kept[id] = r
-		}
-	}
-	for i := 0; i < n; i++ {
-		r, err := at(i)
-		if err != nil {
-			return err
-		}
-		kept[r.ID] = r
-	}
-	m.rows[opID] = kept
-	return nil
-}
-
-func (m *memOpRows) ScanOpRowIndex(opID string, fn func(string, []byte) error) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ids := make([]string, 0, len(m.rows[opID]))
-	for id := range m.rows[opID] {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		if err := fn(id, m.rows[opID][id].Index); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *memOpRows) GetOpRows(opID string, rowIDs []string) ([][]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([][]byte, len(rowIDs))
-	for i, id := range rowIDs {
-		if r, ok := m.rows[opID][id]; ok {
-			out[i] = r.Data
-		}
-	}
-	return out, nil
-}
 
 // storeWithRows is the operations store plus the row-store capability the real
 // store has.
@@ -98,11 +35,11 @@ type storeWithRows struct {
 
 // classListFixture stores two classes under op-1 the way the credits backfill
 // does and returns the handler, the rows and the ids it stored.
-func classListFixture(t *testing.T, withRows bool) (*operations.Handler, *operationsmocks.MockOperationsStore, *memOpRows, []string) {
+func classListFixture(t *testing.T, withRows bool) (*operations.Handler, *operationsmocks.MockOperationsStore, *dbtest.MemOpRows, []string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	mock := operationsmocks.NewMockOperationsStore(t)
-	rows := &memOpRows{}
+	rows := dbtest.NewMemOpRows()
 	ids := make([]string, 2500)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("book-%05d", i)
@@ -231,7 +168,7 @@ func TestGetOperationClassList_ResultWithoutASummaryIsNotFound(t *testing.T) {
 	rd := `{"classes":[{"key":"x","book_ids":["b1"]}]}`
 	mock.EXPECT().GetOperationV2("op-census").Return(&database.OperationV2Row{ID: "op-census", ResultData: &rd}, nil)
 	mock.EXPECT().GetOperationV2("op-running").Return(&database.OperationV2Row{ID: "op-running"}, nil)
-	h := operations.New(storeWithRows{mock, &memOpRows{}}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := operations.New(storeWithRows{mock, dbtest.NewMemOpRows()}, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	assert.Equal(t, http.StatusNotFound, getClassList(t, h, "op-census", "x", "").Code)
 	assert.Equal(t, http.StatusNotFound, getClassList(t, h, "op-running", "x", "").Code)
@@ -249,7 +186,7 @@ func TestGetOperationClassList_StoreWithoutRowsIs503(t *testing.T) {
 func TestGetOperationClassList_FollowsTheRepairsReadGate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mock := operationsmocks.NewMockOperationsStore(t)
-	rows := &memOpRows{}
+	rows := dbtest.NewMemOpRows()
 	sum, err := database.SaveClassLists(rows, "op-repairs", map[string][]string{"x": {"b1"}})
 	require.NoError(t, err)
 	result, _ := json.Marshal(map[string]any{"class_lists": sum})

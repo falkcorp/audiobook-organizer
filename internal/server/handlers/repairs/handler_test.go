@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package repairs
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -347,8 +348,8 @@ func TestPlanStoredTheOldWayIsAConflict(t *testing.T) {
 }
 
 // damagePlanRows rewrites the stored rows of plan opID through edit, which is
-// given each row's id, index entry and body and returns what to store in their
-// place (keep=false drops the row). The plan's summary op row is not touched,
+// given each row's RowID (without repairs.PlanRowPrefix), index entry and body
+// and returns what to store in their place (keep=false drops the row). The plan's summary op row is not touched,
 // so its Total keeps saying how many rows the plan had.
 func damagePlanRows(t *testing.T, ops *fakeOps, opID string, edit func(id string, index, data []byte) (newIndex, newData []byte, keep bool)) {
 	t.Helper()
@@ -363,12 +364,12 @@ func damagePlanRows(t *testing.T, ops *fakeOps, opID string, edit func(id string
 	require.NoError(t, err)
 	var kept []database.OpRow
 	for i, id := range ids {
-		ni, nd, keep := edit(id, idx[id], bodies[i])
+		ni, nd, keep := edit(strings.TrimPrefix(id, repairs.PlanRowPrefix), idx[id], bodies[i])
 		if keep {
 			kept = append(kept, database.OpRow{ID: id, Index: ni, Data: nd})
 		}
 	}
-	require.NoError(t, ops.ReplaceOpRows(opID, len(kept), func(i int) (database.OpRow, error) { return kept[i], nil }))
+	require.NoError(t, ops.ReplaceOpRowsPrefix(opID, repairs.PlanRowPrefix, len(kept), func(i int) (database.OpRow, error) { return kept[i], nil }))
 }
 
 // A stored plan whose rows are not the plan its summary describes is the same

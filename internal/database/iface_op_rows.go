@@ -1,5 +1,5 @@
 // file: internal/database/iface_op_rows.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: afe6c0bf-64dc-4200-9150-d9262fe2a512
 // last-edited: 2026-10-27
 
@@ -38,7 +38,9 @@ type OpRow struct {
 // so a set stays until the operation is discarded.
 type OpRowStore interface {
 	// ReplaceOpRows makes the operation's row set exactly the n rows at(0) ..
-	// at(n-1): it deletes the rows already stored under opID, then writes the
+	// at(n-1): it deletes EVERY row already stored under opID, whatever its
+	// namespace (a writer that must leave another kind of row alone uses
+	// ReplaceOpRowsPrefix), then writes the
 	// new ones in bounded batches, calling at once per row so the caller never
 	// holds the whole encoded set. The write is NOT atomic across batches: a
 	// failure leaves a partial set, which is why a caller that fails calls
@@ -49,7 +51,8 @@ type OpRowStore interface {
 	// rows: it makes the rows whose ID begins with rowPrefix exactly the n rows
 	// at(0) .. at(n-1) and leaves every other row of the operation alone, so a
 	// writer of one kind of row (a result's class lists) never deletes another
-	// kind's (a plan's rows) under the same operation id. Every row at returns
+	// kind's (a plan's rows, repairs.PlanRowPrefix) under the same operation
+	// id: every kind of row has its own prefix. Every row at returns
 	// must have an ID that begins with rowPrefix, or the call fails: otherwise
 	// the set it replaces would not be the set it wrote. An empty rowPrefix is
 	// ReplaceOpRows. The write is no more atomic than ReplaceOpRows's.
