@@ -1,7 +1,7 @@
 // file: internal/maintenance/progress.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a3b4c5d6-e7f8-9012-3456-7890abcdef12
-// last-edited: 2026-05-11
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -25,6 +25,16 @@ func (a *ProgressAdapter) SetTotal(n int) { a.total = n }
 // underlying operations reporter.
 func (a *ProgressAdapter) Increment() {
 	a.cur++
+	_ = a.Ops.UpdateProgress(a.cur, a.total, "")
+}
+
+// SeedProgress moves the current count to done and reports it, for a job that
+// resumes an operation and skips the rows already finished: reporting from zero
+// would drop the progress bar to the start of the run and, because the registry
+// counts ops.items from the position it inherited, count the finished rows a
+// second time as the job walked past them. Implements ProgressSeeder.
+func (a *ProgressAdapter) SeedProgress(done int) {
+	a.cur = done
 	_ = a.Ops.UpdateProgress(a.cur, a.total, "")
 }
 

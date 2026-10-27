@@ -1,5 +1,5 @@
 // file: internal/operations/registry/continue_in_place_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d1c8a5e-6b3f-4e7a-9c20-1f5a8b7d3e64
 // last-edited: 2026-10-26
 
@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,18 +26,27 @@ import (
 // A run that yields once is re-queued under its own id, gets a fresh deadline,
 // finishes, and was never counted as a timeout, a cancel or a failure.
 func TestContinueInPlace_YieldRequeuesTheSameRow(t *testing.T) {
-	g, store := newV3OtelRig(t, registry.Options{})
+	bus := &t06TermBus{}
+	g, store := newV3OtelRig(t, registry.Options{Bus: bus})
 	const id = "test.continue-in-place"
 	def := makeValidDef(id)
 	def.ResumePolicy = registry.ResumeRestart
 	def.Timeout = time.Hour
 	var attempts atomic.Int32
 	deadlines := make(chan time.Time, 4)
-	def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
+	def.Run = func(ctx context.Context, _ json.RawMessage, rep registry.Reporter) error {
 		dl, _ := ctx.Deadline()
 		deadlines <- dl
 		if attempts.Add(1) == 1 {
+			for i := 1; i <= 4; i++ {
+				_ = rep.UpdateProgress(i, 10, "")
+			}
 			return fmt.Errorf("batch done, more to do: %w", registry.ErrContinueInPlace)
+		}
+		// A resumed run that skips its finished rows reports the position it
+		// inherited first, then goes on from it.
+		for i := 4; i <= 10; i++ {
+			_ = rep.UpdateProgress(i, 10, "")
 		}
 		return nil
 	}
@@ -85,6 +93,33 @@ func TestContinueInPlace_YieldRequeuesTheSameRow(t *testing.T) {
 			t.Errorf("ops.runs = %v, want no %s outcome for a yielded run", got, bad)
 		}
 	}
+	// N4: ten rows, each counted once. The resumed attempt's first report is the
+	// position it inherited (4), so the four finished rows are not counted again.
+	if items := g.counterValue(t, "audiobook_organizer.ops.items", id, "processed"); items != 10 {
+		t.Errorf("ops.items{processed} = %d, want 10: the resumed attempt counted finished rows again", items)
+	}
+	// N3: a pause that is re-queued is not an ending. op.terminal fires once, for
+	// the real end; none says the op was interrupted.
+	terminals := bus.terminalStatuses(opID)
+	if len(terminals) != 1 || terminals[0] != "completed" {
+		t.Errorf("op.terminal statuses = %v, want exactly [completed]: an in-place continue must not publish a terminal event", terminals)
+	}
+	if n := bus.resumedCreated(opID); n != 1 {
+		t.Errorf("resumed op.created published %d times, want 1: the re-queue's own announcement", n)
+	}
+	// The op log carries one "operation finished" line (the real end) and the
+	// pause's own line; the pause is not logged as a finish.
+	var logs string
+	waitFor(t, "the final op log flush", 5*time.Second, func() bool {
+		logs = opLogText(t, store, opID)
+		return strings.Contains(logs, "operation finished")
+	})
+	if n := strings.Count(logs, "operation finished"); n != 1 {
+		t.Errorf("op log has %d 'operation finished' lines, want 1 (the real end only)", n)
+	}
+	if !strings.Contains(logs, "continuing in place under the same operation id") {
+		t.Errorf("op log %q lacks the pause's own line", logs)
+	}
 }
 
 // A run that returns the sentinel AFTER its deadline fired is still timed_out
@@ -125,7 +160,9 @@ func TestContinueInPlace_DeadlineStillTimesOut(t *testing.T) {
 	waitForOtel(t, "runs{timed_out}", func() bool { return g.runOutcomes(t, id)["timed_out"] == 1 })
 }
 
-// A user cancel that makes the run return the sentinel stays canceled.
+// A user cancel that makes the run return the sentinel stays canceled, and is
+// never recorded as a quiesce: the run reported progress, so only the context
+// guard (not the progress check) keeps it from being honoured as a yield.
 func TestContinueInPlace_UserCancelStaysCanceled(t *testing.T) {
 	g, store := newV3OtelRig(t, registry.Options{})
 	const id = "test.continue-user-cancel"
@@ -133,8 +170,9 @@ func TestContinueInPlace_UserCancelStaysCanceled(t *testing.T) {
 	def.ResumePolicy = registry.ResumeRestart
 	started := make(chan struct{})
 	var attempts atomic.Int32
-	def.Run = func(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
+	def.Run = func(ctx context.Context, _ json.RawMessage, rep registry.Reporter) error {
 		attempts.Add(1)
+		_ = rep.UpdateProgress(3, 10, "")
 		close(started)
 		<-ctx.Done()
 		return registry.ErrContinueInPlace
@@ -157,44 +195,41 @@ func TestContinueInPlace_UserCancelStaysCanceled(t *testing.T) {
 	if got := attempts.Load(); got != 1 {
 		t.Errorf("Run was called %d times, want 1: a canceled run must not be resumed", got)
 	}
+	assertNotQuiesced(t, store, opID)
 }
 
 // A watchdog kill (no progress past ProgressTimeout) stays canceled even when
-// the killed run's error is the sentinel.
+// the killed run's error is the sentinel, and is never recorded as a quiesce.
+// The run reported progress first, so the progress check cannot be what refuses
+// it.
 func TestContinueInPlace_WatchdogKillStaysCanceled(t *testing.T) {
-	ctx := t.Context()
-	store := newFakeStore()
-	r := registry.NewWithOptions(store, slog.Default(), 2, registry.Options{
-		WatchdogInterval: 50 * time.Millisecond,
-	})
-	def := makeValidDef("test.continue-watchdog")
+	g, store := newV3OtelRig(t, registry.Options{WatchdogInterval: 20 * time.Millisecond})
+	const id = "test.continue-watchdog"
+	def := makeValidDef(id)
 	def.ResumePolicy = registry.ResumeRestart
 	def.ProgressTimeout = 100 * time.Millisecond
 	var attempts atomic.Int32
-	def.Run = func(runCtx context.Context, _ json.RawMessage, _ registry.Reporter) error {
+	def.Run = func(runCtx context.Context, _ json.RawMessage, rep registry.Reporter) error {
 		attempts.Add(1)
+		_ = rep.UpdateProgress(3, 10, "") // then silence: the watchdog kills it
 		<-runCtx.Done()
 		return registry.ErrContinueInPlace
 	}
-	if err := r.RegisterOp(def); err != nil {
+	if err := g.reg.RegisterOp(def); err != nil {
 		t.Fatal(err)
 	}
-	r.Start(ctx)
-	opID, err := r.EnqueueOp(ctx, def.ID, nil)
+	g.reg.Start(t.Context())
+	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitStatus(t, store, opID, "running", 3*time.Second)
-	stale := time.Now().UTC().Add(-200 * time.Millisecond)
-	store.setLastProgressAt(opID, &stale)
-	awaitStatus(t, store, opID, "canceled", 3*time.Second)
+	awaitV2(t, store, opID, "canceled")
+	awaitV3State(t, store, opID, state.V3Canceled)
 	time.Sleep(150 * time.Millisecond)
 	if got := attempts.Load(); got != 1 {
 		t.Errorf("Run was called %d times, want 1: a watchdog-killed run must not be resumed", got)
 	}
-	if st := store.statusOf(opID); st != "canceled" {
-		t.Errorf("status = %q, want canceled", st)
-	}
+	assertNotQuiesced(t, store, opID)
 }
 
 // A def that does not resume in place cannot yield: the sentinel is an ordinary
