@@ -390,7 +390,8 @@ export interface BookFileCore {
   intro_timeout_hash?: string;
   intro_timeout_run_id?: string;
   /**
-   * IntroTimeoutAt is when the latest strike was counted; see BookFile.
+   * IntroTimeoutAt is when the latest strike was counted or a first known
+   * machine recorded; see BookFile.
    */
   intro_timeout_at?: string;
   /**
