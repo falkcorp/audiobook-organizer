@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -62,6 +62,20 @@ func RawParamsFromCtx(ctx context.Context) json.RawMessage {
 	v, _ := ctx.Value(opParamsKey).(json.RawMessage)
 	return v
 }
+
+// ErrContinueInPlace is what a job's Run returns (wrapped is fine) to say: "I
+// made durable progress and am close to my Policy().Timeout; restart this SAME
+// operation and I will continue". It is registry.ErrContinueInPlace, honoured only
+// for a job whose Policy().ResumePolicy is ResumeRestart, and only while the run's
+// context is still live; see there for what the registry does with it and what it
+// leaves unchanged (a deadline that fires is still timed_out, a watchdog kill still
+// canceled).
+//
+// A job may return it only when (a) its progress record survives the restart under
+// the same operation id (the registry re-runs the same row, so the id, the params
+// and the saved state all carry over), and (b) the attempt made progress, because a
+// run that yields without progress is restarted forever.
+var ErrContinueInPlace = opsregistry.ErrContinueInPlace
 
 // ProgressReporter is the minimal interface jobs use to report progress.
 type ProgressReporter interface {
