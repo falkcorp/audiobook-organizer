@@ -1,7 +1,7 @@
 // file: internal/database/book_file_clone.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b0e4c18-52fd-4a6e-9c33-1d8a5f2e6b40
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 package database
 
@@ -47,6 +47,7 @@ func cloneBookFile(f *BookFile) BookFile {
 	c.TranscribeStatus = cloneBookFileScalar(f.TranscribeStatus)
 	c.TranscribeError = cloneBookFileScalar(f.TranscribeError)
 	c.TranscribeAttemptedAt = cloneBookFileScalar(f.TranscribeAttemptedAt)
+	c.IntroTimeoutAt = cloneBookFileScalar(f.IntroTimeoutAt)
 	// IntroMeta holds only value fields, so copying the struct is a deep copy.
 	c.IntroMeta = cloneBookFileScalar(f.IntroMeta)
 	return c
