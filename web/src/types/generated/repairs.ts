@@ -47,10 +47,11 @@ export interface PlanResult {
    */
   owner_applicable?: number /* int */;
   /**
-   * RowStore names where the plan's rows are stored: PlanRowStoreV1 means
-   * beside the operation (SavePlan), one key per row. A stored plan without
-   * it is the older shape (every row inside the operation's result) and is
-   * refused with ErrPlanLegacyFormat: run the plan again.
+   * RowStore names where the plan's rows are stored: PlanRowStoreV2 means
+   * beside the operation (SavePlan), one key per row under PlanRowPrefix. A
+   * stored plan without it is the older shape (every row inside the
+   * operation's result), and one marked PlanRowStoreV1 kept its rows without
+   * the prefix; both are refused with ErrPlanLegacyFormat: run the plan again.
    */
   row_store?: string;
 }
