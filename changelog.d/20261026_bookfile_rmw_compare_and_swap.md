@@ -103,3 +103,14 @@ Third round of review fixes:
   or other writers are changing the files the combine moves, and that no files
   were moved from the other books, instead of naming only the loading library;
   the review lane's `REVIEW_RETRY_LATER` toast no longer claims the index is the only cause.
+
+Fourth round of review fixes:
+
+- The combine operation's retry-later message now names the cause that applies
+  instead of both: "The library is still loading; ..." when the library index is
+  loading, "Other writers are changing the files the combine moves; ..." when the
+  bulk move gave up on busy rows. The result carries a new `retry_cause` (`busy` or
+  `loading`) that the web app picks its text by (`COMBINE_RETRY_LATER_LOADING_MESSAGE`
+  and `COMBINE_RETRY_LATER_BUSY_MESSAGE` replace `COMBINE_RETRY_LATER_MESSAGE`).
+- `ClearIntroTimeouts` no longer reports `cleared` when the row was deleted
+  between its read and its commit and nothing was written.

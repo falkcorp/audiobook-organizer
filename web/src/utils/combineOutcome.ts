@@ -1,5 +1,5 @@
 // file: web/src/utils/combineOutcome.ts
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b8e2d71-c0a4-4f36-9e18-7a3d6f1b9c42
 // last-edited: 2026-10-27
 
@@ -36,13 +36,20 @@ export interface BookCombineOpResult {
   /**
    * The combine was refused only because the library index or the holder list is
    * still loading (right after a restart), or because other writers kept changing
-   * the files it moves; no absorbed file moved, there is nothing to undo, and the
-   * same combine can be queued again shortly. Never set together
-   * with `failed`. retry_reason is the server's own text (it goes in the log, not
-   * the toast).
+   * the files it moves; no absorbed book's file moved, and the same combine can be
+   * queued again shortly. There is no Undo: the survivor's own-file attach may
+   * already have run, but a retry finds it done. Never set together with
+   * `failed`. retry_reason is the server's own text (it goes in the log, not the
+   * toast); retry_cause says which of the two it was.
    */
   retry_later?: boolean;
   retry_reason?: string;
+  /**
+   * Why a retry_later combine was refused: 'busy' (other writers kept changing
+   * the files it moves) or 'loading' (the library index is still loading). A
+   * result without it is read as 'loading'.
+   */
+  retry_cause?: 'busy' | 'loading';
 }
 
 export interface CombineOutcomePlan {
@@ -63,12 +70,19 @@ export const UNDO_ID_UNAVAILABLE =
   "Undo id unavailable: open the combined book's Files & History tab, or the operation, to find what to revert";
 
 /**
- * Said when the combine was refused because the library is still loading or
- * other writers kept changing the files it moves. A warning, not an error:
- * nothing is wrong and no file was moved from the other books.
+ * Said when the combine was refused because the library is still loading. A
+ * warning, not an error: nothing is wrong and no file was moved from the other
+ * books.
  */
-export const COMBINE_RETRY_LATER_MESSAGE =
-  'The library is still loading, or other writers are changing the files the combine moves; try the combine again shortly. No files were moved from the other books.';
+export const COMBINE_RETRY_LATER_LOADING_MESSAGE =
+  'The library is still loading; try the combine again shortly. No files were moved from the other books.';
+
+/**
+ * Said when the combine was refused because other writers kept changing the
+ * files it moves. Same severity and same promise as the loading message.
+ */
+export const COMBINE_RETRY_LATER_BUSY_MESSAGE =
+  'Other writers are changing the files the combine moves; try the combine again shortly. No files were moved from the other books.';
 
 /** " (operation <id>)", so a half-done combine can still be found and reverted after its toast is gone. */
 export function operationRef(operationId: string): string {
@@ -95,7 +109,13 @@ export function describeCombineOutcome(args: {
   // the operation ends completed with this recorded, so it is read before the
   // status. No Undo, as no absorbed file moved, and not an error.
   if (result?.retry_later && !result.failed) {
-    return { severity: 'warning', message: COMBINE_RETRY_LATER_MESSAGE };
+    return {
+      severity: 'warning',
+      message:
+        result.retry_cause === 'busy'
+          ? COMBINE_RETRY_LATER_BUSY_MESSAGE
+          : COMBINE_RETRY_LATER_LOADING_MESSAGE,
+    };
   }
 
   if (result?.failed) {

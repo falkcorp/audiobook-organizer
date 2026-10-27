@@ -1,5 +1,5 @@
 // file: web/src/components/operations/OperationTrackerProvider.test.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d2f6b83-0a41-4c75-8e19-5b3a7c1d4e60
 // last-edited: 2026-10-26
 
@@ -245,6 +245,7 @@ describe('OperationTrackerProvider', () => {
         files_moved: 0,
         books_deleted: 0,
         retry_later: true,
+        retry_cause: 'loading',
         retry_reason: 'try again once the library index has finished loading',
       },
     });
@@ -258,6 +259,34 @@ describe('OperationTrackerProvider', () => {
     expect(lastToast().message).toContain(
       'The library is still loading; try the combine again shortly'
     );
+    expect(lastToast().message).not.toContain('other writers');
+    expect(lastToast().action?.label).toBe('View operation');
+    expect(api.revertOperation).not.toHaveBeenCalled();
+  });
+
+  it('a combine that was refused because other writers kept changing its files ends as a warning that says so: no Undo, the books are released', async () => {
+    const poll = deferPoll('op-2');
+    api.getOperationResult.mockResolvedValue({
+      result_data: {
+        primary_id: 'b',
+        files_moved: 0,
+        books_deleted: 0,
+        retry_later: true,
+        retry_cause: 'busy',
+        retry_reason: 'book_file row kept changing under the write',
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByText('combine'));
+    expect(screen.getByTestId('locked')).toHaveTextContent('b,c');
+    await act(async () => poll.resolve('completed'));
+    await waitFor(() => expect(screen.getByTestId('locked')).toHaveTextContent(''));
+    expect(lastToast().severity).toBe('warning');
+    expect(lastToast().message).toContain(
+      'Other writers are changing the files the combine moves; try the combine again shortly'
+    );
+    expect(lastToast().message).not.toContain('still loading');
     expect(lastToast().action?.label).toBe('View operation');
     expect(api.revertOperation).not.toHaveBeenCalled();
   });

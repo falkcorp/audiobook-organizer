@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.31.2
+// version: 2.31.3
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
 // last-edited: 2026-10-27
 
@@ -37,6 +37,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -339,7 +340,8 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 				// text, which names the cause, is kept in retry_reason.
 				op.SetStatus("retry_later")
 				logging.Warn(ctx, "book combine not run: retry later; no absorbed file moved", "err", err)
-				retry := BookCombineOpResult{PrimaryID: p.KeepID, RetryLater: true, RetryReason: err.Error(), Message: combineRetryLaterMessage}
+				cause, retryMessage := combineRetryLaterCause(err)
+				retry := BookCombineOpResult{PrimaryID: p.KeepID, RetryLater: true, RetryReason: err.Error(), RetryCause: cause, Message: retryMessage}
 				if serr := opsregistry.ReporterSetResult(reporter, retry); serr != nil {
 					logging.Warn(ctx, "book combine: retry-later payload not stored", "err", serr)
 				}
@@ -402,7 +404,9 @@ func (s *Server) RegisterBookCombineOp(reg *opsregistry.Registry) error {
 // kept changing the files it moves (merge.IsRetryLater). The op is not failed
 // and there is nothing to undo beyond the survivor's own-file attach that a busy
 // refusal may already have journaled (a retry finds it done); RetryReason is the
-// refusal's text and Message says to try again shortly. Failed and RetryLater are never both set.
+// refusal's text, RetryCause is its machine-readable cause (CombineRetryCauseBusy
+// or CombineRetryCauseLoading, which the UI picks its own text by) and Message
+// says to try again shortly. Failed and RetryLater are never both set.
 type BookCombineOpResult struct {
 	PrimaryID    string `json:"primary_id"`
 	FilesMoved   int    `json:"files_moved"`
@@ -421,12 +425,36 @@ type BookCombineOpResult struct {
 	Error          string   `json:"error,omitempty"`
 	RetryLater     bool     `json:"retry_later,omitempty"`
 	RetryReason    string   `json:"retry_reason,omitempty"`
+	RetryCause     string   `json:"retry_cause,omitempty"`
 }
 
-// combineRetryLaterMessage is the result's message when the combine was not run
-// because the library index is still loading or other writers kept changing the
-// files it moves.
-const combineRetryLaterMessage = "The library is still loading, or other writers are changing the files the combine moves; try the combine again shortly. No files were moved from the other books."
+// The causes a retry-later combine reports in BookCombineOpResult.RetryCause.
+const (
+	// CombineRetryCauseBusy: other writers kept changing the files the combine
+	// moves (database.ErrBookFileConflict).
+	CombineRetryCauseBusy = "busy"
+	// CombineRetryCauseLoading: the library index, the complete list of the rows
+	// holding a path, is still loading (database.ErrOwnershipLookupIncomplete).
+	CombineRetryCauseLoading = "loading"
+)
+
+// The result's message for each cause of a retry-later combine. Each names only
+// its own cause: the user is told what is actually wrong, not both candidates.
+const (
+	combineRetryLaterBusyMessage    = "Other writers are changing the files the combine moves; try the combine again shortly. No files were moved from the other books."
+	combineRetryLaterLoadingMessage = "The library is still loading; try the combine again shortly. No files were moved from the other books."
+)
+
+// combineRetryLaterCause names why a retry-later combine (merge.IsRetryLater)
+// was refused and the message that says so. A busy refusal is read first: it is
+// the only one that can have got past the journal, so it is never reported as the
+// library still loading.
+func combineRetryLaterCause(err error) (cause, message string) {
+	if errors.Is(err, database.ErrBookFileConflict) {
+		return CombineRetryCauseBusy, combineRetryLaterBusyMessage
+	}
+	return CombineRetryCauseLoading, combineRetryLaterLoadingMessage
+}
 
 // newBookCombineOpResult builds the success payload from the combine's result,
 // with the message the synchronous endpoint used to return.

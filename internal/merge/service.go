@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.64.2
+// version: 1.64.3
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-27
 
@@ -286,9 +286,9 @@ func IsRefusal(err error) bool {
 // second case the combine's journal was already open and the survivor's own-file
 // attach may have run (settleBusyCombine records it, and a retry finds it done),
 // but no absorbed book's file moved. Either way the same request succeeds once
-// the cause is gone, so a caller answers it as "retry later" (503), not as a
-// failure. A caller that applies a plan in several steps (the review apply) may
-// still have to hold the step rather than retry it, because of what an earlier
+// the cause is gone, so a caller answers it as "retry later", not as a failure.
+// A caller that applies a plan in several steps (the review apply) may still
+// have to hold the step rather than retry it, because of what an earlier
 // part of the step wrote. A CombineIncompleteError is excluded even when it wraps
 // the same error: that combine got past its journal and may have written.
 func IsRetryLater(err error) bool {

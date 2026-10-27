@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
 // last-edited: 2026-10-27
 
@@ -512,10 +512,15 @@ func TestCAS_RecordIntroTimeout_NewBytesMeanNoStrike(t *testing.T) {
 // strikes are still cleared.
 func TestCAS_ClearIntroTimeouts_KeepsConcurrentWriteAndStillClears(t *testing.T) {
 	f := newCASFixture(t)
+	// Limit 1: the first strike is permanent, so the row also carries the
+	// transcribe_timeout verdict the clear must drop with the strikes.
 	if _, err := f.s.RecordIntroTimeout(f.book.ID, f.file.ID, IntroTimeoutStrike{
-		SourceHash: "gotham-hash-old", RunOpID: "op-batman", At: time.Now(), Limit: 3, Worker: "m:batcave",
+		SourceHash: "gotham-hash-old", RunOpID: "op-batman", At: time.Now(), Limit: 1, Worker: "m:batcave",
 	}); err != nil {
 		t.Fatalf("RecordIntroTimeout: %v", err)
+	}
+	if before := f.row(t); before.TranscribeStatus == nil || *before.TranscribeStatus != IntroStatusTranscribeTimeout || before.IntroTimeoutAt == nil {
+		t.Fatalf("fixture: row status %v strike time %v, want transcribe_timeout and a strike time", before.TranscribeStatus, before.IntroTimeoutAt)
 	}
 	injectBeforeCommit(t, 1, func(int) { f.strayScan(t, "gotham-hash-old", 250, 2500) })
 
@@ -527,8 +532,43 @@ func TestCAS_ClearIntroTimeouts_KeepsConcurrentWriteAndStillClears(t *testing.T)
 	if row.IntroTimeouts != 0 || row.IntroTimeoutHash != "" || row.IntroTimeoutWorker != "" {
 		t.Errorf("row strikes = %d hash %q worker %q, want them cleared", row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutWorker)
 	}
+	if row.IntroTimeoutAt != nil {
+		t.Errorf("IntroTimeoutAt = %v, want nil after the clear", row.IntroTimeoutAt)
+	}
+	if row.TranscribeStatus != nil || row.TranscribeError != nil || row.IntroRunOpID != "" {
+		t.Errorf("transcribe status %v error %v run %q, want the transcribe_timeout verdict cleared with the strikes", row.TranscribeStatus, row.TranscribeError, row.IntroRunOpID)
+	}
 	if row.Duration != 250 || row.FileSize != 2500 {
 		t.Errorf("row = %d s / %d bytes, want the concurrent writer's 250 / 2500 kept", row.Duration, row.FileSize)
+	}
+}
+
+// A row deleted between the clear's read and its commit is gone, not cleared:
+// the commit loses, the retry finds no row and never runs the callback again,
+// so the flag the callback set on the first attempt must not be reported.
+func TestCAS_ClearIntroTimeouts_RowDeletedBeforeCommitIsNotCleared(t *testing.T) {
+	f := newCASFixture(t)
+	if _, err := f.s.RecordIntroTimeout(f.book.ID, f.file.ID, IntroTimeoutStrike{
+		SourceHash: "gotham-hash-old", RunOpID: "op-batman", At: time.Now(), Limit: 3, Worker: "m:batcave",
+	}); err != nil {
+		t.Fatalf("RecordIntroTimeout: %v", err)
+	}
+	injectBeforeCommit(t, 1, func(int) {
+		if err := f.s.db.Delete(bookFileKey(f.book.ID, f.file.ID), pebble.NoSync); err != nil {
+			t.Errorf("delete: %v", err)
+		}
+	})
+
+	cleared, err := f.s.ClearIntroTimeouts(f.book.ID, f.file.ID, "gotham-hash-old")
+	if err != nil {
+		t.Fatalf("ClearIntroTimeouts: %v", err)
+	}
+	if cleared {
+		t.Errorf("ClearIntroTimeouts reported cleared = true although the row was deleted before the commit and nothing was written")
+	}
+	if raw, closer, gerr := f.s.db.Get(bookFileKey(f.book.ID, f.file.ID)); gerr == nil {
+		closer.Close()
+		t.Errorf("row still stored (%d bytes), want it gone", len(raw))
 	}
 }
 

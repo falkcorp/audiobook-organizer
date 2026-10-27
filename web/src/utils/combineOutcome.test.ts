@@ -1,10 +1,14 @@
 // file: web/src/utils/combineOutcome.test.ts
-// version: 1.0.2
+// version: 1.0.3
 // guid: a2d94f60-8b17-4c3e-b5d9-1e7c0a6f3b85
 // last-edited: 2026-10-27
 
 import { describe, expect, it } from 'vitest';
-import { COMBINE_RETRY_LATER_MESSAGE, describeCombineOutcome } from './combineOutcome';
+import {
+  COMBINE_RETRY_LATER_BUSY_MESSAGE,
+  COMBINE_RETRY_LATER_LOADING_MESSAGE,
+  describeCombineOutcome,
+} from './combineOutcome';
 
 const ok = { primary_id: 'book-a', files_moved: 3, books_deleted: 2 };
 
@@ -145,7 +149,7 @@ describe('describeCombineOutcome', () => {
     expect(p.actionLabel).toBe('Undo');
   });
 
-  it('a combine refused while the library loads is a warning to try again, with no Undo and no failure text', () => {
+  it('a combine refused while the library loads is a warning to try again that blames only the loading, with no Undo and no failure text', () => {
     const p = describeCombineOutcome({
       status: 'completed',
       result: {
@@ -153,15 +157,16 @@ describe('describeCombineOutcome', () => {
         files_moved: 0,
         books_deleted: 0,
         retry_later: true,
+        retry_cause: 'loading',
         retry_reason: 'try again once the library index has finished loading',
         message: 'ignored: the web text is its own',
       },
       operationId: 'op-c',
     });
     expect(p.severity).toBe('warning');
-    expect(p.message).toBe(COMBINE_RETRY_LATER_MESSAGE);
+    expect(p.message).toBe(COMBINE_RETRY_LATER_LOADING_MESSAGE);
     expect(p.message).toContain('The library is still loading');
-    expect(p.message).toContain('other writers are changing the files the combine moves');
+    expect(p.message).not.toContain('other writers');
     expect(p.message).toContain('try the combine again shortly');
     expect(p.message).toContain('No files were moved from the other books');
     expect(p.message).not.toMatch(/^Combined/);
@@ -169,6 +174,38 @@ describe('describeCombineOutcome', () => {
     expect(p.message).not.toContain('refused before changing anything');
     expect(p.undoOperationId).toBeUndefined();
     expect(p.actionLabel).toBeUndefined();
+  });
+
+  it('a combine refused because other writers kept changing its files says so and does not blame the loading', () => {
+    const p = describeCombineOutcome({
+      status: 'completed',
+      result: {
+        primary_id: 'book-a',
+        files_moved: 0,
+        books_deleted: 0,
+        retry_later: true,
+        retry_cause: 'busy',
+        retry_reason: 'book_file row kept changing under the write',
+      },
+      operationId: 'op-c',
+    });
+    expect(p.severity).toBe('warning');
+    expect(p.message).toBe(COMBINE_RETRY_LATER_BUSY_MESSAGE);
+    expect(p.message).toContain('Other writers are changing the files the combine moves');
+    expect(p.message).not.toContain('still loading');
+    expect(p.message).toContain('try the combine again shortly');
+    expect(p.message).toContain('No files were moved from the other books');
+    expect(p.undoOperationId).toBeUndefined();
+    expect(p.actionLabel).toBeUndefined();
+  });
+
+  it('a retry_later result without a cause is read as the library loading', () => {
+    const p = describeCombineOutcome({
+      status: 'completed',
+      result: { ...ok, retry_later: true },
+      operationId: 'op-c',
+    });
+    expect(p.message).toBe(COMBINE_RETRY_LATER_LOADING_MESSAGE);
   });
 
   it('retry-later is read before the status, so a status that is not "completed" still shows it', () => {
@@ -179,7 +216,7 @@ describe('describeCombineOutcome', () => {
       operationId: 'op-c',
     });
     expect(p.severity).toBe('warning');
-    expect(p.message).toBe(COMBINE_RETRY_LATER_MESSAGE);
+    expect(p.message).toBe(COMBINE_RETRY_LATER_LOADING_MESSAGE);
     expect(p.undoOperationId).toBeUndefined();
   });
 
@@ -190,7 +227,8 @@ describe('describeCombineOutcome', () => {
       operationId: 'op-c',
     });
     expect(p.severity).toBe('error');
-    expect(p.message).not.toBe(COMBINE_RETRY_LATER_MESSAGE);
+    expect(p.message).not.toBe(COMBINE_RETRY_LATER_LOADING_MESSAGE);
+    expect(p.message).not.toBe(COMBINE_RETRY_LATER_BUSY_MESSAGE);
   });
 
   it('retry_later false or absent changes nothing about a plain success', () => {
