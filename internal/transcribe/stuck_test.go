@@ -1,7 +1,7 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -381,6 +381,14 @@ type splitHarness struct {
 	// machine-id lookup missed its first wait reports one later in the same
 	// process (see setMachineID).
 	machineID sync.Map
+	// backend holds the /health backend ("host:port" -> backend) a worker reports
+	// from now on, overriding the "mlx" machineHarness starts it with: a URL taken
+	// over by a worker of another server (see setBackend).
+	backend sync.Map
+	// healthDelay holds how long a worker ("host:port" -> time.Duration) holds
+	// every /health request before it answers, or until the request is cancelled:
+	// a probe that is in flight when the op is cancelled (see delayHealth).
+	healthDelay sync.Map
 }
 
 // wedge marks the worker at url as wedged from now on.
@@ -401,6 +409,19 @@ func (h *splitHarness) setChildFault(url string, on bool) {
 // scripts/whisper_mlx_server.py does once its retried lookup succeeds.
 func (h *splitHarness) setMachineID(url, id string) {
 	h.machineID.Store(strings.TrimPrefix(url, "http://"), id)
+}
+
+// delayHealth makes the worker at url hold its /health answers for d from now
+// on (a probe cut short by a cancellation reads nothing).
+func (h *splitHarness) delayHealth(url string, d time.Duration) {
+	h.healthDelay.Store(strings.TrimPrefix(url, "http://"), d)
+}
+
+// setBackend makes the worker at url report backend b from now on: a URL whose
+// worker was replaced by another server ("faster-whisper" is
+// scripts/whisper_server.py, which never reports a machine_id).
+func (h *splitHarness) setBackend(url, b string) {
+	h.backend.Store(strings.TrimPrefix(url, "http://"), b)
 }
 
 type sendRecord struct {

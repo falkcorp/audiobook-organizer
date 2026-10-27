@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -178,16 +178,20 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			// to it is never answered, and queueing behind it is how one bad
 			// clip parked the whole pool.
 			if reason := stuckRefusal(g); reason != "" {
-				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Machine: refusalMachine(g), Stuck: true})
+				r := newRefusal(g, reason)
+				r.Stuck = true
+				refused = append(refused, r)
 				continue
 			}
 			if reason := childFaultRefusal(g); reason != "" {
-				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Machine: refusalMachine(g), Transient: true})
+				r := newRefusal(g, reason)
+				r.Transient = true
+				refused = append(refused, r)
 				continue
 			}
 			if extraRefusal != nil {
 				if reason := extraRefusal(g); reason != "" {
-					refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Machine: refusalMachine(g)})
+					refused = append(refused, newRefusal(g, reason))
 					continue
 				}
 			}
@@ -198,7 +202,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			// an identity like any other.
 			reconcileCanaryMemory(endpoints, kept, refused)
 		}
-		noteCanaryProbes(kept, refused)
+		if ctx.Err() == nil {
+			// A probe that a cancellation cut short read nothing: every endpoint
+			// looks unreachable, which must not start a run of refusals (D56).
+			noteCanaryProbes(kept, refused)
+		}
 		return kept, refused
 	}
 	var (
@@ -273,16 +281,17 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// Health is keyed by URL so allocateJobs keeps operating on []Endpoint
 	// and its index-based contract with the assignment slices is untouched.
 	//
-	// keyFor is each endpoint's machine identity as the gate read it, frozen for
-	// the dispatch: a re-probe after a wait replaces an endpoint's health (and
-	// the identity stored with its answers) but not the key the dispatch groups
-	// it under (keyOf).
+	// keyFor is each endpoint's machine identity as the gate resolved it (D55:
+	// by address, so a worker that missed its machine id this time is still the
+	// machine its URL last reported), frozen for the dispatch: a re-probe after a
+	// wait replaces an endpoint's health (and the identity stored with its
+	// answers) but not the key the dispatch groups it under (keyOf).
 	probeByURL := make(map[string]gatedEndpoint, len(gated))
 	keyFor := make(map[string]string, len(gated))
 	eligible := make([]Endpoint, 0, len(gated))
 	for _, g := range gated {
 		probeByURL[g.Endpoint.URL] = g
-		keyFor[g.Endpoint.URL] = g.machineKey()
+		keyFor[g.Endpoint.URL] = g.identityKey()
 		eligible = append(eligible, g.Endpoint)
 	}
 
@@ -384,11 +393,22 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// queue of its own.
 	soloOverran := make(map[string]map[string]bool)
 	machines := make(map[string]bool, len(ordered))
-	for _, ep := range ordered {
-		machines[keyOf(ep.URL)] = true
+	var soloLimit, faultLimit int
+	// countLimits counts the machines (by the identity keyOf gives each endpoint,
+	// so a machine's port that answers as "u:" is not a machine of its own) and
+	// the endpoints the dispatch has, and derives from them the two limits that
+	// need them: the machines a lone job's condemnation needs, and the endpoints
+	// a faulted job can run out of. It is the one place that counts them, at the
+	// start and again whenever ports are dropped.
+	countLimits := func() {
+		clear(machines)
+		for _, ep := range ordered {
+			machines[keyOf(ep.URL)] = true
+		}
+		soloLimit = min(2, len(machines))
+		faultLimit = min(2, len(ordered))
 	}
-	soloLimit := min(2, len(machines))
-	faultLimit := min(2, len(ordered))
+	countLimits()
 	// dropPorts takes ports out of this dispatch for good: they got no work yet
 	// and are refused (resolvePending's re-probe found them wedged or
 	// unreachable), so the limits that count the pool's machines and endpoints
@@ -396,12 +416,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// condemnation needs and a faulted job could never run out of workers.
 	dropPorts := func(urls map[string]bool) {
 		ordered = slices.DeleteFunc(ordered, func(ep Endpoint) bool { return urls[ep.URL] })
-		clear(machines)
-		for _, ep := range ordered {
-			machines[keyOf(ep.URL)] = true
-		}
-		soloLimit = min(2, len(machines))
-		faultLimit = min(2, len(ordered))
+		countLimits()
 	}
 	var units [][]string
 	// followerOf is the journal's content dedup seen from here: a follower was
@@ -984,6 +999,26 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		requeueUnits(ids)
 	}
+	// identitiesOf is every identity a stored strike or condemnation can name the
+	// worker at url by, or none when its identity is unknown (it was not probed):
+	// the machine the dispatch resolved for it (keyOf, D55), and the "u:" name of
+	// its address. The raw identity its probe reports is one of those two: a
+	// machine id is what keyOf is, and a "u:" is the address. A run that saw the
+	// worker answer as "u:" stored that name for a machine it answers for with an
+	// id now, and a run that stored the machine's name must match a worker that
+	// answers as "u:" now. A job is steered away from a machine however its strike
+	// named it, so steerAway and a condemnation, which names keyOf, agree (S-D of
+	// the review of f241ec20a).
+	identitiesOf := func(url string) []string {
+		if !probeByURL[url].Probed {
+			return nil
+		}
+		ids := []string{"u:" + shortHash(url)}
+		if k := keyOf(url); !strings.HasPrefix(k, "?") && !slices.Contains(ids, k) {
+			ids = append(ids, k)
+		}
+		return ids
+	}
 	// steerAway is R4 of the #4182 review. A job whose file already carries a
 	// timeout strike can only be settled by a strike from a machine that has
 	// not struck it, but allocation fills the lowest priority tier first, so a
@@ -1007,15 +1042,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			return
 		}
 		for i, ep := range eps {
-			here := probeByURL[ep.URL].workerID()
+			here := identitiesOf(ep.URL)
 			for _, id := range slices.Sorted(maps.Keys(asg[i])) {
 				set := avoidOf[id]
-				if _, still := asg[i][id]; !still || here == "" || !set[here] {
+				if _, still := asg[i][id]; !still || len(here) == 0 || !anyIn(set, here) {
 					continue // (not still: a follower that already moved with its leader)
 				}
 				best := -1
 				for k, alt := range eps {
-					if wid := probeByURL[alt.URL].workerID(); k == i || wid == "" || set[wid] {
+					if wids := identitiesOf(alt.URL); k == i || len(wids) == 0 || anyIn(set, wids) {
 						continue
 					}
 					if best < 0 || len(asg[k]) < len(asg[best]) {
@@ -1046,9 +1081,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// tries every other endpoint first, the same preference steerAway applies
 	// to normal allocation.
 	avoids := func(live []string, url string) bool {
-		wid := probeByURL[url].workerID()
+		wids := identitiesOf(url)
 		for _, id := range live {
-			if set := avoidOf[id]; set != nil && (wid == "" || set[wid]) {
+			if set := avoidOf[id]; set != nil && (len(wids) == 0 || anyIn(set, wids)) {
 				return true
 			}
 		}
@@ -1370,7 +1405,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				}
 				if br.Endpoint == "" {
 					br.Endpoint = ep.URL
-					br.Worker = probeByURL[ep.URL].workerID()
+					br.Worker = probeByURL[ep.URL].storedWorker()
 				}
 				results[id] = br
 				settledHere[id] = true
@@ -1614,10 +1649,10 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 	// lone endpoint has nowhere else to send them.
 	holdKills := false
 	results := make(map[string]BatchResult, len(jobs))
-	// key is the identity the gate read, kept for every memory call below: a
+	// key is the identity the gate resolved (D55), kept for every memory call below: a
 	// re-probe after a wait can replace g (its health is what the canary and the
 	// work should use) but must not give the dispatch a second identity.
-	key := g.machineKey()
+	key := g.identityKey()
 	if endpointRemembered(key, url) && ctx.Err() == nil {
 		// It failed the canary clip in an earlier dispatch and has not answered
 		// one since: ask it before sending it any work (see preflight in
@@ -1712,7 +1747,7 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			// (a deferral) is unnamed.
 			if br.Endpoint == "" {
 				br.Endpoint = url
-				br.Worker = g.workerID()
+				br.Worker = g.storedWorker()
 			}
 			results[id] = br
 		}

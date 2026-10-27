@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -91,8 +91,31 @@ var canaryFailed = struct {
 	// answers as "u:" (it restarted under memory pressure and missed its
 	// MACHINE_ID_WAIT_S) or its /health cannot be read. Bounded by the
 	// configured URLs: pruneUnconfiguredCanaryURLs.
+	//
+	// It is also the guard of that link. A URL is in it only while no probe has
+	// found a worker there that cannot report a machine id (a weak identity from
+	// any backend but "mlx": noteCanaryPort), because such a worker is not the
+	// machine that was remembered for the URL, and a dispatch resolves a weak
+	// identity through it only for a worker that can (resolveMachine).
 	byURL map[string]string
-}{m: make(map[string]*canaryEntry), byURL: make(map[string]string)}
+	// firstRefused is, per endpoint URL, when the probes that have refused it
+	// began: the first probe of a run in which none has been answered. A probe
+	// that was answered deletes it (noteProbeResult). A port refused for
+	// deadPortAfter stops counting as a port of its machine (portDeadLocked).
+	firstRefused map[string]time.Time
+}{m: make(map[string]*canaryEntry), byURL: make(map[string]string), firstRefused: make(map[string]time.Time)}
+
+// deadPortAfter is how long a configured port must have refused every probe
+// before it stops counting as a port of the machine it was seen to belong to
+// (D56): until then a machine stays remembered while one of its ports is down,
+// because the port may come back and would be sent work with no canary; a port
+// that has been down for a day is not coming back as part of this problem, and
+// holding the machine remembered for it for ever keeps a sound machine asked a
+// canary clip for as long as the dead tunnel stays configured.
+var deadPortAfter = 24 * time.Hour
+
+// canaryNow is the clock of the dead-port rule, a var so tests can move it.
+var canaryNow = time.Now
 
 // canaryEntry is what is remembered about one machine that failed the canary.
 type canaryEntry struct {
@@ -109,6 +132,19 @@ type canaryEntry struct {
 	ports map[string]bool
 }
 
+// hasPort reports whether url counts as a port of the machine: one a probe
+// attributed to it that has not been refused for deadPortAfter. The lock is held.
+func (e *canaryEntry) hasPort(url string) bool {
+	return e.ports[url] && !portDeadLocked(url)
+}
+
+// portDeadLocked reports whether every probe of url has been refused for at
+// least deadPortAfter. The lock is held.
+func portDeadLocked(url string) bool {
+	t, refused := canaryFailed.firstRefused[url]
+	return refused && canaryNow().Sub(t) >= deadPortAfter
+}
+
 // markCanaryFailed records that machine key failed the canary clip, with the
 // URLs of the ports known to belong to it. It always assigns a new generation.
 func markCanaryFailed(key string, ports ...string) {
@@ -122,8 +158,13 @@ func markCanaryFailedLocked(key string, ports []string) {
 		// A weak identity with no entry of its own: an entry another dispatch
 		// moved to the worker's new key (or that remembers the machine behind
 		// this URL) is where the failure belongs, not a new "u:" entry beside it.
+		// So is the machine a probe last reported for the URL the key was made
+		// from, even when nothing is remembered for that machine yet (R1 of the
+		// review of f241ec20a): its other ports must be asked too.
 		if rk := resolveCanaryKeyLocked(key, ports); rk != "" {
 			key = rk
+		} else if mk := weakKeyMachineLocked(key, ports); mk != "" {
+			key = mk
 		}
 	}
 	canaryFailed.seq++
@@ -144,11 +185,28 @@ func markCanaryFailedLocked(key string, ports []string) {
 		// could be forgotten on its other ports and the down port later given
 		// work with no canary.
 		for u, k := range canaryFailed.byURL {
-			if k == key {
+			if k == key && !portDeadLocked(u) {
 				e.ports[u] = true
 			}
 		}
 	}
+}
+
+// weakKeyMachineLocked is the machine a probe last reported for the URL a "u:"
+// key was made from (key = "u:" + shortHash(url)), or "" when key is not one of
+// the urls' weak keys or no machine is known for its URL. byURL holds a URL only
+// while its worker may still be that machine (see canaryFailed.byURL), so this
+// is the guarded link, not a guess from the key.
+func weakKeyMachineLocked(key string, urls []string) string {
+	if !strings.HasPrefix(key, "u:") {
+		return ""
+	}
+	for _, u := range urls {
+		if "u:"+shortHash(u) == key {
+			return canaryFailed.byURL[u]
+		}
+	}
+	return ""
 }
 
 // isStrongKey reports whether key is a machine identity ("m:" + the id the
@@ -160,12 +218,17 @@ func isStrongKey(key string) bool { return strings.HasPrefix(key, "m:") }
 // resolveCanaryKeyLocked is the key of the entry that remembers an endpoint
 // whose identity in the current dispatch is key and whose URLs are urls, or ""
 // when none does. The endpoint's own key first. Failing that, a weak identity
-// is looked up through what is known of its URLs (the strong identity a probe
-// last reported for it, then any entry listing it as a port): the machine behind
-// a URL does not change because its worker lost, or has not yet reported, its
-// machine id, and an entry another dispatch moved to the worker's new key while
-// this one waited is still the entry for it. A strong key names its machine, so
-// it never resolves to another one's entry.
+// is looked up through any entry listing one of its URLs as a port: the machine
+// behind a URL does not change because its worker lost, or has not yet reported,
+// its machine id, and an entry another dispatch moved to the worker's new key
+// while this one waited is still the entry for it. A strong key names its
+// machine, so it never resolves to another one's entry.
+//
+// The ports are the whole lookup. An earlier version asked byURL first, but
+// whenever byURL[u] names a remembered machine that machine already lists u
+// (noteCanaryPort and markCanaryFailedLocked add every URL byURL gives a
+// machine to its ports, and every removal from one is a removal from the
+// other), so the second question could only repeat the answer.
 func resolveCanaryKeyLocked(key string, urls []string) string {
 	if canaryFailed.m[key] != nil {
 		return key
@@ -173,15 +236,10 @@ func resolveCanaryKeyLocked(key string, urls []string) string {
 	if isStrongKey(key) {
 		return ""
 	}
-	for _, u := range urls {
-		if k := canaryFailed.byURL[u]; k != "" && canaryFailed.m[k] != nil {
-			return k
-		}
-	}
 	var found string
 	for k, e := range canaryFailed.m {
 		for _, u := range urls {
-			if e.ports[u] && (found == "" || k < found) {
+			if e.hasPort(u) && (found == "" || k < found) {
 				found = k
 			}
 		}
@@ -202,12 +260,6 @@ func canaryMemoryKey(key string, urls ...string) string {
 // remembered, or when its URL leads to a remembered entry (resolveCanaryKeyLocked).
 func endpointRemembered(key, url string) bool {
 	return canaryMemoryKey(key, url) != ""
-}
-
-func clearCanaryFailed(key string) {
-	canaryFailed.mu.Lock()
-	defer canaryFailed.mu.Unlock()
-	delete(canaryFailed.m, key)
 }
 
 // canaryGeneration is the generation of the entry that remembers key (or, for a
@@ -243,17 +295,47 @@ func forgetCanaryIf(key string, gen uint64, urls []string, refused []gpuRefusal,
 	return true
 }
 
-// noteCanaryPort records that a probe of url reported identity key.
+// resolveMachine is the machine identity of an endpoint whose probe reported
+// raw (gatedEndpoint.machineKey, or a refusal's Machine) and whose worker is, or
+// is not, one that can report a machine id (idCapable: backend "mlx"), resolved
+// by address (D55).
+//
+// A strong identity is the machine. A weak one ("u:") from a worker that can
+// report an id says only that the worker missed its MACHINE_ID_WAIT_S just now
+// (B-2 of the re-review of #4193: a worker restarted under memory pressure
+// answers as "u:" while its machine is still the one this process last saw
+// behind the URL), so it is that machine, byURL[url], if any is known. A weak
+// identity from a worker that cannot report one is another worker that took the
+// URL over (scripts/whisper_server.py never reports a machine_id): it stands for
+// itself. So does one with no identity at all ("?" for a /health that could not
+// be read, "" for a refusal of one): nothing was read to say it is the same
+// machine, and an unknown worker is never given one.
+func resolveMachine(url, raw string, idCapable bool) string {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	if idCapable && strings.HasPrefix(raw, "u:") {
+		if k := canaryFailed.byURL[url]; k != "" {
+			return k
+		}
+	}
+	return raw
+}
+
+// noteCanaryPort records that a probe of url reported identity key, from a
+// worker that can (idCapable) or cannot report a machine id.
 //
 // A strong identity (an "m:" machine key) is what ties a URL to a machine: the
 // URL belongs to one machine at a time, so it leaves every other entry's set,
 // byURL points at it, and it joins key's set if the machine is remembered. A
-// weaker one (key "u:" or "?") says nothing about the machine, only that the
-// worker did not report one just now (B-2 of the re-review of #4193: a worker
-// restarted under memory pressure answers as "u:" while its machine is still
-// remembered under "m:"), so it takes nothing from any other entry and leaves
-// byURL alone: it only joins its own entry's set, if it has one.
-func noteCanaryPort(key, url string) {
+// weak one from a worker that can report an id says nothing about the machine,
+// only that the worker did not report one just now (B-2 of the re-review of
+// #4193), so it takes nothing from any other entry and leaves byURL alone: it
+// only joins its own entry's set, if it has one. A weak one from a worker that
+// cannot report an id (a faster-whisper worker, which never does) is the
+// opposite: whatever machine was behind this URL, this is not it, so the URL
+// leaves byURL and every other entry's set (S-A of the review of f241ec20a), and
+// a worker that took a URL over cannot be given a machine's memory.
+func noteCanaryPort(key, url string, idCapable bool) {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
 	if isStrongKey(key) {
@@ -263,16 +345,41 @@ func noteCanaryPort(key, url string) {
 			}
 		}
 		canaryFailed.byURL[url] = key
+	} else if !idCapable {
+		for k, e := range canaryFailed.m {
+			if k != key {
+				delete(e.ports, url)
+			}
+		}
+		delete(canaryFailed.byURL, url)
 	}
 	if e := canaryFailed.m[key]; e != nil {
 		e.ports[url] = true
 	}
 }
 
+// noteProbeResult records whether a probe of url was answered, for the
+// dead-port rule (D56): an answer, from any worker, ends the run of refusals;
+// a refusal begins one if none is running.
+func noteProbeResult(url string, answered bool) {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	if answered {
+		delete(canaryFailed.firstRefused, url)
+	} else if _, running := canaryFailed.firstRefused[url]; !running {
+		canaryFailed.firstRefused[url] = canaryNow()
+	}
+}
+
 // pruneUnconfiguredCanaryURLs drops every URL that is not one of the configured
-// endpoints from byURL and from every entry's port set, so neither grows with
-// endpoints an operator has since removed (nit 6 of the re-review of #4193).
-// Every production caller of dispatchPool passes the whole configured pool.
+// endpoints from byURL, firstRefused and every entry's port set, so none grows
+// with endpoints an operator has since removed (nit 6 of the re-review of #4193).
+// An entry left with no port by it is dropped too (N3 of the review of
+// f241ec20a): every endpoint that was ever one of its ports is gone from the
+// configuration, so nothing can be sent work as that machine, and a record of it
+// would otherwise live for as long as the process does. An entry that never had a
+// port is not touched. Every production caller of dispatchPool passes the whole
+// configured pool.
 func pruneUnconfiguredCanaryURLs(configured []Endpoint) {
 	keep := make(map[string]bool, len(configured))
 	for _, ep := range configured {
@@ -285,11 +392,20 @@ func pruneUnconfiguredCanaryURLs(configured []Endpoint) {
 			delete(canaryFailed.byURL, u)
 		}
 	}
-	for _, e := range canaryFailed.m {
+	for u := range canaryFailed.firstRefused {
+		if !keep[u] {
+			delete(canaryFailed.firstRefused, u)
+		}
+	}
+	for k, e := range canaryFailed.m {
+		had := len(e.ports)
 		for u := range e.ports {
 			if !keep[u] {
 				delete(e.ports, u)
 			}
+		}
+		if had > 0 && len(e.ports) == 0 {
+			delete(canaryFailed.m, k)
 		}
 	}
 }
@@ -310,26 +426,23 @@ func pruneUnconfiguredCanaryURLs(configured []Endpoint) {
 // every remembered machine kept all of them remembered for as long as it stayed
 // down. An unprobed endpoint the gate KEPT (a pool with no requirement) is
 // asked under its own "?" key, not as a port of key, so it counts the same way.
-func hasUnheardPort(key string, refused []gpuRefusal, kept []gatedEndpoint) bool {
-	canaryFailed.mu.Lock()
-	defer canaryFailed.mu.Unlock()
-	e := canaryFailed.m[key]
-	return e != nil && e.hasUnheardPort(key, refused, kept)
-}
-
-// A refusal counts for the machine when it names it, or when it
-// names no machine or only a weak identity (the worker's /health could not be
-// read, or it answered as "u:") and its URL is a known port of the machine: a
-// weak identity never moves a URL off a machine (noteCanaryPort), so it cannot
-// vouch that the port is anyone else's.
+//
+// A refusal counts for the machine when it names it (Machine is the identity
+// the gate resolved by address, so a worker that answered as "u:" and is the
+// machine's port by its URL names it), or when it names no machine or only a
+// weak identity (the worker's /health could not be read, or it is not one that
+// can report a machine id) and its URL is a known port of the machine: a weak
+// identity never moves a URL off a machine (noteCanaryPort), so it cannot vouch
+// that the port is anyone else's. A port that has refused every probe for
+// deadPortAfter is no longer a known port (hasPort).
 func (e *canaryEntry) hasUnheardPort(key string, refused []gpuRefusal, kept []gatedEndpoint) bool {
 	for _, r := range refused {
-		if r.Machine == key || (!isStrongKey(r.Machine) && e.ports[r.URL]) {
+		if r.Machine == key || (!isStrongKey(r.Machine) && e.hasPort(r.URL)) {
 			return true
 		}
 	}
 	for _, g := range kept {
-		if !g.Probed && g.machineKey() != key && e.ports[g.Endpoint.URL] {
+		if !g.Probed && g.machineKey() != key && e.hasPort(g.Endpoint.URL) {
 			return true
 		}
 	}
@@ -364,7 +477,7 @@ func refusedPorts(refused []gpuRefusal, key string) []string {
 // a fresh chunk. Only the worker's own earlier keys are touched, and only once
 // it has a better one, so another machine's memory is never read or changed.
 func pruneStaleCanaryIdentities(g gatedEndpoint) {
-	reconcileCanaryIdentity(g.Endpoint.URL, g.workerID())
+	reconcileCanaryIdentity(g.Endpoint.URL, g.storedWorker())
 }
 
 // reconcileCanaryIdentity is pruneStaleCanaryIdentities for an endpoint known by
@@ -422,22 +535,16 @@ func reconcileCanaryMemory(configured []Endpoint, kept []gatedEndpoint, refused 
 func noteCanaryProbes(kept []gatedEndpoint, refused []gpuRefusal) {
 	for _, g := range kept {
 		if g.Probed {
-			noteCanaryPort(g.machineKey(), g.Endpoint.URL)
+			noteCanaryPort(g.identityKey(), g.Endpoint.URL, g.idCapable())
 		}
+		noteProbeResult(g.Endpoint.URL, g.Probed)
 	}
 	for _, r := range refused {
 		if r.Machine != "" {
-			noteCanaryPort(r.Machine, r.URL)
+			noteCanaryPort(r.Machine, r.URL, r.IDCapable)
 		}
+		noteProbeResult(r.URL, r.Machine != "")
 	}
-}
-
-// failedCanaryBefore reports whether key itself is remembered. A dispatch asks
-// endpointRemembered instead: a machine's worker does not keep one key.
-func failedCanaryBefore(key string) bool {
-	canaryFailed.mu.Lock()
-	defer canaryFailed.mu.Unlock()
-	return canaryFailed.m[key] != nil
 }
 
 // errCanarySlotBusy is a canary that was never sent: every request slot on its

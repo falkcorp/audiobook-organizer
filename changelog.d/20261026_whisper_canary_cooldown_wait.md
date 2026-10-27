@@ -111,3 +111,63 @@ Smaller fixes on the same path:
   its memory to its new identity like a kept one does.
 - The url-to-machine map and the remembered ports are bounded to the configured
   endpoints, so a retired URL does not hold a machine remembered for ever.
+
+#### A worker's machine is resolved by its address, once, and used everywhere
+
+Review of the previous change found the dispatcher naming one machine three ways
+inside a single dispatch: the canary memory resolved a worker that missed its
+machine id (`u:`) to the machine its URL last reported, but the sick-machine
+bench, the condemnation limit, the kills held from a machine, the identity
+stored with an answer and a stuck file's condemnation, and the steering of a
+struck file away from a machine each used the raw answer. A machine that timed
+out on one port was benched on its other ports only if they answered with the
+same identity, a lone file stuck on two ports of one machine counted two
+machines, and a condemnation recorded under `u:` was not matched against the
+same machine answering as `m:` later.
+
+The gate now resolves each worker's identity once, from what the probe read and
+what this process knows of the address, and every later use takes that value:
+the canary memory, the sick-machine bench, the condemnation limit (counted again
+by the same identities when ports are dropped), the kills held, the key a lone
+endpoint records its failure under, the identity stored with an answer and with
+a condemnation, and the steering. A stored condemnation or strike that names a
+raw `u:` or `m:` id still matches the endpoint by that id or by the machine it
+resolves to.
+
+#### A worker that cannot report a machine id is never given a machine's memory
+
+A weak identity is bridged to a machine through the address only when the
+worker's `/health` reports `backend` `mlx` (`scripts/whisper_mlx_server.py`, the
+one server that reports a machine id at all and sometimes misses it in its first
+2.5 s). `scripts/whisper_server.py` reports `faster-whisper` and never a machine
+id, so a worker of that kind at the address of a remembered machine is another
+worker, not that machine: it is not asked the machine's canary clip, and its
+address leaves the machine's ports. A refusal now records whether its worker can
+report an id, so a refused worker is judged the same way.
+
+#### A failure on a port that answers as `u:` is the machine's failure
+
+A canary failed by a port that answered as `u:`, whose address last reported a
+machine, was recorded under the weak key alone. The machine's other ports were
+not remembered as sick and were sent a chunk with no canary. The failure is now
+recorded on the machine the address last reported.
+
+#### A configured port that has been down for a day stops holding its machine remembered
+
+A machine that failed the canary stays remembered while one of its ports is down,
+because the port may come back and would be sent work with no canary. A port left
+in the configuration after its tunnel was retired kept the machine remembered for
+ever, and a sound machine was asked a canary clip on every dispatch. A port that
+has refused every probe for 24 hours (counted from the first refusal of the run;
+any answered probe ends the run, and a probe cut short by a cancelled op counts
+for nothing) no longer counts as a port of its machine.
+
+#### Smaller changes in the same area
+
+- An entry of the canary memory whose every address is no longer configured is
+  dropped with them, not kept for as long as the process lives.
+- The helpers only the tests used (`failedCanaryBefore`, `clearCanaryFailed`, the
+  package-level `hasUnheardPort`) moved into a `_test.go` file, and the stray doc
+  comment above `hasUnheardPort` became its method comment.
+- `resolveCanaryKeyLocked` no longer asks the address map first: every address it
+  gives a machine is already one of that machine's ports.

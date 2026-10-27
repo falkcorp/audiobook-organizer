@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_memory_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b0f7c1e-2d64-4f0b-9a57-3c8e1d6a9b42
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -165,7 +165,7 @@ func TestCanaryMemory_APortThatChangesMachinesLeavesTheOldOnesSet(t *testing.T) 
 	const url = "http://gotham-a:8000"
 	markCanaryFailed(batKey, url)
 	markCanaryFailed(robinKey)
-	noteCanaryPort(robinKey, url)
+	noteCanaryPort(robinKey, url, true)
 	if hasUnheardPort(batKey, []gpuRefusal{{URL: url}}, nil) {
 		t.Error("the port was still counted for the machine it left")
 	}
@@ -1118,5 +1118,88 @@ func TestSingle_AWorkerThatBeginsToReportAMachineIdWhileWaitedForKeepsOneIdentit
 				t.Errorf("remembered under m:%s: the re-probe after the wait moved the memory to an identity the dispatch does not use", newID)
 			}
 		})
+	}
+}
+
+// S-C (a) of the review of f241ec20a: a dispatch cancelled while the ports of a
+// pending machine are probed again reads nothing from the probes. The pool has
+// no requirement, so an endpoint whose /health could not be read is KEPT, and
+// without the cancellation check after the probe the machine's ports would be
+// asked the canary clip with a context that is already dead.
+func TestRegate_ACancellationDuringTheReprobeAsksNothingAndEndsAsCancelled(t *testing.T) {
+	shortenPacing(t, 10*time.Millisecond, 40*time.Second)
+	p := rememberedMachine(t, 2)
+	markEndpointFailure(p.h.eps[1].URL)
+	after(t, 30*time.Millisecond, func() {
+		for _, ep := range p.h.eps {
+			p.h.delayHealth(ep.URL, 30*time.Second)
+		}
+	})
+	after(t, 40*time.Millisecond, func() { clearCooldown(p.h.eps[1].URL) })
+	ctx, cancel := context.WithCancel(testCtx(t))
+	t.Cleanup(cancel)
+	after(t, 400*time.Millisecond, cancel)
+	rec := &canaryRecorder{}
+	_, err := dispatchWith(ctx, p, rec.fn, 8)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the cancellation", err)
+	}
+	if errors.Is(err, ErrPoolUnavailable) {
+		t.Errorf("err = %v: a cancelled dispatch is not an outage", err)
+	}
+	if rec.count() != 0 {
+		t.Errorf("canaries = %v, want none: the probe that would say which ports can be asked was cut short", rec.asked)
+	}
+}
+
+// S-C (b): an endpoint that failed in this dispatch (lastErr) is not coming back
+// to take the page, so it is not a stand-in for a remembered machine that is
+// waiting for its cooldown, even once the endpoint's own cooldown has ended. The
+// remembered machine is asked its canary first; a dispatch that took the failed
+// endpoint for a stand-in would send it work again with nothing asked.
+func TestPending_AnEndpointThatFailedInThisDispatchIsNotAStandIn(t *testing.T) {
+	shortenPacing(t, 10*time.Millisecond, 45*time.Second)
+	p := poolOf(t, batMachine, robinMachine)
+	w0, w1 := p.h.eps[0].URL, p.h.eps[1].URL
+	markCanaryFailed(batKey, w0)
+	markEndpointFailure(w0)
+	after(t, 80*time.Millisecond, func() { clearCooldown(w1) })
+	after(t, 300*time.Millisecond, func() { clearCooldown(w0) })
+	rec := &canaryRecorder{}
+	var (
+		mu        sync.Mutex
+		failed    bool
+		askedAt   []int // canaries asked when each send began
+		sendOrder []string
+	)
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pr ProgressFunc) (map[string]BatchResult, error) {
+		mu.Lock()
+		askedAt = append(askedAt, rec.count())
+		sendOrder = append(sendOrder, g.Endpoint.URL)
+		first := !failed && g.Endpoint.URL == w1
+		if first {
+			failed = true
+		}
+		mu.Unlock()
+		if first {
+			return nil, errors.New("connection refused")
+		}
+		return p.send(ctx, g, sub, pr)
+	}
+	res, err := dispatchOn(testCtx(t), p.h.eps, nil, send, rec.fn, 8)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	requireTranscripts(t, res, 8)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(askedAt) < 2 {
+		t.Fatalf("sends = %v, want the failed send and a later one", sendOrder)
+	}
+	if askedAt[1] == 0 {
+		t.Errorf("sends = %v, canaries asked at each = %v: the endpoint that had just failed was sent work again before the remembered machine was asked", sendOrder, askedAt)
+	}
+	if !slices.Contains(rec.asked, w0) {
+		t.Errorf("canaries = %v, want the remembered machine's port asked", rec.asked)
 	}
 }
