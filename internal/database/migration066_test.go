@@ -1,7 +1,7 @@
 // file: internal/database/migration066_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9c16a990-2d0e-4278-b18a-1d20d6bfe3ea
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package database
 
@@ -53,11 +53,11 @@ func TestMigration066StripsInlineRowsFromLegacyPlans(t *testing.T) {
 		"by_outcome": map[string]int{"would_retire": 3},
 	})
 	require.NoError(t, err)
-	// planRowStoreV1 is repairs.PlanRowStoreV1. repairs imports this package, so
+	// planRowStoreV2 is repairs.PlanRowStoreV2. repairs imports this package, so
 	// a test here cannot import it; TestStripLegacyPlanRowsLeavesCurrentPlans in
 	// repairs runs the strip over a plan SavePlan really wrote.
-	const planRowStoreV1 = "op_rows.v1"
-	current := `{"fixer_id":"retired-versions","applicable":3,"row_store":"` + planRowStoreV1 + `"}`
+	const planRowStoreV2 = "op_rows.v2"
+	current := `{"fixer_id":"retired-versions","applicable":3,"row_store":"` + planRowStoreV2 + `"}`
 	otherOp := `{"rows":[1,2,3]}`
 	malformed := `not json`
 

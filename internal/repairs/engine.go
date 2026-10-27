@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.24.4
+// version: 1.24.5
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package repairs
 
@@ -276,7 +276,7 @@ func LoadPlan(r OpReader, rs database.OpRowStore, planOpID, fixerID string) (*Pl
 	if plan.FixerID != fixerID {
 		return nil, fmt.Errorf("%w: %s was planned for %s", ErrPlanOtherFixer, planOpID, plan.FixerID)
 	}
-	if plan.RowStore != PlanRowStoreV1 {
+	if plan.RowStore != PlanRowStoreV2 {
 		return nil, fmt.Errorf("%w: %s", ErrPlanLegacyFormat, planOpID)
 	}
 	if rs == nil {

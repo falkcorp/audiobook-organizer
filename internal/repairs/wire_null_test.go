@@ -1,7 +1,7 @@
 // file: internal/repairs/wire_null_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9a4e1d62-3b85-4c07-8d19-f26c0e7a5b43
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package repairs
 
@@ -89,10 +89,10 @@ func TestRunApply_EarlyReturnsKeepRowsAnArray(t *testing.T) {
 // collections, and a stored row written with a null book_ids.
 func TestLoadPlan_NormalizesStoredNulls(t *testing.T) {
 	s := newMemStore()
-	data := `{"fixer_id":"fx","row_store":"` + PlanRowStoreV1 + `","total":1,"skipped_by_kind":null}`
+	data := `{"fixer_id":"fx","row_store":"` + PlanRowStoreV2 + `","total":1,"skipped_by_kind":null}`
 	s.ops["plan-1"] = &database.OperationV2Row{ID: "plan-1", DefID: PlanOpID, Status: "completed", ResultData: &data}
-	require.NoError(t, s.ReplaceOpRows("plan-1", 1, func(int) (database.OpRow, error) {
-		return database.OpRow{ID: "r", Index: []byte("\x00\x000\x00"), Data: []byte(`{"row_id":"r","book_ids":null}`)}, nil
+	require.NoError(t, s.ReplaceOpRowsPrefix("plan-1", PlanRowPrefix, 1, func(int) (database.OpRow, error) {
+		return database.OpRow{ID: PlanRowPrefix + "r", Index: []byte("\x00\x000\x00"), Data: []byte(`{"row_id":"r","book_ids":null}`)}, nil
 	}))
 	plan, err := LoadPlan(s, s, "plan-1", "fx")
 	require.NoError(t, err)

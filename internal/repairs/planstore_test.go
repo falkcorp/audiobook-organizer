@@ -1,7 +1,7 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package repairs
 
@@ -29,7 +29,7 @@ type countingRows struct {
 	mu         sync.Mutex
 	indexScans int
 	gotIDs     []string
-	failAfter  int // ReplaceOpRows writes then fails when > 0
+	failAfter  int // ReplaceOpRowsPrefix writes then fails when > 0
 }
 
 func (c *countingRows) ScanOpRowIndex(op string, fn func(string, []byte) error) error {
@@ -46,8 +46,8 @@ func (c *countingRows) GetOpRows(op string, ids []string) ([][]byte, error) {
 	return c.OpRowStore.GetOpRows(op, ids)
 }
 
-func (c *countingRows) ReplaceOpRows(op string, n int, at func(int) (database.OpRow, error)) error {
-	if err := c.OpRowStore.ReplaceOpRows(op, n, at); err != nil {
+func (c *countingRows) ReplaceOpRowsPrefix(op, prefix string, n int, at func(int) (database.OpRow, error)) error {
+	if err := c.OpRowStore.ReplaceOpRowsPrefix(op, prefix, n, at); err != nil {
 		return err
 	}
 	if c.failAfter > 0 && n > 0 {
@@ -134,14 +134,14 @@ func TestStoredPlan_PageAndSelectReadOnlyWhatTheyReturn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Rows, 3)
 	require.Equal(t, 1, cr.indexScans)
-	require.Equal(t, []string{"row-010", "row-011", "row-012"}, cr.gotIDs, "a page reads its own rows, not the plan")
+	require.Equal(t, []string{PlanRowPrefix + "row-010", PlanRowPrefix + "row-011", PlanRowPrefix + "row-012"}, cr.gotIDs, "a page reads its own rows, not the plan")
 
 	cr.indexScans, cr.gotIDs = 0, nil
 	sel, err := stored.Select([]string{"row-042", "nope", "row-007", "row-042"})
 	require.NoError(t, err)
 	require.Len(t, sel.Rows, 2, "an unknown id is absent, a repeated one is read once")
 	require.Zero(t, cr.indexScans)
-	require.Equal(t, []string{"row-042", "nope", "row-007", "row-042"}, cr.gotIDs)
+	require.Equal(t, []string{PlanRowPrefix + "row-042", PlanRowPrefix + "nope", PlanRowPrefix + "row-007", PlanRowPrefix + "row-042"}, cr.gotIDs)
 	require.Equal(t, res.Total, sel.Total, "the selection keeps the plan's summary")
 }
 
@@ -189,22 +189,22 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 	stored := storeSummary(t, s, s, res, "op-plan")
 
 	// Fewer rows than the summary's total.
-	require.NoError(t, s.ReplaceOpRows("op-plan", 4, func(i int) (database.OpRow, error) {
+	require.NoError(t, s.ReplaceOpRowsPrefix("op-plan", PlanRowPrefix, 4, func(i int) (database.OpRow, error) {
 		r := res.Rows[i]
 		data, _ := json.Marshal(r)
-		return database.OpRow{ID: r.RowID, Index: encodeRowIndex(&r), Data: data}, nil
+		return database.OpRow{ID: PlanRowPrefix + r.RowID, Index: encodeRowIndex(&r), Data: data}, nil
 	}))
 	_, err := stored.Page("op-plan", FilterAll, "", 0, 5)
 	require.ErrorIs(t, err, ErrPlanRowsIncomplete)
 
 	// The index lists every row but one row's body is gone.
-	require.NoError(t, s.ReplaceOpRows("op-plan", 10, func(i int) (database.OpRow, error) {
+	require.NoError(t, s.ReplaceOpRowsPrefix("op-plan", PlanRowPrefix, 10, func(i int) (database.OpRow, error) {
 		r := res.Rows[i]
 		data, _ := json.Marshal(r)
 		if i == 3 {
 			data = nil
 		}
-		return database.OpRow{ID: r.RowID, Index: encodeRowIndex(&r), Data: data}, nil
+		return database.OpRow{ID: PlanRowPrefix + r.RowID, Index: encodeRowIndex(&r), Data: data}, nil
 	}))
 	// A row with no body (an empty body reads as absent) is an index entry
 	// without its row; a page past it is fine.
@@ -216,7 +216,7 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 
 	// An index entry with the wrong number of fields is unreadable too, and so
 	// is a selection that reads a body that does not decode.
-	require.NoError(t, s.ReplaceOpRows("op-plan", 10, func(i int) (database.OpRow, error) {
+	require.NoError(t, s.ReplaceOpRowsPrefix("op-plan", PlanRowPrefix, 10, func(i int) (database.OpRow, error) {
 		r := res.Rows[i]
 		data, _ := json.Marshal(r)
 		ix := encodeRowIndex(&r)
@@ -224,7 +224,7 @@ func TestStoredPlan_IncompleteRowsFailClosed(t *testing.T) {
 			ix = []byte("moved\x00\x001")
 			data = []byte("{not json")
 		}
-		return database.OpRow{ID: r.RowID, Index: ix, Data: data}, nil
+		return database.OpRow{ID: PlanRowPrefix + r.RowID, Index: ix, Data: data}, nil
 	}))
 	_, err = stored.Page("op-plan", FilterAll, "", 0, 5)
 	require.ErrorIs(t, err, ErrPlanRowsUnreadable)
@@ -248,7 +248,7 @@ func TestPlanNeedsRerun(t *testing.T) {
 
 // TestStripLegacyPlanRowsLeavesCurrentPlans runs migration 66's strip over a
 // plan SavePlan really wrote, in a real Pebble store: the marker SavePlan puts
-// on the plan (PlanRowStoreV1) is not a legacy plan, so the strip writes
+// on the plan (PlanRowStoreV2) is not a legacy plan, so the strip writes
 // nothing and LoadPlan still reads the plan. database's own test cannot import
 // this package, so this is where the marker the strip must respect is real.
 func TestStripLegacyPlanRowsLeavesCurrentPlans(t *testing.T) {
@@ -258,7 +258,7 @@ func TestStripLegacyPlanRowsLeavesCurrentPlans(t *testing.T) {
 	s := newMemStore()
 	res := planFor(t, s, &noBookIDsFixer{s: s, rows: variedRows(6)})
 	require.NoError(t, SavePlan(st, "op-plan", res))
-	require.Equal(t, PlanRowStoreV1, res.RowStore)
+	require.Equal(t, PlanRowStoreV2, res.RowStore)
 	data, err := json.Marshal(res)
 	require.NoError(t, err)
 	// The plan's summary as the plan op stores it: inline rows are not part of
@@ -304,7 +304,7 @@ func TestRunApply_ReadsOnlyTheRowsItIsAskedFor(t *testing.T) {
 	res, err := RunApply(context.Background(), f, stored, "op-plan", []string{"b1", "zz"}, true, deps(s, nil), nopReporter{})
 	require.NoError(t, err)
 	require.Equal(t, []string{"zz"}, res.NotInPlan)
-	require.Equal(t, []string{"b1", "zz"}, cr.gotIDs)
+	require.Equal(t, []string{PlanRowPrefix + "b1", PlanRowPrefix + "zz"}, cr.gotIDs)
 	require.Zero(t, cr.indexScans)
 	require.Equal(t, 1, res.ByOutcome[OutcomeWouldApply])
 }
@@ -412,4 +412,41 @@ func TestLoadPlan_UndecodableOperationRecordNeedsARerun(t *testing.T) {
 	require.ErrorIs(t, err, ErrPlanSummaryUnreadable)
 	require.True(t, PlanNeedsRerun(err), err.Error())
 	require.NotErrorIs(t, err, ErrPlanNotFound)
+}
+
+// Plan rows and class-list rows can belong to one operation. SavePlan and
+// ClearPlanRows replace only the plan/ namespace, so neither deletes the class
+// lists stored beside it, and the plan reads back with the class lists present.
+func TestPlanRows_ShareAnOperationWithClassListsWithoutDeletingThem(t *testing.T) {
+	s := newMemStore()
+	res := planFor(t, s, &noBookIDsFixer{s: s, rows: variedRows(12)})
+	lists := map[string][]string{"fills": {"b1", "b2", "b3"}, "held": {"b9"}}
+	summary, err := database.SaveClassLists(s, "op-plan", lists)
+	require.NoError(t, err)
+
+	// Storing the plan after the class lists leaves them.
+	stored := storeSummary(t, s, s, res, "op-plan")
+	page, err := stored.Page("op-plan", FilterAll, "", 0, 20)
+	require.NoError(t, err)
+	require.Len(t, page.Rows, 12)
+	require.True(t, summary.Valid())
+	got, err := summary.Page(s, "op-plan", "fills", 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"b1", "b2", "b3"}, got, "SavePlan must not delete the class lists")
+
+	// Clearing the plan rows leaves them too.
+	require.NoError(t, ClearPlanRows(s, "op-plan"))
+	got, err = summary.Page(s, "op-plan", "held", 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"b9"}, got, "ClearPlanRows must not delete the class lists")
+	_, err = stored.Page("op-plan", FilterAll, "", 0, 20)
+	require.True(t, PlanNeedsRerun(err), "a plan whose rows were cleared needs a re-run, got %v", err)
+
+	// Storing class lists again leaves the plan rows.
+	stored = storeSummary(t, s, s, res, "op-plan")
+	_, err = database.SaveClassLists(s, "op-plan", map[string][]string{"fills": {"b4"}})
+	require.NoError(t, err)
+	page, err = stored.Page("op-plan", FilterAll, "", 0, 20)
+	require.NoError(t, err)
+	require.Len(t, page.Rows, 12, "SaveClassLists must not delete the plan rows")
 }
