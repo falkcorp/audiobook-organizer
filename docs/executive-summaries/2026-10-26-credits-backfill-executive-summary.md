@@ -1,0 +1,83 @@
+<!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
+<!-- last-edited: 2026-10-27 -->
+
+# A repair job that makes every book's author and narrator lists agree with the book
+
+- Plan: step 3 of the approved author and narrator credit-lists plan (approved 2026-10-04, confirmed again 2026-10-26)
+- Status: built and tested, not yet run on the production library. The owner runs the dry run first, reads it, then decides on the apply.
+
+## Executive Summary
+
+- **The problem.** Each book records its authors and narrators in two places: one
+  "main author" and "narrator" field on the book, and ordered lists of credited people
+  kept beside it. Older versions of the program did not always keep the two in step.
+  A count of the production library on 2026-10-26 (69,504 books) found about 25,800
+  books with a main author but an empty author list, about 28,300 with a narrator but
+  an empty narrator list, and several thousand more where the list leaves out the main
+  author or numbers its entries wrong.
+- **Why it matters.** Audiobookshelf, search and the later steps of the plan read the
+  lists. A book with an empty list shows no narrator in some apps, and the next step of
+  the plan derives the main fields from the lists. If that happened first, an empty
+  list could wipe the main author.
+- **What the job does.** It fills an empty author list from the book's main author,
+  puts the main author first when the list leaves them out, numbers each list 0, 1, 2,
+  and so on, and fills an empty narrator list from the narrator field (cleaned the same
+  way the program already cleans it) or from the stored narrator list. It never
+  creates a new author. It only creates a new narrator for a single name. A name that
+  exists only after splitting a longer string needs the owner's opt-in. It also never
+  writes a placeholder such as "Unknown Author" as an author, and never makes a person
+  of a junk narrator such as "N/A" or "Various".
+- **What it leaves alone.** Cases with more than one possible right answer are listed
+  for a person to decide, and nothing is changed for them: a credit pointing at a
+  deleted or merged author, a combined "A, B" author record, a narrator field that
+  names different people than the list, a self-read book, and similar. Books in the
+  iTunes library and owner-managed series (Doctor Who, Big Finish, Torchwood) are held
+  unless the owner opts them in. A book whose author a person has locked is held
+  whole on the author side: the job writes nothing to its author list or author
+  fields. A book whose narrator a person has locked is held on the narrator side. A
+  book where a later rescan moved the author and the old main author is the stale half
+  is listed for review instead of being put first.
+- **Previewed first, and reversible.** With no options the job only reports what it
+  would do. It lists every group of books with ids and shows before and after examples.
+  It also lists every book that would be filed under a different author folder the
+  next time the library is organized, because putting the main author first can change
+  that folder. Every book it writes is recorded first, and the whole run can be undone.
+  Undoing a book that had its list order changed puts the authors back in the order
+  they were stored in, so the book files under the same author folder as before.
+  The undo refuses any book a person edited after the run, so a later edit is never
+  overwritten.
+- **What the follow-up count will show.** After the job runs, the library count for
+  each fixed problem drops to the books the job held or left for review (iTunes,
+  owner-managed, locked, split-name narrators, and anything past a batch limit). The
+  job's own report lists each of those books, so the count can be checked against it.
+- **Verified.** Tests build a small library with one book for each problem the job
+  fixes, run it, and re-run the library count. Each of those problem counts is zero
+  afterwards, and a second test confirms that held and review books are the only
+  ones left when they are present. The tests also check that the preview writes nothing, that undo restores
+  each book, that a run cut short and restarted stays within its batch limit and
+  does not count a write that never landed, that eight
+  parallel workers give the same result as one, and that a split name never creates a
+  person without the opt-in.
+
+## The credit-list repair job
+
+- **What it was.** The book's main author and narrator fields and its ordered credit
+  lists disagreed on tens of thousands of books, because older import and edit paths
+  wrote one and not the other.
+- **Why it mattered.** Apps that read the lists showed missing or wrong credits. The
+  next planned change makes the lists the only source of truth, and would have turned
+  an empty list into a lost author.
+- **The fix.** A new maintenance job compares each book's fields and lists, fixes the
+  cases that have one safe answer, lists the rest for review, and records every write
+  so it can be undone. Each write also re-saves the book's record and queues it for
+  search re-indexing. At the full library's numbers that could be up to about 55,000
+  books, so the owner can run it in batches with a limit. The limit means the first
+  N books that have something to fix, in a fixed order, and the preview with the same
+  limit shows exactly those books.
+- **A cost to read before applying.** For some books, changing the author list
+  changes which author the book is searched under. Those books will look up their
+  metadata again at the next metadata run, which spends the Google Books daily
+  allowance (1,000 lookups a day). The preview now reports how many books that is and
+  lists them, so the owner can pick a batch size that fits the allowance.
