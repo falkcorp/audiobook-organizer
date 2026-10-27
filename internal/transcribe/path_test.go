@@ -1,7 +1,7 @@
 // file: internal/transcribe/path_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -109,6 +109,19 @@ func useEndpoints(t *testing.T, batchSize int, urls ...string) {
 	// process, and tests reuse machine ids: start and end each test with none.
 	resetCanaryFailed()
 	t.Cleanup(resetCanaryFailed)
+	// An endpoint's cooldown and failure count live in the process-wide health
+	// registry, keyed by URL, and outlive the httptest server that earned them
+	// (a cooldown is 30s per consecutive failure, longer than this package's
+	// whole run). The OS hands a closed server's port to a later server, so a
+	// test could start with a port already benched by an earlier test: the
+	// dispatcher then never sends that port work in the first round, it never
+	// faults, and the canary round asks one port fewer than the test expects
+	// (TestPool_TheCanaryDecidesWhichFaultedMachinesAreBelieved: "canaries = 5,
+	// want 6"). Start each test's endpoints healthy, and leave them healthy.
+	for _, u := range urls {
+		clearCooldown(u)
+		t.Cleanup(func() { clearCooldown(u) })
+	}
 	orig := config.Snapshot()
 	eps := make([]config.WhisperEndpoint, 0, len(urls))
 	for i, u := range urls {
@@ -130,6 +143,33 @@ func useEndpoints(t *testing.T, batchSize int, urls ...string) {
 			c.WhisperBatchSleepMS = orig.WhisperBatchSleepMS
 		})
 	})
+}
+
+// useEndpoints starts a test's endpoints healthy and leaves them healthy: a
+// port's cooldown is keyed by URL in a process-wide registry, and the OS hands a
+// closed httptest server's port to a later one. Standing in for that reuse: the
+// URL below is benched as an earlier test's dispatch would have left it.
+func TestUseEndpoints_ClearsACooldownLeftOnAReusedPort(t *testing.T) {
+	const reused = "http://127.0.0.1:1" // never dialled: only its health entry is read
+	t.Cleanup(func() { clearCooldown(reused) })
+
+	markEndpointFailure(reused)
+	markEndpointFailure(reused) // two consecutive failures: a 60s cooldown
+	if !endpointInCooldown(reused) {
+		t.Fatalf("setup: %s is not in cooldown after two failures", reused)
+	}
+
+	t.Run("a test using it", func(t *testing.T) {
+		useEndpoints(t, 16, reused)
+		if endpointInCooldown(reused) {
+			t.Errorf("%s is still benched at the start of a test that uses it: a dispatch would send it no work", reused)
+		}
+		markEndpointFailure(reused) // what this test's own dispatch does
+	})
+
+	if endpointInCooldown(reused) {
+		t.Errorf("%s is still benched after the test that used it ended, for the next test that is handed its port", reused)
+	}
 }
 
 // pathJobs writes n real files (so the journal's stat signature works) and
