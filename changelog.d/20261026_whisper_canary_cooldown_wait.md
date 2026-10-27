@@ -30,11 +30,12 @@ After the wait the machine's ports are probed again before the canary is sent.
 A port that wedged in the meantime is dropped from the dispatch (and, with
 nothing left, the dispatch ends as a stuck pool, not as a sick machine); a port
 whose decoder is restarting or that cannot be reached is waited for like a
-cooldown, then dropped. That probe judges ports and nothing else: the identities
-the dispatch started with stay as they are, so a worker that begins to report a
-machine id during the wait does not make the machine being waited for look as if
-another dispatch had forgotten it, and the next dispatch's own gate moves the
-memory.
+cooldown, then dropped. A port that is probed again is also judged by who
+answers there (see "A port that changes hands while a dispatch waits" below).
+The lone-endpoint path keeps the identities it started with, so a worker that
+begins to report a machine id during the wait does not make the machine being
+waited for look as if another dispatch had forgotten it, and the next
+dispatch's own gate moves the memory.
 
 #### A whisper machine is forgotten as sick only when every port of it has answered
 
@@ -189,49 +190,59 @@ port answered as a weak identity, now steers a file away from every port of that
 machine and not only the one the hash was made from. A wrong match only steers a
 file further away.
 
-The identity stored with the answers of an endpoint that is probed again after a
-wait is the one the dispatch began with, on the pool and the lone-endpoint path,
-except when another worker answers at the port (below).
-The check for a port of a machine that did not answer the canary reads the same
-identity the rest of the dispatch uses.
-
 The single-Mac tunnel template (`deploy/launchd/com.jdfalk.whisper-tunnel.plist`)
 and `scripts/setup_mac_ai_worker.py` host index 0 both use server port 19848, so
 a Mac on each race for one port. Both files and the Whisper docs now say so; the
 ports are unchanged.
 
-A port that changes hands while a dispatch waits out a cooldown is no longer
-credited to the machine that used to be behind it. The probe after the wait is
-compared with the identity the dispatch froze for the port, and a pool keeps the
-port only if that identity is unchanged. Any difference drops it from the
-dispatch like a refusal: one machine for another, a machine's port that was
-refused and now answers weakly, a worker that cannot report an id, and a worker
-that gained a machine id since (frozen as `u:`, reports `m:` now), which cannot
-be told from another machine that took the port over. A dropped port is not asked
-the old machine's canary clip, so its answer cannot forget that machine, and it
-is sent no work and given no timeout strike under the old machine's name, which
-let one machine make a file permanent on its own. Keeping the worker that gained
-an id had let a port whose id turned out to be a machine already in the dispatch
-escape that machine's bench when it failed the canary clip on another port, take
-all the work, and write strikes naming both identities; it also counted that
-machine twice toward the condemnation limit. The next dispatch's gate keys the
-dropped port by the id it reports, and the canary memory of its address follows
-it. The lone endpoint resolves the memory when it asks, after the gate has moved
-the port to the identity it reports, so it keeps a worker that gained its id and
-stores both identities (the one the dispatch knew it by and the machine it
-reports), so the store can still learn the machine; any other difference defers
-its jobs. The condemnation of a file by two machines names the identity of the
-worker that answered at each endpoint.
+A file struck by a machine is steered away from a port of that machine that
+answers as a weak identity after a refused probe, as it already was away from
+one the link still named. A wrong match only steers a file further away.
+
+#### A port that changes hands while a dispatch waits is not credited to the machine that used to be behind it
+
+A pool probes a port again after every wait (the wait for a remembered machine's
+cooldown, and the round loop's wait for a port an earlier dispatch put into
+cooldown) and uses it only if the worker that answers then is the one the
+dispatch knew when it began. Any difference drops the port from the dispatch like
+a refusal: one machine for another, a machine's port that was refused and now
+answers weakly, a worker that cannot report an id where one could (or the
+reverse), a worker that gained a machine id since it was frozen as `u:`, and a
+port that could not be read when the dispatch began and reads now, since there
+was nothing to compare it with. A port that cannot be read after the wait is not
+used either: after a remembered machine's wait it is waited for like a decoder
+that is restarting, then dropped (the round loop's wait does the same, below).
+
+A dropped port is asked no canary clip, so its answer cannot forget the machine
+that used to be behind it. It is sent no work and given no timeout strike under
+that machine's name, which let one machine make a file permanent on its own. It
+cannot be counted as a second machine toward a condemnation, and it cannot escape
+the bench of the machine it turned out to be. The next dispatch's gate keys it by
+the id it reports, and the canary memory of its address follows it. The identity
+stored with the condemnation of a file by two machines is that of the worker that
+answered at each endpoint. The lone endpoint resolves the memory when it asks,
+after the gate has moved the port to the identity it reports, so it keeps a
+worker that gained its id and stores both identities (the one the dispatch knew
+it by and the machine it reports), so the store can still learn the machine; any
+other difference defers its jobs.
+
+The round loop's wait steps by `poolPaceInterval`, as the wait for a remembered
+machine does, so a cooldown that another dispatch clears early is noticed at once
+and not after the whole cooldown (up to five minutes). Each port the wait was
+for is probed once after its cooldown ends, before it takes work. A port that
+cannot be read then is kept out of the work and read again at the later steps of
+the wait; it is dropped once the pacing allowance is spent, and while other ports
+keep working it simply stays out.
 
 A pool left with nothing to send to because its ports changed hands ended as
 "refused by capability requirements", which sends an operator hunting for a box
 that is not on a GPU. It now ends as the lone endpoint does, wrapping
 `errPortChangedHands` (an unrecognised transport error that the ops defer on
 without counting toward stopping the run), when at least one port changed hands
-and every other refusal is a port that is unreachable. A stuck or capability
-refusal beside them keeps the error that names it, and a pool of nothing but
-unreachable ports is still `ErrPoolUnavailable`.
-
-A file struck by a machine is steered away from a port of that machine that
-answers as a weak identity after a refused probe, as it already was away from
-one the link still named. A wrong match only steers a file further away.
+and every other refusal is a port that is unreachable, or a port that is stuck.
+With stuck ports among them the error names them, but it is not a stuck pool: the
+ports that changed hands are not wedged and the next dispatch's gate keys them,
+so the ops do not count the page toward their stuck streak. A pool of nothing but
+stuck ports is still a stuck pool, a pool of nothing but unreachable ports is
+still `ErrPoolUnavailable`, and a capability refusal beside them keeps the error
+that names it.
