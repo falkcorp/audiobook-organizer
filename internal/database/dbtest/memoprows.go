@@ -1,7 +1,7 @@
 // file: internal/database/dbtest/memoprows.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d2169091-2ad9-44a3-aa72-502009e2a522
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package dbtest
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -32,6 +33,11 @@ func clone(b []byte) []byte { return append([]byte(nil), b...) }
 
 // ReplaceOpRows implements database.OpRowStore.
 func (m *MemOpRows) ReplaceOpRows(opID string, n int, at func(i int) (database.OpRow, error)) error {
+	return m.ReplaceOpRowsPrefix(opID, "", n, at)
+}
+
+// ReplaceOpRowsPrefix implements database.OpRowStore.
+func (m *MemOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
 	if opID == "" {
 		return errors.New("opv2: ReplaceOpRows: empty operation id")
 	}
@@ -44,6 +50,9 @@ func (m *MemOpRows) ReplaceOpRows(opID string, n int, at func(i int) (database.O
 		if row.ID == "" {
 			return fmt.Errorf("opv2: ReplaceOpRows %s: row %d has no id", opID, i)
 		}
+		if !strings.HasPrefix(row.ID, rowPrefix) {
+			return fmt.Errorf("opv2: ReplaceOpRows %s: row %q is outside the replaced prefix %q", opID, row.ID, rowPrefix)
+		}
 		set[row.ID] = database.OpRow{ID: row.ID, Index: clone(row.Index), Data: clone(row.Data)}
 	}
 	m.mu.Lock()
@@ -51,11 +60,20 @@ func (m *MemOpRows) ReplaceOpRows(opID string, n int, at func(i int) (database.O
 	if m.rows == nil {
 		m.rows = map[string]map[string]database.OpRow{}
 	}
-	if n == 0 {
+	kept := map[string]database.OpRow{}
+	for id, row := range m.rows[opID] {
+		if !strings.HasPrefix(id, rowPrefix) {
+			kept[id] = row
+		}
+	}
+	for id, row := range set {
+		kept[id] = row
+	}
+	if len(kept) == 0 {
 		delete(m.rows, opID)
 		return nil
 	}
-	m.rows[opID] = set
+	m.rows[opID] = kept
 	return nil
 }
 

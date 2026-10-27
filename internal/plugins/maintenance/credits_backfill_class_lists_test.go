@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_class_lists_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4d81e07-93c2-4a5f-8e16-5f0c2a7d9e38
 // last-edited: 2026-10-27
 
@@ -167,7 +167,7 @@ func TestCreditsBackfill_FailedResultWriteClearsTheClassListRows(t *testing.T) {
 	if err := storeCreditsBackfillResult(again, f.s, cbTestOpID, res2); err != nil {
 		t.Fatal(err)
 	}
-	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, []string{"held_owner_manual/000000"}) {
+	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, []string{database.ClassListRowPrefix + "held_owner_manual/000000"}) {
 		t.Fatalf("rows after a second store = %v, want only the second run's", rows)
 	}
 
@@ -176,5 +176,61 @@ func TestCreditsBackfill_FailedResultWriteClearsTheClassListRows(t *testing.T) {
 	}
 	if err := storeCreditsBackfillResult(good, f.s, "", res); err == nil {
 		t.Fatal("no operation id was accepted")
+	}
+}
+
+// Storing the result replaces and clears the operation's class-list rows only:
+// another kind of row under the same operation id (a plan's rows) survives a
+// store, a second store and a result write that fails.
+func TestCreditsBackfill_StoringTheResultLeavesTheOperationsOtherRowsIntact(t *testing.T) {
+	f := newCBFixture(t)
+	const planRow = "fixer.merge-authors/000001"
+	if err := f.s.ReplaceOpRows(cbTestOpID, 1, func(int) (database.OpRow, error) {
+		return database.OpRow{ID: planRow, Index: []byte("ix"), Data: []byte(`{"book":"bk"}`)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := &creditsBackfillResult{Classes: []cbClass{
+		{Key: cbHeldITunes, Kind: cbKindHeld, Definition: "d", Count: 2, BookIDs: []string{"b1", "b2"}},
+	}}
+	if err := storeCreditsBackfillResult(&cbReporter{id: cbTestOpID}, f.s, cbTestOpID, res); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeCreditsBackfillResult(&cbReporter{id: cbTestOpID}, f.s, cbTestOpID, res); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{database.ClassListRowPrefix + "held_itunes/000000", planRow}
+	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, want) {
+		t.Fatalf("rows after two stores = %v, want %v", rows, want)
+	}
+	if err := storeCreditsBackfillResult(&failingResultReporter{cbReporter{id: cbTestOpID}}, f.s, cbTestOpID, res); err == nil {
+		t.Fatal("a failing result write was reported as stored")
+	}
+	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, []string{planRow}) {
+		t.Fatalf("rows after a failed store = %v, want only the plan row %q", rows, planRow)
+	}
+}
+
+// A resumed run that wrote its rows again and died before it stored its summary
+// leaves the stored result pointing at rows of another attempt; its ids are not
+// served under the old counts.
+func TestCreditsBackfill_StoredSummaryRefusesRowsOfAnUnfinishedLaterAttempt(t *testing.T) {
+	f := newCBFixture(t)
+	res := &creditsBackfillResult{Classes: []cbClass{
+		{Key: cbHeldITunes, Kind: cbKindHeld, Definition: "d", Count: 2, BookIDs: []string{"b1", "b2"}},
+	}}
+	rep := &cbReporter{id: cbTestOpID}
+	if err := storeCreditsBackfillResult(rep, f.s, cbTestOpID, res); err != nil {
+		t.Fatal(err)
+	}
+	stored := rep.result.(*creditsBackfillResult)
+	if got, err := stored.ClassLists.Page(f.s, cbTestOpID, cbHeldITunes, 0, 10); err != nil || !slices.Equal(got, []string{"b1", "b2"}) {
+		t.Fatalf("before the second attempt: %v %v", got, err)
+	}
+	if _, err := database.SaveClassLists(f.s, cbTestOpID, map[string][]string{cbHeldITunes: {"b8", "b9"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := stored.ClassLists.Page(f.s, cbTestOpID, cbHeldITunes, 0, 10); !errors.Is(err, database.ErrClassListIncomplete) {
+		t.Fatalf("old summary over a later attempt's rows: ids %v, err %v; want ErrClassListIncomplete", got, err)
 	}
 }

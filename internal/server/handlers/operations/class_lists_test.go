@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/class_lists_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f1c7a92-0b3e-4d68-8a15-d27e6c9b30f1
 // last-edited: 2026-10-27
 
@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -34,19 +35,29 @@ type memOpRows struct {
 }
 
 func (m *memOpRows) ReplaceOpRows(opID string, n int, at func(i int) (database.OpRow, error)) error {
+	return m.ReplaceOpRowsPrefix(opID, "", n, at)
+}
+
+func (m *memOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.rows == nil {
 		m.rows = map[string]map[string]database.OpRow{}
 	}
-	m.rows[opID] = map[string]database.OpRow{}
+	kept := map[string]database.OpRow{}
+	for id, r := range m.rows[opID] {
+		if !strings.HasPrefix(id, rowPrefix) {
+			kept[id] = r
+		}
+	}
 	for i := 0; i < n; i++ {
 		r, err := at(i)
 		if err != nil {
 			return err
 		}
-		m.rows[opID][r.ID] = r
+		kept[r.ID] = r
 	}
+	m.rows[opID] = kept
 	return nil
 }
 
@@ -192,6 +203,24 @@ func TestGetOperationClassList_RefusesWhatItCannotServe(t *testing.T) {
 	w := getClassList(t, h, "op-1", "narrator_fill_from_column", "")
 	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), operations.ClassListsNeedRerunCode)
+}
+
+// A run that died after writing its rows and before storing its summary leaves
+// the rows of a newer attempt under the stored summary of an older one; the
+// counts can match. The route answers 409 (run it again), never ids that belong
+// to another attempt.
+func TestGetOperationClassList_RowsOfAnotherAttemptAreA409(t *testing.T) {
+	h, _, rows, ids := classListFixture(t, true)
+	_, err := database.SaveClassLists(rows, "op-1", map[string][]string{
+		"narrator_fill_from_column": slices.Concat([]string{"dick-grayson"}, ids[1:]),
+		"held_itunes":               nil,
+	})
+	require.NoError(t, err)
+
+	w := getClassList(t, h, "op-1", "narrator_fill_from_column", "offset=0&limit=5")
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), operations.ClassListsNeedRerunCode)
+	assert.NotContains(t, w.Body.String(), "dick-grayson")
 }
 
 // A result that carries no class_lists summary (the census, which keeps its

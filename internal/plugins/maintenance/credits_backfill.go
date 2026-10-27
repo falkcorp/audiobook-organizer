@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-27
 
@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
@@ -79,9 +81,10 @@ import (
 //     tie-break of tied positions that it reorders, and, where the join is
 //     empty (the organizer then files under the snapshot), any live author
 //     other than AuthorID: by id when the snapshot's id resolves, and by the
-//     snapshot's NAME compared with AuthorID's record name when it does not
-//     (id 0, or no such record; a comparison of two names the book carries,
-//     not a lookup). The signal is the SNAPSHOT only. The join's stored
+//     snapshot's NAME when it does not (id 0, or no such record), compared
+//     with the record names of the join members other than AuthorID (with a
+//     join) or with AuthorID's record name (empty join); a comparison of
+//     names the book carries, not a lookup. The signal is the SNAPSHOT only. The join's stored
 //     order alone is not one: a book with all-zero positions and no
 //     contradicting snapshot is renumbered with AuthorID first, as the plan's
 //     tie-break rule says, and listed in filing_author_changes when that moves
@@ -168,14 +171,19 @@ import (
 // hour), by the boot scan and by the diagnostics bundle, and the v3 mirror
 // stored it a second time. So the lists are stored as op rows
 // (database.OpRowStore, the way internal/repairs/planstore.go keeps a plan's
-// rows; database.SaveClassLists, one row per 1,000 ids) and the operation's
+// rows; database.SaveClassLists, one row per 1,000 ids, in its own row
+// namespace, tagged with the save's attempt nonce) and the operation's
 // result keeps the summary, the counts and the samples only
 // (storeCreditsBackfillResult). The store must be able to keep op rows: the run
 // refuses to start without it. A run with a limit still plans every book, so it
 // stores the full-library review and held lists again for its own operation id;
-// that is deliberate (they are that run's evidence, and a row set is deleted
-// with its operation), and a limited run's lists are the same size as a full
-// run's. A resumed apply reads this operation's journal rows once
+// that is deliberate (they are that run's evidence), and a limited run's lists
+// are the same size as a full run's. RETENTION: a row set goes when its
+// operation row is deleted, and the only thing that does so on request is a
+// person discarding the operation (registry.Discard, DeleteOperationV2).
+// Nothing prunes operation rows or their row sets by age, so every run's lists
+// (5-12 MB each, limited runs included) stay until that operation is discarded.
+// A resumed apply reads this operation's journal rows once
 // (GetOperationChanges, one operation's rows); there is no per-operation
 // iterator, and ScanOperationChanges walks the whole journal, so it is not used.
 //
@@ -401,8 +409,9 @@ var creditsBackfillClasses = []cbClassDef{
 			"tied positions it reorders would put it ahead of that author; or the join is empty, the organizer files " +
 			"the book under the snapshot, and the snapshot names a live author other than AuthorID, so filling the join " +
 			"from AuthorID (author_fill_from_author_id) would flip the filing author and the snapshot refresh would " +
-			"overwrite the evidence. A snapshot whose id is 0 or resolves to no record is compared by name with " +
-			"AuthorID's record name (a comparison, never a lookup); a different name is the same conflict. The " +
+			"overwrite the evidence. A snapshot whose id is 0 or resolves to no record is compared by name (a " +
+			"comparison, never a lookup): with the record names of the join members other than AuthorID when the " +
+			"join is not empty, with AuthorID's record name when it is; a name that matches is the same conflict. The " +
 			"signal is the snapshot only: all-zero positions with no contradicting " +
 			"snapshot are renumbered with AuthorID first. A rescan reverts AuthorID from file tags when the author is " +
 			"unlocked and never touches the join or the snapshot, so AuthorID is the signal most likely to be the " +
@@ -1599,7 +1608,7 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 			}
 		}
 	}
-	selected = r.settleNewSpellings(selected)
+	selected = r.settleNewSpellings(eligible, selected)
 	if r.params.Apply {
 		return selected
 	}
@@ -1614,23 +1623,33 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 	return selected
 }
 
-// settleNewSpellings is the second half of phase 2: when books of the cohort
-// name one NEW narrator under spellings of one fold key ("Renee Montoya",
-// "Renée Montoya"), the record the run creates takes the most frequent spelling
-// among those books (ties broken by the lexically smallest), and every book
-// whose own spelling differs has that name respelled in its column and
-// NarratorsJSON (settleNarratorSpelling), exactly as for a name linked to an
-// existing record. Before this the record took whichever spelling the first
-// worker to reach it happened to carry, so a dry run could not say which, and
-// two runs over one library could disagree. It runs serially, after the cohort
-// is chosen and before the first write, in a dry run and an apply alike.
+// settleNewSpellings is the second half of phase 2: when books name one NEW
+// narrator under spellings of one fold key ("Renee Montoya", "Renée Montoya"),
+// the record the run creates takes the most frequent spelling among those
+// books (ties broken by the lexically smallest), and every book whose own
+// spelling differs has that name respelled in its column and NarratorsJSON
+// (settleNarratorSpelling), exactly as for a name linked to an existing record.
+// Before this the record took whichever spelling the first worker to reach it
+// happened to carry, so a dry run could not say which, and two runs over one
+// library could disagree. It runs serially, after the cohort is chosen and
+// before the first write, in a dry run and an apply alike.
+//
+// The spellings are counted over EVERY eligible book (eligible, before the
+// limit cut), not only the cohort (selected): the record's spelling is a fact
+// about the library, and a run with a limit that counted its own cohort would
+// create the record under whichever spelling that slice favoured, so a full dry
+// run and the cohorts that follow it could disagree about the record (and the
+// later cohorts, linking to the existing record, would respell the books the
+// first cohort wrote). Only the books of the cohort are rewritten.
 //
 // A book whose respelling cannot be settled is filed under the review class
-// that says why and leaves the cohort; like a book that fails, it keeps its
-// place in a limited cohort (the cohort was decided before this).
-func (r *cbRun) settleNewSpellings(selected []string) []string {
+// that says why and loses its narrator side only: its author-side write, if it
+// has one, stays in the cohort, as planNarratorSide's own refusal leaves it. A
+// book with nothing left to write leaves the cohort; like a book that fails, it
+// keeps its place in a limited cohort (the cohort was decided before this).
+func (r *cbRun) settleNewSpellings(eligible, selected []string) []string {
 	counts := map[string]map[string]int{} // fold key -> spelling -> books
-	for _, id := range selected {
+	for _, id := range eligible {
 		pl := r.plans[id].plan
 		if !pl.narratorWrite {
 			continue
@@ -1678,16 +1697,52 @@ func (r *cbRun) settleNewSpellings(selected []string) []string {
 				}
 			}
 			if refuse := pl.applySpelling(pl.narrators); refuse != "" {
-				r.plansMu.Lock()
-				delete(r.plans, id)
-				r.plansMu.Unlock()
 				r.acc.add(id, refuse)
-				continue
+				pl.dropNarratorSide()
+				if !pl.hasWrite() {
+					r.plansMu.Lock()
+					delete(r.plans, id)
+					r.plansMu.Unlock()
+					continue
+				}
 			}
 		}
 		kept = append(kept, id)
 	}
 	return kept
+}
+
+// narratorSideClasses are the write and informational classes only the narrator
+// side of a plan files (planNarratorSide and applySpelling), which
+// dropNarratorSide takes back out.
+var narratorSideClasses = map[string]bool{
+	cbNarratorFillFromColumn:        true,
+	cbNarratorFillFromNarratorsJSON: true,
+	cbNarratorSelfRead:              true,
+	cbNarratorNewFromSplit:          true,
+	cbNarratorPositionsRenumbered:   true,
+	cbNarratorCreatesRecord:         true,
+	cbNarratorColumnRespelled:       true,
+	cbNarratorsJSONRespelled:        true,
+	cbNarratorCleanDroppedAuthor:    true,
+}
+
+// dropNarratorSide removes the narrator half of a plan and leaves the author
+// half as it was: the state planNarratorSide leaves when it refuses a spelling
+// (the narrator write, its slots, the column and NarratorsJSON it would set, the
+// names it would create, and the write and informational classes only it
+// files). The classes the author side filed (and the book-level ones, such as
+// the iTunes note) stay. Slot names settleNewSpellings renamed in place go with
+// the slots.
+func (pl *cbPlan) dropNarratorSide() {
+	pl.narratorWrite = false
+	pl.narrators, pl.narratorRows, pl.newNames = nil, nil, nil
+	pl.column, pl.columnChanged = nil, false
+	pl.json, pl.jsonChanged = nil, false
+	pl.authorNames, pl.jsonNames = nil, nil
+	pl.requested, pl.rawJSON, pl.columnText, pl.selfRead = nil, nil, "", false
+	pl.writes = slices.DeleteFunc(pl.writes, func(c string) bool { return narratorSideClasses[c] })
+	pl.infos = slices.DeleteFunc(pl.infos, func(c string) bool { return narratorSideClasses[c] })
 }
 
 // failPlan records a phase-1 failure: the book is filed under read_error and
@@ -2432,34 +2487,79 @@ func filingAuthorName(idx *creditCensusIndex, join []database.BookAuthor, snap *
 	return organizer.ScalarAuthorName(snap, scalar), nil
 }
 
-// snapshotNamesOtherJoinMember reports whether the Book.Author snapshot carries
-// the id of a join member other than authorID (compared as canonical records,
-// so a tombstoned id counts as the author it was merged into). A snapshot with
-// no id, one naming an author outside the join, or one naming authorID itself
-// is not a second signal against AuthorID. No name lookup: the plan matches
-// the snapshot by id only.
+// snapshotNamesOtherJoinMember reports whether the Book.Author snapshot names a
+// join member other than authorID.
+//
+// A snapshot whose id resolves to a record is compared by record (as canonical
+// records, so a tombstoned id counts as the author it was merged into): it
+// names another member when that record is in the join and is not authorID's.
+// A snapshot naming authorID itself, or an author outside the join, is not a
+// second signal against AuthorID.
+//
+// A snapshot whose id does not resolve (no id, id 0, or an id with no record)
+// still carries a name, and a name is the only evidence left of who the book
+// is filed under: it is compared with the record names of the join members
+// other than authorID, normalized as the census compares. A match is the same
+// contradiction as the id form, and prepending AuthorID would flip the filing
+// author and the refresh would overwrite the snapshot. That is a comparison of
+// names the book already carries, never a lookup: no author is searched for or
+// matched by name, and none is credited because of it. A blank snapshot name,
+// or a name that is also AuthorID's own, is no signal.
 func snapshotNamesOtherJoinMember(idx *creditCensusIndex, snap *database.Author, authorID int, join []database.BookAuthor) (bool, error) {
-	if snap == nil || snap.ID <= 0 {
+	if snap == nil {
 		return false, nil
 	}
-	canon := func(id int) (int, error) { return canonicalAuthorID(idx, id) }
-	snapID, err := canon(snap.ID)
-	if err != nil || snapID == 0 {
-		return false, err
-	}
-	primary, err := canon(authorID)
+	primary, err := canonicalAuthorID(idx, authorID)
 	if err != nil {
 		return false, err
 	}
-	if snapID == primary {
-		return false, nil
-	}
-	for _, r := range join {
-		id, err := canon(r.AuthorID)
+	if snap.ID > 0 {
+		snapID, err := canonicalAuthorID(idx, snap.ID)
 		if err != nil {
 			return false, err
 		}
-		if id == snapID {
+		if snapID != 0 {
+			if snapID == primary {
+				return false, nil
+			}
+			for _, r := range join {
+				id, err := canonicalAuthorID(idx, r.AuthorID)
+				if err != nil {
+					return false, err
+				}
+				if id == snapID {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+	snapName := util.NormalizeAuthor(strings.TrimSpace(snap.Name))
+	if snapName == "" {
+		return false, nil
+	}
+	if primary != 0 {
+		a, _, err := idx.resolveAuthor(primary)
+		if err != nil {
+			return false, err
+		}
+		if util.NormalizeAuthor(strings.TrimSpace(a.Name)) == snapName {
+			return false, nil
+		}
+	}
+	for _, r := range join {
+		id, err := canonicalAuthorID(idx, r.AuthorID)
+		if err != nil {
+			return false, err
+		}
+		if id == 0 || id == primary {
+			continue
+		}
+		a, _, err := idx.resolveAuthor(id)
+		if err != nil {
+			return false, err
+		}
+		if util.NormalizeAuthor(strings.TrimSpace(a.Name)) == snapName {
 			return true, nil
 		}
 	}
@@ -2896,16 +2996,86 @@ func settleNarratorSpelling(plan *cbPlan, slots []cbNarratorSlot) (column string
 	return column, newJSON, ""
 }
 
-// respellCreditText replaces the first occurrence of each pair's old name in
-// text with its new one. A name not found leaves the text as it was; the caller
-// verifies the result reads back (settleNarratorSpelling).
+// respellCreditText replaces each pair's old name in text with its new one,
+// in the credited name it belongs to. The text is read as the credit pieces
+// util.SplitCreditNames cuts it into (the cut the census and the read-back
+// make), and the old name is looked for piece by piece: first a piece that is
+// exactly the name, then a piece that holds it as whole words (a "Read by"
+// prefix or a role credit around it). A name that is only part of another
+// credited name does not count: "Renee Montoya" is not found inside "Renee
+// Montoya-Sawyer" or "Anne Renee Montoya's", so the respelling lands on the
+// credit that names the person, wherever it stands in the text. A name not
+// found leaves the text as it was; the caller verifies the result reads back
+// (settleNarratorSpelling), which stays the backstop.
 func respellCreditText(text string, pairs [][2]string) string {
 	for _, p := range pairs {
-		if i := strings.Index(text, p[0]); i >= 0 {
+		if i := creditNameOffset(text, p[0]); i >= 0 {
 			text = text[:i] + p[1] + text[i+len(p[0]):]
 		}
 	}
 	return text
+}
+
+// creditNameOffset is the byte offset in text of the occurrence of name that
+// belongs to the credit naming that person (see respellCreditText), or -1.
+func creditNameOffset(text, name string) int {
+	if name == "" {
+		return -1
+	}
+	type piece struct {
+		start int
+		text  string
+	}
+	var pieces []piece
+	cursor := 0
+	for _, p := range util.SplitCreditNames(text) {
+		i := strings.Index(text[cursor:], p)
+		if i < 0 || p == "" {
+			continue
+		}
+		pieces = append(pieces, piece{cursor + i, p})
+		cursor += i + len(p)
+	}
+	for _, p := range pieces {
+		if p.text == name {
+			return p.start
+		}
+	}
+	for _, p := range pieces {
+		for from := 0; from < len(p.text); {
+			j := strings.Index(p.text[from:], name)
+			if j < 0 {
+				break
+			}
+			j += from
+			if wholeWords(p.text, j, j+len(name)) {
+				return p.start + j
+			}
+			from = j + 1
+		}
+	}
+	return -1
+}
+
+// wholeWords reports whether s[start:end] stands as whole words in s: the rune
+// before it and the rune after it (when there are any) are not part of a name.
+// A letter, digit or mark continues a word, and so do a hyphen and an
+// apostrophe that touch the name ("Montoya-Sawyer", "Montoya's").
+func wholeWords(s string, start, end int) bool {
+	joins := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) || r == '-' || r == '\'' || r == '\u2019'
+	}
+	if start > 0 {
+		if r, _ := utf8.DecodeLastRuneInString(s[:start]); joins(r) {
+			return false
+		}
+	}
+	if end < len(s) {
+		if r, _ := utf8.DecodeRuneInString(s[end:]); joins(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // respellNarratorsJSON respells the names inside NarratorsJSON: each entry of a
