@@ -1,5 +1,5 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.5.0
+// version: 2.5.1
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
 // last-edited: 2026-10-26
 
@@ -85,7 +85,8 @@ type gpuRefusal struct {
 	// could not be read (its machine is then unknown, and it may be any
 	// machine's port). The dispatcher uses it to tell whether a machine it
 	// vouches for through one port still has ports it has not heard from (see
-	// dispatchPool's siblingsOf).
+	// hasUnheardPort: an empty Machine counts only for a machine whose known
+	// ports, canaryEntry.ports, include this URL).
 	Machine string
 	// Stuck marks a refusal because the worker is wedged on one inference past
 	// its own deadline (see stuckRefusal), as opposed to a capability or mount

@@ -1,5 +1,5 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
 // last-edited: 2026-10-26
 
@@ -373,11 +373,34 @@ type splitHarness struct {
 	// hung the decoder.
 	wedgeOnPoison bool
 	wedged        sync.Map // "host:port" -> true once wedged
+	// childFault holds the workers ("host:port") whose /health reports that the
+	// decoder cannot start, as a worker does for its fault window.
+	childFault sync.Map
+	// machineID holds the machine_id ("host:port" -> id) a worker reports from
+	// now on, overriding what machineHarness started it with: a worker whose
+	// machine-id lookup missed its first wait reports one later in the same
+	// process (see setMachineID).
+	machineID sync.Map
 }
 
 // wedge marks the worker at url as wedged from now on.
 func (h *splitHarness) wedge(url string) {
 	h.wedged.Store(strings.TrimPrefix(url, "http://"), true)
+}
+
+// setChildFault starts (on) or ends the child-fault window of the worker at url.
+func (h *splitHarness) setChildFault(url string, on bool) {
+	if on {
+		h.childFault.Store(strings.TrimPrefix(url, "http://"), true)
+		return
+	}
+	h.childFault.Delete(strings.TrimPrefix(url, "http://"))
+}
+
+// setMachineID makes the worker at url report machine_id id from now on, as
+// scripts/whisper_mlx_server.py does once its retried lookup succeeds.
+func (h *splitHarness) setMachineID(url, id string) {
+	h.machineID.Store(strings.TrimPrefix(url, "http://"), id)
 }
 
 type sendRecord struct {

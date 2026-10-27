@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
 // last-edited: 2026-10-26
 
@@ -42,6 +42,14 @@ func machineHarness(t *testing.T, machines []string, poison ...string) *splitHar
 			if _, wedged := h.wedged.Load(r.Host); wedged {
 				body = maps.Clone(health)
 				body["busy_seconds"], body["busy_limit_seconds"] = 900.0, 60.0
+			}
+			if _, fault := h.childFault.Load(r.Host); fault {
+				body = maps.Clone(body)
+				body["child_start_error"] = "inference process not ready after 300s"
+			}
+			if id, ok := h.machineID.Load(r.Host); ok {
+				body = maps.Clone(body)
+				body["machine_id"] = id
 			}
 			_ = json.NewEncoder(rw).Encode(body)
 		}))
