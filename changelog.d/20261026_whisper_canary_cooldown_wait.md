@@ -69,3 +69,45 @@ a first miss. Its old entry named an identity that is never seen again and was
 never removed, and dropping it would have forgotten a machine that had just
 failed the canary. The dispatcher now moves the entry, with the ports known for
 it, to the worker's new identity.
+
+#### The canary memory follows a machine across its ports and identities
+
+Review of the first version found six ways the memory could lose or misplace a
+remembered machine, all fixed here.
+
+A machine is now remembered under a stable key even when a concurrent dispatch
+moves the identity it was recorded under (`u:`/`?` to `m:`, or back). The record
+keeps a url-to-machine map for the last identity a worker reported as a machine
+(`m:`), and the check that a machine was "forgotten while this dispatch waited"
+asks whether any port of it is still remembered, not whether the original key
+is. A weaker identity (no machine id reported, or the probe failed) never takes
+a port from a machine: it only joins an entry of its own, or the entry that
+already remembers its URL. Before, a port that briefly reported no machine id
+could delete itself from the machine's ports, and the machine then looked
+forgotten while it was still failing.
+
+A port that was already down or refused with no machine id at the moment its
+machine failed the canary is recorded as a port of that machine once the url map
+knows it, so it is asked before it takes work, and the machine is not forgotten
+while it is unheard.
+
+A job stuck alone on a wedged machine with a remembered machine set aside now
+asks that machine (after its cooldown, within the pacing allowance) instead of
+ending as "no endpoint is left". The same path already existed for a pool whose
+healthy list was empty; it is now also taken when work could not be placed on
+the endpoints that were healthy.
+
+Smaller fixes on the same path:
+
+- A cancelled op during the re-probe that follows the wait returns the
+  cancellation, not `ErrPoolUnavailable`, on the lone-endpoint path.
+- The canary after the wait is sent with the fresh `/health` the re-probe just
+  read, not the one read before the wait.
+- The wait target is the earliest time at which a remembered machine can be
+  asked: the latest cooldown end over that machine's ports, taken as the
+  minimum over machines. A target past the allowance defers the jobs at once.
+- A stand-in that failed in this dispatch is not waited for.
+- A probed endpoint refused for capability (no GPU, decoder restarting) moves
+  its memory to its new identity like a kept one does.
+- The url-to-machine map and the remembered ports are bounded to the configured
+  endpoints, so a retired URL does not hold a machine remembered for ever.

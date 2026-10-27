@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d4812f1f-05db-470a-939d-c8a0a264f017
 // last-edited: 2026-10-26
 
@@ -231,4 +231,5 @@ func resetCanaryFailed() {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
 	clear(canaryFailed.m)
+	clear(canaryFailed.byURL)
 }
