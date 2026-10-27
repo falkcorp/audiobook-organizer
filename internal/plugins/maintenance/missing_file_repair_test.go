@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c47f0a91-5e6b-4d28-93af-2b8054e17c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -171,7 +171,7 @@ func TestMissingFileRepair_ApplyIsOptIn(t *testing.T) {
 func TestMissingFileRepair_ApplyIsRejected(t *testing.T) {
 	deleteCalled := false
 	store := &database.MockStore{
-		DeleteBookFilesByIDsFunc: func(_ []string) error { deleteCalled = true; return nil },
+		DeleteBookFilesByIDsFunc: func(_ []database.BookFileRef) ([]database.BookFile, error) { deleteCalled = true; return nil, nil },
 	}
 	p := &Plugin{deps: fakeDeps{store: store}}
 

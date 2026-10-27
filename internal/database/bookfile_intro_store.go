@@ -1,11 +1,12 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package database
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -24,9 +25,15 @@ import (
 // UpdateBookFile callers, for three reasons the op depends on:
 //
 //   - They re-read the row under its lockBookFile stripe and write only the
-//     intro group, so a concurrent writer's Duration, Missing or fingerprint
-//     is never reverted (the whole-row read-modify-write is what that stripe
-//     exists to prevent).
+//     intro group, and the commit is a compare-and-swap on the bytes read
+//     (setBookFileRowIfUnchanged): the stripe does not order them against the
+//     writers that take none (a create claiming an iTunes ID, the bulk moves,
+//     the fingerprint sweeps, the scan-cache stamp), so a row that changed between the
+//     read and the commit is re-read and the whole decision re-made on it. A
+//     concurrent writer's Duration, Missing or fingerprint is never reverted
+//     (the whole-row read-modify-write is what the stripe and the compare
+//     exist to prevent). After maxStageRetries lost races they return an error
+//     wrapping ErrBookFileConflict and write nothing.
 //   - They write the book_file key and the memdb projection and NOTHING else:
 //     no secondary-index rewrite (none of the indexed fields changes) and no
 //     book-aggregate recompute (nothing the aggregates read changes). Going
@@ -41,11 +48,15 @@ import (
 // go through ModifyBookFile. They write a handful of rows per run (one per
 // timed-out file, not one per file in the library), so the book-aggregate
 // recompute that rules ModifyBookFile out for the bulk writers costs nothing
-// here, and in return they share the stripe-held read-modify-write every other
-// ModifyBookFile caller uses (one callback run under the row's stripe, not a
-// compare-and-swap) instead of adding one more raw read-modify-write. The
-// scanner's batch upsert takes no stripe, so the ops still wait out a running
-// scan before they write.
+// here, and in return they share the compare-and-swap read-modify-write every
+// other ModifyBookFile caller uses (updateBookFileOver: the callback runs on a
+// fresh copy of the row, and when the stored bytes changed between the read and
+// the commit it is re-read and the callback run again) instead of adding one
+// more raw read-modify-write. Their callbacks reset their outcome on every run,
+// because ModifyBookFile may run them more than once. After maxStageRetries
+// lost races they return an error wrapping ErrBookFileConflict and write
+// nothing. The scanner's batch upsert still takes no stripe, so the ops also
+// wait out a running scan before they write.
 type BookFileIntroStore interface {
 	SetBookFileIntro(bookID, fileID string, r BookFileIntroResult) (BookFileIntroWrite, error)
 	ClearBookFileIntro(bookID, fileID, runOpID string) (before *BookFile, cleared bool, err error)
@@ -282,7 +293,22 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 	unlock := s.lockBookFile(fileID)
 	defer unlock()
 
-	row, err := s.getBookFileByID(bookID, fileID)
+	book := bookID
+	res, err := rmwBookFile(&book, fileID, func() (BookFileIntroWrite, error) {
+		return s.setBookFileIntroOnce(bookID, fileID, r)
+	})
+	if errors.Is(err, ErrBookFileConflict) {
+		return IntroWriteSkipped, fmt.Errorf("SetBookFileIntro: write %s: %w", fileID, err)
+	}
+	return res, err
+}
+
+// setBookFileIntroOnce is one read-decide-commit pass of SetBookFileIntro. It
+// returns an error wrapping errBookFileRowVanished when the commit found the
+// row changed since the read: the decision below was made on a row that no
+// longer exists, so the caller re-reads and decides again.
+func (s *PebbleStore) setBookFileIntroOnce(bookID, fileID string, r BookFileIntroResult) (BookFileIntroWrite, error) {
+	row, raw, err := s.readBookFileRow(bookID, fileID)
 	if err != nil {
 		return IntroWriteSkipped, fmt.Errorf("SetBookFileIntro: read %s: %w", fileID, err)
 	}
@@ -358,7 +384,7 @@ func (s *PebbleStore) SetBookFileIntro(bookID, fileID string, r BookFileIntroRes
 	if r.Done {
 		row.IntroSourceHash = r.SourceHash
 	}
-	res, err := s.writeIntroRow(bookID, fileID, row, "SetBookFileIntro")
+	res, err := s.writeIntroRow(bookID, fileID, row, raw, "SetBookFileIntro")
 	if res == IntroWriteWrote && had {
 		res = IntroWriteReplaced
 	}
@@ -385,7 +411,26 @@ func (s *PebbleStore) ClearBookFileIntro(bookID, fileID, runOpID string) (before
 	unlock := s.lockBookFile(fileID)
 	defer unlock()
 
-	row, err := s.getBookFileByID(bookID, fileID)
+	type cleared1 struct {
+		before  *BookFile
+		cleared bool
+	}
+	book := bookID
+	got, err := rmwBookFile(&book, fileID, func() (cleared1, error) {
+		before, cleared, err := s.clearBookFileIntroOnce(bookID, fileID, runOpID)
+		return cleared1{before, cleared}, err
+	})
+	if errors.Is(err, ErrBookFileConflict) {
+		return nil, false, fmt.Errorf("ClearBookFileIntro: write %s: %w", fileID, err)
+	}
+	return got.before, got.cleared, err
+}
+
+// clearBookFileIntroOnce is one read-clear-commit pass of ClearBookFileIntro;
+// like setBookFileIntroOnce it returns errBookFileRowVanished when the commit
+// found the row changed since the read.
+func (s *PebbleStore) clearBookFileIntroOnce(bookID, fileID, runOpID string) (before *BookFile, cleared bool, err error) {
+	row, raw, err := s.readBookFileRow(bookID, fileID)
 	if err != nil {
 		return nil, false, fmt.Errorf("ClearBookFileIntro: read %s: %w", fileID, err)
 	}
@@ -407,7 +452,7 @@ func (s *PebbleStore) ClearBookFileIntro(bookID, fileID, runOpID string) (before
 	row.IntroRunOpID = ""
 	row.IntroMeta = nil
 	row.IntroTimeouts, row.IntroTimeoutHash, row.IntroTimeoutRunID, row.IntroTimeoutAt, row.IntroTimeoutWorker = 0, "", "", nil, ""
-	res, err := s.writeIntroRow(bookID, fileID, row, "ClearBookFileIntro")
+	res, err := s.writeIntroRow(bookID, fileID, row, raw, "ClearBookFileIntro")
 	if err != nil {
 		return nil, res == IntroWriteWrote, err
 	}
@@ -426,12 +471,14 @@ func (s *PebbleStore) ClearBookFileIntro(bookID, fileID, runOpID string) (before
 // writes nothing and reports SameRun.
 //
 // It goes through ModifyBookFile: under the row's stripe it reads the stored
-// row, runs the callback once on a copy and writes the result, so the decision
-// and the write are one step against every other stripe-holding writer. That is
-// NOT compare-and-swap (the commit only checks that the key still exists), and
-// the library scanner's batch upsert takes no file stripe at all, so it can
-// still race this write; the book op closes that gap by waiting out a running
-// scan before it writes (see waitWhileScanBusy), the per-file op likewise.
+// row, runs the callback on a copy and commits the result as a compare-and-swap
+// on the bytes read, so the decision and the write are one step against every
+// writer, stripe-holding or not. A row that changed between the read and the
+// commit is re-read and the callback (which resets its outcome each run) decides
+// again on it; after maxStageRetries lost races the error wraps
+// ErrBookFileConflict and nothing is written. The book op additionally waits out
+// a running scan before it writes (see waitWhileScanBusy), the per-file op
+// likewise, so a scan's batch upsert does not make it retry.
 func (s *PebbleStore) RecordIntroTimeout(bookID, fileID string, st IntroTimeoutStrike) (IntroTimeoutOutcome, error) {
 	if st.SourceHash == "" {
 		return IntroTimeoutOutcome{Stale: true, Skipped: true}, fmt.Errorf("RecordIntroTimeout: %s: empty source hash", fileID)
@@ -567,19 +614,25 @@ func (s *PebbleStore) ClearIntroTimeouts(bookID, fileID, sourceHash string) (boo
 }
 
 // writeIntroRow commits an edited row: the primary key and memdb only, under
-// the caller's stripe. A row deleted meanwhile is reported stale.
-func (s *PebbleStore) writeIntroRow(bookID, fileID string, row *BookFile, who string) (BookFileIntroWrite, error) {
+// the caller's stripe. raw is the stored value the row was decoded from: the
+// write happens only while the row still holds exactly those bytes, and a row
+// that changed meanwhile is reported as errBookFileRowVanished (the caller
+// re-reads and re-decides). A row deleted meanwhile is reported stale.
+func (s *PebbleStore) writeIntroRow(bookID, fileID string, row *BookFile, raw []byte, who string) (BookFileIntroWrite, error) {
 	row.UpdatedAt = time.Now()
 	data, err := marshalBookFileDropSegs(row)
 	if err != nil {
 		return IntroWriteSkipped, fmt.Errorf("%s: encode %s: %w", who, fileID, err)
 	}
-	wrote, err := s.setBookFileRowIfPresent(bookID, bookFileKey(bookID, fileID), data)
+	wrote, err := s.setBookFileRowIfUnchanged(bookID, bookFileKey(bookID, fileID), raw, data)
 	if !bookFileApplied(err) {
 		return IntroWriteSkipped, fmt.Errorf("%s: write %s: %w", who, fileID, err)
 	}
-	if !wrote {
+	switch wrote {
+	case bookFileRowGone:
 		return IntroWriteStale, nil
+	case bookFileRowChanged:
+		return IntroWriteSkipped, errBookFileRowVanished
 	}
 	s.UpsertBookFileToMemDB(row)
 	if err != nil {

@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/link_backfill_test.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 5df77016-851d-46b8-b842-bfe9014b4e37
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package deluge
 
@@ -314,12 +314,11 @@ func newLinkMock(rows ...database.BookFile) *linkMock {
 		return 0, nil
 	}
 	m.UpdateBookFileHashesFunc = func(string, string, string, string) error { forbid("UpdateBookFileHashes"); return nil }
-	m.MarkFileImportedFromDelugeFunc = func(context.Context, string, string, string) error {
-		forbid("MarkFileImportedFromDeluge")
-		return nil
-	}
 	m.DeleteBookFileFunc = func(string) error { forbid("DeleteBookFile"); return nil }
-	m.DeleteBookFilesByIDsFunc = func([]string) error { forbid("DeleteBookFilesByIDs"); return nil }
+	m.DeleteBookFilesByIDsFunc = func([]database.BookFileRef) ([]database.BookFile, error) {
+		forbid("DeleteBookFilesByIDs")
+		return nil, nil
+	}
 	m.DeleteBookFilesForBookFunc = func(string) error { forbid("DeleteBookFilesForBook"); return nil }
 	m.PatchBookFileFieldsFunc = func(string, string, database.BookFileFieldPatch) (*database.BookFile, *database.BookFile, error) {
 		forbid("PatchBookFileFields")

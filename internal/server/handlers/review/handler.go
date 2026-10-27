@@ -1,7 +1,7 @@
 // file: internal/server/handlers/review/handler.go
-// version: 1.17.3
+// version: 1.18.1
 // guid: 2b6f9c14-8e37-4a5d-91c6-0f4a7d2e8b53
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 // Package reviewhandler hosts the universal review-queue HTTP handlers (PR-A1).
 //
@@ -861,10 +861,16 @@ func (h *Handler) applyUnderClaim(ctx context.Context, item *database.ReviewItem
 		if errors.Is(applyErr, merge.ErrITunesProtected) {
 			return nil, chosen, "", rejectf(http.StatusConflict, "REVIEW_ITUNES_PROTECTED", reason.Error())
 		}
-		// A combine refused, with nothing written, because the library index is still
-		// loading: the item is released and the same approve works once it has. 503,
-		// so a single approve says to retry and a bulk approve skips the item
-		// instead of listing it as failed.
+		// A combine refused before it absorbed anything because the library index is
+		// still loading (the warmup refusal): the item is released and the same
+		// approve works once the index has loaded. 503, so a single approve says to
+		// retry and a bulk approve skips the item instead of listing it as failed.
+		//
+		// The other cause of a retry-later refusal, other writers kept changing the
+		// files of a bulk move, does not reach here as a release: the regroup apply's
+		// combine() exempts only ErrITunesProtected and the warmup refusal from
+		// marking the apply as having possibly written, so a busy bulk move is held
+		// above as 409 REVIEW_APPLY_PARTIAL instead.
 		if !held && merge.IsRetryLater(applyErr) {
 			return nil, chosen, "", rejectf(http.StatusServiceUnavailable, "REVIEW_RETRY_LATER", reason.Error())
 		}

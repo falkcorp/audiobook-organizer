@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7b2d9e14-0c63-4a58-8f71-6d3a92c4e150
-// last-edited: 2026-10-20
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -74,9 +74,9 @@ func (f *bookShapeFixture) store(t *testing.T) *database.MockStore {
 			t.Fatalf("book-shape-report deleted a book_file: it is report-only")
 			return nil
 		},
-		DeleteBookFilesByIDsFunc: func([]string) error {
+		DeleteBookFilesByIDsFunc: func([]database.BookFileRef) ([]database.BookFile, error) {
 			t.Fatalf("book-shape-report deleted book_files: it is report-only")
-			return nil
+			return nil, nil
 		},
 	}
 }

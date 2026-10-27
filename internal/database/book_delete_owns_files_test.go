@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: ea8c9be0-11d7-4035-b1ea-a50f919e06cd
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package database
 
@@ -613,9 +613,12 @@ func TestBatchUpsert_ChurnRefusesOnlyRowsThatVanishedRepeatedly(t *testing.T) {
 // before the derived-state pass left memdb serving deleted rows until a restart,
 // and a retry found nothing in Pebble to clean up.
 func TestMultiRowDeletes_SyncFailureStillClearsMemdb(t *testing.T) {
-	deletes := map[string]func(ps *PebbleStore, bookID string, ids []string) error{
-		"DeleteBookFilesForBook": func(ps *PebbleStore, bookID string, _ []string) error { return ps.DeleteBookFilesForBook(bookID) },
-		"DeleteBookFilesByIDs":   func(ps *PebbleStore, _ string, ids []string) error { return ps.DeleteBookFilesByIDs(ids) },
+	deletes := map[string]func(ps *PebbleStore, bookID string, refs []BookFileRef) error{
+		"DeleteBookFilesForBook": func(ps *PebbleStore, bookID string, _ []BookFileRef) error { return ps.DeleteBookFilesForBook(bookID) },
+		"DeleteBookFilesByIDs": func(ps *PebbleStore, _ string, refs []BookFileRef) error {
+			_, err := ps.DeleteBookFilesByIDs(refs)
+			return err
+		},
 	}
 	for name, del := range deletes {
 		t.Run(name, func(t *testing.T) {
@@ -637,7 +640,7 @@ func TestMultiRowDeletes_SyncFailureStillClearsMemdb(t *testing.T) {
 			if err := store.BatchUpsertBookFiles(rows); err != nil {
 				t.Fatal(err)
 			}
-			ids := []string{rows[0].ID, rows[1].ID}
+			refs := []BookFileRef{{BookID: b.ID, FileID: rows[0].ID}, {BookID: b.ID, FileID: rows[1].ID}}
 			memdbRows := func() int {
 				core, err := store.GetAllBookFilesCore()
 				if err != nil {
@@ -657,7 +660,7 @@ func TestMultiRowDeletes_SyncFailureStillClearsMemdb(t *testing.T) {
 
 			bookFileWALSyncHook = func() error { return errors.New("injected fsync failure") }
 			t.Cleanup(func() { bookFileWALSyncHook = nil })
-			err = del(ps, b.ID, ids)
+			err = del(ps, b.ID, refs)
 			bookFileWALSyncHook = nil
 			if !errors.Is(err, ErrBookFileDurabilityUnknown) {
 				t.Fatalf("err = %v, want ErrBookFileDurabilityUnknown", err)

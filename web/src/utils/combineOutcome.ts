@@ -1,7 +1,7 @@
 // file: web/src/utils/combineOutcome.ts
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b8e2d71-c0a4-4f36-9e18-7a3d6f1b9c42
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 /** The book-combine operation's result payload (GET operation result). */
 export interface BookCombineOpResult {
@@ -35,8 +35,9 @@ export interface BookCombineOpResult {
   error?: string;
   /**
    * The combine was refused only because the library index or the holder list is
-   * still loading (right after a restart); nothing was written, there is nothing
-   * to undo, and the same combine can be queued again shortly. Never set together
+   * still loading (right after a restart), or because other writers kept changing
+   * the files it moves; no absorbed file moved, there is nothing to undo, and the
+   * same combine can be queued again shortly. Never set together
    * with `failed`. retry_reason is the server's own text (it goes in the log, not
    * the toast).
    */
@@ -62,11 +63,12 @@ export const UNDO_ID_UNAVAILABLE =
   "Undo id unavailable: open the combined book's Files & History tab, or the operation, to find what to revert";
 
 /**
- * Said when the combine was refused because the library is still loading. A
- * warning, not an error: nothing is wrong and nothing was changed.
+ * Said when the combine was refused because the library is still loading or
+ * other writers kept changing the files it moves. A warning, not an error:
+ * nothing is wrong and no file was moved from the other books.
  */
 export const COMBINE_RETRY_LATER_MESSAGE =
-  'The library is still loading; try the combine again shortly. Nothing was combined.';
+  'The library is still loading, or other writers are changing the files the combine moves; try the combine again shortly. No files were moved from the other books.';
 
 /** " (operation <id>)", so a half-done combine can still be found and reverted after its toast is gone. */
 export function operationRef(operationId: string): string {
@@ -89,9 +91,9 @@ export function describeCombineOutcome(args: {
 }): CombineOutcomePlan {
   const { status, errorMessage, result, operationId } = args;
 
-  // Refused only because the library is still loading: the operation ends
-  // completed with this recorded, so it is read before the status. No Undo, as
-  // nothing was journaled or changed, and not an error.
+  // Refused only because the library is still loading or its files are busy:
+  // the operation ends completed with this recorded, so it is read before the
+  // status. No Undo, as no absorbed file moved, and not an error.
   if (result?.retry_later && !result.failed) {
     return { severity: 'warning', message: COMBINE_RETRY_LATER_MESSAGE };
   }

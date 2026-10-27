@@ -1,5 +1,5 @@
 // file: internal/database/retired_book_files_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 7e41c2b9-3d58-4f06-a1b7-9c20d6e85f13
 // last-edited: 2026-10-26
 
@@ -567,7 +567,8 @@ func TestGenericPrimitivesRefuseRetiredRows(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorIs(t, fx.ps.MoveBookFilesToBook([]string{x.ID}, fx.holder.ID, third.ID), ErrBookFileRetired)
 	require.ErrorIs(t, fx.ps.DeleteBookFile(x.ID), ErrBookFileRetired)
-	require.ErrorIs(t, fx.ps.DeleteBookFilesByIDs([]string{live.ID, x.ID}), ErrBookFileRetired)
+	_, byIDsErr := fx.ps.DeleteBookFilesByIDs(refsOf(fx.holder.ID, live.ID, x.ID))
+	require.ErrorIs(t, byIDsErr, ErrBookFileRetired)
 	require.ErrorIs(t, fx.ps.DeleteBookFilesForBook(fx.holder.ID), ErrBookFileRetired)
 	require.ErrorIs(t, fx.ps.DeleteBook(fx.holder.ID), ErrBookOwnsFiles)
 

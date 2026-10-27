@@ -1,7 +1,7 @@
 // file: internal/database/delete_book_files_by_ids_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 4e7a1c92-3d58-4b6f-9a0e-2c8f5b1d7e43
-// last-edited: 2026-10-03
+// last-edited: 2026-10-26
 
 package database
 
@@ -40,6 +40,15 @@ func countBookVersions(t *testing.T, s *PebbleStore, bookID string) int {
 		n++
 	}
 	return n
+}
+
+// refsOf names rows of one book as DeleteBookFilesByIDs takes them.
+func refsOf(bookID string, ids ...string) []BookFileRef {
+	refs := make([]BookFileRef, 0, len(ids))
+	for _, id := range ids {
+		refs = append(refs, BookFileRef{BookID: bookID, FileID: id})
+	}
+	return refs
 }
 
 // seedBookWithFiles creates one book holding len(durations) rows, each at its own
@@ -104,8 +113,8 @@ func TestDeleteBookFilesByIDs_NotifiesEachAffectedBookExactlyOnce(t *testing.T) 
 
 	// Two rows from A and one from B — deliberately interleaved so the grouping
 	// cannot be an accident of input ordering.
-	ids := []string{filesA[1], filesB[1], filesA[2]}
-	if err := s.DeleteBookFilesByIDs(ids); err != nil {
+	refs := []BookFileRef{{BookID: bookA, FileID: filesA[1]}, {BookID: bookB, FileID: filesB[1]}, {BookID: bookA, FileID: filesA[2]}}
+	if _, err := s.DeleteBookFilesByIDs(refs); err != nil {
 		t.Fatalf("DeleteBookFilesByIDs: %v", err)
 	}
 
@@ -178,7 +187,7 @@ func TestDeleteBookFilesByIDs_FailsClosedOnUnresolvableID(t *testing.T) {
 
 	before := countBookVersions(t, s, bookID)
 
-	err := s.DeleteBookFilesByIDs([]string{fileIDs[0], "no-such-book-file-id", fileIDs[1]})
+	_, err := s.DeleteBookFilesByIDs(refsOf(bookID, fileIDs[0], "no-such-book-file-id", fileIDs[1]))
 	if err == nil {
 		t.Fatal("DeleteBookFilesByIDs returned nil for an unresolvable id, want an error")
 	}
@@ -208,7 +217,7 @@ func TestDeleteBookFilesByIDs_IgnoresDuplicateAndEmptyIDs(t *testing.T) {
 	bookID, fileIDs := seedBookWithFiles(t, s, "Dup-input Book", []int{100, 200, 300})
 
 	before := countBookVersions(t, s, bookID)
-	if err := s.DeleteBookFilesByIDs([]string{fileIDs[2], "", fileIDs[2]}); err != nil {
+	if _, err := s.DeleteBookFilesByIDs(refsOf(bookID, fileIDs[2], "", fileIDs[2])); err != nil {
 		t.Fatalf("DeleteBookFilesByIDs: %v", err)
 	}
 	if got := countBookVersions(t, s, bookID) - before; got != 1 {
@@ -227,7 +236,7 @@ func TestDeleteBookFilesByIDs_EmptyInputIsNoOp(t *testing.T) {
 	bookID, _ := seedBookWithFiles(t, s, "Empty-input Book", []int{100})
 	before := countBookVersions(t, s, bookID)
 
-	if err := s.DeleteBookFilesByIDs(nil); err != nil {
+	if _, err := s.DeleteBookFilesByIDs(nil); err != nil {
 		t.Fatalf("DeleteBookFilesByIDs(nil) = %v, want nil", err)
 	}
 	if got := countBookVersions(t, s, bookID) - before; got != 0 {
@@ -257,7 +266,7 @@ func TestDeleteBookFilesByIDs_RemovesSecondaryIndexes(t *testing.T) {
 		t.Fatalf("CreateBookFile: %v", err)
 	}
 
-	if err := s.DeleteBookFilesByIDs([]string{f.ID}); err != nil {
+	if _, err := s.DeleteBookFilesByIDs(refsOf(bk.ID, f.ID)); err != nil {
 		t.Fatalf("DeleteBookFilesByIDs: %v", err)
 	}
 
@@ -269,7 +278,7 @@ func TestDeleteBookFilesByIDs_RemovesSecondaryIndexes(t *testing.T) {
 	}
 	// The ID index is what DeleteBookFilesByIDs itself resolves through, so a
 	// stale entry here would let a second delete "find" a row that is gone.
-	if err := s.DeleteBookFilesByIDs([]string{f.ID}); err == nil {
+	if _, err := s.DeleteBookFilesByIDs(refsOf(bk.ID, f.ID)); err == nil {
 		t.Fatal("re-deleting an already-deleted id succeeded — the book_file_id " +
 			"index entry is stale, so resolution is lying about what exists")
 	}

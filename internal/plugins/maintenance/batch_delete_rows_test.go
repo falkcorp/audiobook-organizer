@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_delete_rows_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6c1f9b2e-7a04-4d38-95e6-1b8d3f0a2c57
-// last-edited: 2026-09-26
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -216,7 +216,7 @@ func TestOrphanBookFilesCleanup_DeleteModeIsRefusedAndDeletesNothing(t *testing.
 		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) {
 			return []database.BookCore{{ID: "book-alive"}}, nil
 		},
-		DeleteBookFilesByIDsFunc: func(ids []string) error { deletes += len(ids); return nil },
+		DeleteBookFilesByIDsFunc: func(refs []database.BookFileRef) ([]database.BookFile, error) { deletes += len(refs); return nil, nil },
 		DeleteBookFileFunc:       func(id string) error { deletes++; return nil },
 	}
 	p := &Plugin{deps: rootDirDeps{fakeDeps: fakeDeps{store: store}, root: t.TempDir()}}

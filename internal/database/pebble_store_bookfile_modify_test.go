@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfile_modify_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0c8e5b31-7a92-4d6f-b3e4-9f1a2c6d8e57
 // last-edited: 2026-10-26
 
@@ -176,4 +176,39 @@ func TestModifyBookFileDeferAggregates_KeepsTheModifyContract(t *testing.T) {
 
 	_, err = s.ModifyBookFileDeferAggregates(f.BookID, f.ID, func(row *BookFile) error { row.BookID = "other"; return nil })
 	require.Error(t, err, "changing BookID must be refused")
+}
+
+// CONS-18: a millisecond Duration written through either modify variant is
+// stored as seconds, the same as through CreateBookFile and UpdateBookFile. The
+// repair lives in updateBookFileOver, which both variants (and every other
+// row-rewriting path) commit through. 3,600,000 for a 40 MB file implies 88 bps
+// as seconds and 88 kbps as milliseconds, so the heuristic fires.
+func TestModifyBookFile_NormalisesAMillisecondDurationToSeconds(t *testing.T) {
+	variants := map[string]func(s *PebbleStore, bookID, fileID string, fn func(*BookFile) error) (*BookFile, error){
+		"ModifyBookFile":                (*PebbleStore).ModifyBookFile,
+		"ModifyBookFileDeferAggregates": (*PebbleStore).ModifyBookFileDeferAggregates,
+	}
+	for name, modify := range variants {
+		t.Run(name, func(t *testing.T) {
+			s := setupTestPebbleStore(t)
+			b, err := s.CreateBook(&Book{Title: "Batman: Year One", FilePath: "/lib/Gotham/Batman Year One"})
+			require.NoError(t, err)
+			f := &BookFile{BookID: b.ID, FilePath: "/lib/Gotham/Batman Year One/01.m4b", Format: "m4b", Duration: 3600, FileSize: 40_000_000}
+			require.NoError(t, s.CreateBookFile(f))
+
+			row, err := modify(s, b.ID, f.ID, func(r *BookFile) error { r.Duration = 3_600_000; return nil })
+			require.NoError(t, err)
+			require.Equal(t, 3600, row.Duration, "the returned row is what was stored")
+			got, err := s.GetBookFileByID(b.ID, f.ID)
+			require.NoError(t, err)
+			require.Equal(t, 3600, got.Duration, "a millisecond duration must be stored as seconds")
+
+			// A value that is already seconds is never divided again.
+			_, err = modify(s, b.ID, f.ID, func(r *BookFile) error { r.Title = "Batman: Year One, Chapter 1"; return nil })
+			require.NoError(t, err)
+			got, err = s.GetBookFileByID(b.ID, f.ID)
+			require.NoError(t, err)
+			require.Equal(t, 3600, got.Duration)
+		})
+	}
 }

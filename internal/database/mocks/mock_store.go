@@ -6076,66 +6076,6 @@ func (_c *MockStore_ClearBookSignature_Call) RunAndReturn(run func(id string) er
 	return _c
 }
 
-// ClearITunesPID provides a mock function for the type MockStore
-func (_mock *MockStore) ClearITunesPID(itunesPID string) (bool, error) {
-	ret := _mock.Called(itunesPID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ClearITunesPID")
-	}
-
-	var r0 bool
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (bool, error)); ok {
-		return returnFunc(itunesPID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) bool); ok {
-		r0 = returnFunc(itunesPID)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(itunesPID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockStore_ClearITunesPID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearITunesPID'
-type MockStore_ClearITunesPID_Call struct {
-	*mock.Call
-}
-
-// ClearITunesPID is a helper method to define mock.On call
-//   - itunesPID string
-func (_e *MockStore_Expecter) ClearITunesPID(itunesPID any) *MockStore_ClearITunesPID_Call {
-	return &MockStore_ClearITunesPID_Call{Call: _e.mock.On("ClearITunesPID", itunesPID)}
-}
-
-func (_c *MockStore_ClearITunesPID_Call) Run(run func(itunesPID string)) *MockStore_ClearITunesPID_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_ClearITunesPID_Call) Return(cleared bool, err error) *MockStore_ClearITunesPID_Call {
-	_c.Call.Return(cleared, err)
-	return _c
-}
-
-func (_c *MockStore_ClearITunesPID_Call) RunAndReturn(run func(itunesPID string) (bool, error)) *MockStore_ClearITunesPID_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ClearUserPositions provides a mock function for the type MockStore
 func (_mock *MockStore) ClearUserPositions(userID string, bookID string) error {
 	ret := _mock.Called(userID, bookID)
@@ -9041,20 +8981,31 @@ func (_c *MockStore_DeleteBookFile_Call) RunAndReturn(run func(id string) error)
 }
 
 // DeleteBookFilesByIDs provides a mock function for the type MockStore
-func (_mock *MockStore) DeleteBookFilesByIDs(ids []string) error {
-	ret := _mock.Called(ids)
+func (_mock *MockStore) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
+	ret := _mock.Called(refs)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteBookFilesByIDs")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func([]string) error); ok {
-		r0 = returnFunc(ids)
-	} else {
-		r0 = ret.Error(0)
+	var r0 []database.BookFile
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func([]database.BookFileRef) ([]database.BookFile, error)); ok {
+		return returnFunc(refs)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(0).(func([]database.BookFileRef) []database.BookFile); ok {
+		r0 = returnFunc(refs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookFile)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func([]database.BookFileRef) error); ok {
+		r1 = returnFunc(refs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
 // MockStore_DeleteBookFilesByIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteBookFilesByIDs'
@@ -9063,16 +9014,16 @@ type MockStore_DeleteBookFilesByIDs_Call struct {
 }
 
 // DeleteBookFilesByIDs is a helper method to define mock.On call
-//   - ids []string
-func (_e *MockStore_Expecter) DeleteBookFilesByIDs(ids any) *MockStore_DeleteBookFilesByIDs_Call {
-	return &MockStore_DeleteBookFilesByIDs_Call{Call: _e.mock.On("DeleteBookFilesByIDs", ids)}
+//   - refs []database.BookFileRef
+func (_e *MockStore_Expecter) DeleteBookFilesByIDs(refs any) *MockStore_DeleteBookFilesByIDs_Call {
+	return &MockStore_DeleteBookFilesByIDs_Call{Call: _e.mock.On("DeleteBookFilesByIDs", refs)}
 }
 
-func (_c *MockStore_DeleteBookFilesByIDs_Call) Run(run func(ids []string)) *MockStore_DeleteBookFilesByIDs_Call {
+func (_c *MockStore_DeleteBookFilesByIDs_Call) Run(run func(refs []database.BookFileRef)) *MockStore_DeleteBookFilesByIDs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 []string
+		var arg0 []database.BookFileRef
 		if args[0] != nil {
-			arg0 = args[0].([]string)
+			arg0 = args[0].([]database.BookFileRef)
 		}
 		run(
 			arg0,
@@ -9081,12 +9032,12 @@ func (_c *MockStore_DeleteBookFilesByIDs_Call) Run(run func(ids []string)) *Mock
 	return _c
 }
 
-func (_c *MockStore_DeleteBookFilesByIDs_Call) Return(err error) *MockStore_DeleteBookFilesByIDs_Call {
-	_c.Call.Return(err)
+func (_c *MockStore_DeleteBookFilesByIDs_Call) Return(bookFiles []database.BookFile, err error) *MockStore_DeleteBookFilesByIDs_Call {
+	_c.Call.Return(bookFiles, err)
 	return _c
 }
 
-func (_c *MockStore_DeleteBookFilesByIDs_Call) RunAndReturn(run func(ids []string) error) *MockStore_DeleteBookFilesByIDs_Call {
+func (_c *MockStore_DeleteBookFilesByIDs_Call) RunAndReturn(run func(refs []database.BookFileRef) ([]database.BookFile, error)) *MockStore_DeleteBookFilesByIDs_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -24865,75 +24816,6 @@ func (_c *MockStore_MarkExternalIDRemoved_Call) Return(err error) *MockStore_Mar
 }
 
 func (_c *MockStore_MarkExternalIDRemoved_Call) RunAndReturn(run func(source string, externalID string) error) *MockStore_MarkExternalIDRemoved_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// MarkFileImportedFromDeluge provides a mock function for the type MockStore
-func (_mock *MockStore) MarkFileImportedFromDeluge(ctx context.Context, originalPath string, libraryPath string, torrentHash string) error {
-	ret := _mock.Called(ctx, originalPath, libraryPath, torrentHash)
-
-	if len(ret) == 0 {
-		panic("no return value specified for MarkFileImportedFromDeluge")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) error); ok {
-		r0 = returnFunc(ctx, originalPath, libraryPath, torrentHash)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockStore_MarkFileImportedFromDeluge_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkFileImportedFromDeluge'
-type MockStore_MarkFileImportedFromDeluge_Call struct {
-	*mock.Call
-}
-
-// MarkFileImportedFromDeluge is a helper method to define mock.On call
-//   - ctx context.Context
-//   - originalPath string
-//   - libraryPath string
-//   - torrentHash string
-func (_e *MockStore_Expecter) MarkFileImportedFromDeluge(ctx any, originalPath any, libraryPath any, torrentHash any) *MockStore_MarkFileImportedFromDeluge_Call {
-	return &MockStore_MarkFileImportedFromDeluge_Call{Call: _e.mock.On("MarkFileImportedFromDeluge", ctx, originalPath, libraryPath, torrentHash)}
-}
-
-func (_c *MockStore_MarkFileImportedFromDeluge_Call) Run(run func(ctx context.Context, originalPath string, libraryPath string, torrentHash string)) *MockStore_MarkFileImportedFromDeluge_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 string
-		if args[3] != nil {
-			arg3 = args[3].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-			arg3,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_MarkFileImportedFromDeluge_Call) Return(err error) *MockStore_MarkFileImportedFromDeluge_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockStore_MarkFileImportedFromDeluge_Call) RunAndReturn(run func(ctx context.Context, originalPath string, libraryPath string, torrentHash string) error) *MockStore_MarkFileImportedFromDeluge_Call {
 	_c.Call.Return(run)
 	return _c
 }

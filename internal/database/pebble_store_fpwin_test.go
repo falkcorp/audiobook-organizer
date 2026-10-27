@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 67f3605a-acce-4382-9555-a1a26ed37eb0
-// last-edited: 2026-10-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -281,14 +281,15 @@ func TestFpwin_Cascade_DeleteBookFile(t *testing.T) {
 
 func TestFpwin_Cascade_DeleteBookFilesByIDs(t *testing.T) {
 	env := newBookSigEnv(t)
-	_, a := fpwinSeedFile(t, env.store, "/lib/c/a.m4b", nil)
-	_, b := fpwinSeedFile(t, env.store, "/lib/c/b.m4b", nil)
+	aBook, a := fpwinSeedFile(t, env.store, "/lib/c/a.m4b", nil)
+	bBook, b := fpwinSeedFile(t, env.store, "/lib/c/b.m4b", nil)
 	_, kept := fpwinSeedFile(t, env.store, "/lib/c/k.m4b", nil)
 	for _, id := range []string{a, b, kept} {
 		seedWindowsFor(t, env.store, id)
 	}
 
-	require.NoError(t, env.store.DeleteBookFilesByIDs([]string{a, b}))
+	_, err := env.store.DeleteBookFilesByIDs([]BookFileRef{{BookID: aBook, FileID: a}, {BookID: bBook, FileID: b}})
+	require.NoError(t, err)
 
 	fresh := env.reopen(t)
 	requireNoWindowsLeft(t, fresh, a)
@@ -322,10 +323,11 @@ func TestFpwin_Cascade_DeleteBookFilesForBook(t *testing.T) {
 // windows with it either: the cascade is in the same batch as the rows.
 func TestFpwin_Cascade_FailedBatchDeleteKeepsWindows(t *testing.T) {
 	env := newBookSigEnv(t)
-	_, a := fpwinSeedFile(t, env.store, "/lib/c/fc.m4b", nil)
+	aBook, a := fpwinSeedFile(t, env.store, "/lib/c/fc.m4b", nil)
 	seedWindowsFor(t, env.store, a)
 
-	require.Error(t, env.store.DeleteBookFilesByIDs([]string{a, "01NOSUCHROW"}))
+	_, delErr := env.store.DeleteBookFilesByIDs(refsOf(aBook, a, "01NOSUCHROW"))
+	require.Error(t, delErr)
 	got, err := env.store.GetFingerprintWindows(FileWindowRef(a))
 	require.NoError(t, err)
 	require.Len(t, got, 3)
