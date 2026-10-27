@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_r4200b_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 455a0c2b-ac28-4cc4-8d6c-c371cb613ece
 // last-edited: 2026-10-27
 
@@ -263,7 +263,7 @@ func TestCreditsBackfillR4200b_RespellingNeverLandsInsideAnotherName(t *testing.
 		{"longer name first", "Anne Renee Montoya and Renee Montoya", "Anne Renee Montoya and Renée Montoya"},
 		{"possessive is another word", "Renee Montoya's Choice, Renee Montoya", "Renee Montoya's Choice, Renée Montoya"},
 		{"read by prefix", "Read by Renee Montoya", "Read by Renée Montoya"},
-		{"role credit", "Renee Montoya - translator and Bruce Wayne", "Renée Montoya - translator and Bruce Wayne"},
+		{"role credit is no narrator", "Renee Montoya - translator and Bruce Wayne", "Renee Montoya - translator and Bruce Wayne"},
 		{"only inside a longer name", "Renee Montoya-Sawyer", "Renee Montoya-Sawyer"},
 		{"absent", "Bruce Wayne", "Bruce Wayne"},
 	} {
