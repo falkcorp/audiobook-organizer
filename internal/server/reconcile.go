@@ -1,7 +1,7 @@
 // file: internal/server/reconcile.go
-// version: 3.11.0
+// version: 3.12.0
 // guid: e7f8a9b0-c1d2-3e4f-5a6b-7c8d9e0f1a2b
-// last-edited: 2026-10-14
+// last-edited: 2026-10-26
 // HTTP adapters — all logic in internal/reconcile
 
 package server
@@ -67,7 +67,7 @@ func (s *Server) startReconcileScan(c *gin.Context) {
 		httputil.InternalError(c, "failed to enqueue operation", err)
 		return
 	}
-	op := reconcileOperationView(store, opID, "reconcile_scan")
+	op := s.opTextFor(c, reconcileOperationView(store, opID, "reconcile_scan"))
 	if op == nil {
 		httputil.InternalError(c, "failed to load enqueued operation",
 			fmt.Errorf("reconcile.scan %s not readable after enqueue", opID))
@@ -155,12 +155,12 @@ func (s *Server) latestReconcileScan(c *gin.Context) {
 	// preview is a nil *ReconcilePreviewResult when no scan is usable; gin.H would
 	// marshal that as null, but a typed nil in an interface is easy to misread, so
 	// the two shapes are spelled out.
-	body := gin.H{"operation": scan, "preview": nil, "latest_attempt": nil}
+	body := gin.H{"operation": s.opTextFor(c, scan), "preview": nil, "latest_attempt": nil}
 	if preview != nil {
 		body["preview"] = preview
 	}
 	if attempt != nil {
-		body["latest_attempt"] = attempt
+		body["latest_attempt"] = s.opTextFor(c, attempt)
 	}
 	httputil.RespondWithOK(c, body)
 }
@@ -222,7 +222,7 @@ func (s *Server) startReconcile(c *gin.Context) {
 		httputil.InternalError(c, "failed to enqueue operation", err)
 		return
 	}
-	op := reconcileOperationView(store, opID, "reconcile")
+	op := s.opTextFor(c, reconcileOperationView(store, opID, "reconcile"))
 	if op == nil {
 		httputil.InternalError(c, "failed to load enqueued operation",
 			fmt.Errorf("reconcile.apply %s not readable after enqueue", opID))

@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.9.0
+// version: 1.11.0
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 package database
 
@@ -338,11 +338,42 @@ type TransitionRequest struct {
 
 // RunQuery selects runs for ListRunsV3. DefID and State filter; Cursor is the
 // Next of a previous page.
+//
+// Keep, when set, narrows the selection to the runs it returns true for, and
+// the store applies it inside the one pass that counts and pages, so Total is
+// the number of runs Keep accepted (exact, from the same read as the page) and
+// the page is full whenever enough accepted runs exist: a caller that must leave
+// runs out (a read that may not show every run to every caller) needs no refill
+// loop and no second census. Keep is called once per candidate record, in index
+// order, on the calling goroutine, and must not keep the pointer: it is the
+// store's decoded record, reused only for that call. A non-nil Keep makes the
+// listing read every record under the index prefix (Total needs each one
+// judged), where a nil Keep with no DefID+State pair counts index keys alone,
+// so a caller sets it only when it can reject something.
+//
+// SkipID, when set, is asked about the run id of every index key before the
+// record is read; true leaves that run out entirely: its record is never
+// loaded (so a corrupt record of a run the caller may not see cannot fail the
+// listing), and it is not counted in Total or paged. It is the key-level
+// complement of Keep, for a caller that already knows which runs it will refuse.
+// Keep still judges every record that is read, so a run SkipID did not know of
+// (one created since) is not served by mistake. SkipID is called on the calling
+// goroutine, in index order.
+//
+// OnUndecodable, when set, makes a run record the store cannot decode (a
+// corrupt record, or a corrupt progress row) skip that run instead of failing
+// the whole listing: it is called with the run id and the error, the run is
+// not counted or paged, and the listing goes on. A caller sets it to log. Unset,
+// the first undecodable record fails the listing, which is what an exact census
+// needs.
 type RunQuery struct {
-	DefID  string
-	State  state.V3
-	Cursor string
-	Limit  int
+	DefID         string
+	State         state.V3
+	Cursor        string
+	Limit         int
+	Keep          func(*RunRecord) bool
+	SkipID        func(id string) bool
+	OnUndecodable func(id string, err error)
 }
 
 // RunPage is one page of runs. Total is always exact (counted from the

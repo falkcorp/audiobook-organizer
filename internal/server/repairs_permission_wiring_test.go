@@ -1,7 +1,7 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
-// last-edited: 2026-10-24
+// last-edited: 2026-10-25
 
 // The Repairs lane's per-fixer permission check as the server wires it
 // (wireRepairsRoutes + permHolds): the same semantics as s.perm, driven
@@ -194,4 +194,40 @@ func TestRepairsRoutes_PlanRowsNeedTheFixersPermission(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"permitted":false`)
 	require.NotContains(t, w.Body.String(), `"permitted":true`)
+}
+
+// TestRepairsRoutes_AudibleReadStatusIsAdminOnly: the Audible read-status
+// import writes any user's listening state, so (owner decision 2026-10-24) it
+// needs users.manage, as the master-list import does. An editor
+// (library.edit_metadata) is refused 403 naming users.manage on the plan, apply
+// and owner-apply POSTs and on the plan rows; an admin passes every check (plan
+// reaches the handler, which asks for params; apply and rows answer 404 for an
+// unknown plan).
+// Not parallel: it swaps the process-wide config.
+func TestRepairsRoutes_AudibleReadStatusIsAdminOnly(t *testing.T) {
+	const base = "/api/v1/repairs/maintenance.audible-read-status"
+	srv, editor, admin := repairsPermServer(t, true, true)
+	denied := func(w *httptest.ResponseRecorder, what string) {
+		t.Helper()
+		require.Equal(t, http.StatusForbidden, w.Code, what+": "+w.Body.String())
+		require.Contains(t, w.Body.String(), "permission denied: users.manage", what)
+	}
+	passed := func(w *httptest.ResponseRecorder, want int, what string) {
+		t.Helper()
+		require.Equal(t, want, w.Code, what+": "+w.Body.String())
+		require.NotContains(t, w.Body.String(), "permission denied", what)
+	}
+
+	denied(postRepairs(srv, editor, base+"/plan", `{}`), "editor plan")
+	denied(postRepairs(srv, editor, base+"/apply", `{"plan_op_id":"nope","row_ids":["x"]}`), "editor apply")
+	denied(postRepairs(srv, editor, base+"/owner-apply", `{"plan_op_id":"nope","row_id":"x"}`), "editor owner-apply")
+	denied(getRepairs(srv, editor, base+"/plan/op-nope/rows"), "editor rows")
+
+	// The admin is past the permission check on every route. The plan has no
+	// params, which the fixer refuses with a 4xx of its own, never a 403.
+	w := postRepairs(srv, admin, base+"/plan", `{}`)
+	require.NotEqual(t, http.StatusForbidden, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), "permission denied")
+	passed(postRepairs(srv, admin, base+"/apply", `{"plan_op_id":"nope","row_ids":["x"]}`), http.StatusNotFound, "admin apply")
+	passed(getRepairs(srv, admin, base+"/plan/op-nope/rows"), http.StatusNotFound, "admin rows")
 }

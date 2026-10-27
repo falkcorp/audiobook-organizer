@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 58ff982a-a61e-482f-a7a8-a64578984407 -->
-<!-- last-edited: 2026-10-27 -->
+<!-- last-edited: 2026-10-28 -->
 
 # October 2026 — Monthly Executive Summary
 
-**Coverage: 1–27 October 2026; later October work is added here as new sections.**
+**Coverage: 1–28 October 2026; later October work is added here as new sections.**
 
 **Pull requests:** every merged pull request named for a section is listed in the index at the end.
 
@@ -66,7 +66,8 @@ A few terms used throughout:
 - **Listening history was protected from lost saves and from being read by the wrong people.**
   Five places that saved progress now take turns; collections show each viewer their own
   listening; and repair previews, change histories and merge-undo records no longer expose
-  other people's reading to guests.
+  other people's reading to guests, and Repairs runs, their activity and their undo are
+  hidden from anyone who may not use the fixer.
 - **Deleting and purging got safer.** Progress is carried to a live copy before a purge, purges
   are previewed with a full breakdown, trash cleanup stays inside the library, the nightly
   cleanup no longer deletes the files of a version a book still plays, and two library jobs can
@@ -617,6 +618,119 @@ removed to confirm it fails. Four paths remained for a follow-up: the activity l
 copies of server log lines, a repair operation's log lines, merge-undo warnings, and the
 Audible reading-status import preview, which becomes admin-only. Until it ships the goal that
 only admins see others' listening is not fully met.
+
+### Repairs runs, their activity and the data they carry are private to the people who may use them (24–28 October)
+
+**What it was.** The Repairs page runs fixers that change the library on someone's behalf, and
+some of them handle other people's data, such as their listening progress. The earlier fix
+stopped people from reading a fixer's plan, results and change history unless they were allowed
+to use that fixer. Other places still showed the same runs: the newer operations screens, the
+Activity log, the dashboard, the generic "start an operation" routes, the system status screen
+and the undo button.
+
+**Why it mattered.** Someone with only view or edit access could still learn that a run existed
+and what it was working on, including the names of other users it had touched. Someone allowed to
+change settings could start the Audible reading-status fixer through the generic routes without
+being allowed to manage users.
+
+**The fix.**
+
+- The Audible reading-status fixer now needs the permission to manage users (which
+  administrators hold), the same as the master-list import, because it writes any user's
+  reading state. Editors can no longer plan, apply or read it. The generic start and retry
+  routes ask for the same permissions as the Repairs page.
+- The newer operations screens leave out a Repairs run from anyone who may not use its fixer:
+  the run lists, the counts (so a number never hints that a hidden run exists), the timeline,
+  the live feed and the per-run pages. Cancelling such a run is refused to anyone but the person
+  who started it; approving it is refused to everyone who may not use the fixer, the starter
+  included. A run record that is damaged no longer breaks the whole list; it is skipped and
+  logged.
+- The Activity log leaves out the log lines of those runs, and its totals and pages are counted
+  without them, so paging never shows a gap. The nightly summary entries have the hidden runs
+  removed from their list of items. The dashboard no longer names those runs in its recent
+  operations, and neither it nor the system status screen (settings permission) hands out any
+  operation's result data.
+- Log lines that name another user, including lines grouped into a batch, are kept from everyone
+  who may not manage users. So are account audit entries (an email address taken over by
+  another account, a user merge, guest access tokens) and lines that name a user only by account
+  number. The results page of the user-merge and merged-user-repair operations, the diagnostics
+  download, every operation log screen and download, and the live feeds follow the same rule.
+- Undoing an operation now asks for the same permissions as reading it, and undoing a change
+  that carries one user's data needs the permission to manage users. Editors who could undo such
+  an operation before can no longer do so; undoing library-only operations is unchanged. The
+  report an undo returns no longer lists notes that name other users to anyone who may not
+  manage users (it says how many were withheld). The Undo button disappears when the server has
+  already said the person may not undo that operation.
+- The tool that records a fixer's changes now refuses to record a kind of change that nobody has
+  classified as either one user's data or library data, so a new kind cannot become readable by
+  everyone by default.
+- Both live feeds re-check a person's permissions, so lowering someone's role or disabling their
+  account takes effect without a reconnect. To keep a feed that has been open for hours cheap, the
+  check is made at most every five seconds: a role lowered in the last five seconds can still be
+  served for up to that long, never longer and never wider. A feed also closes by itself when
+  the account is switched off or the sign-in or key it was opened with is cancelled.
+- Reading the Activity log for one operation or one book no longer builds the whole history in
+  memory before choosing a page, which any viewer could previously make the server do over and
+  over. Such a read is now limited in how many entries it will examine and in how far down the
+  list a request may page; every path refuses deep pages and caps the page size.
+
+**A second security review** found one serious problem and several smaller ones, all fixed:
+
+- The list of past answers the matcher has accepted or rejected showed who gave each answer. It
+  now shows that only to a person who may manage users.
+- The download of a diagnostics export is allowed only to a person who could have read everything
+  inside it. The export remembers what the person who built it was allowed to see, and the
+  download checks that against the person asking; before, a narrower account could download an
+  administrator's export. Starting or retrying an operation through the general routes now
+  records who did it, so an export started that way is trimmed to that person's access. Its
+  result page no longer shows the server-side file location of the archive to anyone who cannot
+  manage settings.
+- A one-time permission an owner grants for a Repairs apply can be used only by the operation the
+  owner's own approval created; it used to be usable from a different start made by the same
+  signed-in owner.
+- The check for "does this log line mention a person" learned the shapes that carry only an
+  account number, and the same list now also cleans the extra details recorded with an activity
+  entry. The general System Logs list leaves out lines that mention a person for anyone who
+  cannot manage users; the earlier notes said it did, and only one of its two branches did.
+- An operation's error message and progress text, and the label of the item a run is on right
+  now, can mention a person. They are replaced by a short notice for anyone who cannot manage
+  users, on the operation pages, the live feed and the diagnostics export. A third review found
+  the same kind of text served by the Repairs lane's own list, the live worker labels, and the
+  reconcile and candidate-fetch pages; those follow the same rule. Two status pages (AI
+  diagnostics results and the iTunes import status) answered for any operation's number and could
+  show the progress of a Repairs run their caller may not see; each now answers only for its own
+  kind of operation.
+- A new automatic check fails the build when a new kind of operation result contains a user's
+  account number and is not placed behind the manage-users permission or the Repairs rules.
+
+One decision worth recording: undoing a book "combine" or sibling move still needs only the
+library-organize permission. That undo puts back the library's structure (the absorbed book and
+the progress folded into the survivor), which that permission governs; requiring the manage-users
+permission would take the combine-undo away from every editor whenever any user had progress on
+the absorbed book. The undo report is still stripped of other people's rows. Everything else,
+including every other kind of operation, looks the same as before to a person who only has view
+access.
+
+**Still open.**
+
+- The nightly summary entries still carry overall counts that include the hidden runs (how many
+  rows of each kind, and the tag totals), so a number can hint that such a run existed; their
+  items are removed. The Activity page's source counts are not filtered, and a few other overview
+  lists (stale operations, the pause list) are not yet covered.
+- Whether a log line names a user is decided by matching its text, so a line that names a user in
+  an unusual way can still be shown. Which notes in an undo report name a user is decided by a
+  coarse word match, so a note that only uses the word "user" is withheld too.
+- Some fixers record their changes without going through the checked writer, so the refusal of
+  unclassified change kinds does not reach them.
+- The System Logs page's general list still reads the old operation-log storage, which nothing
+  writes to any more, so it is empty in production; it also does not apply the Repairs-run
+  visibility rule to the operations it walks.
+- A Repairs run recorded before this change with no fixer named stays hidden from everyone and
+  cannot be cancelled by an administrator who did not start it. If the record of a Repairs run
+  has been deleted, its Activity lines that name the Repairs lane are hidden from everyone, but
+  the engine's own plain log lines for it cannot be told apart and stay visible.
+
+These are tracked in the to-do fragment filed with this change.
 
 ### Merging two accounts into one (22 October)
 
@@ -1749,7 +1863,8 @@ this summary. A section not listed here has no number identified (the review-hol
 | Bringing Audible's "finished" marks into the library | #3746 (cited) |
 | An uploaded reading list can update what a person has read | #4154 (by title) |
 | Every place that saves listening progress waits its turn | #4073 (cited) |
-| Closing the paths that showed other people's listening history | #4148 (cited; the follow-up was still open at month end) |
+| Closing the paths that showed other people's listening history | #4148 (cited; the follow-up is #4207) |
+| Repairs runs, their activity and the data they carry are private to the people who may use them | #4207 (checked) |
 | Smart collections show each person their own listening | #4181 (by title; the write-up cited the closed draft #4164) |
 | Linking versions brings the whole family | #3756, #3758, #3762 (cited) |
 | Undoing a repair no longer hides the real book | #3805 (cited) |

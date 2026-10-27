@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -261,7 +261,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 		"smartFound", res.SmartFound,
 		"imported", res.Imported, "skipped", res.Skipped,
 		"smartPlaylistsInStoreAfter", verified,
-		"owner", params.OwnerUserID)
+		"owner_user_id", params.OwnerUserID)
 
 	summary := fmt.Sprintf("%s: %d smart playlists found, %d imported, %d skipped",
 		mode, res.SmartFound, res.Imported, res.Skipped)

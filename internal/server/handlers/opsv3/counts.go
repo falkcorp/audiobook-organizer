@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/counts.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 4029c887-479b-45cc-8f37-fc9839c4d0c9
-// last-edited: 2026-10-17
+// last-edited: 2026-10-25
 
 package opsv3
 
@@ -42,6 +42,27 @@ func (h *Handler) Counts(c *gin.Context) {
 	if err != nil {
 		httputil.InternalError(c, "counts", err)
 		return
+	}
+	// The census holds every run; the caller's holds the runs they may read, so
+	// each group gives up the hidden Repairs runs and a group that reaches zero is
+	// left out. This keeps the invariant that a group's count is the length of its
+	// href's list (ListRuns counts only the runs the caller may read).
+	hidden, err := h.hiddenFor(c, rd)
+	if err != nil {
+		httputil.InternalError(c, "counts", err)
+		return
+	}
+	if hidden != nil && hidden.total > 0 {
+		// Copies: the store's maps are not ours to edit.
+		byState := make(map[state.V3]int64, len(oc.ByState))
+		for s, n := range oc.ByState {
+			byState[s] = n - hidden.byState[s]
+		}
+		byDef := make(map[string]int64, len(oc.ByDef))
+		for d, n := range oc.ByDef {
+			byDef[d] = n - hidden.byDef[d]
+		}
+		oc.ByState, oc.ByDef = byState, byDef
 	}
 	groups := []CountGroup{}
 	var total int64

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_applycap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5f2c8d17-9b3e-4a60-b7d4-1c6e0a2f8b95
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 package handlers_test
 
@@ -50,7 +50,7 @@ func diagOpWithSuggestions(t *testing.T, n, booksEach int, action string) *datab
 	raw, err := json.Marshal(map[string]any{"suggestions": suggestions})
 	require.NoError(t, err)
 	rd := string(raw)
-	return &database.OperationV2Row{ID: "op1", ResultData: &rd}
+	return &database.OperationV2Row{ID: "op1", DefID: handlers.DiagnosticsAIDefID, Status: "completed", ResultData: &rd}
 }
 
 func applySuggestionsBody(t *testing.T, approved ...string) string {
