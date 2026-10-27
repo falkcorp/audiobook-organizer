@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.13.0
+// version: 4.14.0
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-09-20
+// last-edited: 2026-10-26
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -38,7 +38,7 @@ import { formatProgressCounts, operationDisplayName } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
-import { describeRevertResult, describeUndoPreflight } from '../../utils/revertResult';
+import { describeRevertResult, describeUndoPreflight, isUndoRefused } from '../../utils/revertResult';
 
 function formatETA(op: ActiveOperation): string | null {
   if (!op.startedAt || op.progress <= 0 || op.total <= 0) return null;
@@ -179,6 +179,9 @@ export function OperationsIndicator() {
   const loadFromServer = useOperationsStore((state) => state.loadFromServer);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
+  // Operations the server refused to preflight an undo for (403): their Undo
+  // button is not offered again, since the same caller is refused every time.
+  const [undoRefused, setUndoRefused] = useState<ReadonlySet<string>>(() => new Set());
   const [activityTarget, setActivityTarget] = useState<ActivityTarget | null>(null);
   const [collapse, setCollapse] = useState<Record<CollapseKey, boolean>>(loadCollapseState);
   const navigate = useNavigate();
@@ -708,7 +711,8 @@ export function OperationsIndicator() {
                         </Button>
                       )}
                       {(op.type === 'organize' || op.type === 'scan_and_organize') &&
-                        op.status === 'completed' && (
+                        op.status === 'completed' &&
+                        !undoRefused.has(op.id) && (
                           <Button
                             size="small"
                             variant="outlined"
@@ -735,6 +739,9 @@ export function OperationsIndicator() {
                                   alert(describeRevertResult(result));
                                 }
                               } catch (err: unknown) {
+                                if (isUndoRefused(err)) {
+                                  setUndoRefused((prev) => new Set(prev).add(op.id));
+                                }
                                 const msg = (err as { message?: string })?.message || 'Undo failed';
                                 alert(msg);
                               }
