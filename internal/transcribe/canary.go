@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-27
 
@@ -97,13 +97,26 @@ var canaryFailed = struct {
 	// any backend but "mlx": noteCanaryPort), because such a worker is not the
 	// machine that was remembered for the URL, and a dispatch resolves a weak
 	// identity through it only for a worker that can (resolveMachine).
+	//
+	// A refused probe of the URL ends the link too (D58, noteProbeResult): the
+	// URL may have changed hands while nobody answered, so a worker that answers
+	// there next is the machine it reports, never the one remembered before.
 	byURL map[string]string
+	// attributed is the last strong identity a probe reported for each endpoint
+	// URL, like byURL, but it is the record of which URLs are ports of which
+	// machine, not the link a worker's identity is resolved through: a refusal
+	// of the URL ends byURL's link (noteProbeResult, D58) and leaves this, since
+	// a port that is down is still a port of its machine until it has been
+	// refused for deadPortAfter (markCanaryFailedLocked adds every one to a
+	// machine that fails the clip). A worker that cannot report a machine id
+	// answering at the URL ends it, as it ends byURL's. Bounded the same way.
+	attributed map[string]string
 	// firstRefused is, per endpoint URL, when the probes that have refused it
 	// began: the first probe of a run in which none has been answered. A probe
 	// that was answered deletes it (noteProbeResult). A port refused for
 	// deadPortAfter stops counting as a port of its machine (portDeadLocked).
 	firstRefused map[string]time.Time
-}{m: make(map[string]*canaryEntry), byURL: make(map[string]string), firstRefused: make(map[string]time.Time)}
+}{m: make(map[string]*canaryEntry), byURL: make(map[string]string), attributed: make(map[string]string), firstRefused: make(map[string]time.Time)}
 
 // deadPortAfter is how long a configured port must have refused every probe
 // before it stops counting as a port of the machine it was seen to belong to
@@ -184,7 +197,7 @@ func markCanaryFailedLocked(key string, ports []string) {
 		// among the ports the dispatch saw for it, and without this the machine
 		// could be forgotten on its other ports and the down port later given
 		// work with no canary.
-		for u, k := range canaryFailed.byURL {
+		for u, k := range canaryFailed.attributed {
 			if k == key && !portDeadLocked(u) {
 				e.ports[u] = true
 			}
@@ -310,6 +323,13 @@ func forgetCanaryIf(key string, gen uint64, urls []string, refused []gpuRefusal,
 // itself. So does one with no identity at all ("?" for a /health that could not
 // be read, "" for a refusal of one): nothing was read to say it is the same
 // machine, and an unknown worker is never given one.
+//
+// byURL is current only while the URL has been answered continuously: a refused
+// probe ends the link (noteProbeResult, D58), so a worker that answers as "u:"
+// after a refusal stands for itself. Two probes that both answer cannot tell a
+// URL that changed hands from one that did not, and the link then names the
+// machine last seen there (N1 of the D58 review): unchanged, and bounded by
+// production running one port per Mac.
 func resolveMachine(url, raw string, idCapable bool) string {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
@@ -345,6 +365,7 @@ func noteCanaryPort(key, url string, idCapable bool) {
 			}
 		}
 		canaryFailed.byURL[url] = key
+		canaryFailed.attributed[url] = key
 	} else if !idCapable {
 		for k, e := range canaryFailed.m {
 			if k != key {
@@ -352,23 +373,60 @@ func noteCanaryPort(key, url string, idCapable bool) {
 			}
 		}
 		delete(canaryFailed.byURL, url)
+		delete(canaryFailed.attributed, url)
 	}
 	if e := canaryFailed.m[key]; e != nil {
 		e.ports[url] = true
 	}
 }
 
+// attributedMachine is the last strong identity (an "m:" machine key) a probe
+// reported for url, whether or not the URL has been refused since (see
+// canaryFailed.attributed), or "" when none is known. It answers which machine a
+// URL belonged to, not who is behind it now: a caller that needs the second
+// question resolves through resolveMachine.
+func attributedMachine(url string) string {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	return canaryFailed.attributed[url]
+}
+
 // noteProbeResult records whether a probe of url was answered, for the
-// dead-port rule (D56): an answer, from any worker, ends the run of refusals;
-// a refusal begins one if none is running.
+// dead-port rule (D56) and for the guard of the URL-to-machine link (D58): an
+// answer, from any worker, ends the run of refusals; a refusal begins one if
+// none is running, and it also drops byURL[url].
+//
+// byURL is the identity of address (D55): the machine last seen behind a URL
+// is the one a worker that missed its machine id is taken for. It stays right
+// as long as the URL is answered continuously. A refused probe is the one
+// moment the URL can have changed hands (a tunnel dropped and came back
+// pointing at another Mac, or the Mac was swapped), so it ends the link: the
+// next answer from the URL is the machine it reports, and a worker that
+// answers as "u:" stores that raw address identity instead of inheriting the
+// old machine (D58). The canary memory does not depend on the link: a machine
+// that failed the clip is still found through its ports (canaryEntry.ports,
+// resolveCanaryKeyLocked), and a refused port stays a port of its machine
+// until it has been refused for deadPortAfter, which is why the record of
+// which URL belongs to which machine (attributed) is a map of its own that a
+// refusal leaves alone.
+//
+// Residual, accepted by the owner (D58): a URL that changes hands between two
+// probes that both answer is not noticed. Production ports are one per Mac
+// (deploy/launchd/com.jdfalk.whisper-tunnel.plist, scripts/setup_mac_ai_worker.py),
+// so two machines do not trade a URL without the tunnel dropping first, which
+// the next probe refuses. The one place two Macs can share a port is the
+// host-index-0 collision those two files document.
 func noteProbeResult(url string, answered bool) {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
 	if answered {
 		delete(canaryFailed.firstRefused, url)
-	} else if _, running := canaryFailed.firstRefused[url]; !running {
+		return
+	}
+	if _, running := canaryFailed.firstRefused[url]; !running {
 		canaryFailed.firstRefused[url] = canaryNow()
 	}
+	delete(canaryFailed.byURL, url)
 }
 
 // pruneUnconfiguredCanaryURLs drops every URL that is not one of the configured
@@ -380,6 +438,12 @@ func noteProbeResult(url string, answered bool) {
 // would otherwise live for as long as the process does. An entry that never had a
 // port is not touched. Every production caller of dispatchPool passes the whole
 // configured pool.
+//
+// So removing a URL from the configuration and adding it back forgets a sick
+// machine behind it (N4 of the D58 review): the removal is the operator saying
+// the endpoint is gone, and a machine that comes back with the URL is asked
+// nothing before it gets work. That is accepted, because the next time it times
+// out it is found sick again by the first dispatch that faults on it.
 func pruneUnconfiguredCanaryURLs(configured []Endpoint) {
 	keep := make(map[string]bool, len(configured))
 	for _, ep := range configured {
@@ -390,6 +454,11 @@ func pruneUnconfiguredCanaryURLs(configured []Endpoint) {
 	for u := range canaryFailed.byURL {
 		if !keep[u] {
 			delete(canaryFailed.byURL, u)
+		}
+	}
+	for u := range canaryFailed.attributed {
+		if !keep[u] {
+			delete(canaryFailed.attributed, u)
 		}
 	}
 	for u := range canaryFailed.firstRefused {
@@ -442,7 +511,7 @@ func (e *canaryEntry) hasUnheardPort(key string, refused []gpuRefusal, kept []ga
 		}
 	}
 	for _, g := range kept {
-		if !g.Probed && g.machineKey() != key && e.hasPort(g.Endpoint.URL) {
+		if !g.Probed && g.identityKey() != key && e.hasPort(g.Endpoint.URL) {
 			return true
 		}
 	}

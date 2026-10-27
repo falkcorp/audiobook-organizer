@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -838,7 +838,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					// What the probe read now is what the canary and the work get
 					// (health carries the worker's timeouts and limits), not what
 					// it said minutes ago. The identity the dispatch groups the
-					// endpoint under stays the one its gate gave it (keyFor).
+					// endpoint under stays the one its gate gave it (keyFor), and
+					// so is the one stored with its answers (N2 of the D58 review).
+					g = g.withIdentity(keyOf(g.Endpoint.URL))
 					probeByURL[g.Endpoint.URL] = g
 					answers[g.Endpoint.URL] = true
 				}
@@ -1008,7 +1010,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// id now, and a run that stored the machine's name must match a worker that
 	// answers as "u:" now. A job is steered away from a machine however its strike
 	// named it, so steerAway and a condemnation, which names keyOf, agree (S-D of
-	// the review of f241ec20a).
+	// the review of f241ec20a). A stored "u:" id made from ANOTHER port's URL
+	// reaches here through avoidOf, which adds the machine of that port to the
+	// avoid set (weakOwner).
 	identitiesOf := func(url string) []string {
 		if !probeByURL[url].Probed {
 			return nil
@@ -1035,6 +1039,38 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			if set := splitWorkers(v); len(set) > 0 {
 				avoidOf[id] = set
 			}
+		}
+	}
+	// A stored "u:" id is the hash of ONE port's URL, written while the machine
+	// behind that port answered as a weak identity (D55), and it names that
+	// machine, not the port: when the machine answers with its id on every port
+	// now, the strike must steer a job off all of them, not only off the port the
+	// hash was made from (S1 of the D58 review). So each stored "u:" id of a
+	// configured endpoint is resolved to the machine of that endpoint, the one
+	// this dispatch resolved for it (keyOf) or, for an endpoint not in the
+	// dispatch, the last machine a probe attributed to its URL, and the machine's
+	// own key joins the avoid set (identitiesOf names every endpoint of the
+	// machine by it). A wrong match only steers a job further away than it
+	// needed to go, which is safe: steerAway never strands a job.
+	weakOwner := make(map[string]string, len(endpoints))
+	for _, ep := range endpoints {
+		m, gated := keyFor[ep.URL]
+		if !gated {
+			m = attributedMachine(ep.URL)
+		}
+		if isStrongKey(m) {
+			weakOwner["u:"+shortHash(ep.URL)] = m
+		}
+	}
+	for _, set := range avoidOf {
+		var machines []string
+		for id := range set {
+			if m := weakOwner[id]; m != "" {
+				machines = append(machines, m)
+			}
+		}
+		for _, m := range machines {
+			set[m] = true
 		}
 	}
 	steerAway := func(eps []Endpoint, asg []map[string]J) {
@@ -1687,7 +1723,9 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 				return results, classifyTransport([]string{url}, ctx.Err())
 			}
 			if len(kept) > 0 {
-				g = kept[0]
+				// The health is the fresh probe's; the identity stays the one
+				// the dispatch began with (key), as in dispatchPool.
+				g = kept[0].withIdentity(key)
 				break
 			}
 			if allTransient(refusedNow) && time.Now().Before(sg.paceUntil) {

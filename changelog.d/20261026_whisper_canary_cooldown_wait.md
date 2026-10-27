@@ -171,3 +171,30 @@ for nothing) no longer counts as a port of its machine.
   comment above `hasUnheardPort` became its method comment.
 - `resolveCanaryKeyLocked` no longer asks the address map first: every address it
   gives a machine is already one of that machine's ports.
+
+#### A refused port forgets its machine, and an old weak strike steers off every port of its machine
+
+A worker that missed its machine id (`u:`) is taken for the machine its address
+last reported. That link is now ended by a refused probe: a refused address is the
+one moment it can have changed hands (a tunnel that dropped and came back from
+another Mac), so a worker that answers as `u:` afterwards stands for itself and
+is not credited with the old machine's id, strikes or condemnations. The canary
+memory does not depend on the link and still finds a remembered machine through
+its ports, and a port that is refused stays a port of its machine until it has
+been down 24 hours. A URL that changes hands between two probes that both answer
+is not noticed; production runs one server port per Mac, so this is accepted.
+
+A strike stored as `u:` plus the hash of one port, while the machine behind that
+port answered as a weak identity, now steers a file away from every port of that
+machine and not only the one the hash was made from. A wrong match only steers a
+file further away.
+
+The identity stored with the answers of an endpoint that is probed again after a
+wait is the one the dispatch began with, on the pool and the lone-endpoint path.
+The check for a port of a machine that did not answer the canary reads the same
+identity the rest of the dispatch uses.
+
+The single-Mac tunnel template (`deploy/launchd/com.jdfalk.whisper-tunnel.plist`)
+and `scripts/setup_mac_ai_worker.py` host index 0 both use server port 19848, so
+a Mac on each race for one port. Both files and the Whisper docs now say so; the
+ports are unchanged.

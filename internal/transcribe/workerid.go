@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-27
 
@@ -88,6 +88,19 @@ func (g gatedEndpoint) identityKey() string {
 		return g.resolved
 	}
 	return g.machineKey()
+}
+
+// withIdentity is g carrying key as its identity, for a re-probe that replaces
+// an endpoint's health but must not give the dispatch a second identity for it
+// (see gatedEndpoint.resolved): identityKey, and so storedWorker, then answer
+// with the identity the dispatch began with. A key that stands for no machine
+// ("" or a "?" key, an endpoint whose /health could not be read) is not carried:
+// the endpoint answered this time, and what it reports is the better identity.
+func (g gatedEndpoint) withIdentity(key string) gatedEndpoint {
+	if key != "" && !strings.HasPrefix(key, "?") {
+		g.resolved = key
+	}
+	return g
 }
 
 // storedWorker is workerID resolved by address, the identity stored with a

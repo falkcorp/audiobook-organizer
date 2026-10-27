@@ -1,7 +1,7 @@
 <!-- file: docs/operations/metal-whisper-worker.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: c47a8e21-93b5-4d06-8f7a-1e6b2c9d5308 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-27 -->
 
 # Metal Whisper worker (Mac)
 
@@ -177,6 +177,21 @@ sed -e "s#USERNAME#$USER#g" -e "s#PROD_HOST#<server>#g" \
 launchctl load -w $LA/com.jdfalk.whisper-mlx.plist
 launchctl load -w $LA/com.jdfalk.whisper-tunnel.plist
 ```
+
+### One server port, one Mac
+
+`com.jdfalk.whisper-tunnel.plist` hard-codes the server-side port `19848`, and
+`scripts/setup_mac_ai_worker.py` gives `--host-index 0` the same `19848..`
+block. A Mac on this single-Mac template and a Mac set up with `--host-index 0`
+race for one server port: the tunnel runs with `ExitOnForwardFailure`, so the
+loser retries every 30 s and whichever reconnects first after a drop holds the
+port. The server then reaches a different Mac through the same URL, and the
+transcribe dispatcher, which treats a URL as one machine, can credit one Mac's
+canary and timeout strikes to the other (a refused probe of the URL ends that
+link: `noteProbeResult` in `internal/transcribe/canary.go`, but two probes that
+both answer cannot tell the swap). Keep this template on at most one Mac, and
+give every other Mac its own `--host-index`. The ports are deliberately not
+changed.
 
 ### The tunnel must own its SSH connection
 

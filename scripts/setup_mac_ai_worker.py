@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/setup_mac_ai_worker.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 3b8e6d21-7f4a-4c19-9e52-0a6d4f8c1b73
-# last-edited: 2026-10-22
+# last-edited: 2026-10-27
 """Set up an Apple Silicon Mac as an AI worker for audiobook-organizer.
 
 It installs and configures three things:
@@ -24,6 +24,16 @@ Each Mac gets its own block of server-side ports, chosen by --host-index:
 The ports on the Mac itself are always 11434 and 19848.. . Only the
 server-side ports differ, and those must never collide: the tunnel sets
 ExitOnForwardFailure, so a taken port kills the WHOLE tunnel, whisper included.
+
+WARNING: host index 0 gets server-side whisper port 19848, the same port the
+older single-Mac template hard-codes
+(deploy/launchd/com.jdfalk.whisper-tunnel.plist, `-R 19848:127.0.0.1:19848`). A
+Mac still on that template and a Mac set up here with --host-index 0 race for
+one server port: whichever reconnects first after a drop holds it, and the
+server then reaches a different Mac through the same URL. The dispatcher treats
+a URL as one machine (internal/transcribe/canary.go), so that mixes the two
+Macs' canary memory and strikes. Give every Mac its own --host-index, and keep
+the legacy template on at most one Mac, the one that is index 0.
 
 By default this prints the plan and changes nothing. Pass --apply to run it.
 
@@ -80,6 +90,10 @@ def plan_ports(host_index: int, workers: int) -> PortPlan:
     if not 1 <= workers <= MAX_WORKERS:
         raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
     local = tuple(WHISPER_LOCAL_BASE + i for i in range(workers))
+    # Host index 0 lands on 19848.., the port the legacy single-Mac tunnel plist
+    # (deploy/launchd/com.jdfalk.whisper-tunnel.plist) hard-codes: a Mac on that
+    # plist and a host-index-0 Mac race for the same server port. See the module
+    # docstring; the ports are not changed.
     remote_base = WHISPER_LOCAL_BASE + WHISPER_REMOTE_STRIDE * host_index
     remote = tuple(remote_base + i for i in range(workers))
     return PortPlan(host_index, OLLAMA_LOCAL_PORT + host_index, local, remote)
