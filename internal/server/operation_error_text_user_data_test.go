@@ -1,5 +1,5 @@
 // file: internal/server/operation_error_text_user_data_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1d9e48-3a75-4b02-8f6e-d4a0b7c25e13
 // last-edited: 2026-10-26
 
@@ -103,12 +103,20 @@ func TestOperationErrorText_V3EventStreamWithholdsIt(t *testing.T) {
 	for who, wantWhole := range map[string]bool{mgr: false, f.admin: true} {
 		ctx, cancel := context.WithCancel(context.Background())
 		body, wait := openStream(t, f, ctx, "/api/v3/ops/events", who)
-		for _, id := range []string{opErrNamesUser, opErrClean} {
-			require.NoError(t, f.srv.opHub.Publish(ctx, "op.updated", map[string]any{"op_id": id}))
-		}
+		// The broker starts on its first client and subscribes to the hub from
+		// its own goroutine, so the heartbeat can arrive before it listens and a
+		// single publish can land in that gap. Re-publish until both runs are on
+		// the stream: an op.updated is a re-read of the run, so a repeat is
+		// harmless.
 		require.Eventually(t, func() bool {
-			return strings.Contains(body(), `"id":"`+opErrClean+`"`) && strings.Contains(body(), `"id":"`+opErrNamesUser+`"`)
-		}, 5*time.Second, 5*time.Millisecond, "events never arrived: %s", body())
+			if strings.Contains(body(), `"id":"`+opErrClean+`"`) && strings.Contains(body(), `"id":"`+opErrNamesUser+`"`) {
+				return true
+			}
+			for _, id := range []string{opErrNamesUser, opErrClean} {
+				require.NoError(t, f.srv.opHub.Publish(ctx, "op.updated", map[string]any{"op_id": id}))
+			}
+			return false
+		}, 30*time.Second, 50*time.Millisecond, "events never arrived: %s", body())
 		got := body()
 		require.Contains(t, got, "disk full", "an ordinary error stays on the stream")
 		require.Equal(t, wantWhole, strings.Contains(got, errUserMarker), "stream for admin=%t: %s", wantWhole, got)

@@ -1,5 +1,5 @@
 // file: internal/server/event_stream_live_access_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9c4e7a15-3d82-4b6f-a0e9-5f1b8d2c7a43
 // last-edited: 2026-10-26
 
@@ -129,19 +129,32 @@ func TestOpsV3Events_RoleLoweredMidStreamStopsTheRuns(t *testing.T) {
 			"%s: want %d events, have %d: %s", id, n, count(id), body())
 	}
 
-	announce(f.defaultApply, f.plainScan)
-	waitFor(f.defaultApply, 1)
-	waitFor(f.plainScan, 1)
+	// The broker starts on its first client and subscribes to the hub from its
+	// own goroutine, so the heartbeat can arrive before it listens and an
+	// announce can land in that gap. Re-announce until both runs are on the
+	// stream, then drain once more so every repeat has been written before the
+	// counts below are taken as the baseline.
+	require.Eventually(t, func() bool {
+		if count(f.defaultApply) >= 1 && count(f.plainScan) >= 1 {
+			return true
+		}
+		announce(f.defaultApply, f.plainScan)
+		return false
+	}, 30*time.Second, 50*time.Millisecond, "the runs never arrived: %s", body())
+	plain := count(f.plainScan)
+	announce(f.plainScan)
+	waitFor(f.plainScan, plain+1)
+	repairs, plain := count(f.defaultApply), count(f.plainScan)
 
 	setOpsManagerPermissions(t, f, auth.PermLibraryView, auth.PermSettingsManage)
 	announce(f.defaultApply)
 	announce(f.plainScan)
-	waitFor(f.plainScan, 2)
+	waitFor(f.plainScan, plain+1)
 	// A later flush of the plain run is queued behind everything the first one
 	// published, so seeing it means the default run's second event was decided.
 	announce(f.plainScan)
-	waitFor(f.plainScan, 3)
-	require.Equal(t, 1, count(f.defaultApply), "the Repairs run's event after the demotion was withheld: %s", body())
+	waitFor(f.plainScan, plain+2)
+	require.Equal(t, repairs, count(f.defaultApply), "the Repairs run's event after the demotion was withheld: %s", body())
 
 	cancel()
 	wait()
