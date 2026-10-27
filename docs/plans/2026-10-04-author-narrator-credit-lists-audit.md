@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.2.3 -->
+<!-- version: 1.2.4 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -649,7 +649,18 @@ the row above:
   Montoya-Sawyer". When several books name one NEW narrator under spellings of one fold
   key, the record takes the most frequent spelling among ALL the eligible books, not
   only the cohort a `limit` cut (ties: the lexically smallest), chosen before the first
-  write, so a full dry run, a first cohort and the cohorts after it agree. A rescan with an unlocked narrator field reads the tag's
+  write. That holds for a full run and for `limit` runs only. Cohorts do NOT fully
+  agree with a single full apply: (a) phase 1 plans every book against the record index
+  frozen at the start of the run, so a narrator record created by an earlier cohort
+  counts as existing in a later cohort, and a book the dry run listed under
+  `narrator_new_from_split` (review) can be written by a later cohort or by a re-run
+  once an earlier cohort created that record, which a single full apply would not do;
+  (b) a `book_ids` run counts spellings over only the books in that run
+  (`settleNewSpellings`), so it can pick a minority spelling that a later full run then
+  respells other books to. A name standing as whole words inside another credit
+  ("Jean Paul Valley Jr." beside "Jean Paul Valley", a translator credit before "Read
+  by") is refused by the read-back (`narrator_spelling_json_conflict` /
+  `narrator_spelling_unreconcilable`), never written wrong. A rescan with an unlocked narrator field reads the tag's
   spelling back and the column-to-junction sync can mint an unaccented duplicate
   record; that is a separate change (`todo.d/2026-10-27-narrator-sync-fold-match.md`).
   Junk names ("N/A", "Various", "Unknown", "Narrator", "Full Cast", a placeholder and

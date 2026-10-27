@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -39,6 +39,32 @@
   fields. A book whose narrator a person has locked is held on the narrator side. A
   book where a later rescan moved the author and the old main author is the stale half
   is listed for review instead of being put first.
+- **Spelling fixes for narrators.** When the job links a narrator name to an existing
+  person who is spelled a little differently (for example "Renee Montoya" and the
+  record "Renée Montoya", or "Jean Paul Valley" and "Jean-Paul Valley"), it also
+  rewrites that name in the book's narrator text and in the book's stored narrator list
+  to the record's spelling. Only the credit that is the name is changed: a "Read by"
+  prefix, a role such as "- translator" and a co-narrating author stay as they were.
+  Both rewrites are recorded and can be undone. A book whose name cannot be respelled
+  safely is not written on the narrator side and is held for review: the spelling
+  cannot be reconciled, the stored list and the text conflict, or the name matches two
+  people. A name standing as whole words inside another credit (such as "Jean Paul
+  Valley Jr." next to "Jean Paul Valley") is one of these held cases, never written
+  wrong. The author side of such a book is still written.
+- **Review lists are kept.** Every run, a limited one too, stores the full list of book
+  ids behind each count so each count can be clicked through. For a full library that
+  is roughly 5 to 12 MB per run, and nothing removes it by age: it stays until the
+  operation is discarded.
+- **Running in batches is not the same as one full run.** Two things differ. First,
+  the job decides everything at the start of a run using the narrator people that
+  exist then. A person created by an earlier batch counts as existing for a later
+  batch, so a book the preview listed as "needs a new person from a split name" (held
+  for review) can be written by a later batch, or by a re-run once an earlier batch
+  created that person. A single full run would not have written it. Second, a run
+  restricted to chosen books picks the spelling of a new narrator by counting only
+  those books, so it can choose a less common spelling that a later full run then
+  changes other books to. Runs limited by a number count over the whole library and do
+  not have this second difference.
 - **Previewed first, and reversible.** With no options the job only reports what it
   would do. It lists every group of books with ids and shows before and after examples.
   It also lists every book that would be filed under a different author folder the
