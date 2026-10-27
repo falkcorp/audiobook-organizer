@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.41.0
+// version: 2.42.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-26
 
@@ -366,7 +366,10 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// join must be registered HERE, above every early return between this point
 	// and the reporter's construction, so no exit path can skip it.
 	var reporterForJoin *dbReporter
-	defer func() {
+	// endAttempt is the attempt's cleanup, idempotent so the in-place continue can
+	// run it early (see the yield path below) and the defer still covers every
+	// other exit.
+	endAttempt := func() {
 		// Revoke before cancel on every exit of executeRun, including the
 		// abandonment returns: the run is over from the registry's side, so a
 		// goroutine still alive must not write.
@@ -380,7 +383,8 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		if reporterForJoin != nil {
 			reporterForJoin.awaitFlush(10 * time.Second)
 		}
-	}()
+	}
+	defer endAttempt()
 
 	// Register the handle. Before overwriting the dispatcher's stub, honor a
 	// cancel that arrived while the run sat in the buffered nextRun channel
@@ -876,14 +880,32 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		r.markTimedOutStopping(runCtx, qr, h)
 	}
 	// A yield (ErrContinueInPlace) is honoured only when the run's context is
-	// still live: a deadline, a cancel and a watchdog kill all cancel it, and
-	// those keep the decision finalStatusForCanceledRun makes for them. It is
+	// still live (a deadline, a cancel and a watchdog kill all cancel it, and
+	// those keep the decision finalStatusForCanceledRun makes for them) AND this
+	// attempt reported progress past where it started (yieldHonoured). It is
 	// recorded in v3 as stopping{quiesce} (a pause that comes back), the same
 	// way a deadline is recorded as stopping{timeout}, before the handle is
 	// released.
-	yielded := !ctxCanceled && continuesInPlace(def, runErr)
+	yieldAsked := !ctxCanceled && continuesInPlace(def, runErr)
+	yielded := yieldAsked && attemptProgressed(reporter)
+	if yieldAsked && !yielded {
+		r.logger.Warn("registry: run asked to continue in place but made no progress this attempt; failing it instead of restarting it",
+			"op_id", qr.opID, "def_id", qr.defID)
+	}
 	if yielded {
 		r.markStopping(qr, h, state.StopQuiesce, false)
+		// The attempt is over, so end it NOW rather than at return: cancel its
+		// context and join the reporter's flush loop, whose terminal flush writes
+		// this attempt's last progress to the row. Done after the re-queue (the
+		// deferred join), that write landed on the RESUMED attempt's row and could
+		// overwrite its first progress with the old attempt's. Done before the
+		// pause is written, the row also spends no time paused waiting for the
+		// join, which keeps the window in which a status poller can see
+		// interrupted_quiesced down to the re-queue's own writes. The lines are
+		// emitted first because a joined reporter drops them.
+		emitPendingProgress(reporter)
+		_ = reporter.Log(slog.LevelInfo, "operation reached its time budget; continuing in place under the same operation id")
+		endAttempt()
 	}
 	r.releaseRunHandle(qr.opID)
 
@@ -899,6 +921,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		outcome = pauseOutcome(finalStatus)
 		msg := continueInPlaceMessage
 		errMsg = &msg
+	case yieldAsked:
+		// The sentinel without progress: a failure, with the reason, never a restart.
+		finalStatus, outcome = "failed", opsmetrics.OutcomeFailed
+		msg := continueInPlaceNoProgressMessage(runErr)
+		errMsg = &msg
 	case runErr != nil:
 		finalStatus, outcome = "failed", opsmetrics.OutcomeFailed
 		msg := runErr.Error()
@@ -910,16 +937,45 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	out := r.writeRunTerminalStatus(qr, h, finalStatus, outcome, &completedAt, errMsg)
 	finalStatus = out.status
 
+	// Re-queue a yielded run under its own id, from its saved progress, right
+	// after the pause is written. Only when the pause was recorded (a Cancel that
+	// landed first leaves "canceled", which stays canceled) and not during
+	// shutdown: the row then stays interrupted_quiesced and the next boot's
+	// resume sweep picks it up, the convention the scan stand-down keeps (a
+	// re-queue now would publish a run nobody will start and count a second
+	// resume for one restart). The reporter was joined above, so nothing of the
+	// old attempt writes after this.
+	continuing := false
+	if yielded && out.status == string(state.InterruptedQuiesced) && !r.shuttingDown.Load() {
+		r.logger.Info("registry: run yielded before its deadline; continuing in place",
+			"op_id", qr.opID, "def_id", qr.defID)
+		continuing = r.resumeQuiescedOp(qr.opID)
+	}
+
 	// R-1: fan out op.terminal so the UI bell stops showing this op as running.
-	if out.publish {
+	// Not for an in-place continue: the op is not over (its re-queue announced
+	// op.created), and op.terminal would drop it from the bell, mark it settled
+	// for the live store and mirror "interrupted" onto its legacy row. A pause
+	// that could not be re-queued is announced as the terminal event it is.
+	if out.publish && !continuing {
 		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
 	}
 	r.recordRunMetrics(h, qr.defID, out, runStartedAt)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
-	// for the same subject can be re-evaluated or failed as appropriate.
-	r.notifyDepTerminal(finalStatus, qr)
+	// for the same subject can be re-evaluated or failed as appropriate. Not for
+	// an in-place continue: failing the subjects' dependents at a pause that
+	// comes right back would be wrong.
+	if !continuing {
+		r.notifyDepTerminal(finalStatus, qr)
+	}
 
+	if continuing {
+		// The "operation continuing" line was emitted before the join; a finished
+		// line here would tell the op log the operation ended.
+		r.logger.Info("registry: run yielded; re-queued", "op_id", qr.opID, "status", finalStatus)
+		return false
+	}
 	emitPendingProgress(reporter)
 	logErr := runErr
 	if yielded {
@@ -927,18 +983,6 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 	emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, logErr, false, h.lastProgressAt.Load() != 0)
 	r.logger.Info("registry: run finished", "op_id", qr.opID, "status", finalStatus)
-
-	// Re-queue a yielded run under its own id, from its saved progress. Only
-	// when the pause was recorded (a Cancel that landed first leaves "canceled",
-	// which stays canceled) and not during shutdown: the row then stays
-	// interrupted_quiesced and the next boot's resume sweep picks it up, the
-	// convention the scan stand-down keeps (a re-queue now would publish a run
-	// nobody will start and count a second resume for one restart).
-	if yielded && out.status == string(state.InterruptedQuiesced) && !r.shuttingDown.Load() {
-		r.logger.Info("registry: run yielded before its deadline; continuing in place",
-			"op_id", qr.opID, "def_id", qr.defID)
-		r.resumeQuiescedOp(qr.opID)
-	}
 	return false
 }
 

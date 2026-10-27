@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.17.3
+// version: 1.18.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package registry
 
@@ -752,6 +752,10 @@ func (r *dbReporter) SetResult(v any) error {
 	return nil
 }
 
+// AttemptMadeProgress implements AttemptProgress: whether this attempt reported
+// progress past the position it started from (see processedItems.madeProgress).
+func (r *dbReporter) AttemptMadeProgress() bool { return r.items.madeProgress() }
+
 // TouchLiveness implements LivenessToucher: it stamps the runHandle's
 // lastProgressAt atomic -- the clock the stuck-op watchdog reads -- and nothing
 // else. No DB write, no bus event, no progress change, so current/total stay
@@ -1021,6 +1025,10 @@ type processedItems struct {
 	segTotal int  // total of the current segment
 	mark     int  // highest current already counted in the current segment
 	seen     bool // a determinate report has been observed in this attempt
+	// advanced is true once a report moved past the mark the attempt started
+	// from or reached: the attempt did new work. Reports that merely replay the
+	// inherited position (or sit below it) do not set it.
+	advanced bool
 }
 
 // newProcessedItems returns the counter for one attempt of defID, seeded with
@@ -1031,6 +1039,17 @@ func newProcessedItems(ops *opsmetrics.Recorder, defID string, startCurrent, sta
 		ops = opsmetrics.Default()
 	}
 	return &processedItems{ops: ops, defID: defID, segTotal: startTotal, mark: max(0, startCurrent)}
+}
+
+// madeProgress reports whether any report of this attempt counted items beyond
+// the position the attempt started from. A nil receiver reports false.
+func (p *processedItems) madeProgress() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.advanced
 }
 
 // observe accounts for one UpdateProgress(current, total). Safe for
@@ -1057,6 +1076,9 @@ func (p *processedItems) observe(current, total int) {
 		// A new phase (or an attempt restarting below its seed): start a
 		// segment at this report.
 		p.mark, p.segTotal = current, total
+	}
+	if add > 0 {
+		p.advanced = true
 	}
 	p.mu.Unlock()
 	p.ops.Items(p.defID, opsmetrics.ItemsProcessed, int64(add))
