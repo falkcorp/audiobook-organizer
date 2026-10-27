@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/fixture_test_packages.py
-# version: 1.2.2
+# version: 1.3.0
 # guid: 92f31101-2399-4ce9-9b83-0af332666123
-# last-edited: 2026-10-06
+# last-edited: 2026-10-27
 """List the Go packages whose tests skip under -short, for `make test-fixtures`.
 
 Every PR-gating Go test run in this repo passes -short (`make test-short` in
@@ -25,6 +25,18 @@ A package is selected when any of these holds:
 Discovery goes through `go list ./...`, which honors go.mod's `ignore ./web`,
 so Go files under web/node_modules are never picked up.
 
+The partition is host-independent. Each of the three Woodpecker shard
+workflows runs this script on whichever agent picks it up (linux/amd64 or
+darwin/arm64), and OS-specific test files and build tags (reflink_control_*,
+race_enabled_*) make the native package set differ between hosts. A greedy bin
+assignment over differing lists can shift so a package lands in NO shard
+(silent skip) or in two. So discovery always runs under GOOS=linux
+GOARCH=amd64 CGO_ENABLED=1 -- the set ci.yml's ubuntu runner sees -- and only
+the packages assigned to THIS shard are then checked against the native
+`go list`; one that cannot be tested here fails loudly instead of being
+skipped. A short hash of the partition input goes to stderr so shard logs can
+be compared.
+
 Usage:
   fixture_test_packages.py                 # every selected package, one per line
   fixture_test_packages.py --shard 2/3     # shard 2 of 3 (1-based)
@@ -40,7 +52,9 @@ into a list that silently dropped every vptest-based package.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -92,6 +106,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _SHORT_RE = re.compile(r"\btesting\.Short\(\)")
 
+# The platform the partition is computed for, whatever host runs the script:
+# what ci.yml's ubuntu-latest runner has (cgo on, which is its default there).
+_DISCOVERY_ENV = {"GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "1"}
+
 
 def _calls_short(directory: str, files: list[str]) -> bool:
     for name in files:
@@ -103,8 +121,16 @@ def _calls_short(directory: str, files: list[str]) -> bool:
     return False
 
 
-def _load_packages(root: Path) -> list[dict]:
-    res = subprocess.run(["go", "list", "-json", "./..."], capture_output=True, text=True, cwd=root)
+def _go_list_json(
+    root: Path, patterns: list[str], env_overrides: dict[str, str], extra: tuple[str, ...] = ()
+) -> list[dict]:
+    res = subprocess.run(
+        ["go", "list", *extra, "-json", *patterns],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        env={**os.environ, **env_overrides},
+    )
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
         raise SystemExit(f"fixture_test_packages: go list failed (exit {res.returncode})")
@@ -119,6 +145,39 @@ def _load_packages(root: Path) -> list[dict]:
         obj, i = dec.raw_decode(text, i)
         pkgs.append(obj)
     return pkgs
+
+
+def _load_packages(root: Path) -> list[dict]:
+    return _go_list_json(root, ["./..."], _DISCOVERY_ENV)
+
+
+def partition_hash(pkgs: list[str]) -> str:
+    """Short digest of the full partition input, to compare shard logs."""
+    return hashlib.sha256("\n".join(sorted(pkgs)).encode()).hexdigest()[:12]
+
+
+def verify_testable_here(assigned: list[str], root: Path = _REPO_ROOT) -> None:
+    """Fail loudly if a package assigned to this shard cannot be tested on this
+    host: absent from the native `go list`, broken there, or with every test
+    file excluded by this host's GOOS/GOARCH/tags. Skipping it instead would
+    drop it from every shard's coverage without a trace."""
+    native = _go_list_json(root, assigned, {}, extra=("-e",))
+    by_path = {p["ImportPath"]: p for p in native}
+    problems = []
+    for path in assigned:
+        p = by_path.get(path)
+        if p is None:
+            problems.append(f"{path}: not in this host's go list")
+        elif p.get("Error") or p.get("DepsErrors"):
+            err = p.get("Error") or p["DepsErrors"][0]
+            problems.append(f"{path}: {err.get('Err', err) if isinstance(err, dict) else err}")
+        elif not (p.get("TestGoFiles") or p.get("XTestGoFiles")):
+            problems.append(f"{path}: no test files build on this host")
+    if problems:
+        raise SystemExit(
+            "fixture_test_packages: package(s) assigned to this shard cannot be tested on "
+            "this host (refusing to skip them silently):\n  " + "\n  ".join(problems)
+        )
 
 
 def find_helpers(
@@ -207,6 +266,10 @@ def main() -> None:
     args = ap.parse_args()
 
     pkgs = discover().selected
+    sys.stderr.write(
+        f"fixture_test_packages: partition input {len(pkgs)} packages, "
+        f"hash {partition_hash(pkgs)} (GOOS=linux GOARCH=amd64 CGO_ENABLED=1)\n"
+    )
     if args.shard:
         m = re.fullmatch(r"(\d+)/(\d+)", args.shard)
         if not m or not 1 <= int(m.group(1)) <= int(m.group(2)):
@@ -218,6 +281,7 @@ def main() -> None:
             raise SystemExit(
                 f"fixture_test_packages: shard {args.shard} is empty; use fewer shards"
             )
+    verify_testable_here(pkgs)
     print("\n".join(pkgs))
 
 

@@ -1,5 +1,5 @@
 # file: .woodpecker/test-fixtures-3.yaml
-# version: 1.0.0
+# version: 1.0.1
 # guid: 13014a42-ab00-4738-8bc3-4e5be21eeb6c
 # last-edited: 2026-10-27
 #
@@ -66,7 +66,9 @@ steps:
     commands:
       # GOMODCACHE and GOCACHE are set by the first command, not here: the two
       # heavy agents keep the cache in different places (/tank/ci/cache on U1,
-      # $HOME/ci/cache on llm1), and `environment:` takes only literals.
+      # the CI user's home-directory cache on llm1 -- not the per-run HOME; the
+      # path is set in scripts/ci/cache_env.sh), and `environment:` takes only
+      # literals.
       # The local backend gives every pipeline a fresh HOME, so Go's default
       # caches (under $HOME, including the downloaded toolchain) were
       # re-created per run and never removed on the Mac agents:

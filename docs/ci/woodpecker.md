@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.17.0 -->
+<!-- version: 1.17.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -195,7 +195,7 @@ repo settings in Woodpecker, set the pipeline path to `.woodpecker/`.
 | llm1 | 192.0.2.20 (macOS arm64) | local | `host=llm1,heavy=true` | 2 | LaunchDaemon, `UserName` = the CI user |
 | U1 | 192.0.2.35 (Ubuntu amd64) | local | `host=u1,heavy=true,taglib=true` | 1 | systemd `woodpecker-agent.service`, `User=woodpecker` |
 | u0-local | 192.0.2.10 (prod, Ubuntu amd64) | local | `host=u0-local,taglib=true` | 1 | systemd `woodpecker-agent-local.service`, `User=woodpecker` |
-| mac | the owner's Mac (macOS arm64) | local | `host=mac,heavy=true` | 2 | `run-agent.sh` under `env -i`, started by hand (not a launchd job); gRPC goes through an ssh tunnel to U0 because macOS Local Network blocks the agent binary |
+| mac | the owner's Mac (macOS arm64) | local | `host=mac,heavy=true` | 1 | `run-agent.sh` under `env -i`, started by hand (not a launchd job); gRPC goes through an ssh tunnel to U0 because macOS Local Network blocks the agent binary |
 
 All agents use `WOODPECKER_SERVER=192.0.2.10:18734` and the same
 `WOODPECKER_AGENT_SECRET` as the server.
