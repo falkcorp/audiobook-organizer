@@ -1,5 +1,5 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.6.2
+// version: 2.6.3
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
 // last-edited: 2026-10-27
 
@@ -79,6 +79,8 @@ type gatedEndpoint struct {
 	// learned is the strong identity a re-probe read from a worker whose
 	// dispatch identity is a weak "u:" (reprobed): stored beside it, never in
 	// its place, and never part of what the dispatch groups the endpoint under.
+	// Only the lone-endpoint path keeps such a worker (dispatchSingle); a pool
+	// drops the port.
 	learned string
 }
 
@@ -123,8 +125,9 @@ type gpuRefusal struct {
 	Transient bool
 	// ChangedHands marks a port a dispatch waited for as a remembered machine's
 	// that another worker answers at after the wait (resolvePending). It is no
-	// capability problem and no outage: when every refusal is ChangedHands the
-	// dispatch ends as errPortChangedHands.
+	// capability problem and no outage: when at least one refusal is ChangedHands
+	// and every other one is Transient the dispatch ends as errPortChangedHands
+	// (changedHandsOrTransient).
 	ChangedHands bool
 }
 

@@ -1,5 +1,5 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
 // last-edited: 2026-10-27
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -389,6 +390,11 @@ type splitHarness struct {
 	// every /health request before it answers, or until the request is cancelled:
 	// a probe that is in flight when the op is cancelled (see delayHealth).
 	healthDelay sync.Map
+	// healthField holds extra /health fields a worker reports from now on
+	// ("host:port" -> map of field -> value, never modified once stored), merged
+	// over what machineHarness started it with (see setHealthField): a worker
+	// whose health changed with its identity intact.
+	healthField sync.Map
 }
 
 // wedge marks the worker at url as wedged from now on.
@@ -415,6 +421,12 @@ func (h *splitHarness) setMachineID(url, id string) {
 // on (a probe cut short by a cancellation reads nothing).
 func (h *splitHarness) delayHealth(url string, d time.Duration) {
 	h.healthDelay.Store(strings.TrimPrefix(url, "http://"), d)
+}
+
+// setHealthField makes the worker at url report fields in /health from now on
+// (replacing any set before), leaving its identity as it was.
+func (h *splitHarness) setHealthField(url string, fields map[string]any) {
+	h.healthField.Store(strings.TrimPrefix(url, "http://"), maps.Clone(fields))
 }
 
 // setBackend makes the worker at url report backend b from now on: a URL whose

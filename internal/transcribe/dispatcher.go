@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.22.3
+// version: 1.22.4
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -256,14 +256,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				"%w: all %d whisper endpoint(s) still unreachable or unable to start their decoder after waiting %s: %s",
 				ErrPoolUnavailable, len(endpoints), poolPaceMax, describeRefusals(refused)))
 		}
-		if allChangedHands(refused) {
-			// Every port the dispatch had was a remembered machine's that
-			// another worker answers at now (resolvePending). No verdict on
-			// anyone and no outage: the same answer as the lone endpoint's, which
-			// the ops defer on without counting toward stopping the run (it is
-			// not a recognised transport failure).
+		if changedHandsOrTransient(refused) {
+			// Every port the dispatch had left was a remembered machine's that
+			// another worker answers at now (resolvePending), and any other was
+			// only unreachable (a dead tunnel is no capability problem). No
+			// verdict on anyone and no outage: the same answer as the lone
+			// endpoint's, which the ops defer on without counting toward
+			// stopping the run (it is not a recognised transport failure).
 			return classifyTransport(endpointURLs(endpoints), fmt.Errorf(
-				"all %d whisper endpoint(s) answer as a different worker than the machine that failed the canary clip in an earlier dispatch: %w, so they are sent no work and the jobs are deferred: %s",
+				"none of the %d whisper endpoint(s) can take the jobs: those that answer do so as a different worker than the machine that failed the canary clip in an earlier dispatch (%w), so they are sent no work and the jobs are deferred: %s",
 				len(endpoints), errPortChangedHands, describeRefusals(refused)))
 		}
 		// Distinct from "no whisper endpoints configured": that sends an
@@ -297,9 +298,10 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// whether its worker could report a machine id then. A re-probe after a wait
 	// replaces an endpoint's health (the canary and the work use what the worker
 	// says now) but is judged against both (gatedEndpoint.reprobed): the same
-	// identity stands, a worker that gained its id keeps the identity the
-	// dispatch groups it under, and a port that changed hands is dropped, so an
-	// answer is never stored as a machine it did not come from.
+	// identity stands, and a port that changed hands is dropped, so an answer is
+	// never stored as a machine it did not come from. A worker that gained its id
+	// is one of those in a pool (resolvePending); only the lone endpoint keeps it
+	// and stores both identities.
 	probeByURL := make(map[string]gatedEndpoint, len(gated))
 	keyFor := make(map[string]string, len(gated))
 	capableFor := make(map[string]bool, len(gated))
@@ -399,20 +401,6 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		return keyOf(url)
 	}
 	soloStuck := make(map[string]map[string]string) // job -> machine key -> the endpoint it was stuck on alone there
-	// condemnedBy is the identities a condemnation names, from one job's
-	// soloStuck: the machine key of each endpoint it was stuck on alone, which is
-	// the identity of the worker that answered there (a re-probe that found
-	// another worker behind a URL dropped the port: gatedEndpoint.reprobed), and
-	// the machine a worker that gained its id since reports now, as the answers
-	// of that worker name it (answerWorker). A condemnation by two known machines
-	// needs both to be known.
-	condemnedBy := func(stuck map[string]string) []string {
-		ids := slices.Collect(maps.Keys(stuck))
-		for _, u := range stuck {
-			ids = append(ids, probeByURL[u].learned)
-		}
-		return ids
-	}
 	// soloOverran is the weaker record: a lone job's request outlived its
 	// ceiling on a worker that, when asked, was NOT wedged (it answered /health
 	// and was inside its own decode deadline), so the request most likely waited
@@ -872,29 +860,28 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					// it said minutes ago. The identity the dispatch groups the
 					// endpoint under stays the one its gate gave it (keyFor), and
 					// so is the one stored with its answers (N2 of the D58
-					// review), unless another worker answers there now: a port
-					// that changed hands during the wait is dropped like a refusal,
-					// never asked the old machine's canary clip (its answer would
-					// count toward forgetting that machine) and never given its
-					// work (B-1 of review 6 of #4201).
+					// review). A pool keeps a port only if the re-probe finds that
+					// identity unchanged: any other worker answering there now is
+					// dropped like a refusal, never asked the old machine's canary
+					// clip (its answer would count toward forgetting that machine)
+					// and never given its work (B-1 of review 6 of #4201).
 					//
-					// A worker that gained a machine id is the one case reprobed
-					// cannot judge alone: the port is grouped (groupOf) under the
-					// machine that is remembered at it, and that may be a strong
-					// "m:" other than the one the worker reports now. The group is
-					// what the canary is asked of, what a verdict is credited to and
-					// what a failure is remembered for, so asking would send the old
-					// machine's clip to the new one, and its answer would forget (or
-					// fail to remember) the wrong machine (review 7 of #4201). The
-					// port changed hands like any other: dropped. The lone-endpoint
-					// path has no group to disagree with and keeps such a worker
-					// (dispatchSingle).
+					// That includes a worker that gained a machine id (frozen "u:",
+					// reports "m:" now), which reprobed alone would keep: it may be
+					// the machine that was behind the URL or another one that took
+					// it over, and a pool cannot tell, whatever it is grouped under
+					// (groupOf). Kept, it would be counted, benched and struck under
+					// two identities, and one that is also another port's machine
+					// in this dispatch would escape that machine's bench (reviews 7
+					// and 8 of #4201). The next dispatch's gate keys it by the id it
+					// reports. Only the lone-endpoint path keeps such a worker
+					// (dispatchSingle): it resolves the canary memory at call time,
+					// after noteCanaryProbes moved the port, so it has no frozen
+					// group to disagree with, and it stores both identities.
 					u := g.Endpoint.URL
 					fresh, ok := g.reprobed(keyOf(u), capableFor[u])
-					if ok && fresh.learned != "" {
-						if grp := groupOf(u); isStrongKey(grp) && grp != fresh.learned {
-							ok = false
-						}
+					if fresh.learned != "" {
+						ok = false
 					}
 					if !ok {
 						r := newRefusal(g, "answers as a different worker than the machine the dispatch waited for (its port changed hands during the wait), so it is sent no work in this dispatch")
@@ -1521,7 +1508,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				}
 				if br.Endpoint == "" {
 					br.Endpoint = ep.URL
-					br.Worker = probeByURL[ep.URL].answerWorker()
+					br.Worker = probeByURL[ep.URL].storedWorker()
 				}
 				results[id] = br
 				settledHere[id] = true
@@ -1689,12 +1676,16 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					// about this file, not about any worker. Byte-identical
 					// followers are the same audio and get the same verdict. It
 					// names every machine involved: as a strike it stands for
-					// each of them (see BatchResult.Worker).
+					// each of them (see BatchResult.Worker). The names are the
+					// machine keys the endpoints were stuck under, which is the
+					// identity of the worker that answered there: a re-probe that
+					// found another worker behind a URL dropped the port
+					// (resolvePending), so no key here stands for two machines.
 					verdict := BatchResult{Condemned: true, Error: fmt.Sprintf(
 						"%s%sno result: this file alone left %d worker(s) stuck past their deadline",
 						PathErrTranscribeTimeout, pathErrSeparator, len(soloStuck[id])),
 						Endpoint: strings.Join(slices.Sorted(maps.Values(soloStuck[id])), WorkerSeparator),
-						Worker:   joinWorkers(condemnedBy(soloStuck[id]))}
+						Worker:   joinWorkers(slices.Collect(maps.Keys(soloStuck[id])))}
 					settled := 0
 					for _, cid := range append([]string{id}, followersOf[id]...) {
 						if _, ok := remaining[cid]; !ok {
@@ -2230,18 +2221,24 @@ func afterStuck(ctx context.Context, url string, stuckErr error) (out error, wed
 	return stuckErr, wedged
 }
 
-// allChangedHands reports whether every refusal is a port that changed hands
-// while the dispatch waited out a cooldown (gpuRefusal.ChangedHands).
-func allChangedHands(refused []gpuRefusal) bool {
-	if len(refused) == 0 {
-		return false
-	}
+// changedHandsOrTransient reports whether the refusals are ports that changed
+// hands while the dispatch waited out a cooldown (gpuRefusal.ChangedHands), with
+// nothing beside them but ports that are unreachable (Transient): at least one
+// changed hands and every other one is only down. A dead tunnel is not a
+// capability problem, and a pool left with it and ports that changed hands has
+// nothing to send to for the reason the changed ports give. Any stuck or
+// capability refusal beside them is not this: that error names the real cause.
+func changedHandsOrTransient(refused []gpuRefusal) bool {
+	var changed bool
 	for _, r := range refused {
-		if !r.ChangedHands {
+		switch {
+		case r.ChangedHands:
+			changed = true
+		case !r.Transient:
 			return false
 		}
 	}
-	return true
+	return changed
 }
 
 func allStuck(refused []gpuRefusal) bool {

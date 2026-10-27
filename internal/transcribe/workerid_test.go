@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
 // last-edited: 2026-10-27
 
@@ -66,6 +66,10 @@ func machineHarness(t *testing.T, machines []string, poison ...string) *splitHar
 			if b, ok := h.backend.Load(r.Host); ok {
 				body = maps.Clone(body)
 				body["backend"] = b
+			}
+			if f, ok := h.healthField.Load(r.Host); ok {
+				body = maps.Clone(body)
+				maps.Copy(body, f.(map[string]any))
 			}
 			_ = json.NewEncoder(rw).Encode(body)
 		}))
