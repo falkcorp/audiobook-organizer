@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/rows.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 39018ebb-a7f9-40a8-8aef-6a3cd4889ce6
-// last-edited: 2026-10-17
+// last-edited: 2026-10-26
 
 package opsv3
 
@@ -46,6 +46,9 @@ func (h *Handler) ListRows(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "run", id)
 		return
 	}
+	if !h.mayReadRun(c, rec) {
+		return
+	}
 	page, err := rd.ListItemOutcomesV3(id, database.ItemQuery{
 		Outcome: c.Query("outcome"), Cursor: c.Query("cursor"), Limit: limit,
 	})
@@ -53,9 +56,13 @@ func (h *Handler) ListRows(c *gin.Context) {
 		storeErr(c, "list rows", err)
 		return
 	}
+	// An item's key and error are free text of the run (a runner may key an item
+	// by a label and put the cause in the error), so both are read through the
+	// caller's text rule, as the run's own error and its workers' items are.
+	userText := h.d.RepairsAccess.For(c).UserText
 	items := make([]RowView, 0, len(page.Rows))
 	for _, r := range page.Rows {
-		items = append(items, RowView{Key: r.Key, Outcome: r.Outcome, Error: r.Error, Chunk: r.Chunk})
+		items = append(items, RowView{Key: userText(r.Key), Outcome: r.Outcome, Error: userText(r.Error), Chunk: r.Chunk})
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"items": items, "next_cursor": page.Next, "total": page.Total, "truncated": page.Truncated,

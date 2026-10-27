@@ -450,6 +450,46 @@ func (r *RevertResult) Summary() string {
 	return b.String()
 }
 
+// userNotesWithheld is the line WithoutUserData leaves where it dropped notes,
+// so a list that had entries does not read as one that never did (and Summary
+// does not end in an empty list).
+const userNotesWithheld = "%d note(s) that name a user withheld (users.manage shows them)"
+
+// WithoutUserData is r as a caller who may not manage users may read it. The
+// merge undo's warnings (Kept, and the combine notes Summary lists) carry a
+// user's id and what they were listening to ("user <id> progress on ...");
+// every free-text list is stripped of the notes that name a user
+// (undo.NamesUser), each list that lost some ends with a count so it is not
+// silently shorter, and Summary, built from the same lists, follows. The counts
+// and types stay. r is not modified.
+func (r *RevertResult) WithoutUserData() *RevertResult {
+	if r == nil {
+		return nil
+	}
+	strip := func(in []string) []string {
+		var out []string
+		dropped := 0
+		for _, n := range in {
+			if undo.NamesUser(n) {
+				dropped++
+				continue
+			}
+			out = append(out, n)
+		}
+		if dropped > 0 {
+			out = append(out, fmt.Sprintf(userNotesWithheld, dropped))
+		}
+		return out
+	}
+	out := *r
+	out.Kept = strip(r.Kept)
+	out.combineKept = strip(r.combineKept)
+	out.SupersededDetail = strip(r.SupersededDetail)
+	out.HandOffFailed = strip(r.HandOffFailed)
+	out.SettleSkipped = strip(r.SettleSkipped)
+	return &out
+}
+
 // NotRestorableError is returned by RevertOperation when no row of the
 // operation has a change type the engine can reverse -- e.g. every row of a
 // maintenance.purge-empty-authors run is an author_delete record. Nothing is

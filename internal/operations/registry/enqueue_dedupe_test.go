@@ -1,7 +1,7 @@
 // file: internal/operations/registry/enqueue_dedupe_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4352733d-985f-4541-87ce-22f4698d67cc
-// last-edited: 2026-09-02
+// last-edited: 2026-10-26
 
 // ENQ-DEDUP-1 regression suite.
 //
@@ -427,4 +427,133 @@ func TestEnqueueOp_DedupeStillFiresForTheCommonDoubleClick(t *testing.T) {
 	if rows := activeRowsForDef(t, store, def.ID); len(rows) != 1 {
 		t.Errorf("expected exactly 1 active row after 3 identical enqueues, got %d", len(rows))
 	}
+}
+
+// TestEnqueueOp_DedupeSameActorOnly: a def that opts in (the diagnostics
+// export, whose run is narrowed to its requester) reuses an active op only for
+// the same account holding the same permissions. The wider account gets its own
+// run while a narrower one's identical export is active, and the reverse; the
+// same account (permission order aside) still joins; and a def that has not
+// opted in keeps folding across accounts, which is what the flag changes.
+func TestEnqueueOp_DedupeSameActorOnly(t *testing.T) {
+	params := map[string]string{"category": "general", "description": ""}
+	manager := []registry.EnqueueOption{registry.WithActor("01HZBATMANMANAGER000000000"), registry.WithActorPermissions([]string{"settings.manage"})}
+	admin := []registry.EnqueueOption{registry.WithActor("01HZBATMANADMIN00000000000"), registry.WithActorPermissions([]string{"settings.manage", "users.manage"})}
+	enqueue := func(t *testing.T, r *registry.Registry, defID string, opts []registry.EnqueueOption) string {
+		t.Helper()
+		id, err := r.EnqueueOp(context.Background(), defID, params, opts...)
+		if err != nil {
+			t.Fatalf("EnqueueOp(%s): %v", defID, err)
+		}
+		return id
+	}
+	newRegistry := func(t *testing.T, sameActorOnly bool) (*registry.Registry, *fakeStore) {
+		t.Helper()
+		r, store := newTestRegistry(t)
+		def := makeDedupeDef(t, "diagnostics.export", "diagnostics.export")
+		def.DedupeSameActorOnly = sameActorOnly
+		if err := r.RegisterOp(def); err != nil {
+			t.Fatal(err)
+		}
+		return r, store
+	}
+	actorOf := func(t *testing.T, store *fakeStore, id string) string {
+		t.Helper()
+		row, err := store.GetOperationV2(id)
+		if err != nil || row == nil || row.ActorUserID == nil {
+			t.Fatalf("row %s: %v %v", id, row, err)
+		}
+		return *row.ActorUserID
+	}
+
+	t.Run("wider account does not join a narrower account's export", func(t *testing.T) {
+		r, store := newRegistry(t, true)
+		narrow := enqueue(t, r, "diagnostics.export", manager)
+		wide := enqueue(t, r, "diagnostics.export", admin)
+		if narrow == wide {
+			t.Fatalf("the admin's export was folded into the manager's op %s", narrow)
+		}
+		if got := actorOf(t, store, wide); got != "01HZBATMANADMIN00000000000" {
+			t.Errorf("the admin's run belongs to %s", got)
+		}
+		if n := len(activeRowsForDef(t, store, "diagnostics.export")); n != 2 {
+			t.Errorf("active rows = %d, want 2", n)
+		}
+	})
+
+	t.Run("narrower account does not join a wider account's export", func(t *testing.T) {
+		r, store := newRegistry(t, true)
+		wide := enqueue(t, r, "diagnostics.export", admin)
+		narrow := enqueue(t, r, "diagnostics.export", manager)
+		if narrow == wide {
+			t.Fatalf("the manager's export was folded into the admin's op %s", wide)
+		}
+		if got := actorOf(t, store, narrow); got != "01HZBATMANMANAGER000000000" {
+			t.Errorf("the manager's run belongs to %s", got)
+		}
+	})
+
+	t.Run("a different account holding the same permissions gets its own run", func(t *testing.T) {
+		r, store := newRegistry(t, true)
+		first := enqueue(t, r, "diagnostics.export", manager)
+		second := enqueue(t, r, "diagnostics.export", []registry.EnqueueOption{
+			registry.WithActor("01HZBATMANOTHERMGR0000000"), registry.WithActorPermissions([]string{"settings.manage"})})
+		if first == second {
+			t.Fatalf("a second account's export was folded into op %s", first)
+		}
+		if got := actorOf(t, store, second); got != "01HZBATMANOTHERMGR0000000" {
+			t.Errorf("the second run belongs to %s", got)
+		}
+	})
+
+	t.Run("same account with a different permission set gets its own run", func(t *testing.T) {
+		r, _ := newRegistry(t, true)
+		first := enqueue(t, r, "diagnostics.export", manager)
+		second := enqueue(t, r, "diagnostics.export", []registry.EnqueueOption{
+			registry.WithActor("01HZBATMANMANAGER000000000"), registry.WithActorPermissions([]string{"settings.manage", "library.view"})})
+		if first == second {
+			t.Fatalf("a changed permission set was folded into op %s", first)
+		}
+	})
+
+	t.Run("same account and permissions still join, in any order", func(t *testing.T) {
+		r, store := newRegistry(t, true)
+		first := enqueue(t, r, "diagnostics.export", admin)
+		second := enqueue(t, r, "diagnostics.export", []registry.EnqueueOption{
+			registry.WithActor("01HZBATMANADMIN00000000000"), registry.WithActorPermissions([]string{"users.manage", "settings.manage"})})
+		if first != second {
+			t.Fatalf("the same account's repeat start queued a second run: %s then %s", first, second)
+		}
+		if n := len(activeRowsForDef(t, store, "diagnostics.export")); n != 1 {
+			t.Errorf("active rows = %d, want 1", n)
+		}
+	})
+
+	t.Run("no actor on either side still joins", func(t *testing.T) {
+		r, _ := newRegistry(t, true)
+		first := enqueue(t, r, "diagnostics.export", nil)
+		second := enqueue(t, r, "diagnostics.export", nil)
+		if first != second {
+			t.Fatalf("two starts with no actor were not folded: %s then %s", first, second)
+		}
+	})
+
+	t.Run("a never-recorded permission set is not an empty one", func(t *testing.T) {
+		r, _ := newRegistry(t, true)
+		none := enqueue(t, r, "diagnostics.export", []registry.EnqueueOption{registry.WithActor("01HZBATMANMANAGER000000000")})
+		empty := enqueue(t, r, "diagnostics.export", []registry.EnqueueOption{
+			registry.WithActor("01HZBATMANMANAGER000000000"), registry.WithActorPermissions([]string{})})
+		if none == empty {
+			t.Fatalf("a request holding nothing was folded into a run with no recorded set: %s", none)
+		}
+	})
+
+	t.Run("a def that has not opted in keeps folding across accounts", func(t *testing.T) {
+		r, _ := newRegistry(t, false)
+		first := enqueue(t, r, "diagnostics.export", manager)
+		second := enqueue(t, r, "diagnostics.export", admin)
+		if first != second {
+			t.Fatalf("the default dedupe changed: %s then %s", first, second)
+		}
+	})
 }

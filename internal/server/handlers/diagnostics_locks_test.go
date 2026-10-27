@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics_locks_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7d2e5b1a-4c8f-4e93-a6b0-2f9d3c7e8a15
-// last-edited: 2026-09-14
+// last-edited: 2026-10-26
 
 package handlers_test
 
@@ -29,7 +29,7 @@ func diagLockedRow(bookID, key string) []database.MetadataFieldState {
 
 func diagSuggestionOp(suggestions string) *database.OperationV2Row {
 	rd := `{"suggestions":[` + suggestions + `]}`
-	return &database.OperationV2Row{ID: "op-1", Status: "completed", ResultData: &rd}
+	return &database.OperationV2Row{ID: "op-1", DefID: handlers.DiagnosticsAIDefID, Status: "completed", ResultData: &rd}
 }
 
 func TestDiagnosticsHandler_ApplySuggestions_LockedTitleIsSkippedNotOverwritten(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/coverage_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a3b4c5d6-e7f8-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-07
+// last-edited: 2026-10-26
 
 // coverage_test.go provides additional tests targeting uncovered code paths
 // in the UOS-02 registry package to meet the ≥80% coverage requirement.
@@ -84,6 +84,33 @@ func TestEnqueueOptions_WithParentAndActor(t *testing.T) {
 	}
 	if row.ActorAuthMethod != "cf_access" {
 		t.Errorf("expected actor auth method cf_access, got %q", row.ActorAuthMethod)
+	}
+}
+
+// An empty permission set is a recorded set that held nothing, not "no set was
+// recorded": the op row keeps it as a non-nil empty slice so a job capped at it
+// is capped at nothing, while an enqueue that names no set leaves nil.
+func TestEnqueueOptions_WithActorPermissions_EmptySetIsKeptNotDropped(t *testing.T) {
+	r, store := newTestRegistry(t)
+	_ = r.RegisterOp(makeValidDef("test.perms"))
+
+	emptyID, err := r.EnqueueOp(context.Background(), "test.perms", nil,
+		registry.WithActor("user-123"), registry.WithActorPermissions(nil))
+	if err != nil {
+		t.Fatalf("EnqueueOp: %v", err)
+	}
+	row, _ := store.GetOperationV2(emptyID)
+	if row == nil || row.ActorPermissions == nil || len(row.ActorPermissions) != 0 {
+		t.Fatalf("an empty set must be recorded as a non-nil empty slice, got %#v", row)
+	}
+
+	noneID, err := r.EnqueueOp(context.Background(), "test.perms", nil, registry.WithActor("user-123"))
+	if err != nil {
+		t.Fatalf("EnqueueOp: %v", err)
+	}
+	row, _ = store.GetOperationV2(noneID)
+	if row == nil || row.ActorPermissions != nil {
+		t.Fatalf("an enqueue that names no set must leave it nil, got %#v", row)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.12.0
+// version: 1.14.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-10-24
+// last-edited: 2026-10-26
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -68,6 +68,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -103,6 +104,9 @@ type Handler struct {
 	ownerEmail func() string
 	// permCheck reports whether the caller holds a permission (PermissionCheck).
 	permCheck PermissionCheck
+	// access decides whether the caller may read other users' text; nil holds
+	// nothing, so an op's error text that names a user is withheld (opRef).
+	access *opaccess.Repairs
 }
 
 // PermissionCheck reports whether the request's caller holds p. It writes
@@ -126,6 +130,14 @@ func (h *Handler) WithPermissionCheck(check PermissionCheck) *Handler {
 	if check != nil {
 		h.permCheck = check
 	}
+	return h
+}
+
+// WithOpAccess sets the check that withholds an op's error text when it names
+// a user, for a caller without users.manage (opaccess.Reader.UserText). nil
+// keeps the fail-closed default: such text is always withheld.
+func (h *Handler) WithOpAccess(a *opaccess.Repairs) *Handler {
+	h.access = a
 	return h
 }
 
@@ -263,8 +275,8 @@ func (h *Handler) ListFixers(c *gin.Context) {
 		// Only for a caller who may read the fixer's rows: the pointers name the
 		// plan op whose rows ListPlanRows serves, and their summaries count them.
 		if info.Permitted {
-			info.LastPlan = h.lastRun(lastPlanKey(f.ID()))
-			info.LastApply = h.lastRun(lastApplyKey(f.ID()))
+			info.LastPlan = h.lastRun(c, lastPlanKey(f.ID()))
+			info.LastApply = h.lastRun(c, lastApplyKey(f.ID()))
 		}
 		out = append(out, info)
 	}
@@ -281,7 +293,7 @@ func lastApplyKey(fixerID string) string { return "repairs_last_apply_op:" + fix
 
 // lastRun resolves a recorded op id. Best effort: a missing setting or op
 // row leaves it unset.
-func (h *Handler) lastRun(key string) *OpRef {
+func (h *Handler) lastRun(c *gin.Context, key string) *OpRef {
 	if h.ops == nil {
 		return nil
 	}
@@ -293,13 +305,16 @@ func (h *Handler) lastRun(key string) *OpRef {
 	if err != nil || row == nil {
 		return nil
 	}
-	return opRef(row)
+	return opRef(row, h.access.For(c).UserText)
 }
 
-func opRef(r *database.OperationV2Row) *OpRef {
+// opRef summarises a stored op. Its error text goes through userText, which
+// withholds it when it names another user (opaccess.Reader.UserText): an op's
+// ErrorMessage is free text and a Repairs op can put an account id in it.
+func opRef(r *database.OperationV2Row, userText func(string) string) *OpRef {
 	ref := &OpRef{OperationID: r.ID, Status: r.Status, QueuedAt: r.QueuedAt, CompletedAt: r.CompletedAt}
 	if r.ErrorMessage != nil {
-		ref.Error = *r.ErrorMessage
+		ref.Error = userText(*r.ErrorMessage)
 	}
 	if r.ResultData == nil {
 		return ref
@@ -572,7 +587,8 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
 		FixerID: f.ID(), PlanOpID: req.PlanOpID, DryRun: &no,
 		OwnerApplyRowIDs: []string{req.RowID}, OwnerGrant: tok,
-	}, opsregistry.WithActor(user.ID), opsregistry.WithActorAuthMethod(string(method)))
+	}, opsregistry.WithActor(user.ID), opsregistry.WithActorAuthMethod(string(method)),
+		opsregistry.WithOwnerApply())
 }
 
 // sameOriginWhyNot is why r is not a same-origin request carrying the owner
