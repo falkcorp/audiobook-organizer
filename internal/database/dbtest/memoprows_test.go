@@ -1,7 +1,7 @@
 // file: internal/database/dbtest/memoprows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aed47c42-ea13-41db-a55f-21821dbb3d0c
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package dbtest
 
@@ -61,6 +61,52 @@ func TestOpRowStoresAgree(t *testing.T) {
 			want = got
 		} else if got != want {
 			t.Fatalf("pebble and mem disagree:\n pebble %s\n mem    %s", got, want)
+		}
+	}
+}
+
+// ReplaceOpRowsPrefix replaces only the rows whose id begins with the prefix:
+// the operation's other rows (another kind of row under the same operation id,
+// such as a plan's rows beside a result's class lists) and other operations'
+// rows survive, a row outside the prefix is refused, and the double and the
+// Pebble store answer alike.
+func TestOpRowStoresAgree_ReplaceOpRowsPrefixLeavesOtherRowsAlone(t *testing.T) {
+	stores := map[string]database.OpRowStore{"mem": NewMemOpRows(), "pebble": NewStore(t)}
+	set := func(ids ...string) func(int) (database.OpRow, error) {
+		return func(i int) (database.OpRow, error) {
+			return database.OpRow{ID: ids[i], Index: []byte("ix-" + ids[i]), Data: []byte("d-" + ids[i])}, nil
+		}
+	}
+	list := func(s database.OpRowStore, op string) []string {
+		var out []string
+		if err := s.ScanOpRowIndex(op, func(id string, _ []byte) error { out = append(out, id); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for name, s := range stores {
+		must := func(err error) {
+			t.Helper()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		must(s.ReplaceOpRows("op-a", 2, set("plan/1", "plan/2")))
+		must(s.ReplaceOpRows("op-b", 1, set("lists/x/000000")))
+		must(s.ReplaceOpRowsPrefix("op-a", "lists/", 2, set("lists/x/000000", "lists/x/000001")))
+		must(s.ReplaceOpRowsPrefix("op-a", "lists/", 1, set("lists/y/000000")))
+		if got, want := fmt.Sprint(list(s, "op-a")), "[lists/y/000000 plan/1 plan/2]"; got != want {
+			t.Fatalf("%s: op-a rows %s, want %s (the plan rows must survive, the first lists must go)", name, got, want)
+		}
+		if got, want := fmt.Sprint(list(s, "op-b")), "[lists/x/000000]"; got != want {
+			t.Fatalf("%s: op-b rows %s, want %s", name, got, want)
+		}
+		if err := s.ReplaceOpRowsPrefix("op-a", "lists/", 1, set("plan/3")); err == nil {
+			t.Fatalf("%s: a row outside the replaced prefix was accepted", name)
+		}
+		must(s.ReplaceOpRowsPrefix("op-a", "lists/", 0, nil))
+		if got, want := fmt.Sprint(list(s, "op-a")), "[plan/1 plan/2]"; got != want {
+			t.Fatalf("%s: op-a rows after clearing the prefix %s, want %s", name, got, want)
 		}
 	}
 }

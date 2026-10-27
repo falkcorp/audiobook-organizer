@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.2.2 -->
+<!-- version: 1.2.3 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -565,11 +565,14 @@ the row above:
   organizer files such a book under the snapshot, so filling the join from
   `AuthorID` would flip the filing author, and the snapshot is never refreshed in
   that case. A snapshot whose id is 0 or resolves to no record still carries a name:
-  it is compared with `AuthorID`'s own record name (normalized), and a different name
-  is the same conflict (`author_id_snapshot_conflict`, nothing written, snapshot not
-  refreshed). That is a comparison of two names the book carries, never a lookup: no
-  author is searched for or credited by name. Tested in
-  `TestCreditsBackfill_SnapshotWithoutAResolvableIDIsComparedByName`. Where there is no such signal, this rule above applies unchanged and the
+  with an empty join it is compared with `AuthorID`'s own record name (normalized), and
+  a different name is the same conflict; with a join it is compared with the record
+  names of the join members other than `AuthorID`, and a match is the same conflict
+  (`author_id_snapshot_conflict`, nothing written, snapshot not refreshed). That is a
+  comparison of names the book carries, never a lookup: no author is searched for or
+  credited by name. Tested in
+  `TestCreditsBackfill_SnapshotWithoutAResolvableIDIsComparedByName` and
+  `TestCreditsBackfillR4200b_UnresolvableSnapshotNamingAJoinMemberIsHeldNotWritten`. Where there is no such signal, this rule above applies unchanged and the
   prepend is written and listed in `filing_author_changes`. The same snapshot check
   guards the all-zero tie-break when the tie-break reorders the join; all-zero
   positions with no contradicting snapshot are renumbered with `AuthorID` first, as
@@ -639,10 +642,14 @@ the row above:
   The respelled column must read back through `CleanNarratorCredit` as exactly the
   record's names and the respelled JSON must still match the junction or the column,
   or the book is listed for review (`narrator_spelling_unreconcilable`,
-  `narrator_spelling_json_conflict`). When several books of the cohort name one NEW
-  narrator under spellings of one fold key, the record takes the most frequent
-  spelling among them (ties: the lexically smallest), chosen before the first write, so
-  a dry run predicts it. A rescan with an unlocked narrator field reads the tag's
+  `narrator_spelling_json_conflict`); such a book loses its narrator side only, and an
+  author-side write it has stays in the cohort. The name is located by the credit
+  pieces `SplitCreditNames` cuts the column into (a piece that is exactly the name, else
+  one holding it as whole words), so "Renee Montoya" is never found inside "Renee
+  Montoya-Sawyer". When several books name one NEW narrator under spellings of one fold
+  key, the record takes the most frequent spelling among ALL the eligible books, not
+  only the cohort a `limit` cut (ties: the lexically smallest), chosen before the first
+  write, so a full dry run, a first cohort and the cohorts after it agree. A rescan with an unlocked narrator field reads the tag's
   spelling back and the column-to-junction sync can mint an unaccented duplicate
   record; that is a separate change (`todo.d/2026-10-27-narrator-sync-fold-match.md`).
   Junk names ("N/A", "Various", "Unknown", "Narrator", "Full Cast", a placeholder and
@@ -658,7 +665,14 @@ the row above:
   counts and the samples, and the ids are stored as op rows (`database.OpRowStore`, one
   row per 1,000 ids, `database.SaveClassLists`; the repairs plan moved out of its result
   the same way). A client pages one class with
-  `GET /operations/:id/class-lists/:class?offset=&limit=`. A resumed apply loads the operation's
+  `GET /operations/:id/class-lists/:class?offset=&limit=`. The rows are a namespace of
+  their own (`classlist/`): saving or clearing them leaves any other row of the same
+  operation id alone, and each save draws an attempt nonce stored in the summary and in
+  every row, so rows a later unfinished save left are refused (409) instead of served
+  under the old counts. They are deleted when the operation row is: the only thing that
+  does that on request is a person discarding the operation (`registry.Discard`,
+  `DeleteOperationV2`); nothing prunes operation rows or their row sets by age, so each
+  run's lists, limited runs included, stay until then. A resumed apply loads the operation's
   journal rows once to verify them (`GetOperationChanges`); there is no per-operation
   iterator, and `ScanOperationChanges` walks the whole journal, so it is not used.
   `limit` keeps each run's write count bounded in any case.

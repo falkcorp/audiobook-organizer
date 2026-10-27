@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_op_rows.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d45025bc-200a-4342-a7e6-2d64d54a63fe
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package database
 
@@ -109,12 +109,20 @@ func opv2RunScopedPrefixes(id string) [][]byte {
 // is somehow gone leaves rows no delete will find, so the caller treats a
 // failure of the write that follows (SetOperationV2Result refuses a missing
 // row) as a reason to clear the set again.
-func (p *PebbleStore) ReplaceOpRows(opID string, n int, at func(i int) (OpRow, error)) (err error) {
-	defer recoverPebbleClosed("ReplaceOpRows", &err)
+func (p *PebbleStore) ReplaceOpRows(opID string, n int, at func(i int) (OpRow, error)) error {
+	return p.ReplaceOpRowsPrefix(opID, "", n, at)
+}
+
+// ReplaceOpRowsPrefix implements OpRowStore. It clears the keys of both row
+// families under {op_id}:{rowPrefix} only (the other rows of the operation are
+// not in that range) and writes rows whose IDs all begin with rowPrefix.
+func (p *PebbleStore) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (OpRow, error)) (err error) {
+	defer recoverPebbleClosed("ReplaceOpRowsPrefix", &err)
 	if err := validOpRowsID(opID); err != nil {
 		return fmt.Errorf("ReplaceOpRows: %w", err)
 	}
 	for _, pfx := range opv2RowFamilyPrefixes(opID) {
+		pfx = append(pfx, rowPrefix...)
 		if err := p.db.DeleteRange(pfx, prefixEnd(pfx), pebble.Sync); err != nil {
 			return err
 		}
@@ -135,6 +143,10 @@ func (p *PebbleStore) ReplaceOpRows(opID string, n int, at func(i int) (OpRow, e
 			if row.ID == "" {
 				batch.Close()
 				return fmt.Errorf("opv2: ReplaceOpRows %s: row %d has no id", opID, hi)
+			}
+			if !strings.HasPrefix(row.ID, rowPrefix) {
+				batch.Close()
+				return fmt.Errorf("opv2: ReplaceOpRows %s: row %q is outside the replaced prefix %q", opID, row.ID, rowPrefix)
 			}
 			if serr := batch.Set(opv2RowKey(opID, row.ID), row.Data, nil); serr != nil {
 				batch.Close()

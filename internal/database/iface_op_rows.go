@@ -1,7 +1,7 @@
 // file: internal/database/iface_op_rows.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: afe6c0bf-64dc-4200-9150-d9262fe2a512
-// last-edited: 2026-10-22
+// last-edited: 2026-10-27
 
 package database
 
@@ -31,8 +31,11 @@ type OpRow struct {
 //
 // It is a capability, not part of Store (nobody edits store.go): resolve it
 // with AsCapability[OpRowStore](store). A row set belongs to the operation id
-// and is deleted with the operation (DeleteOperationV2, DeleteRunV3 and
-// SweepHollowOperationsV2 all remove it).
+// and is removed when the operation row is deleted (DeleteOperationV2,
+// DeleteRunV3 and SweepHollowOperationsV2 all remove it). In production the only
+// caller of those that runs on request is a person discarding the operation
+// (registry.Discard); nothing prunes operation rows, or their row sets, by age,
+// so a set stays until the operation is discarded.
 type OpRowStore interface {
 	// ReplaceOpRows makes the operation's row set exactly the n rows at(0) ..
 	// at(n-1): it deletes the rows already stored under opID, then writes the
@@ -42,6 +45,15 @@ type OpRowStore interface {
 	// ReplaceOpRows(opID, 0, nil) and why a reader checks the row count its
 	// own summary recorded. n == 0 only clears the set.
 	ReplaceOpRows(opID string, n int, at func(i int) (OpRow, error)) error
+	// ReplaceOpRowsPrefix is ReplaceOpRows for one namespace of the operation's
+	// rows: it makes the rows whose ID begins with rowPrefix exactly the n rows
+	// at(0) .. at(n-1) and leaves every other row of the operation alone, so a
+	// writer of one kind of row (a result's class lists) never deletes another
+	// kind's (a plan's rows) under the same operation id. Every row at returns
+	// must have an ID that begins with rowPrefix, or the call fails: otherwise
+	// the set it replaces would not be the set it wrote. An empty rowPrefix is
+	// ReplaceOpRows. The write is no more atomic than ReplaceOpRows's.
+	ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (OpRow, error)) error
 	// ScanOpRowIndex calls fn with the ID and Index of every row of the
 	// operation, in ID order, without reading any Data. index is valid only
 	// during the call. A non-nil error from fn stops the scan and is returned.
