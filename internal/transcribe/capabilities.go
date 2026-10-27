@@ -1,5 +1,5 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.6.1
+// version: 2.6.2
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
 // last-edited: 2026-10-27
 
@@ -121,6 +121,11 @@ type gpuRefusal struct {
 	// outage; without pacing, each page found the whole pool refused in under
 	// a millisecond and deferred, and a run drained the library in minutes.
 	Transient bool
+	// ChangedHands marks a port a dispatch waited for as a remembered machine's
+	// that another worker answers at after the wait (resolvePending). It is no
+	// capability problem and no outage: when every refusal is ChangedHands the
+	// dispatch ends as errPortChangedHands.
+	ChangedHands bool
 }
 
 // newRefusal is the refusal of g for reason: its URL and label, the identity

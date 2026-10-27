@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-27
 
@@ -107,10 +107,20 @@ func (g gatedEndpoint) identityKey() string {
 //     changed, the probe stands.
 //   - Frozen weak, fresh strong, from an id-capable worker both times: the worker
 //     gained its machine id. Whether that is the machine that was behind the URL
-//     or another one that took it over cannot be told, so what is stored with its
-//     answers stays the frozen "u:" (an unknown machine never earns a file its
-//     second strike), and the machine it reports now travels with it (learned) so
-//     the store can still learn the machine (database learnsMachine).
+//     or another one that took it over cannot be told from the probe. The frozen
+//     "u:" stays the key because the rest of the dispatch (benching, the machine
+//     count behind the condemnation limit, steering, the canary memory) has
+//     grouped the endpoint under it since the start and must not see two
+//     identities for one endpoint. The machine it reports now travels with it
+//     (learned), and the stored value names both ("u:" and "m:", answerWorker):
+//     the store counts the "m:" as a machine like any other (a strike by it can
+//     be the second strike of a file, database independentStrike) and learns it
+//     when the row knew no machine (database learnsMachine), while the "u:"
+//     still matches a row an earlier strike of that address wrote. The
+//     machine it reports is therefore credited as itself. A pool dispatch whose
+//     canary memory already groups the port under a different strong machine
+//     drops the port instead (resolvePending), so no answer is credited to
+//     both; the lone-endpoint path has no group to disagree with and keeps it.
 //   - A frozen key standing for no machine ("" or "?", an endpoint whose /health
 //     could not be read at the start), or a probe that read nothing now: there
 //     is nothing to compare, and what the dispatch froze carries (a fresh probe
