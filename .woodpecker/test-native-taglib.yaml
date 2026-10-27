@@ -1,7 +1,7 @@
 # file: .woodpecker/test-native-taglib.yaml
-# version: 1.2.0
+# version: 1.3.0
 # guid: 8e2d6a41-5c93-4b7f-a0d8-1f4b9c3e7a52
-# last-edited: 2026-10-17
+# last-edited: 2026-10-27
 #
 # The tag writers under `-tags native_taglib`: the cgo build the production
 # binary is made with (Dockerfile, Dockerfile.build-cgo). Every other workflow
@@ -29,7 +29,7 @@
 # No CI-COVERAGE line: these packages are already counted by the test
 # workflows' -short runs, and this run's coverage would be the cgo files only.
 #
-# Clone, environment, trigger and cleanup are copied from test-fixtures.yaml;
+# Clone, environment, trigger and cleanup are copied from test-fixtures-1.yaml;
 # see that file for why each setting is there.
 
 labels:
@@ -57,7 +57,7 @@ steps:
     environment:
       GOTOOLCHAIN: go1.27.2
       # -trimpath keeps the shared GOCACHE reusable across clones; see
-      # test-fixtures.yaml. CGO_ENABLED is explicit: the tag does nothing
+      # test-fixtures-1.yaml. CGO_ENABLED is explicit: the tag does nothing
       # without it.
       GOFLAGS: -trimpath
       CGO_ENABLED: "1"
@@ -71,7 +71,7 @@ steps:
       - go test -tags native_taglib -race -count=1 -timeout 30m ./internal/metadata/... ./internal/tagger/... ./internal/metafetch/...
 
   - name: cleanup
-    # Runs on success and failure; see test-fixtures.yaml for each line.
+    # Runs on success and failure; see test-fixtures-1.yaml for each line.
     image: bash
     when:
       - status: [success, failure]

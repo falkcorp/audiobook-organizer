@@ -1,0 +1,114 @@
+# file: .woodpecker/test-fixtures-3.yaml
+# version: 1.0.0
+# guid: 13014a42-ab00-4738-8bc3-4e5be21eeb6c
+# last-edited: 2026-10-27
+#
+# Shard 3 of 3 of the tests that -short skips, run WITHOUT -short and with
+# -race: the mirror of ci.yml's fixture-tests job (matrix shard 3/3). The
+# other test workflows pass -short, so tests built on
+# internal/versionprimary/vptest (which skips under -short) and every other
+# testing.Short() skip -- the merge, undo and redirect state-machine tests
+# among them -- never ran there. `make test-fixtures` discovers the packages at
+# run time (scripts/ci/fixture_test_packages.py); FIXTURE_SHARD=3/3 selects
+# this workflow's third. test-fixtures-1.yaml, -2.yaml and -3.yaml are
+# identical except for the shard number.
+#
+# Several of those packages decode audio (scanner, server, audiobooks,
+# organizer, plugins/maintenance), so this runs on a heavy agent (U1 or llm1)
+# like test-rest, never on the prod host. Clone, environment, trigger and
+# cleanup are copied from test-rest.yaml; see that file for why each setting
+# is there.
+#
+# Three separate parallel workflows (owner decision D59, 2026-10-27), status
+# contexts ci/woodpecker/pr/test-fixtures-1, -2 and -3. History: one `go test`
+# over every package contended temp-file I/O and CPU on the slower heavy agents
+# (llm1, mac) and internal/plugins/maintenance hit the 25m per-package timeout
+# (pipeline 1129); on 2026-10-18 it became three shards run one after another
+# in a single step under a 55 min shared budget (a wrapper script, since
+# deleted). On llm1 those three shards summed to about 3400-3500s, over that
+# budget, and the last shard (internal/server) timed out. As separate
+# workflows each shard has its own 60 min pipeline timeout and the full 25m
+# per-package go test -timeout, which still fires before Woodpecker kills the
+# job. Each workflow can land on a different heavy agent, and no test is
+# skipped (the shards together cover every package).
+
+labels:
+  # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
+  heavy: "true"
+
+when:
+  # Automatic on pull requests (owner 2026-10-15; reverses the 2026-10-02
+  # manual-only rule). Each agent runs as many workflows as its own
+  # capacity allows; there is no global one-at-a-time cap. manual stays
+  # so a pipeline can still be queued through the API.
+  - event: [pull_request, manual]
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+    settings:
+      lfs: false  # GitHub's LFS budget is exhausted; no test reads LFS content
+      depth: 50
+
+steps:
+  - name: test
+    # Local backend: `image` names the SHELL that runs the commands, not a
+    # container image; the step runs on the host with the agent's PATH.
+    image: bash
+    environment:
+      GOTOOLCHAIN: go1.27.2
+      # Every pipeline clones into a new random workdir
+      # (woodpecker-local-<n>), and without -trimpath Go keys each package's
+      # cache entry on its directory: nothing was ever reused and the cache
+      # grew by a full race+cover build per run (164 GB in under a day,
+      # 2026-09-29). -trimpath drops the directory from the key.
+      GOFLAGS: -trimpath
+    commands:
+      # GOMODCACHE and GOCACHE are set by the first command, not here: the two
+      # heavy agents keep the cache in different places (/tank/ci/cache on U1,
+      # $HOME/ci/cache on llm1), and `environment:` takes only literals.
+      # The local backend gives every pipeline a fresh HOME, so Go's default
+      # caches (under $HOME, including the downloaded toolchain) were
+      # re-created per run and never removed on the Mac agents:
+      # 107 leftover workdirs held 117 GB on 2026-09-28 and filled the disk.
+      # One host-wide cache per host is shared instead; Go locks both, so
+      # concurrent pipelines are safe. See scripts/ci/cache_env.sh.
+      - . scripts/ci/cache_env.sh || exit 1
+      # python3 runs the cache cap in cleanup; fail here, loudly, if it is missing.
+      - command -v ffmpeg && command -v ffprobe && command -v fpcalc && python3 --version
+      # No -short, no CI-COVERAGE line: these packages' short runs are already
+      # counted by the other three test workflows, so a coverage line here
+      # would count them twice.
+      # One shard of three. The full 25m per-package go test -timeout applies
+      # (FIXTURE_TIMEOUT); it fires, with its goroutine dump, before the 60 min
+      # pipeline timeout kills the job.
+      - make --no-print-directory test-fixtures FIXTURE_SHARD=3/3 FIXTURE_TIMEOUT=25m
+
+  - name: cleanup
+    # Runs on success and failure: clear this clone and anything left in the
+    # per-run HOME, so the agent's own workdir removal at teardown cannot trip
+    # on read-only files.
+    image: bash
+    when:
+      - status: [success, failure]
+    commands:
+      # Sets GOCACHE for this host; see the test step.
+      - . scripts/ci/cache_env.sh || true
+      # Cap the shared GOCACHE by size, least recently used first. The age rule
+      # this replaces (drop entries unused for a day) never fired: the cache
+      # hit 164 GB in under a day on 2026-09-29. Runs before the workspace is
+      # cleared, since the script lives in the clone.
+      - '[ -n "$${GOCACHE}" ] && python3 scripts/ci/trim_go_cache.py "$${GOCACHE}" --max-gb 40 --target-gb 30 || true'
+      - '[ -n "$${CI_WORKSPACE}" ] && [ "$${CI_WORKSPACE}" != / ] && find "$${CI_WORKSPACE}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || true'
+      - '[ -n "$${HOME}" ] && [ -d "$${HOME}/go" ] && chmod -R u+w "$${HOME}/go" && rm -rf "$${HOME}/go" || true'
+      # A killed build leaves its go-build temp dir behind; clear any over an hour old.
+      - 'find "$${TMPDIR:-/tmp}" -maxdepth 1 -name "go-build*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true'
+      # Backstop for leftover workdirs (woodpecker-local-<n>, the parent of
+      # HOME). The agent removes a workflow's workdir at teardown, but that
+      # removal failed on the read-only Go module cache each run used to keep
+      # under its own HOME ("could not destroy workflow ... permission denied"),
+      # and 114 such dirs held 93 GB on llm1 by 2026-09-29. The shared GOMODCACHE
+      # above fixed the cause; this clears anything an agent crash or a future
+      # regression leaves. Sweeps siblings older than 3 hours: safe only while
+      # the repo's Woodpecker pipeline timeout (60 min) stays below that.
+      - '[ -n "$${HOME}" ] && W=$$(dirname "$${HOME}") && R=$$(dirname "$$W") && case "$$(basename "$$W")" in woodpecker-local-*) find "$$R" -mindepth 1 -maxdepth 1 -name "woodpecker-local-*" -type d ! -path "$$W" -mmin +180 -exec sh -c "chmod -R u+w \"\$$@\" && rm -rf \"\$$@\"" _ {} + ;; esac || true'
