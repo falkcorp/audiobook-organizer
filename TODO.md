@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.9 -->
+<!-- version: 10.78.10 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -1903,7 +1903,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Version-group membership lock: rows created straight into a group.** Every writer that moves an EXISTING book between version groups now holds the shared group locks (and the no-group sentinel) across the write (#3666). Rows that are CREATED already carrying a `version_group_id` still join that group with no lock, so a group-lock holder (`itunes.regroup`'s apply-time recheck, a hand-off) can see a member appear mid-check. For each, hold `versionprimary.LockGroups(groupID)` across the `CreateBook` (and any follow-up flag write), released before any hand-off. Sites: `internal/server/transcode_version.go` recordTranscodedVersion's M4B version row (~148, `store.CreateBook(nb)`); `internal/scanner/version_link.go` the new scanned row that takes the auto-linked group (~453, `dbBook.VersionGroupID = &groupID` before the scanner's create); `internal/dedup/split_book_merge.go` (~594, the split/combine source plan carrying `VersionGroupID`); `internal/server/handlers/versions.go` (~865/876, the version row created into a group). `organizer.CreateOrganizedVersion` is done: it creates its copy under the locks (#3666).
 
-- [ ] **Number-leading titles — leftovers from the 2026-10-03 overnight (see `docs/executive-summaries/2026-10-03-the-books-titled-by-a-number-executive-summary.md`).**
+- [ ] **Number-leading titles — leftovers from the 2026-10-03 overnight (see `docs/executive-summaries/2026-10-executive-summary.md`).**
   - [ ] Fragment fixer: a path twin whose own match is AMBIGUOUS (two parents) or whose path two matched fragments share still lends/takes nothing by design (#3685); list those so the owner can resolve them by hand instead of them vanishing from the plan.
   - [ ] Fragment fixer `no-parent`: a "numbered chapter set" rule for ≥3 short files from one import folder whose stems differ only by a leading number but carry DIFFERENT titles ("070 - Skating", "047 - Core" — SenescentSoul 262 rows, Anansi Boys 55, Lord of the Dragon Riders 45); `ChapterGroupKey` keys them apart today, so they never form a group. Survivor titled from the folder.
   - [ ] Fragment fixer `no-parent`: folder-per-file layouts (each chapter in its own folder named after the file) group by the grandparent folder when the import dir holds only that file.
@@ -20333,7 +20333,7 @@ frontend + backend feature work, not a mechanical change.
 52. ~~**Consolidate the dedup page into the review page**~~ — ✅ DONE 2026-10-18: the old
     dedup page is deleted and every job moved into the Review page (Duplicates, Authors &
     series and Repairs lanes); old `/dedup` addresses redirect into `/review` (PR #4065 docs;
-    see `docs/executive-summaries/2026-10-18-dedup-page-retired-executive-summary.md`).
+    see `docs/executive-summaries/2026-10-executive-summary.md`).
     Original scope, kept for the record: slim the dedup page down to
     run-control only (start/stop dedup runs + run status/progress); move ALL candidate
     and result display + review actions into the review page so there is one place to
