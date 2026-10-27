@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-27
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/gin-gonic/gin"
 )
@@ -38,6 +39,12 @@ func TestDeprecatedBooksAliases_RemainingSixRoutesAnswer(t *testing.T) {
 		database.SetGlobalStore(origStore)
 		store.Close()
 	})
+
+	// A version purge needs a library root (it deletes nothing while the library
+	// does not look mounted).
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = t.TempDir()
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
 
 	srv := newTestServer(t, store)
 

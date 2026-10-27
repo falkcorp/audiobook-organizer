@@ -1,7 +1,7 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.6.0
+// version: 1.7.1
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 import { ApiError } from '../services/api';
 
@@ -14,6 +14,14 @@ import { ApiError } from '../services/api';
 // CONFLICT): a response that carries any other specific code is never
 // re-classified by its text.
 const OWNS_FILES_CODE = 'OWNS_FILES';
+
+// The refusal of a book that owns no live file row but holds retired versions
+// (409, code HOLDS_RETIRED_VERSIONS, database.ErrBookHoldsRetiredVersions,
+// which also wraps ErrBookOwnsFiles). It replaced OWNS_FILES for that case
+// (2026-10-27): the rows are kept under this very book as retired versions (for
+// another version of the book) and cannot be moved, so the advice for
+// OWNS_FILES (move the files) does not apply.
+const HOLDS_RETIRED_VERSIONS_CODE = 'HOLDS_RETIRED_VERSIONS';
 const OWNS_FILES_MARKER = 'still owns book_file rows';
 const GENERIC_CODE = 'CONFLICT';
 
@@ -56,11 +64,28 @@ export function isProgressDiscardedBookKeptRefusal(error: unknown): boolean {
   return error instanceof ApiError && errorCode(error) === PROGRESS_DISCARDED_CODE;
 }
 
-/** Reports whether a delete or purge was refused because the book still owns file rows. */
+/**
+ * Reports whether a delete or purge was refused because the book owns no live
+ * file row but holds retired versions: file rows of another book that were
+ * retired into it and cannot be moved (409, code HOLDS_RETIRED_VERSIONS).
+ */
+export function isHoldsRetiredVersionsRefusal(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    errorCode(error) === HOLDS_RETIRED_VERSIONS_CODE
+  );
+}
+
+/**
+ * Reports whether a delete or purge was refused because the book still owns
+ * file rows: its own (OWNS_FILES) or retired ones it holds
+ * (HOLDS_RETIRED_VERSIONS, a refusal of the same family).
+ */
 export function isOwnsFilesRefusal(error: unknown): boolean {
   if (!(error instanceof ApiError) || error.status !== 409) return false;
   const code = errorCode(error);
-  if (code === OWNS_FILES_CODE) return true;
+  if (code === OWNS_FILES_CODE || code === HOLDS_RETIRED_VERSIONS_CODE) return true;
   if (code !== undefined && code !== GENERIC_CODE) return false;
   return error.message.includes(OWNS_FILES_MARKER);
 }
@@ -103,8 +128,11 @@ export function isRootNotReadyRefusal(error: unknown): boolean {
  * Returns the message to show when deleting (or purging) a book failed.
  *
  * A STATE_MOVED_BOOK_KEPT or PROGRESS_DISCARDED_BOOK_KEPT error says what
- * happened to the progress and shows the server's message. A 409 "still owns
- * file rows" refusal of a live book becomes a plain sentence with the row
+ * happened to the progress and shows the server's message. A
+ * HOLDS_RETIRED_VERSIONS refusal says the book has file rows kept for
+ * another version of the book (retired versions), which cannot be moved
+ * (soft-deleting a live book is offered, as for OWNS_FILES; a book already in the trash gets no such
+ * advice). A 409 "still owns file rows" refusal of a live book becomes a plain sentence with the row
  * count and what to do next, except when the rows are retired ones, which
  * cannot be moved, or the book is already in the trash (options.inTrash): the
  * server's own wording is shown then. Any other server error shows the
@@ -126,6 +154,17 @@ export function describeDeleteBookError(
       return (
         'The book was not purged, but its stored listening state (progress, bookmarks or ' +
         `reset markers) had already been erased. ${error.message}`
+      );
+    }
+    if (isHoldsRetiredVersionsRefusal(error)) {
+      const m = /\((\d+) retired row\(s\)/.exec(error.message);
+      const count = m ? Number(m[1]) : undefined;
+      const rows =
+        count === undefined ? 'file rows' : `${count} file row${count === 1 ? '' : 's'}`;
+      return (
+        `This book has ${rows} kept for another version of the book (retired versions). ` +
+        "They can't be moved, so the book can't be permanently deleted while they exist." +
+        (options.inTrash ? '' : ' Soft-delete it instead (it stays hidden and restorable).')
       );
     }
     if (

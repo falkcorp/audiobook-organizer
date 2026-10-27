@@ -1,12 +1,18 @@
 // file: web/src/services/versionApi.ts
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 import type { RevertOperationResult } from './api';
 import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = '/api/v1';
+
+/** One file a purge left on disk: why a purge kept it, or why it could not remove it. */
+export interface PurgeFileNote {
+  path: string;
+  reason: string;
+}
 
 export interface BookVersion {
   id: string;
@@ -20,6 +26,11 @@ export interface BookVersion {
   purged_date?: string;
   /** When the version entered the trash; the 14-day purge window counts from here. Unset outside the trash. */
   trashed_at?: string;
+  /** Files a finished purge did NOT remove (another row or book names them, a protected path, a folder that still holds files). */
+  purge_kept?: PurgeFileNote[];
+  /** Status purge_failed: the files a purge could not remove and why. A retry (purge-now) or a hard delete are the ways out. */
+  purge_failed?: PurgeFileNote[];
+  purge_failed_at?: string;
   created_at: string;
   updated_at: string;
   version: number;

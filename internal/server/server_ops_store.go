@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.22.0
+// version: 1.23.4
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-18
+// last-edited: 2026-10-27
 
 package server
 
@@ -126,6 +126,10 @@ type serverBookVersionStore interface {
 	GetBookVersion(id string) (*database.BookVersion, error)
 	UpdateBookVersion(v *database.BookVersion) error
 	DeleteBookVersion(id string) error
+	// ListTrashedBookVersions and ListPurgedBookVersions are the trash page's two
+	// tabs (GET /audiobooks/trashed-versions and /purged-versions).
+	ListTrashedBookVersions() ([]database.BookVersion, error)
+	ListPurgedBookVersions() ([]database.BookVersion, error)
 	// The version-group primary hand-off (versionprimary.EnsureStore) after
 	// a transcode: the group's members and each member's chapter rows.
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
@@ -137,6 +141,9 @@ type serverBookVersionStore interface {
 type serverBookFileReader interface {
 	GetBookFileByID(bookID string, fileID string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
+	// BookFilesAtPath: versions.PurgeVersion asks it, retired rows included,
+	// whether another row still names a file before removing it.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	// GetAllBookFilesCore: the external-ID backfill's one batch read of
 	// book_file rows (PERF-5) — see internal/itunes/backfill.go.
 	GetAllBookFilesCore() ([]database.BookFileCore, error)

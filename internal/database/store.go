@@ -1,12 +1,13 @@
 // file: internal/database/store.go
-// version: 2.128.1
+// version: 2.128.3
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -819,10 +820,30 @@ type BookVersion struct {
 	RetiredFromBookID string     `json:"retired_from_book_id,omitempty"`
 	RetireOpID        string     `json:"retire_op_id,omitempty"`
 	RetiredAt         *time.Time `json:"retired_at,omitempty"`
-	MetadataJSON      string     `json:"metadata_json,omitempty"` // source-specific catch-all
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	Version           int        `json:"version"`
+	// PurgeKept lists the files a finished purge did NOT remove, with why: a
+	// file another book_file row (a retired version's included) or another
+	// book names stays where it is. Set by versions.PurgeVersion on the write
+	// that marks the version inactive_purged, so a purge that kept files is
+	// not reported as one that removed them all. Empty when it removed
+	// everything.
+	PurgeKept []PurgeFileNote `json:"purge_kept,omitempty"`
+	// PurgeFailed, PurgeFailedAt: the files a purge could not remove for a
+	// reason that retrying will not change (permission, read-only filesystem),
+	// the reason for each, and when the version entered
+	// BookVersionStatusPurgeFailed. Empty in every other status.
+	PurgeFailed   []PurgeFileNote `json:"purge_failed,omitempty"`
+	PurgeFailedAt *time.Time      `json:"purge_failed_at,omitempty"`
+	MetadataJSON  string          `json:"metadata_json,omitempty"` // source-specific catch-all
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	Version       int             `json:"version"`
+}
+
+// PurgeFileNote is one file a purge left on disk (BookVersion.PurgeKept) or
+// could not remove (BookVersion.PurgeFailed), and why.
+type PurgeFileNote struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }
 
 // BookVersionStatus values. See spec 3.1 for the full state
@@ -845,7 +866,39 @@ const (
 	// auto-promoted, never trashed, never purged (purging deletes the files),
 	// and it leaves this status only through UnretireBookFiles.
 	BookVersionStatusRetired = "retired"
+	// BookVersionStatusPurging marks a trashed version whose purge has been
+	// claimed: PurgeVersion sets it, under the version's stripe, before the
+	// first file is removed, and it ends in BookVersionStatusInactivePurged. A
+	// version that stays in this status is a purge that failed part way (some
+	// files removed, one could not be): it is retried by the trash cleanup and
+	// by "purge now", and it can NOT be restored, because some of its files are
+	// already gone. UpdateBookVersion enforces both halves (see
+	// refusePurgeTransition). It is not a state a user moves a version to.
+	BookVersionStatusPurging = "purging"
+	// BookVersionStatusPurgeFailed marks a version whose purge failed for a
+	// reason retrying cannot change (a file it may not remove: permission, a
+	// read-only filesystem). It is the end of the automatic retries: the trash
+	// cleanup counts it as needing attention instead of failing on it every
+	// night. Like purging it cannot be restored (some files are already gone).
+	// The owner can retry the purge ("Purge now": the claim accepts it), or
+	// hard-delete the version, which removes the record and leaves the files
+	// named in BookVersion.PurgeFailed where they are. Only PurgeVersion sets
+	// it, from purging.
+	BookVersionStatusPurgeFailed = "purge_failed"
 )
+
+// ErrVersionPurging is returned by UpdateBookVersion when the stored version
+// is purging (or purge_failed) and the write would move it anywhere but the
+// purge states or inactive_purged: a restore, a re-trash, a swap, or a stale
+// writer putting back a copy it read before the claim.
+var ErrVersionPurging = errors.New("version is being purged and cannot change status")
+
+// ErrVersionPurgeClaimLost is returned by UpdateBookVersion when a write sets
+// BookVersionStatusPurging and the stored version is none of trash, purging
+// and purge_failed (or a write sets purge_failed and the stored version is not
+// purging): it was restored (or otherwise left the trash) after the caller read
+// it, so its files must not be removed.
+var ErrVersionPurgeClaimLost = errors.New("version is no longer in the trash, so its purge was not claimed")
 
 // Role is a named bundle of permissions for the multi-user model
 // (spec 3.7). Permissions are Go string constants validated at

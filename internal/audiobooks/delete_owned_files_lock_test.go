@@ -1,7 +1,7 @@
 // file: internal/audiobooks/delete_owned_files_lock_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: c41e7a92-6d05-4b38-8e1f-2a9d5b073c64
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package audiobooks
 
@@ -210,6 +210,7 @@ func TestDeleteAudiobook_HardDeleteOfBookWithOnlyRetiredRowsMovesNothing(t *test
 
 	require.Nil(t, res)
 	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.ErrorIs(t, err, database.ErrBookHoldsRetiredVersions)
 	require.Contains(t, err.Error(), "retired")
 	require.Contains(t, err.Error(), "cannot be moved")
 	require.NotContains(t, err.Error(), "move its files to another book first")
@@ -385,7 +386,8 @@ func TestPurgeSoftDeletedBooks_RetiredOnlyStatelessBookIsRefusedBeforeAnySideEff
 	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), false, nil)
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"holder"}, res.SkippedOwnsFilesIDs, "result %+v", res)
+	require.Equal(t, []string{"holder"}, res.SkippedHoldsRetiredVersionsIDs, "result %+v", res)
+	require.Zero(t, res.SkippedOwnsFiles, "a holder of retired versions only is kept under its own reason, not as owning files: %+v", res)
 	require.Zero(t, res.Purged)
 	require.Empty(t, res.Errors)
 	require.False(t, bookGone(t, store, "holder"))
@@ -408,6 +410,7 @@ func TestPurgeNow_RetiredOnlyBookKeepsTheHelpersWording(t *testing.T) {
 	_, err = purgeNowUnderHold(t, NewAudiobookService(store), book)
 
 	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.ErrorIs(t, err, database.ErrBookHoldsRetiredVersions)
 	require.Contains(t, err.Error(), "retired row(s)")
 	require.Contains(t, err.Error(), "cannot be moved")
 	require.NotContains(t, err.Error(), "soft-delete")
@@ -432,6 +435,7 @@ func TestDiscardProgressAndPurge_RetiredOnlyBookIsRefusedBeforeAnythingIsCleared
 	_, err = svc.DiscardProgressAndPurge(context.Background(), "holder", "owner")
 
 	require.ErrorIs(t, err, database.ErrBookOwnsFiles)
+	require.ErrorIs(t, err, database.ErrBookHoldsRetiredVersions)
 	require.Contains(t, err.Error(), "retired")
 	require.Contains(t, err.Error(), "cannot be moved")
 	require.False(t, bookGone(t, store, "holder"))

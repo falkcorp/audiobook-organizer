@@ -1,0 +1,96 @@
+// file: web/src/utils/trashCleanupResult.ts
+// version: 1.0.0
+// guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
+// last-edited: 2026-10-27
+
+/** The def id of the nightly trash cleanup operation. */
+export const TRASH_CLEANUP_DEF_ID = 'maintenance.trash-cleanup';
+
+/** The def id it ran under before the maintenance plugin took it over. */
+const FORMER_TRASH_CLEANUP_DEF_ID = 'scheduler.trash-cleanup';
+
+/** Reports whether an operation is a run of the trash cleanup (under either id). */
+export function isTrashCleanupDef(defId: string | undefined | null): boolean {
+  return defId === TRASH_CLEANUP_DEF_ID || defId === FORMER_TRASH_CLEANUP_DEF_ID;
+}
+
+/**
+ * The result the trash cleanup stores on its operation
+ * (maintenance.TrashCleanupResult). The id lists are what the counts link to.
+ */
+export interface TrashCleanupResult {
+  purged: number;
+  failed: number;
+  /** versions purged with files left on disk because another row or book names them (also counted in purged) */
+  kept_files: number;
+  kept_version_ids: string[];
+  kept_book_ids: string[];
+  kept_file_paths: string[];
+  /** versions whose purge gave up on a file it cannot remove (purge_failed); not counted in failed */
+  needs_attention: number;
+  needs_attention_version_ids: string[];
+  needs_attention_book_ids: string[];
+  /** a merge or combine held the merge lock for the whole wait, so the run stopped and left the rest for the next night */
+  stopped_for_merge: boolean;
+}
+
+/** The two groups of versions the result points at. */
+export type TrashCleanupSet = 'kept' | 'needs_attention';
+
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+
+/**
+ * Reads a stored operation result as a trash cleanup result. The server omits
+ * empty id lists and a false stopped_for_merge, so every field has a default.
+ * null when the value is not an object (no result stored, or text).
+ */
+export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  return {
+    purged: num(r.purged),
+    failed: num(r.failed),
+    kept_files: num(r.kept_files),
+    kept_version_ids: strings(r.kept_version_ids),
+    kept_book_ids: strings(r.kept_book_ids),
+    kept_file_paths: strings(r.kept_file_paths),
+    needs_attention: num(r.needs_attention),
+    needs_attention_version_ids: strings(r.needs_attention_version_ids),
+    needs_attention_book_ids: strings(r.needs_attention_book_ids),
+    stopped_for_merge: r.stopped_for_merge === true,
+  };
+}
+
+/** The version ids behind one of the result's counts. */
+export function cleanupVersionIds(r: TrashCleanupResult, set: TrashCleanupSet): string[] {
+  return set === 'kept' ? r.kept_version_ids : r.needs_attention_version_ids;
+}
+
+/** The distinct book ids behind one of the result's counts. */
+export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): string[] {
+  const ids = set === 'kept' ? r.kept_book_ids : r.needs_attention_book_ids;
+  return [...new Set(ids)];
+}
+
+/**
+ * Where a count of the result links to: the Version Management page, narrowed
+ * to the versions of that run's group. The page reads the ids from the
+ * operation's stored result (op), so the link stays short however many
+ * versions the run named. Kept versions have finished purging (Purged tab);
+ * versions that need attention are still listed in the Trash tab.
+ */
+export function cleanupVersionsLink(opId: string, set: TrashCleanupSet): string {
+  return `/versions?op=${encodeURIComponent(opId)}&set=${set}`;
+}
+
+/** Which Version Management tab lists the versions of a group. */
+export function cleanupSetTab(set: TrashCleanupSet): 'trash' | 'purged' {
+  return set === 'kept' ? 'purged' : 'trash';
+}
+
+/** Reads the set query value back; null for anything but the two known sets. */
+export function parseCleanupSet(v: string | null): TrashCleanupSet | null {
+  return v === 'kept' || v === 'needs_attention' ? v : null;
+}

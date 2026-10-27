@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.55.0
+// version: 1.55.2
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package maintenance
 
@@ -307,8 +307,10 @@ func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int,
 }
 func (d fakeDeps) QuarantineKnownBadFiles(_ context.Context) (int, bool, error) { return 0, false, nil }
 func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int              { return 0 }
-func (d fakeDeps) CleanupTrashedVersions() int                                  { return 0 }
-func (d fakeDeps) ActivityFlushOp(_ string)                                     {}
+func (d fakeDeps) CleanupTrashedVersions() (versions.CleanupResult, error) {
+	return versions.CleanupResult{}, nil
+}
+func (d fakeDeps) ActivityFlushOp(_ string) {}
 func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageReport, error) {
 	return &TriageReport{}, nil
 }

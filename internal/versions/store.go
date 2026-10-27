@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.6.0
+// version: 1.7.5
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 package versions
 
@@ -44,12 +44,25 @@ type versionPurger interface {
 	versionUpdater
 	bookFileLister
 
+	// BookFilesAtPath lists EVERY row at a path, retired rows included, so a
+	// purge never removes a file another row (a retired version's) still names.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+
+	// The book-row side of the same question (a book can name a file no
+	// book_file row does, and a trashed book is restorable) is not here:
+	// database.BookRowPathReader is not on Store, so otherBooksNamingPath finds
+	// it with database.AsCapability and fails closed without it.
+
 	GetBookByID(id string) (*database.Book, error)
 }
 
 type TrashedVersionCleaner interface {
 	versionPurger
 
+	// ListTrashedBookVersions lists the trash, the purges that were claimed and
+	// did not finish (status purging), so the cleanup retries those too, and
+	// the purges that gave up (status purge_failed), which it counts as
+	// needing attention and does not retry.
 	ListTrashedBookVersions() ([]database.BookVersion, error)
 	// GetBookVersion re-reads each listed row before it is stamped or
 	// purged, narrowing the window in which a mid-run restore is undone.

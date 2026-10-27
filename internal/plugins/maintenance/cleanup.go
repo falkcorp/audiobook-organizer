@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.27.0
+// version: 1.27.3
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
@@ -19,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -502,9 +504,78 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 	}
 }
 
+// TrashCleanupResult is the result payload of maintenance.trash-cleanup. The
+// id lists are what the operation page links from: a purge that kept files, or
+// gave up, is not "purged N" and must be found from the result, not only from
+// the log.
+type TrashCleanupResult struct {
+	Purged int `json:"purged"`
+	Failed int `json:"failed"`
+	// KeptFiles counts the versions purged with files left on disk because
+	// another row or book names them; they are also counted in Purged.
+	KeptFiles      int      `json:"kept_files"`
+	KeptVersionIDs []string `json:"kept_version_ids,omitempty"`
+	KeptBookIDs    []string `json:"kept_book_ids,omitempty"`
+	KeptFilePaths  []string `json:"kept_file_paths,omitempty"`
+	// NeedsAttention counts the versions whose purge gave up on a file it cannot
+	// remove (purge_failed); the cleanup does not retry them and does not count
+	// them in Failed.
+	NeedsAttention           int      `json:"needs_attention"`
+	NeedsAttentionVersionIDs []string `json:"needs_attention_version_ids,omitempty"`
+	NeedsAttentionBookIDs    []string `json:"needs_attention_book_ids,omitempty"`
+	// StoppedForMerge is true when a merge or combine held the merge lock for
+	// the whole wait, so the run stopped there and left the remaining versions
+	// for the next night. It is not a failure and does not turn the op red.
+	StoppedForMerge bool `json:"stopped_for_merge,omitempty"`
+}
+
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	purged := p.deps.CleanupTrashedVersions()
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: purged %d versions", purged))
+	res, err := p.deps.CleanupTrashedVersions()
+	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), StoppedForMerge: res.StoppedForMerge}
+	for _, k := range res.KeptFiles {
+		payload.KeptVersionIDs = append(payload.KeptVersionIDs, k.VersionID)
+		payload.KeptBookIDs = append(payload.KeptBookIDs, k.BookID)
+		for _, f := range k.Files {
+			payload.KeptFilePaths = append(payload.KeptFilePaths, f.Path)
+		}
+	}
+	for _, k := range res.NeedsAttention {
+		payload.NeedsAttentionVersionIDs = append(payload.NeedsAttentionVersionIDs, k.VersionID)
+		payload.NeedsAttentionBookIDs = append(payload.NeedsAttentionBookIDs, k.BookID)
+	}
+	// A result the page cannot read back would leave a run that purged versions
+	// looking like a run that did nothing; a failed write is reported on the op.
+	setErr := opsregistry.ReporterSetResult(reporter, payload)
+
+	if len(res.KeptFiles) > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d of the purged versions kept files another row or book names (versions %s, books %s)",
+			len(res.KeptFiles), strings.Join(payload.KeptVersionIDs, ", "), strings.Join(payload.KeptBookIDs, ", ")))
+	}
+	if len(res.NeedsAttention) > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) cannot be purged (a file cannot be removed: permission or a read-only filesystem) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
+			len(res.NeedsAttention), strings.Join(payload.NeedsAttentionVersionIDs, ", "), strings.Join(payload.NeedsAttentionBookIDs, ", ")))
+	}
+	if err != nil {
+		// Some due purges failed (or the trash could not be listed): say so in
+		// the operation log and fail the op, so a night in which nothing could
+		// be purged does not read as "purged 0 versions" with a success status.
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: purged %d versions, %d failed: %v", res.Purged, res.Failed, err))
+		return err
+	}
+	msg := fmt.Sprintf("Trash cleanup: purged %d versions", res.Purged)
+	if n := len(res.KeptFiles); n > 0 {
+		msg = fmt.Sprintf("Trash cleanup: purged %d versions, %d of them with files kept (versions %s)", res.Purged, n, strings.Join(payload.KeptVersionIDs, ", "))
+	}
+	if n := len(res.NeedsAttention); n > 0 {
+		msg += fmt.Sprintf("; %d need attention (versions %s)", n, strings.Join(payload.NeedsAttentionVersionIDs, ", "))
+	}
+	if res.StoppedForMerge {
+		msg += "; stopped early: a merge or combine was running, the rest runs next night"
+	}
+	_ = reporter.Log(slog.LevelInfo, msg)
+	if setErr != nil {
+		return fmt.Errorf("trash cleanup: persist result: %w", setErr)
+	}
 	return nil
 }
 

@@ -1,6 +1,7 @@
 // file: internal/versions/fs.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c2a1f8d-4b3e-4f70-a9c5-2e8d0f1b9a47
+// last-edited: 2026-10-27
 //
 // Filesystem primitives for the `.versions/{id}/` layout (spec 3.1).
 //
@@ -136,16 +137,6 @@ func movePreservingAttrs(src, dst string) (bool, error) {
 	// chmod on every fs.
 	_ = os.Chmod(dst, srcInfo.Mode())
 	return false, nil
-}
-
-// RemoveVersionSlot removes the per-version subdirectory and all
-// its contents. Idempotent if the slot doesn't exist.
-func RemoveVersionSlot(bookDir, versionID string) error {
-	slot := VersionSlotDir(bookDir, versionID)
-	if _, err := os.Stat(slot); os.IsNotExist(err) {
-		return nil
-	}
-	return os.RemoveAll(slot)
 }
 
 // PruneEmptyVersionsDir removes `bookDir/.versions/` if empty, so

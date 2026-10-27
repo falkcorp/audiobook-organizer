@@ -1,7 +1,7 @@
 // file: web/src/utils/purgeSummary.test.ts
-// version: 1.0.0
+// version: 1.1.1
 // guid: 5b2e8f13-9c47-4d60-a3e1-8f0d6b4a7c25
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 import { describe, expect, it } from 'vitest';
 import type { PurgeResult } from '../services/api';
@@ -9,6 +9,7 @@ import {
   decidedCount,
   errorDetails,
   keptReasons,
+  keptReasonsOfBreakdown,
   keptReasonsOfResult,
   outcomeHeadline,
   outcomeNotes,
@@ -67,15 +68,19 @@ describe('kept reasons', () => {
     expect(r[1].label).toContain('can still be undone');
   });
   it('is empty when nothing is kept', () => {
-    expect(keptReasons({ ownsFiles: 0, undoPossible: 0, hasProgress: 0 })).toEqual([]);
+    expect(
+      keptReasons({ ownsFiles: 0, holdsRetiredVersions: 0, undoPossible: 0, hasProgress: 0 })
+    ).toEqual([]);
   });
   it('uses singular and plural verbs', () => {
-    expect(keptReasons({ ownsFiles: 1, undoPossible: 0, hasProgress: 0 })[0].label).toMatch(
-      /^still owns /
-    );
-    expect(keptReasons({ ownsFiles: 2, undoPossible: 0, hasProgress: 0 })[0].label).toMatch(
-      /^still own /
-    );
+    expect(
+      keptReasons({ ownsFiles: 1, holdsRetiredVersions: 0, undoPossible: 0, hasProgress: 0 })[0]
+        .label
+    ).toMatch(/^still owns /);
+    expect(
+      keptReasons({ ownsFiles: 2, holdsRetiredVersions: 0, undoPossible: 0, hasProgress: 0 })[0]
+        .label
+    ).toMatch(/^still own /);
   });
 });
 
@@ -97,6 +102,59 @@ describe('outcome severity and notes', () => {
     expect(notes[0]).toContain('2 books had listening progress');
     expect(notes[1]).toContain('1 book; it was kept');
     expect(notes[2]).toContain('3 books could not be decided');
+  });
+});
+
+describe('books that hold only retired versions', () => {
+  const holds: PurgeResult = {
+    ...base,
+    attempted: 10,
+    purged: 3,
+    files_deleted: 0,
+    skipped_owns_files: 2,
+    skipped_holds_retired_versions: 4,
+    skipped_holds_retired_versions_ids: ['b1', 'b2', 'b3', 'b4'],
+  };
+  it('is its own kept reason, after owns-files and before the undo reasons', () => {
+    const r = keptReasonsOfResult({ ...holds, kept_undo_possible: 1 });
+    expect(r.map((x) => [x.key, x.count])).toEqual([
+      ['owns_files', 2],
+      ['holds_retired_versions', 4],
+      ['undo_possible', 1],
+    ]);
+    expect(r[1].label).toBe(
+      'hold file rows kept for another version of the book (retired versions; the purge never deletes those)'
+    );
+  });
+  it('is not folded into owns-files, so each count stays exact', () => {
+    const only = keptReasonsOfResult({ ...base, skipped_holds_retired_versions: 1 });
+    expect(only.map((x) => x.key)).toEqual(['holds_retired_versions']);
+    expect(only[0].label).toMatch(/^holds file rows kept for another version of the book /);
+  });
+  it('counts as decided, so a stopped purge does not under-report how far it got', () => {
+    const stopped: PurgeResult = {
+      ...holds,
+      attempted: 50,
+      stopped_early: true,
+      stop_reason: 'cancelled',
+    };
+    // 3 purged + 2 owns files + 4 holds retired versions
+    expect(decidedCount(stopped)).toBe(9);
+    expect(outcomeHeadline(stopped)).toContain('9 of 50 books in the trash were decided');
+  });
+  it('the breakdown has no separate figure (the server folds it into owns_files)', () => {
+    expect(
+      keptReasonsOfBreakdown({
+        computed_at: '2026-10-27T00:00:00Z',
+        from_preview: true,
+        total: 5,
+        purgeable: 0,
+        owns_files: 5,
+        undo_possible: 0,
+        has_listening_state: 0,
+        failed: 0,
+      }).map((x) => x.key)
+    ).toEqual(['owns_files']);
   });
 });
 

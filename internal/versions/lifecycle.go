@@ -1,12 +1,26 @@
 // file: internal/versions/lifecycle.go
-// version: 1.3.1
+// version: 1.7.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
 // Lifecycle states:
-//   active → alt → trash → inactive_purged → (hard delete)
+//   active → alt → trash → purging → inactive_purged → (hard delete)
+//                             ↓  ↑
+//                        purge_failed → (hard delete)
+//
+// purging is the claim PurgeVersion takes before it removes the first file. A
+// purge that finishes passes through it in one call; one that fails part way
+// leaves the version there, where it cannot be restored (some files are gone)
+// and where the nightly cleanup and purge-now retry it.
+//
+// purge_failed is where a purge ends when a file can never be removed
+// (permission, a read-only filesystem): without it the version would sit in
+// purging, refused by restore and by hard delete, with the nightly cleanup
+// failing on it every night. It records the files and reasons on the version,
+// is counted by the nightly cleanup as needing attention (not retried), and is
+// left by purge-now (a retry, back through purging), or by hard delete.
 //
 // Delete puts a version in trash (14-day TTL, counted from TrashedAt --
 // when it entered the trash, not when it was created). Auto-promote selects
@@ -14,16 +28,30 @@
 // moves trash back to alt. Purge physically deletes files and
 // marks inactive_purged (keeps metadata for fingerprint). Hard
 // delete removes all traces.
+//
+// A retired version (database.BookVersionStatusRetired) is outside this
+// machine. It holds the retired book_file rows of a book that was retired into
+// the version's own book, it is created in that state and leaves it only
+// through UnretireBookFiles, and every transition here refuses it with
+// ErrRetiredVersion: trashing it would start the 14-day clock that ends in
+// PurgeVersion, and PurgeVersion deletes files from disk.
 
 package versions
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // TrashTTLDays is the number of days a trashed version is kept before
@@ -32,29 +60,102 @@ const TrashTTLDays = 14
 
 var lifecycleLog = logger.New("versions.lifecycle")
 
+// ErrVersionNotInTrash is returned by PurgeVersion when the version left the
+// trash after the caller read it (it was restored): the claim was refused and
+// nothing was deleted. It is not a failure of the purge, the user's restore
+// won; the nightly cleanup skips such a version, and purge-now answers 409.
+var ErrVersionNotInTrash = errors.New("version is no longer in the trash")
+
+// ErrRetiredVersion is returned by the lifecycle steps that refuse a retired
+// version: MarkTrashed, MarkRestored and PurgeVersion. Callers branch on it
+// with errors.Is; the server answers it with a 409. AutoPromoteAlt never
+// returns it (it skips a retired version silently), and swap has no guard yet:
+// it is tracked in the todo fragment for this stack.
+var ErrRetiredVersion = errors.New("a retired version is not part of the version lifecycle")
+
+// refuseRetired is the one place a lifecycle step checks for a retired
+// version. The store refuses to change a retired version only while it still
+// holds retired rows (database.ErrRetiredVersionHasFiles); a retired version
+// that holds none, or a step that acts on the caller's copy before it writes
+// (PurgeVersion removes files first), is not covered by that, so each step
+// refuses here, up front, from the status the caller holds.
+func refuseRetired(v *database.BookVersion, action string) error {
+	if v != nil && v.Status == database.BookVersionStatusRetired {
+		return fmt.Errorf("%s version %s: %w (it holds the retired files of book %s, which stay where they are)",
+			action, v.ID, ErrRetiredVersion, v.RetiredFromBookID)
+	}
+	return nil
+}
+
+// refusePurging refuses a lifecycle step on a version whose purge has started
+// (purging) or gave up (purge_failed).
+func refusePurging(v *database.BookVersion, action string) error {
+	if v == nil {
+		return nil
+	}
+	switch v.Status {
+	case database.BookVersionStatusPurging:
+		return fmt.Errorf("%s version %s: %w (an earlier purge removed some of its files; "+
+			"the nightly cleanup or Purge now finishes it)", action, v.ID, database.ErrVersionPurging)
+	case database.BookVersionStatusPurgeFailed:
+		return fmt.Errorf("%s version %s: %w (an earlier purge removed some of its files and could not remove the rest; "+
+			"Purge now retries it, or it can be hard-deleted)", action, v.ID, database.ErrVersionPurging)
+	}
+	return nil
+}
+
 // MarkTrashed moves v into the trash in memory and stamps TrashedAt with now.
 // A version already in the trash keeps its stamp, so a repeated trash request
 // neither restarts nor shortens its window. The caller persists v; the store
 // enforces the same rule on write (database.PebbleStore.UpdateBookVersion),
 // this just makes the stamp visible on the caller's copy too.
-func MarkTrashed(v *database.BookVersion, now time.Time) {
+//
+// It refuses a retired version (ErrRetiredVersion) and leaves v untouched: a
+// retired version in the trash would reach PurgeVersion 14 days later. It
+// refuses a purging version (database.ErrVersionPurging) too.
+func MarkTrashed(v *database.BookVersion, now time.Time) error {
+	if err := refuseRetired(v, "trash"); err != nil {
+		return err
+	}
+	if err := refusePurging(v, "trash"); err != nil {
+		return err
+	}
 	if v.Status == database.BookVersionStatusTrash && v.TrashedAt != nil {
-		return
+		return nil
 	}
 	stamp := now
 	v.Status = database.BookVersionStatusTrash
 	v.TrashedAt = &stamp
+	return nil
 }
 
 // MarkRestored moves a trashed v back to alt in memory and clears TrashedAt.
-// The caller persists v.
-func MarkRestored(v *database.BookVersion) {
+// The caller persists v. It refuses a retired version (ErrRetiredVersion),
+// which is not in the trash and must not become an alt, and a purging version
+// (database.ErrVersionPurging): its purge has started, so some of its files may
+// already be gone and an alt made of it would name them. The store refuses the
+// same write (database.refusePurgeTransition), which is what closes the race
+// with a purge that is claimed after the caller read the version.
+func MarkRestored(v *database.BookVersion) error {
+	if err := refuseRetired(v, "restore"); err != nil {
+		return err
+	}
+	if err := refusePurging(v, "restore"); err != nil {
+		return err
+	}
 	v.Status = database.BookVersionStatusAlt
 	v.TrashedAt = nil
+	return nil
 }
 
 // AutoPromoteAlt selects the most recent alt version and promotes it
 // to active. Called when the active version is trashed.
+//
+// Only an alt version is a candidate, so a retired version is never promoted
+// even when it is newer than every alt: the status test runs before the date
+// comparison. Promoting it would put the retired files of another book into the
+// holder's active slot. TestAutoPromoteAlt_IgnoresRetired pins this; it fails if
+// the status test is loosened to admit any status but trash.
 func AutoPromoteAlt(store altPromoter, bookID string) error {
 	allVers, err := store.GetBookVersionsByBookID(bookID)
 	if err != nil {
@@ -77,51 +178,557 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 	return store.UpdateBookVersion(bestAlt)
 }
 
+// PurgeDecision is what a PurgeDecider says about one path.
+type PurgeDecision int
+
+const (
+	// PurgeRemove: the path is a file (or an empty directory) that may be
+	// unlinked now.
+	PurgeRemove PurgeDecision = iota
+	// PurgeGone: nothing is there (and the folder it would be in vouches for
+	// that), so the file counts as removed.
+	PurgeGone
+	// PurgeKeep: the path must not be removed, and that will not change by
+	// asking again (a protected path, outside the library root, a directory
+	// that still holds files). The reason is recorded on the version
+	// (BookVersion.PurgeKept) and the purge goes on without it.
+	PurgeKeep
+)
+
+// PurgeGuard is the book purge's safety, as a version purge asks it: the
+// library-root and per-path checks that live in internal/audiobooks
+// (AudiobookService.VersionPurgeGuard implements it). A version purge deletes
+// files from disk, and it did so with none of them until 2026-10-27: a file
+// under an import path or the iTunes library, or the "missing" files of a
+// library that is not mounted (ENOENT counted as removed), were all its to
+// delete. It is a parameter, not an import, because internal/audiobooks is the
+// one place those checks are kept and the book purge and this one must not
+// disagree about them.
+type PurgeGuard interface {
+	// RootReady reports whether the library looks mounted (the root exists and
+	// most of a sample of its live files can be seen). PurgeVersion asks it
+	// before it takes the merge lock, as the book purge does, so the stats do
+	// not run under it; a purge on a library that is not ready removes
+	// nothing and claims nothing.
+	RootReady() error
+	// NewDecider starts the decisions of ONE purge. seedDirs are folders this
+	// purge may find empty because of its own earlier work (a retry), which the
+	// decider must not mistake for the mount point of a filesystem that is
+	// not mounted.
+	NewDecider(seedDirs []string) PurgeDecider
+}
+
+// PurgeDecider decides the paths of one purge, one at a time, immediately
+// before each removal. A non-nil error is a question it could not answer now
+// (a stat that failed, a folder that cannot vouch for "gone"): transient, the
+// path is left alone and the version is retried.
+type PurgeDecider interface {
+	Decide(path string) (decision PurgeDecision, reason string, err error)
+	// Unlinking is called just before the purge unlinks path, so the folder it
+	// is about to empty is not mistaken for an unmounted mount point when a
+	// neighbour that is already gone is decided.
+	Unlinking(path string)
+}
+
+// ErrPurgeFailed is returned by PurgeVersion when a file could not be removed
+// for a reason retrying will not change (permission, a read-only filesystem):
+// the version is now in database.BookVersionStatusPurgeFailed, with the files
+// and reasons on it, and is no longer retried by the nightly cleanup.
+var ErrPurgeFailed = errors.New("a file of the version cannot be removed and retrying will not change that")
+
+// BackgroundMergeLockWait is how long the nightly cleanup waits, per version,
+// for a running merge or combine to release the merge lock before it gives up
+// on that version for the night (merge.ErrMergeBusy; the next run retries it).
+// A var only so a test can shorten it.
+var BackgroundMergeLockWait = 10 * time.Minute
+
+// removeFile is os.Remove; a variable so a test can make a removal fail the
+// way a read-only filesystem does.
+var removeFile = os.Remove
+
 // PurgeVersion physically deletes the version's files and marks it
-// inactive_purged. Keeps the DB rows for fingerprint matching.
-func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
+// inactive_purged. Keeps the DB rows for fingerprint matching. It is
+// PurgeVersionWithin for a background caller (the nightly cleanup), which waits
+// up to BackgroundMergeLockWait for the merge lock.
+func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGuard) error {
+	return PurgeVersionWithin(store, ver, guard, BackgroundMergeLockWait)
+}
+
+// PurgeVersionWithin is PurgeVersion with the time it will wait for the merge
+// lock passed in (an interactive caller passes merge.InteractiveMergeLockWait
+// and answers merge.ErrMergeBusy, which the error wraps, instead of hanging
+// behind a combine).
+//
+// It refuses a retired version (ErrRetiredVersion) before touching the disk.
+// The refusal has to come first: the file removal below happens before
+// UpdateBookVersion, whose own refusal comes too late, and the files of a
+// retired version belong to a book the library still keeps.
+//
+// It never removes a file that some other book_file row still names. A
+// retired version keeps the rows of a book that was retired into this one's
+// book, and those rows can name the very paths this version's own rows name
+// (PLAN section 5.1 rule 4: the holder's active rows hold every path of the
+// shell), so purging this version must leave those files alone. Owners are
+// every other book_file row (retired ones included) and every other book row
+// whose own FilePath is the path, a trashed (restorable) book included, the
+// same two questions the book purge asks at removal time (audiobooks
+// otherBookRowAt): a book can name a file with no row at all. The book lookup
+// is database.BookRowPathReader, found with database.AsCapability; a store that
+// does not provide it fails the purge closed like a lookup error does. The
+// version's own book is not another owner.
+//
+// The owners are asked twice. First for every path, before the claim: a path
+// whose owners cannot be listed (database.ErrBookFilesAtPathUnavailable) aborts
+// the purge with nothing deleted and the version unchanged, so the next run
+// retries it. Then again for each path immediately before its removal, as the
+// book purge does, because a row can be written between the decision and the
+// unlink. The merge lock is held from before the claim to the end, the lock the
+// writers of book_file rows (the repoint fixers, retire) hold, so a merge-family
+// writer cannot add an owner in the middle; a writer that does not take it
+// (the library scan) is caught by the second question, for all but the instant
+// between it and the unlink.
+//
+// Every path is also put to the guard (PurgeGuard): not a protected path (an
+// import path, the iTunes library, .failed), inside the library root, and a
+// "not there" counts as removed only when its folder vouches for it. A path
+// the guard or an owner keeps is not removed and is recorded on the version
+// (database.BookVersion.PurgeKept), which still ends inactive_purged: the
+// caller (the nightly cleanup, the purge-now handler) reports the kept files
+// instead of presenting the purge as complete.
+//
+// The version is claimed before the first file is removed: it is written as
+// purging (database.BookVersionStatusPurging), under the version's stripe, and
+// the write is refused with ErrVersionNotInTrash when the stored version is no
+// longer trash, purging or purge_failed, so a restore that landed after the
+// caller read the version wins and nothing is deleted. From then on a restore
+// is refused (database.ErrVersionPurging).
+//
+// A file that cannot be removed leaves the version purging when the failure may
+// pass (a lookup, a stat, EIO): marking it purged would orphan the file,
+// because nothing looks at a purged version's disk again; left purging it is
+// retried by the next cleanup run (and by purge-now), and a file the first
+// attempt already removed is simply gone then. It is purging, not trash,
+// because some of its files are already gone and a restore would hand back an
+// alt that names them. When every failure is one retrying will not change
+// (permission, a read-only filesystem, a directory that is not empty:
+// removeErrorIsPermanent) the version ends in
+// database.BookVersionStatusPurgeFailed instead, with the paths and reasons
+// recorded, and the error wraps ErrPurgeFailed; the nightly cleanup does not
+// retry it, the owner can retry it or hard-delete it. The folders a removal
+// emptied are pruned only when the purge completes: a folder pruned under a
+// retry would make the files that are already gone read as "its folder is
+// missing too" for ever.
+//
+// A version whose book no longer exists has no row to name its files, and its
+// slot is found through the book's FilePath: the book's tombstone
+// (database.GetBookTombstone) still has it, and the slot's files are removed
+// with the same checks. With no tombstone there is nothing to find, and the
+// version is marked purged with the files it could not locate unreported (a
+// warning is logged): DeleteBook refuses while rows exist, so there are no
+// rows to name them. A book that cannot be READ is a different thing: that is
+// an error, the version is untouched, and the next run retries it.
+func PurgeVersionWithin(store versionPurger, ver *database.BookVersion, guard PurgeGuard, wait time.Duration) error {
+	if err := refuseRetired(ver, "purge"); err != nil {
+		return err
+	}
+	if guard == nil {
+		return fmt.Errorf("purge version %s: no purge guard is configured, so nothing is deleted", ver.ID)
+	}
+	// The library-root check makes stats that can take seconds: before the lock.
+	if err := guard.RootReady(); err != nil {
+		return fmt.Errorf("purge version %s: %w", ver.ID, err)
+	}
+	unlock, err := merge.TryLockMergeRMWWithin(wait)
+	if err != nil {
+		return fmt.Errorf("purge version %s: %w", ver.ID, err)
+	}
+	defer unlock()
+	return purgeVersionLocked(store, ver, guard)
+}
+
+// purgeVersionLocked is PurgeVersionWithin with the merge lock held.
+func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard PurgeGuard) error {
+	retry := ver.Status == database.BookVersionStatusPurging || ver.Status == database.BookVersionStatusPurgeFailed
 	book, err := store.GetBookByID(ver.BookID)
-	if err != nil || book == nil {
-		return fmt.Errorf("book %s not found", ver.BookID)
+	if err != nil {
+		return fmt.Errorf("purge version %s: read book %s: %w", ver.ID, ver.BookID, err)
+	}
+	bookDir := ""
+	if book != nil {
+		bookDir = dirOfPath(book.FilePath)
+	} else {
+		tomb, err := bookTombstoneOf(store, ver.BookID)
+		if err != nil {
+			return fmt.Errorf("purge version %s: its book %s no longer exists and its tombstone cannot be read: %w", ver.ID, ver.BookID, err)
+		}
+		if tomb != nil {
+			bookDir = dirOfPath(tomb.FilePath)
+		} else {
+			lifecycleLog.Warn("purge version %s: its book %s no longer exists and has no tombstone, so the version's slot cannot be located; marking the version purged",
+				ver.ID, ver.BookID)
+		}
 	}
 
-	// Remove files from .versions/{vid}/ or book root.
-	bookDir := ""
-	if book.FilePath != "" {
-		// Extract directory by finding the last slash
-		for i := len(book.FilePath) - 1; i >= 0; i-- {
-			if book.FilePath[i] == '/' {
-				bookDir = book.FilePath[:i]
-				break
+	// Everything this purge would delete: the files under the version's slot,
+	// plus any file directly associated with this version by a row.
+	own, err := store.GetBookFiles(ver.BookID)
+	if err != nil {
+		return fmt.Errorf("purge version %s: list book files: %w", ver.ID, err)
+	}
+	targets := make(map[string]struct{})
+	if bookDir != "" {
+		slotFiles, err := versionSlotFiles(bookDir, ver.ID)
+		if err != nil {
+			return fmt.Errorf("purge version %s: list slot: %w", ver.ID, err)
+		}
+		for _, p := range slotFiles {
+			targets[p] = struct{}{}
+		}
+	}
+	for _, f := range own {
+		if f.VersionID == ver.ID && f.FilePath != "" {
+			targets[f.FilePath] = struct{}{}
+		}
+	}
+	paths := make([]string, 0, len(targets))
+	for p := range targets {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+
+	// Decide first, delete after, so a lookup failure leaves the disk alone.
+	var doomed []string
+	kept := map[string]string{}
+	for _, p := range paths {
+		reason, err := otherOwnerOf(store, p, ver)
+		if err != nil {
+			return fmt.Errorf("purge version %s: %w", ver.ID, err)
+		}
+		if reason != "" {
+			lifecycleLog.Warn("purge version %s: keeping %s: %s", ver.ID, p, reason)
+			kept[p] = reason
+			continue
+		}
+		doomed = append(doomed, p)
+	}
+
+	// Claim the version before the first removal. Everything above only reads,
+	// so a lookup failure leaves the version as it was.
+	if err := claimPurge(store, ver); err != nil {
+		return err
+	}
+
+	// A retry may find folders empty that its own earlier attempt emptied.
+	var seeds []string
+	if retry {
+		for _, p := range doomed {
+			seeds = append(seeds, filepath.Dir(p))
+		}
+	}
+	decider := guard.NewDecider(seeds)
+	var transient, permanent []error
+	var failedNotes []database.PurgeFileNote
+	for _, p := range doomed {
+		// The owners again, for this path, right before its removal: a row can
+		// have been written since the decision above.
+		reason, err := otherOwnerOf(store, p, ver)
+		if err != nil {
+			transient = append(transient, fmt.Errorf("%s: %w", p, err))
+			continue
+		}
+		if reason != "" {
+			lifecycleLog.Warn("purge version %s: keeping %s: %s (named since the purge began)", ver.ID, p, reason)
+			kept[p] = reason
+			continue
+		}
+		decision, why, err := decider.Decide(p)
+		if err != nil {
+			lifecycleLog.Warn("purge version %s: cannot decide %s yet: %v", ver.ID, p, err)
+			transient = append(transient, fmt.Errorf("%s: %w", p, err))
+			continue
+		}
+		switch decision {
+		case PurgeGone:
+			continue
+		case PurgeKeep:
+			lifecycleLog.Warn("purge version %s: keeping %s: %s", ver.ID, p, why)
+			kept[p] = why
+			continue
+		}
+		decider.Unlinking(p)
+		if err := removeFile(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			lifecycleLog.Warn("purge version %s: remove %s failed: %v", ver.ID, p, err)
+			e := fmt.Errorf("remove %s: %w", p, err)
+			if removeErrorIsPermanent(err) {
+				permanent = append(permanent, e)
+				failedNotes = append(failedNotes, database.PurgeFileNote{Path: p, Reason: err.Error()})
+			} else {
+				transient = append(transient, e)
 			}
 		}
 	}
 
-	if bookDir != "" {
-		if err := RemoveVersionSlot(bookDir, ver.ID); err != nil {
-			lifecycleLog.Warn("remove version slot for %s failed: %v", ver.ID, err)
+	switch {
+	case len(transient) > 0:
+		return fmt.Errorf("purge version %s: %d of %d file(s) could not be removed or decided; the version stays purging (it cannot be restored) and is retried: %w",
+			ver.ID, len(transient)+len(permanent), len(doomed), errors.Join(append(transient, permanent...)...))
+	case len(permanent) > 0:
+		now := time.Now()
+		ver.Status = database.BookVersionStatusPurgeFailed
+		ver.PurgeFailed = failedNotes
+		ver.PurgeFailedAt = &now
+		ver.PurgeKept = keptNotes(kept)
+		if err := store.UpdateBookVersion(ver); err != nil {
+			return fmt.Errorf("purge version %s: %d file(s) cannot be removed, and recording that failed: %w", ver.ID, len(permanent), errors.Join(append(permanent, err)...))
 		}
+		return fmt.Errorf("purge version %s: %d of %d file(s) cannot be removed; the version is now purge_failed, no longer retried every night: %w: %w",
+			ver.ID, len(permanent), len(doomed), ErrPurgeFailed, errors.Join(permanent...))
+	}
+	if bookDir != "" {
+		pruneEmptyDirs(VersionSlotDir(bookDir, ver.ID))
 		_ = PruneEmptyVersionsDir(bookDir)
 	}
+	ver.PurgeKept = keptNotes(kept)
+	return markPurged(store, ver)
+}
 
-	// Also remove any files directly associated with this version.
-	files, _ := store.GetBookFiles(ver.BookID)
-	for _, f := range files {
-		if f.VersionID == ver.ID {
-			_ = os.Remove(f.FilePath)
+// dirOfPath is the directory part of path ("" when it has no slash), as the
+// purge has always found a book's folder.
+func dirOfPath(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			return path[:i]
 		}
 	}
+	return ""
+}
 
+// bookTombstoneReader is the lookup of a hard-deleted book's last snapshot,
+// found with database.AsCapability. A store without it cannot locate the slot
+// of a version whose book is gone.
+type bookTombstoneReader interface {
+	GetBookTombstone(id string) (*database.Book, error)
+}
+
+func bookTombstoneOf(store versionPurger, bookID string) (*database.Book, error) {
+	r, ok := database.AsCapability[bookTombstoneReader](store)
+	if !ok {
+		return nil, nil
+	}
+	return r.GetBookTombstone(bookID)
+}
+
+// keptNotes turns the kept paths into the notes stored on the version, in path
+// order.
+func keptNotes(kept map[string]string) []database.PurgeFileNote {
+	if len(kept) == 0 {
+		return nil
+	}
+	notes := make([]database.PurgeFileNote, 0, len(kept))
+	for p, why := range kept {
+		notes = append(notes, database.PurgeFileNote{Path: p, Reason: why})
+	}
+	slices.SortFunc(notes, func(a, b database.PurgeFileNote) int { return strings.Compare(a.Path, b.Path) })
+	return notes
+}
+
+// removeErrorIsPermanent says whether a failed removal will fail the same way
+// every time it is retried: no permission, a read-only filesystem, a directory
+// that still holds something (POSIX lets rmdir answer ENOTEMPTY or EEXIST), a
+// directory where a file was expected. Anything else (EIO, ESTALE, EBUSY, a
+// timeout) may pass, and is retried.
+func removeErrorIsPermanent(err error) bool {
+	if errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	for _, e := range []error{syscall.EROFS, syscall.ENOTEMPTY, syscall.EEXIST, syscall.EISDIR, syscall.EPERM, syscall.EACCES} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
+// otherOwnerOf says why path must not be removed because something other than
+// ver names it, "" when nothing does: another book_file row (a retired
+// version's included), or another book row (soft-deleted ones included). A
+// lookup that cannot answer is an error: fail closed, never "no owner".
+func otherOwnerOf(store versionPurger, path string, ver *database.BookVersion) (string, error) {
+	owner, err := otherRowNamingPath(store, path, ver)
+	if err != nil {
+		return "", fmt.Errorf("cannot verify %s is unreferenced: %w", path, err)
+	}
+	if owner != nil {
+		return fmt.Sprintf("book_file %s of book %s (version %q, retired=%t) still names it",
+			owner.ID, owner.BookID, owner.VersionID, owner.Retired), nil
+	}
+	others, err := otherBooksNamingPath(store, path, ver.BookID)
+	if err != nil {
+		return "", fmt.Errorf("cannot verify %s is not a book's file: %w", path, err)
+	}
+	if len(others) > 0 {
+		return fmt.Sprintf("it is the file path of book(s) %v (live or in the trash)", others), nil
+	}
+	return "", nil
+}
+
+// claimPurge writes ver as purging. The store refuses the write when the
+// stored version is no longer trash, purging or purge_failed (restored since
+// the caller read it): that is ErrVersionNotInTrash, the purge does not go
+// ahead, and ver is put back as it was read.
+func claimPurge(store versionPurger, ver *database.BookVersion) error {
+	was := ver.Status
+	ver.Status = database.BookVersionStatusPurging
+	if err := store.UpdateBookVersion(ver); err != nil {
+		ver.Status = was
+		if errors.Is(err, database.ErrVersionPurgeClaimLost) {
+			return fmt.Errorf("purge version %s: %w (%v)", ver.ID, ErrVersionNotInTrash, err)
+		}
+		return fmt.Errorf("purge version %s: claim it: %w", ver.ID, err)
+	}
+	return nil
+}
+
+// markPurged records the end of a purge. A version that failed before and is
+// purged now loses its failure record; PurgeKept is whatever the caller set.
+func markPurged(store versionPurger, ver *database.BookVersion) error {
 	now := time.Now()
 	ver.Status = database.BookVersionStatusInactivePurged
 	ver.PurgedDate = &now
+	ver.PurgeFailed = nil
+	ver.PurgeFailedAt = nil
 	return store.UpdateBookVersion(ver)
+}
+
+// otherRowNamingPath returns a book_file row that names path and is not one of
+// ver's own rows (same book, same version), or nil when none does. Retired
+// rows are included: BookFilesAtPath does not filter them. Any lookup error is
+// returned, so the caller fails closed.
+func otherRowNamingPath(store versionPurger, path string, ver *database.BookVersion) (*database.BookFile, error) {
+	rows, err := store.BookFilesAtPath(path)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].BookID == ver.BookID && rows[i].VersionID == ver.ID {
+			continue
+		}
+		return &rows[i], nil
+	}
+	return nil, nil
+}
+
+// otherBooksNamingPath returns the id of every book row, soft-deleted ones
+// included, whose own FilePath is path, other than ownBookID. A trashed book is
+// restorable and wants its audio back, so it holds a path exactly as a live one
+// does (the live-only lookup, LiveBookIDsAtPath, missed it). The lookup is
+// database.BookRowPathReader, which is not on database.Store, so it is resolved
+// with database.AsCapability; a store without it, or a lookup that errors, is
+// an error: the caller fails closed and deletes nothing, never "no owner".
+func otherBooksNamingPath(store versionPurger, path, ownBookID string) ([]string, error) {
+	rows, ok := database.AsCapability[database.BookRowPathReader](store)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not provide the all-rows book path lookup (database.BookRowPathReader)", store)
+	}
+	ids, err := rows.BookIDsAtPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("books-at-path lookup: %w", err)
+	}
+	var others []string
+	for _, id := range ids {
+		// The version's own book naming its file is the normal case, not a
+		// second owner: the file is the version's, and the version is what is
+		// being purged.
+		if id != ownBookID {
+			others = append(others, id)
+		}
+	}
+	return others, nil
+}
+
+// versionSlotFiles lists every non-directory entry under the version's
+// .versions slot. A slot that does not exist has no files. Symlinks are listed
+// as themselves, never followed.
+func versionSlotFiles(bookDir, versionID string) ([]string, error) {
+	slot := VersionSlotDir(bookDir, versionID)
+	if _, err := os.Lstat(slot); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var files []string
+	err := filepath.WalkDir(slot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
+}
+
+// pruneEmptyDirs removes dir and its subdirectories bottom-up, but only the
+// empty ones: a directory that still holds a kept file stays, and so do its
+// parents. Idempotent when dir does not exist.
+func pruneEmptyDirs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			pruneEmptyDirs(filepath.Join(dir, e.Name()))
+		}
+	}
+	// os.Remove refuses a non-empty directory, which is the check.
+	_ = os.Remove(dir)
+}
+
+// CleanupResult is what one run of the trash cleanup did.
+type CleanupResult struct {
+	// Purged counts the versions this run finished purging, including those
+	// that finished with files kept (KeptFiles).
+	Purged int
+	// Failed counts the versions this run could not act on (see
+	// cleanupTrashedVersionsAt).
+	Failed int
+	// KeptFiles are the versions purged this run with files left on disk
+	// because another row or book names them (database.BookVersion.PurgeKept
+	// has the paths and reasons). Each is also counted in Purged: the version
+	// is purged, but not every file is gone, and a report must say so.
+	KeptFiles []KeptVersion
+	// NeedsAttention are the versions in database.BookVersionStatusPurgeFailed:
+	// a purge that gave up on a file it cannot remove. The run does not retry
+	// them and does not count them as Failed (that would fail the operation
+	// every night for ever); it lists them so they are seen.
+	NeedsAttention []KeptVersion
+	// StoppedForMerge is set when a merge or combine held the merge lock for the
+	// whole of BackgroundMergeLockWait, so the run stopped there: the versions
+	// from that one on were not attempted and are picked up by the next run.
+	// It is not a failure of any version (a busy library is not a broken
+	// version) and does not count in Failed; waiting the same time for every
+	// remaining version would hold the 06:00 job for N times the wait.
+	StoppedForMerge bool
+}
+
+// KeptVersion names a version and its book, with the files a purge left or
+// could not remove.
+type KeptVersion struct {
+	VersionID string
+	BookID    string
+	Files     []database.PurgeFileNote
 }
 
 // CleanupTrashedVersions is the maintenance task that purges versions
 // whose trash window has run out. Called by the scheduler.
-func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
-	return cleanupTrashedVersionsAt(store, time.Now())
+//
+// It reports what it did (CleanupResult), with an error that is non-nil
+// exactly when Failed > 0 or the trash could not be listed. A run in which every
+// due purge fails (book_files flagged incomplete, a file that cannot be
+// removed) must not read as "purged 0" to the operation that called it: the
+// versions stay in the trash past their window and only the error says so.
+func CleanupTrashedVersions(store TrashedVersionCleaner, guard PurgeGuard) (CleanupResult, error) {
+	return cleanupTrashedVersionsAt(store, time.Now(), guard)
 }
 
 // cleanupTrashedVersionsAt is CleanupTrashedVersions with the clock passed in.
@@ -136,21 +743,61 @@ func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
 // full window from the first run that sees it. A version lacking TrashedAt is
 // never purged.
 //
+// A version in database.BookVersionStatusPurging (a purge that failed part way)
+// is retried here at once, with no window: its window had run out when the
+// purge was claimed, or the user asked for it with purge-now. A version in
+// database.BookVersionStatusPurgeFailed is NOT retried: its purge gave up on a
+// file that cannot be removed, and trying again each night only fails again; it
+// is listed in NeedsAttention.
+//
 // The trash is small and the loop is sequential on purpose: each purge deletes
-// files. The re-read below narrows, but does not close, the race with a
-// restore that lands mid-run: UpdateBookVersion has no compare-and-swap, so a
-// restore between the re-read and the stamp write is re-trashed, and one
-// between the re-read and PurgeVersion still loses its files. Closing it needs
-// an atomic claim of the row before any file is deleted.
-func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purged int) {
+// files. The re-read below narrows the race with a restore that lands mid-run,
+// and PurgeVersion's claim closes it: the claim is written under the version's
+// stripe and refused when the stored version is no longer trash, so a restore
+// between the re-read and the claim wins (the version is skipped, not failed)
+// and a restore after the claim is refused. The one write this does not cover
+// is the legacy stamp below, which a restore in the same instant can still
+// turn back into a trash row with a fresh window (harmless: it is purged 14
+// days later, not at once).
+//
+// Failed counts the versions this run could not act on: a purge that failed,
+// a re-read that failed, a stamp that could not be written. err is nil when
+// Failed is 0; otherwise it names the count and the id of EVERY failed
+// version, and wraps every failure (errors.Is sees each), so one stuck version
+// cannot hide a new failure behind it. When the trash cannot be listed at all,
+// err is that failure and Failed is 0 (no version was attempted).
+func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time, guard PurgeGuard) (res CleanupResult, err error) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
 		lifecycleLog.Warn("trash cleanup: list trashed versions failed: %v", err)
-		return 0
+		return CleanupResult{}, fmt.Errorf("trash cleanup: list trashed versions: %w", err)
+	}
+	var failures []error
+	var failedIDs []string
+	fail := func(id string, e error) {
+		res.Failed++
+		failures = append(failures, e)
+		failedIDs = append(failedIDs, id)
+	}
+	purgedOK := func(v *database.BookVersion) {
+		res.Purged++
+		if len(v.PurgeKept) > 0 {
+			res.KeptFiles = append(res.KeptFiles, KeptVersion{VersionID: v.ID, BookID: v.BookID, Files: v.PurgeKept})
+			lifecycleLog.Warn("trash cleanup: version %s (book %s) purged with %d file(s) kept because another row or book names them: %s",
+				v.ID, v.BookID, len(v.PurgeKept), notePaths(v.PurgeKept))
+		}
 	}
 
 	ttl := time.Duration(TrashTTLDays) * 24 * time.Hour
 	stamped := 0
+	// stopForMerge ends the run at the first purge that found the merge lock
+	// held for the whole wait: see CleanupResult.StoppedForMerge.
+	stopForMerge := func(id string) {
+		res.StoppedForMerge = true
+		lifecycleLog.Warn("trash cleanup: a merge or combine held the merge lock for %s while purging version %s; stopping here, the rest of the trash is handled by the next run",
+			BackgroundMergeLockWait, id)
+	}
+trashLoop:
 	for i := range trashed {
 		id := trashed[i].ID
 		// The list is a snapshot. Re-read so a restore that landed after it
@@ -158,9 +805,39 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 		v, err := store.GetBookVersion(id)
 		if err != nil {
 			lifecycleLog.Warn("trash cleanup: re-read version %s failed, skipping it this run: %v", id, err)
+			fail(id, fmt.Errorf("re-read version %s: %w", id, err))
 			continue
 		}
-		if v == nil || v.Status != database.BookVersionStatusTrash {
+		// Only a trashed (or purging, or purge_failed) version is ever purged
+		// here. A retired version is not trashed (MarkTrashed refuses it) and
+		// would not be listed; PurgeVersion refuses it as well, so a stale or
+		// hand-edited row cannot reach the disk.
+		if v == nil || (v.Status != database.BookVersionStatusTrash && v.Status != database.BookVersionStatusPurging &&
+			v.Status != database.BookVersionStatusPurgeFailed) {
+			continue
+		}
+		if v.Status == database.BookVersionStatusPurgeFailed {
+			res.NeedsAttention = append(res.NeedsAttention, KeptVersion{VersionID: v.ID, BookID: v.BookID, Files: v.PurgeFailed})
+			continue
+		}
+		if v.Status == database.BookVersionStatusPurging {
+			// An unfinished purge: no window, no stamp. Retry it.
+			if err := PurgeVersion(store, v, guard); err != nil {
+				if errors.Is(err, ErrVersionNotInTrash) {
+					// A concurrent purge-now finished (or otherwise moved) it
+					// between the re-read and the claim: nothing to do, not a failure.
+					lifecycleLog.Info("trash cleanup: version %s left the purging state while this run was under way; not retrying it", v.ID)
+					continue
+				}
+				if errors.Is(err, merge.ErrMergeBusy) {
+					stopForMerge(id)
+					break trashLoop
+				}
+				lifecycleLog.Warn("trash cleanup: retrying the purge of version %s failed: %v", v.ID, err)
+				fail(id, err)
+				continue
+			}
+			purgedOK(v)
 			continue
 		}
 		if v.TrashedAt == nil {
@@ -168,6 +845,7 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			v.TrashedAt = &stamp
 			if err := store.UpdateBookVersion(v); err != nil {
 				lifecycleLog.Warn("trash cleanup: version %s has no trashed-at time and stamping it failed; not purging it: %v", id, err)
+				fail(id, fmt.Errorf("stamp version %s: %w", id, err))
 				continue
 			}
 			stamped++
@@ -178,14 +856,51 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 		if now.Sub(*v.TrashedAt) < ttl {
 			continue
 		}
-		if err := PurgeVersion(store, v); err != nil {
+		if err := PurgeVersion(store, v, guard); err != nil {
+			if errors.Is(err, ErrVersionNotInTrash) {
+				lifecycleLog.Info("trash cleanup: version %s was restored while this run was under way; not purging it", v.ID)
+				continue
+			}
+			if errors.Is(err, merge.ErrMergeBusy) {
+				stopForMerge(id)
+				break trashLoop
+			}
 			lifecycleLog.Warn("trash cleanup: purging version %s failed: %v", v.ID, err)
+			fail(id, err)
 			continue
 		}
-		purged++
+		purgedOK(v)
 	}
 	if stamped > 0 {
 		lifecycleLog.Info("trash cleanup: stamped %d trashed version(s) that had no trashed-at time; none of them were purged", stamped)
 	}
-	return purged
+	if n := len(res.NeedsAttention); n > 0 {
+		lifecycleLog.Warn("trash cleanup: %d version(s) are purge_failed (a file cannot be removed) and need the owner: %s; not retried",
+			n, keptVersionIDs(res.NeedsAttention))
+	}
+	if res.Failed > 0 {
+		lifecycleLog.Warn("trash cleanup: purged %d, failed %d of %d trashed version(s) (%s); the failed ones stay in the trash and are retried next run",
+			res.Purged, res.Failed, len(trashed), strings.Join(failedIDs, ", "))
+		return res, fmt.Errorf("trash cleanup: %d of %d trashed version(s) could not be handled (%d purged); failed versions %s: %w",
+			res.Failed, len(trashed), res.Purged, strings.Join(failedIDs, ", "), errors.Join(failures...))
+	}
+	return res, nil
+}
+
+// notePaths joins the paths of notes for a log line.
+func notePaths(notes []database.PurgeFileNote) string {
+	paths := make([]string, len(notes))
+	for i, n := range notes {
+		paths[i] = n.Path
+	}
+	return strings.Join(paths, ", ")
+}
+
+// keptVersionIDs joins the version ids of vs for a log line.
+func keptVersionIDs(vs []KeptVersion) string {
+	ids := make([]string, len(vs))
+	for i, v := range vs {
+		ids[i] = v.VersionID
+	}
+	return strings.Join(ids, ", ")
 }
