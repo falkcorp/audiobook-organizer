@@ -1,7 +1,7 @@
 // file: internal/operations/registry/resume.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 3c4d5e6f-7a8b-9012-cdef-012345678901
-// last-edited: 2026-10-14
+// last-edited: 2026-10-26
 
 package registry
 
@@ -403,9 +403,14 @@ func (r *Registry) recordResumeRequeueFailure(row database.OperationV2Row, retir
 // resumed after a stand-down and one resumed after a reboot take an identical
 // path. A no-op if the row is missing, no longer quiesced (already terminal or
 // resumed by another path), or its def is unknown.
-func (r *Registry) resumeQuiescedOp(opID string) {
+//
+// Returns true only when the row was re-queued by this call; every no-op and
+// failure returns false, so a caller that must tell the world what happened to a
+// run it just paused (the in-place continue) can tell "re-queued" from "stays
+// paused". The stand-down callers ignore the result.
+func (r *Registry) resumeQuiescedOp(opID string) bool {
 	// Serialized with RetryInterrupted: both read an interrupted row and flip
-	// it to queued, and an operator may press Retry on the quiesced scan at the
+	// it to queued, and an operator may press Retry on the quiesced op at the
 	// same moment the last stand-down holder releases.
 	r.retryMu.Lock()
 	defer r.retryMu.Unlock()
@@ -413,12 +418,12 @@ func (r *Registry) resumeQuiescedOp(opID string) {
 	row, err := r.store.GetOperationV2(opID)
 	if err != nil || row == nil {
 		r.logger.Warn("registry: resumeQuiescedOp: op row missing", "op_id", opID, "error", err)
-		return
+		return false
 	}
 	if row.Status != "interrupted_quiesced" {
 		r.logger.Info("registry: resumeQuiescedOp: op not quiesced, skipping",
 			"op_id", opID, "status", row.Status)
-		return
+		return false
 	}
 	def, ok := r.lookupDef(row.DefID)
 	if ok {
@@ -427,15 +432,17 @@ func (r *Registry) resumeQuiescedOp(opID string) {
 	if !ok {
 		r.logger.Warn("registry: resumeQuiescedOp: unknown def, cannot resume",
 			"op_id", opID, "def_id", row.DefID)
-		return
+		return false
 	}
 	if !r.resumeRestart(context.Background(), *row, def) {
 		// resumeRestart has already logged and recorded the failure. Name the
-		// runtime consequence here: nothing retries at runtime, so this scan
+		// runtime consequence here: nothing retries at runtime, so this op
 		// stays parked until the next startup sweep (or a fresh enqueue).
-		r.logger.Error("registry: resumeQuiescedOp: scan could not be re-queued; it stays interrupted_quiesced until the next startup resume sweep",
+		r.logger.Error("registry: resumeQuiescedOp: op could not be re-queued; it stays interrupted_quiesced until the next startup resume sweep",
 			"op_id", opID, "def_id", row.DefID)
+		return false
 	}
+	return true
 }
 
 // mergeJSONParams overlays checkpoint keys onto base params. Keys present in

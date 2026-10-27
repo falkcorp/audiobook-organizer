@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes_yield_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a4d1e93-0b7c-4f25-8e38-9d2b5c7a1f40
 // last-edited: 2026-10-26
 
@@ -278,4 +278,72 @@ func TestBackfillFileHashes_PolicyResumesInPlace(t *testing.T) {
 	assert.Equal(t, opsregistry.ResumeRestart, j.Policy().ResumePolicy)
 	assert.Equal(t, opsregistry.LivenessManual, j.Policy().Liveness, "the watchdog still kills a run that stops reporting")
 	assert.Equal(t, 4*time.Hour, j.Policy().Timeout, "the per-attempt cap that kills a stuck run is unchanged")
+}
+
+// seedingReporter is a maintenance.ProgressReporter that, like the real one,
+// can be seeded, and keeps the position the job reports.
+type seedingReporter struct {
+	noopReporter
+	cur       int
+	positions []int // every position reported, in order
+	seeded    int   // the last seed, -1 if never seeded
+}
+
+func (r *seedingReporter) Increment() { r.cur++; r.positions = append(r.positions, r.cur) }
+func (r *seedingReporter) SeedProgress(done int) {
+	r.cur, r.seeded = done, done
+	r.positions = append(r.positions, done)
+}
+
+// A resumed attempt reports the position the earlier one stopped at (the whole
+// chunks the report already accounts for) and continues from it, so the progress
+// bar does not fall back to the start at a pause and the registry, which counts
+// ops.items from the position the row held, does not count the finished rows a
+// second time. Across the attempts the reported positions climb to the total and
+// never go back.
+func TestBackfillFileHashes_ResumedAttemptContinuesTheReportedPosition(t *testing.T) {
+	const total = 1300 // chunks: [0,512) [512,1024) [1024,1300)
+	defer jobs.SetHashBackfillYieldMargin(time.Hour)()
+	root := hbLibrary(t)
+	h := newHBStore(t, hbMixedLibrary(t, root, total)...)
+	const opID = "01YIELDSEED"
+	j, err := maintenance.Get("backfill-file-hashes")
+	require.NoError(t, err)
+
+	var reps []*seedingReporter
+	for attempt := 1; ; attempt++ {
+		require.LessOrEqual(t, attempt, 5, "the run must finish")
+		rep := &seedingReporter{seeded: -1}
+		reps = append(reps, rep)
+		if err := j.Run(yieldCtx(t, opID, 30*time.Minute), h.store(), rep, true); err == nil {
+			break
+		} else {
+			require.ErrorIs(t, err, maintenance.ErrContinueInPlace)
+		}
+	}
+	require.Len(t, reps, 3)
+
+	assert.Equal(t, -1, reps[0].seeded, "a first attempt has nothing finished to skip")
+	assert.Equal(t, 512, reps[1].seeded, "the second attempt starts where the first stopped")
+	assert.Equal(t, 1024, reps[2].seeded, "the third attempt starts where the second stopped")
+	last := 0
+	for i, rep := range reps {
+		require.NotEmpty(t, rep.positions)
+		assert.GreaterOrEqual(t, rep.positions[0], last, "attempt %d starts at or after where the last one stopped: the bar must not drop", i+1)
+		for k := 1; k < len(rep.positions); k++ {
+			require.Equal(t, rep.positions[k-1]+1, rep.positions[k], "attempt %d position steps by one row", i+1)
+		}
+		last = rep.positions[len(rep.positions)-1]
+	}
+	assert.Equal(t, total, last, "the operation ends at its total")
+	// Rows are counted once across the attempts: each attempt reports only the
+	// rows it walked, the seeded ones not again.
+	walked := 0
+	for _, rep := range reps {
+		walked += len(rep.positions)
+		if rep.seeded >= 0 {
+			walked-- // the seed itself is a position, not a walked row
+		}
+	}
+	assert.Equal(t, total, walked, "every row walked exactly once across the attempts")
 }

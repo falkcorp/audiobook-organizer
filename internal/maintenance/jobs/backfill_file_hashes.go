@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.5.0
+// version: 4.6.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -92,7 +92,8 @@ func (j *backfillFileHashesJob) Description() string {
 		"only the first 50 paths are logged) and listed in a per-row TSV report under the library's .reports " +
 		"directory, instead of being warned about once per file; nothing is written to the database for it. " +
 		"A hash is stored only if the row still has none and still points at the file that was hashed; a row " +
-		"that changed meanwhile is counted as busy and retried next run. " +
+		"that changed meanwhile is counted as busy and left for the next operation (a run that pauses and " +
+		"continues under the same operation does not retry it). " +
 		"When a library root is configured the op refuses to run, a dry run included, if the root is unreadable, " +
 		"is not an absolute path, holds nothing but dot-prefixed entries (a share that is probably not mounted), " +
 		"or has a .reports directory that cannot be written"
@@ -1058,6 +1059,25 @@ func (r *hashBackfillRun) yieldDue(ctx context.Context, moreRows bool) (left tim
 	return left, left < max(hbYieldMargin, 2*r.slowestChunk)
 }
 
+// finishedPrefix is how many leading rows of files are finished: whole chunks, in
+// order, from the first, in which every row already carries a hash or is listed
+// in the report. It stops at the first chunk with a row left to decide, so the
+// chunks after it are walked as usual. The result is a multiple of
+// hashBackfillChunkSize except at the end of files.
+func (r *hashBackfillRun) finishedPrefix(files []database.BookFileCore) int {
+	n := 0
+	for n < len(files) {
+		end := min(n+hashBackfillChunkSize, len(files))
+		for _, bf := range files[n:end] {
+			if bf.FileHash == "" && !r.report.has(bf.ID) {
+				return n
+			}
+		}
+		n = end
+	}
+	return n
+}
+
 // commitChunk makes a fully processed chunk real, in this order: journal the
 // chunk's hashed outcomes (durably), store the hashes (unless dry-run), recompute
 // each affected book's aggregates once, count every outcome and write the chunk's
@@ -1285,7 +1305,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 	}
 
-	// Process in ORDERED chunks, always from the first row. Each chunk runs
+	// Process in ORDERED chunks, from the first row that has work left. Each chunk runs
 	// through a bounded worker pool that only DECIDES each row (hash, classify),
 	// skipping rows that already have a hash or that the report already lists;
 	// nothing is stored, counted or reported until the whole chunk is done, then
@@ -1295,7 +1315,21 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	// (writeJournal/replayJournal). Walking from row 0 instead of a saved index
 	// costs one map lookup per finished row, and it cannot skip rows when the row
 	// list shifts between attempts (rows retired or restored in between).
-	for start := 0; start < len(files); start += hashBackfillChunkSize {
+	//
+	// A resumed attempt does not walk the chunks the report already accounts for
+	// whole: it reports its position as where they end (ProgressSeeder) and starts
+	// at the first chunk with work left. Walking them reported 1, 2, 3... from
+	// zero, which dropped the progress bar to the start at every pause and made
+	// the registry count the finished rows as processed again (it counts from the
+	// position the row already held). A reporter that cannot seed (a test double)
+	// leaves the walk as it was.
+	firstChunk := 0
+	if seeder, ok := reporter.(maintenance.ProgressSeeder); ok && prior {
+		if firstChunk = run.finishedPrefix(files); firstChunk > 0 {
+			seeder.SeedProgress(firstChunk)
+		}
+	}
+	for start := firstChunk; start < len(files); start += hashBackfillChunkSize {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -1395,6 +1429,12 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	return nil
 }
 
+// A row counted busy (its row changed while the file was hashed) is listed in the
+// report like any other outcome, and the report is what a later attempt of the
+// same operation skips on. So it is retried by the NEXT OPERATION (a fresh report),
+// not by the next attempt of this one: a pause and its restart do not give the
+// rows a second go. The summary's "retried next run" means that.
+//
 // Policy: ResumeRestart because a restarted run resumes exactly: the progress
 // record is the per-run report (every row the run reached is listed in it) plus
 // the hashes already stored, which a rerun of the same operation reads back and

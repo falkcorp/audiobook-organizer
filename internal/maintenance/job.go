@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-10-26
 
@@ -82,6 +82,15 @@ type ProgressReporter interface {
 	SetTotal(n int)
 	Increment()
 	Log(level, message string, details *string)
+}
+
+// ProgressSeeder is optionally implemented by a ProgressReporter (the real one
+// is). A job that resumes an operation by skipping its finished rows calls
+// SeedProgress(done) once, before its first Increment, so the position it
+// reports continues from where the earlier attempt stopped. A job must work
+// without it (a test double need not implement it) by reporting from zero.
+type ProgressSeeder interface {
+	SeedProgress(done int)
 }
 
 // PermissionAware is optionally implemented by jobs that require a non-default
