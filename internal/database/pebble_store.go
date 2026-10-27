@@ -6411,4 +6411,9 @@ type SweepBookFileSegDropResult struct {
 	Rewrite int // rows rewritten (had at least one non-empty seg)
 	Skipped int // rows skipped (already clean)
 	Errors  int // rows skipped due to unmarshal/marshal errors (logged)
+	// Conflicts counts rows left un-rewritten because a concurrent writer kept
+	// changing them under the sweep (ErrBookFileConflict, each attempt re-read
+	// and re-judged the row). They still carry their segs; re-running the sweep
+	// picks them up.
+	Conflicts int
 }

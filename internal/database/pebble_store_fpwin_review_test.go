@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_fpwin_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d2c6f14-3a5e-4b71-9c08-e4f1a7b2d953
-// last-edited: 2026-09-19
+// last-edited: 2026-10-26
 
 package database
 
@@ -134,11 +134,12 @@ func TestFpwin_DeletesOfDifferentFilesAreNotSerialized(t *testing.T) {
 	env := newBookSigEnv(t)
 	_, held := fpwinSeedFile(t, env.store, "/lib/l/held.m4b", nil)
 	heldStripe := stripeFor(string(FileWindowRef(held)))
-	var others []string
+	var others, otherBooks []string
 	for i := 0; len(others) < 2; i++ {
-		_, id := fpwinSeedFile(t, env.store, fmt.Sprintf("/lib/l/o%02d.m4b", i), nil)
+		bookID, id := fpwinSeedFile(t, env.store, fmt.Sprintf("/lib/l/o%02d.m4b", i), nil)
 		if stripeFor(string(FileWindowRef(id))) != heldStripe {
 			others = append(others, id)
+			otherBooks = append(otherBooks, bookID)
 		}
 	}
 	seedWindowsFor(t, env.store, others[0])
@@ -149,7 +150,10 @@ func TestFpwin_DeletesOfDifferentFilesAreNotSerialized(t *testing.T) {
 
 	done := make(chan error, 2)
 	go func() { done <- env.store.DeleteBookFile(others[0]) }()
-	go func() { done <- env.store.DeleteBookFilesByIDs([]string{others[1]}) }()
+	go func() {
+		_, err := env.store.DeleteBookFilesByIDs(refsOf(otherBooks[1], others[1]))
+		done <- err
+	}()
 	for range 2 {
 		select {
 		case err := <-done:

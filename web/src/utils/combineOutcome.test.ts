@@ -1,7 +1,7 @@
 // file: web/src/utils/combineOutcome.test.ts
-// version: 1.0.1
+// version: 1.0.2
 // guid: a2d94f60-8b17-4c3e-b5d9-1e7c0a6f3b85
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 import { describe, expect, it } from 'vitest';
 import { COMBINE_RETRY_LATER_MESSAGE, describeCombineOutcome } from './combineOutcome';
@@ -160,7 +160,10 @@ describe('describeCombineOutcome', () => {
     });
     expect(p.severity).toBe('warning');
     expect(p.message).toBe(COMBINE_RETRY_LATER_MESSAGE);
-    expect(p.message).toContain('The library is still loading; try the combine again shortly');
+    expect(p.message).toContain('The library is still loading');
+    expect(p.message).toContain('other writers are changing the files the combine moves');
+    expect(p.message).toContain('try the combine again shortly');
+    expect(p.message).toContain('No files were moved from the other books');
     expect(p.message).not.toMatch(/^Combined/);
     expect(p.message).not.toContain('did not complete');
     expect(p.message).not.toContain('refused before changing anything');

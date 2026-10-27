@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_scancache.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: 5737e19f-0c4c-4762-a8ea-928619a02862
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package database
 
@@ -306,7 +306,22 @@ func (p *PebbleStore) BackfillBookFileScanCache(dryRun bool) (*BackfillBookFileS
 // into a general row write -- doing so would reintroduce the index-staleness this
 // deliberately skips.
 func (p *PebbleStore) stampFileScanCache(bookID, fileID string, apply func(*BookFile)) error {
-	old, err := p.getBookFileByID(bookID, fileID)
+	// The stamp is re-applied to a fresh read when the commit finds the row
+	// changed since the read (a writer that takes no file stripe, such as a bulk
+	// move or a PID transfer, got in between), so apply MAY RUN MORE THAN ONCE and must be a pure function of
+	// the row it is given.
+	book := bookID
+	_, err := rmwBookFile(&book, fileID, func() (struct{}, error) {
+		return struct{}{}, p.stampFileScanCacheOnce(bookID, fileID, apply)
+	})
+	return err
+}
+
+// stampFileScanCacheOnce is one read-apply-commit pass of stampFileScanCache;
+// it returns an error wrapping errBookFileRowVanished when the commit found the
+// row changed since the read.
+func (p *PebbleStore) stampFileScanCacheOnce(bookID, fileID string, apply func(*BookFile)) error {
+	old, raw, err := p.readBookFileRow(bookID, fileID)
 	if err != nil {
 		return err
 	}
@@ -324,16 +339,19 @@ func (p *PebbleStore) stampFileScanCache(bookID, fileID string, apply func(*Book
 
 	// Primary row only. No index churn: every indexed field is untouched above, so
 	// the existing index entries still point at this row and still hold true.
-	key := []byte(fmt.Sprintf("book_file:%s:%s", old.BookID, old.ID))
+	key := bookFileKey(old.BookID, old.ID)
 	// Under the book's owner stripe and only while the row is still committed
-	// (book_delete_owns_files.go); a row that went away is the same non-fatal
-	// case as the nil read above.
-	wrote, err := p.setBookFileRowIfPresent(old.BookID, key, data)
+	// and still holds the bytes read (book_delete_owns_files.go); a row that
+	// went away is the same non-fatal case as the nil read above.
+	wrote, err := p.setBookFileRowIfUnchanged(old.BookID, key, raw, data)
 	if !bookFileApplied(err) {
 		return err
 	}
-	if !wrote {
+	switch wrote {
+	case bookFileRowGone:
 		return nil
+	case bookFileRowChanged:
+		return errBookFileRowVanished
 	}
 	p.UpsertBookFileToMemDB(old)
 	if err != nil {

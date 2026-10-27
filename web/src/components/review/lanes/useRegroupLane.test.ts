@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRegroupLane.test.ts
-// version: 1.14.1
+// version: 1.14.2
 // guid: 7d3e9b16-2c58-4f07-a4e1-06b8d5c92f3a
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 /**
  * Tests for the regroup lane's data layer.
@@ -390,7 +390,7 @@ describe('actionFor', () => {
     expect(toast).not.toHaveBeenCalled();
   });
 
-  it('tells the reviewer a warmup refusal changed nothing and to approve again', async () => {
+  it('tells the reviewer a retry-later refusal moved nothing and to approve again', async () => {
     mockItems([makeItem('a1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
     vi.mocked(api.approveReviewItem).mockRejectedValue(
       Object.assign(new Error('the row of book Hush was not taken'), {
@@ -406,7 +406,7 @@ describe('actionFor', () => {
 
     expect(toast).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^Nothing was changed: the library index is still loading\..*was not taken/
+        /^Nothing was moved: the combine was refused for now, usually because the library index is still loading\..*was not taken/
       ),
       'error'
     );

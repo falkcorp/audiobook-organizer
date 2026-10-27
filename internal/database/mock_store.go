@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.154.0
+// version: 1.155.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-26
 
@@ -591,7 +591,6 @@ type MockStore struct {
 	GetBookFilesFunc                        func(bookID string) ([]BookFile, error)
 	GetBookFileByIDFunc                     func(bookID, fileID string) (*BookFile, error)
 	GetBookFileByPIDFunc                    func(itunesPID string) (*BookFile, error)
-	ClearITunesPIDFunc                      func(itunesPID string) (bool, error)
 	GetBookFileByPathFunc                   func(filePath string) (*BookFile, error)
 	BookFilesAtPathFunc                     func(path string) ([]BookFile, error)
 	BookFilesWithHashFunc                   func(hash string) ([]BookFile, error)
@@ -599,11 +598,10 @@ type MockStore struct {
 	HasRetiredVersionsFunc                  func() (bool, error)
 	ClaimBookFilePathKeyFunc                func(bookID, fileID, path string) (bool, error)
 	BookAtPathIndexBuiltFunc                func() (bool, error)
-	MarkFileImportedFromDelugeFunc          func(ctx context.Context, originalPath, libraryPath, torrentHash string) error
 	GetBookFileByAcoustIDFunc               func(fingerprint string) (*BookFile, error)
 	GetBookFileByAcoustIDFuzzyFunc          func(fingerprint string, minSimilarity float64) (*BookFile, error)
 	DeleteBookFileFunc                      func(id string) error
-	DeleteBookFilesByIDsFunc                func(ids []string) error
+	DeleteBookFilesByIDsFunc                func(refs []BookFileRef) ([]BookFile, error)
 	DeleteBookFilesForBookFunc              func(bookID string) error
 	UpsertBookFileFunc                      func(file *BookFile) error
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
@@ -3467,13 +3465,6 @@ func (m *MockStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error
 	return nil, nil
 }
 
-func (m *MockStore) MarkFileImportedFromDeluge(ctx context.Context, originalPath, libraryPath, torrentHash string) error {
-	if m.MarkFileImportedFromDelugeFunc != nil {
-		return m.MarkFileImportedFromDelugeFunc(ctx, originalPath, libraryPath, torrentHash)
-	}
-	return nil
-}
-
 func (m *MockStore) GetBookFileByID(bookID, fileID string) (*BookFile, error) {
 	if m.GetBookFileByIDFunc != nil {
 		return m.GetBookFileByIDFunc(bookID, fileID)
@@ -3485,12 +3476,6 @@ func (m *MockStore) GetBookFileByPID(itunesPID string) (*BookFile, error) {
 		return m.GetBookFileByPIDFunc(itunesPID)
 	}
 	return nil, nil
-}
-func (m *MockStore) ClearITunesPID(itunesPID string) (bool, error) {
-	if m.ClearITunesPIDFunc != nil {
-		return m.ClearITunesPIDFunc(itunesPID)
-	}
-	return false, nil
 }
 func (m *MockStore) GetBookFileByPath(filePath string) (*BookFile, error) {
 	if m.GetBookFileByPathFunc != nil {
@@ -3542,13 +3527,13 @@ func (m *MockStore) DeleteBookFile(id string) error {
 	}
 	return nil
 }
-func (m *MockStore) DeleteBookFilesByIDs(ids []string) error {
+func (m *MockStore) DeleteBookFilesByIDs(refs []BookFileRef) ([]BookFile, error) {
 	if m.DeleteBookFilesByIDsFunc != nil {
-		return m.DeleteBookFilesByIDsFunc(ids)
+		return m.DeleteBookFilesByIDsFunc(refs)
 	}
 	// Default to the same fallback DeleteBookFileFunc-less mocks get: succeed
 	// silently. Tests that care about which rows were deleted set the Func.
-	return nil
+	return nil, nil
 }
 func (m *MockStore) DeleteBookFilesForBook(bookID string) error {
 	if m.DeleteBookFilesForBookFunc != nil {

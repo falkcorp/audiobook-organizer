@@ -158,7 +158,7 @@ type opsBookFileMutator interface {
 // opsBookFileDeleter removes book_file rows.
 type opsBookFileDeleter interface {
 	DeleteBookFile(id string) error
-	DeleteBookFilesByIDs(ids []string) error
+	DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error)
 	// CarryOverFingerprintWindows moves the donors' fingerprint windows onto
 	// the keeper. Deleting a book_file row deletes its windows, so a row merge
 	// calls this once per group BEFORE deleting the donors. A group with no

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
 // last-edited: 2026-10-26
 
@@ -190,6 +190,24 @@ func TestPatchBookFile_ApplyRecomputesBookAndAudits(t *testing.T) {
 	edits := out["edits"].([]any)
 	require.Len(t, edits, 1)
 	require.Equal(t, editID, edits[0].(map[string]any)["edit_id"])
+}
+
+// The record editor writes through ModifyBookFile, whose store-side CONS-18
+// repair turns a millisecond duration into seconds (the handler's re-read
+// comment relies on it). A 40 MB file claiming 3,600,000 is 88 bps as seconds
+// and 88 kbps as milliseconds, so the edit lands as 3600 and the response and the
+// undo image describe what was stored.
+func TestPatchBookFile_StoreNormalisesAMillisecondDuration(t *testing.T) {
+	fx := newFixture(t)
+	r := fx.router(admin)
+	file := &database.BookFile{BookID: fx.book.ID, FilePath: "/lib/Gotham/Long Book/03.m4b", Duration: 1800, FileSize: 40_000_000}
+	require.NoError(t, fx.store.CreateBookFile(file))
+
+	w, out := do(t, r, http.MethodPatch, "/api/v1/admin/debug/book-files/"+file.ID+"?apply=true", `{"duration":3600000}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, false, out["dry_run"])
+
+	require.Equal(t, 3600, fx.fileDuration(t, file), "a millisecond duration must be stored as seconds")
 }
 
 func TestUndo_RestoresAndRefusesTwice(t *testing.T) {

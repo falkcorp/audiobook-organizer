@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_rollback_failures_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b07ff01f-6cf6-482c-a79d-2b4cbad437be
-// last-edited: 2026-10-05
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -36,11 +36,11 @@ func (s *icStepFailStore) ModifyBookFile(bookID, fileID string, fn func(*databas
 	return s.PebbleStore.ModifyBookFile(bookID, fileID, fn)
 }
 
-func (s *icStepFailStore) DeleteBookFilesByIDs(ids []string) error {
+func (s *icStepFailStore) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
 	if s.step == "delete_rows" {
-		return fmt.Errorf("injected DeleteBookFilesByIDs failure")
+		return nil, fmt.Errorf("injected DeleteBookFilesByIDs failure")
 	}
-	return s.PebbleStore.DeleteBookFilesByIDs(ids)
+	return s.PebbleStore.DeleteBookFilesByIDs(refs)
 }
 
 func (s *icStepFailStore) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
