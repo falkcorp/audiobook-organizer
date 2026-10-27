@@ -1,7 +1,7 @@
 // file: internal/undo/user_data.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package undo
 
@@ -72,6 +72,9 @@ var changeTypeHoldsUserData = map[string]bool{
 	ChangeTypeMetadataCacheCopy:         false,
 	ChangeTypeTitleRelinkCredits:        false,
 	ChangeTypeTitleRelinkAuthorCreate:   false,
+	// One book's credit lists and flat author/narrator fields, before and
+	// after the credits backfill.
+	ChangeTypeCreditsBackfill: false,
 	// The merge pointers hold only a journal id. The journal they name does
 	// hold every user's progress; the routes that serve it strip that for
 	// callers who may not manage users (GET /merge/combine-journal and

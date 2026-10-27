@@ -1,7 +1,7 @@
 // file: internal/organizer/organizer.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package organizer
 
@@ -432,19 +432,63 @@ func (o *Organizer) resolveAuthorName(book *database.Book) string {
 			return name
 		}
 	}
-	if book.Author != nil {
-		if trimmed := strings.TrimSpace(book.Author.Name); trimmed != "" {
-			return trimmed
-		}
-	} else if book.AuthorID != nil && o.store != nil {
-		author, err := o.store.GetAuthorByID(*book.AuthorID)
-		if err == nil && author != nil {
-			if trimmed := strings.TrimSpace(author.Name); trimmed != "" {
-				return trimmed
-			}
+	var scalar *database.Author
+	if book.Author == nil && book.AuthorID != nil && o.store != nil {
+		if author, err := o.store.GetAuthorByID(*book.AuthorID); err == nil {
+			scalar = author
 		}
 	}
+	return ScalarAuthorName(book.Author, scalar)
+}
+
+// ScalarAuthorName is the scalar half of resolveAuthorName, as a pure function
+// over already-resolved records: the book's Author snapshot when it is
+// present, and ONLY then (a present snapshot with a blank name yields "" and
+// does not fall through to AuthorID), else the AuthorID record's name
+// (scalar; nil when AuthorID is unset or does not resolve). The snapshot's
+// name is returned even when it is the placeholder: only the join path
+// excludes the placeholder, and this one never has. Anything that must
+// predict where the organizer files a book (the credits backfill) calls this
+// and PrimaryJoinAuthor/JoinAuthorName instead of copying the rules.
+func ScalarAuthorName(snapshot, scalar *database.Author) string {
+	if snapshot != nil {
+		return strings.TrimSpace(snapshot.Name)
+	}
+	if scalar != nil {
+		return strings.TrimSpace(scalar.Name)
+	}
 	return ""
+}
+
+// PrimaryJoinAuthor is the book_authors row the organizer files a book under:
+// the first row, in stored order, at the lowest Position. The first-encountered
+// tie-break is load-bearing (see authorNameFromJoin).
+func PrimaryJoinAuthor(rows []database.BookAuthor) (database.BookAuthor, bool) {
+	if len(rows) == 0 {
+		return database.BookAuthor{}, false
+	}
+	primary := rows[0]
+	for _, ba := range rows[1:] {
+		if ba.Position < primary.Position {
+			primary = ba
+		}
+	}
+	return primary, true
+}
+
+// JoinAuthorName is the name the join's primary resolves to for filing: the
+// record's trimmed name, or "" when the record is missing (dangling), its name
+// is blank, or it is the placeholder (authorname.IsPlaceholder). "" means the
+// join has nothing usable and the scalar fields decide.
+func JoinAuthorName(primary *database.Author) string {
+	if primary == nil {
+		return ""
+	}
+	name := strings.TrimSpace(primary.Name)
+	if name == "" || authorname.IsPlaceholder(name) {
+		return ""
+	}
+	return name
 }
 
 // authorNameFromJoin resolves the primary (lowest Position) author from the
@@ -476,12 +520,7 @@ func (o *Organizer) authorNameFromJoin(bookID string) string {
 	if len(authors) == 0 {
 		return ""
 	}
-	primary := authors[0]
-	for _, ba := range authors[1:] {
-		if ba.Position < primary.Position {
-			primary = ba
-		}
-	}
+	primary, _ := PrimaryJoinAuthor(authors)
 	author, err := o.store.GetAuthorByID(primary.AuthorID)
 	if err != nil {
 		slog.Warn("organizer: join primary author lookup failed; falling back to scalar author",
@@ -492,11 +531,7 @@ func (o *Organizer) authorNameFromJoin(bookID string) string {
 		// Dangling AuthorID (the known leak) -- fall through to the scalar, tested.
 		return ""
 	}
-	name := strings.TrimSpace(author.Name)
-	if name == "" || authorname.IsPlaceholder(name) {
-		return ""
-	}
-	return name
+	return JoinAuthorName(author)
 }
 
 // HasResolvedAuthor reports whether organizing this book would use a real

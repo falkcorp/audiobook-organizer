@@ -282,3 +282,4 @@ collections.refresh-relative-dynamic
 library.purge-soft-deleted
 maintenance.book-hash-index-repair
 maintenance.combine-journal-check
+maintenance.credits-backfill

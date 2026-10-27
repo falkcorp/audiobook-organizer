@@ -135,6 +135,7 @@ maintenance.cleanup-activity-log	no-mode
 maintenance.cleanup-old-backups	no-mode
 maintenance.clear-apply-rename-failures	preview
 maintenance.cover-text-read	preview
+maintenance.credits-backfill	preview
 maintenance.file-provenance-export	preview
 maintenance.regroup-shattered-ai	preview
 maintenance.repair-merged-user-state	preview
