@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.16.0 -->
+<!-- version: 1.17.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-18 -->
+<!-- last-edited: 2026-10-27 -->
 
 # Woodpecker CI: install runbook
 
@@ -40,7 +40,7 @@ one for the same commit.
 | `test-database` | `heavy=true` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
 | `test-server-scanner` | `heavy=true` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `heavy=true` | every other package, including maintenance, registry and applygate | about 450–600 s |
-| `test-fixtures` | `heavy=true` | `make test-fixtures` as three sequential shards (`scripts/ci/run_fixture_shards.sh`): every package whose tests skip under `-short`, run without `-short`; no coverage line. All shards always run; the step fails if any failed. Split because one run of every package was contended on llm1/mac (temp-file I/O and CPU). Each shard's `-timeout` is `min(25m, 55 min budget - elapsed)`, under the 60 min repo timeout | sharded: not yet measured. Single run: 22-34 min on llm1/mac, about 11 min on U1 |
+| `test-fixtures-1`, `-2`, `-3` | `heavy=true` | three parallel workflows, one `make test-fixtures FIXTURE_SHARD=N/3 FIXTURE_TIMEOUT=25m` each (owner decision D59, 2026-10-27; contexts `ci/woodpecker/pr/test-fixtures-1` etc.): every package whose tests skip under `-short`, run without `-short`; no coverage line. Split because one run of every package was contended on llm1/mac (temp-file I/O and CPU), and the three sequential shards of 2026-10-18 summed to about 3400-3500 s on llm1, over their shared 55 min budget, so the last shard (`internal/server`) timed out. Each workflow has its own 60 min pipeline timeout and the full 25m per-package `-timeout` | not yet measured as parallel workflows. Single run: 22-34 min on llm1/mac, about 11 min on U1; sequential shards about 3400-3500 s on llm1 |
 | `test-native-taglib` | `taglib=true` | `go test -tags native_taglib -race` of `internal/metadata`, `internal/tagger` and `internal/metafetch`: the cgo tag writers the production binary uses, which no other workflow compiles. `scripts/ci/build_taglib_static.py` builds TagLib 2.0.2 once into `$CI_CACHE_ROOT/taglib/` (keyed by the TagLib and utfcpp versions) and copies it to `third_party/taglib`; no coverage line | not yet measured |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `heavy=true` | vet, fmt-check, sdkguard, bench-check, pprof-check, web tests | split out of `checks` on 2026-09-29 |
@@ -50,8 +50,8 @@ Placement follows three rules. First, packages whose tests decode audio
 (server, scanner and the decode set in `test-rest`) never run on the prod
 host, which must not decode; its Docker image has no ffmpeg. Second, the test
 workflows start together, so the wall time is roughly the slowest of them.
-Third, the five heavy workflows (`test-database`, `test-server-scanner`,
-`test-rest`, `test-fixtures`, `checks-build`) are labelled `heavy=true`, not
+Third, the seven heavy workflows (`test-database`, `test-server-scanner`,
+`test-rest`, `test-fixtures-1`, `-2`, `-3`, `checks-build`) are labelled `heavy=true`, not
 `host=u1`, so either local-backend agent can take them: U1 and llm1 both carry
 that label (owner decision 2026-10-11, so CI keeps working when U1 is paused at
 night). U1 is the fast host (48 cores; under 55 s per shard), and llm1's 10
@@ -319,7 +319,7 @@ golangci-lint caches (under `XDG_CACHE_HOME`) there.
 ### llm1: local backend (takes `heavy=true` workflows)
 
 No workflow targets `host=llm1` by name, but it carries `heavy=true`, so it
-runs the five heavy workflows whenever it has a free slot, whether or not U1 is
+runs the seven heavy workflows whenever it has a free slot, whether or not U1 is
 busy or paused; see Pipeline layout (which also covers preferring U1). Its tools (Homebrew Go, node/npm, ffmpeg, ffprobe, fpcalc,
 python3, golangci-lint, make) must be on the agent's PATH. Its cache root is
 `/Users/jdfalk/ci/cache/{gomod,go-build,npm}`. This agent runs steps directly
@@ -349,7 +349,7 @@ pipelines would run as root.
 ### U1: local backend on Linux
 
 U1 runs the `heavy=true` workflows (`test-rest`, `test-database`,
-`test-server-scanner`, `test-fixtures`, `checks-build` and, shared with
+`test-server-scanner`, `test-fixtures-1`/`-2`/`-3`, `checks-build` and, shared with
 u0-local, `test-native-taglib`) with the local
 backend, like llm1, so the decode tests use the host's ffmpeg, ffprobe and
 fpcalc (`apt install ffmpeg libchromaprint-tools`). `build-essential` supplies

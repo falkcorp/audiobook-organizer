@@ -1,14 +1,17 @@
-# file: .woodpecker/test-fixtures.yaml
-# version: 1.4.0
-# guid: cf4b2a0b-48ac-4607-b815-6816d2cbc041
-# last-edited: 2026-10-18
+# file: .woodpecker/test-fixtures-2.yaml
+# version: 1.0.0
+# guid: 6251b896-bdd8-4fb5-b0ba-211ee2c26c8a
+# last-edited: 2026-10-27
 #
-# The tests that -short skips, run WITHOUT -short and with -race: the mirror of
-# ci.yml's fixture-tests job. The other three test workflows pass -short, so
-# tests built on internal/versionprimary/vptest (which skips under -short) and
-# every other testing.Short() skip -- the merge, undo and redirect
-# state-machine tests among them -- never ran here. `make test-fixtures`
-# discovers the packages at run time (scripts/ci/fixture_test_packages.py).
+# Shard 2 of 3 of the tests that -short skips, run WITHOUT -short and with
+# -race: the mirror of ci.yml's fixture-tests job (matrix shard 2/3). The
+# other test workflows pass -short, so tests built on
+# internal/versionprimary/vptest (which skips under -short) and every other
+# testing.Short() skip -- the merge, undo and redirect state-machine tests
+# among them -- never ran there. `make test-fixtures` discovers the packages at
+# run time (scripts/ci/fixture_test_packages.py); FIXTURE_SHARD=2/3 selects
+# this workflow's third. test-fixtures-1.yaml, -2.yaml and -3.yaml are
+# identical except for the shard number.
 #
 # Several of those packages decode audio (scanner, server, audiobooks,
 # organizer, plugins/maintenance), so this runs on a heavy agent (U1 or llm1)
@@ -16,20 +19,18 @@
 # cleanup are copied from test-rest.yaml; see that file for why each setting
 # is there.
 #
-# Three shards, run one after another in the one `test` step (2026-10-18).
-# Run as a single `go test` over every package, the packages are contended
-# (temp-file I/O and CPU) on the slower heavy agents (llm1, mac) and each one
-# slows down: in pipeline 1129 internal/plugins/maintenance hit the 25m
-# per-package timeout at 1501s with nothing hung, and database (1178s), scanner
-# (1124s) and server (1115s) were near the cap. Each shard runs about a third
-# of the packages at a time, which keeps the heavy ones (database, maintenance,
-# scanner/server) from all overlapping. They are sequential, not parallel
-# workflows, so the status context stays `ci/woodpecker/pr/test-fixtures` and
-# the whole job stays on one agent; ci.yml's fixture-tests matrix runs the same
-# three shards in parallel on separate GitHub runners. The per-package 25m
-# timeout is unchanged and no test is skipped (the shards together cover every
-# package). scripts/ci/run_fixture_shards.sh runs every shard even when one
-# fails and holds the step inside a 55 min budget; see that file.
+# Three separate parallel workflows (owner decision D59, 2026-10-27), status
+# contexts ci/woodpecker/pr/test-fixtures-1, -2 and -3. History: one `go test`
+# over every package contended temp-file I/O and CPU on the slower heavy agents
+# (llm1, mac) and internal/plugins/maintenance hit the 25m per-package timeout
+# (pipeline 1129); on 2026-10-18 it became three shards run one after another
+# in a single step under a 55 min shared budget (a wrapper script, since
+# deleted). On llm1 those three shards summed to about 3400-3500s, over that
+# budget, and the last shard (internal/server) timed out. As separate
+# workflows each shard has its own 60 min pipeline timeout and the full 25m
+# per-package go test -timeout, which still fires before Woodpecker kills the
+# job. Each workflow can land on a different heavy agent, and no test is
+# skipped (the shards together cover every package).
 
 labels:
   # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
@@ -65,7 +66,7 @@ steps:
     commands:
       # GOMODCACHE and GOCACHE are set by the first command, not here: the two
       # heavy agents keep the cache in different places (/tank/ci/cache on U1,
-      # /Users/jdfalk/ci/cache on llm1), and `environment:` takes only literals.
+      # $HOME/ci/cache on llm1), and `environment:` takes only literals.
       # The local backend gives every pipeline a fresh HOME, so Go's default
       # caches (under $HOME, including the downloaded toolchain) were
       # re-created per run and never removed on the Mac agents:
@@ -78,10 +79,10 @@ steps:
       # No -short, no CI-COVERAGE line: these packages' short runs are already
       # counted by the other three test workflows, so a coverage line here
       # would count them twice.
-      # Runs all three shards, then exits non-zero if any failed or was
-      # skipped for lack of time budget. Woodpecker substitutes $VAR itself, so
-      # the logic lives in the script rather than inline shell here.
-      - bash scripts/ci/run_fixture_shards.sh
+      # One shard of three. The full 25m per-package go test -timeout applies
+      # (FIXTURE_TIMEOUT); it fires, with its goroutine dump, before the 60 min
+      # pipeline timeout kills the job.
+      - make --no-print-directory test-fixtures FIXTURE_SHARD=2/3 FIXTURE_TIMEOUT=25m
 
   - name: cleanup
     # Runs on success and failure: clear this clone and anything left in the
