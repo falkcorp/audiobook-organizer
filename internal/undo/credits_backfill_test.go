@@ -1,7 +1,7 @@
 // file: internal/undo/credits_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 13d57ee7-2dda-4c77-b02f-ecdf96215b72
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package undo
 
@@ -47,10 +47,11 @@ func TestCheckCreditsBackfillCurrent_ThreeWay(t *testing.T) {
 	if err := CheckCreditsBackfillCurrent("b1", after, before, after); err != nil {
 		t.Fatalf("current == after: %v, want nil", err)
 	}
-	// The pre-image comes back canonical (AuthorID first, 0..n-1), so a book
-	// already reverted reads as before.Canonical(), not as before.
-	if err := CheckCreditsBackfillCurrent("b1", before.Canonical(), before, after); !errors.Is(err, ErrAlreadyRestored) {
-		t.Fatalf("current == canonical before: %v, want ErrAlreadyRestored", err)
+	// The pre-image comes back through Restored (stored order, 0..n-1), so a
+	// book already reverted reads as before.Restored(), not as before and not
+	// as before.Canonical() (which puts AuthorID first among tied rows).
+	if err := CheckCreditsBackfillCurrent("b1", before.Restored(), before, after); !errors.Is(err, ErrAlreadyRestored) {
+		t.Fatalf("current == restored before: %v, want ErrAlreadyRestored", err)
 	}
 	for name, mutate := range map[string]func(s *CreditsBackfillState){
 		"author row added": func(s *CreditsBackfillState) {
@@ -132,5 +133,47 @@ func TestDecodeCreditsBackfill(t *testing.T) {
 		if l := NotRestorableLabel(c); !strings.HasPrefix(l, ChangeTypeCreditsBackfill+":") {
 			t.Errorf("%s: label %q", name, l)
 		}
+	}
+}
+
+// B4: the revert must give the organizer back the filing author it had. The
+// organizer files under the first STORED row at the lowest position, so an
+// all-zero pre-image [Selina@0, Bruce@0] with AuthorID Bruce restores as
+// [Selina@0, Bruce@1] (stored order), not as Canonical's [Bruce@0, Selina@1]
+// (the backfill's own AuthorID tie-break).
+func TestRestored_KeepsStoredOrderWhereCanonicalBreaksTiesWithAuthorID(t *testing.T) {
+	before, _ := cbStates()
+	ids := func(rows []database.BookAuthor) []int {
+		var out []int
+		for _, r := range rows {
+			out = append(out, r.AuthorID)
+		}
+		return out
+	}
+	if got := ids(before.Restored().Authors); len(got) != 2 || got[0] != 2 || got[1] != 1 {
+		t.Fatalf("Restored = %v, want stored order [2 1]", got)
+	}
+	if got := ids(before.Canonical().Authors); got[0] != 1 {
+		t.Fatalf("Canonical = %v, the AuthorID tie-break should put 1 first (the forward write's rule)", got)
+	}
+	r := before.Restored()
+	for i, row := range r.Authors {
+		if row.Position != i {
+			t.Fatalf("Restored positions = %+v, want 0..n-1", r.Authors)
+		}
+	}
+	// Idempotent: the store normalising Restored's rows with AuthorID as the
+	// tie-breaker (distinct positions, nothing to break) changes nothing.
+	again := CreditsBackfillState{Authors: database.NormalizeBookAuthors(r.Authors, before.AuthorID), AuthorID: before.AuthorID}
+	if !SameCreditsBackfillState(CreditsBackfillState{Authors: r.Authors, AuthorID: before.AuthorID}, again) {
+		t.Fatalf("the store's AuthorID tie-breaker reorders a Restored list: %+v", again.Authors)
+	}
+	// The AuthorID-first form is NOT "already restored": a book holding it
+	// when the revert runs holds the backfill's order, not the pre-image's, so
+	// it is refused as changed-since rather than skipped as done.
+	_, after := cbStates()
+	err := CheckCreditsBackfillCurrent("b1", before.Canonical(), before, after)
+	if errors.Is(err, ErrAlreadyRestored) || RefusalReason(err) != ReasonChangedSince {
+		t.Fatalf("current == canonical before: %v, want a %s refusal", err, ReasonChangedSince)
 	}
 }

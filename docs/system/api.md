@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.21.0 -->
+<!-- version: 1.22.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-27 -->
 
 # HTTP API
 
@@ -425,7 +425,7 @@ sequenceDiagram
 | `repairs.plan` / `repairs.apply` | Repairs lane plan ("trial") and apply runs; launched via `/api/v1/repairs/:fixer/*` |
 | `maintenance.version-group-primary-repair` | Elect exactly one primary per version group (also the `version-group-primary-repair` fixer) |
 | `maintenance.purge-empty-authors` / `maintenance.purge-empty-narrators` | Purge author/narrator rows with no books (fail-closed ref counts) |
-| `maintenance.credit-census` / `maintenance.credits-backfill` | Count books whose author/narrator credit lists disagree with the flat fields (read-only), then fill and renumber the lists (`{}` previews; `apply: true` writes, journaled as `credits_backfill` and revertable; `book_ids`, `limit`, `allow`: `narrator_new_from_split`, `narrator_self_read`, `itunes`) |
+| `maintenance.credit-census` / `maintenance.credits-backfill` | Count books whose author/narrator credit lists disagree with the flat fields (read-only), then fill and renumber the lists (`{}` previews; `apply: true` writes, journaled as `credits_backfill` and revertable; `book_ids`; `limit` caps the cohort to the first N eligible books by id in both modes, so a dry run with the same `limit` shows what the apply would write; `allow`: `narrator_new_from_split`, `narrator_self_read`, `itunes`; the result adds `books_eligible` and `books_to_reidentify`, the books whose search identity changes and so spend Google Books quota at their next metadata run) |
 | `library.scan` | Library scan (per-book scan lock since #3635, so repairs may apply during a scan) |
 | `itunes.heal` | Heal stale iTunes file paths after organize (former ID `maintenance.itunes-heal` still resolves) |
 | `reconcile.scan` | Reconcile library paths vs. filesystem; also the nightly `reconcile_scan` task. The generic operations endpoint requires `settings.manage`; `POST /api/v1/operations/reconcile/scan` still admits `scan.trigger`. `GET /api/v1/operations/reconcile/scan/latest` answers `{operation, preview, latest_attempt}`: `operation` and `preview` are the newest scan that completed with a readable result, whichever ID it was stored under, and `latest_attempt` is the newest run when it is a different one (still running or queued, canceled, failed, interrupted, or completed with an unreadable result), else `null`. A newer failed or canceled run never hides the last good preview. With no usable scan, `operation` is the newest run, `preview` is `null` and `latest_attempt` is `null`. Former ID `maintenance.reconcile-scan` still resolves |

@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-27 -->
 
 # A repair job that makes every book's author and narrator lists agree with the book
 
@@ -26,19 +26,26 @@
   and so on, and fills an empty narrator list from the narrator field (cleaned the same
   way the program already cleans it) or from the stored narrator list. It never
   creates a new author. It only creates a new narrator for a single name. A name that
-  exists only after splitting a longer string needs the owner's opt-in.
+  exists only after splitting a longer string needs the owner's opt-in. It also never
+  writes a placeholder such as "Unknown Author" as an author, and never makes a person
+  of a junk narrator such as "N/A" or "Various".
 - **What it leaves alone.** Cases with more than one possible right answer are listed
   for a person to decide, and nothing is changed for them: a credit pointing at a
   deleted or merged author, a combined "A, B" author record, a narrator field that
   names different people than the list, a self-read book, and similar. Books in the
   iTunes library and owner-managed series (Doctor Who, Big Finish, Torchwood) are held
-  unless the owner opts them in. On a book whose author a person has locked, the job
-  never changes which author the book is shown and filed under.
+  unless the owner opts them in. A book whose author a person has locked is held
+  whole on the author side: the job writes nothing to its author list or author
+  fields. A book whose narrator a person has locked is held on the narrator side. A
+  book where a later rescan moved the author and the old main author is the stale half
+  is listed for review instead of being put first.
 - **Previewed first, and reversible.** With no options the job only reports what it
   would do. It lists every group of books with ids and shows before and after examples.
   It also lists every book that would be filed under a different author folder the
   next time the library is organized, because putting the main author first can change
   that folder. Every book it writes is recorded first, and the whole run can be undone.
+  Undoing a book that had its list order changed puts the authors back in the order
+  they were stored in, so the book files under the same author folder as before.
   The undo refuses any book a person edited after the run, so a later edit is never
   overwritten.
 - **What the follow-up count will show.** After the job runs, the library count for
@@ -66,4 +73,11 @@
   cases that have one safe answer, lists the rest for review, and records every write
   so it can be undone. Each write also re-saves the book's record and queues it for
   search re-indexing. At the full library's numbers that could be up to about 55,000
-  books, so the owner can run it in batches with a limit.
+  books, so the owner can run it in batches with a limit. The limit means the first
+  N books that have something to fix, in a fixed order, and the preview with the same
+  limit shows exactly those books.
+- **A cost to read before applying.** For some books, changing the author list
+  changes which author the book is searched under. Those books will look up their
+  metadata again at the next metadata run, which spends the Google Books daily
+  allowance (1,000 lookups a day). The preview now reports how many books that is and
+  lists them, so the owner can pick a batch size that fits the allowance.

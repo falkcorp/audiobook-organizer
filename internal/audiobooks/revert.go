@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.96.0
+// version: 1.97.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package audiobooks
 
@@ -2812,9 +2812,11 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 // created stay (another book may credit them since); the empty ones are
 // maintenance.purge-empty-narrators' to remove.
 //
-// The store normalises the restored lists like every credit write, so a
-// pre-image whose positions were not 0..n-1 comes back in the canonical order
-// readers already saw it in (see undo.ChangeTypeCreditsBackfill).
+// The pre-image goes back through undo.CreditsBackfillState.Restored: rows in
+// stored order, positions renumbered before the store sees them, so a
+// pre-image whose positions were all 0 comes back with the same first stored
+// row the organizer filed the book under, not the AuthorID-first order the
+// backfill's own write used (see undo.ChangeTypeCreditsBackfill, Positions).
 func (rs *RevertService) revertCreditsBackfill(c *database.OperationChange) error {
 	before, write, err := undo.DecodeCreditsBackfill(c)
 	if err != nil {
@@ -2835,8 +2837,12 @@ func (rs *RevertService) revertCreditsBackfill(c *database.OperationChange) erro
 			}
 			return cerr
 		}
-		credits.Authors = append([]database.BookAuthor(nil), before.Authors...)
-		credits.Narrators = append([]database.BookNarrator(nil), before.Narrators...)
+		// Restored, not before as stored: the store breaks position ties with
+		// AuthorID, which would change the organizer's filing author (see
+		// undo.ChangeTypeCreditsBackfill, Positions).
+		restored := before.Restored()
+		credits.Authors = append([]database.BookAuthor(nil), restored.Authors...)
+		credits.Narrators = append([]database.BookNarrator(nil), restored.Narrators...)
 		before.ApplyFlatFields(b)
 		return nil
 	})

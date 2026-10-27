@@ -1,7 +1,7 @@
 // file: internal/undo/credits_backfill.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 28847eaf-80d0-49cd-95a2-6de0cb8f0381
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package undo
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -35,11 +36,18 @@ import (
 // changed since is a later edit the revert must not overwrite).
 //
 // Positions: every credit write normalises its lists (PR 1:
-// NormalizeBookAuthors / NormalizeBookNarrators), so a pre-image whose
-// positions were not 0..n-1 (the all-zero rows the backfill renumbers) comes
-// back in canonical form: the same rows in the order every reader already
-// returned them (GetBookCredits reads through the same normalisation), not
-// the duplicate positions themselves. Everything else, the flat fields
+// NormalizeBookAuthors / NormalizeBookNarrators). The backfill's own write
+// breaks position ties with Book.AuthorID (the plan's tie-breaker), but the
+// revert must NOT: the organizer files a book under the first STORED row at
+// the lowest position (organizer.PrimaryJoinAuthor), so a pre-image of
+// [Selina@0, Bruce@0] with AuthorID Bruce, written back through the store's
+// AuthorID tie-breaker, would come back [Bruce, Selina] and the book would be
+// filed under another author than before the backfill. The revert therefore
+// restores the pre-image through Restored: ties resolved by STORED order,
+// positions renumbered 0..n-1 before the store sees them, so its AuthorID
+// tie-breaker has nothing left to break. A pre-image whose positions were not
+// 0..n-1 comes back as the same rows in the order the organizer read them in,
+// not as the duplicate positions themselves. Everything else, the flat fields
 // included, comes back exactly.
 const ChangeTypeCreditsBackfill = "credits_backfill"
 
@@ -109,6 +117,30 @@ func (s CreditsBackfillState) Canonical() CreditsBackfillState {
 	return out
 }
 
+// Restored returns s with its lists in the form the revert stores them: rows
+// in STORED order (a stable sort on Position, so a tie keeps the order the
+// rows were stored in, which is the order the organizer picks its filing
+// author in), positions renumbered 0..n-1, rows without a record and repeated
+// (id, role) rows dropped, as a credit write would. Unlike Canonical, no
+// AuthorID tie-breaker is applied: the positions it returns are distinct, so
+// the store's own AuthorID tie-breaker cannot reorder them afterwards.
+func (s CreditsBackfillState) Restored() CreditsBackfillState {
+	out := s
+	rows := make([]database.BookAuthor, 0, len(s.Authors))
+	for _, r := range s.Authors {
+		if r.AuthorID > 0 {
+			rows = append(rows, r)
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Position < rows[j].Position })
+	for i := range rows {
+		rows[i].Position = i
+	}
+	out.Authors = database.NormalizeBookAuthors(rows, nil)
+	out.Narrators = database.NormalizeBookNarrators(s.Narrators)
+	return out
+}
+
 // SameCreditsBackfillState reports whether two states are the same rows in
 // the same order with the same roles and positions, and the same four flat
 // fields. Row book ids are not compared: the key names the book, and the store
@@ -158,13 +190,13 @@ func DecodeCreditsBackfill(c *database.OperationChange) (CreditsBackfillState, C
 // CheckCreditsBackfillCurrent is the revert's compare-and-set. It returns nil
 // when current is exactly the state the backfill wrote (after), so the
 // pre-image may be restored; ErrAlreadyRestored when current already is the
-// pre-image as the store holds it (before, canonical); and a ReasonChangedSince
+// pre-image as the revert stores it (before.Restored()); and a ReasonChangedSince
 // refusal otherwise.
 func CheckCreditsBackfillCurrent(bookID string, current, before, after CreditsBackfillState) error {
 	switch {
 	case SameCreditsBackfillState(current, after):
 		return nil
-	case SameCreditsBackfillState(current, before.Canonical()):
+	case SameCreditsBackfillState(current, before.Restored()):
 		return ErrAlreadyRestored
 	}
 	return refuse(ReasonChangedSince, "book %s credits or author/narrator fields changed since the credits backfill (%s)",

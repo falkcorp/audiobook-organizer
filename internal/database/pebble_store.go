@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.233.1
+// version: 1.234.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-24
+// last-edited: 2026-10-27
 
 package database
 
@@ -3819,6 +3819,14 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 // ASIN its candidates were fetched for, and the apply gate refuses each kept
 // candidate that does not carry the new ASIN. See the caller.
 func (p *PebbleStore) candidateSearchIdentityChanged(oldBook, newBook *Book) bool {
+	return SearchIdentityChanged(p.GetAuthorByID, oldBook, newBook)
+}
+
+// SearchIdentityChanged is candidateSearchIdentityChanged with the author
+// lookup passed in (the store's GetAuthorByID), so a dry run can count the
+// books a planned write would re-identify without writing: the store's write
+// path and the count it reports share this one predicate.
+func SearchIdentityChanged(getAuthor func(id int) (*Author, error), oldBook, newBook *Book) bool {
 	if oldBook == nil || newBook == nil {
 		return true
 	}
@@ -3831,19 +3839,19 @@ func (p *PebbleStore) candidateSearchIdentityChanged(oldBook, newBook *Book) boo
 	if oldBook.AuthorID == nil || newBook.AuthorID == nil {
 		return true
 	}
-	return !p.sameAuthorName(*oldBook.AuthorID, *newBook.AuthorID)
+	return !sameAuthorName(getAuthor, *oldBook.AuthorID, *newBook.AuthorID)
 }
 
 // sameAuthorName reports whether two author ids resolve to authors with the
 // same (trimmed) name. An unreadable or missing author is "not the same": the
 // caller then marks the cached row Stale (stageCacheStaleStamp), as it would
 // for any re-credit.
-func (p *PebbleStore) sameAuthorName(a, b int) bool {
-	oldA, err := p.GetAuthorByID(a)
+func sameAuthorName(getAuthor func(id int) (*Author, error), a, b int) bool {
+	oldA, err := getAuthor(a)
 	if err != nil || oldA == nil {
 		return false
 	}
-	newA, err := p.GetAuthorByID(b)
+	newA, err := getAuthor(b)
 	if err != nil || newA == nil {
 		return false
 	}

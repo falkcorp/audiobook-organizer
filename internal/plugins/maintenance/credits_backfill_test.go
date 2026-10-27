@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 6950317d-b65c-41e5-86a8-9cc277a95054
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package maintenance
 
@@ -557,7 +557,7 @@ func TestCreditsBackfill_PlanReviewsTombstonedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := planCreditsBackfill(idx, func(string) (database.Narrator, bool, error) { return database.Narrator{}, false, nil },
-		nil, book, nil, nil, census, "")
+		nil, book, nil, nil, census, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -793,9 +793,12 @@ func TestCreditsBackfill_RevertRestoresThePreImage(t *testing.T) {
 				t.Fatalf("revert overwrote the later edit on %s", id)
 			}
 		default:
-			// The lists come back as the store keeps every list: canonical.
-			// For a pre-image already in canonical form that is exact.
-			want := before[id].Canonical()
+			// The revert restores through Restored: rows in STORED order with
+			// positions renumbered 0..n-1 (not Canonical, whose AuthorID
+			// tie-breaker would reorder an all-zero pre-image and change the
+			// organizer's filing author). For a pre-image whose positions
+			// were already 0..n-1 that is exact.
+			want := before[id].Restored()
 			if !undo.SameCreditsBackfillState(got, want) {
 				t.Fatalf("%s not restored:\nwant %+v\ngot  %+v", id, want, got)
 			}
@@ -950,7 +953,9 @@ func TestCreditsBackfill_ResumeAfterPartialRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// One worker, canceled after four items: a run killed part-way.
-	rep := &cbReporter{id: cbTestOpID, cancel: cancel, cancelAfter: 5}
+	// Progress calls: one for the index, one per book while planning, then one
+	// per write. Cancel four writes into the apply pass.
+	rep := &cbReporter{id: cbTestOpID, cancel: cancel, cancelAfter: int64(len(ids)) + 1 + 4}
 	first, err := f.runWith(ctx, rep, creditsBackfillParams{Apply: true}, 1)
 	if err == nil {
 		t.Fatal("the interrupted run reported success")
@@ -1091,10 +1096,12 @@ func TestCreditsBackfill_CensusResidualIsHeldAndReviewBooks(t *testing.T) {
 
 func TestCreditsBackfill_LimitHoldsAcrossAResume(t *testing.T) {
 	f := newCBFixture(t)
-	seedCBCensusFixture(f)
+	listed := seedCBCensusFixture(f)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rep := &cbReporter{id: cbTestOpID, cancel: cancel, cancelAfter: 3}
+	// The progress counter runs through the planning pass (one call for the
+	// index, one per book) before the first write: cancel two writes in.
+	rep := &cbReporter{id: cbTestOpID, cancel: cancel, cancelAfter: int64(len(listed)) + 1 + 2}
 	first, _ := f.runWith(ctx, rep, creditsBackfillParams{Apply: true, Limit: 3}, 1)
 	if first == nil || first.BooksToWrite == 0 || first.BooksToWrite >= 3 {
 		t.Fatalf("first attempt wrote %v books; the test needs a partial cohort", first)
@@ -1115,10 +1122,12 @@ func TestCreditsBackfill_LimitHoldsAcrossAResume(t *testing.T) {
 	}
 }
 
-func TestCreditsBackfill_ResumeDoesNotCountARefusedWrite(t *testing.T) {
-	f := newCBFixture(t)
-	bruce := f.author("Bruce Wayne")
-	selina := f.author("Selina Kyle")
+// cbRefusedWriteRun runs an apply in which cbe-01's write is refused (a person
+// edits the book between the plan and the write) and cbe-02's lands.
+func cbRefusedWriteRun(t *testing.T, f *cbFixture) (bruce, selina int) {
+	t.Helper()
+	bruce = f.author("Bruce Wayne")
+	selina = f.author("Selina Kyle")
 	f.book("cbe-01", "Batman: Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
 	f.book("cbe-02", "Batman: Hush", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
 	mod := &cbInterleavingModifier{BookCreditsModifier: f.s, bookID: "cbe-01", edit: func() {
@@ -1133,15 +1142,84 @@ func TestCreditsBackfill_ResumeDoesNotCountARefusedWrite(t *testing.T) {
 	if _, err := runCreditsBackfillScan(context.Background(), env, creditsBackfillParams{Apply: true}, rep); err == nil {
 		t.Fatal("a refused write reported a clean run")
 	}
+	return bruce, selina
+}
 
-	// The attempt that resumes it: cbe-01 has a journal row whose write never
-	// landed, and is now dirty again (AuthorID not in the join).
+func cbJournalRowsOf(t *testing.T, f *cbFixture, bookID string) []*database.OperationChange {
+	t.Helper()
+	rows, err := f.s.GetOperationChanges(cbTestOpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []*database.OperationChange
+	for _, r := range rows {
+		if r.BookID == bookID {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// N6: a journal row written for a write that was refused is voided, the way
+// every journaling writer takes back a row for a write it did not make: the
+// revert ignores it and the resume does not read it as a written book.
+func TestCreditsBackfill_RefusedWriteVoidsItsJournalRow(t *testing.T) {
+	f := newCBFixture(t)
+	cbRefusedWriteRun(t, f)
+	rows := cbJournalRowsOf(t, f, "cbe-01")
+	if len(rows) != 1 || !rows[0].Voided || rows[0].RevertedAt == nil {
+		t.Fatalf("cbe-01 journal rows = %+v, want one voided row", rows)
+	}
+	if rows := cbJournalRowsOf(t, f, "cbe-02"); len(rows) != 1 || rows[0].Voided {
+		t.Fatalf("cbe-02 journal rows = %+v, want one live row", rows)
+	}
+
+	// The attempt that resumes it: cbe-01 is dirty again (AuthorID not in the
+	// join) and its voided row is not a prior write.
 	second, err := f.run(creditsBackfillParams{Apply: true, Attempt: 1}, 2)
 	if err != nil {
 		t.Fatalf("second attempt: %v", err)
 	}
 	if second.BooksWrittenEarlierAttempts != 1 {
-		t.Fatalf("earlier=%d, want 1 (cbe-02 only; cbe-01's row was refused)", second.BooksWrittenEarlierAttempts)
+		t.Fatalf("earlier=%d, want 1 (cbe-02 only; cbe-01's row was voided)", second.BooksWrittenEarlierAttempts)
+	}
+	if got := cbClassIDs(second, cbJournalUnverified); len(got) != 0 {
+		t.Fatalf("%s = %v, want none: a voided row is not a stranded one", cbJournalUnverified, got)
+	}
+	if got := cbClassIDs(second, cbAuthorIDPrepended); !slices.Equal(got, []string{"cbe-01"}) {
+		t.Fatalf("%s = %v, want cbe-01 written now", cbAuthorIDPrepended, got)
+	}
+	// The revert acts on the live rows only and puts the person's edit back
+	// where it was before the second attempt's write.
+	if _, err := audiobooks.NewRevertService(f.s).RevertOperation(cbTestOpID); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	selina, _ := f.s.GetAuthorByName("Selina Kyle")
+	if got := cbAuthorIDs(f.state("cbe-01").Authors); !slices.Equal(got, []int{selina.ID}) {
+		t.Fatalf("cbe-01 after revert = %v, want the person's edit [%d]", got, selina.ID)
+	}
+}
+
+// A row that was journaled and never voided (the run stopped between the
+// journal and the write) is journal_unverified when the book does not hold
+// its post-image, and the revert restores from the row that matches.
+func TestCreditsBackfill_ResumeDoesNotCountAStrandedRow(t *testing.T) {
+	f := newCBFixture(t)
+	cbRefusedWriteRun(t, f)
+	// Un-void cbe-01's row: a crash between the journal and the write leaves
+	// it standing.
+	row := *cbJournalRowsOf(t, f, "cbe-01")[0]
+	row.Voided, row.RevertedAt = false, nil
+	if err := f.s.CreateOperationChange(&row); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := f.run(creditsBackfillParams{Apply: true, Attempt: 1}, 2)
+	if err != nil {
+		t.Fatalf("second attempt: %v", err)
+	}
+	if second.BooksWrittenEarlierAttempts != 1 {
+		t.Fatalf("earlier=%d, want 1 (cbe-02 only; cbe-01's row never landed)", second.BooksWrittenEarlierAttempts)
 	}
 	if got := cbClassIDs(second, cbJournalUnverified); !slices.Equal(got, []string{"cbe-01"}) {
 		t.Fatalf("%s = %v", cbJournalUnverified, got)
@@ -1153,8 +1231,9 @@ func TestCreditsBackfill_ResumeDoesNotCountARefusedWrite(t *testing.T) {
 	if _, err := audiobooks.NewRevertService(f.s).RevertOperation(cbTestOpID); err != nil {
 		t.Logf("revert: %v (the stranded row refuses)", err)
 	}
-	if got := cbAuthorIDs(f.state("cbe-01").Authors); !slices.Equal(got, []int{selina}) {
-		t.Fatalf("cbe-01 after revert = %v, want the person's edit [%d]", got, selina)
+	selina, _ := f.s.GetAuthorByName("Selina Kyle")
+	if got := cbAuthorIDs(f.state("cbe-01").Authors); !slices.Equal(got, []int{selina.ID}) {
+		t.Fatalf("cbe-01 after revert = %v, want the person's edit [%d]", got, selina.ID)
 	}
 }
 

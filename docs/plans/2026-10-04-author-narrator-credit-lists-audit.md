@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-27 -->
 
 # Author and narrator credit lists: read-only audit and draft migration plan
 
@@ -532,9 +532,12 @@ the row above:
   `author_positions_all_zero`), `author_snapshot_stale`, `narrator_column_no_junction`,
   `narrators_json_junction_empty` and `narrator_positions_not_normalized`. Even these
   keep the books the run did not write: held books (iTunes without the opt-in,
-  owner-manual, user-locked, unreadable guard), books in a review class (a new
-  narrator name that exists only after a split, a self-read, a combined or dangling
-  source), and books cut off by `limit`. The run's own result lists every one of
+  owner-manual, user-locked author or narrator, unreadable guard), books in a review
+  class (a new narrator name that exists only after a split, a self-read, a combined
+  or dangling source, a placeholder author such as "Unknown Author", a junk narrator
+  such as "N/A", a narrator name that matches two records once accents are ignored, an
+  author whose reverted rescan snapshot names a different credited person), and books
+  outside the `limit` cohort. The run's own result lists every one of
   them by class, so a census re-run is read against that result. Tested in
   `TestCreditsBackfill_CensusResidualIsHeldAndReviewBooks`. These census classes
   are listed for review and never written: `author_id_dangling`, `author_id_tombstoned`,
@@ -546,9 +549,24 @@ the row above:
   join's lowest-position row, not under `AuthorID` (`resolveAuthorName`,
   `internal/organizer/organizer.go`). Prepending `AuthorID` (`author_id_not_in_join`)
   or breaking an all-zero tie in its favour therefore changes the path the next
-  organize would pick. Every such book is also listed in `filing_author_changes`, and
-  a user-locked author field holds the author side (`held_user_locked`).
+  organize would pick. Every such book is also listed in `filing_author_changes`.
+  A user lock on the author field holds the whole author side of the book
+  (`held_user_locked`), not only the writes that change the filing author, because
+  the snapshot refresh and the list fill also change what the author field shows. A
+  user lock on the narrator field holds the narrator side
+  (`held_narrator_user_locked`); repair locks are not user locks and do not hold.
   `author_id_not_primary` (AuthorID present but not first) is left for review.
+  Whether to prepend `AuthorID` is decided from a second signal. Where the join's
+  stored order, or the book's `Author` snapshot, names a credited person other than
+  `AuthorID` (the usual sign that a rescan moved the author and the scalar is the
+  stale half), the book goes to `author_id_snapshot_conflict` and nothing is written.
+  Where there is no such signal, this rule above applies unchanged and the prepend is
+  written and listed in `filing_author_changes`. The same two-signal check guards the
+  all-zero tie-break. A placeholder author name ("Unknown Author" and the other names
+  `authorname.IsPlaceholder` knows) is never written into a list: the book goes to
+  `author_placeholder`. The filing author the dry run reports is computed by the
+  organizer's own pure functions (`organizer.ScalarAuthorName`, `PrimaryJoinAuthor`,
+  `JoinAuthorName`), so the report cannot drift from what the organizer does.
 - **Narrator source order.** A column the cleaner reads as people
   (`CleanNarratorCredit`) is the source. `NarratorsJSON` is used only when the column
   is empty, and then the column is written as the joined list so the two agree. The
@@ -560,10 +578,18 @@ the row above:
   authors) is written only with `allow: ["narrator_self_read"]`. Note that the live
   narrator sync (`syncNarratorJunctionAfterWrite`) already creates a narrator for
   every split name on every column write, so this rule is stricter than the store.
-- **Positions come back canonical on revert.** Every credit write normalises (PR 1),
-  so a reverted all-zero join comes back as 0..n-1 in the order every reader already
-  saw. Everything else, the four flat fields included, comes back exactly. The revert
-  is compare-and-set on the whole state and refuses a book changed since.
+- **Revert restores the stored order, not the canonical one.** Every credit write
+  normalises (PR 1), and the normaliser breaks a position tie by putting `AuthorID`
+  first. An earlier version of this section said a reverted all-zero join comes back
+  in the order every reader already saw; that was wrong whenever the tie-break moved
+  the author, because the organizer files under the first stored row. The revert now
+  assigns positions 0..n-1 by the pre-image's stored order (`CreditsBackfillState.Restored`,
+  `internal/undo/credits_backfill.go`), so the organizer files the book under the
+  author it filed under before the run. The "already restored" check in the same
+  package compares against that same restored state. Everything else, the four flat
+  fields included, comes back exactly. The revert is compare-and-set on the whole
+  state and refuses a book changed since, and it refuses a book whose write was
+  refused at apply time (see Resume).
 - **Guards.** iTunes books are held unless `allow: ["itunes"]`, because each fixer
   needs its own DB-only clearance. Owner-manual books (Doctor Who, Big Finish,
   Torchwood) are held. Narrator records the run created stay when a book is reverted.
@@ -572,14 +598,54 @@ the row above:
   skipped. Before a resumed apply starts, each book in the operation's journal is
   checked against its row: a book that still holds the row's post-image counts as
   written (toward `limit` too, so a restart mid-cohort cannot overshoot it); one that
-  does not (a write refused as changed since the plan, a stop between the journal and
-  the write, or an edit since) is listed under `journal_unverified` and not counted.
-  Such a book can get a second row if this attempt writes it; the revert restores
-  from the row that matches and refuses the other. A write refused as changed since
-  the plan marks the run incomplete.
+  does not (a stop between the journal and the write, or an edit since) is listed
+  under `journal_unverified` and not counted. Such a book can get a second row if this
+  attempt writes it; the revert restores from the row that matches and refuses the
+  other. A write refused as changed since the plan, or that failed, voids its own
+  journal row (`Voided`, the same convention the merge and repair writers use), so the
+  revert refuses it and a resume does not see it as stranded. A refused write marks the
+  run incomplete.
+- **`limit` is a cohort of books, in both modes.** The run plans every selected book
+  first (concurrently), then takes the first N eligible books by sorted id, where
+  eligible means it has a write to make (books written by an earlier attempt of the
+  same operation count against N). The dry run takes the same cohort, so a dry run with
+  `limit` shows exactly the books an apply with the same `limit` would write. A book in
+  the cohort whose write fails or is refused keeps its slot; no other book replaces
+  it. Books outside the cohort are listed as `limit_reached`.
+- **Concurrency.** Three phases: plan and guard every book concurrently, pick the
+  cohort serially from the sorted ids, then write the cohort concurrently
+  (`registry.RunItems` with `Concurrency` set). Books are disjoint, so two workers
+  never write the same row. Narrator records the run creates are serialised and shared
+  by accent-folded name, so two books naming one new narrator get one record.
+- **Narrator names.** A narrator name is matched exactly first, then by an
+  accent- and case-folded key (`authorjunk.FoldKey`) when exactly one record has it.
+  A fold key that matches two records sends the book to `narrator_name_ambiguous`.
+  Junk names ("N/A", "Various", "Unknown", "Narrator", "Full Cast", a placeholder and
+  the like) are never turned into a record: the book goes to `narrator_junk_name`. The
+  check runs on the raw entry before the narrator cleaner splits it, because "N/A"
+  splits on the slash.
+- **Result payload.** The class lists are not capped: every count in the result clicks
+  through to its book ids, and the repo has no separate per-operation list endpoint. At
+  the census numbers (about 55,000 books) a class with every book in it is roughly
+  40 bytes per id, so a few megabytes at most. A resumed apply loads the operation's
+  journal rows once to verify them (`GetOperationChanges`); there is no per-operation
+  iterator, and `ScanOperationChanges` walks the whole journal, so it is not used.
+  `limit` keeps each run's write count bounded in any case.
 - **Cost.** `ModifyBookCredits` rewrites the book row, so each write leaves a
   `book_ver` snapshot and queues a search reindex. At the census numbers that is up to
   about 55,000 rows. Run it in `limit` cohorts.
+  - **Metadata re-identification and the Google Books quota.** When a write changes
+    the author a book is searched under (the store's `candidateSearchIdentityChanged`
+    test, now the exported `database.SearchIdentityChanged`), the book's stored metadata
+    candidates are no longer valid and the next metadata run searches for it again. That
+    spends the Google Books quota (1,000 requests a day). The result reports the number
+    as `books_to_reidentify` and lists the ids under `search_identity_changes`
+    (informational, in dry run as well). Read it before choosing `limit`, and size the
+    cohort against the days of quota you are willing to spend.
+  - **Writes gate.** The op declares `Writes: ResBooks`, so it is gated like the other
+    book-writing ops (it does not run alongside another `ResBooks` writer, such as a
+    scan or an organize). A dry run is gated too, as with the other ops that declare
+    writes regardless of mode; the description says so.
 
 ### 6.3 Risks
 
