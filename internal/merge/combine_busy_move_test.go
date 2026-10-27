@@ -1,5 +1,5 @@
 // file: internal/merge/combine_busy_move_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f6c8f0e-6a52-4a39-8b7a-5d2f1c9e4b17
 // last-edited: 2026-10-26
 
@@ -47,7 +47,7 @@ func TestCombineBooks_BusyBulkMoveIsARefusalNotAHalfDoneCombine(t *testing.T) {
 	assert.True(t, errors.Is(err, database.ErrBookFileConflict), "the cause stays visible so the caller can answer retry-later: %v", err)
 	var incomplete *CombineIncompleteError
 	assert.False(t, errors.As(err, &incomplete), "nothing was absorbed, so there is nothing to revert: %v", err)
-	assert.True(t, IsRetryLater(err), "the HTTP and review layers answer a busy combine as retry-later (503): %v", err)
+	assert.True(t, IsRetryLater(err), "the HTTP and review layers answer a busy combine as retry-later: %v", err)
 
 	ms := NewService(store)
 	journals, jerr := ms.ListCombineJournals(0)

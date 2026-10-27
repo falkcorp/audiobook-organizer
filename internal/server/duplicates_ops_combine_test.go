@@ -1,5 +1,5 @@
 // file: internal/server/duplicates_ops_combine_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9d2e6b14-3a87-4c50-b1f9-7e0a5c3d8f26
 // last-edited: 2026-10-26
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -129,6 +130,9 @@ func TestBookCombineOpRun_WarmupRefusalIsRetryLaterNotAFailure(t *testing.T) {
 	require.False(t, got.Incomplete)
 	require.Equal(t, keep, got.PrimaryID)
 	require.Contains(t, got.RetryReason, "once the library index has finished loading")
+	require.Equal(t, CombineRetryCauseLoading, got.RetryCause)
+	require.Equal(t, combineRetryLaterLoadingMessage, got.Message)
+	require.NotContains(t, got.Message, "other writers", "a loading refusal does not blame other writers")
 	require.Contains(t, got.Message, "still loading")
 	require.Empty(t, got.OperationID, "nothing was journaled, so there is nothing to undo")
 	require.Empty(t, got.JournalID)
@@ -147,6 +151,54 @@ func TestBookCombineOpRun_WarmupRefusalIsRetryLaterNotAFailure(t *testing.T) {
 	require.False(t, again.RetryLater, again.RetryReason)
 	require.False(t, again.Failed)
 	require.Equal(t, 1, again.BooksDeleted, "the same combine goes through once the index serves")
+}
+
+// busyBulkMoveStore answers the bulk file move as the real store does when other
+// writers kept changing the rows it moves: it gave up after its last re-stage
+// and wrote nothing.
+type busyBulkMoveStore struct{ database.Store }
+
+func (s *busyBulkMoveStore) Unwrap() database.Store { return s.Store }
+func (s *busyBulkMoveStore) MoveBookFilesToBookBulk(moves []database.BookFileMove, target string) error {
+	return fmt.Errorf("MoveBookFilesToBookBulk: gave up re-staging the batch: %w", database.ErrBookFileConflict)
+}
+
+// A combine whose bulk file move is refused because other writers kept changing
+// the rows (database.ErrBookFileConflict) ends as "retry later" too, not as a
+// failure: the op returns no error, the result is not failed, the absorbed book
+// is still live with every one of its files, and the result names the busy cause
+// (not the library loading) in both its message and retry_cause.
+func TestBookCombineOpRun_BusyMoveIsRetryLaterNotAFailure(t *testing.T) {
+	store := newRerouteStore(t)
+	keep := createRerouteBook(t, store, "The Long Halloween", nil)
+	absorbed := createRerouteBook(t, store, "Hush", nil)
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "hush-f1", BookID: absorbed, FilePath: "/lib/Gotham/Hush/01.m4b", Format: "m4b"}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "hush-f2", BookID: absorbed, FilePath: "/lib/Gotham/Hush/02.m4b", Format: "m4b"}))
+
+	got, rep, runErr := runCombineOp(t, &busyBulkMoveStore{Store: store}, dedup.BookCombineParams{KeepID: keep, MergeIDs: []string{absorbed}})
+	require.NoError(t, runErr, "a busy refusal does not fail the op")
+	require.True(t, got.RetryLater)
+	require.False(t, got.Failed)
+	require.False(t, got.Incomplete)
+	require.Equal(t, keep, got.PrimaryID)
+	require.Zero(t, got.BooksDeleted)
+	require.Zero(t, got.FilesMoved)
+	require.Equal(t, got, rep.result)
+	require.Contains(t, got.RetryReason, database.ErrBookFileConflict.Error(), "retry_reason carries the cause")
+	require.Equal(t, CombineRetryCauseBusy, got.RetryCause)
+	require.Equal(t, combineRetryLaterBusyMessage, got.Message)
+	require.NotContains(t, got.Message, "still loading", "a busy refusal does not blame the library loading")
+
+	files, ferr := store.GetBookFiles(absorbed)
+	require.NoError(t, ferr)
+	require.Len(t, files, 2, "no absorbed file moved")
+	require.False(t, isSoftDeleted(mustGetRerouteBook(t, store, absorbed)), "the absorbed book stays live")
+
+	raw, merr := json.Marshal(got)
+	require.NoError(t, merr)
+	require.Contains(t, string(raw), `"retry_later":true`)
+	require.Contains(t, string(raw), `"retry_cause":"busy"`)
+	require.NotContains(t, string(raw), `"failed"`)
 }
 
 // A refusal that is not the warmup one stays a failure with a failed result.

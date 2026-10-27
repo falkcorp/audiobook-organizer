@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.26.1
+// version: 1.26.2
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-26
 
@@ -199,10 +199,13 @@ func (h *Handler) launchOp(c *gin.Context, defID, opType, detail string, params 
 // until 2026-09-02 both came back as a generic 500 and the reason was only in
 // the server log. Anything else is the 500 it always was.
 //
-// A combine refused only because the library index is still loading is not
-// answered here: the combine's holder-list check runs inside the queued
-// operation (internal/server/duplicates_ops.go), which ends as "retry later"
-// (BookCombineOpResult.RetryLater), so nothing this handler checks can produce it.
+// A combine refused for a reason that passes by itself (merge.IsRetryLater) is
+// not answered here: both causes arise inside the queued operation
+// (internal/server/duplicates_ops.go), which ends as "retry later"
+// (BookCombineOpResult.RetryLater, with RetryCause naming which): the library
+// index is still loading, so the holder-list check cannot be answered yet, or
+// other writers kept changing the files the combine moves
+// (database.ErrBookFileConflict). Nothing this handler checks can produce either.
 func respondMergeError(c *gin.Context, err error, fallback string) {
 	var notFound *merge.BookNotFoundError
 	switch {

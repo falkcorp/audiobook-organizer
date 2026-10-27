@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_intro_store.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 8c1e5a47-2f93-4d06-b7a8-3e90d14c6b25
 // last-edited: 2026-10-27
 
@@ -594,7 +594,7 @@ func (s *PebbleStore) ClearIntroTimeouts(bookID, fileID, sourceHash string) (boo
 		return false, fmt.Errorf("ClearIntroTimeouts: %s: empty source hash", fileID)
 	}
 	cleared := false
-	_, err := s.ModifyBookFile(bookID, fileID, func(row *BookFile) error {
+	stored, err := s.ModifyBookFile(bookID, fileID, func(row *BookFile) error {
 		cleared = false
 		if row.FileHash != sourceHash || row.IntroTimeoutHash != sourceHash || (row.IntroTimeouts == 0 && row.IntroTimeoutRunID == "" && row.IntroTimeoutWorker == "") {
 			return ErrSkipBookFileWrite
@@ -610,7 +610,13 @@ func (s *PebbleStore) ClearIntroTimeouts(bookID, fileID, sourceHash string) (boo
 	if err != nil {
 		return cleared && bookFileApplied(err), fmt.Errorf("ClearIntroTimeouts: %s: %w", fileID, err)
 	}
-	return cleared, nil
+	// cleared is set by the callback's last run, which may have been an attempt
+	// whose commit then lost the compare-and-swap. If the row was deleted before
+	// the next attempt, ModifyBookFile finds nothing to read and never runs the
+	// callback again, so the flag still says "cleared" while nothing was
+	// written: a nil row is the only sign of it (RecordIntroTimeout reads it the
+	// same way).
+	return cleared && stored != nil, nil
 }
 
 // writeIntroRow commits an edited row: the primary key and memdb only, under
