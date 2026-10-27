@@ -1,5 +1,5 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
 // last-edited: 2026-10-26
 
@@ -81,6 +81,12 @@ type gpuRefusal struct {
 	URL    string
 	Label  string
 	Reason string
+	// Machine is the refused endpoint's machineKey, or empty when its /health
+	// could not be read (its machine is then unknown, and it may be any
+	// machine's port). The dispatcher uses it to tell whether a machine it
+	// vouches for through one port still has ports it has not heard from (see
+	// dispatchPool's siblingsOf).
+	Machine string
 	// Stuck marks a refusal because the worker is wedged on one inference past
 	// its own deadline (see stuckRefusal), as opposed to a capability or mount
 	// problem. When every refusal is Stuck the dispatcher's error wraps
@@ -148,9 +154,10 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 		}
 		if reason := capabilityRefusalReason(g, poolRequires); reason != "" {
 			refused = append(refused, gpuRefusal{
-				URL:    g.Endpoint.URL,
-				Label:  g.Endpoint.Label,
-				Reason: reason,
+				URL:     g.Endpoint.URL,
+				Label:   g.Endpoint.Label,
+				Reason:  reason,
+				Machine: refusalMachine(g),
 				// Not shown to lack a label, only not reachable to ask: that
 				// clears by itself (see gpuRefusal.Transient).
 				Transient: !g.Probed,
@@ -160,6 +167,15 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 		kept = append(kept, g)
 	}
 	return kept, refused
+}
+
+// refusalMachine is the machineKey a refusal records for g: empty when g was
+// never probed, since an unprobed endpoint's key stands for no machine.
+func refusalMachine(g gatedEndpoint) string {
+	if !g.Probed {
+		return ""
+	}
+	return g.machineKey()
 }
 
 // measuredLabels is the namespace of capability labels DERIVED from /health.
