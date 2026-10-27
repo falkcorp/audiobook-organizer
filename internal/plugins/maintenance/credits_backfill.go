@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-27
 
@@ -497,7 +497,9 @@ var creditsBackfillClasses = []cbClassDef{
 type creditsBackfillParams struct {
 	// Apply writes; the default is a dry run that writes nothing.
 	Apply bool `json:"apply"`
-	// BookIDs restricts the run to these books (a cohort for a first apply).
+	// BookIDs restricts the run to these books (a cohort for a first apply). The
+	// spelling a new narrator record gets is counted over only these books, so a
+	// later full run can respell other books to a different spelling.
 	BookIDs []string `json:"book_ids,omitempty"`
 	// Limit caps the cohort (0 = no cap): every book is planned first, then the
 	// first Limit eligible book ids in sorted order are the cohort, in a dry
