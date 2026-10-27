@@ -1,11 +1,12 @@
 // file: internal/database/book_version_test.go
-// version: 1.0.2
+// version: 1.1.1
 // guid: 7a3d9e1c-5b4f-4a60-b8c5-2e7f0c1b9a48
-// last-edited: 2026-10-03
+// last-edited: 2026-10-27
 
 package database
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -174,5 +175,62 @@ func TestBookVersion_ListTrashedAndPurged(t *testing.T) {
 	// Includes both inactive_purged and blocked_for_redownload per spec.
 	if len(purged) != 2 {
 		t.Errorf("purged = %d, want 2 (inactive_purged + blocked_for_redownload)", len(purged))
+	}
+}
+
+// The purging claim is enforced under the version's stripe by UpdateBookVersion:
+// only a trash (or purging) version can be claimed, and a purging version moves
+// only to purging or inactive_purged. This is what closes the restore-versus-
+// purge race: whichever write reaches the stripe second is refused.
+func TestUpdateBookVersion_PurgingClaim(t *testing.T) {
+	store, err := NewPebbleStoreInMemory("db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	mk := func(status string) *BookVersion {
+		v, err := store.CreateBookVersion(&BookVersion{BookID: "b-" + status, Status: status, Format: "m4b", Source: "imported"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	set := func(v *BookVersion, status string) error {
+		c := *v
+		c.Status = status
+		return store.UpdateBookVersion(&c)
+	}
+
+	// Claim: trash -> purging is allowed; alt -> purging is refused.
+	trash := mk(BookVersionStatusTrash)
+	if err := set(trash, BookVersionStatusPurging); err != nil {
+		t.Fatalf("claim of a trashed version: %v", err)
+	}
+	if err := set(mk(BookVersionStatusAlt), BookVersionStatusPurging); !errors.Is(err, ErrVersionPurgeClaimLost) {
+		t.Fatalf("claim of an alt = %v, want ErrVersionPurgeClaimLost", err)
+	}
+
+	// A purging version is listed with the trash, so the cleanup retries it.
+	listed, _ := store.ListTrashedBookVersions()
+	if len(listed) != 1 || listed[0].ID != trash.ID {
+		t.Fatalf("ListTrashedBookVersions = %v, want the purging version", listed)
+	}
+
+	// Purging -> alt / trash / active are refused; purging -> purging and
+	// purging -> inactive_purged are not.
+	for _, to := range []string{BookVersionStatusAlt, BookVersionStatusTrash, BookVersionStatusActive, BookVersionStatusSwappingIn} {
+		if err := set(trash, to); !errors.Is(err, ErrVersionPurging) {
+			t.Errorf("purging -> %s = %v, want ErrVersionPurging", to, err)
+		}
+	}
+	if got, _ := store.GetBookVersion(trash.ID); got.Status != BookVersionStatusPurging {
+		t.Fatalf("status = %s after the refused writes, want purging", got.Status)
+	}
+	if err := set(trash, BookVersionStatusPurging); err != nil {
+		t.Errorf("purging -> purging (a retry): %v", err)
+	}
+	if err := set(trash, BookVersionStatusInactivePurged); err != nil {
+		t.Errorf("purging -> inactive_purged: %v", err)
 	}
 }

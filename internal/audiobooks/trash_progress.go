@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package audiobooks
 
@@ -36,6 +36,10 @@ const (
 	purgeFailed purgeKind = iota
 	purgePurged
 	purgeOwnsFiles
+	// purgeHoldsRetiredVersions: the book owns no live file row but holds
+	// retired versions (ReasonHoldsRetiredVersions); it is kept like one that
+	// owns files.
+	purgeHoldsRetiredVersions
 	purgeCarried
 	purgeKeptHasProgress
 	purgeCarryFailed
@@ -75,9 +79,10 @@ type purgeOutcome struct {
 	// when nothing was moved.
 	stateMovedTo  string
 	stateMovedErr error
-	// ownsFilesErr is the owned-files check's own error for a purgeOwnsFiles
-	// outcome (it wraps database.ErrBookOwnsFiles and names live or retired
-	// rows). A refusal is counted by its kind alone and adds no Errors line, so
+	// ownsFilesErr is the owned-files check's own error for a purgeOwnsFiles or
+	// purgeHoldsRetiredVersions outcome (it wraps database.ErrBookOwnsFiles, and
+	// the latter also database.ErrBookHoldsRetiredVersions, and names live or
+	// retired rows). A refusal is counted by its kind alone and adds no Errors line, so
 	// "Purge now" shows this text.
 	ownsFilesErr error
 	// abort, when set, is a failure that will repeat for every remaining book
@@ -140,6 +145,9 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 	case purgeKeptUndo:
 		r.KeptUndoPossible++
 		r.KeptUndoPossibleIDs = append(r.KeptUndoPossibleIDs, bookID)
+	case purgeHoldsRetiredVersions:
+		r.SkippedHoldsRetiredVersions++
+		r.SkippedHoldsRetiredVersionsIDs = append(r.SkippedHoldsRetiredVersionsIDs, bookID)
 	case purgeKeptHasProgress:
 		r.KeptHasProgress++
 		r.KeptHasProgressIDs = append(r.KeptHasProgressIDs, bookID)
@@ -166,6 +174,7 @@ func (r *PurgeResult) add(bookID string, o purgeOutcome) {
 // particular order, so a result reads the same run to run.
 func (r *PurgeResult) sortIDs() {
 	slices.Sort(r.SkippedOwnsFilesIDs)
+	slices.Sort(r.SkippedHoldsRetiredVersionsIDs)
 	slices.Sort(r.CarriedToSiblingIDs)
 	slices.Sort(r.KeptHasProgressIDs)
 	slices.Sort(r.KeptUndoPossibleIDs)
@@ -529,6 +538,11 @@ func (svc *AudiobookService) purgeNowLocked(book *database.Book, mode purgeFileM
 			return nil, out.ownsFilesErr
 		}
 		return nil, fmt.Errorf("purge %s: %w: the purge never deletes a book that owns file rows", book.ID, database.ErrBookOwnsFiles)
+	case purgeHoldsRetiredVersions:
+		if out.ownsFilesErr != nil {
+			return nil, out.ownsFilesErr
+		}
+		return nil, fmt.Errorf("purge %s: %w: %w: the purge never deletes a book that holds retired versions", book.ID, database.ErrBookHoldsRetiredVersions, database.ErrBookOwnsFiles)
 	case purgeKeptUndo:
 		return nil, fmt.Errorf("purge %s: %w", book.ID, ErrPurgeUndoPossible)
 	case purgeKeptHasProgress:
@@ -660,8 +674,9 @@ func (svc *AudiobookService) recorder() activityRecorder {
 // audit row.
 //
 // It refuses, changing nothing, a book that is not in the trash
-// (ErrNotInTrash), one that still owns book_file rows
-// (database.ErrBookOwnsFiles: the purge never deletes those), and any call
+// (ErrNotInTrash), one that still owns book_file rows or holds retired
+// versions (database.ErrBookOwnsFiles, which a holder of retired versions also
+// wraps with ErrHoldsRetiredVersions: the purge never deletes those), and any call
 // when no activity log is wired (ErrAuditUnavailable). The trash and
 // file-row checks run once up front and again under the merge lock in the
 // precheck, before any state is cleared, so a restore or a file row that

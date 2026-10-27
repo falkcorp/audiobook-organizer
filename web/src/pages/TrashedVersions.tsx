@@ -1,7 +1,7 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.4.1
+// version: 1.5.1
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -39,11 +39,13 @@ import {
 const API_BASE = '/api/v1';
 
 // versionDate is the date a row is listed under: when it was purged, else when
-// it was trashed. Undefined for a trash row with no trashed_at.
+// it was trashed. Undefined for a trash row with no trashed_at, and for a
+// purging row (a purge that did not finish): it has left the trash, so its
+// created date must not stand in for a trash date.
 function versionDate(v: BookVersion): string | undefined {
   if (v.purged_date) return v.purged_date;
   if (v.trashed_at) return v.trashed_at;
-  return v.status === 'trash' ? undefined : v.created_at;
+  return v.status === 'trash' || v.status === 'purging' ? undefined : v.created_at;
 }
 
 const COLUMNS: ColumnDef<BookVersion>[] = [
@@ -86,7 +88,11 @@ const COLUMNS: ColumnDef<BookVersion>[] = [
     defaultWidth: 120,
     sortable: true,
     render: (v) => (
-      <Chip label={v.status} size="small" color={v.status === 'trash' ? 'warning' : 'error'} />
+      <Chip
+        label={v.status}
+        size="small"
+        color={v.status === 'trash' || v.status === 'purging' ? 'warning' : 'error'}
+      />
     ),
     sortValue: (v) => v.status,
   },
@@ -291,6 +297,14 @@ export default function TrashedVersions() {
                           Purge Now
                         </Button>
                       </>
+                    )}
+                    {v.status === 'purging' && (
+                      // A purge that failed part way: some files are already gone,
+                      // so there is no Restore. The nightly cleanup retries it;
+                      // this retries it now.
+                      <Button size="small" color="error" onClick={() => handlePurge(v)}>
+                        Retry Purge
+                      </Button>
                     )}
                     {(v.status === 'inactive_purged' || v.status === 'blocked_for_redownload') && (
                       <Button size="small" color="error" onClick={() => handleHardDelete(v)}>

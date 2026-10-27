@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.41.0
+// version: 1.41.1
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -74,6 +74,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
 )
 
@@ -1039,7 +1040,7 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		}
 		httputil.RespondWithError(c, status, err.Error(), CodeProgressDiscardedBookKept)
 	case errors.Is(err, database.ErrBookOwnsFiles):
-		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), ownsFilesCode(err))
 	case errors.Is(err, audiobookspkg.ErrPurgeUndoPossible):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeUndoPossible)
 	case errors.Is(err, merge.ErrMergeBusy):
@@ -1378,12 +1379,27 @@ func (h *Handler) RestoreAudiobook(c *gin.Context) {
 	id := c.Param("id")
 	updated, err := h.audiobookService.RestoreAudiobook(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, merge.ErrMergeBusy) {
+		switch {
+		case errors.Is(err, merge.ErrMergeBusy):
 			// A running combine holds the merge lock; nothing was restored.
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeMergeBusy)
-			return
+		case errors.Is(err, database.ErrBookIsRetiredShell):
+			// Refused on purpose (the book exists; its files are kept as a
+			// retired version), so it is a conflict, not a 404.
+			httputil.RespondWithConflict(c, err.Error())
+		case errors.Is(err, versionprimary.ErrMembershipChanged):
+			// A concurrent group change outlasted the lock's retries: transient,
+			// nothing was written, and the same request succeeds when it settles.
+			// Same answer as the split handler's (handlers/versions.go).
+			httputil.RespondWithConflict(c, "the audiobook's version group kept changing while it was being restored; nothing was restored, retry: "+err.Error())
+		case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
+			httputil.RespondWithNotFound(c, "audiobook", id)
+		default:
+			// A lookup that failed (the retired-shell check fails closed, a
+			// read error) says nothing about whether the book exists: a 404
+			// here told the user their book was gone.
+			httputil.InternalError(c, "failed to restore audiobook", err)
 		}
-		httputil.RespondWithNotFound(c, "audiobook", id)
 		return
 	}
 

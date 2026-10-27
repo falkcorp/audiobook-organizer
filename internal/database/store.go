@@ -1,12 +1,13 @@
 // file: internal/database/store.go
-// version: 2.128.1
+// version: 2.128.2
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -845,7 +846,28 @@ const (
 	// auto-promoted, never trashed, never purged (purging deletes the files),
 	// and it leaves this status only through UnretireBookFiles.
 	BookVersionStatusRetired = "retired"
+	// BookVersionStatusPurging marks a trashed version whose purge has been
+	// claimed: PurgeVersion sets it, under the version's stripe, before the
+	// first file is removed, and it ends in BookVersionStatusInactivePurged. A
+	// version that stays in this status is a purge that failed part way (some
+	// files removed, one could not be): it is retried by the trash cleanup and
+	// by "purge now", and it can NOT be restored, because some of its files are
+	// already gone. UpdateBookVersion enforces both halves (see
+	// refusePurgeTransition). It is not a state a user moves a version to.
+	BookVersionStatusPurging = "purging"
 )
+
+// ErrVersionPurging is returned by UpdateBookVersion when the stored version
+// is purging and the write would move it anywhere but purging or
+// inactive_purged: a restore, a re-trash, a swap, or a stale writer putting
+// back a copy it read before the claim.
+var ErrVersionPurging = errors.New("version is being purged and cannot change status")
+
+// ErrVersionPurgeClaimLost is returned by UpdateBookVersion when a write sets
+// BookVersionStatusPurging and the stored version is neither trash nor
+// purging: it was restored (or otherwise left the trash) after the caller read
+// it, so its files must not be removed.
+var ErrVersionPurgeClaimLost = errors.New("version is no longer in the trash, so its purge was not claimed")
 
 // Role is a named bundle of permissions for the multi-user model
 // (spec 3.7). Permissions are Go string constants validated at

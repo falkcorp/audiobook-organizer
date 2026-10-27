@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.73.0
+// version: 1.73.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -301,7 +301,7 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 	return removed
 }
 
-func (s *Server) CleanupTrashedVersions() int {
+func (s *Server) CleanupTrashedVersions() (purged, failed int, err error) {
 	return CleanupTrashedVersions(s.storeForWiring())
 }
 

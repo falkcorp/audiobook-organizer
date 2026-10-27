@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package audiobooks
 
@@ -656,7 +656,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		// before anything moved, so the state is where it was.
 		// Counted once, as skipped (SkippedOwnsFilesIDs), so no Errors line;
 		// the reason travels in detail for "Purge now".
-		return purgeOutcome{kind: purgeOwnsFiles, ownsFilesErr: fmt.Errorf("%w; nothing moved", merge.PrecheckCause(err))}
+		return ownsFilesOutcome(fmt.Errorf("%w; nothing moved", merge.PrecheckCause(err)))
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, merge.ErrBookHasListeningState):
 		// Nothing moved; with no listed version to carry to, the book stays
 		// in the trash flagged "has progress", as when there was none.
@@ -1139,7 +1139,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 		return nil, err
 	}
 	if res.Book == nil {
-		return nil, fmt.Errorf("audiobook not found")
+		return nil, ErrAudiobookNotFound
 	}
 	if !res.Restored {
 		return res.Book, nil

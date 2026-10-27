@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.6.0
+// version: 1.7.3
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 package versions
 
@@ -44,12 +44,22 @@ type versionPurger interface {
 	versionUpdater
 	bookFileLister
 
+	// BookFilesAtPath lists EVERY row at a path, retired rows included, so a
+	// purge never removes a file another row (a retired version's) still names.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+
+	// LiveBookIDsAtPath lists the live books whose own FilePath is the path: a
+	// book can name a file no book_file row does.
+	LiveBookIDsAtPath(path string) ([]string, error)
+
 	GetBookByID(id string) (*database.Book, error)
 }
 
 type TrashedVersionCleaner interface {
 	versionPurger
 
+	// ListTrashedBookVersions lists the trash AND the purges that were claimed
+	// and did not finish (status purging), so the cleanup retries those too.
 	ListTrashedBookVersions() ([]database.BookVersion, error)
 	// GetBookVersion re-reads each listed row before it is stamped or
 	// purged, narrowing the window in which a mid-run restore is undone.

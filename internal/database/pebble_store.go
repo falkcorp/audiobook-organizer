@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.0
+// version: 1.234.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package database
 
@@ -5258,6 +5258,9 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 	if err := p.refuseRetiredVersionChange(prev, v); err != nil {
 		return err
 	}
+	if err := refusePurgeTransition(prev, v); err != nil {
+		return err
+	}
 	now := time.Now()
 	maintainTrashedAt(prev, v, now)
 	v.UpdatedAt = now
@@ -5311,6 +5314,33 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 		}
 	}
 	return b.Commit(pebble.Sync)
+}
+
+// refusePurgeTransition enforces the purging claim, under the version's stripe
+// (the caller holds it, so the stored row cannot change between this check and
+// the commit):
+//
+//   - a write that sets purging needs the stored status to be trash (the claim)
+//     or purging (a retry): a version restored since the caller read it is
+//     ErrVersionPurgeClaimLost, and its files stay;
+//   - a stored purging version may only stay purging or become
+//     inactive_purged: anything else (a restore, a re-trash, a stale copy
+//     written back) is ErrVersionPurging, because some of its files may already
+//     be gone.
+//
+// This is the one place the restore-versus-purge race is closed: whichever
+// write reaches the stripe second sees the other's status and is refused.
+func refusePurgeTransition(prev, v *BookVersion) error {
+	if v.Status == BookVersionStatusPurging &&
+		prev.Status != BookVersionStatusTrash && prev.Status != BookVersionStatusPurging {
+		return fmt.Errorf("book version %s has status %q: %w", v.ID, prev.Status, ErrVersionPurgeClaimLost)
+	}
+	if prev.Status == BookVersionStatusPurging &&
+		v.Status != BookVersionStatusPurging && v.Status != BookVersionStatusInactivePurged {
+		return fmt.Errorf("book version %s: cannot move from %q to %q: %w",
+			v.ID, prev.Status, v.Status, ErrVersionPurging)
+	}
+	return nil
 }
 
 // maintainTrashedAt keeps BookVersion.TrashedAt consistent with Status on
@@ -5406,8 +5436,12 @@ func (p *PebbleStore) GetBookVersionByTorrentHash(hash string) (*BookVersion, er
 	return p.GetBookVersion(versionID)
 }
 
+// ListTrashedBookVersions lists every version still in the trash: those in
+// BookVersionStatusTrash and those in BookVersionStatusPurging, a purge that
+// was claimed and has not finished. The trash cleanup needs both, so a purging
+// version is retried and cannot stay stuck.
 func (p *PebbleStore) ListTrashedBookVersions() ([]BookVersion, error) {
-	return p.listBookVersionsByStatus(BookVersionStatusTrash)
+	return p.listBookVersionsByStatus(BookVersionStatusTrash, BookVersionStatusPurging)
 }
 
 func (p *PebbleStore) ListPurgedBookVersions() ([]BookVersion, error) {
@@ -5422,7 +5456,7 @@ func (p *PebbleStore) ListPurgedBookVersions() ([]BookVersion, error) {
 	return append(purged, blocked...), nil
 }
 
-func (p *PebbleStore) listBookVersionsByStatus(status string) ([]BookVersion, error) {
+func (p *PebbleStore) listBookVersionsByStatus(statuses ...string) ([]BookVersion, error) {
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("bv:"),
 		UpperBound: []byte("bv:~"),
@@ -5437,7 +5471,7 @@ func (p *PebbleStore) listBookVersionsByStatus(status string) ([]BookVersion, er
 		if err := json.Unmarshal(iter.Value(), &v); err != nil {
 			continue
 		}
-		if v.Status == status {
+		if slices.Contains(statuses, v.Status) {
 			out = append(out, v)
 		}
 	}

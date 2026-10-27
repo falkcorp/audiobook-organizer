@@ -1,7 +1,7 @@
 // file: internal/database/book_owned_files_check_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0d52b8f6-93a1-4e7c-a4b0-1f6e8c3d7952
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package database
 
@@ -20,29 +20,33 @@ func TestCheckBookOwnsNoFiles_AgreesWithDeleteBook(t *testing.T) {
 		name        string
 		setup       func(t *testing.T, fx *retiredFixture) string // returns the book id to check
 		wantRefused bool
-		wantInMsg   []string
+		// wantHolds: the refusal also wraps ErrBookHoldsRetiredVersions, which
+		// is so only when every row is retired (a live row is the more basic
+		// reason and wins).
+		wantHolds bool
+		wantInMsg []string
 	}
 	cases := []tc{
 		{"no rows", func(t *testing.T, fx *retiredFixture) string {
 			b, err := fx.ps.CreateBook(&Book{Title: "The Killing Joke", FilePath: "/lib/Gotham/ret/plain"})
 			require.NoError(t, err)
 			return b.ID
-		}, false, nil},
+		}, false, false, nil},
 		{"live rows only", func(t *testing.T, fx *retiredFixture) string {
 			fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/live/01.mp3"})
 			return fx.shell.ID
-		}, true, []string{"soft-delete it instead, or move its files to another book first"}},
+		}, true, false, []string{"soft-delete it instead, or move its files to another book first"}},
 		{"retired rows only", func(t *testing.T, fx *retiredFixture) string {
 			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/ro/01.mp3"})
 			require.NoError(t, fx.retire(t, x))
 			return fx.holder.ID
-		}, true, []string{"retired", "cannot be moved"}},
+		}, true, true, []string{"retired", "cannot be moved"}},
 		{"live and retired rows", func(t *testing.T, fx *retiredFixture) string {
 			x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/ret/mix/01.mp3"})
 			require.NoError(t, fx.retire(t, x))
 			fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/Gotham/ret/mix/live.mp3"})
 			return fx.holder.ID
-		}, true, []string{"1 live and 1 retired", "cannot be moved"}},
+		}, true, false, []string{"1 live and 1 retired", "cannot be moved"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -55,6 +59,8 @@ func TestCheckBookOwnsNoFiles_AgreesWithDeleteBook(t *testing.T) {
 			if c.wantRefused {
 				require.ErrorIs(t, check, ErrBookOwnsFiles)
 				require.ErrorIs(t, delErr, ErrBookOwnsFiles, "the check must predict DeleteBook's refusal")
+				require.Equal(t, c.wantHolds, errors.Is(check, ErrBookHoldsRetiredVersions),
+					"ErrBookHoldsRetiredVersions is set exactly when every row is retired: %v", check)
 				require.Contains(t, check.Error(), "hard delete "+id+": ")
 				for _, s := range c.wantInMsg {
 					require.Contains(t, check.Error(), s)
