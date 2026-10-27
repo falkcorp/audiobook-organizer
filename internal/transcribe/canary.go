@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-27
 
@@ -630,13 +630,14 @@ func noteCanaryProbes(kept []gatedEndpoint, refused []gpuRefusal) {
 var errCanarySlotBusy = errors.New("canary clip not sent: every request slot on the endpoint stayed taken")
 
 // errPortChangedHands is a re-probe after a cooldown wait finding another
-// worker behind the URL than the one the dispatch froze it as
-// (gatedEndpoint.reprobed; a pool also drops a worker that gained a machine id).
-// That worker is not the machine the memory is about and its answers are not
-// credited to it, so the dispatch asks it nothing and sends it nothing. The lone
-// endpoint defers its jobs with it; a pool ends with it only when at least one
-// port changed hands and every other one it had is only unreachable
-// (changedHandsOrTransient, noEndpointError). Deferred as for
+// worker behind the URL than the one the dispatch froze it as (a pool: regate,
+// any difference of identity; the lone endpoint: gatedEndpoint.reprobed, which
+// keeps a worker that gained a machine id). That worker is not the machine the
+// memory is about and its answers are not credited to it, so the dispatch asks
+// it nothing and sends it nothing. The lone endpoint defers its jobs with it; a
+// pool ends with it when at least one port changed hands and every other one it
+// had is only unreachable (changedHandsOrTransient) or stuck
+// (stuckBesideChangedHands; noEndpointError). Deferred as for
 // errCanarySlotBusy: no verdict on anyone, not counted toward stopping the run.
 // The next dispatch's gate keys the port by what it reports. Its text must not
 // contain any of transportWordings.

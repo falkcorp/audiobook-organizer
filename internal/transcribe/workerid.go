@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-27
 
@@ -101,6 +101,13 @@ func (g gatedEndpoint) identityKey() string {
 // dispatch waited, in which case the port is to be dropped from the dispatch
 // like a refusal: the next dispatch's gate re-keys it (B-1 of review 6 of #4201).
 //
+// Only the lone endpoint (dispatchSingle) keeps what is described as kept below
+// for a frozen "?" or "", a probe that read nothing, and a worker that gained a
+// machine id. A pool (dispatcher regate) compares g.identityKey() with the frozen
+// key first and uses reprobed only for the kind of worker: it drops all three,
+// since a port is used after a wait only if its identity then equals its frozen
+// one and is read (D60, D62).
+//
 //   - Same identity (a weak "u:" also needs the same kind of worker: a worker
 //     that cannot report an id answers as "u:" + the address of the URL, the very
 //     string an id-capable worker that missed its wait answers as): nothing
@@ -121,7 +128,7 @@ func (g gatedEndpoint) identityKey() string {
 //     path keeps such a worker (dispatchSingle): it resolves the canary memory at
 //     call time, after noteCanaryProbes moved the port to the new identity, so it
 //     has no frozen group to disagree with. A pool dispatch drops it
-//     (resolvePending, on learned != ""): it cannot tell the machine that was
+//     (regate, on any identity different from the frozen one): it cannot tell the machine that was
 //     behind the URL from another that took it over, and a kept port would be
 //     counted, benched and struck under two identities.
 //   - A frozen key standing for no machine ("" or "?", an endpoint whose /health
