@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_review3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c9f6b13-7a4e-48d0-b5e1-0d83a7c4f956
 // last-edited: 2026-10-27
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Tests for the third adversarial review of PR #4200 (credits backfill):
@@ -233,7 +234,8 @@ func TestCreditsBackfill_UnreconcilableSpellingMoveHasItsOwnClassAndWritesNothin
 // --- N2: a fold-shared new narrator's spelling does not depend on the worker -
 
 // Books naming one NEW person under spellings of one fold key get one record
-// that takes the most frequent spelling (ties: the lexically smallest), the
+// that takes the most frequent spelling (ties: mixed case, then the accented
+// form, then the lexically smallest), the
 // same on every run and in the dry run, whichever worker gets there first.
 func TestCreditsBackfill_FoldSharedNewNarratorTakesTheMostFrequentSpelling(t *testing.T) {
 	for _, tc := range []struct {
@@ -242,7 +244,9 @@ func TestCreditsBackfill_FoldSharedNewNarratorTakesTheMostFrequentSpelling(t *te
 		want  string
 	}{
 		{"most frequent wins", []string{"Renee Montoya", "Renée Montoya", "Renée Montoya"}, "Renée Montoya"},
-		{"tie goes to the lexically smallest", []string{"Renée Montoya", "Renee Montoya"}, "Renee Montoya"},
+		{"tie goes to the accented spelling", []string{"Renée Montoya", "Renee Montoya"}, "Renée Montoya"},
+		{"tie goes to mixed case over all capitals", []string{"RENEE MONTOYA", "Renee Montoya"}, "Renee Montoya"},
+		{"tie of equals goes to the lexically smallest", []string{"renee Montoya", "Renee Montoya"}, "Renee Montoya"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCBFixture(t)
@@ -251,7 +255,10 @@ func TestCreditsBackfill_FoldSharedNewNarratorTakesTheMostFrequentSpelling(t *te
 			for i, n := range tc.names {
 				id := "ns-" + string(rune('a'+i))
 				ids = append(ids, id)
-				if n != tc.want {
+				// The census compares spellings by their normalized form, so a
+				// column that differs from the record only in case keeps its text
+				// and is not listed as respelled.
+				if util.NormalizeAuthor(n) != util.NormalizeAuthor(tc.want) {
 					differing = append(differing, id)
 				}
 				f.book(id, "No Man's Land "+id, func(b *database.Book) {
@@ -281,9 +288,15 @@ func TestCreditsBackfill_FoldSharedNewNarratorTakesTheMostFrequentSpelling(t *te
 			if len(all) != 1 || all[0].Name != tc.want {
 				t.Fatalf("narrator records = %+v, want one named %q", all, tc.want)
 			}
-			for _, id := range ids {
-				if got := cbStr(f.state(id).Narrator, "<nil>"); got != tc.want {
-					t.Errorf("%s column = %q, want %q", id, got, tc.want)
+			for i, id := range ids {
+				// A column that differs only in case already reads as the record's
+				// name to the census, so it keeps its text.
+				want := tc.want
+				if util.NormalizeAuthor(tc.names[i]) == util.NormalizeAuthor(tc.want) {
+					want = tc.names[i]
+				}
+				if got := cbStr(f.state(id).Narrator, "<nil>"); got != want {
+					t.Errorf("%s column = %q, want %q", id, got, want)
 				}
 			}
 			assertPlansClean(t, f, ids...)

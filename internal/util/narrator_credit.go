@@ -1,13 +1,14 @@
 // file: internal/util/narrator_credit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 103b5e2d-c894-4e2f-b95d-6b796e77762e
-// last-edited: 2026-09-23
+// last-edited: 2026-10-27
 
 package util
 
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // NarratorCreditVerdict says what CleanNarratorCredit made of a credit.
@@ -75,8 +76,8 @@ func CleanNarratorCredit(credit string, bookAuthors []string) ([]string, Narrato
 	var people, nonAuthors []string
 	seen := make(map[string]bool)
 	for _, piece := range SplitCreditNames(credit) {
-		piece = strings.TrimSpace(narratorByPrefix.ReplaceAllString(strings.TrimSpace(piece), ""))
-		if piece == "" || narratorRoleSuffix.MatchString(piece) || narratorRolePrefix.MatchString(piece) {
+		piece, _, ok := NarratorCreditPiecePerson(piece)
+		if !ok {
 			continue
 		}
 		norm := NormalizeAuthor(piece)
@@ -96,4 +97,26 @@ func CleanNarratorCredit(credit string, bookAuthors []string) ([]string, Narrato
 		return nil, NarratorCreditAllAuthors
 	}
 	return nonAuthors, NarratorCreditPeople
+}
+
+// NarratorCreditPiecePerson reads one credit piece, as SplitCreditNames cuts it,
+// the way CleanNarratorCredit does: a leading "By:" / "Read by" is stripped, and
+// a piece that names a non-narrator role ("- translator", "Introduction by ...")
+// or is empty is no narrator (ok is false). person is the stripped, trimmed
+// text; offset is its byte offset inside piece, so a caller that edits the
+// person in place edits exactly the text the cleaner takes as the name.
+func NarratorCreditPiecePerson(piece string) (person string, offset int, ok bool) {
+	trimmed := strings.TrimLeftFunc(piece, unicode.IsSpace)
+	offset = len(piece) - len(trimmed)
+	if loc := narratorByPrefix.FindStringIndex(trimmed); loc != nil {
+		offset += loc[1]
+		trimmed = trimmed[loc[1]:]
+	}
+	rest := strings.TrimLeftFunc(trimmed, unicode.IsSpace)
+	offset += len(trimmed) - len(rest)
+	person = strings.TrimRightFunc(rest, unicode.IsSpace)
+	if person == "" || narratorRoleSuffix.MatchString(person) || narratorRolePrefix.MatchString(person) {
+		return "", 0, false
+	}
+	return person, offset, true
 }

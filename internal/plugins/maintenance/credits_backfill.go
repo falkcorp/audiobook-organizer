@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-27
 
@@ -129,10 +129,15 @@ import (
 // too. The op declares Writes: ResBooks (also in a dry run, like the other ops
 // that declare writes), so it is gated against other book writers.
 //
-// CONCURRENCY. Three phases over ids that are sorted and de-duplicated, so every
+// CONCURRENCY. Four phases over ids that are sorted and de-duplicated, so every
 // book is planned and written by exactly one worker: a disjoint partition by
-// book id, no two workers ever touch the same row.
+// book id, no two workers ever touch the same row. A book_ids run plans the
+// whole library and only reports and writes its own books.
 //  1. Plan and guard every book concurrently (errgroup bounded by NumCPU).
+//     A split-credit fill that would need a new narrator record is parked.
+//  1b. Re-plan the parked books concurrently once phase 1 knows which narrator
+//     records the run itself will create, so a dry run and a single full apply
+//     agree with the cohorts about which of them are fills.
 //  2. Pick the limit cohort serially: the first N eligible books by sorted id,
 //     N reduced by the books earlier attempts of this operation already wrote.
 //     A dry run picks the same cohort, so it shows what the apply would write.
@@ -356,7 +361,9 @@ var creditsBackfillClasses = []cbClassDef{
 	{cbNarratorNewFromSplit, cbKindReview,
 		"OPT-IN (allow: [\"narrator_new_from_split\"]). The narrator fill needs a NEW narrator record for a name that " +
 			"came out of splitting a credit (\"A, B\"). Never created without the owner's allow (same rule as " +
-			"repair-combined-author-credits); fills whose names all exist are written without it."},
+			"repair-combined-author-credits); fills whose names all exist, or that another eligible book credits " +
+			"whole (unsplit; within a cohort that leaves that book out, this book creates the record), are written " +
+			"without it."},
 	{ccAuthorIDDangling, cbKindReview,
 		"Book.AuthorID or a book_authors row names an author id that resolves to no record. Author side not written."},
 	{ccAuthorIDTombstoned, cbKindReview,
@@ -497,9 +504,11 @@ var creditsBackfillClasses = []cbClassDef{
 type creditsBackfillParams struct {
 	// Apply writes; the default is a dry run that writes nothing.
 	Apply bool `json:"apply"`
-	// BookIDs restricts the run to these books (a cohort for a first apply). The
-	// spelling a new narrator record gets is counted over only these books, so a
-	// later full run can respell other books to a different spelling.
+	// BookIDs restricts what the run reports on and writes to these books (a
+	// cohort for a first apply). The run still plans the whole library, so the
+	// spelling a new narrator record gets is counted over every eligible book, as
+	// in a full run, and a later full run does not respell other books to a
+	// different one.
 	BookIDs []string `json:"book_ids,omitempty"`
 	// Limit caps the cohort (0 = no cap): every book is planned first, then the
 	// first Limit eligible book ids in sorted order are the cohort, in a dry
@@ -655,7 +664,7 @@ func (p *Plugin) creditsBackfillDef() sdk.OperationDef {
 			"narrator credits and junction/column disagreements are listed for review, not written. Doctor Who / Big " +
 			"Finish / Torchwood books are held; iTunes books are held unless allow:[\"itunes\"]. Every write is journaled " +
 			"(pre-image of both lists and the four flat fields) and undone by the operation's revert. book_ids and limit " +
-			"apply a cohort first (the first limit eligible ids in sorted order, dry run and apply alike). The result " +
+			"apply a cohort first (the first limit eligible ids in sorted order, dry run and apply alike; a book_ids run still plans the whole library, so spellings are counted over all of it). The result " +
 			"(GET /operations/:id/result) carries every class's count and before/after samples, and each class's book ids " +
 			"are paged from GET /operations/:id/class-lists/:class; books_to_reidentify counts the " +
 			"books whose AuthorID change makes the store re-identify them (provider quota). Declares a books write, so " +
@@ -931,6 +940,13 @@ type cbRun struct {
 	// has finished.
 	plansMu sync.Mutex
 	plans   map[string]*cbPlanned
+	// pending are the books phase 1 left for review under
+	// narrator_new_from_split, as read, for phase 2 to plan again
+	// (replanPending); also under plansMu.
+	pending map[string]*cbBookRead
+	// scope is the set of books a book_ids run reports on and writes (nil: the
+	// whole library). Every book is planned either way.
+	scope map[string]bool
 	// unplanned are the books phase 1 could not read or plan (by id), also
 	// under plansMu. Whether they had anything to write is unknown, so each
 	// holds its place in a limit cohort (selectCohort).
@@ -1065,14 +1081,21 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		run.byName = r
 	}
 
-	var ids []string
+	// Every run plans the whole library: the spelling a new narrator record
+	// takes, and the names the run creates, are facts about the library, and a
+	// cohort that counted its own books could disagree with the full dry run.
+	// A book_ids run only reports on and writes its own books (run.scope); an
+	// id that is not a book is still planned, so it is counted as gone.
+	ids, err := env.store.ListBookIDs()
+	if err != nil {
+		return nil, fmt.Errorf("list book ids: %w", err)
+	}
 	if len(params.BookIDs) > 0 {
-		ids = slices.Clone(params.BookIDs)
-	} else {
-		ids, err = env.store.ListBookIDs()
-		if err != nil {
-			return nil, fmt.Errorf("list book ids: %w", err)
+		run.scope = make(map[string]bool, len(params.BookIDs))
+		for _, id := range params.BookIDs {
+			run.scope[id] = true
 		}
+		ids = append(ids, params.BookIDs...)
 	}
 	// Sorted and de-duplicated: one item per book, so no two workers ever
 	// plan or write the same book (the disjoint partition).
@@ -1111,8 +1134,12 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		},
 	})
 
-	// PHASE 2: the cohort. A canceled planning pass has not seen every book,
-	// so an apply stops there; a dry run reports what it saw.
+	// PHASE 2: books waiting on a name the run creates are planned again, then
+	// the cohort. A canceled planning pass has not seen every book, so an apply
+	// stops there; a dry run reports what it saw.
+	if runErr == nil {
+		runErr = run.replanPending(runCtx, workRep, workers)
+	}
 	eligible := run.planIDs()
 	var selected []string
 	if runErr == nil || !params.Apply {
@@ -1151,9 +1178,13 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	if params.Apply {
 		earlier = run.mergeJournal()
 	}
-	res := run.result(ids, started)
+	listed := ids
+	if run.scope != nil {
+		listed = slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return !run.scope[id] })
+	}
+	res := run.result(listed, started)
 	res.BooksWrittenEarlierAttempts = earlier
-	res.BooksEligible = len(eligible)
+	res.BooksEligible = len(run.inScopeIDs(eligible))
 	res.BooksToReidentify = res.Counts[cbSearchIdentityChanges]
 
 	var outErr error
@@ -1477,6 +1508,20 @@ type cbPlanned struct {
 	plan   *cbPlan
 }
 
+// inScope reports whether the book is one the run reports on and may write: a
+// book_ids run plans the whole library (the spellings it settles are facts
+// about the library) and reports and writes only its own books.
+func (r *cbRun) inScope(id string) bool { return r.scope == nil || r.scope[id] }
+
+// cbBookRead is one book as phase 1 read it: what planning, and the re-plan of
+// phase 2, needs.
+type cbBookRead struct {
+	book     *database.Book
+	join     []database.BookAuthor
+	junction []database.BookNarrator
+	census   []string
+}
+
 // planBook is phase 1 for one book: read it, classify it, plan it, run the
 // hands-off checks, and file the book under its review/held classes. A book
 // with something to write is kept in r.plans for the cohort; nothing is
@@ -1488,7 +1533,9 @@ func (r *cbRun) planBook(id string) {
 		return
 	}
 	if book == nil {
-		r.gone.Add(1)
+		if r.inScope(id) {
+			r.gone.Add(1)
+		}
 		return
 	}
 	join, err := r.env.store.GetBookAuthors(id)
@@ -1506,10 +1553,24 @@ func (r *cbRun) planBook(id string) {
 		r.failPlan(id, fmt.Errorf("book %s: classify: %w", id, err))
 		return
 	}
-	r.scanned.Add(1)
-	r.acc.addCensus(census)
+	if r.inScope(id) {
+		r.scanned.Add(1)
+		r.acc.addCensus(census)
+	}
+	r.finishPlan(id, &cbBookRead{book: book, join: join, junction: junction, census: census}, nil)
+}
 
-	plan, err := planCreditsBackfill(r.idx, r.lookupNarrator, r.allow, book, join, junction, census, "", "")
+// finishPlan plans a book already read, runs the hands-off checks, files its
+// review and held classes and keeps a plan with something to write in r.plans.
+//
+// willCreate is nil in phase 1. A book it leaves for review ONLY because its
+// narrator fill would create a record for a name that came out of a split
+// credit (narrator_new_from_split, not allowed) is not filed or kept then: it
+// goes to r.pending, and phase 2 plans it again once every other book's plan is
+// known, with willCreate saying which names the run itself creates.
+func (r *cbRun) finishPlan(id string, in *cbBookRead, willCreate func(name string) bool) {
+	book, join, junction, census := in.book, in.join, in.junction, in.census
+	plan, err := planCreditsBackfill(r.idx, r.lookupNarrator, willCreate, r.allow, book, join, junction, census, "", "")
 	if err != nil {
 		r.failPlan(id, fmt.Errorf("book %s: plan: %w", id, err))
 		return
@@ -1537,7 +1598,7 @@ func (r *cbRun) planBook(id string) {
 				if g.narratorLocked {
 					narratorHold = cbHeldNarratorLocked
 				}
-				if plan, err = planCreditsBackfill(r.idx, r.lookupNarrator, r.allow, book, join, junction, census, authorHold, narratorHold); err != nil {
+				if plan, err = planCreditsBackfill(r.idx, r.lookupNarrator, willCreate, r.allow, book, join, junction, census, authorHold, narratorHold); err != nil {
 					r.failPlan(id, fmt.Errorf("book %s: plan: %w", id, err))
 					return
 				}
@@ -1547,8 +1608,21 @@ func (r *cbRun) planBook(id string) {
 			}
 		}
 	}
-	r.acc.add(id, plan.reviews...)
-	r.acc.add(id, plan.held...)
+	if willCreate == nil && slices.Contains(plan.reviews, cbNarratorNewFromSplit) {
+		// Only possible when the class is not allowed (an allowed one is a
+		// write). Nothing of this plan is filed: phase 2 plans the book again.
+		r.plansMu.Lock()
+		if r.pending == nil {
+			r.pending = map[string]*cbBookRead{}
+		}
+		r.pending[id] = in
+		r.plansMu.Unlock()
+		return
+	}
+	if r.inScope(id) {
+		r.acc.add(id, plan.reviews...)
+		r.acc.add(id, plan.held...)
+	}
 	if !plan.hasWrite() {
 		return
 	}
@@ -1563,12 +1637,71 @@ func (r *cbRun) planBook(id string) {
 	r.plansMu.Unlock()
 }
 
+// replanPending is the first half of phase 2. A book phase 1 left for review
+// under narrator_new_from_split names someone the library has no record for.
+// Planned against the records as they stood at the start of the run, it reads
+// as "creates a record from a split credit", but when another eligible book
+// names the same person alone (an unsplit credit, which creates a record
+// without the opt-in) the run creates that record anyway, and a run split into
+// cohorts would find it there and write the book. This plans each such book
+// again with the names the run itself will create counted as existing, so the
+// dry run lists what the cohorts write and a single full apply writes it too.
+// The names come from the plans phase 1 kept (each of them is an unsplit fill:
+// the split ones are exactly the books being planned again), and a book that is
+// still waiting for a name nobody creates stays under review. It is not
+// cascading: a book planned again creates nothing new.
+func (r *cbRun) replanPending(ctx context.Context, rep sdk.Reporter, workers int) error {
+	r.plansMu.Lock()
+	ids := slices.Sorted(maps.Keys(r.pending))
+	creates := map[string]bool{}
+	for _, pb := range r.plans {
+		if !pb.plan.narratorWrite {
+			continue
+		}
+		for _, slot := range pb.plan.narrators {
+			if k := authorjunk.FoldKey(slot.Name); slot.ID == 0 && k != "" {
+				creates[k] = true
+			}
+		}
+	}
+	pending := r.pending
+	r.pending = nil
+	r.plansMu.Unlock()
+	if len(ids) == 0 {
+		return nil
+	}
+	willCreate := func(name string) bool {
+		k := authorjunk.FoldKey(name)
+		return k != "" && creates[k]
+	}
+	return registry.RunItems(ctx, rep, ids, func(_ context.Context, id string) error {
+		r.finishPlan(id, pending[id], willCreate)
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: workers,
+		ErrMode:     registry.ErrModeFail,
+		// Label runs inside each worker goroutine: it reads its arguments only.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Credits backfill: planning split credits again %d/%d", i+1, total)
+		},
+	})
+}
+
 // planIDs is the ids with something to write, sorted. Phase 1 has finished,
 // so nothing writes r.plans any more.
 func (r *cbRun) planIDs() []string {
 	r.plansMu.Lock()
 	defer r.plansMu.Unlock()
 	return slices.Sorted(maps.Keys(r.plans))
+}
+
+// inScopeIDs is ids restricted to the run's scope (ids itself when the run has
+// none).
+func (r *cbRun) inScopeIDs(ids []string) []string {
+	if r.scope == nil {
+		return ids
+	}
+	return slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return !r.scope[id] })
 }
 
 // selectCohort is phase 2: the first Limit - (books earlier attempts of this
@@ -1580,7 +1713,12 @@ func (r *cbRun) planIDs() []string {
 // cohort is decided before any write, so it does not depend on write order.
 // So does a book phase 1 could not read or plan (r.unplanned): it holds its
 // place in the sorted order, unwritten.
-func (r *cbRun) selectCohort(eligible []string) []string {
+//
+// eligible is every book of the library with something to write; a book_ids run
+// writes only its own (inScopeIDs) and counts the limit over those, while the
+// spellings are settled over all of them.
+func (r *cbRun) selectCohort(allEligible []string) []string {
+	eligible := r.inScopeIDs(allEligible)
 	selected := eligible
 	if r.params.Limit > 0 {
 		room := max(r.params.Limit-int(r.priorRun), 0)
@@ -1590,7 +1728,7 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 		// transient read error. It is not written (it has no plan); the
 		// re-run, with the read healthy, finds it with room left for it.
 		r.plansMu.Lock()
-		unplanned := slices.Sorted(maps.Keys(r.unplanned))
+		unplanned := r.inScopeIDs(slices.Sorted(maps.Keys(r.unplanned)))
 		r.plansMu.Unlock()
 		candidates := slices.Clone(eligible)
 		candidates = append(candidates, unplanned...)
@@ -1610,7 +1748,7 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 			}
 		}
 	}
-	selected = r.settleNewSpellings(eligible, selected)
+	selected = r.settleNewSpellings(allEligible, selected)
 	if r.params.Apply {
 		return selected
 	}
@@ -1628,8 +1766,8 @@ func (r *cbRun) selectCohort(eligible []string) []string {
 // settleNewSpellings is the second half of phase 2: when books name one NEW
 // narrator under spellings of one fold key ("Renee Montoya", "Renée Montoya"),
 // the record the run creates takes the most frequent spelling among those
-// books (ties broken by the lexically smallest), and every book whose own
-// spelling differs has that name respelled in its column and NarratorsJSON
+// books (ties: a mixed-case spelling, then an accented one, then the
+// lexically smallest), and every book whose own spelling differs has that name respelled in its column and NarratorsJSON
 // (settleNarratorSpelling), exactly as for a name linked to an existing record.
 // Before this the record took whichever spelling the first worker to reach it
 // happened to carry, so a dry run could not say which, and two runs over one
@@ -1672,7 +1810,7 @@ func (r *cbRun) settleNewSpellings(eligible, selected []string) []string {
 		}
 		best, most := "", 0
 		for spelling, n := range spellings {
-			if n > most || (n == most && spelling < best) {
+			if n > most || (n == most && betterSpelling(spelling, best)) {
 				best, most = spelling, n
 			}
 		}
@@ -1712,6 +1850,44 @@ func (r *cbRun) settleNewSpellings(eligible, selected []string) []string {
 		kept = append(kept, id)
 	}
 	return kept
+}
+
+// betterSpelling reports whether a is the spelling a record should take over b
+// when both are equally frequent: mixed case ("Renee Montoya") over a spelling
+// that is all capitals or all lower case, then the accented form ("Renée
+// Montoya") over the plain one, then byte order, so the choice is the same on
+// every run. An empty b is always beaten.
+func betterSpelling(a, b string) bool {
+	if b == "" {
+		return true
+	}
+	if ma, mb := mixedCase(a), mixedCase(b); ma != mb {
+		return ma
+	}
+	if aa, ab := accented(a), accented(b); aa != ab {
+		return aa
+	}
+	return a < b
+}
+
+// mixedCase reports whether s has both an upper-case and a lower-case letter.
+func mixedCase(s string) bool {
+	var upper, lower bool
+	for _, r := range s {
+		upper = upper || unicode.IsUpper(r)
+		lower = lower || unicode.IsLower(r)
+	}
+	return upper && lower
+}
+
+// accented reports whether s has a letter beyond ASCII or a combining mark.
+func accented(s string) bool {
+	for _, r := range s {
+		if unicode.IsMark(r) || (r > unicode.MaxASCII && unicode.IsLetter(r)) {
+			return true
+		}
+	}
+	return false
 }
 
 // narratorSideClasses are the write and informational classes only the narrator
@@ -1933,7 +2109,7 @@ func (r *cbRun) apply(pb *cbPlanned) {
 		r.acc.add(id, held...)
 		return
 	}
-	var created []database.Narrator
+	var created, createdNow []database.Narrator
 	var newIDs []int
 	spellingMoved := false
 	if plan.narratorWrite && len(plan.newNames) > 0 {
@@ -1957,15 +2133,25 @@ func (r *cbRun) apply(pb *cbPlanned) {
 			plan.narrators[i].ID = n.ID
 			plan.narrators[i].Name = n.Name
 			newIDs = append(newIDs, n.ID)
-			created = append(created, *n)
+			createdNow = append(createdNow, *n)
 		}
-		created = r.acc.claimCreated(created)
 		if spellingMoved {
 			if refuse := plan.applySpelling(plan.narrators); refuse != "" {
-				r.fail(id, cbWriteFailed, fmt.Errorf("book %s: narrator record spelling (%s): not written, a re-run lists it for review", id, refuse))
-				return
+				// The column cannot be respelled to the record's name, so the
+				// narrator side is refused as at plan time (settleNewSpellings):
+				// filed under the review class that says why, and the author
+				// side, if the book has one, is still written. The records
+				// created for it stay (a book that credits them claims them);
+				// this book's journal row does not name them.
+				r.acc.add(id, refuse)
+				plan.dropNarratorSide()
+				newIDs, createdNow = nil, nil
+				if !plan.hasWrite() {
+					return
+				}
 			}
 		}
+		created = r.acc.claimCreated(createdNow)
 	}
 
 	after := r.afterState(before, plan, id)
@@ -2208,7 +2394,11 @@ type narratorLookup func(name string) (database.Narrator, bool, error)
 //
 // authorHold and narratorHold, when set, hold that side under that class
 // instead of planning it (a guard's decision on a re-plan).
-func planCreditsBackfill(idx *creditCensusIndex, lookup narratorLookup, allow map[string]bool, book *database.Book,
+//
+// willCreate, when set, says which new names the run itself creates for other
+// books: a book whose new narrator names all pass it is not "a new record from a
+// split credit" (see replanPending).
+func planCreditsBackfill(idx *creditCensusIndex, lookup narratorLookup, willCreate func(name string) bool, allow map[string]bool, book *database.Book,
 	join []database.BookAuthor, junction []database.BookNarrator, census []string, authorHold, narratorHold string) (*cbPlan, error) {
 	has := make(map[string]bool, len(census))
 	for _, c := range census {
@@ -2232,7 +2422,7 @@ func planCreditsBackfill(idx *creditCensusIndex, lookup narratorLookup, allow ma
 		plan.held = append(plan.held, narratorHold)
 		return plan, nil
 	}
-	if err := planNarratorSide(idx, lookup, allow, plan, book, junction, has, authorNames); err != nil {
+	if err := planNarratorSide(idx, lookup, willCreate, allow, plan, book, junction, has, authorNames); err != nil {
 		return nil, err
 	}
 	return plan, nil
@@ -2324,13 +2514,16 @@ func planAuthorSide(idx *creditCensusIndex, plan *cbPlan, book *database.Book, j
 		if err != nil {
 			return nil, nil, err
 		}
-		norm := util.NormalizeAuthor(strings.TrimSpace(a.Name))
+		// A join member that is the same person under another spelling
+		// ("Renee Montoya" beside "Renée Montoya") is a duplicate record, which
+		// is the fold key's question, not the census's normalized spelling.
+		fold := authorjunk.FoldKey(a.Name)
 		for _, r := range join {
 			other, state, err := idx.resolveAuthor(r.AuthorID)
 			if err != nil {
 				return nil, nil, err
 			}
-			if state != authorDangling && other.ID != a.ID && norm != "" && util.NormalizeAuthor(strings.TrimSpace(other.Name)) == norm {
+			if state != authorDangling && other.ID != a.ID && fold != "" && authorjunk.FoldKey(other.Name) == fold {
 				return review(cbAuthorIDDuplicateName)
 			}
 		}
@@ -2672,7 +2865,7 @@ func liveAuthorNames(idx *creditCensusIndex, authorID *int, join []database.Book
 
 // planNarratorSide fills the narrator half of plan. authorNames are the
 // book's live authors after the author side's write.
-func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, allow map[string]bool, plan *cbPlan, book *database.Book,
+func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, willCreate func(name string) bool, allow map[string]bool, plan *cbPlan, book *database.Book,
 	junction []database.BookNarrator, has map[string]bool, authorNames []string) error {
 	for _, c := range []string{ccNarratorIDDangling, ccNarratorJunctionCombined} {
 		if has[c] {
@@ -2832,7 +3025,9 @@ func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, allow map[s
 			}
 		}
 		var slots []cbNarratorSlot
-		var newNames []string
+		// newNames are the names with no record yet; uncovered are those among
+		// them that no other book of the run creates either.
+		var newNames, uncovered []string
 		for _, name := range fillNames {
 			n, ok, err := lookup(name)
 			if errors.Is(err, errNarratorNameAmbiguous) {
@@ -2849,8 +3044,11 @@ func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, allow map[s
 			}
 			slots = append(slots, cbNarratorSlot{Name: name})
 			newNames = append(newNames, name)
+			if willCreate == nil || !willCreate(name) {
+				uncovered = append(uncovered, name)
+			}
 		}
-		if len(newNames) > 0 && fromSplit && !allow[cbAllowNewFromSplit] {
+		if len(uncovered) > 0 && fromSplit && !allow[cbAllowNewFromSplit] {
 			plan.reviews = append(plan.reviews, cbNarratorNewFromSplit)
 			plan.infos = removeClass(plan.infos, cbNarratorCleanDroppedAuthor)
 			return nil
@@ -2885,7 +3083,7 @@ func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, allow map[s
 		plan.writes = append(plan.writes, fillClass)
 		if len(newNames) > 0 {
 			plan.infos = append(plan.infos, cbNarratorCreatesRecord)
-			if fromSplit {
+			if fromSplit && len(uncovered) > 0 {
 				plan.writes = append(plan.writes, cbNarratorNewFromSplit)
 			}
 		}
@@ -2925,7 +3123,7 @@ func (pl *cbPlan) applySpelling(slots []cbNarratorSlot) (refuse string) {
 	pl.column, pl.columnChanged = &column, true
 	pl.json, pl.jsonChanged = newJSON, newJSON != nil
 	pl.infos = removeClass(removeClass(pl.infos, cbNarratorColumnRespelled), cbNarratorsJSONRespelled)
-	if pl.columnText != "" {
+	if pl.columnText != "" && column != pl.columnText {
 		pl.infos = append(pl.infos, cbNarratorColumnRespelled)
 	}
 	if newJSON != nil {
@@ -3001,49 +3199,93 @@ func settleNarratorSpelling(plan *cbPlan, slots []cbNarratorSlot) (column string
 // respellCreditText replaces each pair's old name in text with its new one,
 // in the credited name it belongs to. The text is read as the credit pieces
 // util.SplitCreditNames cuts it into (the cut the census and the read-back
-// make), and the old name is looked for piece by piece: first a piece that is
-// exactly the name, then a piece that holds it as whole words (a "Read by"
-// prefix or a role credit around it). A name that is only part of another
-// credited name does not count: "Renee Montoya" is not found inside "Renee
-// Montoya-Sawyer" or "Anne Renee Montoya's", so the respelling lands on the
-// credit that names the person, wherever it stands in the text. A name not
-// found leaves the text as it was; the caller verifies the result reads back
-// (settleNarratorSpelling), which stays the backstop.
+// make), and the name is the person the cleaner takes from a piece
+// (util.NarratorCreditPiecePerson: the piece without its "Read by" prefix,
+// never a role credit such as "- translator"). Every piece that yields that
+// person is respelled, because the cleaner reads "Renee Montoya, Read by Renee
+// Montoya" as one person and the read-back must too. A name that is only part
+// of another credited name does not count: "Renee Montoya" is not found inside
+// "Renee Montoya-Sawyer" or "Anne Renee Montoya's", so the respelling lands on
+// the credit that names the person, wherever it stands in the text. Only when no
+// piece yields the person does the name's first whole-word occurrence in a
+// non-role piece stand in. A name not found leaves the text as it was; the
+// caller verifies the result reads back (settleNarratorSpelling), which stays
+// the backstop.
 func respellCreditText(text string, pairs [][2]string) string {
 	for _, p := range pairs {
-		if i := creditNameOffset(text, p[0]); i >= 0 {
-			text = text[:i] + p[1] + text[i+len(p[0]):]
+		offsets := creditPersonOffsets(text, p[0])
+		if len(offsets) == 0 {
+			if i := creditNameOffset(text, p[0]); i >= 0 {
+				offsets = []int{i}
+			}
 		}
+		text = replaceAtOffsets(text, offsets, len(p[0]), p[1])
 	}
 	return text
 }
 
-// creditNameOffset is the byte offset in text of the occurrence of name that
-// belongs to the credit naming that person (see respellCreditText), or -1.
-func creditNameOffset(text, name string) int {
-	if name == "" {
-		return -1
+// replaceAtOffsets replaces the n bytes at each of the (ascending) offsets with
+// repl, last first so the earlier offsets stay valid.
+func replaceAtOffsets(text string, offsets []int, n int, repl string) string {
+	for i := len(offsets) - 1; i >= 0; i-- {
+		text = text[:offsets[i]] + repl + text[offsets[i]+n:]
 	}
-	type piece struct {
-		start int
-		text  string
-	}
-	var pieces []piece
+	return text
+}
+
+// creditPiece is one credit piece of a text, with its byte offset in it.
+type creditPiece struct {
+	start int
+	text  string
+}
+
+// creditPieces are the pieces util.SplitCreditNames cuts text into, located in
+// text.
+func creditPieces(text string) []creditPiece {
+	var pieces []creditPiece
 	cursor := 0
 	for _, p := range util.SplitCreditNames(text) {
 		i := strings.Index(text[cursor:], p)
 		if i < 0 || p == "" {
 			continue
 		}
-		pieces = append(pieces, piece{cursor + i, p})
+		pieces = append(pieces, creditPiece{cursor + i, p})
 		cursor += i + len(p)
 	}
-	for _, p := range pieces {
-		if p.text == name {
-			return p.start
+	return pieces
+}
+
+// creditPersonOffsets are the byte offsets in text of name in every credit
+// piece the cleaner takes name from (the piece, minus a "Read by" prefix, is
+// exactly name; role pieces are no narrator and never count), in text order.
+func creditPersonOffsets(text, name string) []int {
+	if name == "" {
+		return nil
+	}
+	var offsets []int
+	for _, p := range creditPieces(text) {
+		if person, off, ok := util.NarratorCreditPiecePerson(p.text); ok && person == name {
+			offsets = append(offsets, p.start+off)
 		}
 	}
-	for _, p := range pieces {
+	return offsets
+}
+
+// creditNameOffset is the byte offset in text of the occurrence of name that
+// belongs to the credit naming that person (see respellCreditText), or -1: the
+// first piece the cleaner takes name from, else the first whole-word occurrence
+// inside a piece that is no role credit.
+func creditNameOffset(text, name string) int {
+	if name == "" {
+		return -1
+	}
+	if offsets := creditPersonOffsets(text, name); len(offsets) > 0 {
+		return offsets[0]
+	}
+	for _, p := range creditPieces(text) {
+		if _, _, ok := util.NarratorCreditPiecePerson(p.text); !ok {
+			continue
+		}
 		for from := 0; from < len(p.text); {
 			j := strings.Index(p.text[from:], name)
 			if j < 0 {
@@ -3080,18 +3322,41 @@ func wholeWords(s string, start, end int) bool {
 	return true
 }
 
-// respellNarratorsJSON respells the names inside NarratorsJSON: each entry of a
+// respellNarratorsJSON respells the names inside NarratorsJSON: the entries of a
 // JSON array of strings, else the bare credit string (the two forms the census
 // parses, parseCreditCensusNarratorsJSON).
+//
+// In an array each pair is looked for across ALL the entries first: the entries
+// whose person the cleaner takes to be the name are respelled, and only when
+// none is does the first entry holding the name as whole words stand in. An
+// entry that merely contains the name as words ("Jean Paul Valley Jr." beside
+// "Jean Paul Valley") is therefore left alone whenever the exact entry exists,
+// wherever it stands in the array.
 func respellNarratorsJSON(raw string, pairs [][2]string) string {
 	var arr []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &arr); err != nil {
 		return respellCreditText(raw, pairs)
 	}
 	changed := false
-	for i := range arr {
-		if r := respellCreditText(arr[i], pairs); r != arr[i] {
-			arr[i], changed = r, true
+	for _, p := range pairs {
+		var hit []int
+		for i, entry := range arr {
+			if len(creditPersonOffsets(entry, p[0])) > 0 {
+				hit = append(hit, i)
+			}
+		}
+		if len(hit) == 0 {
+			for i, entry := range arr {
+				if creditNameOffset(entry, p[0]) >= 0 {
+					hit = []int{i}
+					break
+				}
+			}
+		}
+		for _, i := range hit {
+			if r := respellCreditText(arr[i], [][2]string{p}); r != arr[i] {
+				arr[i], changed = r, true
+			}
 		}
 	}
 	if !changed {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6950317d-b65c-41e5-86a8-9cc277a95054
 // last-edited: 2026-10-27
 
@@ -557,7 +557,7 @@ func TestCreditsBackfill_PlanReviewsTombstonedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := planCreditsBackfill(idx, func(string) (database.Narrator, bool, error) { return database.Narrator{}, false, nil },
-		nil, book, nil, nil, census, "", "")
+		nil, nil, book, nil, nil, census, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
