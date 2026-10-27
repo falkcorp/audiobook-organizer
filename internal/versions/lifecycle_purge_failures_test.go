@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_purge_failures_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3d8a1f64-27c9-4b05-9e73-a1c5e0b84f29
 // last-edited: 2026-10-27
 
@@ -17,12 +17,21 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// liveLookupStore makes the live-book path lookup fail.
-type liveLookupStore struct{ *database.PebbleStore }
+// bookRowLookupStore makes the all-rows book path lookup
+// (database.BookRowPathReader, which PurgeVersion resolves with AsCapability)
+// fail.
+type bookRowLookupStore struct{ *database.PebbleStore }
 
-func (liveLookupStore) LiveBookIDsAtPath(string) ([]string, error) {
-	return nil, errors.New("injected live lookup failure")
+func (bookRowLookupStore) BookIDsAtPath(string) ([]string, error) {
+	return nil, errors.New("injected book lookup failure")
 }
+
+// noBookRowLookupStore hides the all-rows book path lookup: it embeds the
+// database.Store INTERFACE, which does not carry BookIDsAtPath (it is a
+// capability, not a Store method), and has no Unwrap, so AsCapability cannot
+// reach the concrete store behind it. This is a store that cannot answer "does
+// any book, a trashed one included, name this path?".
+type noBookRowLookupStore struct{ database.Store }
 
 // The lifecycle refusal of a retired version must not send the user to a
 // control that does not work yet.
@@ -96,16 +105,124 @@ func TestPurgeVersion_TheVersionsOwnBookIsNotAnotherOwner(t *testing.T) {
 	requireGone(t, f.ownOnly)
 }
 
-// When the live-book lookup cannot answer, the purge fails closed like the
-// row lookup does: nothing deleted, version still in the trash.
-func TestPurgeVersion_FailsClosedWhenLiveLookupFails(t *testing.T) {
+// A TRASHED book (soft-deleted, restorable) that names a file keeps it, exactly
+// as a live one does: the live-only lookup this replaced let the purge delete
+// the audio a restore would have wanted. The file nothing names is the control.
+func TestPurgeVersion_KeepsAFileATrashedBookNames(t *testing.T) {
+	f := newSharedPathFixture(t)
+	yes := true
+	if _, err := f.store.CreateBook(&database.Book{
+		Title: "Batman: Hush", FilePath: f.unrowed, MarkedForDeletion: &yes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	requireOnDisk(t, f.unrowed)
+	requireGone(t, f.ownOnly)
+}
+
+// The same holds when the trashed book names a path the version's OWN row names
+// (the version's file, shared with a trashed book): own row plus a trashed
+// book's FilePath keeps it, and the nightly cleanup agrees.
+func TestCleanupTrashedVersions_KeepsAFileATrashedBookNames(t *testing.T) {
+	f := newSharedPathFixture(t)
+	yes := true
+	if _, err := f.store.CreateBook(&database.Book{
+		Title: "Batman: The Long Halloween", FilePath: f.ownOnly, MarkedForDeletion: &yes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, _ := cleanupTrashedVersionsAt(f.store, time.Now()); n != 1 {
+		t.Fatalf("purged %d, want 1", n)
+	}
+	requireOnDisk(t, f.ownOnly)
+	requireGone(t, f.unrowed)
+}
+
+// A retired row is a holder too (BookFilesAtPath keeps retired rows): a path
+// only a retired row names, outside the version's own rows and slot, is kept.
+// Pinned here next to the trashed-book case so the three holders (live book,
+// trashed book, retired row) each have a test that fails if its lookup is
+// dropped. The version's own row names the path so it is a purge target.
+func TestPurgeVersion_KeepsAFileOnlyARetiredRowOutsideTheSlotNames(t *testing.T) {
+	f := newSharedPathFixture(t)
+	extra := filepath.Join(t.TempDir(), "gotham_extra.m4b")
+	if err := os.WriteFile(extra, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shell, err := f.store.CreateBook(&database.Book{Title: "Shell Of Dick Grayson", FilePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.CreateBookFile(&database.BookFile{
+		BookID: f.holderID, FilePath: extra, VersionID: f.trashed.ID, TrackNumber: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row := &database.BookFile{BookID: shell.ID, FilePath: extra, TrackNumber: 1}
+	if err := f.store.CreateBookFile(row); err != nil {
+		t.Fatal(err)
+	}
+	retiredAt := time.Now()
+	retiredVer, err := f.store.CreateBookVersion(&database.BookVersion{
+		BookID: f.holderID, Status: database.BookVersionStatusRetired, Format: "m4b", Source: "retired_book",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-2", RetiredAt: &retiredAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: shell.ID}}, f.holderID, retiredVer.ID); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	requireOnDisk(t, extra)
+	requireGone(t, f.ownOnly)
+}
+
+// When the book lookup cannot answer, the purge fails closed like the row
+// lookup does: nothing deleted, version still in the trash.
+func TestPurgeVersion_FailsClosedWhenBookLookupFails(t *testing.T) {
 	f := newSharedPathFixture(t)
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
-	err := PurgeVersion(liveLookupStore{f.store}, v)
-	if err == nil || !strings.Contains(err.Error(), "injected live lookup failure") {
-		t.Fatalf("PurgeVersion = %v, want the live lookup failure", err)
+	err := PurgeVersion(bookRowLookupStore{f.store}, v)
+	if err == nil || !strings.Contains(err.Error(), "injected book lookup failure") {
+		t.Fatalf("PurgeVersion = %v, want the book lookup failure", err)
 	}
 	for _, p := range []string{f.ownOnly, f.slotShare, f.rowShared, f.retOnly, f.unrowed} {
+		requireOnDisk(t, p)
+	}
+	requireTrashed(t, f)
+}
+
+// A store that does not provide the all-rows book lookup at all (capability
+// absent) deletes nothing, on the direct purge and on the nightly cleanup, and
+// leaves the version in the trash: absent is never read as "no book names it".
+func TestPurgeVersion_FailsClosedWhenBookLookupCapabilityAbsent(t *testing.T) {
+	f := newSharedPathFixture(t)
+	store := noBookRowLookupStore{f.store}
+	if _, ok := database.AsCapability[database.BookRowPathReader](store); ok {
+		t.Fatal("test store unexpectedly provides BookRowPathReader")
+	}
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	err := PurgeVersion(store, v)
+	if err == nil || !strings.Contains(err.Error(), "BookRowPathReader") {
+		t.Fatalf("PurgeVersion = %v, want the missing-capability error", err)
+	}
+	for _, p := range []string{f.ownOnly, f.slotShare, f.rowShared, f.retOnly, f.unrowed} {
+		requireOnDisk(t, p)
+	}
+	requireTrashed(t, f)
+
+	if n, failed, cerr := cleanupTrashedVersionsAt(store, time.Now()); n != 0 || failed != 1 || cerr == nil {
+		t.Errorf("cleanup = purged %d failed %d err %v, want 0 purged, 1 failed, an error", n, failed, cerr)
+	}
+	for _, p := range []string{f.ownOnly, f.unrowed} {
 		requireOnDisk(t, p)
 	}
 	requireTrashed(t, f)

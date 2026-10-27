@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-27
 
@@ -48,9 +48,10 @@ type versionPurger interface {
 	// purge never removes a file another row (a retired version's) still names.
 	BookFilesAtPath(path string) ([]database.BookFile, error)
 
-	// LiveBookIDsAtPath lists the live books whose own FilePath is the path: a
-	// book can name a file no book_file row does.
-	LiveBookIDsAtPath(path string) ([]string, error)
+	// The book-row side of the same question (a book can name a file no
+	// book_file row does, and a trashed book is restorable) is not here:
+	// database.BookRowPathReader is not on Store, so otherBooksNamingPath finds
+	// it with database.AsCapability and fails closed without it.
 
 	GetBookByID(id string) (*database.Book, error)
 }

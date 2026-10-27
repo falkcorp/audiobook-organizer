@@ -1,7 +1,7 @@
 // file: web/src/utils/deleteBookError.test.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 2d5f9315-d0df-4666-81b5-9b5423eb3f77
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../services/api';
@@ -9,6 +9,7 @@ import {
   describeBlockOutcome,
   describeDeleteBookError,
   isHasProgressRefusal,
+  isHoldsRetiredVersionsRefusal,
   isOwnsFilesRefusal,
   isProgressDiscardedBookKeptRefusal,
   isRootNotReadyRefusal,
@@ -86,7 +87,9 @@ describe('describeDeleteBookError', () => {
     for (const status of [409, 500]) {
       const err = new ApiError(serverMsg, status, { code: 'PROGRESS_DISCARDED_BOOK_KEPT' });
       const msg = describeDeleteBookError(err, 'f', { inTrash: true });
-      expect(msg).toContain('listening state (progress, bookmarks or reset markers) had already been erased');
+      expect(msg).toContain(
+        'listening state (progress, bookmarks or reset markers) had already been erased'
+      );
       expect(msg).toContain(serverMsg);
       expect(msg).not.toContain('Soft-delete it instead');
       expect(isProgressDiscardedBookKeptRefusal(err)).toBe(true);
@@ -107,6 +110,69 @@ describe('describeDeleteBookError', () => {
       const err = new ApiError(m, 409, { code: 'OWNS_FILES' });
       expect(describeDeleteBookError(err, 'f')).toBe(m);
     }
+  });
+});
+
+describe('HOLDS_RETIRED_VERSIONS', () => {
+  const server =
+    'hard delete b1: book holds retired versions: book still owns book_file rows (3 retired row(s) kept for another version of the book; they cannot be moved, so it cannot be deleted while they exist)';
+
+  it('is recognised by its code, and is an owns-files refusal of the same family', () => {
+    const err = new ApiError(server, 409, { code: 'HOLDS_RETIRED_VERSIONS' });
+    expect(isHoldsRetiredVersionsRefusal(err)).toBe(true);
+    expect(isOwnsFilesRefusal(err)).toBe(true);
+    // Whatever the message says, the code decides.
+    expect(
+      isHoldsRetiredVersionsRefusal(new ApiError('x', 409, { code: 'HOLDS_RETIRED_VERSIONS' }))
+    ).toBe(true);
+  });
+
+  it('is false for OWNS_FILES, other statuses and plain errors', () => {
+    expect(isHoldsRetiredVersionsRefusal(new ApiError('x', 409, { code: 'OWNS_FILES' }))).toBe(
+      false
+    );
+    expect(isHoldsRetiredVersionsRefusal(new ApiError('x', 409))).toBe(false);
+    expect(
+      isHoldsRetiredVersionsRefusal(new ApiError('x', 500, { code: 'HOLDS_RETIRED_VERSIONS' }))
+    ).toBe(false);
+    expect(isOwnsFilesRefusal(new ApiError('x', 500, { code: 'HOLDS_RETIRED_VERSIONS' }))).toBe(
+      false
+    );
+    expect(isHoldsRetiredVersionsRefusal(new Error('x'))).toBe(false);
+  });
+
+  it('says the book holds retired versions of another book, with the row count, and offers a soft delete for a live book', () => {
+    const msg = describeDeleteBookError(
+      new ApiError(server, 409, { code: 'HOLDS_RETIRED_VERSIONS' }),
+      'f'
+    );
+    expect(msg).toContain("holds retired versions of another book's files (3 retired file rows)");
+    expect(msg).toContain("can't be moved");
+    expect(msg).toContain('Soft-delete it instead');
+  });
+
+  it('gives a book already in the trash no advice to soft-delete it', () => {
+    const msg = describeDeleteBookError(
+      new ApiError(server, 409, { code: 'HOLDS_RETIRED_VERSIONS' }),
+      'f',
+      { inTrash: true }
+    );
+    expect(msg).toContain('holds retired versions');
+    expect(msg).not.toContain('Soft-delete');
+  });
+
+  it('copes with a message that carries no row count (the purge fallback wording)', () => {
+    const msg = describeDeleteBookError(
+      new ApiError(
+        'purge b1: book holds retired versions: book still owns book_file rows: the purge never deletes a book that holds retired versions',
+        409,
+        { code: 'HOLDS_RETIRED_VERSIONS' }
+      ),
+      'f',
+      { inTrash: true }
+    );
+    expect(msg).toContain("another book's files (file rows)");
+    expect(msg).not.toContain('still owns');
   });
 });
 

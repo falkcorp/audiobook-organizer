@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -35,7 +35,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -176,9 +175,12 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 // whose owners cannot be listed (database.ErrBookFilesAtPathUnavailable) aborts
 // the purge with nothing deleted and the version unchanged, so the next run
 // retries it. Owners are every other book_file row (retired ones included) and
-// every other LIVE book whose own FilePath is the path, the same two questions
-// the book purge asks (audiobooks purgePathStillReferenced): a book can name a
-// file with no row at all. The version's own book is not another owner.
+// every other book row whose own FilePath is the path, a trashed (restorable)
+// book included, the same two questions the book purge asks at removal time
+// (audiobooks otherBookRowAt): a book can name a file with no row at all. The
+// book lookup is database.BookRowPathReader, found with database.AsCapability;
+// a store that does not provide it fails the purge closed like a lookup error
+// does. The version's own book is not another owner.
 //
 // The version is claimed before the first file is removed: it is written as
 // purging (database.BookVersionStatusPurging), under the version's stripe, and
@@ -265,17 +267,13 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 				ver.ID, p, owner.ID, owner.BookID, owner.VersionID, owner.Retired)
 			continue
 		}
-		live, err := store.LiveBookIDsAtPath(p)
+		others, err := otherBooksNamingPath(store, p, ver.BookID)
 		if err != nil {
-			return fmt.Errorf("purge version %s: cannot verify %s is not a live book's file: %w", ver.ID, p, err)
+			return fmt.Errorf("purge version %s: cannot verify %s is not a book's file: %w", ver.ID, p, err)
 		}
-		// The version's own book naming its file is the normal case, not a
-		// second owner: the file is the version's, and the version is what is
-		// being purged. Any OTHER live book naming it keeps it.
-		live = slices.DeleteFunc(live, func(id string) bool { return id == ver.BookID })
-		if len(live) > 0 {
-			lifecycleLog.Warn("purge version %s: keeping %s, it is the file path of live book(s) %v",
-				ver.ID, p, live)
+		if len(others) > 0 {
+			lifecycleLog.Warn("purge version %s: keeping %s, it is the file path of book(s) %v (live or in the trash)",
+				ver.ID, p, others)
 			continue
 		}
 		doomed = append(doomed, p)
@@ -345,6 +343,34 @@ func otherRowNamingPath(store versionPurger, path string, ver *database.BookVers
 		return &rows[i], nil
 	}
 	return nil, nil
+}
+
+// otherBooksNamingPath returns the id of every book row, soft-deleted ones
+// included, whose own FilePath is path, other than ownBookID. A trashed book is
+// restorable and wants its audio back, so it holds a path exactly as a live one
+// does (the live-only lookup, LiveBookIDsAtPath, missed it). The lookup is
+// database.BookRowPathReader, which is not on database.Store, so it is resolved
+// with database.AsCapability; a store without it, or a lookup that errors, is
+// an error: the caller fails closed and deletes nothing, never "no owner".
+func otherBooksNamingPath(store versionPurger, path, ownBookID string) ([]string, error) {
+	rows, ok := database.AsCapability[database.BookRowPathReader](store)
+	if !ok {
+		return nil, fmt.Errorf("store %T does not provide the all-rows book path lookup (database.BookRowPathReader)", store)
+	}
+	ids, err := rows.BookIDsAtPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("books-at-path lookup: %w", err)
+	}
+	var others []string
+	for _, id := range ids {
+		// The version's own book naming its file is the normal case, not a
+		// second owner: the file is the version's, and the version is what is
+		// being purged.
+		if id != ownBookID {
+			others = append(others, id)
+		}
+	}
+	return others, nil
 }
 
 // versionSlotFiles lists every non-directory entry under the version's
