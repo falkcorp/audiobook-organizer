@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-26
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -65,7 +66,12 @@ type canaryFunc func(ctx context.Context, g gatedEndpoint) error
 // dispatcher waits a cooldown out (poolPaceMax is longer than the longest
 // one) and then sends the chunk anyway. A machine in this set is sent the
 // canary first instead, which costs one clip, and gets work only once every
-// one of its ports answers it.
+// one of its ports answers it. (A port in cooldown is waited for, not skipped:
+// see preflight in dispatchPool.)
+//
+// Keys are machineKey values. An entry is dropped when its machine answers,
+// and an entry for an identity the endpoint no longer has is dropped by
+// pruneStaleCanaryIdentities, so the set cannot grow with dead identities.
 var canaryFailed = struct {
 	mu sync.Mutex
 	m  map[string]bool
@@ -81,6 +87,46 @@ func clearCanaryFailed(key string) {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
 	delete(canaryFailed.m, key)
+}
+
+// hasUnheardPort reports whether the gate refused an endpoint that is, or may
+// be, a port of machine key: one whose machine was recorded as key, or one whose
+// /health could not be read at all (its machine is unknown, so it may be any).
+// Such a port has not answered the canary, so the machine must not be
+// forgotten as sick on the strength of its other ports alone (nit 2 of review 6
+// of #4193): the pool's next dispatch asks every port that is eligible, and
+// would otherwise give the refused one work with no question asked when it
+// came back.
+func hasUnheardPort(refused []gpuRefusal, key string) bool {
+	return slices.ContainsFunc(refused, func(r gpuRefusal) bool {
+		return r.Machine == "" || r.Machine == key
+	})
+}
+
+// pruneStaleCanaryIdentities drops the entries of canaryFailed that name g's
+// endpoint under an identity it no longer has (nit 3 of review 6 of #4193). A
+// worker too old to report machine_id is keyed "u:" + a hash of its URL, and
+// an endpoint that could not be probed "?" + the same hash; once the worker
+// reports a machine_id its key is "m:...", a different key, so the old entry
+// would never be read or cleared again. Only the worker's own earlier keys are
+// dropped, and only once it has a better one, so another machine's memory is
+// never touched. The failure is not carried over to the new identity: a worker
+// that began to report machine_id was upgraded and restarted, and a restart is
+// the usual cure for the sickness the entry remembers.
+func pruneStaleCanaryIdentities(g gatedEndpoint) {
+	if !g.Probed {
+		return
+	}
+	h := shortHash(g.Endpoint.URL)
+	stale := []string{"?" + h}
+	if strings.HasPrefix(g.workerID(), "m:") {
+		stale = append(stale, "u:"+h)
+	}
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	for _, k := range stale {
+		delete(canaryFailed.m, k)
+	}
 }
 
 func failedCanaryBefore(key string) bool {
