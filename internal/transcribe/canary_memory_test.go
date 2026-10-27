@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_memory_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b0f7c1e-2d64-4f0b-9a57-3c8e1d6a9b42
 // last-edited: 2026-10-27
 
@@ -1021,13 +1021,13 @@ func TestCanaryMemory_APortTheGateRefusedWithItsMachineIsRecordedWithIt(t *testi
 
 // B1 x S4 x N-d: the identity a dispatch asks a remembered machine under is the
 // one its gate gave it. The re-probe that follows a wait for a cooldown must not
-// reconcile identities: a worker that began to report a machine id meanwhile
-// would have its memory moved to the new key under the dispatch's feet, and the
-// machine it is still waiting for would look as if another dispatch had
-// forgotten it, so it would be sent work without being asked.
-func TestRegate_AWorkerThatBeginsToReportAMachineIdWhileWaitedForIsStillAsked(t *testing.T) {
+// reconcile identities: a worker whose decoder was restarting when it was probed
+// again (a transient refusal) is waited for, and once it answers it is the same
+// worker, asked the canary clip under the identity the dispatch froze, before it
+// is sent anything.
+func TestRegate_AWorkerWaitedForThroughADecoderFaultWindowIsStillAskedUnderItsFrozenIdentity(t *testing.T) {
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
-	h := machineHarness(t, []string{"", robinMachine}) // worker 0 reports no machine id yet
+	h := machineHarness(t, []string{"", robinMachine}) // worker 0 reports no machine id
 	useEndpoints(t, 16, endpointURLs(h.eps)...)
 	p := &faultPool{h: h, answer: answerWithTranscripts, batch: 16}
 	t.Cleanup(func() {
@@ -1037,16 +1037,13 @@ func TestRegate_AWorkerThatBeginsToReportAMachineIdWhileWaitedForIsStillAsked(t 
 	})
 	w0, w1 := h.eps[0].URL, h.eps[1].URL
 	oldKey := "u:" + shortHash(w0)
-	const newID = "cccc0003"
 	markCanaryFailed(oldKey)
 	markCanaryFailed(robinKey)
 	markEndpointFailure(w0)
-	// At 80 ms worker 0 reports its machine id and enters its decoder's fault
-	// window (a transient refusal), and its cooldown ends: the dispatch probes
-	// it again, finds it refused for now and goes on waiting. The window ends at
-	// 250 ms.
+	// At 80 ms worker 0 enters its decoder's fault window (a transient refusal)
+	// and its cooldown ends: the dispatch probes it again, finds it refused for
+	// now and goes on waiting. The window ends at 250 ms.
 	after(t, 80*time.Millisecond, func() {
-		h.setMachineID(w0, newID)
 		h.setChildFault(w0, true)
 		clearCooldown(w0)
 	})
@@ -1066,8 +1063,54 @@ func TestRegate_AWorkerThatBeginsToReportAMachineIdWhileWaitedForIsStillAsked(t 
 	if want := []string{w0}; !slices.Equal(rec.asked, want) {
 		t.Errorf("canaries = %v, want worker 0 asked once, before it was sent anything", rec.asked)
 	}
-	if failedCanaryBefore(oldKey) || failedCanaryBefore("m:"+newID) {
-		t.Errorf("remembered: %s=%v m:%s=%v, want it forgotten under the identity it was asked as",
+	if failedCanaryBefore(oldKey) {
+		t.Errorf("%s is still remembered, want it forgotten under the identity it was asked as", oldKey)
+	}
+}
+
+// A worker that begins to report a machine id while it is waited for is another
+// identity than the dispatch froze, and a pool cannot tell it from another
+// machine that took the port (review 8 of #4201): it is dropped, asked nothing
+// and sent nothing, and neither identity's memory is touched by an answer of its.
+func TestRegate_AWorkerThatBeginsToReportAMachineIdWhileWaitedForByAPoolIsDroppedNotAsked(t *testing.T) {
+	shortenPacing(t, 10*time.Millisecond, time.Minute)
+	h := machineHarness(t, []string{"", robinMachine}) // worker 0 reports no machine id yet
+	useEndpoints(t, 16, endpointURLs(h.eps)...)
+	p := &faultPool{h: h, answer: answerWithTranscripts, batch: 16}
+	t.Cleanup(func() {
+		for _, ep := range h.eps {
+			clearCooldown(ep.URL)
+		}
+	})
+	w0, w1 := h.eps[0].URL, h.eps[1].URL
+	oldKey := "u:" + shortHash(w0)
+	const newID = "cccc0003"
+	markCanaryFailed(oldKey)
+	markCanaryFailed(robinKey)
+	markEndpointFailure(w0)
+	after(t, 80*time.Millisecond, func() {
+		h.setMachineID(w0, newID)
+		clearCooldown(w0)
+	})
+	rec := &canaryRecorder{}
+	canary := func(ctx context.Context, g gatedEndpoint) error {
+		if g.Endpoint.URL == w1 {
+			return errors.New("canary: " + timeoutText) // the stand-in is sick
+		}
+		return rec.fn(ctx, g)
+	}
+	res, err := dispatchOn(testCtx(t), h.eps, nil, p.send, canary, 8)
+	if !IsPoolUnavailable(err) {
+		t.Fatalf("err = %v, want ErrPoolUnavailable: the stand-in is sick and worker 0 was dropped", err)
+	}
+	if len(res) != 0 || len(sentTo(p)) != 0 {
+		t.Errorf("%d results, work sent to %v, want none", len(res), sentTo(p))
+	}
+	if len(rec.asked) != 0 {
+		t.Errorf("canaries = %v, want worker 0 asked none: it answers as another identity than the dispatch froze", rec.asked)
+	}
+	if !failedCanaryBefore(oldKey) || failedCanaryBefore("m:"+newID) {
+		t.Errorf("remembered: %s=%v m:%s=%v, want the weak identity still remembered (nobody answered for it) and the new one never recorded",
 			oldKey, failedCanaryBefore(oldKey), newID, failedCanaryBefore("m:"+newID))
 	}
 }

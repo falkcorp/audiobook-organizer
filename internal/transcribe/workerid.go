@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-27
 
@@ -117,10 +117,13 @@ func (g gatedEndpoint) identityKey() string {
 //     be the second strike of a file, database independentStrike) and learns it
 //     when the row knew no machine (database learnsMachine), while the "u:"
 //     still matches a row an earlier strike of that address wrote. The
-//     machine it reports is therefore credited as itself. A pool dispatch whose
-//     canary memory already groups the port under a different strong machine
-//     drops the port instead (resolvePending), so no answer is credited to
-//     both; the lone-endpoint path has no group to disagree with and keeps it.
+//     machine it reports is therefore credited as itself. Only the lone-endpoint
+//     path keeps such a worker (dispatchSingle): it resolves the canary memory at
+//     call time, after noteCanaryProbes moved the port to the new identity, so it
+//     has no frozen group to disagree with. A pool dispatch drops it
+//     (resolvePending, on learned != ""): it cannot tell the machine that was
+//     behind the URL from another that took it over, and a kept port would be
+//     counted, benched and struck under two identities.
 //   - A frozen key standing for no machine ("" or "?", an endpoint whose /health
 //     could not be read at the start), or a probe that read nothing now: there
 //     is nothing to compare, and what the dispatch froze carries (a fresh probe
@@ -161,6 +164,8 @@ func (g gatedEndpoint) storedWorker() string {
 // answerWorker is the identity stored with the answers a probed worker gives:
 // storedWorker, joined with the machine a worker that gained its id during the
 // dispatch reports now (learned, see reprobed). Empty when g was not probed.
+// Only the lone-endpoint path (dispatchSingle) can hold such a worker; a pool
+// drops it at the re-probe and stores storedWorker.
 func (g gatedEndpoint) answerWorker() string {
 	w := g.storedWorker()
 	if w == "" || g.learned == "" {

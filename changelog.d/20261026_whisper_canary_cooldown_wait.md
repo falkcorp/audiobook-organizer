@@ -202,39 +202,35 @@ ports are unchanged.
 
 A port that changes hands while a dispatch waits out a cooldown is no longer
 credited to the machine that used to be behind it. The probe after the wait is
-compared with the identity the dispatch froze for the port: the same identity
-stands; a worker that only gained its machine id since is stored under the
-identity the dispatch knew it by with the machine it reports beside it, so the
-store can still learn the machine (on a pool, unless the port is grouped under a
-different remembered machine, below); any other difference (one machine for another,
-a machine's port that was refused and now answers weakly, a worker that cannot
-report an id) drops the port from the dispatch like a refusal. It is not asked the
-old machine's canary clip, so its answer cannot forget that machine, and it is
-sent no work and given no timeout strike under the old machine's name, which
-let one machine make a file permanent on its own. A lone endpoint that changed
-hands defers its jobs. The next dispatch's gate keys the port by what it reports.
-The condemnation of a file by two machines names the identity of the worker that
-answered at each endpoint.
+compared with the identity the dispatch froze for the port, and a pool keeps the
+port only if that identity is unchanged. Any difference drops it from the
+dispatch like a refusal: one machine for another, a machine's port that was
+refused and now answers weakly, a worker that cannot report an id, and a worker
+that gained a machine id since (frozen as `u:`, reports `m:` now), which cannot
+be told from another machine that took the port over. A dropped port is not asked
+the old machine's canary clip, so its answer cannot forget that machine, and it
+is sent no work and given no timeout strike under the old machine's name, which
+let one machine make a file permanent on its own. Keeping the worker that gained
+an id had let a port whose id turned out to be a machine already in the dispatch
+escape that machine's bench when it failed the canary clip on another port, take
+all the work, and write strikes naming both identities; it also counted that
+machine twice toward the condemnation limit. The next dispatch's gate keys the
+dropped port by the id it reports, and the canary memory of its address follows
+it. The lone endpoint resolves the memory when it asks, after the gate has moved
+the port to the identity it reports, so it keeps a worker that gained its id and
+stores both identities (the one the dispatch knew it by and the machine it
+reports), so the store can still learn the machine; any other difference defers
+its jobs. The condemnation of a file by two machines names the identity of the
+worker that answered at each endpoint.
 
-The case that needed more on a pool: a port that was the only port of a
-remembered machine, was refused by a probe, and then answered as a weak id (a
-worker that missed its machine id) was kept when the worker reported a machine id
-during the wait, whichever machine it named. The dispatch still grouped the port
-under the remembered machine, so until this was fixed the old machine's canary clip was sent to the
-new one, and its answer forgot the old machine (a pass) or was recorded as the old
-machine failing with the new machine's port in its list, so the new machine was
-never remembered and the next dispatch sent it work with nothing asked (a fail).
-A pool now drops such a port like the other changed-hands cases whenever the
-machine it reports is not the remembered machine it was grouped under. The old
-machine stays remembered, the new one is asked and recorded nothing, and the port
-is sent no work in that dispatch. The lone endpoint has no group to disagree with
-and keeps a worker that gained its id, as before.
-
-A pool whose every port changed hands during the wait ended as "refused by
-capability requirements", which sends an operator hunting for a box that is not on
-a GPU. It now ends as the lone endpoint does, wrapping `errPortChangedHands`: an
-unrecognised transport error that the ops defer on without counting toward
-stopping the run.
+A pool left with nothing to send to because its ports changed hands ended as
+"refused by capability requirements", which sends an operator hunting for a box
+that is not on a GPU. It now ends as the lone endpoint does, wrapping
+`errPortChangedHands` (an unrecognised transport error that the ops defer on
+without counting toward stopping the run), when at least one port changed hands
+and every other refusal is a port that is unreachable. A stuck or capability
+refusal beside them keeps the error that names it, and a pool of nothing but
+unreachable ports is still `ErrPoolUnavailable`.
 
 A file struck by a machine is steered away from a port of that machine that
 answers as a weak identity after a refused probe, as it already was away from

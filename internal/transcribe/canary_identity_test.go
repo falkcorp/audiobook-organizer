@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_identity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e7a9c52-81d4-4f6b-b0a3-6d2c15e8f947
 // last-edited: 2026-10-27
 
@@ -70,77 +70,60 @@ func askedOnce(t *testing.T, asked []string, want ...string) {
 
 // B-1: another dispatch's gate moves a remembered worker's memory from its old
 // identity to its new one (u: -> m:) while this dispatch waits for the worker's
-// cooldown. The wait must still find the machine remembered: asked the canary
-// clip, and sent no work when it fails it. Judged by the key it began with, it
-// looked forgotten, was un-benched and was sent a chunk with no question asked.
+// cooldown. The wait must still find the machine remembered, and a worker that
+// reports another identity than the one the dispatch froze is not sent a chunk
+// with no question asked: judged by the key it began with, the machine looked
+// forgotten, was un-benched and was sent work. A pool drops a worker that gained
+// a machine id (review 8 of #4201), so the port is neither asked the clip nor
+// sent anything in this dispatch, and the memory the other dispatch moved is
+// left for the next dispatch's gate to ask, under the identity it was moved to.
 func TestCanaryIdentity_AConcurrentGateMovingTheMemoryDuringTheWaitDoesNotForgetTheMachine(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		answer error // worker 0's answer to the canary clip
-	}{
-		{"it fails the canary", timeoutCanaryErr},
-		{"it answers the canary", nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			shortenPacing(t, 10*time.Millisecond, time.Minute)
-			h := machineHarness(t, []string{"", robinMachine}) // worker 0 reports no machine id yet
-			useEndpoints(t, 16, endpointURLs(h.eps)...)
-			p := &faultPool{h: h, answer: answerWithTranscripts, batch: 16}
-			t.Cleanup(func() {
-				for _, ep := range h.eps {
-					clearCooldown(ep.URL)
-				}
-			})
-			w0, w1 := h.eps[0].URL, h.eps[1].URL
-			oldKey, newKey := "u:"+shortHash(w0), "m:"+catwomanMachine
-			markCanaryFailed(oldKey)
-			markCanaryFailed(robinKey)
-			markEndpointFailure(w0)
-			// At 80 ms a concurrent dispatch's gate sees worker 0 report its
-			// machine id and moves the memory to the new key, and the cooldown ends.
-			after(t, 80*time.Millisecond, func() {
-				h.setMachineID(w0, catwomanMachine)
-				kept, refused := gateEndpoints(context.Background(), h.eps[:1], nil)
-				reconcileCanaryMemory(h.eps[:1], kept, refused)
-				noteCanaryProbes(kept, refused)
-				clearCooldown(w0)
-			})
-			rec := &canaryRecorder{err: tc.answer}
-			canary := func(ctx context.Context, g gatedEndpoint) error {
-				if g.Endpoint.URL == w1 {
-					return timeoutCanaryErr // the stand-in is sick
-				}
-				return rec.fn(ctx, g)
-			}
-			res, err := dispatchOn(testCtx(t), h.eps, nil, p.send, canary, 8)
-			if !slices.Equal(rec.asked, []string{w0}) {
-				t.Errorf("canaries = %v, want worker 0 asked once: the machine another dispatch moved is still remembered", rec.asked)
-			}
-			requireNoStrikes(t, res)
-			if tc.answer != nil {
-				if !IsPoolUnavailable(err) {
-					t.Fatalf("err = %v, want ErrPoolUnavailable: both machines were asked and neither answered", err)
-				}
-				if got := sentTo(p); len(got) != 0 {
-					t.Errorf("work was sent to %v, want none: both machines failed the canary", got)
-				}
-				if !failedCanaryBefore(newKey) {
-					t.Errorf("%s is not remembered: the failure was lost on the way", newKey)
-				}
-				if failedCanaryBefore(oldKey) {
-					t.Errorf("%s was re-created beside the identity the memory moved to", oldKey)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("err = %v, want worker 0 to take the page once it answered", err)
-			}
-			requireTranscripts(t, res, 8)
-			if failedCanaryBefore(newKey) || failedCanaryBefore(oldKey) {
-				t.Errorf("remembered: %s=%v %s=%v, want the machine forgotten once it answered under the identity it has now",
-					newKey, failedCanaryBefore(newKey), oldKey, failedCanaryBefore(oldKey))
-			}
-		})
+	shortenPacing(t, 10*time.Millisecond, time.Minute)
+	h := machineHarness(t, []string{"", robinMachine}) // worker 0 reports no machine id yet
+	useEndpoints(t, 16, endpointURLs(h.eps)...)
+	p := &faultPool{h: h, answer: answerWithTranscripts, batch: 16}
+	t.Cleanup(func() {
+		for _, ep := range h.eps {
+			clearCooldown(ep.URL)
+		}
+	})
+	w0, w1 := h.eps[0].URL, h.eps[1].URL
+	oldKey, newKey := "u:"+shortHash(w0), "m:"+catwomanMachine
+	markCanaryFailed(oldKey)
+	markCanaryFailed(robinKey)
+	markEndpointFailure(w0)
+	// At 80 ms a concurrent dispatch's gate sees worker 0 report its
+	// machine id and moves the memory to the new key, and the cooldown ends.
+	after(t, 80*time.Millisecond, func() {
+		h.setMachineID(w0, catwomanMachine)
+		kept, refused := gateEndpoints(context.Background(), h.eps[:1], nil)
+		reconcileCanaryMemory(h.eps[:1], kept, refused)
+		noteCanaryProbes(kept, refused)
+		clearCooldown(w0)
+	})
+	rec := &canaryRecorder{}
+	canary := func(ctx context.Context, g gatedEndpoint) error {
+		if g.Endpoint.URL == w1 {
+			return timeoutCanaryErr // the stand-in is sick
+		}
+		return rec.fn(ctx, g)
+	}
+	res, err := dispatchOn(testCtx(t), h.eps, nil, p.send, canary, 8)
+	if len(rec.asked) != 0 {
+		t.Errorf("canaries = %v, want worker 0 asked none: it answers as another identity than the dispatch froze, so it is dropped", rec.asked)
+	}
+	requireNoStrikes(t, res)
+	if !IsPoolUnavailable(err) {
+		t.Fatalf("err = %v, want ErrPoolUnavailable: the stand-in is sick and worker 0 was dropped", err)
+	}
+	if got := sentTo(p); len(got) != 0 {
+		t.Errorf("work was sent to %v, want none: worker 0 was dropped and the stand-in failed the canary", got)
+	}
+	if !failedCanaryBefore(newKey) {
+		t.Errorf("%s is not remembered: the memory another dispatch moved was lost on the way", newKey)
+	}
+	if failedCanaryBefore(oldKey) {
+		t.Errorf("%s was re-created beside the identity the memory moved to", oldKey)
 	}
 }
 
@@ -522,14 +505,25 @@ func TestSingle_ACancelDuringTheReProbeAfterTheWaitReturnsTheCancellation(t *tes
 }
 
 // Nit 2: the canary, and the work after it, get what the probe after the wait
-// read, not what the gate read minutes earlier: here the worker's identity.
+// read, not what the gate read minutes earlier. On the lone endpoint that is the
+// worker's identity too (it gained its machine id); on a pool a worker that
+// gained an id is dropped (review 8 of #4201), so what changes there is a field
+// of its health with the identity intact.
 func TestRegate_TheCanaryGetsTheHealthTheProbeAfterTheWaitRead(t *testing.T) {
+	const freshModel = "gotham-large-v9"
 	for _, tc := range []struct {
 		name     string
 		machines []string
+		change   func(h *splitHarness, url string)
+		saw      func(g gatedEndpoint) string
+		want     string
 	}{
-		{"lone endpoint", []string{""}},
-		{"pool", []string{"", robinMachine}},
+		{"lone endpoint", []string{""},
+			func(h *splitHarness, url string) { h.setMachineID(url, catwomanMachine) },
+			func(g gatedEndpoint) string { return g.Health.MachineID }, catwomanMachine},
+		{"pool", []string{"", robinMachine},
+			func(h *splitHarness, url string) { h.setHealthField(url, map[string]any{"model": freshModel}) },
+			func(g gatedEndpoint) string { return g.Health.Model }, freshModel},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			shortenPacing(t, 10*time.Millisecond, time.Minute)
@@ -546,7 +540,7 @@ func TestRegate_TheCanaryGetsTheHealthTheProbeAfterTheWaitRead(t *testing.T) {
 			markCanaryFailed(robinKey) // (a pool's second machine)
 			markEndpointFailure(w0)
 			after(t, 80*time.Millisecond, func() {
-				h.setMachineID(w0, catwomanMachine)
+				tc.change(h, w0)
 				clearCooldown(w0)
 			})
 			var sawCanary, sawWork string
@@ -554,18 +548,20 @@ func TestRegate_TheCanaryGetsTheHealthTheProbeAfterTheWaitRead(t *testing.T) {
 				if g.Endpoint.URL != w0 {
 					return timeoutCanaryErr // a pool's other machine is sick: worker 0 is what is waited for
 				}
-				sawCanary = g.Health.MachineID
+				sawCanary = tc.saw(g)
 				return nil
 			}
 			send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pr ProgressFunc) (map[string]BatchResult, error) {
-				sawWork = g.Health.MachineID
+				if g.Endpoint.URL == w0 {
+					sawWork = tc.saw(g)
+				}
 				return p.send(ctx, g, sub, pr)
 			}
 			if _, err := dispatchOn(testCtx(t), h.eps, nil, send, canary, 4); err != nil {
 				t.Fatalf("err = %v", err)
 			}
-			if sawCanary != catwomanMachine || sawWork != catwomanMachine {
-				t.Errorf("canary saw machine_id %q, work saw %q, want the fresh %q for both", sawCanary, sawWork, catwomanMachine)
+			if sawCanary != tc.want || sawWork != tc.want {
+				t.Errorf("canary saw %q, work saw %q, want the fresh %q for both", sawCanary, sawWork, tc.want)
 			}
 		})
 	}
