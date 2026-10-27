@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
 // last-edited: 2026-10-25
 
@@ -348,8 +348,17 @@ func TestUndoPreflightHandler_Error(t *testing.T) {
 
 // --- RevertOperation ---
 
+// allowRevertReads answers the two reads RevertOperation makes before it
+// reverts (the op row and the change journal, for the Repairs access check)
+// with an ordinary op that has no journal rows.
+func allowRevertReads(store *operationsmocks.MockOperationsStore) {
+	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
+	store.EXPECT().GetOperationChanges("op-1").Return(nil, nil)
+}
+
 func TestRevertOperation_Success(t *testing.T) {
-	h, _, _, _, _, _ := newTestHandler(t)
+	h, store, _, _, _, _ := newTestHandler(t)
+	allowRevertReads(store)
 	w := run(http.MethodPost, "/operations/:id/revert", "/operations/op-1/revert", nil, func(r *gin.Engine) {
 		r.POST("/operations/:id/revert", h.RevertOperation)
 	})
@@ -359,6 +368,7 @@ func TestRevertOperation_Success(t *testing.T) {
 func TestRevertOperation_Error(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := operationsmocks.NewMockOperationsStore(t)
+	allowRevertReads(store)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
 		func(id string) (*audiobooks.RevertResult, error) { return nil, errors.New("revert failed") },
@@ -373,7 +383,9 @@ func TestRevertOperation_Error(t *testing.T) {
 func newRevertHandler(t *testing.T, result *audiobooks.RevertResult, err error) *operations.Handler {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	return operations.New(operationsmocks.NewMockOperationsStore(t), nil, nil, nil, nil, nil, nil,
+	store := operationsmocks.NewMockOperationsStore(t)
+	allowRevertReads(store)
+	return operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
 		func(id string) (*audiobooks.RevertResult, error) { return result, err },
 	)

@@ -947,6 +947,35 @@ describe('ActivityLog revert asks the preflight first', () => {
     expect(mockedRevertOperation).not.toHaveBeenCalled();
   });
 
+  it('stops offering Undo for an operation the server refused it for (403)', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });
+    mockedGetUndoPreflight.mockRejectedValue(
+      Object.assign(new Error('permission denied: users.manage'), { response: { status: 403, data: {} } })
+    );
+
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Revert operation' }));
+
+    expect(await screen.findByText(/permission denied: users\.manage/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revert operation' })).not.toBeInTheDocument();
+    expect(mockedRevertOperation).not.toHaveBeenCalled();
+  });
+
+  it('keeps offering Undo after a preflight that failed for another reason', async () => {
+    const user = userEvent.setup();
+    mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });
+    mockedGetUndoPreflight.mockRejectedValue(
+      Object.assign(new Error('internal error'), { response: { status: 500, data: {} } })
+    );
+
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Revert operation' }));
+
+    expect(await screen.findByText(/internal error/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revert operation' })).toBeInTheDocument();
+  });
+
   it('states the restorable count and names the record-only rows in the dialog', async () => {
     const user = userEvent.setup();
     mockedFetchActivity.mockResolvedValue({ entries: [organizeEntry], total: 1 });

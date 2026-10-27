@@ -1,7 +1,7 @@
 // file: internal/server/invite_rate_limit_test.go
-// version: 1.27.1
+// version: 1.28.0
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -67,6 +68,16 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 		c.String(http.StatusOK, "parsed=%v token=%s", p.parsed, p.req.Token)
 	})
 	return &inviteLimitHarness{t: t, engine: r, limits: limits}
+}
+
+// inviteRefillAllowance is how many requests a token bucket that refills
+// perMinute can admit beyond its burst while a test loop of the given duration
+// runs: it refills continuously, so a slow loop (a race build on a loaded CI
+// runner took 1 to 3 seconds for 200 requests) sees tokens come back, and a
+// fixed slack of one would fail it on timing alone. One is added for the
+// rounding of the first refill.
+func inviteRefillAllowance(elapsed time.Duration, perMinute int) int {
+	return 1 + int(math.Ceil(elapsed.Minutes()*float64(perMinute)))
 }
 
 // peerIP returns the i-th distinct TEST-NET-1 address (1..254).
@@ -947,6 +958,7 @@ func TestOnceSet_Bounded(t *testing.T) {
 func TestInviteRateLimit_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
 	admitted := 0
+	start := time.Now()
 	for i := range 50 {
 		peer := fmt.Sprintf("[fd12:3456:789a:1::%x]", i+1)
 		for j := range 2 {
@@ -955,7 +967,7 @@ func TestInviteRateLimit_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) 
 			}
 		}
 	}
-	if admitted > inviteDirectLANPrefixRateBurst+1 {
+	if admitted > inviteDirectLANPrefixRateBurst+inviteRefillAllowance(time.Since(start), inviteDirectLANPrefixRatePerMinute) {
 		t.Fatalf("one LAN /64 rotating 50 addresses got %d requests through, want at most the aggregate burst of %d", admitted, inviteDirectLANPrefixRateBurst)
 	}
 	if admitted < inviteDirectLANPrefixRateBurst {
@@ -1097,12 +1109,13 @@ func TestInviteRateLimit_CfMarkedULARotationIsCapped(t *testing.T) {
 	t.Cleanup(func() { unlistedConnectors = saved })
 	h := newInviteLimitHarness(t, false)
 	admitted := 0
+	start := time.Now()
 	for i := range 100 {
 		if w := h.get(inviteTestToken(i), fmt.Sprintf("[fd12:3456:789a:1::%x]", 0x100+i), map[string]string{"Cf-Ray": "x"}); w.Code == http.StatusOK {
 			admitted++
 		}
 	}
-	if admitted > inviteUnlistedLANPrefixRateBurst+1 {
+	if admitted > inviteUnlistedLANPrefixRateBurst+inviteRefillAllowance(time.Since(start), inviteUnlistedLANPrefixRatePerMinute) {
 		t.Fatalf("Cf-marked ULA rotation: %d of 100 admitted, want at most the aggregate burst of %d", admitted, inviteUnlistedLANPrefixRateBurst)
 	}
 	allowed, limited, _ := countAllowedUntilLimited(t, inviteAuthRateBurst+10, func(i int) *httptest.ResponseRecorder {
@@ -1645,6 +1658,7 @@ func TestInviteRateLimit_DirectLANTrafficSpendsTheGlobalLayer(t *testing.T) {
 func TestInviteRateLimit_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *testing.T) {
 	h := newInviteLimitHarness(t, false)
 	admitted := 0
+	start := time.Now()
 	for i := range 100 {
 		peer := fmt.Sprintf("10.0.%d.%d", i/200, i%200+1)
 		for j := range 2 {
@@ -1653,7 +1667,7 @@ func TestInviteRateLimit_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *test
 			}
 		}
 	}
-	if admitted < inviteDirectLANTotalRateBurst || admitted > inviteDirectLANTotalRateBurst+1 {
+	if admitted < inviteDirectLANTotalRateBurst || admitted > inviteDirectLANTotalRateBurst+inviteRefillAllowance(time.Since(start), inviteDirectLANTotalRatePerMinute) {
 		t.Fatalf("direct IPv4 alias rotation: %d of 200 admitted, want the direct total's burst of %d", admitted, inviteDirectLANTotalRateBurst)
 	}
 	for i := range inviteGlobalRateBurst - inviteDirectLANTotalRateBurst - 5 {
@@ -1672,12 +1686,13 @@ func TestInviteRateLimit_CfMarkedIPv4AliasRotationIsCapped(t *testing.T) {
 
 	h := newInviteLimitHarness(t, false)
 	admitted := 0
+	start := time.Now()
 	for i := range 100 {
 		if w := h.get(inviteTestToken(i), fmt.Sprintf("10.0.0.%d", i+100), cf); w.Code == http.StatusOK {
 			admitted++
 		}
 	}
-	if admitted < inviteUnlistedLANPrefixRateBurst || admitted > inviteUnlistedLANPrefixRateBurst+1 {
+	if admitted < inviteUnlistedLANPrefixRateBurst || admitted > inviteUnlistedLANPrefixRateBurst+inviteRefillAllowance(time.Since(start), inviteUnlistedLANPrefixRatePerMinute) {
 		t.Fatalf("Cf-marked rotation within one /24: %d of 100 admitted, want the /24 aggregate's burst of %d", admitted, inviteUnlistedLANPrefixRateBurst)
 	}
 	if w := h.get(inviteTestToken(500), "10.0.0.50", nil); w.Code != http.StatusOK {
@@ -1686,12 +1701,13 @@ func TestInviteRateLimit_CfMarkedIPv4AliasRotationIsCapped(t *testing.T) {
 
 	h = newInviteLimitHarness(t, false)
 	admitted = 0
+	start = time.Now()
 	for i := range 100 {
 		if w := h.get(inviteTestToken(i), fmt.Sprintf("10.0.%d.9", i), cf); w.Code == http.StatusOK {
 			admitted++
 		}
 	}
-	if admitted < inviteUnlistedLANTotalRateBurst || admitted > inviteUnlistedLANTotalRateBurst+1 {
+	if admitted < inviteUnlistedLANTotalRateBurst || admitted > inviteUnlistedLANTotalRateBurst+inviteRefillAllowance(time.Since(start), inviteUnlistedLANTotalRatePerMinute) {
 		t.Fatalf("Cf-marked rotation across 100 /24s: %d admitted, want the unlisted total's burst of %d", admitted, inviteUnlistedLANTotalRateBurst)
 	}
 }
@@ -1704,6 +1720,7 @@ func TestInviteRateLimit_CfMarkedRotationAcrossSlash64sCannotDrainTheGlobal(t *t
 	withFreshUnlistedWarnings(t)
 	h := newInviteLimitHarness(t, false)
 	admitted := 0
+	start := time.Now()
 	for i := range 60 {
 		for j := range 3 {
 			peer := fmt.Sprintf("[fd12:3456:%x::%x]", 0x100+i, j+1)
@@ -1712,7 +1729,7 @@ func TestInviteRateLimit_CfMarkedRotationAcrossSlash64sCannotDrainTheGlobal(t *t
 			}
 		}
 	}
-	if admitted < inviteUnlistedLANTotalRateBurst || admitted > inviteUnlistedLANTotalRateBurst+1 {
+	if admitted < inviteUnlistedLANTotalRateBurst || admitted > inviteUnlistedLANTotalRateBurst+inviteRefillAllowance(time.Since(start), inviteUnlistedLANTotalRatePerMinute) {
 		t.Fatalf("Cf-marked rotation across 60 /64s: %d of 180 admitted, want the unlisted total's burst of %d", admitted, inviteUnlistedLANTotalRateBurst)
 	}
 	// What is left of the global burst is still there for everyone else.
