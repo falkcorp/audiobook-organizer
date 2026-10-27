@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_memory_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0f7c1e-2d64-4f0b-9a57-3c8e1d6a9b42
 // last-edited: 2026-10-26
 
@@ -183,10 +183,10 @@ func TestCanaryMemory_APassDoesNotEraseANewerFailure(t *testing.T) {
 	markCanaryFailed(batKey)
 	gen := canaryGeneration(batKey)
 	markCanaryFailed(batKey) // another dispatch's failure of a machine already remembered
-	if forgetCanaryIf(batKey, gen, nil, nil) || !failedCanaryBefore(batKey) {
+	if forgetCanaryIf(batKey, gen, nil, nil, nil) || !failedCanaryBefore(batKey) {
 		t.Fatal("a newer failure of an already remembered machine was erased by an older answer")
 	}
-	if !forgetCanaryIf(batKey, canaryGeneration(batKey), nil, nil) || failedCanaryBefore(batKey) {
+	if !forgetCanaryIf(batKey, canaryGeneration(batKey), nil, nil, nil) || failedCanaryBefore(batKey) {
 		t.Fatal("an answer to the latest failure must forget the machine")
 	}
 
@@ -196,7 +196,7 @@ func TestCanaryMemory_APassDoesNotEraseANewerFailure(t *testing.T) {
 	gen = canaryGeneration(batKey)
 	clearCanaryFailed(batKey)
 	markCanaryFailed(batKey)
-	if forgetCanaryIf(batKey, gen, nil, nil) || !failedCanaryBefore(batKey) {
+	if forgetCanaryIf(batKey, gen, nil, nil, nil) || !failedCanaryBefore(batKey) {
 		t.Fatal("a failure recorded after the entry was cleared was erased by an answer from before")
 	}
 
@@ -208,7 +208,7 @@ func TestCanaryMemory_APassDoesNotEraseANewerFailure(t *testing.T) {
 		t.Fatalf("generation of a machine that is not remembered = %d, want 0", gen)
 	}
 	markCanaryFailed(batKey)
-	if forgetCanaryIf(batKey, gen, nil, nil) || !failedCanaryBefore(batKey) {
+	if forgetCanaryIf(batKey, gen, nil, nil, nil) || !failedCanaryBefore(batKey) {
 		t.Fatal("a failure recorded after the dispatch asked was erased by it")
 	}
 }

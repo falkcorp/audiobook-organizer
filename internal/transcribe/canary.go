@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-26
 
@@ -84,7 +84,15 @@ var canaryFailed = struct {
 	// nothing happened in between.
 	seq uint64
 	m   map[string]*canaryEntry
-}{m: make(map[string]*canaryEntry)}
+	// byURL is the last STRONG identity (an "m:" machine key) a probe reported
+	// for each endpoint URL, as far as this process has seen: the one thing that
+	// outlives a worker's identity changing (see noteCanaryPort). It is the
+	// link between a URL and the machine remembered for it when the worker
+	// answers as "u:" (it restarted under memory pressure and missed its
+	// MACHINE_ID_WAIT_S) or its /health cannot be read. Bounded by the
+	// configured URLs: pruneUnconfiguredCanaryURLs.
+	byURL map[string]string
+}{m: make(map[string]*canaryEntry), byURL: make(map[string]string)}
 
 // canaryEntry is what is remembered about one machine that failed the canary.
 type canaryEntry struct {
@@ -110,6 +118,14 @@ func markCanaryFailed(key string, ports ...string) {
 }
 
 func markCanaryFailedLocked(key string, ports []string) {
+	if canaryFailed.m[key] == nil && !isStrongKey(key) {
+		// A weak identity with no entry of its own: an entry another dispatch
+		// moved to the worker's new key (or that remembers the machine behind
+		// this URL) is where the failure belongs, not a new "u:" entry beside it.
+		if rk := resolveCanaryKeyLocked(key, ports); rk != "" {
+			key = rk
+		}
+	}
 	canaryFailed.seq++
 	e := canaryFailed.m[key]
 	if e == nil {
@@ -120,6 +136,72 @@ func markCanaryFailedLocked(key string, ports []string) {
 	for _, u := range ports {
 		e.ports[u] = true
 	}
+	if isStrongKey(key) {
+		// Every URL a probe has ever attributed to this machine is one of its
+		// ports, up or down right now (S1 of the re-review of #4193): a port
+		// that was refused with no machine when the machine failed is never
+		// among the ports the dispatch saw for it, and without this the machine
+		// could be forgotten on its other ports and the down port later given
+		// work with no canary.
+		for u, k := range canaryFailed.byURL {
+			if k == key {
+				e.ports[u] = true
+			}
+		}
+	}
+}
+
+// isStrongKey reports whether key is a machine identity ("m:" + the id the
+// worker reports), as opposed to the weaker ones: "u:" (a worker too old to
+// report one, or one whose lookup missed its wait) and "?" (no /health). A
+// weak key is a function of one URL and says nothing about the machine.
+func isStrongKey(key string) bool { return strings.HasPrefix(key, "m:") }
+
+// resolveCanaryKeyLocked is the key of the entry that remembers an endpoint
+// whose identity in the current dispatch is key and whose URLs are urls, or ""
+// when none does. The endpoint's own key first. Failing that, a weak identity
+// is looked up through what is known of its URLs (the strong identity a probe
+// last reported for it, then any entry listing it as a port): the machine behind
+// a URL does not change because its worker lost, or has not yet reported, its
+// machine id, and an entry another dispatch moved to the worker's new key while
+// this one waited is still the entry for it. A strong key names its machine, so
+// it never resolves to another one's entry.
+func resolveCanaryKeyLocked(key string, urls []string) string {
+	if canaryFailed.m[key] != nil {
+		return key
+	}
+	if isStrongKey(key) {
+		return ""
+	}
+	for _, u := range urls {
+		if k := canaryFailed.byURL[u]; k != "" && canaryFailed.m[k] != nil {
+			return k
+		}
+	}
+	var found string
+	for k, e := range canaryFailed.m {
+		for _, u := range urls {
+			if e.ports[u] && (found == "" || k < found) {
+				found = k
+			}
+		}
+	}
+	return found
+}
+
+// canaryMemoryKey is resolveCanaryKeyLocked under the lock.
+func canaryMemoryKey(key string, urls ...string) string {
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	return resolveCanaryKeyLocked(key, urls)
+}
+
+// endpointRemembered is the one question every part of the dispatcher asks
+// about an endpoint: is the machine behind it remembered as having failed the
+// canary clip and not answered one since? It is when the endpoint's own key is
+// remembered, or when its URL leads to a remembered entry (resolveCanaryKeyLocked).
+func endpointRemembered(key, url string) bool {
+	return canaryMemoryKey(key, url) != ""
 }
 
 func clearCanaryFailed(key string) {
@@ -128,13 +210,14 @@ func clearCanaryFailed(key string) {
 	delete(canaryFailed.m, key)
 }
 
-// canaryGeneration is the generation of key's entry, or 0 when the machine is
+// canaryGeneration is the generation of the entry that remembers key (or, for a
+// weak key, one of urls: see resolveCanaryKeyLocked), or 0 when the machine is
 // not remembered (generations start at 1). A dispatch takes it before it asks
 // the machine the canary clip and hands it back to forgetCanaryIf.
-func canaryGeneration(key string) uint64 {
+func canaryGeneration(key string, urls ...string) uint64 {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
-	if e := canaryFailed.m[key]; e != nil {
+	if e := canaryFailed.m[resolveCanaryKeyLocked(key, urls)]; e != nil {
 		return e.gen
 	}
 	return 0
@@ -145,31 +228,69 @@ func canaryGeneration(key string) uint64 {
 // dispatch saw when it began to ask (gen), so a failure another dispatch
 // recorded in the meantime is not erased by this dispatch's older answer, and
 // (b) no port of it is unheard (hasUnheardPort). Both are decided under one
-// lock. It reports whether the machine was forgotten.
-func forgetCanaryIf(key string, gen uint64, refused []gpuRefusal, kept []gatedEndpoint) bool {
+// lock. The entry is the one that remembers key or, for a weak key, urls (the
+// ports that answered): it may have moved to another key since the dispatch
+// began (resolveCanaryKeyLocked). It reports whether the machine was forgotten.
+func forgetCanaryIf(key string, gen uint64, urls []string, refused []gpuRefusal, kept []gatedEndpoint) bool {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
-	e := canaryFailed.m[key]
-	if e == nil || e.gen != gen || e.hasUnheardPort(key, refused, kept) {
+	rk := resolveCanaryKeyLocked(key, urls)
+	e := canaryFailed.m[rk]
+	if e == nil || e.gen != gen || e.hasUnheardPort(rk, refused, kept) {
 		return false
 	}
-	delete(canaryFailed.m, key)
+	delete(canaryFailed.m, rk)
 	return true
 }
 
-// noteCanaryPort records that a probe reported url as a port of machine key.
-// A URL belongs to one machine at a time, so it leaves every other entry's set;
-// it joins key's only if the machine is remembered.
+// noteCanaryPort records that a probe of url reported identity key.
+//
+// A strong identity (an "m:" machine key) is what ties a URL to a machine: the
+// URL belongs to one machine at a time, so it leaves every other entry's set,
+// byURL points at it, and it joins key's set if the machine is remembered. A
+// weaker one (key "u:" or "?") says nothing about the machine, only that the
+// worker did not report one just now (B-2 of the re-review of #4193: a worker
+// restarted under memory pressure answers as "u:" while its machine is still
+// remembered under "m:"), so it takes nothing from any other entry and leaves
+// byURL alone: it only joins its own entry's set, if it has one.
 func noteCanaryPort(key, url string) {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
-	for k, e := range canaryFailed.m {
-		if k != key {
-			delete(e.ports, url)
+	if isStrongKey(key) {
+		for k, e := range canaryFailed.m {
+			if k != key {
+				delete(e.ports, url)
+			}
 		}
+		canaryFailed.byURL[url] = key
 	}
 	if e := canaryFailed.m[key]; e != nil {
 		e.ports[url] = true
+	}
+}
+
+// pruneUnconfiguredCanaryURLs drops every URL that is not one of the configured
+// endpoints from byURL and from every entry's port set, so neither grows with
+// endpoints an operator has since removed (nit 6 of the re-review of #4193).
+// Every production caller of dispatchPool passes the whole configured pool.
+func pruneUnconfiguredCanaryURLs(configured []Endpoint) {
+	keep := make(map[string]bool, len(configured))
+	for _, ep := range configured {
+		keep[ep.URL] = true
+	}
+	canaryFailed.mu.Lock()
+	defer canaryFailed.mu.Unlock()
+	for u := range canaryFailed.byURL {
+		if !keep[u] {
+			delete(canaryFailed.byURL, u)
+		}
+	}
+	for _, e := range canaryFailed.m {
+		for u := range e.ports {
+			if !keep[u] {
+				delete(e.ports, u)
+			}
+		}
 	}
 }
 
@@ -196,9 +317,14 @@ func hasUnheardPort(key string, refused []gpuRefusal, kept []gatedEndpoint) bool
 	return e != nil && e.hasUnheardPort(key, refused, kept)
 }
 
+// A refusal counts for the machine when it names it, or when it
+// names no machine or only a weak identity (the worker's /health could not be
+// read, or it answered as "u:") and its URL is a known port of the machine: a
+// weak identity never moves a URL off a machine (noteCanaryPort), so it cannot
+// vouch that the port is anyone else's.
 func (e *canaryEntry) hasUnheardPort(key string, refused []gpuRefusal, kept []gatedEndpoint) bool {
 	for _, r := range refused {
-		if r.Machine == key || (r.Machine == "" && e.ports[r.URL]) {
+		if r.Machine == key || (!isStrongKey(r.Machine) && e.ports[r.URL]) {
 			return true
 		}
 	}
@@ -238,20 +364,30 @@ func refusedPorts(refused []gpuRefusal, key string) []string {
 // a fresh chunk. Only the worker's own earlier keys are touched, and only once
 // it has a better one, so another machine's memory is never read or changed.
 func pruneStaleCanaryIdentities(g gatedEndpoint) {
-	if !g.Probed {
+	reconcileCanaryIdentity(g.Endpoint.URL, g.workerID())
+}
+
+// reconcileCanaryIdentity is pruneStaleCanaryIdentities for an endpoint known by
+// its URL and the identity its probe reported (workerID: empty when it could
+// not be probed). It is also what runs for an endpoint the gate refused for its
+// capabilities (nit 5 of the re-review of #4193): its worker reports an
+// identity like any other, and a machine that is refused for what it offers
+// still has its memory moved when its identity changes.
+func reconcileCanaryIdentity(url, workerID string) {
+	if workerID == "" {
 		return
 	}
-	h := shortHash(g.Endpoint.URL)
+	h := shortHash(url)
 	stale := []string{"?" + h}
-	if strings.HasPrefix(g.workerID(), "m:") {
+	if isStrongKey(workerID) {
 		stale = append(stale, "u:"+h)
 	}
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
 	var carried bool
-	ports := []string{g.Endpoint.URL}
+	ports := []string{url}
 	for _, k := range stale {
-		if k == g.machineKey() {
+		if k == workerID {
 			continue
 		}
 		if e := canaryFailed.m[k]; e != nil {
@@ -261,10 +397,43 @@ func pruneStaleCanaryIdentities(g gatedEndpoint) {
 		}
 	}
 	if carried {
-		markCanaryFailedLocked(g.machineKey(), ports)
+		markCanaryFailedLocked(workerID, ports)
 	}
 }
 
+// reconcileCanaryMemory is what a dispatch's own gate does with what it just
+// probed: drop the URLs no longer configured, then move the memory of every
+// probed endpoint, kept or refused, to the identity it reports now.
+func reconcileCanaryMemory(configured []Endpoint, kept []gatedEndpoint, refused []gpuRefusal) {
+	pruneUnconfiguredCanaryURLs(configured)
+	for _, g := range kept {
+		pruneStaleCanaryIdentities(g)
+	}
+	for _, r := range refused {
+		reconcileCanaryIdentity(r.URL, r.Machine)
+	}
+}
+
+// noteCanaryProbes records the identity every probed endpoint reported, kept or
+// refused (see noteCanaryPort). Every gate does it, the re-probes that follow a
+// wait included: it moves no entry, and the URL-to-machine link it keeps is
+// what lets the dispatcher recognise a remembered machine again whatever its
+// worker answers as next.
+func noteCanaryProbes(kept []gatedEndpoint, refused []gpuRefusal) {
+	for _, g := range kept {
+		if g.Probed {
+			noteCanaryPort(g.machineKey(), g.Endpoint.URL)
+		}
+	}
+	for _, r := range refused {
+		if r.Machine != "" {
+			noteCanaryPort(r.Machine, r.URL)
+		}
+	}
+}
+
+// failedCanaryBefore reports whether key itself is remembered. A dispatch asks
+// endpointRemembered instead: a machine's worker does not keep one key.
 func failedCanaryBefore(key string) bool {
 	canaryFailed.mu.Lock()
 	defer canaryFailed.mu.Unlock()
