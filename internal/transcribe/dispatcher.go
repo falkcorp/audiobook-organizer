@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-26
 
@@ -167,20 +167,21 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		gated, refused = gateEndpoints(ctx, endpoints, requires)
 		kept := gated[:0:0]
 		for _, g := range gated {
+			pruneStaleCanaryIdentities(g)
 			// A wedged worker is refused for every kind of job: a request sent
 			// to it is never answered, and queueing behind it is how one bad
 			// clip parked the whole pool.
 			if reason := stuckRefusal(g); reason != "" {
-				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Stuck: true})
+				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Machine: refusalMachine(g), Stuck: true})
 				continue
 			}
 			if reason := childFaultRefusal(g); reason != "" {
-				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Transient: true})
+				refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Machine: refusalMachine(g), Transient: true})
 				continue
 			}
 			if extraRefusal != nil {
 				if reason := extraRefusal(g); reason != "" {
-					refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason})
+					refused = append(refused, gpuRefusal{URL: g.Endpoint.URL, Label: g.Endpoint.Label, Reason: reason, Machine: refusalMachine(g)})
 					continue
 				}
 			}
@@ -231,6 +232,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			len(endpoints), requires, describeRefusals(refused)))
 	}
 
+	// forget drops a machine from the remembered canary failures once it has
+	// answered, unless a port of it was refused at the gate and has not (see
+	// hasUnheardPort). Used wherever a pass would clear the memory.
+	forget := func(key string) {
+		if !hasUnheardPort(refused, key) {
+			clearCanaryFailed(key)
+		}
+	}
+
 	// Health is keyed by URL so allocateJobs keeps operating on []Endpoint
 	// and its index-based contract with the assignment slices is untouched.
 	probeByURL := make(map[string]gatedEndpoint, len(gated))
@@ -241,7 +251,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	}
 
 	if len(eligible) == 1 {
-		return dispatchSingle(ctx, probeByURL[eligible[0].URL], jobs, onProgress, send, canary)
+		return dispatchSingle(ctx, probeByURL[eligible[0].URL], refused, jobs, onProgress, send, canary)
 	}
 
 	ordered := make([]Endpoint, len(eligible))
@@ -561,7 +571,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				canaryBusy[key] = true
 			case canaryPassed:
 				canaryOK[key] = true
-				clearCanaryFailed(key)
+				forget(key)
 				dispatchLog.Info("every whisper endpoint faulted and every faulted port of this machine answered the canary clip: its timeouts are about the clips and count: machine=%s ports=%d",
 					logger.SanitizeLogValue(key), len(asks[key]))
 			}
@@ -572,10 +582,31 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// sent it on every port before it is given any work, instead of a fresh
 	// chunk that costs a full chunk of per-clip deadlines before it faults
 	// again. One that answers on every port is forgotten as sick and takes
-	// work as normal (its later faults are judged afresh). One that does not,
-	// or whose canary could not get a slot, is benched for the whole dispatch
-	// (preBenched) and counts as a machine whose canary was run, failed or
-	// busy, for the end-of-dispatch verdict below.
+	// work as normal (its later faults are judged afresh), unless a port of
+	// the machine was refused at the gate and so has not answered (forget).
+	// One that does not, or whose canary could not get a slot, is benched for
+	// the whole dispatch (preBenched) and counts as a machine whose canary was
+	// run, failed or busy, for the end-of-dispatch verdict below.
+	//
+	// A machine with a port in cooldown cannot be asked on every port yet, and
+	// asking only the others would vouch for it on partial evidence (nit 1 of
+	// review 6 of #4193). If another machine that is not known to be sick is in
+	// the pool, it is benched for this dispatch without being asked, as before:
+	// the work goes to the other machine and nothing is lost by not waiting.
+	// With no such machine (the production Mac alone, on a night llm1 is out)
+	// benching it ended the dispatch as ErrPoolUnavailable at once, which the
+	// book op counts toward its five-page stop, so six pages in flight could
+	// end the night's run inside one cooldown (at most five minutes) for a Mac
+	// that would have passed the canary afterwards. So the dispatch waits the
+	// cooldown out, bounded by the same pacing allowance as the round loop's
+	// paceWait (paceUntil) and in steps of poolPaceInterval, then asks every
+	// port. A cooldown that outlasts the allowance is no verdict, exactly as a
+	// canary that could not get a request slot is: the machine is benched and
+	// not remembered afresh, and the dispatch defers without counting toward
+	// the ops' stop limits. A cancelled op returns from the wait with nothing
+	// benched; the round loop returns the cancellation. The ops tick the
+	// watchdog around the whole dispatch call (tickWhileWaiting), as for every
+	// other wait in this function.
 	preflight := func() {
 		asks := make(map[string][]string)
 		unaskable := make(map[string]bool)
@@ -592,23 +623,84 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		if (len(asks) == 0 && len(unaskable) == 0) || ctx.Err() != nil {
 			return
 		}
-		// A port that cannot be asked cannot vouch for its machine: benched,
-		// with nothing learned, so it stays remembered.
+		// A machine with a port that cannot be asked yet is asked on none.
 		for k := range unaskable {
 			delete(asks, k)
-			preBenched[k], canaryRan[k] = true, true
 		}
-		for key, v := range askCanaries(asks, "a whisper machine that failed the canary clip in an earlier dispatch was asked it again") {
-			switch v {
-			case canaryPassed:
-				clearCanaryFailed(key)
-				dispatchLog.Info("a whisper machine that failed the canary clip in an earlier dispatch answered it on every port: it takes work again: machine=%s",
-					logger.SanitizeLogValue(key))
-				continue
-			case canaryWasBusy:
-				canaryBusy[key] = true
+		const why = "a whisper machine that failed the canary clip in an earlier dispatch was asked it again"
+		// settle applies the verdicts of askCanaries.
+		settle := func(verdicts map[string]canaryVerdict, asked map[string][]string) {
+			for key, v := range verdicts {
+				switch v {
+				case canaryPassed:
+					forget(key)
+					dispatchLog.Info("a whisper machine that failed the canary clip in an earlier dispatch answered it on every port: it takes work again: machine=%s ports=%d",
+						logger.SanitizeLogValue(key), len(asked[key]))
+					continue
+				case canaryWasBusy:
+					canaryBusy[key] = true
+				}
+				preBenched[key], canaryRan[key] = true, true
 			}
-			preBenched[key], canaryRan[key] = true, true
+		}
+		settle(askCanaries(asks, why), asks)
+		waitLogged := false
+		for len(unaskable) > 0 && ctx.Err() == nil {
+			// Another machine that is not known to be sick can take the work.
+			if slices.ContainsFunc(ordered, func(ep Endpoint) bool {
+				k := keyOf(ep.URL)
+				return !unaskable[k] && !preBenched[k]
+			}) {
+				for k := range unaskable {
+					preBenched[k], canaryRan[k] = true, true
+				}
+				return
+			}
+			cooling := make(map[string]bool)
+			var coolingURLs []string
+			for _, ep := range ordered {
+				if k := keyOf(ep.URL); unaskable[k] && endpointInCooldown(ep.URL) {
+					cooling[k] = true
+					coolingURLs = append(coolingURLs, ep.URL)
+				}
+			}
+			ready := make(map[string][]string)
+			for _, ep := range ordered {
+				if k := keyOf(ep.URL); unaskable[k] && !cooling[k] {
+					ready[k] = append(ready[k], ep.URL)
+				}
+			}
+			if len(ready) > 0 {
+				for k := range ready {
+					delete(unaskable, k)
+					if !failedCanaryBefore(k) {
+						// Another dispatch asked it and cleared it meanwhile.
+						delete(ready, k)
+					}
+				}
+				settle(askCanaries(ready, why), ready)
+				continue
+			}
+			wait, ok := cooldownWait(coolingURLs, paceUntil)
+			if !ok {
+				if time.Now().Before(paceUntil) {
+					continue // the last cooldown ended between the checks
+				}
+				for k := range unaskable {
+					preBenched[k], canaryRan[k], canaryBusy[k] = true, true, true
+					dispatchLog.Warn("a whisper machine that failed the canary clip in an earlier dispatch still has a port in cooldown after waiting %s: no verdict on it, the jobs are deferred: machine=%s",
+						poolPaceMax, logger.SanitizeLogValue(k))
+				}
+				return
+			}
+			if !waitLogged {
+				waitLogged = true
+				dispatchLog.Warn("every whisper machine that could take work failed the canary clip in an earlier dispatch and one has a port in cooldown; waiting for the cooldown to end before asking it: machines=%d",
+					len(unaskable))
+			}
+			if sleepCtx(ctx, min(wait, poolPaceInterval)) != nil {
+				return
+			}
 		}
 	}
 	faultLimit := min(2, len(ordered))
@@ -1234,7 +1326,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 //     that is NOT a recognised outage: the ops defer the unanswered jobs and go
 //     on, and the gate refuses the worker while it reports the fault (pacing,
 //     see dispatchPool).
-func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string]J, onProgress ProgressFunc, send endpointSender[J], canary canaryFunc) (map[string]BatchResult, error) {
+func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRefusal, jobs map[string]J, onProgress ProgressFunc, send endpointSender[J], canary canaryFunc) (map[string]BatchResult, error) {
 	url := g.Endpoint.URL
 	canaryAsked := false
 	// holdKills: the worker's fault was mostly decoder kills, so its
@@ -1251,7 +1343,12 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, jobs map[string
 		case ctx.Err() != nil:
 			return results, classifyTransport([]string{url}, ctx.Err())
 		case cerr == nil:
-			clearCanaryFailed(key)
+			// Forgotten only if this was every port of its machine: a sibling
+			// the gate refused has not answered, and when it is eligible again
+			// the pool asks every port before it gets work.
+			if !hasUnheardPort(refused, key) {
+				clearCanaryFailed(key)
+			}
 		case errors.Is(cerr, errCanarySlotBusy):
 			return results, classifyTransport([]string{url}, fmt.Errorf(
 				"the only whisper endpoint failed the canary clip in an earlier dispatch and %w, so it is sent no work and the jobs are deferred", cerr))
@@ -1431,16 +1528,29 @@ var (
 // put it in. ok is false when there is no such endpoint, or the pacing
 // allowance is spent.
 func paceWait(ordered []Endpoint, lastErr map[string]error, paceUntil time.Time) (time.Duration, bool) {
+	var urls []string
+	for _, ep := range ordered {
+		if lastErr[ep.URL] == nil {
+			urls = append(urls, ep.URL)
+		}
+	}
+	return cooldownWait(urls, paceUntil)
+}
+
+// cooldownWait is how long until the first of urls that is in cooldown comes
+// out of it, capped at what is left of the pacing allowance. ok is false when
+// none of them is in cooldown or the allowance is spent.
+func cooldownWait(urls []string, paceUntil time.Time) (time.Duration, bool) {
 	now := time.Now()
 	if !now.Before(paceUntil) {
 		return 0, false
 	}
 	var earliest time.Time
-	for _, ep := range ordered {
-		if lastErr[ep.URL] != nil || !endpointInCooldown(ep.URL) {
+	for _, url := range urls {
+		if !endpointInCooldown(url) {
 			continue
 		}
-		until := aidispatch.DefaultHealth().CooldownUntil(endpointIDForURL(ep.URL))
+		until := aidispatch.DefaultHealth().CooldownUntil(endpointIDForURL(url))
 		if earliest.IsZero() || until.Before(earliest) {
 			earliest = until
 		}
