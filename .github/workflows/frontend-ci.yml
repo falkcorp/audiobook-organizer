@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.15.0
+# version: 2.16.0
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-10-21
+# last-edited: 2026-10-27
 
 name: Frontend CI
 
@@ -73,6 +73,15 @@ jobs:
       # covers values up to 30m; above that it must be raised upstream first.
       # nightly.yml passes the same value; keep them together.
       go-test-timeout: '25m'
+      # The reusable workflow's E2E step cannot gate anything: it installs
+      # Playwright browsers with `sudo` (into /root/.cache) but the test step
+      # runs as the runner user (looking in /home/runner/.cache), so every test
+      # fails in ms with "Executable doesn't exist", and the frontend-run helper
+      # exits 0 on failure anyway. It only burns ~20 min and has pushed this
+      # workflow past its 30 min limit. The real E2E gate is the separate
+      # "E2E (chromium)" workflow. Remove this once github-common and
+      # gha-ci-workflow-helpers are fixed upstream and the pin is bumped.
+      skip-e2e-tests: true
     secrets: inherit
 
   # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an
