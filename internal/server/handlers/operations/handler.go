@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-25
+// last-edited: 2026-10-27
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -450,6 +450,109 @@ func (h *Handler) GetOperationResult(c *gin.Context) {
 		return
 	}
 	h.respondWithResult(c, row.ResultData)
+}
+
+// Paging of GET /operations/:id/class-lists/:class.
+const (
+	// ClassListDefaultLimit is the page size when ?limit= is absent.
+	ClassListDefaultLimit = 100
+	// ClassListMaxLimit is the largest page ?limit= may ask for.
+	ClassListMaxLimit = 1000
+)
+
+// ClassListPage is one page of a stored class's ids.
+type ClassListPage struct {
+	OperationID string   `json:"operation_id"`
+	Class       string   `json:"class"`
+	Total       int      `json:"total"`
+	Offset      int      `json:"offset"`
+	Limit       int      `json:"limit"`
+	IDs         []string `json:"ids"`
+}
+
+// ClassListsNeedRerunCode is the error code of the 409 answered when an
+// operation's stored class lists do not match its result summary (a partial
+// write, a deleted row set): the only remedy is to run the operation again.
+const ClassListsNeedRerunCode = "OPERATION_CLASS_LISTS_NEED_RERUN"
+
+// GetOperationClassList implements
+// GET /operations/:id/class-lists/:class?offset=&limit=.
+//
+// An operation whose result is class-based (maintenance.credits-backfill) keeps
+// the summary and the counts in its result row and the id lists in op rows
+// beside it (database.SaveClassLists: the lists are 5-12 MB at library scale,
+// and every reader of an operation row used to decode them whole). The result
+// names them under "class_lists"; this route pages one class's ids out of the
+// rows, so every count in the result still clicks through. offset and limit
+// page the class's sorted ids (default 100, at most 1000). The same read access
+// as GET /operations/:id/result applies.
+func (h *Handler) GetOperationClassList(c *gin.Context) {
+	id, class := c.Param("id"), c.Param("class")
+	offset, err := intQuery(c, "offset", 0)
+	if err != nil || offset < 0 {
+		httputil.RespondWithValidationError(c, "offset", "must be a non-negative integer")
+		return
+	}
+	limit, err := intQuery(c, "limit", ClassListDefaultLimit)
+	if err != nil || limit < 1 {
+		httputil.RespondWithValidationError(c, "limit", "must be a positive integer")
+		return
+	}
+	limit = min(limit, ClassListMaxLimit)
+
+	row, err := h.store.GetOperationV2(id)
+	if err != nil {
+		httputil.InternalError(c, "failed to get operation", err)
+		return
+	}
+	if row == nil {
+		httputil.RespondWithNotFound(c, "operation", id)
+		return
+	}
+	if !h.repairsAccess.For(c).Require(row) {
+		return
+	}
+	var stored struct {
+		ClassLists *database.ClassListSummary `json:"class_lists"`
+	}
+	if row.ResultData != nil {
+		// A result that does not decode has no class lists to page.
+		_ = json.Unmarshal([]byte(*row.ResultData), &stored)
+	}
+	if !stored.ClassLists.Valid() {
+		httputil.RespondWithNotFound(c, "class lists of operation", id)
+		return
+	}
+	rows, ok := database.AsCapability[database.OpRowStore](h.store)
+	if !ok {
+		httputil.RespondWithServiceUnavailable(c, "the operation store cannot keep class lists")
+		return
+	}
+	ids, err := stored.ClassLists.Page(rows, id, class, offset, limit)
+	switch {
+	case err == nil:
+	case errors.Is(err, database.ErrClassListUnknown):
+		httputil.RespondWithNotFound(c, "class", class)
+		return
+	case errors.Is(err, database.ErrClassListIncomplete):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), ClassListsNeedRerunCode)
+		return
+	default:
+		httputil.InternalError(c, "failed to read class list", err)
+		return
+	}
+	httputil.RespondWithOK(c, ClassListPage{
+		OperationID: id, Class: class, Total: stored.ClassLists.Counts[class],
+		Offset: offset, Limit: limit, IDs: ids,
+	})
+}
+
+func intQuery(c *gin.Context, key string, def int) (int, error) {
+	v := c.Query(key)
+	if v == "" {
+		return def, nil
+	}
+	return strconv.Atoi(v)
 }
 
 // respondWithResult renders a stored result payload, which is a *string of JSON

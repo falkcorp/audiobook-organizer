@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_rereview_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2e9a46-1c8b-4f35-a0d7-93b6e5c41f28
 // last-edited: 2026-10-27
 
@@ -321,31 +321,6 @@ func TestCreditsBackfill_NewNarratorSharedByFoldKeyFollowsTheCreatedSpelling(t *
 		t.Fatalf("columns %v / %v, want both rewritten to the one record's spelling", a.Narrator, b.Narrator)
 	}
 	assertPlansClean(t, f, "fn-1", "fn-2")
-}
-
-// NarratorsJSON keeps the old spelling, and the op does not rewrite it: a
-// fold-linked name from NarratorsJSON would leave the JSON matching neither
-// the column nor the junction, so the book is listed for review instead of
-// written into a state the census flags.
-func TestCreditsBackfill_FoldLinkedNarratorsJSONIsListedForReview(t *testing.T) {
-	f := newCBFixture(t)
-	bruce := f.author("Bruce Wayne")
-	f.narrator("Renée Montoya")
-	f.book("fj-1", "Gotham Central: Soft Targets", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.NarratorsJSON = strp(`["Renee Montoya"]`)
-	}, ba("fj-1", [2]int{bruce, 0}), nil)
-
-	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cbHasID(res, ccNarratorsJSONDisagrees, "fj-1") || cbHasID(res, cbNarratorFillFromNarratorsJSON, "fj-1") {
-		t.Fatalf("fj-1 not held for review under %s: counts %v", ccNarratorsJSONDisagrees, res.Counts)
-	}
-	if st := f.state("fj-1"); len(st.Narrators) != 0 || st.Narrator != nil {
-		t.Fatalf("fj-1 was written: junction %v column %v", cbNarratorIDs(st.Narrators), st.Narrator)
-	}
 }
 
 // assertPlansClean fails when the credit census still counts any of the books

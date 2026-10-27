@@ -1,7 +1,7 @@
 // file: internal/server/wire_operations_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f6a7b8c9-d0e1-2345-fabc-678901234567
-// last-edited: 2026-09-20
+// last-edited: 2026-10-27
 
 package server
 
@@ -98,6 +98,7 @@ func (s *Server) wireOperationsRoutes(
 	// ── still on the legacy handler; each needs a v2 home before it can go ──
 	protected.GET("/operations/stale", s.perm(auth.PermLibraryView), operationsH.ListStaleOperations)
 	protected.GET("/operations/:id/result", s.perm(auth.PermLibraryView), operationsH.GetOperationResult)
+	protected.GET("/operations/:id/class-lists/:class", s.perm(auth.PermLibraryView), operationsH.GetOperationClassList)
 	protected.POST("/operations/clear-stale", s.perm(auth.PermSettingsManage), operationsH.ClearStaleOperations)
 	protected.POST("/operations/optimize-database", s.perm(auth.PermSettingsManage), operationsH.OptimizeDatabase)
 	protected.POST("/operations/sweep-tombstones", s.perm(auth.PermSettingsManage), operationsH.SweepTombstones)
