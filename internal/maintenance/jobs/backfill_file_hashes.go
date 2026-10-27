@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.4.1
+// version: 4.5.0
 // guid: a1000014-0000-0000-0000-000000000014
 // last-edited: 2026-10-26
 
@@ -569,6 +569,15 @@ type hashBackfillRun struct {
 	dryRun   bool
 	root     string // cleaned library root; "" when none is configured
 	workers  int
+
+	// attemptRows is how many rows THIS attempt counted and made durable (a
+	// resumed attempt's seeded counts are not in it): the proof of progress a
+	// yield needs. slowestChunk is the longest a chunk took, hashing and commit,
+	// so far this attempt: the yield margin scales with it. Both are only touched
+	// by the chunk-committing goroutine.
+	attemptRows  int64
+	slowestChunk time.Duration
+
 	// journalID is the operation-state key the chunk journal lives under, "" when
 	// the run keeps none (no operation ID to key it by, or no report to finish).
 	journalID string
@@ -994,6 +1003,7 @@ func (r *hashBackfillRun) recordOutcomes(outs []hbOutcome) error {
 		}
 		r.counts.add(o.bucket)
 		r.report.add(o.bucket, o.bf, o.reason)
+		r.attemptRows++
 	}
 	if err := r.report.flush(); err != nil {
 		return err
@@ -1004,6 +1014,48 @@ func (r *hashBackfillRun) recordOutcomes(outs []hbOutcome) error {
 		}
 	}
 	return nil
+}
+
+// hbYieldMargin is the least time left before the run's deadline at which the
+// run stops taking new chunks and hands itself back to the registry to be
+// restarted (maintenance.ErrContinueInPlace). The margin used is the larger of
+// this and twice the slowest chunk the attempt has seen, so a chunk that starts
+// just before the line still finishes and commits well inside the deadline: a
+// deadline that cancelled a chunk half way would discard its hashing (nothing is
+// recorded for a cancelled chunk) and end the run timed_out. A variable so a
+// test can move it.
+var hbYieldMargin = 5 * time.Minute
+
+// yieldDue reports whether the run should stop here and continue as a fresh
+// attempt of the same operation, and how much of the deadline is left. It is
+// true only when ALL of these hold:
+//
+//   - more rows remain (a run that is about to finish just finishes);
+//   - this attempt has made durable progress (attemptRows > 0). That is the guard
+//     against a restart loop: the registry's infinite-restart check only force-drops
+//     a row whose high-water progress is zero, which a run that has ever made
+//     progress is not, so an attempt that yielded without progress would be
+//     restarted forever;
+//   - the run has an operation ID and a report. The report, named after the
+//     operation ID, is the progress record the restarted attempt reads back (in a
+//     dry run it is the ONLY one: nothing is stored); without both, the restart
+//     would begin again from row zero, so the run goes on and, if it cannot finish,
+//     times out as before;
+//   - the context has a deadline and less than the margin is left of it.
+//
+// The deadline itself is unchanged and still kills a run that stops making
+// progress: this only fires after a chunk was committed, and a stuck run never
+// gets there.
+func (r *hashBackfillRun) yieldDue(ctx context.Context, moreRows bool) (left time.Duration, due bool) {
+	if !moreRows || r.attemptRows == 0 || r.opID == "" || r.report == nil {
+		return 0, false
+	}
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	left = time.Until(dl)
+	return left, left < max(hbYieldMargin, 2*r.slowestChunk)
 }
 
 // commitChunk makes a fully processed chunk real, in this order: journal the
@@ -1249,6 +1301,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 		end := min(start+hashBackfillChunkSize, len(files))
 		outs := make([]hbOutcome, end-start)
+		chunkBegan := time.Now()
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(run.workers)
@@ -1282,6 +1335,18 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		// are being dropped from it.
 		if rerr := run.commitChunk(start, outs); rerr != nil {
 			return fmt.Errorf("backfill-file-hashes: chunk at row %d (report %s): %w", start, reportPath, rerr)
+		}
+		if took := time.Since(chunkBegan); took > run.slowestChunk {
+			run.slowestChunk = took
+		}
+		// The chunk is on disk. If the run's time budget is nearly spent, stop
+		// here and let the registry restart the SAME operation: it continues from
+		// the report (which skips every row this attempt recorded), with a fresh
+		// timeout. This is what lets a library too big for one timeout finish.
+		if left, due := run.yieldDue(ctx, end < len(files)); due {
+			run.log("info", fmt.Sprintf("Pausing with %s of this run's time limit left, after making %d rows durable in this attempt: the operation restarts under the same id and continues from its report",
+				left.Round(time.Second), run.attemptRows), nil)
+			return fmt.Errorf("backfill-file-hashes: %w", maintenance.ErrContinueInPlace)
 		}
 	}
 
@@ -1337,6 +1402,14 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 // that lets the summary say a run was resumed when no earlier report survives; it
 // carries no row index. PR-2 moves the marker to reporter.Checkpoint; the policy
 // is unchanged by that move.
+//
+// The 4h Timeout stays what the registry makes it: a per-attempt cap that kills a
+// run that is stuck. It is not sized to the library, because the library only
+// grows: a prod dry run over 791,451 rows was cancelled by it at 307,328 and
+// could never have finished (about 21 rows/s). Instead the run watches its own
+// deadline and, between chunks, returns maintenance.ErrContinueInPlace (see
+// yieldDue); ResumeRestart is what makes the registry honour that, restarting the
+// same operation from its report with a fresh timeout.
 func (j *backfillFileHashesJob) Policy() maintenance.ExecutionPolicy {
 	return maintenance.RestartPolicy()
 }

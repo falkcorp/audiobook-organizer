@@ -1,13 +1,14 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.7.0
+// version: 3.8.0
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-10-18
+// last-edited: 2026-10-26
 
 package server
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -260,8 +261,16 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 			// piles into one bucket. Skipping is the better failure; the WARN that
 			// keeps it from being a silent one is raised above, at the point the id
 			// is obtained, because an empty id disables more than this summary.
+			//
+			// A run that yielded (maintenance.ErrContinueInPlace) is not finished: the
+			// registry restarts the same operation, which emits the summary when it
+			// really ends. Its buffered lines are still flushed, so the feed shows
+			// the attempt's work, but no summary entry says "done" in the middle.
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
+				if errors.Is(runErr, maintenance.ErrContinueInPlace) {
+					return runErr
+				}
 				if sum, serr := store.GetOperationSummaryLog(opID); serr == nil && sum != nil && sum.Result != nil {
 					activity.EmitInfo(s.activityWriter, opID, jobID, jobID, *sum.Result, activity.AlwaysShow)
 				} else {
