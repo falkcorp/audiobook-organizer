@@ -1,1 +1,0 @@
-- [ ] **Purge round-11 notes (PR 4165)** The sampler skips books with `LibraryState == "deleted"` and trashed books but not rows whose `Missing` flag is set (deliberate: a file the scanner already flagged missing is still evidence of a lost mount); revisit if a genuinely deleted-by-hand library keeps refusing.

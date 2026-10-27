@@ -1,1 +1,0 @@
-- [ ] **TODO-GH-PR-REF-PURGE** Low priority, far future: if the owner ever wants it, ask GitHub Support to purge `refs/pull/N/head` and cached views for closed PRs #4145, #4149, #4156 and #4159, which carried private library data before being superseded. A draft request exists in the session notes. The owner decided on 2026-10-26 not to send it for now.

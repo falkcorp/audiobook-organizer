@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.8 -->
+<!-- version: 10.78.9 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-27 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,131 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **PURGE-MERGE-FOLLOWUPS-4113** purge/merge follow-ups (#4113), two items
+      found in review and left out of that PR on purpose:
+      (1) `internal/organizer/organizer.go` (the same-version-group branch near
+      line 198) refuses with `LibraryCopyExistsError` whenever a holder of the
+      book's file hash is in its version group, including a library copy that is
+      already inside RootDir, such as an in-root `_copy1` twin. Consider
+      applying that library-copy backstop only when the book being organized is
+      outside RootDir, so an in-root twin is not refused for a reason that only
+      applies to a protected original. Needs a test with an in-root twin and an
+      outside-root original.
+      (2) The interactive purge and discard paths do work under the merge lock
+      that does not need it: building the purge environment (`newPurgeEnv`) and
+      the trash-progress listing (`TrashProgress`) both run while the lock taken
+      by `merge.TryLockMergeRMWWithin` is held, so a slow store read there keeps
+      every merge and combine waiting. Read what can be read before taking the
+      lock and re-read only what the lock must protect.
+
+- [ ] **TODO-RETIRED-PURGE-TRASH-UNDO-CALLERS** the retired-versions reader
+      census (PLAN.md section 4.3) lists INCLUDE sites that are not covered by
+      the callers change (3b) and belong with the purge, trash and undo work
+      (PR 4 and 5): `audiobooks/service_single.go` `purgeOne` owns-files
+      pre-check (report a new reason `holds_retired_versions`),
+      `audiobooks/service_mutation.go` `DeleteAudiobook` owns-files pre-check
+      (it runs before the hash-block side effect, so with the live-only read it
+      would pass and leave a block behind before `DeleteBook` refuses),
+      `audiobooks/trash_progress.go` (two reads, same as purge),
+      `merge/trash_restore.go` (restoring a trashed holder must carry its
+      retired versions), `versions/lifecycle.go` `PurgeVersion` (refuse a
+      `retired` version explicitly instead of relying on the default filter),
+      and the revert and combine-undo path/sibling reads in
+      `audiobooks/revert.go` and `merge/combine_journal.go` (a journaled row
+      that is now retired is changed-since). All of them are safe while nothing
+      retires a row (the fixer's Apply is not built yet), and must land before
+      the first prod retire. Open question for the owner: `deluge/discovery.go` decides whether a
+      torrent's intro fingerprint is "already tracked" through
+      `GetBookFileByAcoustID` and `GetBookFileByAcoustIDFuzzy`, which both skip
+      retired rows, so content the library holds only as a retired version would
+      be offered for import as new (the ingest path refuses it, see
+      `ErrHeldAsRetiredVersion`). Counting it as tracked needs an
+      include-retired fingerprint lookup that does not exist yet.
+
+- [ ] **TODO-VIEWER-ID** Make the native and Audiobookshelf collection surfaces resolve the
+      per-viewer identity the same way — with authentication off the native routes evaluate as
+      `_local` (`CallingUserID`), while the Audiobookshelf surface has no user and falls back to
+      "" (no viewer, so a per-user collection shows no books). Falling back to `_local` on the
+      Audiobookshelf side is NOT a safe fix on its own: an unresolved caller would read `_local`'s
+      state, which fails open. Decide what an unauthenticated Audiobookshelf caller should see
+      when auth is off, then give both surfaces one resolver. Left from the PR 4155 review (N5).
+
+- [ ] **TODO-PERUSER-BOOLEAN** Support `OR` and grouped `NOT` over per-user terms
+      (`read_status`, `progress_pct`, `last_played`) instead of refusing them. Today
+      `search.CheckPerUserBoolean` refuses a per-user term under an `OR` with a sibling or under
+      a `NOT` over a group (HTTP 400 on dynamic collection and smart playlist create/update, and
+      `members_unavailable` for a stored row), because the translator flattens every per-user term
+      into one AND list applied after the index search. The real fix is for the per-user pass to
+      evaluate the boolean tree itself: have the translator return the tree with the per-user
+      leaves left as callbacks (or evaluate each leaf to a per-viewer id set and combine the sets
+      with the index's id set per node), then delete `CheckPerUserBoolean`. The library list search
+      (`internal/audiobooks/service_query.go`, `service_search_cache.go`) no longer answers these
+      shapes as an AND: `search=` refuses them with a 400 (`audiobooks.SearchPerUserProblem` in the
+      list handler, and `search.CheckPerUserTerms` in `searchWithBleve` and in both substring
+      fallbacks for every other caller), and the web search box, whose `field:value` terms travel
+      as `filters=` JSON that cannot hold an OR or a group, sends such a query whole as `search=`
+      (`serverQuery` in `web/src/utils/searchParser.ts`) so the server can refuse it. So the list
+      needs the same change: once the tree is evaluated, the box can send the filters again, and
+      the shape refusals there go with `CheckPerUserBoolean`. The value checks
+      (`search.CheckPerUserValues`, applied to `search=`, to `filters=` through
+      `search.PerUserFilterForTerm`, and to collections and playlists: statuses, numbers, dates,
+      no patterns, lowercase names, no empty list) stay. Left from the PR 4164 re-review (B-1, S-D).
+
+- [ ] **Purge file journal follow-up (PR 4140 review, n6)** Every path check in the purge (journal path, `book_atpath` key, `BookFilesAtPath`) compares exact bytes, so a row naming the same file as `/lib//x`, in NFD instead of NFC, or in different case on a case-insensitive filesystem is not seen; storing and comparing `filepath.Clean` paths would remove the `//` and `./` forms. (The boot-time journal replay and the library-root readiness check that this item used to list as n5 landed in the same PR.)
+
+- [ ] **Purge round-10 notes (PR 4165, n-5/n-6/n-7)** (n-5) Every trash listing reads the whole pending-removal journal through `PendingFileRemovals`; with a long journal that is a full scan per listing, so cache the count or keep a counter record. (n-6) A single-book purge clears an unresolvable-path record at once, where a pass gives it three attempts; decide whether the single-book paths should count attempts too. (n-7) The boot replay can lose a race to a library scan that attaches a journaled path to a new book, in which case the replay keeps the file and clears the record (correct, but the scan has then imported a file the owner had purged): consider holding the boot replay until the first scan has finished.
+
+- [ ] **SWEEP-TOMBSTONES-UNGUARDED-REMOVE** `internal/sweep/sweeper.go:61-66` `SweepTombstones` calls `os.Remove(tomb.FilePath)` with no library-root, protected-path or still-referenced check. A tombstone whose path a live book (or a trashed one) still names, or that lies outside the library root, loses that file. Found in review of PR 4140, which therefore does not keep tombstones longer to cover a crashed purge (it journals the pending removals instead). Run the same checks the purge runs (`planPurgeFile` and an all-rows `BookIDsAtPath` lookup) before the remove.
+
+- [ ] **TODO-ABS-503-CHECK** Check once, by hand, how AudioBooth (and Plappa, if used) handle
+      the `503` that `GET /api/collections/:id` answers for a per-viewer collection whose
+      members could not be worked out (the search index rebuilding, or a stored query that is
+      now refused). The route has precedent on this surface (`play`, `progress` and the
+      playlist writes answer 503 with `{"error": ...}`), but no real client was run against it:
+      a client that treats any non-2xx answer as fatal would show an error screen instead of an
+      empty shelf. Do it before the first per-viewer collection is made on prod (there are none
+      today, and the Audiobookshelf surface cannot create one): make a dynamic collection with
+      `read_status:finished` in the web UI, restart the server so the index is rebuilding, and
+      open the collection in the app. If it misbehaves, answer 200 with no books and the
+      list's `lastUpdate` instead. Left from the PR 4164 re-review (NIT 1).
+
+- [ ] **TODO-GH-PR-REF-PURGE** Low priority, far future: if the owner ever wants it, ask GitHub Support to purge `refs/pull/N/head` and cached views for closed PRs #4145, #4149, #4156 and #4159, which carried private library data before being superseded. A draft request exists in the session notes. The owner decided on 2026-10-26 not to send it for now.
+
+- [ ] **Purge round-11 notes (PR 4165)** The sampler skips books with `LibraryState == "deleted"` and trashed books but not rows whose `Missing` flag is set (deliberate: a file the scanner already flagged missing is still evidence of a lost mount); revisit if a genuinely deleted-by-hand library keeps refusing.
+
+- [ ] **TODO-REPORTS-PRUNE** Prune `{library root}/.reports` — `backfill-file-hashes`
+      writes one report per run named for its op ID (about 100 MB of TSV for a
+      full-library run, and a rerun is a new op with a new file), and nothing ever
+      removes them, so the directory grows without bound on the library volume.
+      Decide a retention rule (keep the newest N per op kind, or by age), delete
+      only regular files this op family wrote (never follow a symlink, never
+      touch a `.pending` file of a live run), and log what was removed.
+
+- [ ] **Retired versions: per-scan cache for `RetiredBookFilesWithHash`** (#4173 review N4). While memdb is not serving and retired versions exist, each hash lookup re-enumerates every retired version (`internal/database/retired_hash_lookup.go`). Needs a scan-lifetime cache with invalidation against concurrent retire/unretire. Do before retire-apply runs library-wide scans.
+- [ ] **Retired versions: `isRetiredShell` stays true after un-retire** (#4173 review N5). A version can remain `Status=retired` with zero rows after `UnretireBookFiles`, so the shell check keeps paying extra lookups (`internal/database/retired_book_files.go`). Fix by clearing the version's status when its last row is un-retired, or by checking for rows (one extra read per shell check on the scan path).
+- [ ] **Retired versions: retire-apply must clear the durable metafetch skip** (#4173 review N-C). When a retired occupant refuses a rename collision, `recordRenameCollisionFailure` / `ApplyRenameBlocked` (`internal/metafetch/file_pipeline.go:108-125`) records a durable skip keyed on the file. Un-retiring or rehoming the occupant changes neither the file's size nor its mtime, so the skip never lifts and the rename is never retried. Retire-apply (and un-retire) needs a way to clear that skip for the paths it frees.
+
+- [ ] **TODO-TAGS-KEYWORD-FIELD** Map the search index's `tags` field as a real keyword
+      (the keyword tokenizer plus a lower-case filter), bump `bookMappingVersion`
+      (`internal/search/bleve_index.go`), and move `tag:` back into the index so it can be exact
+      inside an `OR`, an alternation or a `NOT` group. Today `tags` is analysed as words (the
+      standard analyzer: lower-cased, English stop words removed), so an index term on it matches
+      by word ("to-read" reduces to "read"; "sci-fi" is found in "hard sci-fi"; `-tag:"it"` is the
+      whole library). `tag:` is therefore pulled out of the query and applied by `GetBooksByTag`
+      (`search.SplitTagTerms`, `search.ResolveTagIDs`), which only works for a term that is a
+      conjunct of the whole query, and refuses the other shapes with a 400. The change forces a
+      FULL reindex of the library (about 100,000 books). While the index rebuilds, a whole-sent
+      query is answered by the substring fallback (`GetAudiobooks` and `searchWithinIDs` in
+      `internal/audiobooks/service_query.go`), which matches the literal query text and returns
+      about 0 rows for any fielded query, and every collection and playlist reads as
+      `members_unavailable`. Plan the window with the owner first, and fix the fallback (or hold
+      the old index until the new one is complete) before doing it. After it lands, delete the
+      refusal of `tag:` under OR/NOT, `TestTagsIndexFieldMatchesByWord_WhichIsWhyTagIsNotAnIndexTerm`
+      will fail and say so, and decide what `tags:` (the raw field name, a word match today) means.
+      Left from the PR 4175 re-review (R-B1, decision D46).
+
+- [ ] **TODO-WHISPER-TIMEOUT-FOLLOWUPS** Two things the Whisper timeout work (PR #4168) left as they are. (1) The per-book op's retry rounds (300 s retry, second-file retry) are still synchronous inside one page: a page waits for retry 1 and retry 2 in sequence while the rest of the library waits behind it. Making them a second queued pass (so the first pass keeps the workers busy) is a design change to `processTranscribePage`, not a fix; decide whether the throughput is worth it. (2) A worker older than `whisper_mlx_server.py` 1.8.0 reports no `busy_seconds` and no `child_start_error`, so it is only covered by the 600 s backstop and a stalled clip on it never converges to a per-file verdict; retire or upgrade those workers, then drop the backstop-only path in `internal/transcribe/liveness.go`. Also: the Python worker re-checks the client deadline only before each clip, so a request that queued behind a wedged inference lock still runs one clip once it gets the lock.
 
 - [ ] **TODO-RETIRED-FPIDX-SHELL-ID** after `RetireBookFiles` re-keys a row
       under the holder, its `fpidx:` LSH value (the near-duplicate fingerprint
