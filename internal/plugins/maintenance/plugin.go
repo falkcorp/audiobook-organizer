@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.91.1
+// version: 1.92.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-23
+// last-edited: 2026-10-26
 
 package maintenance
 
@@ -210,6 +210,10 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// credit lists, with each class's book ids in the result. Gate for the
 		// credits backfill (docs/plans/2026-10-04-author-narrator-credit-lists-audit.md).
 		p.creditCensusDef(),
+		// credits-backfill is DRY RUN by default (write capability): it fills
+		// and repairs the credit lists from the flat author/narrator fields,
+		// journaled per book for undo (plan PR 3, same document).
+		p.creditsBackfillDef(),
 		// author-conjunction-repair is NOT reachable from author-split-scan:
 		// SplitCompositeAuthorName("& Conrad Westmaas") returns nil (no
 		// delimiter, three words), so the split scan skips these rows entirely.

@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.0.2 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-10-26 -->
 
 # Author and narrator credit lists: read-only audit and draft migration plan
 
@@ -517,6 +517,69 @@ parallel coordination rule). The sequence must also be scheduled against the
 approved **ModifyBook migration** (`.claude/notes/modifybook-migration-plan-2026-09-13.md`),
 which rewrites about 200 Get->UpdateBook sites. Doing PR 4 after (or as part of)
 that migration avoids touching the same sites twice.
+
+#### PR 3 as built (2026-10-26)
+
+The op is `maintenance.credits-backfill` (`internal/plugins/maintenance/credits_backfill.go`),
+journal type `credits_backfill` (`internal/undo/credits_backfill.go`). `{}` is a dry
+run; `{"apply": true}` writes. `book_ids` and `limit` cut a cohort; `allow` takes
+`narrator_new_from_split`, `narrator_self_read` and `itunes`. Where it departs from
+the row above:
+
+- **The census does not go to 0 in every disagreement class.** The backfill writes
+  the classes with one safe answer: `author_id_join_empty`, `author_join_no_author_id`,
+  `author_id_not_in_join`, `author_positions_not_normalized` (and its subset
+  `author_positions_all_zero`), `author_snapshot_stale`, `narrator_column_no_junction`,
+  `narrators_json_junction_empty` and `narrator_positions_not_normalized`. Even these
+  keep the books the run did not write: held books (iTunes without the opt-in,
+  owner-manual, user-locked, unreadable guard), books in a review class (a new
+  narrator name that exists only after a split, a self-read, a combined or dangling
+  source), and books cut off by `limit`. The run's own result lists every one of
+  them by class, so a census re-run is read against that result. Tested in
+  `TestCreditsBackfill_CensusResidualIsHeldAndReviewBooks`. These census classes
+  are listed for review and never written: `author_id_dangling`, `author_id_tombstoned`,
+  `author_join_combined`, `author_id_not_primary`, `narrator_column_differs_junction`,
+  `narrator_junction_no_column`, `narrator_column_not_people` and its junction variant,
+  `narrators_json_disagrees_both`, `narrator_id_dangling`, `narrator_junction_combined`.
+  Each needs someone to pick which side is right.
+- **AuthorID going first changes the filing author.** The organizer files under the
+  join's lowest-position row, not under `AuthorID` (`resolveAuthorName`,
+  `internal/organizer/organizer.go`). Prepending `AuthorID` (`author_id_not_in_join`)
+  or breaking an all-zero tie in its favour therefore changes the path the next
+  organize would pick. Every such book is also listed in `filing_author_changes`, and
+  a user-locked author field holds the author side (`held_user_locked`).
+  `author_id_not_primary` (AuthorID present but not first) is left for review.
+- **Narrator source order.** A column the cleaner reads as people
+  (`CleanNarratorCredit`) is the source. `NarratorsJSON` is used only when the column
+  is empty, and then the column is written as the joined list so the two agree. The
+  row above put `NarratorsJSON` first.
+- **Creating a person.** No author record is ever created. A narrator record is
+  created for a column that is a single unsplit name, or for a `NarratorsJSON` array
+  entry. A name that exists only after a split is created only with
+  `allow: ["narrator_new_from_split"]`. A self-read (the column names only the book's
+  authors) is written only with `allow: ["narrator_self_read"]`. Note that the live
+  narrator sync (`syncNarratorJunctionAfterWrite`) already creates a narrator for
+  every split name on every column write, so this rule is stricter than the store.
+- **Positions come back canonical on revert.** Every credit write normalises (PR 1),
+  so a reverted all-zero join comes back as 0..n-1 in the order every reader already
+  saw. Everything else, the four flat fields included, comes back exactly. The revert
+  is compare-and-set on the whole state and refuses a book changed since.
+- **Guards.** iTunes books are held unless `allow: ["itunes"]`, because each fixer
+  needs its own DB-only clearance. Owner-manual books (Doctor Who, Big Finish,
+  Torchwood) are held. Narrator records the run created stay when a book is reverted.
+  `maintenance.purge-empty-narrators` removes the ones nothing credits.
+- **Resume** re-runs the whole pass. A book already written reads as clean and is
+  skipped. Before a resumed apply starts, each book in the operation's journal is
+  checked against its row: a book that still holds the row's post-image counts as
+  written (toward `limit` too, so a restart mid-cohort cannot overshoot it); one that
+  does not (a write refused as changed since the plan, a stop between the journal and
+  the write, or an edit since) is listed under `journal_unverified` and not counted.
+  Such a book can get a second row if this attempt writes it; the revert restores
+  from the row that matches and refuses the other. A write refused as changed since
+  the plan marks the run incomplete.
+- **Cost.** `ModifyBookCredits` rewrites the book row, so each write leaves a
+  `book_ver` snapshot and queues a search reindex. At the census numbers that is up to
+  about 55,000 rows. Run it in `limit` cohorts.
 
 ### 6.3 Risks
 

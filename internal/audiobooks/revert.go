@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.95.0
+// version: 1.96.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-26
 
@@ -970,6 +970,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertJunkAuthorCredits(c)
 	case undo.ChangeTypeJunkAuthorCreate:
 		return rs.revertJunkAuthorCreate(c)
+	case undo.ChangeTypeCreditsBackfill:
+		return rs.revertCreditsBackfill(c)
 	case undo.ChangeTypeAuthorRename:
 		return rs.revertAuthorRename(c)
 	case undo.ChangeTypeAuthorIDRepoint:
@@ -2796,6 +2798,55 @@ func (rs *RevertService) revertJunkAuthorCredits(c *database.OperationChange) er
 		return err
 	}
 	return rs.revertCreditsMove(c, snap, move.CreditsAfter, move.PrimaryChanged, move.PrimaryAfter, "junk-author repair")
+}
+
+// revertCreditsBackfill puts back the credit lists and the four flat
+// author/narrator fields maintenance.credits-backfill replaced, in ONE
+// ModifyBookCredits write: the row and both lists commit together, so a
+// half-reverted book cannot be left. Compare-and-set on the whole state
+// (undo.CheckCreditsBackfillCurrent), checked under the book and both credit
+// stripes: the pre-image goes back only while the book still holds exactly
+// what the backfill wrote; a book already back at the pre-image counts as
+// restored; any other state (a credit added, an author changed, the narrator
+// edited since) is refused with nothing written. Narrator records the backfill
+// created stay (another book may credit them since); the empty ones are
+// maintenance.purge-empty-narrators' to remove.
+//
+// The store normalises the restored lists like every credit write, so a
+// pre-image whose positions were not 0..n-1 comes back in the canonical order
+// readers already saw it in (see undo.ChangeTypeCreditsBackfill).
+func (rs *RevertService) revertCreditsBackfill(c *database.OperationChange) error {
+	before, write, err := undo.DecodeCreditsBackfill(c)
+	if err != nil {
+		return err
+	}
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	m, ok := database.AsCapability[database.BookCreditsModifier](rs.db)
+	if !ok {
+		return fmt.Errorf("this store cannot write a book's credits and row together (ModifyBookCredits); credits backfill of %s not reverted", c.BookID)
+	}
+	book, _, err := m.ModifyBookCredits(c.BookID, func(b *database.Book, credits *database.BookCreditsEdit) error {
+		cur := undo.CreditsBackfillStateOf(b, credits.Authors, credits.Narrators)
+		if cerr := undo.CheckCreditsBackfillCurrent(c.BookID, cur, before, write.After); cerr != nil {
+			if errors.Is(cerr, undo.ErrAlreadyRestored) {
+				return database.ErrSkipBookWrite
+			}
+			return cerr
+		}
+		credits.Authors = append([]database.BookAuthor(nil), before.Authors...)
+		credits.Narrators = append([]database.BookNarrator(nil), before.Narrators...)
+		before.ApplyFlatFields(b)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if book == nil {
+		return &undo.ReferentError{Reason: undo.ReasonBookMissing, Detail: fmt.Sprintf("book %s no longer exists", c.BookID)}
+	}
+	return nil
 }
 
 // revertCreditsMove puts back the junction and primary a journaled credit move

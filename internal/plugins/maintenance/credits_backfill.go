@@ -1,0 +1,1929 @@
+// file: internal/plugins/maintenance/credits_backfill.go
+// version: 1.1.0
+// guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
+// last-edited: 2026-10-26
+
+package maintenance
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"runtime"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+)
+
+// --- credits-backfill ---
+//
+// WHY THIS EXISTS. PR 3 of docs/plans/2026-10-04-author-narrator-credit-lists-audit.md
+// (owner-approved 2026-10-04, re-confirmed 2026-10-26 as D54). The UI, the list
+// endpoints and ABS read the credit lists (book_authors, book_narrators), but
+// the production census of 2026-10-26 (maintenance.credit-census) found 28,349
+// books whose narrator credit lives only in the Narrator column and 25,800
+// whose author lives only in Book.AuthorID: they look narrator-less or
+// author-less to every list reader. This op fills and repairs the lists from
+// the flat fields, so the lists can become the only truth (PR 4-6).
+//
+// SOURCES, in the plan's order: the existing join; Book.AuthorID (position 0
+// when the join lacks it, the tie-breaker when positions tie); the Book.Author
+// snapshot (only when there is neither, and only by id: no name lookup); then
+// for narrators util.CleanNarratorCredit(Narrator), the rule the column ->
+// junction sync applies (database.syncNarratorJunctionAfterWrite), and
+// NarratorsJSON when the column is empty. The census (credit_census.go)
+// classifies every book; this op plans from the same classification
+// (classifyCreditBook) and the same frozen author/narrator index, so the two
+// cannot disagree about which books are broken.
+//
+// WHAT IT NEVER DOES.
+//   - It never creates an author. Every author it credits is a record the book
+//     already names by id (AuthorID, the join, the snapshot).
+//   - It never creates a narrator from a SPLIT unless the owner opts that class
+//     in (allow: ["narrator_new_from_split"]), the rule
+//     maintenance.repair-combined-author-credits follows for authors (new
+//     people from a split only through an owner-reviewed class). A credit that
+//     is one name ("Jim Dale") may create that one narrator record, as the
+//     sync does on every write; that is not a split.
+//   - It never writes a book in a REVIEW class: ids that dangle or resolve
+//     through a tombstone, combined-name records, a narrator column that is not
+//     a list of people, a junction that disagrees with the column, a junction
+//     with no column, NarratorsJSON that disagrees with both, AuthorID in the
+//     join but not first. Those are counted and listed for a person; the plan
+//     specifies no fix for them.
+//   - It never writes Doctor Who / Big Finish / Torchwood books (owner rule:
+//     author and narrator are often swapped there and the owner applies those
+//     by hand), books with a file under books/itunes/** unless the owner opts
+//     in (allow: ["itunes"]; the write is database-only), or a book whose
+//     user-locked author would change its filing author.
+//
+// WRITES go through ModifyBookCredits (credits_store.go): the row and both
+// lists in one Pebble batch under the book and both credit stripes. Before the
+// write the book's pre-image (both lists exactly as stored and the four flat
+// fields) and the exact post-image are journaled as one
+// undo.ChangeTypeCreditsBackfill row; the write itself re-checks the pre-image
+// under the stripes and refuses if anything moved since the plan. Undo with the
+// apply operation's revert (POST /operations/:id/revert), which is
+// compare-and-set on the whole state (audiobooks.revertCreditsBackfill).
+//
+// CONCURRENCY. One item per book id, ids sorted and de-duplicated, so every
+// book is planned and written by exactly one worker: a disjoint partition by
+// book id, no two workers ever touch the same row. The pool is bounded by
+// runtime.NumCPU (registry.RunItems with Concurrency set: the default is one
+// worker). Shared state is the class accumulator (mutex) and atomics; Label
+// runs inside the workers and reads atomics only. Narrator creation is
+// resolve-or-create under the store's name-index lock, so two books naming the
+// same new narrator get one record.
+//
+// RESUME. ResumeRestart re-runs the whole pass; that is the resume. Every
+// item is idempotent: a book the earlier attempt wrote now plans clean (no
+// second journal row), so the re-run costs one read pass and writes only what
+// is left. The written lists of earlier attempts come back from this
+// operation's own journal rows (GetOperationChanges), so the result covers the
+// whole operation. A position watermark (chapters_backfill's pattern) is
+// deliberately not used: it would drop the review and held lists of every book
+// below it from the result, and every count here must click through.
+//
+// EVERY COUNT CLICKS THROUGH. The result (GET /operations/:id/result) carries
+// every class with its sorted book ids, plus a few before/after samples per
+// write class. A dry run writes nothing at all, not even journal rows.
+
+const creditsBackfillOpID = "maintenance.credits-backfill"
+
+// Opt-in keys accepted in params.allow.
+const (
+	// cbAllowNewFromSplit lets a narrator fill create records for names that
+	// came out of a split credit.
+	cbAllowNewFromSplit = "narrator_new_from_split"
+	// cbAllowSelfRead lets a column that names only the book's own authors
+	// (a self-read, or a mis-tag) become the narrator credit.
+	cbAllowSelfRead = "narrator_self_read"
+	// cbAllowITunes lets the op write (database only) books with a file under
+	// books/itunes/**.
+	cbAllowITunes = "itunes"
+)
+
+var creditsBackfillAllowKeys = []string{cbAllowNewFromSplit, cbAllowSelfRead, cbAllowITunes}
+
+// Class kinds in the result.
+const (
+	cbKindWrite         = "write"         // written (apply) or would be written (dry run)
+	cbKindReview        = "review"        // left for a person; not written
+	cbKindHeld          = "held"          // a guard held the book; not written
+	cbKindInformational = "informational" // context on books in other classes
+	cbKindError         = "error"         // the book could not be read or written
+)
+
+// Class keys. Review classes that mirror a census class use the census key.
+const (
+	// writes: authors
+	cbAuthorFillFromAuthorID    = "author_fill_from_author_id"
+	cbAuthorFillFromSnapshot    = "author_fill_from_snapshot"
+	cbAuthorIDPrepended         = "author_id_prepended"
+	cbAuthorIDFromJoin          = "author_id_from_join"
+	cbAuthorPositionsRenumbered = "author_positions_renumbered"
+	cbAuthorSnapshotRefreshed   = "author_snapshot_refreshed"
+	// writes: narrators
+	cbNarratorFillFromColumn        = "narrator_fill_from_column"
+	cbNarratorFillFromNarratorsJSON = "narrator_fill_from_narrators_json"
+	cbNarratorPositionsRenumbered   = "narrator_positions_renumbered"
+	// opt-in (write when allowed, review otherwise)
+	cbNarratorSelfRead     = cbAllowSelfRead
+	cbNarratorNewFromSplit = cbAllowNewFromSplit
+	// review: backfill-specific
+	cbAuthorSourceCombined     = "author_source_combined"
+	cbAuthorSnapshotUnresolved = "author_snapshot_unresolved"
+	cbAuthorIDDuplicateName    = "author_id_duplicate_name_in_join"
+	cbAuthorJoinNoAuthorRole   = "author_join_no_author_role"
+	cbNarratorsJSONNotPeople   = "narrators_json_not_people"
+	cbNarratorsJSONUnjoinable  = "narrators_json_unjoinable"
+	// held
+	cbHeldOwnerManual     = "held_owner_manual"
+	cbHeldITunes          = "held_itunes"
+	cbHeldGuardUnreadable = "held_guard_unreadable"
+	cbHeldUserLocked      = "held_user_locked"
+	// informational
+	cbFilingAuthorChanges        = "filing_author_changes"
+	cbNarratorCreatesRecord      = "narrator_creates_record"
+	cbNarratorCleanDroppedAuthor = "narrator_clean_dropped_author"
+	cbITunesDatabaseOnly         = "itunes_database_only"
+	cbLimitReached               = "limit_reached"
+	cbJournalUnverified          = "journal_unverified"
+	// errors
+	cbReadError        = "read_error"
+	cbChangedSincePlan = "changed_since_plan"
+	cbWriteFailed      = "write_failed"
+)
+
+// cbClassDef is one class as the payload describes it.
+type cbClassDef struct {
+	Key        string
+	Kind       string
+	Definition string
+}
+
+// creditsBackfillClasses is every class in report order. An opt-in class's
+// kind is decided per run (write when allowed, review otherwise).
+var creditsBackfillClasses = []cbClassDef{
+	{cbAuthorFillFromAuthorID, cbKindWrite,
+		"book_authors was empty and Book.AuthorID names a live author: the join becomes [AuthorID] at position 0. " +
+			"Fixes census author_id_join_empty."},
+	{cbAuthorFillFromSnapshot, cbKindWrite,
+		"book_authors was empty, Book.AuthorID unset, and the Book.Author snapshot names a live author by id: the join " +
+			"becomes [snapshot] and AuthorID is set to it. No name lookup, no author created."},
+	{cbAuthorIDPrepended, cbKindWrite,
+		"Book.AuthorID names a live author the join lacks: it is credited at position 0 and the rest follow in their " +
+			"order (plan PR 3: 'AuthorID always position 0 when it is missing from the join'). The organizer files a book " +
+			"under its lowest-position join row, so these books usually also appear under filing_author_changes. " +
+			"Fixes census author_id_not_in_join."},
+	{cbAuthorIDFromJoin, cbKindWrite,
+		"The join credits authors but Book.AuthorID is unset: AuthorID is set to the first author-role row in " +
+			"position order (the row the organizer already files under). Fixes census author_join_no_author_id."},
+	{cbAuthorPositionsRenumbered, cbKindWrite,
+		"book_authors positions were not 0..n-1 (duplicates such as every row at 0, gaps, negatives): renumbered in " +
+			"position order, Book.AuthorID first among tied rows (plan: AuthorID is the tie-breaker). Fixes census " +
+			"author_positions_not_normalized and author_positions_all_zero."},
+	{cbAuthorSnapshotRefreshed, cbKindWrite,
+		"The persisted Book.Author snapshot named another author or an old name: it is refreshed to the primary " +
+			"author's current record. Fixes census author_snapshot_stale."},
+	{cbNarratorFillFromColumn, cbKindWrite,
+		"book_narrators was empty and the Narrator column is a list of people: the junction becomes " +
+			"util.CleanNarratorCredit(column, the book's authors), the rule the column->junction sync uses (first row " +
+			"'narrator', the rest 'co-narrator'). Fixes census narrator_column_no_junction."},
+	{cbNarratorFillFromNarratorsJSON, cbKindWrite,
+		"book_narrators and the Narrator column were empty and NarratorsJSON names narrators: the junction is filled " +
+			"from it (each entry one person, the book's own authors dropped) and the column is set to the entries joined " +
+			"(\"A and B\"), so the column, the junction and the JSON agree. Fixes census narrators_json_junction_empty."},
+	{cbNarratorPositionsRenumbered, cbKindWrite,
+		"book_narrators positions were not 0..n-1: renumbered in position order. Fixes census narrator_positions_not_normalized."},
+	{cbNarratorSelfRead, cbKindReview,
+		"OPT-IN (allow: [\"narrator_self_read\"]). book_narrators is empty and the Narrator column names only the " +
+			"book's own authors (util.CleanNarratorCredit verdict all_authors): a self-read, or a mis-tag that copied the " +
+			"author into the narrator tag. The two cannot be told apart, so it is written only when the owner allows it; " +
+			"then the junction credits the named authors as narrators."},
+	{cbNarratorNewFromSplit, cbKindReview,
+		"OPT-IN (allow: [\"narrator_new_from_split\"]). The narrator fill needs a NEW narrator record for a name that " +
+			"came out of splitting a credit (\"A, B\"). Never created without the owner's allow (same rule as " +
+			"repair-combined-author-credits); fills whose names all exist are written without it."},
+	{ccAuthorIDDangling, cbKindReview,
+		"Book.AuthorID or a book_authors row names an author id that resolves to no record. Author side not written."},
+	{ccAuthorIDTombstoned, cbKindReview,
+		"Book.AuthorID or a book_authors row names a merged-away author id. Author side not written."},
+	{ccAuthorJoinCombined, cbKindReview,
+		"book_authors credits a record whose name reads as several people: repair-combined-author-credits owns these. " +
+			"Author side not written."},
+	{ccAuthorIDNotPrimary, cbKindReview,
+		"Book.AuthorID is in the join but not first. The plan does not say which wins; reordering the join changes " +
+			"the filing author and resetting AuthorID changes the primary every AuthorID reader shows. Author side not written."},
+	{cbAuthorSourceCombined, cbKindReview,
+		"The author the backfill would credit (AuthorID or the snapshot) reads as several people (authorcredit.LooksCombined): " +
+			"crediting it would add a combined record to the join. Author side not written."},
+	{cbAuthorSnapshotUnresolved, cbKindReview,
+		"No AuthorID and no join; the Book.Author snapshot carries no id that resolves to a live author. " +
+			"The backfill does not look authors up by name."},
+	{cbAuthorIDDuplicateName, cbKindReview,
+		"Book.AuthorID is missing from the join, but the join credits a different author record with the same " +
+			"normalized name: prepending would credit one person twice. Author side not written."},
+	{cbAuthorJoinNoAuthorRole, cbKindReview,
+		"Book.AuthorID is unset and the join holds no author-role row (only narrators, editors and the like)."},
+	{ccNarratorColumnNotPeople, cbKindReview,
+		"The Narrator column is set but is not a list of people (junk, or only the book's own authors with a junction " +
+			"already present). The sync leaves these alone by design. Narrator side not written."},
+	{ccNarratorColumnNotPeopleJunctionDiffers, cbKindReview,
+		"The Narrator column is not a list of people and book_narrators names someone else. Narrator side not written."},
+	{ccNarratorColumnDiffers, cbKindReview,
+		"book_narrators is not empty and differs from the cleaned column: either can be the newer edit (the UI writes " +
+			"the junction without the column). Narrator side not written."},
+	{ccNarratorJunctionNoColumn, cbKindReview,
+		"book_narrators is not empty and the Narrator column is empty: a cleared column or a junction written directly. " +
+			"Narrator side not written."},
+	{ccNarratorsJSONDisagrees, cbKindReview,
+		"NarratorsJSON names narrators that match neither book_narrators nor the column. Narrator side not written."},
+	{ccNarratorIDDangling, cbKindReview,
+		"A book_narrators row names a narrator id that resolves to no record. Narrator side not written."},
+	{ccNarratorJunctionCombined, cbKindReview,
+		"book_narrators credits a narrator record named after several people: split-joined-narrators owns these. " +
+			"Narrator side not written."},
+	{cbNarratorsJSONNotPeople, cbKindReview,
+		"The NarratorsJSON fill was refused: an entry is not one person, or every entry is one of the book's authors."},
+	{cbNarratorsJSONUnjoinable, cbKindReview,
+		"The NarratorsJSON fill was refused: an entry contains a separator (\",\", \"&\", \"and\"), so the joined column " +
+			"would not split back into the same people."},
+	{cbHeldOwnerManual, cbKindHeld,
+		"Doctor Who / Big Finish / Torchwood (path, series, title, credits, transcription or franchise tag): the owner " +
+			"applies author/narrator fixes on these by hand. Not written."},
+	{cbHeldITunes, cbKindHeld,
+		"A file of the book is under books/itunes/**. Not written unless the run allows \"itunes\" (the write is " +
+			"database-only; no file, tag or ITL is touched)."},
+	{cbHeldGuardUnreadable, cbKindHeld,
+		"The guard could not settle where a file of the book lives (fail closed). Not written."},
+	{cbHeldUserLocked, cbKindHeld,
+		"The book's author field carries a user lock and the write would change the author it is filed under. Author " +
+			"side not written."},
+	{cbFilingAuthorChanges, cbKindInformational,
+		"The write changes the author the organizer files the book under (its lowest-position join row, else the " +
+			"snapshot, else AuthorID): the next organize may move the book's folder."},
+	{cbNarratorCreatesRecord, cbKindInformational,
+		"The narrator fill creates at least one narrator record (or would, in a dry run)."},
+	{cbNarratorCleanDroppedAuthor, cbKindInformational,
+		"util.CleanNarratorCredit dropped one of the book's own authors from the narrator credit (a self-reading " +
+			"co-narrator); the junction credits the rest, as the sync does."},
+	{cbITunesDatabaseOnly, cbKindInformational,
+		"Written (or would be) although a file is under books/itunes/**: the run allowed \"itunes\". Database only."},
+	{cbLimitReached, cbKindInformational,
+		"Eligible but not written: the run's limit was reached."},
+	{cbJournalUnverified, cbKindInformational,
+		"An earlier attempt of this operation journaled this book, but when this attempt started the book did not " +
+			"hold the state that row wrote: the write was refused (changed since the plan), the run stopped between " +
+			"the journal and the write, or the book was edited since. It is not counted as written. If this attempt " +
+			"wrote it, it is listed under the write classes too and has a second journal row; reverting the operation " +
+			"restores it from the row that matches."},
+	{cbReadError, cbKindError, "The book or its credits could not be read. The run is incomplete."},
+	{cbChangedSincePlan, cbKindError,
+		"The book changed between the plan and the write (checked under the book's locks); nothing was written. Its " +
+			"journal row stays and its revert is refused as 'changed since'. The run is incomplete; re-run (or resume) to " +
+			"pick it up."},
+	{cbWriteFailed, cbKindError, "The journal row or the write failed. The run is incomplete."},
+}
+
+// creditsBackfillParams are the op's params.
+type creditsBackfillParams struct {
+	// Apply writes; the default is a dry run that writes nothing.
+	Apply bool `json:"apply"`
+	// BookIDs restricts the run to these books (a cohort for a first apply).
+	BookIDs []string `json:"book_ids,omitempty"`
+	// Limit caps the books written by the whole operation (0 = no cap).
+	Limit int `json:"limit,omitempty"`
+	// Allow opts review classes in: narrator_new_from_split,
+	// narrator_self_read, itunes.
+	Allow []string `json:"allow,omitempty"`
+	// Attempt counts runs of this operation (the checkpoint carries it, so
+	// a resumed run knows it is one).
+	Attempt int `json:"attempt,omitempty"`
+}
+
+// creditsBackfillStore is the op's store surface. creditCensusStore (all
+// reads) plus the guard's reads, field locks, narrator creation, the journal
+// and the series names. The guard's tag reader comes from its own accessor
+// (Plugin.repairsGuardTags), as for every Repairs guard. The credit write itself is ModifyBookCredits,
+// resolved separately (database.AsCapability), so a store without it can still
+// dry-run.
+type creditsBackfillStore interface {
+	creditCensusStore
+	repairs.GuardReader
+	database.MetadataFieldStateReader
+	creditsBackfillWriter
+	GetAllSeries() ([]database.Series, error)
+}
+
+// creditsBackfillWriter is the op's write surface besides ModifyBookCredits.
+type creditsBackfillWriter interface {
+	CreateNarrator(name string) (*database.Narrator, error)
+	CreateOperationChange(change *database.OperationChange) error
+	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+}
+
+// narratorByNameReader resolves a narrator name through the store's name
+// index (resolved with database.AsCapability; the frozen index answers when
+// the store lacks it).
+type narratorByNameReader interface {
+	GetNarratorByName(name string) (*database.Narrator, error)
+}
+
+// cbCreditsView is a book's credits as a sample shows them: names, in order.
+type cbCreditsView struct {
+	Authors        []string `json:"authors"`
+	Narrators      []string `json:"narrators"`
+	AuthorID       *int     `json:"author_id,omitempty"`
+	AuthorSnapshot string   `json:"author_snapshot,omitempty"`
+	Narrator       string   `json:"narrator,omitempty"`
+	NarratorsJSON  string   `json:"narrators_json,omitempty"`
+}
+
+// cbSample is one book's before/after.
+type cbSample struct {
+	BookID  string        `json:"book_id"`
+	Title   string        `json:"title"`
+	Classes []string      `json:"classes"`
+	Before  cbCreditsView `json:"before"`
+	After   cbCreditsView `json:"after"`
+	// NewNarrators names the narrator records the write creates.
+	NewNarrators []string `json:"new_narrators,omitempty"`
+}
+
+// cbClass is one class in the result.
+type cbClass struct {
+	Key        string      `json:"key"`
+	Kind       string      `json:"kind"`
+	Definition string      `json:"definition"`
+	Count      int         `json:"count"`
+	BookIDs    []string    `json:"book_ids"`
+	Samples    []*cbSample `json:"samples,omitempty"`
+}
+
+// creditsBackfillResult is the op's result payload.
+type creditsBackfillResult struct {
+	// Mode is "dry_run" or "apply".
+	Mode string `json:"mode"`
+	// Complete is false when the run was canceled, lost the scan stand-down,
+	// or any book could not be read or written.
+	Complete bool     `json:"complete"`
+	Allowed  []string `json:"allowed"`
+	Attempt  int      `json:"attempt"`
+	Limit    int      `json:"limit,omitempty"`
+
+	BooksListed  int `json:"books_listed"`
+	BooksScanned int `json:"books_scanned"`
+	BooksGone    int `json:"books_gone"`
+	// BooksToWrite is the books in at least one write class: would be
+	// written (dry run) or written (apply, every attempt of the operation).
+	BooksToWrite int `json:"books_to_write"`
+	// BooksWrittenEarlierAttempts is the books an earlier attempt of this
+	// operation journaled and wrote: each still held its row's post-image when
+	// this attempt started. Journaled books that did not are listed under
+	// journal_unverified instead.
+	BooksWrittenEarlierAttempts int `json:"books_written_earlier_attempts,omitempty"`
+	BooksInReview               int `json:"books_in_review"`
+	BooksHeld                   int `json:"books_held"`
+	// NarratorsToCreate is the distinct narrator names the run creates (or
+	// would); NarratorsCreated the records it did create.
+	NarratorsToCreate int      `json:"narrators_to_create"`
+	NarratorNames     []string `json:"narrator_names_to_create"`
+	NarratorsCreated  int      `json:"narrators_created"`
+	// CensusBefore is the credit-census class counts over the books this run
+	// read, before it wrote anything.
+	CensusBefore map[string]int `json:"census_before"`
+	Counts       map[string]int `json:"counts"`
+	Classes      []cbClass      `json:"classes"`
+	StartedAt    time.Time      `json:"started_at"`
+	FinishedAt   time.Time      `json:"finished_at"`
+	Error        string         `json:"error,omitempty"`
+}
+
+// cbSamplesPerClass bounds the before/after samples kept per write class:
+// the smallest book ids, so a re-run shows the same books.
+const cbSamplesPerClass = 3
+
+// errCreditsBackfillChanged aborts a write whose book moved since the plan.
+var errCreditsBackfillChanged = errors.New("credits backfill: book changed since the plan")
+
+// errCreditsBackfillStandDownLost stops the apply when the scan stand-down
+// lease is lost (the scanner may be writing again).
+var errCreditsBackfillStandDownLost = errors.New("credits backfill: scan stand-down lost; remaining writes aborted")
+
+func (p *Plugin) creditsBackfillDef() sdk.OperationDef {
+	return sdk.OperationDef{
+		ID:          creditsBackfillOpID,
+		Preview:     sdk.PreviewSpec{Params: creditsBackfillParams{}},
+		Liveness:    sdk.LivenessRunItems,
+		Plugin:      "maintenance",
+		DisplayName: "Author/narrator credits backfill",
+		Description: "DRY RUN unless {\"apply\": true}. Fills and repairs the book_authors / book_narrators credit lists " +
+			"from the flat fields so every list reader sees the same credits: an empty join gets Book.AuthorID (or the " +
+			"Book.Author snapshot), a missing AuthorID is put first, positions are renumbered with AuthorID as the " +
+			"tie-breaker, an empty narrator junction gets util.CleanNarratorCredit(Narrator) (or NarratorsJSON), and a " +
+			"missing AuthorID or stale snapshot is set from the join. Never creates an author; creates a narrator from a " +
+			"split credit only with allow:[\"narrator_new_from_split\"]. Dangling, tombstoned and combined ids, non-people " +
+			"narrator credits and junction/column disagreements are listed for review, not written. Doctor Who / Big " +
+			"Finish / Torchwood books are held; iTunes books are held unless allow:[\"itunes\"]. Every write is journaled " +
+			"(pre-image of both lists and the four flat fields) and undone by the operation's revert. book_ids and limit " +
+			"apply a cohort first. Every class lists its book ids in GET /operations/:id/result, with before/after samples.",
+		// ResumeRestart: every item is idempotent (a written book plans clean),
+		// so a restart re-runs the pass and writes only what is left; the
+		// written lists of earlier attempts come back from the journal.
+		ResumePolicy:    sdk.ResumeRestart,
+		DefaultPriority: sdk.PriorityLow,
+		// Shares the census's key: a census running while the backfill writes
+		// would count a half-written library.
+		ConcurrencyKey: "maintenance.credit-census",
+		Reads:          []sdk.Resource{sdk.ResBooks, sdk.ResAuthors},
+		Cancellable:    true,
+		Isolate:        false,
+		// A full apply rewrites ~55k book rows (one synced batch each); the
+		// read pass alone is the census's cost. Generous, and a timeout loses
+		// nothing: the re-run is idempotent.
+		Timeout:      12 * time.Hour,
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Run:          p.runCreditsBackfill,
+	}
+}
+
+func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	var params creditsBackfillParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("invalid params: %w", err)
+		}
+	}
+	ops := p.deps.OpsStore()
+	if ops == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	var store creditsBackfillStore = ops
+	var mod database.BookCreditsModifier
+	if params.Apply {
+		m, ok := database.AsCapability[database.BookCreditsModifier](ops)
+		if !ok {
+			return fmt.Errorf("cannot apply: store is %T, which cannot write a book's credits and row together "+
+				"(ModifyBookCredits), and no store in its decorator chain can", ops)
+		}
+		mod = m
+	}
+	env := creditsBackfillEnv{
+		store:   store,
+		mod:     mod,
+		tags:    p.repairsGuardTags(),
+		scan:    p.deps,
+		opID:    registry.ReporterOpID(reporter),
+		workers: runtime.NumCPU(),
+	}
+	res, err := runCreditsBackfillScan(ctx, env, params, reporter)
+	if res != nil {
+		if params.Apply && res.Counts != nil && res.BooksToWrite > 0 {
+			p.deps.InvalidateAuthorsCache()
+		}
+		if serr := registry.ReporterSetResult(reporter, res); serr != nil {
+			if err == nil {
+				return fmt.Errorf("store credits backfill result: %w", serr)
+			}
+			_ = reporter.Log(slog.LevelError, "credits-backfill: result not stored", slog.String("error", serr.Error()))
+		}
+	}
+	return err
+}
+
+// creditsBackfillEnv is what one run needs besides its params.
+type creditsBackfillEnv struct {
+	store creditsBackfillStore
+	// mod writes; nil in a dry run.
+	mod database.BookCreditsModifier
+	// tags is the guard's franchise-tag reader (nil: the tag check is
+	// skipped, as repairs.GuardOwnerManualBooks documents).
+	tags repairs.GuardTagReader
+	// scan is the stand-down controller (nil: no interlock, as in tests).
+	scan ScanController
+	// opID is this operation's id ("" when the reporter cannot say: then no
+	// journal can be written, so an apply refuses).
+	opID    string
+	workers int
+}
+
+// cbAccumulator collects book ids and samples per class across workers.
+type cbAccumulator struct {
+	mu       sync.Mutex
+	byClass  map[string]map[string]bool
+	samples  map[string][]*cbSample
+	census   map[string]int
+	newNames map[string]string // normalized -> first spelling seen
+	// createdIDs are the narrator records CreateNarrator returned for names
+	// the plan did not find: two books naming one new person share one.
+	createdIDs map[int]bool
+}
+
+func newCBAccumulator() *cbAccumulator {
+	return &cbAccumulator{
+		byClass:    map[string]map[string]bool{},
+		samples:    map[string][]*cbSample{},
+		census:     map[string]int{},
+		newNames:   map[string]string{},
+		createdIDs: map[int]bool{},
+	}
+}
+
+func (a *cbAccumulator) add(bookID string, classes ...string) {
+	if len(classes) == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, c := range classes {
+		set := a.byClass[c]
+		if set == nil {
+			set = map[string]bool{}
+			a.byClass[c] = set
+		}
+		set[bookID] = true
+	}
+}
+
+func (a *cbAccumulator) addCensus(classes []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, c := range classes {
+		a.census[c]++
+	}
+}
+
+// claimCreated records the narrator records CreateNarrator returned for one
+// book and returns the ones this run had not seen before. CreateNarrator is
+// resolve-or-create, so when several workers plan the same new name, each gets
+// the one record back; only the first to claim it is told it created it, and
+// only that book's journal row names it in CreatedNarrators.
+func (a *cbAccumulator) claimCreated(created []database.Narrator) []database.Narrator {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var claimed []database.Narrator
+	for _, n := range created {
+		if a.createdIDs[n.ID] {
+			continue
+		}
+		a.createdIDs[n.ID] = true
+		claimed = append(claimed, n)
+	}
+	return claimed
+}
+
+func (a *cbAccumulator) addNewNames(names []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, n := range names {
+		k := util.NormalizeAuthor(n)
+		if _, ok := a.newNames[k]; !ok {
+			a.newNames[k] = n
+		}
+	}
+}
+
+// sample keeps s for each of its write classes when its book id is among the
+// cbSamplesPerClass smallest seen for that class.
+func (a *cbAccumulator) sample(s *cbSample, writeClasses []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, c := range writeClasses {
+		list := append(a.samples[c], s)
+		sort.Slice(list, func(i, j int) bool { return list[i].BookID < list[j].BookID })
+		if len(list) > cbSamplesPerClass {
+			list = list[:cbSamplesPerClass]
+		}
+		a.samples[c] = list
+	}
+}
+
+// cbRun is one run's shared state.
+type cbRun struct {
+	env      creditsBackfillEnv
+	params   creditsBackfillParams
+	allow    map[string]bool
+	idx      *creditCensusIndex
+	narrIdx  map[string]database.Narrator // normalized name -> record (frozen)
+	byName   narratorByNameReader         // nil: frozen index only
+	series   repairs.SeriesNamer
+	resolver *repairs.PathResolver
+	acc      *cbAccumulator
+
+	// written counts this attempt's writes, toward the limit.
+	written  atomic.Int64
+	reserved atomic.Int64
+	// priorRun is the books earlier attempts of this operation wrote whose
+	// post-image the book still held when this attempt started (verified
+	// against the journal); it counts toward the limit. priorWritten holds
+	// their write classes, priorUnverified the journaled books that did not
+	// hold their post-image. Both are read before the items run and not
+	// written after, so workers may read them without a lock.
+	priorRun        int64
+	priorWritten    map[string][]string
+	priorUnverified map[string]bool
+
+	scanned, gone, failed, planned atomic.Int64
+
+	firstErrMu sync.Mutex
+	firstErr   error
+
+	// stopCause stops the remaining items (stand-down lost).
+	stop func(error)
+	// standDown state.
+	holderID string
+	held     bool
+}
+
+func (r *cbRun) noteErr(err error) {
+	r.firstErrMu.Lock()
+	if r.firstErr == nil {
+		r.firstErr = err
+	}
+	r.firstErrMu.Unlock()
+}
+
+// runCreditsBackfillScan does the work. It returns a result whenever it got
+// as far as listing books, including on cancel or failure (Complete=false).
+func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams, reporter sdk.Reporter) (*creditsBackfillResult, error) {
+	started := time.Now()
+	allow := map[string]bool{}
+	for _, k := range params.Allow {
+		k = strings.TrimSpace(k)
+		if !slices.Contains(creditsBackfillAllowKeys, k) {
+			return nil, fmt.Errorf("unknown allow key %q (known: %s)", k, strings.Join(creditsBackfillAllowKeys, ", "))
+		}
+		allow[k] = true
+	}
+	if params.Limit < 0 {
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	if params.Apply {
+		if env.mod == nil {
+			return nil, fmt.Errorf("apply needs ModifyBookCredits")
+		}
+		if env.opID == "" {
+			return nil, fmt.Errorf("apply needs an operation id to journal its writes under, and the reporter has none")
+		}
+	}
+	params.Attempt++
+	// The checkpoint carries every param: on ResumeRestart it is merged back
+	// into the params, so a resumed apply stays an apply with the same cohort,
+	// limit and allows, and knows it is a later attempt.
+	_ = reporter.Checkpoint(params)
+
+	mode := "dry_run"
+	if params.Apply {
+		mode = "apply"
+	}
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("credits-backfill: start (%s, attempt %d)", mode, params.Attempt))
+	_ = reporter.UpdateProgress(0, 1, "Indexing authors and narrators…")
+
+	idx, err := buildCreditCensusIndex(env.store)
+	if err != nil {
+		return nil, err
+	}
+	allSeries, err := env.store.GetAllSeries()
+	if err != nil {
+		return nil, fmt.Errorf("list series: %w", err)
+	}
+	run := &cbRun{
+		env:      env,
+		params:   params,
+		allow:    allow,
+		idx:      idx,
+		narrIdx:  make(map[string]database.Narrator, len(idx.narrators)),
+		series:   repairs.SeriesNamesFrom(allSeries),
+		resolver: repairs.NewPathResolver(),
+		acc:      newCBAccumulator(),
+	}
+	// Ids in ascending order: a name shared by two records resolves to the
+	// lower id, deterministically. The store's name index (byName) wins when
+	// the store has one.
+	nids := make([]int, 0, len(idx.narrators))
+	for id := range idx.narrators {
+		nids = append(nids, id)
+	}
+	sort.Ints(nids)
+	for _, id := range nids {
+		n := idx.narrators[id]
+		if k := util.NormalizeAuthor(strings.TrimSpace(n.Name)); k != "" {
+			if _, dup := run.narrIdx[k]; !dup {
+				run.narrIdx[k] = n
+			}
+		}
+	}
+	if r, ok := database.AsCapability[narratorByNameReader](env.store); ok {
+		run.byName = r
+	}
+
+	var ids []string
+	if len(params.BookIDs) > 0 {
+		ids = slices.Clone(params.BookIDs)
+	} else {
+		ids, err = env.store.ListBookIDs()
+		if err != nil {
+			return nil, fmt.Errorf("list book ids: %w", err)
+		}
+	}
+	// Sorted and de-duplicated: one item per book, so no two workers ever
+	// plan or write the same book (the disjoint partition).
+	sort.Strings(ids)
+	ids = slices.Compact(ids)
+
+	if params.Apply {
+		holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, env.scan, reporter, "credits-backfill apply")
+		if sdErr != nil {
+			return nil, fmt.Errorf("credits-backfill: scan stand-down: %w", sdErr)
+		}
+		defer release()
+		run.holderID, run.held = holderID, held
+		if perr := run.verifyPriorAttempts(ctx); perr != nil {
+			return nil, perr
+		}
+	}
+
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	run.stop = cancel
+
+	workers := max(env.workers, 1)
+	runErr := registry.RunItems(runCtx, reporter, ids, func(_ context.Context, id string) error {
+		if run.env.scan != nil && params.Apply && scanStandDownLostForApply(run.env.scan, run.holderID, run.held) {
+			run.stop(errCreditsBackfillStandDownLost)
+			return nil
+		}
+		run.processBook(id)
+		return nil
+	}, registry.RunItemsOptions{
+		Concurrency: workers,
+		ErrMode:     registry.ErrModeCollect,
+		// Label runs inside each worker goroutine: it reads atomics only.
+		Label: func(i, total int) string {
+			verb := "to write"
+			if params.Apply {
+				verb = "written"
+			}
+			return fmt.Sprintf("Credits backfill %d/%d (%s %d, errors %d)",
+				i+1, total, verb, run.planned.Load(), run.failed.Load())
+		},
+	})
+	if cause := context.Cause(runCtx); runErr == nil && errors.Is(cause, errCreditsBackfillStandDownLost) {
+		runErr = cause
+	}
+
+	earlier := 0
+	if params.Apply {
+		earlier = run.mergeJournal()
+	}
+	res := run.result(ids, started)
+	res.BooksWrittenEarlierAttempts = earlier
+
+	var outErr error
+	switch {
+	case runErr != nil:
+		outErr = fmt.Errorf("credits backfill stopped: %w", runErr)
+	case run.failed.Load() > 0:
+		run.firstErrMu.Lock()
+		first := run.firstErr
+		run.firstErrMu.Unlock()
+		outErr = fmt.Errorf("credits backfill incomplete: %d book(s) failed, first: %w", run.failed.Load(), first)
+	}
+	res.Complete = outErr == nil
+	if outErr != nil {
+		res.Error = outErr.Error()
+	}
+	res.FinishedAt = time.Now()
+
+	summary := fmt.Sprintf("credits-backfill (%s, complete=%t): listed=%d scanned=%d to_write=%d review=%d held=%d "+
+		"narrators_to_create=%d created=%d counts=%v",
+		res.Mode, res.Complete, res.BooksListed, res.BooksScanned, res.BooksToWrite, res.BooksInReview, res.BooksHeld,
+		res.NarratorsToCreate, res.NarratorsCreated, res.Counts)
+	_ = reporter.Log(slog.LevelInfo, summary)
+	_ = reporter.UpdateProgress(len(ids), len(ids), summary)
+	return res, outErr
+}
+
+// cbJournalBook is what this operation's journal holds for one book: the
+// write classes of every row, and each row's post-image.
+type cbJournalBook struct {
+	classes []string
+	afters  []undo.CreditsBackfillState
+}
+
+// creditsBackfillJournalBooks reads this operation's credits_backfill rows by
+// book. A row that does not decode is skipped (its revert refuses it too).
+func creditsBackfillJournalBooks(store creditsBackfillWriter, opID string) (map[string]*cbJournalBook, error) {
+	out := map[string]*cbJournalBook{}
+	if opID == "" {
+		return out, nil
+	}
+	rows, err := store.GetOperationChanges(opID)
+	if err != nil {
+		return nil, fmt.Errorf("read this operation's journal: %w", err)
+	}
+	for _, c := range rows {
+		if c == nil || c.ChangeType != undo.ChangeTypeCreditsBackfill || c.BookID == "" {
+			continue
+		}
+		_, w, derr := undo.DecodeCreditsBackfill(c)
+		if derr != nil {
+			continue
+		}
+		jb := out[c.BookID]
+		if jb == nil {
+			jb = &cbJournalBook{}
+			out[c.BookID] = jb
+		}
+		jb.classes = append(jb.classes, w.Classes...)
+		jb.afters = append(jb.afters, w.After)
+	}
+	return out, nil
+}
+
+// verifyPriorAttempts reads this operation's journal before a resumed apply
+// and checks each journaled book against its rows: a book that still holds
+// a row's post-image was written; one that holds none of them was not (a
+// refused write, a stop between the journal and the write) or was edited
+// since, and is not counted. Only verified books count toward the limit and
+// as written by earlier attempts. Reads run on the run's worker count; a
+// book that cannot be read fails the attempt rather than guessing.
+func (r *cbRun) verifyPriorAttempts(ctx context.Context) error {
+	journal, err := creditsBackfillJournalBooks(r.env.store, r.env.opID)
+	if err != nil {
+		return err
+	}
+	r.priorWritten = map[string][]string{}
+	r.priorUnverified = map[string]bool{}
+	if len(journal) == 0 {
+		return nil
+	}
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(max(r.env.workers, 1))
+	for _, bookID := range slices.Sorted(maps.Keys(journal)) {
+		jb := journal[bookID]
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			holds, err := r.holdsAnyPostImage(bookID, jb.afters)
+			if err != nil {
+				return fmt.Errorf("verify earlier attempt's write of book %s: %w", bookID, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if holds {
+				r.priorWritten[bookID] = jb.classes
+			} else {
+				r.priorUnverified[bookID] = true
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	r.priorRun = int64(len(r.priorWritten))
+	return nil
+}
+
+// holdsAnyPostImage reports whether the book currently holds one of afters.
+// A book that no longer exists holds none.
+func (r *cbRun) holdsAnyPostImage(bookID string, afters []undo.CreditsBackfillState) (bool, error) {
+	book, err := r.env.store.GetBookByID(bookID)
+	if err != nil {
+		return false, err
+	}
+	if book == nil {
+		return false, nil
+	}
+	join, err := r.env.store.GetBookAuthors(bookID)
+	if err != nil {
+		return false, err
+	}
+	junction, err := r.env.store.GetBookNarrators(bookID)
+	if err != nil {
+		return false, err
+	}
+	cur := undo.CreditsBackfillStateOf(book, join, junction)
+	for _, a := range afters {
+		if undo.SameCreditsBackfillState(cur, a) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// mergeJournal adds the books earlier attempts of this operation wrote
+// (verified at the start of this attempt) to the write classes, so the result
+// covers the whole operation, and returns how many of them this attempt did
+// not write itself. Journaled books that did not hold their post-image are
+// listed under journal_unverified.
+func (r *cbRun) mergeJournal() int {
+	r.acc.mu.Lock()
+	thisAttempt := func(bookID string, classes []string) bool {
+		for _, c := range classes {
+			if r.acc.byClass[c][bookID] {
+				return true
+			}
+		}
+		return false
+	}
+	type pending struct {
+		id      string
+		classes []string
+	}
+	var adds []pending
+	earlier := 0
+	for bookID, classes := range r.priorWritten {
+		if !thisAttempt(bookID, classes) {
+			earlier++
+		}
+		adds = append(adds, pending{bookID, classes})
+	}
+	r.acc.mu.Unlock()
+	for _, a := range adds {
+		r.acc.add(a.id, a.classes...)
+	}
+	for bookID := range r.priorUnverified {
+		r.acc.add(bookID, cbJournalUnverified)
+	}
+	return earlier
+}
+
+// result builds the payload from the accumulator.
+func (r *cbRun) result(ids []string, started time.Time) *creditsBackfillResult {
+	mode := "dry_run"
+	if r.params.Apply {
+		mode = "apply"
+	}
+	res := &creditsBackfillResult{
+		Mode:         mode,
+		Allowed:      cbSortedAllow(r.allow),
+		Attempt:      r.params.Attempt,
+		Limit:        r.params.Limit,
+		BooksListed:  len(ids),
+		BooksScanned: int(r.scanned.Load()),
+		BooksGone:    int(r.gone.Load()),
+		Counts:       map[string]int{},
+		StartedAt:    started,
+	}
+	r.acc.mu.Lock()
+	defer r.acc.mu.Unlock()
+	res.CensusBefore = make(map[string]int, len(r.acc.census))
+	for k, v := range r.acc.census {
+		res.CensusBefore[k] = v
+	}
+	for _, n := range r.acc.newNames {
+		res.NarratorNames = append(res.NarratorNames, n)
+	}
+	sort.Strings(res.NarratorNames)
+	res.NarratorsToCreate = len(res.NarratorNames)
+	res.NarratorsCreated = len(r.acc.createdIDs)
+	toWrite, review, held := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, def := range creditsBackfillClasses {
+		kind := r.kindOf(def)
+		set := r.acc.byClass[def.Key]
+		bookIDs := make([]string, 0, len(set))
+		for id := range set {
+			bookIDs = append(bookIDs, id)
+		}
+		sort.Strings(bookIDs)
+		res.Classes = append(res.Classes, cbClass{
+			Key: def.Key, Kind: kind, Definition: def.Definition,
+			Count: len(bookIDs), BookIDs: bookIDs, Samples: r.acc.samples[def.Key],
+		})
+		res.Counts[def.Key] = len(bookIDs)
+		for _, id := range bookIDs {
+			switch kind {
+			case cbKindWrite:
+				toWrite[id] = true
+			case cbKindReview:
+				review[id] = true
+			case cbKindHeld:
+				held[id] = true
+			}
+		}
+	}
+	res.BooksToWrite, res.BooksInReview, res.BooksHeld = len(toWrite), len(review), len(held)
+	return res
+}
+
+// kindOf is def's kind in this run: an opt-in class is a write class when the
+// run allows it.
+func (r *cbRun) kindOf(def cbClassDef) string {
+	if (def.Key == cbNarratorSelfRead || def.Key == cbNarratorNewFromSplit) && r.allow[def.Key] {
+		return cbKindWrite
+	}
+	return def.Kind
+}
+
+func cbSortedAllow(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		if v {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// cbNarratorSlot is one planned narrator credit: an existing record (ID > 0)
+// or a name the write creates.
+type cbNarratorSlot struct {
+	Name string
+	ID   int
+}
+
+// cbPlan is what the backfill would do to one book.
+type cbPlan struct {
+	writes  []string
+	reviews []string
+	held    []string
+	infos   []string
+
+	authorWrite bool
+	authors     []database.BookAuthor // full new join (normalised by the write)
+	authorID    *int
+	snapshot    *database.Author
+	snapChanged bool
+
+	narratorWrite bool
+	narrators     []cbNarratorSlot
+	narratorRows  []database.BookNarrator // set when narrators are rows already (renumber)
+	column        *string
+	columnChanged bool
+	// newNames are the narrator names the write creates.
+	newNames []string
+
+	filingChanges bool
+}
+
+func (pl *cbPlan) hasWrite() bool { return pl.authorWrite || pl.narratorWrite }
+
+// processBook plans one book and, in an apply, writes it.
+func (r *cbRun) processBook(id string) {
+	book, err := r.env.store.GetBookByID(id)
+	if err != nil {
+		r.fail(id, cbReadError, fmt.Errorf("book %s: read book: %w", id, err))
+		return
+	}
+	if book == nil {
+		r.gone.Add(1)
+		return
+	}
+	join, err := r.env.store.GetBookAuthors(id)
+	if err != nil {
+		r.fail(id, cbReadError, fmt.Errorf("book %s: read book_authors: %w", id, err))
+		return
+	}
+	junction, err := r.env.store.GetBookNarrators(id)
+	if err != nil {
+		r.fail(id, cbReadError, fmt.Errorf("book %s: read book_narrators: %w", id, err))
+		return
+	}
+	census, err := classifyCreditBook(r.idx, book, join, junction)
+	if err != nil {
+		r.fail(id, cbReadError, fmt.Errorf("book %s: classify: %w", id, err))
+		return
+	}
+	r.scanned.Add(1)
+	r.acc.addCensus(census)
+
+	plan, err := planCreditsBackfill(r.idx, r.lookupNarrator, r.allow, book, join, junction, census, "")
+	if err != nil {
+		r.fail(id, cbReadError, fmt.Errorf("book %s: plan: %w", id, err))
+		return
+	}
+	if plan.hasWrite() {
+		g, err := r.guard(book, plan)
+		if err != nil {
+			r.fail(id, cbReadError, fmt.Errorf("book %s: guard: %w", id, err))
+			return
+		}
+		switch {
+		case g.holdAll != "":
+			plan.holdAll(g.holdAll)
+		case g.itunes && !r.allow[cbAllowITunes]:
+			plan.holdAll(cbHeldITunes)
+		default:
+			if g.authorLocked {
+				// Re-plan without the author side: the narrator credit is
+				// cleaned against the authors the book keeps.
+				if plan, err = planCreditsBackfill(r.idx, r.lookupNarrator, r.allow, book, join, junction, census, cbHeldUserLocked); err != nil {
+					r.fail(id, cbReadError, fmt.Errorf("book %s: plan: %w", id, err))
+					return
+				}
+			}
+			if g.itunes && plan.hasWrite() {
+				plan.infos = append(plan.infos, cbITunesDatabaseOnly)
+			}
+		}
+	}
+	r.acc.add(id, plan.reviews...)
+	r.acc.add(id, plan.held...)
+	if !plan.hasWrite() {
+		return
+	}
+
+	before := undo.CreditsBackfillStateOf(book, join, junction)
+	if !r.params.Apply {
+		r.planned.Add(1)
+		r.acc.add(id, plan.writes...)
+		r.acc.add(id, plan.infos...)
+		r.acc.addNewNames(plan.newNames)
+		r.acc.sample(r.sampleOf(book, before, plan), plan.writes)
+		return
+	}
+	r.apply(book, before, plan)
+}
+
+func (r *cbRun) fail(id, class string, err error) {
+	r.failed.Add(1)
+	r.acc.add(id, class)
+	r.noteErr(err)
+}
+
+// cbGuardDecision is what the hands-off checks decided for one book.
+type cbGuardDecision struct {
+	// holdAll, when set, holds the whole book under that class.
+	holdAll string
+	// itunes: a file of the book is under books/itunes/**.
+	itunes bool
+	// authorLocked: the author field carries a user lock and the plan
+	// changes the filing author.
+	authorLocked bool
+}
+
+// guard runs the hands-off checks on a book with something to write. A read
+// error is returned (fail closed: the book is not written).
+func (r *cbRun) guard(book *database.Book, plan *cbPlan) (cbGuardDecision, error) {
+	var g cbGuardDecision
+	files, err := r.env.store.GetBookFiles(book.ID)
+	if err != nil {
+		return g, fmt.Errorf("read files: %w", err)
+	}
+	paths := make([]string, 0, len(files)+1)
+	paths = append(paths, book.FilePath)
+	for _, f := range files {
+		paths = append(paths, f.FilePath)
+	}
+	seriesName := ""
+	if book.SeriesID != nil && r.series != nil {
+		seriesName = r.series(*book.SeriesID)
+	}
+	switch kind, _ := repairs.GuardBookPathsWith(r.resolver, book.ID, paths, seriesName); kind {
+	case "":
+	case repairs.SkipITunes:
+		g.itunes = true
+	case repairs.SkipOwnerManual:
+		g.holdAll = cbHeldOwnerManual
+		return g, nil
+	default:
+		g.holdAll = cbHeldGuardUnreadable
+		return g, nil
+	}
+	// The owner-manual rules beyond the path (title, credits, transcription,
+	// franchise tag); the iTunes path check is lifted here and decided above.
+	kind, _, err := repairs.GuardOwnerManualBooks(r.env.store, r.env.tags, r.series, r.resolver, []string{book.ID})
+	if err != nil {
+		return g, err
+	}
+	switch kind {
+	case "":
+	case repairs.SkipOwnerManual:
+		g.holdAll = cbHeldOwnerManual
+		return g, nil
+	default:
+		g.holdAll = cbHeldGuardUnreadable
+		return g, nil
+	}
+	if plan.authorWrite && plan.filingChanges {
+		locks, err := database.LoadFieldLocks(r.env.store, book.ID)
+		if err != nil {
+			return g, fmt.Errorf("read field locks: %w", err)
+		}
+		g.authorLocked = locks.Locked(database.FieldKeyAuthorName) && !locks.RepairLocked(database.FieldKeyAuthorName)
+	}
+	return g, nil
+}
+
+// holdAll moves every write of the plan to held under class.
+func (pl *cbPlan) holdAll(class string) {
+	pl.authorWrite, pl.narratorWrite = false, false
+	pl.writes, pl.infos, pl.newNames = nil, nil, nil
+	pl.held = append(pl.held, class)
+}
+
+// lookupNarrator resolves a narrator name to an existing record: the store's
+// name index when it has one, else the frozen index. ok is false when no
+// record holds the name.
+func (r *cbRun) lookupNarrator(name string) (database.Narrator, bool, error) {
+	if r.byName != nil {
+		n, err := r.byName.GetNarratorByName(name)
+		if err != nil {
+			return database.Narrator{}, false, fmt.Errorf("look up narrator %q: %w", name, err)
+		}
+		if n == nil {
+			return database.Narrator{}, false, nil
+		}
+		return *n, true, nil
+	}
+	n, ok := r.narrIdx[util.NormalizeAuthor(strings.TrimSpace(name))]
+	return n, ok, nil
+}
+
+// apply writes one planned book: create its new narrators, journal the pre-
+// and post-image, then ModifyBookCredits, which re-checks the pre-image under
+// the book's stripes.
+func (r *cbRun) apply(book *database.Book, before undo.CreditsBackfillState, plan *cbPlan) {
+	id := book.ID
+	if r.params.Limit > 0 {
+		if r.priorRun+r.reserved.Add(1) > int64(r.params.Limit) {
+			r.reserved.Add(-1)
+			r.acc.add(id, cbLimitReached)
+			return
+		}
+	}
+	var created []database.Narrator
+	if plan.narratorWrite && len(plan.newNames) > 0 {
+		for i, slot := range plan.narrators {
+			if slot.ID > 0 {
+				continue
+			}
+			n, err := r.env.store.CreateNarrator(slot.Name)
+			if err != nil || n == nil {
+				if err == nil {
+					err = errors.New("store returned no narrator")
+				}
+				r.unreserve()
+				r.fail(id, cbWriteFailed, fmt.Errorf("book %s: create narrator %q: %w", id, slot.Name, err))
+				return
+			}
+			plan.narrators[i].ID = n.ID
+			created = append(created, *n)
+		}
+		created = r.acc.claimCreated(created)
+	}
+
+	after := r.afterState(before, plan, id)
+	oldJSON, err := json.Marshal(before)
+	if err != nil {
+		r.unreserve()
+		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: encode pre-image: %w", id, err))
+		return
+	}
+	newJSON, err := json.Marshal(undo.CreditsBackfillWrite{After: after, Classes: plan.writes, CreatedNarrators: created})
+	if err != nil {
+		r.unreserve()
+		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: encode post-image: %w", id, err))
+		return
+	}
+	if err := r.env.store.CreateOperationChange(&database.OperationChange{
+		ID:          ulid.Make().String(),
+		OperationID: r.env.opID,
+		BookID:      id,
+		ChangeType:  undo.ChangeTypeCreditsBackfill,
+		FieldName:   "book_credits",
+		OldValue:    string(oldJSON),
+		NewValue:    string(newJSON),
+	}); err != nil {
+		r.unreserve()
+		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: journal (book NOT written): %w", id, err))
+		return
+	}
+	updated, edit, err := r.env.mod.ModifyBookCredits(id, func(b *database.Book, credits *database.BookCreditsEdit) error {
+		cur := undo.CreditsBackfillStateOf(b, credits.Authors, credits.Narrators)
+		if !undo.SameCreditsBackfillState(cur, before) {
+			return errCreditsBackfillChanged
+		}
+		credits.Authors = slices.Clone(after.Authors)
+		credits.Narrators = slices.Clone(after.Narrators)
+		after.ApplyFlatFields(b)
+		return nil
+	})
+	switch {
+	case errors.Is(err, errCreditsBackfillChanged), err == nil && updated == nil:
+		r.unreserve()
+		// Counted as a failure: the book is still dirty and the run must not
+		// read as complete until a re-run has picked it up.
+		r.fail(id, cbChangedSincePlan, fmt.Errorf("book %s changed between the plan and the write; not written", id))
+		return
+	case err != nil:
+		r.unreserve()
+		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: write (journal row already written): %w", id, err))
+		return
+	}
+	got := undo.CreditsBackfillStateOf(updated, edit.Authors, edit.Narrators)
+	if !undo.SameCreditsBackfillState(got, after) {
+		// The journaled post-image is not what the store kept: the revert of
+		// this row would refuse. Counted as a failure so the run says so.
+		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: stored credits differ from the journaled post-image", id))
+		return
+	}
+	r.written.Add(1)
+	r.planned.Add(1)
+	r.acc.add(id, plan.writes...)
+	r.acc.add(id, plan.infos...)
+	r.acc.addNewNames(plan.newNames)
+	r.acc.sample(r.sampleOf(book, before, plan), plan.writes)
+}
+
+func (r *cbRun) unreserve() {
+	if r.params.Limit > 0 {
+		r.reserved.Add(-1)
+	}
+}
+
+// afterState is the exact state the write leaves: before with the plan's
+// lists and flat fields, the lists in the form the store keeps them.
+func (r *cbRun) afterState(before undo.CreditsBackfillState, plan *cbPlan, bookID string) undo.CreditsBackfillState {
+	after := before
+	after.Authors = slices.Clone(before.Authors)
+	after.Narrators = slices.Clone(before.Narrators)
+	if plan.authorWrite {
+		after.AuthorID = plan.authorID
+		after.Author = plan.snapshot
+		after.Authors = slices.Clone(plan.authors)
+	}
+	if plan.narratorWrite {
+		after.Narrators = plan.narratorRowsOut()
+		if plan.columnChanged {
+			after.Narrator = plan.column
+		}
+	}
+	after = after.Canonical()
+	for i := range after.Authors {
+		after.Authors[i].BookID = bookID
+	}
+	for i := range after.Narrators {
+		after.Narrators[i].BookID = bookID
+	}
+	return after
+}
+
+// narratorRowsOut is the plan's narrator rows: the renumbered junction, or
+// the filled slots with the sync's roles.
+func (pl *cbPlan) narratorRowsOut() []database.BookNarrator {
+	if pl.narratorRows != nil {
+		return slices.Clone(pl.narratorRows)
+	}
+	rows := make([]database.BookNarrator, 0, len(pl.narrators))
+	for _, s := range pl.narrators {
+		role := "narrator"
+		if len(rows) > 0 {
+			role = "co-narrator"
+		}
+		rows = append(rows, database.BookNarrator{NarratorID: s.ID, Role: role, Position: len(rows)})
+	}
+	return rows
+}
+
+// sampleOf renders a book's before/after for the result.
+func (r *cbRun) sampleOf(book *database.Book, before undo.CreditsBackfillState, plan *cbPlan) *cbSample {
+	s := &cbSample{
+		BookID:       book.ID,
+		Title:        book.Title,
+		Classes:      slices.Clone(plan.writes),
+		Before:       r.viewOf(before, nil),
+		NewNarrators: slices.Clone(plan.newNames),
+	}
+	after := before
+	if plan.authorWrite {
+		after.AuthorID, after.Author = plan.authorID, plan.snapshot
+		after.Authors = database.NormalizeBookAuthors(plan.authors, plan.authorID)
+	}
+	var names []string
+	if plan.narratorWrite {
+		if plan.narratorRows != nil {
+			after.Narrators = database.NormalizeBookNarrators(plan.narratorRows)
+		} else {
+			after.Narrators = nil
+			for _, slot := range plan.narrators {
+				names = append(names, slot.Name)
+			}
+		}
+		if plan.columnChanged {
+			after.Narrator = plan.column
+		}
+	}
+	s.After = r.viewOf(after, names)
+	return s
+}
+
+// viewOf names a state's credits. narratorNames, when not nil, replaces the
+// narrator rows (a dry run's fill has no ids for new records yet).
+func (r *cbRun) viewOf(s undo.CreditsBackfillState, narratorNames []string) cbCreditsView {
+	v := cbCreditsView{Authors: []string{}, Narrators: []string{}, AuthorID: s.AuthorID}
+	for _, row := range database.NormalizeBookAuthors(s.Authors, s.AuthorID) {
+		a, state, err := r.idx.resolveAuthor(row.AuthorID)
+		switch {
+		case err != nil || state == authorDangling:
+			v.Authors = append(v.Authors, fmt.Sprintf("(missing author %d)", row.AuthorID))
+		default:
+			v.Authors = append(v.Authors, a.Name)
+		}
+	}
+	if narratorNames != nil {
+		v.Narrators = append(v.Narrators, narratorNames...)
+	} else {
+		for _, row := range database.NormalizeBookNarrators(s.Narrators) {
+			n, ok, err := r.idx.resolveNarrator(row.NarratorID)
+			if err != nil || !ok {
+				v.Narrators = append(v.Narrators, fmt.Sprintf("(missing narrator %d)", row.NarratorID))
+				continue
+			}
+			v.Narrators = append(v.Narrators, n.Name)
+		}
+	}
+	if s.Author != nil {
+		v.AuthorSnapshot = fmt.Sprintf("%d:%s", s.Author.ID, s.Author.Name)
+	}
+	if s.Narrator != nil {
+		v.Narrator = *s.Narrator
+	}
+	if s.NarratorsJSON != nil {
+		v.NarratorsJSON = *s.NarratorsJSON
+	}
+	return v
+}
+
+// narratorLookup resolves a narrator name to an existing record.
+type narratorLookup func(name string) (database.Narrator, bool, error)
+
+// planCreditsBackfill decides what the backfill does to one book. census is
+// the book's credit-census classes (classifyCreditBook). It reads nothing but
+// the frozen index (and lookup, for narrator names) and writes nothing.
+//
+// authorHold, when set, holds the author side under that class instead of
+// planning it (a guard's decision on a re-plan).
+func planCreditsBackfill(idx *creditCensusIndex, lookup narratorLookup, allow map[string]bool, book *database.Book,
+	join []database.BookAuthor, junction []database.BookNarrator, census []string, authorHold string) (*cbPlan, error) {
+	has := make(map[string]bool, len(census))
+	for _, c := range census {
+		has[c] = true
+	}
+	plan := &cbPlan{}
+	postAuthorID, postJoin := book.AuthorID, join
+	if authorHold != "" {
+		plan.held = append(plan.held, authorHold)
+	} else {
+		var err error
+		if postAuthorID, postJoin, err = planAuthorSide(idx, plan, book, join, has); err != nil {
+			return nil, err
+		}
+	}
+	authorNames, err := liveAuthorNames(idx, postAuthorID, postJoin)
+	if err != nil {
+		return nil, err
+	}
+	if err := planNarratorSide(idx, lookup, allow, plan, book, junction, has, authorNames); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// planAuthorSide fills the author half of plan. It returns the AuthorID and
+// join the book will have afterwards (unchanged when the side is not
+// written), which the narrator side cleans its credit against.
+func planAuthorSide(idx *creditCensusIndex, plan *cbPlan, book *database.Book, join []database.BookAuthor, has map[string]bool) (*int, []database.BookAuthor, error) {
+	authorID := 0
+	if book.AuthorID != nil && *book.AuthorID > 0 {
+		authorID = *book.AuthorID
+	}
+	review := func(c string) (*int, []database.BookAuthor, error) {
+		plan.reviews = append(plan.reviews, c)
+		return book.AuthorID, join, nil
+	}
+	for _, c := range []string{ccAuthorIDDangling, ccAuthorIDTombstoned, ccAuthorJoinCombined} {
+		if has[c] {
+			plan.reviews = append(plan.reviews, c)
+		}
+	}
+	if len(plan.reviews) > 0 {
+		return book.AuthorID, join, nil
+	}
+
+	var (
+		newJoin  = join
+		newID    = book.AuthorID
+		writes   []string
+		sourceID int
+	)
+	switch {
+	case authorID == 0 && len(join) == 0:
+		snap := book.Author
+		if snap == nil {
+			// no_author: nothing to build from.
+			return book.AuthorID, join, nil
+		}
+		a, state, err := idx.resolveAuthor(snap.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if snap.ID <= 0 || state != authorLive || a.ID != snap.ID {
+			return review(cbAuthorSnapshotUnresolved)
+		}
+		sourceID = a.ID
+		newJoin = []database.BookAuthor{{BookID: book.ID, AuthorID: a.ID, Role: "author", Position: 0}}
+		id := a.ID
+		newID = &id
+		writes = append(writes, cbAuthorFillFromSnapshot)
+	case authorID != 0 && len(join) == 0:
+		sourceID = authorID
+		newJoin = []database.BookAuthor{{BookID: book.ID, AuthorID: authorID, Role: "author", Position: 0}}
+		writes = append(writes, cbAuthorFillFromAuthorID)
+	case authorID == 0:
+		first := 0
+		for _, r := range database.NormalizeBookAuthors(join, nil) {
+			if database.IsAuthorCreditRole(r.Role) {
+				first = r.AuthorID
+				break
+			}
+		}
+		if first == 0 {
+			return review(cbAuthorJoinNoAuthorRole)
+		}
+		id := first
+		newID = &id
+		writes = append(writes, cbAuthorIDFromJoin)
+	case has[ccAuthorIDNotInJoin]:
+		a, _, err := idx.resolveAuthor(authorID)
+		if err != nil {
+			return nil, nil, err
+		}
+		norm := util.NormalizeAuthor(strings.TrimSpace(a.Name))
+		for _, r := range join {
+			other, state, err := idx.resolveAuthor(r.AuthorID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if state != authorDangling && other.ID != a.ID && norm != "" && util.NormalizeAuthor(strings.TrimSpace(other.Name)) == norm {
+				return review(cbAuthorIDDuplicateName)
+			}
+		}
+		sourceID = authorID
+		minPos := 0
+		for i, r := range join {
+			if i == 0 || r.Position < minPos {
+				minPos = r.Position
+			}
+		}
+		newJoin = append([]database.BookAuthor{{BookID: book.ID, AuthorID: authorID, Role: "author", Position: minPos - 1}}, join...)
+		writes = append(writes, cbAuthorIDPrepended)
+	case has[ccAuthorIDNotPrimary]:
+		return review(ccAuthorIDNotPrimary)
+	}
+	if sourceID != 0 {
+		a, _, err := idx.resolveAuthor(sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if idx.looksCombined(a.Name) {
+			return review(cbAuthorSourceCombined)
+		}
+	}
+	if has[ccAuthorPositionsNotNorm] {
+		writes = append(writes, cbAuthorPositionsRenumbered)
+	}
+
+	// The snapshot follows the primary when the book carries one: refreshed
+	// when the census reads it as stale or the write moves the primary. A
+	// book with no snapshot keeps none.
+	snapshot := book.Author
+	snapChanged := false
+	primaryMoves := !sameAuthorIDPtr(newID, book.AuthorID)
+	if book.Author != nil && newID != nil && (has[ccAuthorSnapshotStale] || primaryMoves) {
+		a, state, err := idx.resolveAuthor(*newID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if state == authorLive && (book.Author.ID != a.ID || book.Author.Name != a.Name) {
+			rec := database.Author{ID: a.ID, Name: a.Name}
+			snapshot, snapChanged = &rec, true
+			writes = append(writes, cbAuthorSnapshotRefreshed)
+		}
+	}
+	if len(writes) == 0 {
+		return book.AuthorID, join, nil
+	}
+
+	plan.authorWrite = true
+	plan.writes = append(plan.writes, writes...)
+	plan.authors = slices.Clone(newJoin)
+	plan.authorID = newID
+	plan.snapshot = snapshot
+	plan.snapChanged = snapChanged
+
+	before, err := filingAuthorName(idx, join, book.Author, book.AuthorID)
+	if err != nil {
+		return nil, nil, err
+	}
+	after, err := filingAuthorName(idx, database.NormalizeBookAuthors(newJoin, newID), snapshot, newID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if util.NormalizeAuthor(before) != util.NormalizeAuthor(after) {
+		plan.filingChanges = true
+		plan.infos = append(plan.infos, cbFilingAuthorChanges)
+	}
+	return newID, database.NormalizeBookAuthors(newJoin, newID), nil
+}
+
+func sameAuthorIDPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// filingAuthorName is the author the organizer files a book under
+// (organizer.resolveAuthorName): the join's first row at the lowest position
+// in stored order, else the snapshot's name, else AuthorID's record.
+func filingAuthorName(idx *creditCensusIndex, join []database.BookAuthor, snap *database.Author, authorID *int) (string, error) {
+	if len(join) > 0 {
+		primary := join[0]
+		for _, r := range join[1:] {
+			if r.Position < primary.Position {
+				primary = r
+			}
+		}
+		a, state, err := idx.resolveAuthor(primary.AuthorID)
+		if err != nil {
+			return "", err
+		}
+		if state != authorDangling && strings.TrimSpace(a.Name) != "" {
+			return strings.TrimSpace(a.Name), nil
+		}
+	}
+	if snap != nil && strings.TrimSpace(snap.Name) != "" {
+		return strings.TrimSpace(snap.Name), nil
+	}
+	if authorID != nil && *authorID > 0 {
+		a, state, err := idx.resolveAuthor(*authorID)
+		if err != nil {
+			return "", err
+		}
+		if state != authorDangling {
+			return strings.TrimSpace(a.Name), nil
+		}
+	}
+	return "", nil
+}
+
+// liveAuthorNames returns the book's live author names in credit order:
+// AuthorID first, then the join in position order, each record once, a
+// tombstoned id as its canonical record, a dangling one skipped. It is the
+// list the census (and database.LiveBookAuthorNames) hands
+// util.CleanNarratorCredit.
+func liveAuthorNames(idx *creditCensusIndex, authorID *int, join []database.BookAuthor) ([]string, error) {
+	var ids []int
+	if authorID != nil && *authorID > 0 {
+		ids = append(ids, *authorID)
+	}
+	sorted := slices.Clone(join)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Position < sorted[j].Position })
+	for _, r := range sorted {
+		ids = append(ids, r.AuthorID)
+	}
+	seen := map[int]bool{}
+	var names []string
+	for _, id := range ids {
+		a, state, err := idx.resolveAuthor(id)
+		if err != nil {
+			return nil, err
+		}
+		if state == authorDangling || seen[a.ID] {
+			continue
+		}
+		seen[a.ID] = true
+		if n := strings.TrimSpace(a.Name); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
+
+// planNarratorSide fills the narrator half of plan. authorNames are the
+// book's live authors after the author side's write.
+func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, allow map[string]bool, plan *cbPlan, book *database.Book,
+	junction []database.BookNarrator, has map[string]bool, authorNames []string) error {
+	for _, c := range []string{ccNarratorIDDangling, ccNarratorJunctionCombined} {
+		if has[c] {
+			plan.reviews = append(plan.reviews, c)
+		}
+	}
+	if has[ccNarratorIDDangling] || has[ccNarratorJunctionCombined] {
+		return nil
+	}
+
+	var junctionNames []string
+	for _, r := range database.NormalizeBookNarrators(junction) {
+		n, ok, err := idx.resolveNarrator(r.NarratorID)
+		if err != nil {
+			return err
+		}
+		if ok && strings.TrimSpace(n.Name) != "" {
+			junctionNames = append(junctionNames, strings.TrimSpace(n.Name))
+		}
+	}
+	column := ""
+	if book.Narrator != nil {
+		column = strings.TrimSpace(*book.Narrator)
+	}
+	var jsonNames []string
+	jsonIsArray := false
+	if book.NarratorsJSON != nil {
+		jsonNames = parseCreditCensusNarratorsJSON(*book.NarratorsJSON)
+		var arr []string
+		jsonIsArray = json.Unmarshal([]byte(strings.TrimSpace(*book.NarratorsJSON)), &arr) == nil
+	}
+
+	var (
+		fillNames  []string
+		fillClass  string
+		fromSplit  bool
+		newColumn  *string
+		renumber   bool
+		cleanedCol []string
+	)
+	switch {
+	case column != "":
+		people, verdict := util.CleanNarratorCredit(column, authorNames)
+		cleanedCol = people
+		switch {
+		case verdict != util.NarratorCreditPeople && len(junction) > 0:
+			if !sameNameSet(junctionNames, util.SplitCreditNames(column)) {
+				plan.reviews = append(plan.reviews, ccNarratorColumnNotPeopleJunctionDiffers)
+				return nil
+			}
+			// A self-read whose junction already credits the named author.
+			renumber = true
+		case verdict == util.NarratorCreditAllAuthors:
+			// Empty junction, the column names only the book's authors.
+			var names []string
+			for _, piece := range util.SplitCreditNames(column) {
+				if ppl, v := util.CleanNarratorCredit(piece, nil); v == util.NarratorCreditPeople {
+					names = append(names, ppl...)
+				}
+			}
+			if !allow[cbAllowSelfRead] || len(names) == 0 {
+				plan.reviews = append(plan.reviews, cbNarratorSelfRead)
+				return nil
+			}
+			fillNames, fillClass = names, cbNarratorSelfRead
+			fromSplit = len(util.SplitCreditNames(column)) > 1
+		case verdict != util.NarratorCreditPeople:
+			plan.reviews = append(plan.reviews, ccNarratorColumnNotPeople)
+			return nil
+		case len(junction) == 0:
+			fillNames, fillClass = people, cbNarratorFillFromColumn
+			fromSplit = len(util.SplitCreditNames(column)) > 1
+			if dropsAuthor(column, people) {
+				plan.infos = append(plan.infos, cbNarratorCleanDroppedAuthor)
+			}
+		case !sameOrderedNames(people, junctionNames):
+			plan.reviews = append(plan.reviews, ccNarratorColumnDiffers)
+			return nil
+		default:
+			renumber = true
+		}
+	case len(junction) > 0:
+		plan.reviews = append(plan.reviews, ccNarratorJunctionNoColumn)
+		return nil
+	case len(jsonNames) > 0:
+		var raw []string
+		for _, entry := range jsonNames {
+			ppl, v := util.CleanNarratorCredit(entry, nil)
+			if v != util.NarratorCreditPeople || len(ppl) != 1 {
+				plan.reviews = append(plan.reviews, cbNarratorsJSONNotPeople)
+				return nil
+			}
+			raw = append(raw, ppl[0])
+		}
+		joined := database.JoinCreditNames(raw)
+		people, verdict := util.CleanNarratorCredit(joined, authorNames)
+		if verdict != util.NarratorCreditPeople {
+			plan.reviews = append(plan.reviews, cbNarratorsJSONNotPeople)
+			return nil
+		}
+		// The column must split back into exactly these people, or the
+		// census would read the book as column != junction.
+		if !sameOrderedNames(util.SplitCreditNames(joined), raw) {
+			plan.reviews = append(plan.reviews, cbNarratorsJSONUnjoinable)
+			return nil
+		}
+		fillNames, fillClass = people, cbNarratorFillFromNarratorsJSON
+		fromSplit = !jsonIsArray && len(jsonNames) > 1
+		newColumn = &joined
+		cleanedCol = people
+	}
+
+	// NarratorsJSON that matches neither the (resulting) junction nor the
+	// column is a disagreement the census keeps counting: left for review.
+	if len(jsonNames) > 0 && fillClass != cbNarratorFillFromNarratorsJSON {
+		result := junctionNames
+		if fillNames != nil {
+			result = fillNames
+		}
+		matchesJunction := len(result) > 0 && sameNameSet(jsonNames, result)
+		matchesColumn := column != "" &&
+			(sameNameSet(jsonNames, util.SplitCreditNames(column)) || (len(cleanedCol) > 0 && sameNameSet(jsonNames, cleanedCol)))
+		if !matchesJunction && !matchesColumn {
+			plan.reviews = append(plan.reviews, ccNarratorsJSONDisagrees)
+			plan.infos = removeClass(plan.infos, cbNarratorCleanDroppedAuthor)
+			return nil
+		}
+	}
+
+	switch {
+	case fillNames != nil:
+		var slots []cbNarratorSlot
+		var newNames []string
+		for _, name := range fillNames {
+			n, ok, err := lookup(name)
+			if err != nil {
+				return err
+			}
+			if ok {
+				slots = append(slots, cbNarratorSlot{Name: n.Name, ID: n.ID})
+				continue
+			}
+			slots = append(slots, cbNarratorSlot{Name: name})
+			newNames = append(newNames, name)
+		}
+		if len(newNames) > 0 && fromSplit && !allow[cbAllowNewFromSplit] {
+			plan.reviews = append(plan.reviews, cbNarratorNewFromSplit)
+			plan.infos = removeClass(plan.infos, cbNarratorCleanDroppedAuthor)
+			return nil
+		}
+		plan.narratorWrite = true
+		plan.narrators = slots
+		plan.newNames = newNames
+		plan.writes = append(plan.writes, fillClass)
+		if len(newNames) > 0 {
+			plan.infos = append(plan.infos, cbNarratorCreatesRecord)
+			if fromSplit {
+				plan.writes = append(plan.writes, cbNarratorNewFromSplit)
+			}
+		}
+		if newColumn != nil {
+			plan.column, plan.columnChanged = newColumn, true
+		}
+	case renumber && has[ccNarratorPositionsNotNorm]:
+		plan.narratorWrite = true
+		plan.narratorRows = database.NormalizeBookNarrators(junction)
+		plan.writes = append(plan.writes, cbNarratorPositionsRenumbered)
+	}
+	return nil
+}
+
+// dropsAuthor reports whether cleaning the column dropped a person: the raw
+// split has a person the cleaned list lacks that is not a role credit.
+func dropsAuthor(column string, cleaned []string) bool {
+	kept := map[string]bool{}
+	for _, n := range cleaned {
+		kept[util.NormalizeAuthor(n)] = true
+	}
+	for _, piece := range util.SplitCreditNames(column) {
+		ppl, v := util.CleanNarratorCredit(piece, nil)
+		if v != util.NarratorCreditPeople {
+			continue
+		}
+		for _, p := range ppl {
+			if !kept[util.NormalizeAuthor(p)] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func removeClass(classes []string, c string) []string {
+	out := classes[:0]
+	for _, x := range classes {
+		if x != c {
+			out = append(out, x)
+		}
+	}
+	return out
+}

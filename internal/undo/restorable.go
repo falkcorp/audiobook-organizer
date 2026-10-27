@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-25
+// last-edited: 2026-10-26
 
 package undo
 
@@ -743,6 +743,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	case ChangeTypeJunkAuthorCredits:
 		if _, _, err := DecodeJunkAuthorCredits(c); err != nil {
 			return ChangeTypeJunkAuthorCredits + ":(unparsable)"
+		}
+		return ""
+	case ChangeTypeCreditsBackfill:
+		if _, _, err := DecodeCreditsBackfill(c); err != nil {
+			return ChangeTypeCreditsBackfill + ":(unparsable)"
 		}
 		return ""
 	case ChangeTypeRepairBookCreate:
