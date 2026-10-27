@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -71,6 +71,11 @@ type gatedEndpoint struct {
 	// reachable for an endpoint with RequireGPU off -- the gate refuses a
 	// RequireGPU endpoint it could not probe.
 	Probed bool
+	// resolved is the machine identity gateEndpoints resolved for the endpoint
+	// (resolveMachine), read through identityKey. It is set once, at the gate, and
+	// travels with the value, so one dispatch never has two identities for an
+	// endpoint however another dispatch's gate moves the memory meanwhile.
+	resolved string
 }
 
 // gpuRefusal records one endpoint the gate turned away, and why. The reason
@@ -81,13 +86,18 @@ type gpuRefusal struct {
 	URL    string
 	Label  string
 	Reason string
-	// Machine is the refused endpoint's machineKey, or empty when its /health
+	// Machine is the refused endpoint's identityKey, or empty when its /health
 	// could not be read (its machine is then unknown, and it may be any
 	// machine's port). The dispatcher uses it to tell whether a machine it
 	// vouches for through one port still has ports it has not heard from (see
 	// hasUnheardPort: an empty Machine counts only for a machine whose known
 	// ports, canaryEntry.ports, include this URL).
 	Machine string
+	// IDCapable is gatedEndpoint.idCapable of the refused endpoint: its worker is
+	// one that can report a machine id (backend "mlx"). Whether a weak Machine
+	// ("u:") stands for the machine remembered behind the URL, or for another
+	// worker that took the URL over, depends on it (see noteCanaryPort).
+	IDCapable bool
 	// Stuck marks a refusal because the worker is wedged on one inference past
 	// its own deadline (see stuckRefusal), as opposed to a capability or mount
 	// problem. When every refusal is Stuck the dispatcher's error wraps
@@ -107,6 +117,20 @@ type gpuRefusal struct {
 	// outage; without pacing, each page found the whole pool refused in under
 	// a millisecond and deferred, and a run drained the library in minutes.
 	Transient bool
+}
+
+// newRefusal is the refusal of g for reason: its URL and label, the identity
+// the gate resolved for it and whether its worker can report one. The caller
+// sets Stuck or Transient where they apply. Every refusal is built here, so
+// none can leave IDCapable unset.
+func newRefusal(g gatedEndpoint, reason string) gpuRefusal {
+	return gpuRefusal{
+		URL:       g.Endpoint.URL,
+		Label:     g.Endpoint.Label,
+		Reason:    reason,
+		Machine:   refusalMachine(g),
+		IDCapable: g.idCapable(),
+	}
 }
 
 func (r gpuRefusal) String() string {
@@ -145,6 +169,14 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 		})
 	}
 	wg.Wait()
+	// The identity of every endpoint is resolved here, once, from what the probe
+	// read and what this process knows of its URL (resolveMachine), before the
+	// dispatch reconciles or notes anything: every later use of the endpoint's
+	// machine, in this dispatch and in its memory, is that one value.
+	for i := range probes {
+		g := &probes[i]
+		g.resolved = resolveMachine(g.Endpoint.URL, g.machineKey(), g.idCapable())
+	}
 
 	var kept []gatedEndpoint
 	var refused []gpuRefusal
@@ -154,15 +186,11 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 				"url", g.Endpoint.URL, "ignored", ignored)
 		}
 		if reason := capabilityRefusalReason(g, poolRequires); reason != "" {
-			refused = append(refused, gpuRefusal{
-				URL:     g.Endpoint.URL,
-				Label:   g.Endpoint.Label,
-				Reason:  reason,
-				Machine: refusalMachine(g),
-				// Not shown to lack a label, only not reachable to ask: that
-				// clears by itself (see gpuRefusal.Transient).
-				Transient: !g.Probed,
-			})
+			r := newRefusal(g, reason)
+			// Not shown to lack a label, only not reachable to ask: that
+			// clears by itself (see gpuRefusal.Transient).
+			r.Transient = !g.Probed
+			refused = append(refused, r)
 			continue
 		}
 		kept = append(kept, g)
@@ -170,13 +198,13 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 	return kept, refused
 }
 
-// refusalMachine is the machineKey a refusal records for g: empty when g was
-// never probed, since an unprobed endpoint's key stands for no machine.
+// refusalMachine is the identity (identityKey) a refusal records for g: empty
+// when g was never probed, since an unprobed endpoint's key stands for no machine.
 func refusalMachine(g gatedEndpoint) string {
 	if !g.Probed {
 		return ""
 	}
-	return g.machineKey()
+	return g.identityKey()
 }
 
 // measuredLabels is the namespace of capability labels DERIVED from /health.

@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -34,10 +34,22 @@ func machineHarness(t *testing.T, machines []string, poison ...string) *splitHar
 	}
 	for i, m := range machines {
 		health := maps.Clone(aliveHealth)
+		// A worker that reports a machine id at all is scripts/whisper_mlx_server.py;
+		// one that reports none because it missed its MACHINE_ID_WAIT_S is still
+		// that server, which is what lets its URL stand for its machine (see
+		// setBackend for the worker that is not).
+		health["backend"] = backendMLX
 		if m != "" {
 			health["machine_id"] = m
 		}
 		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			if d, ok := h.healthDelay.Load(r.Host); ok {
+				select {
+				case <-time.After(d.(time.Duration)):
+				case <-r.Context().Done():
+					return
+				}
+			}
 			body := health
 			if _, wedged := h.wedged.Load(r.Host); wedged {
 				body = maps.Clone(health)
@@ -50,6 +62,10 @@ func machineHarness(t *testing.T, machines []string, poison ...string) *splitHar
 			if id, ok := h.machineID.Load(r.Host); ok {
 				body = maps.Clone(body)
 				body["machine_id"] = id
+			}
+			if b, ok := h.backend.Load(r.Host); ok {
+				body = maps.Clone(body)
+				body["backend"] = b
 			}
 			_ = json.NewEncoder(rw).Encode(body)
 		}))

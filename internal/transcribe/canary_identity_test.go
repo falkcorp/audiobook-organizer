@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_identity_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7a9c52-81d4-4f6b-b0a3-6d2c15e8f947
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -312,9 +312,9 @@ func TestCanaryMemory_AWeakerIdentityNeverTakesAPortFromAMachine(t *testing.T) {
 	const url = "http://gotham-a:8000"
 	h := shortHash(url)
 	markCanaryFailed(batKey, url)
-	noteCanaryPort(batKey, url)
+	noteCanaryPort(batKey, url, true)
 	for _, weak := range []string{"u:" + h, "?" + h} {
-		noteCanaryPort(weak, url)
+		noteCanaryPort(weak, url, true)
 		if !hasUnheardPort(batKey, []gpuRefusal{{URL: url}}, nil) {
 			t.Fatalf("%s took the port from the machine", weak)
 		}
@@ -325,7 +325,7 @@ func TestCanaryMemory_AWeakerIdentityNeverTakesAPortFromAMachine(t *testing.T) {
 			t.Fatalf("an endpoint answering as %s is not remembered although its URL is a port of a remembered machine", weak)
 		}
 	}
-	noteCanaryPort(robinKey, url) // another strong identity does
+	noteCanaryPort(robinKey, url, true) // another strong identity does
 	if hasUnheardPort(batKey, []gpuRefusal{{URL: url}}, nil) || canaryURLMachine(url) != robinKey {
 		t.Error("a strong identity must move the URL to the new machine")
 	}
@@ -346,7 +346,7 @@ func TestEndpointRemembered(t *testing.T) {
 		portC = "http://gotham-c:8000"
 	)
 	markCanaryFailed(batKey, portA)
-	noteCanaryPort(robinKey, portB) // a probe attributed portB to a machine that is not remembered
+	noteCanaryPort(robinKey, portB, true) // a probe attributed portB to a machine that is not remembered
 	for _, tc := range []struct {
 		name string
 		key  string
@@ -693,8 +693,8 @@ func TestCanaryIdentity_ARefusedEndpointsMemoryMovesToItsNewIdentity(t *testing.
 func TestCanaryMemory_AURLNoLongerConfiguredIsDropped(t *testing.T) {
 	p := poolOf(t, batMachine, batMachine)
 	const gone = "http://gotham-gone:8000"
-	markCanaryFailed(batKey, gone)
-	noteCanaryPort(batKey, gone)
+	markCanaryFailed(batKey, gone, p.h.eps[0].URL) // a port that stays keeps the machine remembered
+	noteCanaryPort(batKey, gone, true)
 	if canaryURLMachine(gone) != batKey || !hasUnheardPort(batKey, []gpuRefusal{{URL: gone}}, nil) {
 		t.Fatal("setup: the URL was not recorded")
 	}

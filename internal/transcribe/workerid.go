@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerid.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -66,6 +66,39 @@ func (g gatedEndpoint) machineKey() string {
 	return "?" + shortHash(g.Endpoint.URL)
 }
 
+// backendMLX is the /health backend of scripts/whisper_mlx_server.py, the one
+// worker server that reports machine_id (scripts/whisper_server.py reports
+// "faster-whisper" and never a machine_id). It is what makes a worker able to
+// have a stable machine identity at all: only such a worker that answers with
+// a weak identity ("u:") has merely missed its MACHINE_ID_WAIT_S and is still
+// the machine this process last saw behind its URL (see resolveMachine).
+const backendMLX = "mlx"
+
+// idCapable reports whether g is a probed worker that is able to report a
+// machine_id, whether or not it did this time.
+func (g gatedEndpoint) idCapable() bool { return g.Probed && g.Health.Backend == backendMLX }
+
+// identityKey is machineKey resolved by address: the key every part of a
+// dispatch groups g under (D55). It is the machine identity the gate resolved
+// for g (gateEndpoints: resolveMachine), or machineKey for a value the gate never
+// saw. A worker that missed its machine id this time keeps the machine its URL
+// last reported, so one machine is one key whatever its worker answers as.
+func (g gatedEndpoint) identityKey() string {
+	if g.resolved != "" {
+		return g.resolved
+	}
+	return g.machineKey()
+}
+
+// storedWorker is workerID resolved by address, the identity stored with a
+// strike or a condemnation: empty when g was not probed (see workerID).
+func (g gatedEndpoint) storedWorker() string {
+	if !g.Probed {
+		return ""
+	}
+	return g.identityKey()
+}
+
 // workerID is the identity stored with a strike: "m:" + the reported
 // machine_id, or "u:" + a hash of the URL for a worker too old to report one.
 // Empty when /health could not be read: the store then treats a later strike as
@@ -104,4 +137,9 @@ func joinWorkers(keys []string) string {
 	}
 	slices.Sort(ids)
 	return strings.Join(ids, WorkerSeparator)
+}
+
+// anyIn reports whether any of ids is in set.
+func anyIn(set map[string]bool, ids []string) bool {
+	return slices.ContainsFunc(ids, func(id string) bool { return set[id] })
 }
