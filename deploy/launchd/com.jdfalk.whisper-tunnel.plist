@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
     file: deploy/launchd/com.jdfalk.whisper-tunnel.plist
-    version: 1.0.0
+    version: 1.0.1
     guid: 9c2f6b18-4d7a-4e35-a081-52b3e7d94c6a
-    last-edited: 2026-08-31
+    last-edited: 2026-10-27
 
     Reverse SSH tunnel publishing this Mac's loopback-only Whisper worker to
     the audiobook-organizer server, which then reaches it at 127.0.0.1:19848.
@@ -23,6 +23,19 @@
 
     Replace USERNAME and PROD_HOST before installing; see
     docs/operations/metal-whisper-worker.md.
+
+    WARNING - server-side port collision. This template hard-codes the
+    server-side port 19848, which is also the first whisper port that
+    scripts/setup_mac_ai_worker.py gives host index 0. A Mac running this
+    template and a Mac set up with --host-index 0 therefore both ask the
+    server for 19848, and only one can hold it (ExitOnForwardFailure makes the
+    loser retry every ThrottleInterval, so whichever reconnects first after a
+    drop gets it). The server then reaches a DIFFERENT Mac through the same
+    URL, and the dispatcher, which treats a URL as one machine, can credit one
+    Mac's canary or timeout strikes to the other (see noteProbeResult in
+    internal/transcribe/canary.go). Run at most ONE Mac on 19848: give every
+    other Mac a distinct --host-index (19848 + 8N) and do not install this
+    template on it. The ports here are deliberately not changed.
 -->
 <plist version="1.0">
 <dict>

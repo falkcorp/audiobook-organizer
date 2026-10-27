@@ -1,7 +1,7 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
-<!-- last-edited: 2026-10-23 -->
+<!-- last-edited: 2026-10-27 -->
 
 # Whisper intro transcription with Mac-side extraction
 
@@ -134,6 +134,12 @@ launchctl kickstart -k gui/$(id -u)/com.jdfalk.whisper-mlx-19849   # and -19850,
 `scripts/setup_mac_ai_worker.py` rewrites these plists from scratch, so pass
 `--whisper-path-map /mnt/bigdata=/Users/jdfalk/mnt/bigdata` whenever you re-run
 it, or the variable is dropped.
+
+It also gives `--host-index 0` the server-side ports `19848..`, the same port the
+older `deploy/launchd/com.jdfalk.whisper-tunnel.plist` hard-codes: never run a Mac
+on that plist and a different Mac at host index 0, or the two race for one server
+port and the server reaches a different Mac through the same URL (see "One server
+port, one Mac" in `docs/operations/metal-whisper-worker.md`).
 
 ### 3. Verify
 

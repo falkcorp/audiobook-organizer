@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_resolution_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1d9e47-35a2-4b80-8f6e-0d7a2b93c154
 // last-edited: 2026-10-27
 
@@ -396,7 +396,7 @@ func TestCanaryMemory_ARememberedMachineListsEveryURLTheMapGivesIt(t *testing.T)
 		t.Helper()
 		canaryFailed.mu.Lock()
 		defer canaryFailed.mu.Unlock()
-		for u, k := range canaryFailed.byURL {
+		for u, k := range canaryFailed.attributed {
 			if e := canaryFailed.m[k]; e != nil && !e.ports[u] {
 				t.Errorf("after %s: %s is attributed to %s, which remembers it as no port (ports %v)", step, u, k, e.ports)
 			}
