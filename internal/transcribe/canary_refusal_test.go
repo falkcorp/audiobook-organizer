@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_refusal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a3d90261-5960-4067-ab7e-f4d536051b69
 // last-edited: 2026-10-27
 
@@ -142,28 +142,5 @@ func TestCanaryRefusal_AStaleLinkDoesNotStoreTheWrongMachineOrDefeatSteering(t *
 	}
 	if got := res["j"]; got.Worker == catKey {
 		t.Errorf("the answer names machine cat (%q), which was never behind either port", got.Worker)
-	}
-}
-
-// N2 of the D58 review: a re-probe after a wait replaces an endpoint's health
-// but the dispatch keeps the identity it began with, so the identity stored with
-// the answers is the one it groups the endpoint under. An endpoint that began
-// with no identity ("?") takes what the fresh probe reports.
-func TestCanaryRefusal_AReprobeKeepsTheDispatchIdentity(t *testing.T) {
-	fresh := gatedEndpoint{
-		Endpoint: Endpoint{URL: "http://gotham-tunnel:8000"},
-		Probed:   true,
-		Health:   remoteHealth{Backend: backendMLX, MachineID: robinMachine},
-	}
-	if got := fresh.storedWorker(); got != robinKey {
-		t.Fatalf("a fresh probe stores %q, want %q", got, robinKey)
-	}
-	if got := fresh.withIdentity(catKey).storedWorker(); got != catKey {
-		t.Errorf("a re-probe under the dispatch's identity stores %q, want %q", got, catKey)
-	}
-	for _, none := range []string{"", "?" + shortHash(fresh.Endpoint.URL)} {
-		if got := fresh.withIdentity(none).storedWorker(); got != robinKey {
-			t.Errorf("withIdentity(%q).storedWorker() = %q, want the fresh probe's %q", none, got, robinKey)
-		}
 	}
 }

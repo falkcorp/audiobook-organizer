@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-27
 
@@ -90,17 +90,53 @@ func (g gatedEndpoint) identityKey() string {
 	return g.machineKey()
 }
 
-// withIdentity is g carrying key as its identity, for a re-probe that replaces
-// an endpoint's health but must not give the dispatch a second identity for it
-// (see gatedEndpoint.resolved): identityKey, and so storedWorker, then answer
-// with the identity the dispatch began with. A key that stands for no machine
-// ("" or a "?" key, an endpoint whose /health could not be read) is not carried:
-// the endpoint answered this time, and what it reports is the better identity.
-func (g gatedEndpoint) withIdentity(key string) gatedEndpoint {
-	if key != "" && !strings.HasPrefix(key, "?") {
-		g.resolved = key
+// reprobed is the fresh probe g of an endpoint the dispatch froze as key (a
+// weak or strong identity, resolved by the gate at the start) and capable (its
+// worker could report a machine id then), judged against what g reports now. A
+// re-probe replaces an endpoint's health (the canary and the work should use
+// what the worker says now) but never gives the dispatch a second identity for
+// it, and never credits a worker's answers to a machine it is not.
+//
+// It returns the probe to keep, and false when the port changed hands while the
+// dispatch waited, in which case the port is to be dropped from the dispatch
+// like a refusal: the next dispatch's gate re-keys it (B-1 of review 6 of #4201).
+//
+//   - Same identity (a weak "u:" also needs the same kind of worker: a worker
+//     that cannot report an id answers as "u:" + the address of the URL, the very
+//     string an id-capable worker that missed its wait answers as): nothing
+//     changed, the probe stands.
+//   - Frozen weak, fresh strong, from an id-capable worker both times: the worker
+//     gained its machine id. Whether that is the machine that was behind the URL
+//     or another one that took it over cannot be told, so what is stored with its
+//     answers stays the frozen "u:" (an unknown machine never earns a file its
+//     second strike), and the machine it reports now travels with it (learned) so
+//     the store can still learn the machine (database learnsMachine).
+//   - A frozen key standing for no machine ("" or "?", an endpoint whose /health
+//     could not be read at the start), or a probe that read nothing now: there
+//     is nothing to compare, and what the dispatch froze carries (a fresh probe
+//     that answered is the better identity for a frozen "?" and takes over).
+//   - Anything else (one strong identity for another, a strong one for a weak one
+//     after a refusal ended the URL-to-machine link, a worker that cannot report
+//     an id where one could, or the reverse): another worker is behind the URL.
+func (g gatedEndpoint) reprobed(key string, capable bool) (gatedEndpoint, bool) {
+	if key == "" || strings.HasPrefix(key, "?") {
+		return g, true
 	}
-	return g
+	if !g.Probed {
+		g.resolved = key
+		return g, true
+	}
+	fresh := g.identityKey()
+	switch {
+	case fresh == key && (isStrongKey(key) || g.idCapable() == capable):
+		g.resolved = key
+		return g, true
+	case !isStrongKey(key) && isStrongKey(fresh) && capable && g.idCapable():
+		g.resolved = key
+		g.learned = fresh
+		return g, true
+	}
+	return g, false
 }
 
 // storedWorker is workerID resolved by address, the identity stored with a
@@ -110,6 +146,17 @@ func (g gatedEndpoint) storedWorker() string {
 		return ""
 	}
 	return g.identityKey()
+}
+
+// answerWorker is the identity stored with the answers a probed worker gives:
+// storedWorker, joined with the machine a worker that gained its id during the
+// dispatch reports now (learned, see reprobed). Empty when g was not probed.
+func (g gatedEndpoint) answerWorker() string {
+	w := g.storedWorker()
+	if w == "" || g.learned == "" {
+		return w
+	}
+	return joinWorkers([]string{w, g.learned})
 }
 
 // workerID is the identity stored with a strike: "m:" + the reported

@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
 // last-edited: 2026-10-27
 
@@ -239,9 +239,10 @@ func isStrongKey(key string) bool { return strings.HasPrefix(key, "m:") }
 //
 // The ports are the whole lookup. An earlier version asked byURL first, but
 // whenever byURL[u] names a remembered machine that machine already lists u
-// (noteCanaryPort and markCanaryFailedLocked add every URL byURL gives a
-// machine to its ports, and every removal from one is a removal from the
-// other), so the second question could only repeat the answer.
+// (noteCanaryPort adds the URL to the ports of the machine it sets in byURL,
+// and markCanaryFailedLocked adds every URL attributed gives the machine that
+// fails, a superset of byURL's because a refusal ends byURL's link and leaves
+// attributed), so the second question could only repeat the answer.
 func resolveCanaryKeyLocked(key string, urls []string) string {
 	if canaryFailed.m[key] != nil {
 		return key
@@ -627,6 +628,16 @@ func noteCanaryProbes(kept []gatedEndpoint, refused []gpuRefusal) {
 // failure; in particular it never wraps the slot error, which carries "context
 // deadline exceeded".
 var errCanarySlotBusy = errors.New("canary clip not sent: every request slot on the endpoint stayed taken")
+
+// errPortChangedHands is the lone endpoint's re-probe after a cooldown wait
+// finding another worker behind the URL than the machine that failed the clip
+// (gatedEndpoint.reprobed). That worker is not the machine the memory is about
+// and its answers are not credited to it, so the dispatch asks it nothing and
+// sends it nothing and the jobs are deferred, as for errCanarySlotBusy: no
+// verdict on anyone, not counted toward stopping the run. The next dispatch's
+// gate keys the port by what it reports. Its text must not contain any of
+// transportWordings.
+var errPortChangedHands = errors.New("whisper port changed hands")
 
 // canaryHolderClipSeconds is the clip length canarySlotWait assumes for the
 // request ahead of the canary: the 90 s first-pass clip both intro ops send,

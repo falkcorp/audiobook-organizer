@@ -1,5 +1,5 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
 // last-edited: 2026-10-27
 
@@ -76,6 +76,10 @@ type gatedEndpoint struct {
 	// travels with the value, so one dispatch never has two identities for an
 	// endpoint however another dispatch's gate moves the memory meanwhile.
 	resolved string
+	// learned is the strong identity a re-probe read from a worker whose
+	// dispatch identity is a weak "u:" (reprobed): stored beside it, never in
+	// its place, and never part of what the dispatch groups the endpoint under.
+	learned string
 }
 
 // gpuRefusal records one endpoint the gate turned away, and why. The reason

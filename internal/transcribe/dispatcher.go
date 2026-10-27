@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.22.1
+// version: 1.22.2
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -283,15 +283,21 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	//
 	// keyFor is each endpoint's machine identity as the gate resolved it (D55:
 	// by address, so a worker that missed its machine id this time is still the
-	// machine its URL last reported), frozen for the dispatch: a re-probe after a
-	// wait replaces an endpoint's health (and the identity stored with its
-	// answers) but not the key the dispatch groups it under (keyOf).
+	// machine its URL last reported), frozen for the dispatch, and capableFor is
+	// whether its worker could report a machine id then. A re-probe after a wait
+	// replaces an endpoint's health (the canary and the work use what the worker
+	// says now) but is judged against both (gatedEndpoint.reprobed): the same
+	// identity stands, a worker that gained its id keeps the identity the
+	// dispatch groups it under, and a port that changed hands is dropped, so an
+	// answer is never stored as a machine it did not come from.
 	probeByURL := make(map[string]gatedEndpoint, len(gated))
 	keyFor := make(map[string]string, len(gated))
+	capableFor := make(map[string]bool, len(gated))
 	eligible := make([]Endpoint, 0, len(gated))
 	for _, g := range gated {
 		probeByURL[g.Endpoint.URL] = g
 		keyFor[g.Endpoint.URL] = g.identityKey()
+		capableFor[g.Endpoint.URL] = g.idCapable()
 		eligible = append(eligible, g.Endpoint)
 	}
 
@@ -383,6 +389,20 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		return keyOf(url)
 	}
 	soloStuck := make(map[string]map[string]string) // job -> machine key -> the endpoint it was stuck on alone there
+	// condemnedBy is the identities a condemnation names, from one job's
+	// soloStuck: the machine key of each endpoint it was stuck on alone, which is
+	// the identity of the worker that answered there (a re-probe that found
+	// another worker behind a URL dropped the port: gatedEndpoint.reprobed), and
+	// the machine a worker that gained its id since reports now, as the answers
+	// of that worker name it (answerWorker). A condemnation by two known machines
+	// needs both to be known.
+	condemnedBy := func(stuck map[string]string) []string {
+		ids := slices.Collect(maps.Keys(stuck))
+		for _, u := range stuck {
+			ids = append(ids, probeByURL[u].learned)
+		}
+		return ids
+	}
 	// soloOverran is the weaker record: a lone job's request outlived its
 	// ceiling on a worker that, when asked, was NOT wedged (it answered /health
 	// and was inside its own decode deadline), so the request most likely waited
@@ -834,18 +854,31 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					return nil
 				}
 				answers := make(map[string]bool, len(kept))
+				waiting := make(map[string]bool)
+				gone := make(map[string]bool)
 				for _, g := range kept {
 					// What the probe read now is what the canary and the work get
 					// (health carries the worker's timeouts and limits), not what
 					// it said minutes ago. The identity the dispatch groups the
 					// endpoint under stays the one its gate gave it (keyFor), and
-					// so is the one stored with its answers (N2 of the D58 review).
-					g = g.withIdentity(keyOf(g.Endpoint.URL))
-					probeByURL[g.Endpoint.URL] = g
-					answers[g.Endpoint.URL] = true
+					// so is the one stored with its answers (N2 of the D58
+					// review), unless another worker answers there now: a port
+					// that changed hands during the wait is dropped like a refusal,
+					// never asked the old machine's canary clip (its answer would
+					// count toward forgetting that machine) and never given its
+					// work (B-1 of review 6 of #4201).
+					u := g.Endpoint.URL
+					fresh, ok := g.reprobed(keyOf(u), capableFor[u])
+					if !ok {
+						refused = append(refused, newRefusal(g, "answers as a different worker than the machine the dispatch waited for (its port changed hands during the wait), so it is sent no work in this dispatch"))
+						gone[u] = true
+						dispatchLog.Warn("a whisper port waited for after its machine failed the canary clip answers as a different worker now, so it is dropped from this dispatch: url=%s was=%s now=%s",
+							logger.SanitizeLogValue(u), logger.SanitizeLogValue(keyOf(u)), logger.SanitizeLogValue(g.identityKey()))
+						continue
+					}
+					probeByURL[u] = fresh
+					answers[u] = true
 				}
-				waiting := make(map[string]bool)
-				gone := make(map[string]bool)
 				for _, r := range refusedNow {
 					if keepWaitingFor(r, time.Now(), paceUntil) {
 						waiting[urlKey[r.URL]] = true
@@ -1018,8 +1051,21 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			return nil
 		}
 		ids := []string{"u:" + shortHash(url)}
-		if k := keyOf(url); !strings.HasPrefix(k, "?") && !slices.Contains(ids, k) {
+		k := keyOf(url)
+		if !strings.HasPrefix(k, "?") && !slices.Contains(ids, k) {
 			ids = append(ids, k)
+		}
+		// A weak key does not say whose port this is: a port of a machine that
+		// restarted while a probe refused it answers as "u:" now, and a job a
+		// strike by that machine's id avoids must still be moved off it (S-1 of
+		// review 6 of #4201). The machine a probe last attributed to the URL
+		// is named too. Naming a machine that is not behind the port any more only
+		// steers a job further than it needed to go (steerAway leaves a job where
+		// it is when nothing better exists).
+		if !isStrongKey(k) {
+			if m := attributedMachine(url); m != "" && !slices.Contains(ids, m) {
+				ids = append(ids, m)
+			}
 		}
 		return ids
 	}
@@ -1055,8 +1101,13 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	weakOwner := make(map[string]string, len(endpoints))
 	for _, ep := range endpoints {
 		m, gated := keyFor[ep.URL]
-		if !gated {
-			m = attributedMachine(ep.URL)
+		if !gated || !isStrongKey(m) {
+			// An endpoint the dispatch did not gate, or one the gate could only
+			// name by a weak key (it was refused while its machine restarted and
+			// answers as "u:" now), is the machine a probe last attributed to it.
+			if a := attributedMachine(ep.URL); a != "" {
+				m = a
+			}
 		}
 		if isStrongKey(m) {
 			weakOwner["u:"+shortHash(ep.URL)] = m
@@ -1441,7 +1492,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				}
 				if br.Endpoint == "" {
 					br.Endpoint = ep.URL
-					br.Worker = probeByURL[ep.URL].storedWorker()
+					br.Worker = probeByURL[ep.URL].answerWorker()
 				}
 				results[id] = br
 				settledHere[id] = true
@@ -1614,7 +1665,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 						"%s%sno result: this file alone left %d worker(s) stuck past their deadline",
 						PathErrTranscribeTimeout, pathErrSeparator, len(soloStuck[id])),
 						Endpoint: strings.Join(slices.Sorted(maps.Values(soloStuck[id])), WorkerSeparator),
-						Worker:   joinWorkers(slices.Collect(maps.Keys(soloStuck[id])))}
+						Worker:   joinWorkers(condemnedBy(soloStuck[id]))}
 					settled := 0
 					for _, cid := range append([]string{id}, followersOf[id]...) {
 						if _, ok := remaining[cid]; !ok {
@@ -1688,7 +1739,7 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 	// key is the identity the gate resolved (D55), kept for every memory call below: a
 	// re-probe after a wait can replace g (its health is what the canary and the
 	// work should use) but must not give the dispatch a second identity.
-	key := g.identityKey()
+	key, capable := g.identityKey(), g.idCapable()
 	if endpointRemembered(key, url) && ctx.Err() == nil {
 		// It failed the canary clip in an earlier dispatch and has not answered
 		// one since: ask it before sending it any work (see preflight in
@@ -1724,8 +1775,18 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			}
 			if len(kept) > 0 {
 				// The health is the fresh probe's; the identity stays the one
-				// the dispatch began with (key), as in dispatchPool.
-				g = kept[0].withIdentity(key)
+				// the dispatch began with (key), as in dispatchPool, unless
+				// another worker answers at the port now: it is not the machine
+				// that failed the clip, so it is asked nothing and sent nothing,
+				// and the jobs are deferred. The next dispatch's gate re-keys it.
+				fresh, ok := kept[0].reprobed(key, capable)
+				if !ok {
+					dispatchLog.Warn("the only whisper endpoint answers as a different worker than the machine that failed the canary clip after its cooldown was waited out, so it is sent no work and the jobs are deferred: url=%s was=%s now=%s",
+						logger.SanitizeLogValue(url), logger.SanitizeLogValue(key), logger.SanitizeLogValue(kept[0].identityKey()))
+					return results, classifyTransport([]string{url}, fmt.Errorf(
+						"the only whisper endpoint answers as a different worker than the machine that failed the canary clip in an earlier dispatch: %w, so it is sent no work and the jobs are deferred", errPortChangedHands))
+				}
+				g = fresh
 				break
 			}
 			if allTransient(refusedNow) && time.Now().Before(sg.paceUntil) {
@@ -1785,7 +1846,7 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			// (a deferral) is unnamed.
 			if br.Endpoint == "" {
 				br.Endpoint = url
-				br.Worker = g.storedWorker()
+				br.Worker = g.answerWorker()
 			}
 			results[id] = br
 		}
