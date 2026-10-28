@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_coverage_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b0e2a0e-6b8e-4d63-9c1e-7f7c5c1a2d31
 // last-edited: 2026-10-27
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -175,6 +176,28 @@ func TestCreditsBackfill_CreatorChangedSincePlanSendsTheSplitBookBackToReview(t 
 	if st := f.state("a-split"); len(st.Narrators) != 0 {
 		t.Errorf("a-split was written: %v", st.Narrators)
 	}
+}
+
+// The split book sorts before its creator and a single worker writes in order,
+// so only the two passes (creators, then the books that link to them) let it
+// find the record: written in sorted order it would have no landed record to
+// link to and go back to review.
+func TestCreditsBackfill_ApplyWritesTheCreatorBeforeTheSplitBookThatLinksToIt(t *testing.T) {
+	f := cbSplitFixture(t, "z-solo", "a-split")
+	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cbClassIDs(res, cbNarratorFillFromColumn); !slices.Equal(got, []string{"a-split", "z-solo"}) {
+		t.Fatalf("%s = %v, want both books (review: %v)", cbNarratorFillFromColumn, got, cbClassIDs(res, cbNarratorNewFromSplit))
+	}
+	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock", "Renee Montoya"}) {
+		t.Errorf("narrator records = %v, want Harvey Bullock and ONE Renee Montoya", got)
+	}
+	if res.NarratorsCreated != 1 || res.NarratorsCreatedUnused != 0 {
+		t.Errorf("created=%d unused=%d, want 1 and 0", res.NarratorsCreated, res.NarratorsCreatedUnused)
+	}
+	assertPlansClean(t, f, "z-solo", "a-split")
 }
 
 // The creator's narrator side is refused AT APPLY TIME (the store gives the
@@ -438,5 +461,52 @@ func TestCreditsBackfill_ApplyTimeSpellingRefusalReportsTheRecordNobodyCredits(t
 	}
 	if res.NarratorsCreated != 0 || res.NarratorsCreatedUnused != 1 || len(res.UnusedNarratorNames) != 1 {
 		t.Errorf("created=%d unused=%d %v, want the record reported unused", res.NarratorsCreated, res.NarratorsCreatedUnused, res.UnusedNarratorNames)
+	}
+}
+
+// cbCancelOnReplanReporter cancels the run as the replan of the parked split
+// books starts its first item.
+type cbCancelOnReplanReporter struct {
+	cbReporter
+	cancel context.CancelFunc
+}
+
+func (r *cbCancelOnReplanReporter) SetCurrentItem(label string) {
+	if strings.HasPrefix(label, "Credits backfill: planning split credits again") {
+		r.cancel()
+	}
+}
+
+// The replan itself is interrupted (workers: 1 runs the items in order and stops
+// before the next one): the book it had started is planned again and covered by
+// the unsplit book, and the books it never reached are filed as phase 1 left them
+// under narrator_new_from_split, not dropped from every class.
+func TestCreditsBackfill_InterruptedReplanFilesTheSplitBooksItNeverReached(t *testing.T) {
+	f := newCBFixture(t)
+	bruce := f.author("Bruce Wayne")
+	f.narrator("Harvey Bullock")
+	f.book("c-solo", "Batman: The Long Halloween", func(b *database.Book) {
+		b.AuthorID = intp(bruce)
+		b.Narrator = strp("Selina Kyle")
+	}, ba("c-solo", [2]int{bruce, 0}), nil)
+	splits := []string{"a-split-1", "a-split-2", "a-split-3"}
+	for _, id := range splits {
+		f.book(id, "Batman: Dark Victory "+id, func(b *database.Book) {
+			b.AuthorID = intp(bruce)
+			b.Narrator = strp("Selina Kyle and Harvey Bullock")
+		}, ba(id, [2]int{bruce, 0}), nil)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rep := &cbCancelOnReplanReporter{cbReporter: cbReporter{id: cbTestOpID}, cancel: cancel}
+	res, err := runCreditsBackfillScan(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{}, rep)
+	if err == nil || res.Complete {
+		t.Fatalf("a canceled run must be incomplete: err=%v", err)
+	}
+	if got := cbClassIDs(res, cbNarratorFillFromColumn); !slices.Equal(got, []string{"a-split-1", "c-solo"}) {
+		t.Errorf("%s = %v, want [a-split-1 c-solo]: the book the replan had started is covered by c-solo", cbNarratorFillFromColumn, got)
+	}
+	if got := cbClassIDs(res, cbNarratorNewFromSplit); !slices.Equal(got, []string{"a-split-2", "a-split-3"}) {
+		t.Errorf("%s = %v, want [a-split-2 a-split-3]: the replan never reached them", cbNarratorNewFromSplit, got)
 	}
 }
