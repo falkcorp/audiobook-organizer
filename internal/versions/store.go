@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-27
 
@@ -44,9 +44,15 @@ type versionPurger interface {
 	versionUpdater
 	bookFileLister
 
-	// GetBookVersionsByBookID finds the book's active version, whose files
+	// GetBookVersionsByBookID finds a book's active version, whose files
 	// the purge must not delete.
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+	// BookFilesAtPath and GetBookByFilePath find ANOTHER live book that
+	// serves a file of the version: deluge and import folders are shared.
+	// BookFilesAtPath returns database.ErrBookFilesAtPathUnavailable when it
+	// cannot be complete; the purge then deletes nothing.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+	GetBookByFilePath(path string) (*database.Book, error)
 
 	GetBookByID(id string) (*database.Book, error)
 }

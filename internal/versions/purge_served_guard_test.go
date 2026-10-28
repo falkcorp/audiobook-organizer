@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-27
 
@@ -8,6 +8,7 @@ package versions
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -342,5 +343,330 @@ func TestPurgeFailsClosedWhenVersionsCannotBeRead(t *testing.T) {
 	}
 	if got := f.status(v1.ID); got != database.BookVersionStatusTrash {
 		t.Fatalf("status = %s, want trash", got)
+	}
+}
+
+// ---- multi-file books, symlinks, hard links, other books ----
+
+// setBookFilePath re-points the fixture book's FilePath.
+func (f *servedFixture) setBookFilePath(p string) {
+	f.t.Helper()
+	f.book.FilePath = p
+	if _, err := f.store.UpdateBook(f.book.ID, f.book); err != nil {
+		f.t.Fatalf("update book: %v", err)
+	}
+}
+
+func (f *servedFixture) requireAllOnDisk(paths ...string) {
+	f.t.Helper()
+	for _, p := range paths {
+		if !onDisk(p) {
+			f.t.Fatalf("SERVED FILE DELETED: %s", p)
+		}
+	}
+}
+
+// A multi-file book's FilePath is its containing FOLDER, not a file, so an
+// exact match never fires: every track of the trashed active version sits
+// inside the folder the book still plays.
+func TestPurgeKeepsServedFiles_MultiFileBookFolderFilePath(t *testing.T) {
+	for _, withAlt := range []bool{false, true} {
+		for _, mode := range []string{"nightly-cleanup", "purge-now"} {
+			name := mode + "/only-version"
+			if withAlt {
+				name = mode + "/with-alt"
+			}
+			t.Run(name, func(t *testing.T) {
+				f := newServedFixture(t)
+				f.setBookFilePath(f.dir)
+				v1 := f.version(database.BookVersionStatusActive, 90*day)
+				p1, p2 := filepath.Join(f.dir, "01.mp3"), filepath.Join(f.dir, "02.mp3")
+				writeServed(t, p1)
+				writeServed(t, p2)
+				f.row(v1.ID, p1, 1)
+				f.row(v1.ID, p2, 2)
+				var altFile string
+				if withAlt {
+					v2 := f.version(database.BookVersionStatusAlt, 30*day)
+					altFile = filepath.Join(VersionSlotDir(filepath.Dir(f.dir), v2.ID), "alt.m4b")
+					writeServed(t, altFile)
+					f.row(v2.ID, altFile, 1)
+				}
+				f.trashLikeHandler(v1.ID)
+
+				if mode == "nightly-cleanup" {
+					res := f.afterWindow()
+					f.requireAllOnDisk(p1, p2)
+					f.requireKept(res, v1, 2)
+				} else {
+					v, _ := f.store.GetBookVersion(v1.ID)
+					var served *BookServesFilesError
+					if err := PurgeVersion(f.store, v); !errors.As(err, &served) || len(served.Paths) != 2 {
+						t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError with 2 paths", err)
+					}
+					f.requireAllOnDisk(p1, p2)
+					if got := f.status(v1.ID); got != database.BookVersionStatusTrash {
+						t.Fatalf("status = %s, want trash", got)
+					}
+				}
+				if withAlt {
+					f.requireAllOnDisk(altFile)
+				}
+			})
+		}
+	}
+}
+
+// Control: with a folder FilePath, a trashed alt whose files sit in its
+// .versions/ slot (beside or under the folder) is not served and still purges.
+func TestPurgeStillPurgesAltSlotFilesOfFolderBook(t *testing.T) {
+	for name, slotBase := range map[string]func(dir string) string{
+		"slot beside the folder": func(dir string) string { return filepath.Dir(dir) },
+		"slot under the folder":  func(dir string) string { return dir },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newServedFixture(t)
+			f.setBookFilePath(f.dir)
+			active := f.version(database.BookVersionStatusActive, 10*day)
+			p1 := filepath.Join(f.dir, "01.mp3")
+			writeServed(t, p1)
+			f.row(active.ID, p1, 1)
+			alt := f.version(database.BookVersionStatusAlt, 30*day)
+			altFile := filepath.Join(VersionSlotDir(slotBase(f.dir), alt.ID), "alt.m4b")
+			writeServed(t, altFile)
+			f.row(alt.ID, altFile, 1)
+			f.trashLikeHandler(alt.ID)
+
+			res := f.afterWindow()
+
+			if res.Purged != 1 || len(res.Kept) != 0 {
+				t.Fatalf("result = %+v, want 1 purged", res)
+			}
+			if onDisk(altFile) {
+				t.Fatal("the alt's own slot file survived its purge")
+			}
+			f.requireAllOnDisk(p1)
+		})
+	}
+}
+
+// The folder a book's FilePath names is not the folder of an AUDIO-extension
+// FilePath: a single-file book's FilePath is the file, and a sibling file in
+// its directory that the version owns is not served by it.
+func TestPurgeStillPurgesSiblingOfSingleFileBook(t *testing.T) {
+	f := newServedFixture(t)
+	active := f.version(database.BookVersionStatusActive, 10*day)
+	f.row(active.ID, f.active, 1)
+	alt := f.version(database.BookVersionStatusAlt, 30*day)
+	sibling := filepath.Join(f.dir, "hush-alt.m4b")
+	writeServed(t, sibling)
+	f.row(alt.ID, sibling, 1)
+	f.trashLikeHandler(alt.ID)
+
+	res := f.afterWindow()
+
+	if res.Purged != 1 || onDisk(sibling) {
+		t.Fatalf("result = %+v, sibling on disk = %v: a sibling of a single-file book is not served", res, onDisk(sibling))
+	}
+	f.requireAllOnDisk(f.active)
+}
+
+// book.FilePath recorded through a symlinked root; rows recorded with the
+// real path (or the other way round).
+func TestPurgeKeepsServedFiles_SymlinkedRoot(t *testing.T) {
+	f := newServedFixture(t)
+	link := filepath.Join(t.TempDir(), "lib-link")
+	if err := os.Symlink(f.dir, link); err != nil {
+		t.Fatal(err)
+	}
+	f.setBookFilePath(filepath.Join(link, "hush.m4b"))
+	v1 := f.version(database.BookVersionStatusActive, 90*day)
+	f.row(v1.ID, f.active, 1)
+	f.trashLikeHandler(v1.ID)
+
+	res := f.afterWindow()
+
+	f.requireAllOnDisk(f.active)
+	f.requireKept(res, v1, 1)
+}
+
+// The same file under another name (a hard link) is the same file.
+func TestPurgeKeepsServedFiles_HardLink(t *testing.T) {
+	f := newServedFixture(t)
+	link := filepath.Join(f.dir, "hush-link.m4b")
+	if err := os.Link(f.active, link); err != nil {
+		t.Skipf("hard links unsupported: %v", err)
+	}
+	active := f.version(database.BookVersionStatusActive, 10*day)
+	f.row(active.ID, f.active, 1)
+	alt := f.version(database.BookVersionStatusAlt, 30*day)
+	f.row(alt.ID, link, 1) // the trashed version's row names the hard link
+	f.trashLikeHandler(alt.ID)
+
+	res := f.afterWindow()
+
+	f.requireAllOnDisk(link, f.active)
+	f.requireKept(res, alt, 1)
+}
+
+// otherBook creates a second live book at path with one active-version row
+// (versioned) or one unversioned row.
+func (f *servedFixture) otherBook(id, path string, versioned bool, setFilePath bool) *database.Book {
+	f.t.Helper()
+	fp := ""
+	if setFilePath {
+		fp = path
+	}
+	b, err := f.store.CreateBook(&database.Book{ID: id, Title: "Batman: Year One", FilePath: fp})
+	if err != nil {
+		f.t.Fatalf("create other book: %v", err)
+	}
+	vid := ""
+	if versioned {
+		ov, err := f.store.CreateBookVersion(&database.BookVersion{BookID: id, Status: database.BookVersionStatusActive, Format: "m4b", Source: "imported"})
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		vid = ov.ID
+	}
+	if err := f.store.CreateBookFile(&database.BookFile{BookID: id, FilePath: path, VersionID: vid, TrackNumber: 1, Format: "m4b"}); err != nil {
+		f.t.Fatal(err)
+	}
+	return b
+}
+
+// trashedAltNaming trashes an alt of the fixture book whose row names path.
+func (f *servedFixture) trashedAltNaming(path string) *database.BookVersion {
+	f.t.Helper()
+	active := f.version(database.BookVersionStatusActive, 10*day)
+	f.row(active.ID, f.active, 1)
+	v := f.version(database.BookVersionStatusAlt, 30*day)
+	f.row(v.ID, path, 1)
+	f.trashLikeHandler(v.ID)
+	return v
+}
+
+// Deluge and import folders are shared: a file another LIVE book serves is
+// kept, whichever way that book names it.
+func TestPurgeKeepsServedFiles_ServedByAnotherLiveBook(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(f *servedFixture, shared string)
+	}{
+		{"FilePath and active-version row", func(f *servedFixture, shared string) { f.otherBook("other", shared, true, true) }},
+		{"active-version row only", func(f *servedFixture, shared string) { f.otherBook("other", shared, true, false) }},
+		{"unversioned row only", func(f *servedFixture, shared string) { f.otherBook("other", shared, false, false) }},
+		{"FilePath is the containing folder", func(f *servedFixture, shared string) {
+			if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One", FilePath: filepath.Dir(shared)}); err != nil {
+				f.t.Fatal(err)
+			}
+		}},
+	} {
+		for _, mode := range []string{"nightly-cleanup", "purge-now"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				f := newServedFixture(t)
+				shared := filepath.Join(t.TempDir(), "deluge", "shared.m4b")
+				writeServed(t, shared)
+				tc.make(f, shared)
+				v := f.trashedAltNaming(shared)
+
+				if mode == "nightly-cleanup" {
+					res := f.afterWindow()
+					f.requireAllOnDisk(shared)
+					f.requireKept(res, v, 1)
+					return
+				}
+				got, _ := f.store.GetBookVersion(v.ID)
+				var served *BookServesFilesError
+				if err := PurgeVersion(f.store, got); !errors.As(err, &served) {
+					t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
+				}
+				f.requireAllOnDisk(shared)
+			})
+		}
+	}
+}
+
+// Another book that is itself trashed, or names the file only through a
+// non-active version, does not serve it: the version still purges.
+func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
+	for name, setup := range map[string]func(f *servedFixture, shared string){
+		"other book trashed": func(f *servedFixture, shared string) {
+			f.otherBook("other", shared, true, true)
+			if _, err := f.store.ModifyBook("other", func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil }); err != nil {
+				f.t.Fatal(err)
+			}
+		},
+		"other book names it through an alt version": func(f *servedFixture, shared string) {
+			if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One"}); err != nil {
+				f.t.Fatal(err)
+			}
+			ov, err := f.store.CreateBookVersion(&database.BookVersion{BookID: "other", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported"})
+			if err != nil {
+				f.t.Fatal(err)
+			}
+			if err := f.store.CreateBookFile(&database.BookFile{BookID: "other", FilePath: shared, VersionID: ov.ID, TrackNumber: 1}); err != nil {
+				f.t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newServedFixture(t)
+			shared := filepath.Join(f.dir, ".versions", "x", "shared.m4b")
+			writeServed(t, shared)
+			setup(f, shared)
+			f.trashedAltNaming(shared)
+
+			res := f.afterWindow()
+
+			if res.Purged != 1 || len(res.Kept) != 0 || onDisk(shared) {
+				t.Fatalf("result = %+v, shared on disk = %v, want purged and deleted", res, onDisk(shared))
+			}
+		})
+	}
+}
+
+// failingAtPathStore makes the other-books lookup fail.
+type failingAtPathStore struct {
+	*database.PebbleStore
+	err error
+}
+
+func (s failingAtPathStore) BookFilesAtPath(string) ([]database.BookFile, error) { return nil, s.err }
+
+type failingByFilePathStore struct{ *database.PebbleStore }
+
+func (failingByFilePathStore) GetBookByFilePath(string) (*database.Book, error) {
+	return nil, errors.New("transient: pebble busy")
+}
+
+// Fail closed: when the guard cannot tell whether another book serves a file,
+// nothing is deleted and the version is not purged.
+func TestPurgeFailsClosedWhenOtherBooksCannotBeRead(t *testing.T) {
+	for name, wrap := range map[string]func(*database.PebbleStore) TrashedVersionCleaner{
+		"index unavailable": func(s *database.PebbleStore) TrashedVersionCleaner {
+			return failingAtPathStore{s, database.ErrBookFilesAtPathUnavailable}
+		},
+		"row lookup error": func(s *database.PebbleStore) TrashedVersionCleaner {
+			return failingAtPathStore{s, fmt.Errorf("transient: %w", errors.New("pebble busy"))}
+		},
+		"book-by-path error": func(s *database.PebbleStore) TrashedVersionCleaner { return failingByFilePathStore{s} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newServedFixture(t)
+			own := filepath.Join(VersionSlotDir(f.dir, "slotid"), "alt.m4b")
+			writeServed(t, own)
+			v := f.trashedAltNaming(own)
+
+			res := cleanupTrashedVersionsAt(wrap(f.store), time.Now().Add(40*day))
+
+			if res.Purged != 0 {
+				t.Fatalf("purged %d on a read error, want 0", res.Purged)
+			}
+			f.requireAllOnDisk(own, f.active)
+			if got := f.status(v.ID); got != database.BookVersionStatusTrash {
+				t.Fatalf("status = %s, want trash", got)
+			}
+		})
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -116,55 +116,19 @@ func bookIsTrashed(b *database.Book) bool {
 	return b.LibraryState != nil && *b.LibraryState == trashedLibraryState
 }
 
-// cleanPath normalises p for comparison: absolute and cleaned. A path that
-// cannot be made absolute is only cleaned.
-func cleanPath(p string) string {
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
-	}
-	return filepath.Clean(p)
-}
-
-// servedPaths returns the cleaned paths the book serves: its FilePath, and
-// every book_file row that belongs to a currently ACTIVE version of the book
-// or to no version. Rows of alt, trashed or purged versions are not served.
-func servedPaths(store versionPurger, book *database.Book, files []database.BookFile) (map[string]struct{}, error) {
-	vers, err := store.GetBookVersionsByBookID(book.ID)
-	if err != nil {
-		return nil, fmt.Errorf("list versions of book %s: %w", book.ID, err)
-	}
-	active := make(map[string]struct{})
-	for i := range vers {
-		if vers[i].Status == database.BookVersionStatusActive {
-			active[vers[i].ID] = struct{}{}
-		}
-	}
-	served := make(map[string]struct{})
-	if book.FilePath != "" {
-		served[cleanPath(book.FilePath)] = struct{}{}
-	}
-	for i := range files {
-		f := &files[i]
-		if f.FilePath == "" {
-			continue
-		}
-		if _, ok := active[f.VersionID]; ok || f.VersionID == "" {
-			served[cleanPath(f.FilePath)] = struct{}{}
-		}
-	}
-	return served, nil
-}
-
 // PurgeVersion physically deletes the version's files and marks it
 // inactive_purged. Keeps the DB rows for fingerprint matching.
 //
-// A file the version's own book still serves is never deleted: when the book
-// is not itself trashed and the file is the book's FilePath or is named by a
-// book_file row of its active version (or of no version), PurgeVersion deletes
-// nothing, leaves the version in the trash and returns a *BookServesFilesError.
-// It fails closed: if the book, its versions or its rows cannot be read, or
-// the version's slot cannot be walked, nothing is deleted and the error is
-// returned.
+// A file a live book still serves is never deleted: when the version's book is
+// not itself trashed and a file is served (see servedGuard: the book's
+// FilePath or, for a multi-file book, the folder it names; a row of its active
+// version or of no version; the same file reached by a symlink or hard link;
+// or any of those for ANOTHER live book), PurgeVersion deletes nothing, leaves
+// the version in the trash and returns a *BookServesFilesError. It fails
+// closed: if the book, its versions, its rows or another book's rows cannot be
+// read, or the version's slot cannot be walked, nothing is deleted and the
+// error is returned. A book that is itself in the trash is not guarded, as
+// before.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	book, err := store.GetBookByID(ver.BookID)
 	if err != nil || book == nil {
@@ -206,19 +170,23 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	}
 
 	if !bookIsTrashed(book) {
-		served, err := servedPaths(store, book, files)
+		guard, err := newServedGuard(store, book, files)
 		if err != nil {
 			return err
 		}
 		var kept []string
 		seen := make(map[string]struct{})
 		for _, p := range own {
-			c := cleanPath(p)
+			c := canonPath(p)
 			if _, dup := seen[c]; dup {
 				continue
 			}
 			seen[c] = struct{}{}
-			if _, ok := served[c]; ok {
+			served, err := guard.serves(p)
+			if err != nil {
+				return err
+			}
+			if served {
 				kept = append(kept, p)
 			}
 		}

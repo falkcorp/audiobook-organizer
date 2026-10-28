@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder.go
-// version: 3.3.2
+// version: 3.4.0
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
-// last-edited: 2026-10-19
+// last-edited: 2026-10-27
 
 package database
 
@@ -123,7 +123,7 @@ func (s OwnFolderSplit) Counted(files []BookFile) []BookFile {
 func SplitOwnFolderFiles(book *Book, files []BookFile) OwnFolderSplit {
 	var s OwnFolderSplit
 	if book != nil {
-		s.Dir = bookOwnFolder(book.FilePath, files)
+		s.Dir = BookOwnFolder(book.FilePath, files)
 	}
 	inside := make([]bool, len(files))
 	for i := range files {
@@ -399,13 +399,17 @@ func bookFileNames(f BookFile) []string {
 	return out
 }
 
-// bookOwnFolder derives the book's own folder from its library path.
+// BookOwnFolder derives the book's own folder from its library path.
+// Exported so callers outside this package (the version purge guard) apply the
+// same rule instead of restating it: Book.FilePath is the containing FOLDER for
+// a multi-file book, so the result equals filepath.Clean(p) exactly when p is
+// that folder, and is its parent directory when p is a file.
 // FilePath is a FILE (so its directory is the folder) only when it is one of
 // the rows' paths or carries an audio extension; otherwise it is the folder
 // itself. Deciding "directory" from "some row lies under it" would be wrong
 // the other way: with no row under it, Dir(FilePath) climbs to the author
 // folder, where sibling copies would then count as own.
-func bookOwnFolder(p string, files []BookFile) string {
+func BookOwnFolder(p string, files []BookFile) string {
 	if p == "" {
 		return ""
 	}
