@@ -1,7 +1,7 @@
 // file: internal/util/names.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3a91c4e7-52bd-4f16-8c03-9e7d1b5a2f48
-// last-edited: 2026-09-02
+// last-edited: 2026-10-27
 
 package util
 
@@ -76,6 +76,35 @@ func looksLikeSurnameFirst(left, right string) bool {
 // Returns the input as a single element when nothing splits, so callers can
 // treat the result uniformly.
 func SplitCreditNames(name string) []string {
+	work := SplitCreditPieces(name)
+
+	// Drop duplicates, preserving order: "A & A" and repeated tag credits must
+	// not create two identical narrator rows.
+	seen := make(map[string]struct{}, len(work))
+	var result []string
+	for _, p := range work {
+		key := strings.ToLower(p)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, p)
+	}
+
+	if len(result) == 0 {
+		return []string{name}
+	}
+	return result
+}
+
+// SplitCreditPieces is SplitCreditNames without the de-duplication: every piece
+// the credit is cut into, in order, repeats included ("A & a" is two pieces).
+// A caller that edits a credit in place needs all of them, because a repeat the
+// splitter drops is still text in the credit: respelling only the first of
+// "Renee Montoya, RENEE MONTOYA" leaves the other as written. Everything else
+// about the cut (the "Surname, Given" guard, the separators, the trimming) is
+// SplitCreditNames's, which is built on this.
+func SplitCreditPieces(name string) []string {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return []string{name}
@@ -106,24 +135,10 @@ func SplitCreditNames(name string) []string {
 		}
 		work = next
 	}
-
-	// Drop duplicates, preserving order: "A & A" and repeated tag credits must
-	// not create two identical narrator rows.
-	seen := make(map[string]struct{}, len(work))
-	var result []string
-	for _, p := range work {
-		key := strings.ToLower(p)
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, p)
-	}
-
-	if len(result) == 0 {
+	if len(work) == 0 {
 		return []string{name}
 	}
-	return result
+	return work
 }
 
 // IsCompoundCreditName reports whether a credit string names more than one
