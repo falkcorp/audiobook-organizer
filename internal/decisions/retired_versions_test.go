@@ -1,7 +1,7 @@
 // file: internal/decisions/retired_versions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f8b05d3-7a19-4c64-9e50-c13d6a84b7e9
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package decisions
 
@@ -173,26 +173,16 @@ func TestRetiredBookResolver_AnEmptiedVersionIsIgnored(t *testing.T) {
 	require.Equal(t, "S3", got)
 }
 
-func TestChainResolvers(t *testing.T) {
-	step := func(m map[string]string) IDResolver {
-		return func(_, id string) (string, error) {
+func TestChainPathResolvers_StopsOnACycleAndPassesAReadFailureThrough(t *testing.T) {
+	step := func(m map[string]string) PathResolver {
+		return PathOf(func(_, id string) (string, error) {
 			if n, ok := m[id]; ok {
 				return n, nil
 			}
 			return id, nil
-		}
+		})
 	}
-	// B -> C is the first resolver's, C -> D the second's, D -> E the first's
-	// again: the chain goes on until nothing moves.
-	chain := ChainResolvers(step(map[string]string{"B": "C", "D": "E"}), step(map[string]string{"C": "D"}))
-	got, err := chain("book", "B")
-	require.NoError(t, err)
-	require.Equal(t, "E", got)
-	got, err = chain("book", "Z")
-	require.NoError(t, err)
-	require.Equal(t, "Z", got)
-
-	_, err = ChainResolvers(step(map[string]string{"A": "B", "B": "A"}))("book", "A")
+	_, err := ChainPathResolvers(step(map[string]string{"A": "B", "B": "A"}))("book", "A")
 	require.ErrorIs(t, err, ErrResolverCycle)
 	require.ErrorIs(t, err, ErrIDUnresolvable)
 	var ue *UnresolvableIDError
@@ -201,7 +191,7 @@ func TestChainResolvers(t *testing.T) {
 	require.Contains(t, ue.Related, "B")
 
 	boom := errors.New("boom")
-	_, err = ChainResolvers(func(string, string) (string, error) { return "", boom })("book", "A")
+	_, err = ChainPathResolvers(PathOf(func(string, string) (string, error) { return "", boom }))("book", "A")
 	require.ErrorIs(t, err, boom)
 	require.NotErrorIs(t, err, ErrIDUnresolvable)
 }
@@ -237,7 +227,7 @@ func TestRetiredBookResolver_VetoOnAPurgedShellStillBlocks(t *testing.T) {
 
 	r := &retiredBooks{books: map[string]*database.Book{holder: liveBook(holder), other: liveBook(other)}} // the shell was purged
 	r.retire(shell, holder)
-	v := mustLoad(t, s, ChainResolvers(RetiredBookResolver(r)))
+	v := mustLoad(t, s, RetiredBookResolver(r))
 	require.True(t, snapVetoed(t, v, testType, holder, other, FamilySameWork))
 	require.True(t, snapVetoed(t, v, testType, shell, other, FamilySameWork), "the old id resolves too")
 	require.False(t, snapVetoed(t, v, testType, holder, other, FamilySameCopy), "still family scoped")
