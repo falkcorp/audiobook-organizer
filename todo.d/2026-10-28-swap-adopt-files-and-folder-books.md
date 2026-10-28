@@ -8,6 +8,6 @@
       checks (never the same file as the active version's, never a symlink, same filesystem or
       a verified copy), then swap. The same task covers a book whose `file_path` is a folder
       (inplace multi-file): the swap must move the whole folder's files, not assume the
-      parent of `file_path` is the book's folder. Also give a swap whose database writes fail
-      after the files moved (`ErrSwapIncomplete`) a resume that finishes it (the preflight
-      refuses the half-written state today) and implement `ResumeVersionSwaps`.
+      parent of `file_path` is the book's folder. Resuming a swap that did not finish
+      (`ErrSwapIncomplete`, `ResumeVersionSwaps`) is tracked separately as
+      TODO-SWAP-STUCK-RECOVERY.
