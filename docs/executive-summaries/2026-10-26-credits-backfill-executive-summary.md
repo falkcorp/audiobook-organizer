@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.2.2 -->
 <!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -49,6 +49,17 @@
   safely is not written on the narrator side and is held for review: the spelling
   cannot be reconciled, the stored list and the text conflict, or the name matches two
   people. The author side of such a book is still written.
+- **A name that exists only inside a longer credit.** When a book's narrator text
+  lists several people and one of them is new to the library, the job does not create
+  that person on its own. If another book names the same person alone, that book
+  creates the record and the longer credit links to it, and this holds in every
+  step: the preview, a single full run, and a run split into batches. In a batch that
+  leaves the other book out, the longer credit simply waits (the report lists it as
+  waiting and it does not use up the batch size), and a later batch links it. If the
+  other book cannot be written, because its spelling cannot be settled or its write
+  fails, the longer credit is not written either and goes back to review. A record
+  the job created that no written book ends up using is reported by name, so it can be
+  removed with the existing empty-narrator cleanup.
 - **Review lists are kept.** Every run, a limited one too, stores the full list of book
   ids behind each count so each count can be clicked through. For a full library that
   is roughly 5 to 12 MB per run, and nothing removes it by age: it stays until the

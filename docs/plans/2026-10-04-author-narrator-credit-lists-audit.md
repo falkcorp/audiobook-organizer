@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.2.5 -->
+<!-- version: 1.2.6 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-27 -->
 
@@ -625,10 +625,14 @@ the row above:
   same operation count against N). The dry run takes the same cohort, so a dry run with
   `limit` shows exactly the books an apply with the same `limit` would write. A book in
   the cohort whose write fails or is refused keeps its slot; no other book replaces
-  it. Books outside the cohort are listed as `limit_reached`.
+  it. Books outside the cohort are listed as `limit_reached`. A split book whose
+  creating book is in the cohort takes a place the other books leave (after them, in
+  sorted order), or is `limit_reached`; one whose creating book is not in the cohort is
+  `narrator_waiting_on_creator` and takes no place.
 - **Concurrency.** Three phases: plan and guard every book concurrently, pick the
   cohort serially from the sorted ids, then write the cohort concurrently
-  (`registry.RunItems` with `Concurrency` set). Books are disjoint, so two workers
+  (`registry.RunItems` with `Concurrency` set), the books that create records before
+  the split books that link to them. Books are disjoint, so two workers
   never write the same row. Narrator records the run creates are serialised and shared
   by accent-folded name, so two books naming one new narrator get one record.
 - **Narrator names.** A narrator name is matched exactly first, then by its fold key
@@ -655,11 +659,26 @@ the row above:
   a full run does. Cohorts agree with a single full apply: a book whose only unknown
   names come from splitting another book's credit is re-evaluated after the first
   pass with the names the run itself will create counted as existing, so the dry run
-  lists it as a fill and a single full apply writes it; in a cohort that
-  leaves the corroborating book out, the split book itself creates the record. A name that stands as whole words in more than one credit ("Jean Paul
+  lists it as a fill and a single full apply writes it. **A split book never creates a
+  record without the allow.** It links to a record another book creates, and that
+  holds at every step: at plan time the spelling settle runs to a fixpoint over the
+  creating books that survive it, and a split book left without one goes back to
+  `narrator_new_from_split`; in a cohort that leaves the creating book out the split
+  book waits (`narrator_waiting_on_creator`, informational, no `limit` place used) and is
+  written in the cohort that creates the record or a later one, which links to the
+  record that exists by then; at apply time the books that create records are written
+  first and the split books second, and a split book links only to a record whose
+  creating write landed, so a creator that fails, is locked, changed or is refused sends
+  its dependents back to `narrator_new_from_split`, unwritten. A record the run created
+  that no written book credits (a creator that failed after creating, or an apply-time
+  spelling refusal) is reported as `narrators_created_unused` with
+  `unused_narrator_names`, and a book that still has an author write names it in its
+  journal row; `maintenance.purge-empty-narrators` removes it. A name that stands as whole words in more than one credit ("Jean Paul
   Valley Jr." beside "Jean Paul Valley") is respelled only in the credit that is the
   name (preferring the exact entry across the whole stored list), and every credit of
-  the same person in the column is respelled. A rescan with an unlocked narrator field
+  the same person in the column is respelled, whatever its case ("Renee Montoya,
+  RENEE MONTOYA": the cleaner reads both as one person, so each piece is replaced over
+  its own length). A rescan with an unlocked narrator field
   reads the tag's spelling back and the column-to-junction sync can mint an unaccented duplicate
   record; that is a separate change (`todo.d/2026-10-27-narrator-sync-fold-match.md`).
   Junk names ("N/A", "Various", "Unknown", "Narrator", "Full Cast", a placeholder and
