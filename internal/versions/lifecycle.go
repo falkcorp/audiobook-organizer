@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -126,6 +126,27 @@ func refusePurging(v *database.BookVersion, action string) error {
 	return nil
 }
 
+// ErrVersionSwapping is returned by MarkTrashed for a version in swapping_out or
+// swapping_in: a swap that stopped half way (RunVersionSwap returned
+// ErrSwapIncomplete, or the process died). Its files may be in two places and the
+// book's file_path and rows may name either, so the version is not the caller's
+// to trash: 14 days later the cleanup would delete files the book plays. The
+// server answers it with a 409. There is no resume yet; a person repairs it.
+var ErrVersionSwapping = errors.New("the version is part of a swap that did not finish")
+
+// refuseSwapping refuses a lifecycle step on a version whose swap has started
+// and not finished (swapping_out, swapping_in).
+func refuseSwapping(v *database.BookVersion, action string) error {
+	if v == nil {
+		return nil
+	}
+	if v.Status == database.BookVersionStatusSwappingOut || v.Status == database.BookVersionStatusSwappingIn {
+		return fmt.Errorf("%s version %s: %w (it is %s: a swap of this book stopped half way and its files may be in two places; "+
+			"it needs repair, and trashing it could lead to the files the book plays being deleted)", action, v.ID, ErrVersionSwapping, v.Status)
+	}
+	return nil
+}
+
 // MarkTrashed moves v into the trash in memory and stamps TrashedAt with now.
 // A version already in the trash keeps its stamp, so a repeated trash request
 // neither restarts nor shortens its window. The caller persists v; the store
@@ -136,12 +157,17 @@ func refusePurging(v *database.BookVersion, action string) error {
 // retired version in the trash would reach PurgeVersion 14 days later. It
 // refuses a purging version (database.ErrVersionPurging) and a purged one
 // (database.ErrVersionPurged): its files are gone, and a trash row would start a
-// clock that ends in a purge of nothing.
+// clock that ends in a purge of nothing. It refuses a version in swapping_out or
+// swapping_in (ErrVersionSwapping): a swap that stopped half way is not undone by
+// trashing the version it left, which is what a retried DELETE would do.
 func MarkTrashed(v *database.BookVersion, now time.Time) error {
 	if err := refuseRetired(v, "trash"); err != nil {
 		return err
 	}
 	if err := refusePurging(v, "trash"); err != nil {
+		return err
+	}
+	if err := refuseSwapping(v, "trash"); err != nil {
 		return err
 	}
 	if v.Status == database.BookVersionStatusInactivePurged {

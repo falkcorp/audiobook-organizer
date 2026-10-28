@@ -1,5 +1,5 @@
 // file: internal/versions/swap_layout_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ceae3827-5dd4-4742-9093-b4d214299d8a
 // last-edited: 2026-10-28
 
@@ -223,9 +223,9 @@ func TestSwapLayout_AltOutsideBookFolderRefused(t *testing.T) {
 
 	// A file in another version's slot of the same book.
 	f3 := newSwapFixture(t)
-	third := f3.add(database.BookVersionStatusTrash, 5*time.Hour, "Third.mp3")
+	third := f3.add(database.BookVersionStatusTrash, 5*time.Hour, "Long Shadows.mp3")
 	_ = third
-	alt3 := f3.addAltAt(filepath.Join(VersionSlotDir(f3.bookDir, third.ID), "Third.mp3"), "")
+	alt3 := f3.addAltAt(filepath.Join(VersionSlotDir(f3.bookDir, third.ID), "Long Shadows.mp3"), "")
 	requireRefused(t, f3, alt3, "not inside its own slot")
 }
 
@@ -403,7 +403,7 @@ func (s *failingSwapStore) ModifyBookFile(bookID, fileID string, fn func(*databa
 	}
 	if fileID == s.changeRowFirst {
 		if _, err := s.PebbleStore.ModifyBookFile(bookID, fileID, func(r *database.BookFile) error {
-			r.FilePath = filepath.Join(filepath.Dir(r.FilePath), "Renamed Meanwhile.m4b")
+			r.FilePath = filepath.Join(filepath.Dir(r.FilePath), "Batman Incorporated.m4b")
 			return nil
 		}); err != nil {
 			return nil, err
@@ -504,48 +504,134 @@ func TestRunVersionSwap_RowRepointedMeanwhileIsNamed(t *testing.T) {
 	}
 }
 
-// anyMoved counts a file as moved only when its source is gone AND its
-// destination is there.
-func TestAnyMoved(t *testing.T) {
+// undoMoves puts back exactly the files a Move* call reported as renamed. A file
+// that is at its new path but was not renamed by this call is not its to move,
+// whatever the disk looks like (it used to infer what moved from the disk).
+func TestUndoMoves_PutsBackOnlyWhatWasRenamed(t *testing.T) {
 	dir := t.TempDir()
-	present := filepath.Join(dir, "present")
-	absent := filepath.Join(dir, "absent")
-	other := filepath.Join(dir, "other")
-	writeTestFile(t, present, "x")
-	writeTestFile(t, other, "y")
-	cases := []struct {
-		name     string
-		old, new string
-		want     bool
-	}{
-		{"source gone, destination there", absent, present, true},
-		{"source and destination both there", other, present, false},
-		{"source and destination both gone", absent, filepath.Join(dir, "absent2"), false},
-		{"source there, destination gone", present, absent, false},
-		{"same path", present, present, false},
+	oldA, newA := filepath.Join(dir, "Year One.m4b"), filepath.Join(dir, "slot", "Year One.m4b")
+	oldB, newB := filepath.Join(dir, "Year Two.m4b"), filepath.Join(dir, "slot", "Year Two.m4b")
+	writeTestFile(t, newA, "a")
+	writeTestFile(t, newB, "b")
+	if err := undoMoves([]string{oldA, oldB}, []string{newA, newB}, []bool{true, false}); err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		if got := anyMoved([]string{c.old}, []string{c.new}); got != c.want {
-			t.Errorf("%s: anyMoved = %v, want %v", c.name, got, c.want)
-		}
+	if got := readTestFile(t, oldA); got != "a" {
+		t.Errorf("Year One was not put back: %q", got)
+	}
+	if _, err := os.Lstat(newA); !os.IsNotExist(err) {
+		t.Errorf("Year One is still at its new path: %v", err)
+	}
+	if _, err := os.Lstat(oldB); !os.IsNotExist(err) {
+		t.Errorf("Year Two, not renamed by the call, was put back: %v", err)
+	}
+	if got := readTestFile(t, newB); got != "b" {
+		t.Errorf("Year Two was touched: %q", got)
 	}
 }
 
-// undoMoves puts back what moved and leaves alone what was already moved before
-// the call.
-func TestUndoMoves(t *testing.T) {
+// An original path that is taken now is an error, and what is there is not
+// overwritten: the file the call moved stays where it went, so nothing is lost.
+func TestUndoMoves_OccupiedOriginalIsAnErrorNotAClobber(t *testing.T) {
 	dir := t.TempDir()
-	oldA, newA := filepath.Join(dir, "a"), filepath.Join(dir, "slot", "a")
-	oldB, newB := filepath.Join(dir, "b"), filepath.Join(dir, "slot", "b")
-	writeTestFile(t, newA, "a")
-	writeTestFile(t, newB, "b")
-	if err := undoMoves([]string{oldA, oldB}, []string{newA, newB}, []bool{false, true}); err != nil {
-		t.Fatal(err)
+	oldA, newA := filepath.Join(dir, "Hush.m4b"), filepath.Join(dir, "slot", "Hush.m4b")
+	writeTestFile(t, newA, "the audio the swap moved")
+	writeTestFile(t, oldA, "a stranger created meanwhile")
+
+	err := undoMoves([]string{oldA}, []string{newA}, []bool{true})
+	if err == nil {
+		t.Fatal("undoMoves returned nil although the original path is occupied")
 	}
-	if _, err := os.Stat(oldA); err != nil {
-		t.Errorf("a was not put back: %v", err)
+	if !errors.Is(err, fs.ErrExist) || !strings.Contains(err.Error(), "occupied") {
+		t.Errorf("err = %v, want it to say the original path is occupied", err)
 	}
-	if _, err := os.Stat(oldB); !os.IsNotExist(err) {
-		t.Errorf("b, moved before the call, was put back: %v", err)
+	if got := readTestFile(t, oldA); got != "a stranger created meanwhile" {
+		t.Errorf("the stranger's file was overwritten: %q", got)
+	}
+	if got := readTestFile(t, newA); got != "the audio the swap moved" {
+		t.Errorf("the moved file was lost: %q", got)
+	}
+}
+
+// When a move fails and the leaving version's file cannot be put back because
+// something took its place meanwhile, the swap does not put the statuses back
+// and does not clobber: it returns ErrSwapIncomplete with both versions left in
+// swapping_*, and every file is where it is. (It used to skip the file, restore
+// the statuses and leave the book playing the stranger's file.)
+func TestRunVersionSwap_UndoBlockedByAStrangerIsIncomplete(t *testing.T) {
+	f := newSwapFixture(t)
+	// The alt's file has the active file's name, so step 3 moves it onto the
+	// root path the leaving file vacated.
+	alt := f.add(database.BookVersionStatusAlt, time.Hour, filepath.Base(f.rootAud))
+	altFile := filepath.Join(VersionSlotDir(f.bookDir, alt.ID), filepath.Base(f.rootAud))
+	slotFile := filepath.Join(VersionSlotDir(f.bookDir, f.active.ID), filepath.Base(f.rootAud))
+
+	err := RunVersionSwap(context.Background(), f.store, VersionSwapParams{
+		BookID: f.book.ID, FromVersionID: f.active.ID, ToVersionID: alt.ID,
+	}, func(step string, _ int) {
+		if step == "fs_move_from" {
+			// Between step 2 and step 3 another writer takes the vacated path.
+			writeTestFile(t, f.rootAud, "a stranger created meanwhile")
+		}
+	}, nil, nil)
+	if !errors.Is(err, ErrSwapIncomplete) {
+		t.Fatalf("err = %v, want ErrSwapIncomplete", err)
+	}
+	if errors.Is(err, ErrSwapRefused) {
+		t.Errorf("a failure after the swap started is not a refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "occupied") {
+		t.Errorf("err = %v, want it to name the occupied original path", err)
+	}
+	if got := readTestFile(t, f.rootAud); got != "a stranger created meanwhile" {
+		t.Errorf("the stranger's file was overwritten: %q", got)
+	}
+	if got := readTestFile(t, slotFile); got != "active" {
+		t.Errorf("the leaving file is not in its slot: %q", got)
+	}
+	if got := readTestFile(t, altFile); got != "alt-"+alt.ID {
+		t.Errorf("the entering file moved although its move failed: %q", got)
+	}
+	if v, _ := f.store.GetBookVersion(f.active.ID); v.Status != database.BookVersionStatusSwappingOut {
+		t.Errorf("leaving version status = %s, want swapping_out (not put back)", v.Status)
+	}
+	if v, _ := f.store.GetBookVersion(alt.ID); v.Status != database.BookVersionStatusSwappingIn {
+		t.Errorf("entering version status = %s, want swapping_in (not put back)", v.Status)
+	}
+}
+
+// A version that is already swapping_* is refused before anything is written:
+// resuming a swap is not implemented and its files may be in two places.
+func TestRunVersionSwap_RefusesAVersionAlreadySwapping(t *testing.T) {
+	for _, st := range []string{database.BookVersionStatusSwappingOut, database.BookVersionStatusSwappingIn} {
+		for _, side := range []string{"from", "to"} {
+			t.Run(st+"/"+side, func(t *testing.T) {
+				f := newSwapFixture(t)
+				alt := f.add(database.BookVersionStatusAlt, time.Hour, "Hush.m4b")
+				stuck := alt
+				if side == "from" {
+					stuck = f.active
+				}
+				v, _ := f.store.GetBookVersion(stuck.ID)
+				v.Status = st
+				if err := f.store.UpdateBookVersion(v); err != nil {
+					t.Fatal(err)
+				}
+				diskBefore, stateBefore := tree(t, f.bookDir), f.versionState()
+
+				err := RunVersionSwap(context.Background(), f.store, VersionSwapParams{
+					BookID: f.book.ID, FromVersionID: f.active.ID, ToVersionID: alt.ID,
+				}, nil, nil, nil)
+				if !errors.Is(err, ErrSwapRefused) || !strings.Contains(err.Error(), "did not finish") {
+					t.Fatalf("err = %v, want a refusal saying the earlier swap did not finish", err)
+				}
+				if got := tree(t, f.bookDir); got != diskBefore {
+					t.Errorf("the disk changed:\nbefore:\n%s\nafter:\n%s", diskBefore, got)
+				}
+				if got := f.versionState(); got != stateBefore {
+					t.Errorf("the store changed:\nbefore:\n%s\nafter:\n%s", stateBefore, got)
+				}
+			})
+		}
 	}
 }

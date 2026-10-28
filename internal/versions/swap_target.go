@@ -1,5 +1,5 @@
 // file: internal/versions/swap_target.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e5b7a4c-83d1-4f6a-9c2e-7d1a5b3f8e64
 // last-edited: 2026-10-28
 
@@ -155,11 +155,15 @@ func PickSwapTarget(store swapTargetStore, bookID, fromID string) (*database.Boo
 // swapBookDir is the folder RunVersionSwap works in, the parent of the book's
 // FilePath, or why it cannot be trusted: a FilePath that is empty (its parent
 // would be "." and the swap would move files into the process's working
-// directory), not absolute, or a folder (see bookPathIsFolder).
+// directory), not absolute, one that ends in a separator (it names a folder, not
+// a file, and filepath.Dir of it is the path itself, which would make the
+// file's own name the "book folder"), or a folder (see bookPathIsFolder).
 func swapBookDir(book *database.Book) (dir, why string) {
 	switch {
 	case book.FilePath == "":
 		return "", "the book has no file path, so its folder is unknown"
+	case strings.HasSuffix(book.FilePath, "/") || strings.HasSuffix(book.FilePath, string(filepath.Separator)):
+		return "", fmt.Sprintf("the book's path %q ends in a path separator, so it is not a file", book.FilePath)
 	case !filepath.IsAbs(book.FilePath):
 		return "", fmt.Sprintf("the book's path %q is not absolute, so its folder is unknown", book.FilePath)
 	case bookPathIsFolder(book.FilePath):
@@ -189,11 +193,13 @@ func folderBookReason(path string) string {
 // asks it of every candidate and RunVersionSwap asks it again before its first
 // write, so what the picker approved is what the swap will see.
 //
-// It checks the layout the swap assumes (swapLayoutBlocker) and then repeats the
-// moves' own checks (movePreservingAttrs) without making them: a file is
-// movable when it exists (or is already at its destination) and its
-// destination is free. Existence is NOT part of the layout check, so a file
-// that is already where the swap would put it (a resumed swap) passes.
+// It checks the layout the swap assumes (swapLayoutBlocker), the folders the
+// files move through (slotBlocker) and then the moves' own conditions
+// (movePreservingAttrs) without making them: a file is movable when it EXISTS
+// and its destination is FREE. There is no third case. A source that is missing
+// while a file of the same name sits at the destination is not "already moved":
+// it is another book's file (or a leftover) that the swap would adopt, switch
+// the book to, and the purge would then delete the real audio behind it.
 //
 // RunVersionSwap moves the leaving version's files into its slot first, so a
 // root path they occupy is free for the entering version's files; that is
@@ -203,6 +209,9 @@ func swapPreflight(bookDir, fromID, toID string, fromFiles, toFiles []database.B
 		return "it has no files"
 	}
 	if why := swapLayoutBlocker(bookDir, fromID, toID, fromFiles, toFiles); why != "" {
+		return why
+	}
+	if why := slotBlocker(bookDir, fromID, toID); why != "" {
 		return why
 	}
 	vacated := make(map[string]struct{})
@@ -216,9 +225,7 @@ func swapPreflight(bookDir, fromID, toID string, fromFiles, toFiles []database.B
 		if why := moveBlocker(f.FilePath, dst, nil); why != "" {
 			return "the active version's " + why
 		}
-		if dst != f.FilePath {
-			vacated[f.FilePath] = struct{}{}
-		}
+		vacated[f.FilePath] = struct{}{}
 	}
 	seen = make(map[string]string)
 	for _, f := range toFiles {
@@ -230,6 +237,48 @@ func swapPreflight(bookDir, fromID, toID string, fromFiles, toFiles []database.B
 		if why := moveBlocker(f.FilePath, dst, vacated); why != "" {
 			return "its " + why
 		}
+	}
+	return ""
+}
+
+// slotBlocker asks of the two folders the swap moves through whether they are
+// what the swap takes them to be. `.versions` and both slots (.versions/{id})
+// must each be absent or a real directory, not a link and not a file, whose
+// canonical path is the canonical book folder joined with .versions/{id}. The
+// swap creates the leaving version's slot with MkdirAll, which follows links,
+// and moves files through both: a slot that is a symlink out, or a .versions
+// that is a symlink to another book's, would put the leaving version's files in
+// that other folder, where the purge's slot checks do not look.
+func slotBlocker(bookDir, fromID, toID string) string {
+	canonDir := canonPath(bookDir)
+	versionsDir := VersionsDir(bookDir)
+	if why := plainDirOrAbsent(versionsDir, filepath.Join(canonDir, VersionsDirName)); why != "" {
+		return why
+	}
+	for _, id := range []string{fromID, toID} {
+		if why := plainDirOrAbsent(VersionSlotDir(bookDir, id), filepath.Join(canonDir, VersionsDirName, id)); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// plainDirOrAbsent is "" when path does not exist or is a real directory whose
+// canonical path is wantCanon, else why not.
+func plainDirOrAbsent(path, wantCanon string) string {
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return ""
+	case err != nil:
+		return fmt.Sprintf("the folder %s cannot be checked (%v)", path, err)
+	case fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Sprintf("the folder %s is a symbolic link, not a real folder of this book", path)
+	case !fi.IsDir():
+		return fmt.Sprintf("%s is a file, not a folder", path)
+	}
+	if got := canonPath(path); got != wantCanon {
+		return fmt.Sprintf("the folder %s resolves to %s, not %s", path, got, wantCanon)
 	}
 	return ""
 }
@@ -308,24 +357,27 @@ func sameFile(a, b string) bool {
 }
 
 // moveBlocker is movePreservingAttrs's decision without the move: "" when src
-// can be renamed to dst (or is already there), else why not. A dst listed in
-// vacated is about to be emptied by an earlier move of the same swap.
+// is there and dst is free, else why not. Both are Lstat, so a dangling link is a
+// file that is there. A dst listed in vacated is about to be emptied by an
+// earlier move of the same swap.
 func moveBlocker(src, dst string, vacated map[string]struct{}) string {
 	if src == dst {
-		return ""
+		return fmt.Sprintf("file %s would be moved onto itself", src)
 	}
-	_, srcErr := os.Stat(src)
-	_, dstErr := os.Stat(dst)
-	if os.IsNotExist(srcErr) && dstErr == nil {
-		return "" // already moved by an earlier run
+	if _, err := os.Lstat(src); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Sprintf("file %s is missing, so there is nothing to move (cannot be read: %v)", src, err)
+		}
+		return fmt.Sprintf("file %s cannot be read (%v)", src, err)
 	}
-	if srcErr != nil {
-		return fmt.Sprintf("file %s cannot be read (%v)", src, srcErr)
-	}
-	if dstErr == nil {
+	_, dstErr := os.Lstat(dst)
+	switch {
+	case dstErr == nil:
 		if _, freed := vacated[dst]; !freed {
 			return fmt.Sprintf("file %s cannot move to %s: something is already there", src, dst)
 		}
+	case !errors.Is(dstErr, os.ErrNotExist):
+		return fmt.Sprintf("file %s cannot move to %s: the destination cannot be checked (%v)", src, dst, dstErr)
 	}
 	return ""
 }

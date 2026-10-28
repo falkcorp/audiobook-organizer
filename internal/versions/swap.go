@@ -1,5 +1,5 @@
 // file: internal/versions/swap.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6c3d5a2e-8b4c-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -9,10 +9,13 @@
 // The current primary's files move into .versions/{fromID}/ and
 // the target version's files move up to the book's root directory.
 //
-// Every step is idempotent so the operation can be resumed after a
-// crash: if swapping_in/swapping_out statuses are found on restart,
-// the server re-runs from the filesystem move stage (the DB
-// transitions are already committed).
+// A swap that stops half way (a crash, or a database write that failed after
+// the files had moved) leaves the versions in swapping_out/swapping_in. Resuming
+// one is NOT implemented (ResumeVersionSwaps is a stub): RunVersionSwap refuses a
+// version that is already swapping_*, the lifecycle refuses to trash one
+// (MarkTrashed), and a person has to repair it. The moves are never "already
+// done": a file whose source is missing is an error (see fs.go), because taking
+// a file at the destination to be the missing source adopts a stranger's.
 
 package versions
 
@@ -20,9 +23,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -42,16 +45,21 @@ type NotifyDelugeFunc func(fromVer, toVer *database.BookVersion, bookFilePath st
 
 // ErrSwapRefused is what RunVersionSwap returns (wrapped, errors.Is), having
 // written nothing, when the swap cannot be done safely: the two versions are not
-// of the book, the book's folder is unknown or a multi-file folder, or the files
-// are not where the swap assumes (swapLayoutBlocker). A refusal is a conflict
-// with the library's state, not a fault: the caller answers it with a 409.
+// of the book, one of them is already swapping_*, the book's folder is unknown or
+// a multi-file folder, a file to move is missing or its destination taken, or the
+// files are not where the swap assumes (swapLayoutBlocker, swapPreflight). A
+// refusal is a conflict with the library's state, not a fault: the caller
+// answers it with a 409.
 var ErrSwapRefused = errors.New("the swap was refused before anything was written")
 
-// ErrSwapIncomplete is what RunVersionSwap returns (wrapped, errors.Is) when
-// the files have moved but the database could not be brought along. Nothing is
-// put back: the files are in their new places and the versions stay in
-// swapping_out/swapping_in, which needs a person to repair.
-var ErrSwapIncomplete = errors.New("the swap moved the files but could not finish writing the database; the versions are left in swapping_out/swapping_in")
+// ErrSwapIncomplete is what RunVersionSwap returns (wrapped, errors.Is) whenever
+// it leaves the versions in swapping_out/swapping_in: the files have moved but
+// the database could not be brought along (nothing is put back; the files are in
+// their new places), or a move could not be undone (the files are in two
+// places), or the statuses could not be put back. Every one of them needs a
+// person to repair, and none is to be retried: the caller must not trash either
+// version (MarkTrashed refuses a swapping_* version too).
+var ErrSwapIncomplete = errors.New("the swap did not finish and the versions are left in swapping_out/swapping_in")
 
 func swapRefusal(bookID, why string) error {
 	return fmt.Errorf("swap versions of book %s: %w: %s", bookID, ErrSwapRefused, why)
@@ -62,11 +70,14 @@ func swapRefusal(bookID, why string) error {
 //
 // Before its first write it re-runs the preflight PickSwapTarget used (the
 // layout check and the move check, see swapPreflight) and refuses with
-// ErrSwapRefused if it fails. Once it has started, a failure puts everything it
-// did back: files that were moved are moved back and the two versions get their
-// old statuses (and with them the book's active index) again. Only a failure
-// after the files have moved to stay (the database writes of step 4), or a
-// move that could not be undone, leaves the versions in swapping_out/swapping_in.
+// ErrSwapRefused if it fails: every file to move must be there and every
+// destination free. Once it has started, a failure puts everything it did back:
+// the files THIS call renamed are moved back (no-replace, so a path someone has
+// since taken is an error and not a clobber) and the two versions get their old
+// statuses (and with them the book's active index) again. Only a failure after
+// the files have moved to stay (the database writes of step 4), or a move that
+// could not be undone, leaves the versions in swapping_out/swapping_in, and
+// returns ErrSwapIncomplete.
 //
 // onWriteBack is called with the book ID after a successful swap so
 // the caller can enqueue a write-back operation. May be nil.
@@ -112,6 +123,13 @@ func RunVersionSwap(
 	if err := refuseRetired(toVer, "swap in"); err != nil {
 		return err
 	}
+	// An earlier swap that did not finish: its files may be in two places, and
+	// there is no resume. Refused before the first status write.
+	for _, v := range []*database.BookVersion{fromVer, toVer} {
+		if v.Status == database.BookVersionStatusSwappingIn || v.Status == database.BookVersionStatusSwappingOut {
+			return swapRefusal(params.BookID, fmt.Sprintf("an earlier swap of this book did not finish (version %s is %s) and resuming one is not implemented", v.ID, v.Status))
+		}
+	}
 
 	book, err := store.GetBookByID(params.BookID)
 	if err != nil {
@@ -142,17 +160,12 @@ func RunVersionSwap(
 		return swapRefusal(book.ID, why)
 	}
 	fromPaths, toPaths := filePaths(fromFiles), filePaths(toFiles)
-	fromSlot := VersionSlotDir(bookDir, params.FromVersionID)
-	fromDst, toDst := destPaths(fromSlot, fromPaths), destPaths(bookDir, toPaths)
-	// Files already where this swap would put them (a resumed swap) are not
-	// this call's to move back.
-	fromAlready, toAlready := movedFlags(fromPaths, fromDst), movedFlags(toPaths, toDst)
 
 	// ── Step 1: Mark DB transitional states ─────────────────────
-	// Only set if not already in the transitional state (resume path). Every
-	// status this call changes is put back by the deferred restore on any error
-	// until the files have moved for good; a status whose write failed was not
-	// changed and is not touched.
+	// Every status this call changes is put back by the deferred restore on any
+	// error until the files have moved for good; a status whose write failed was
+	// not changed and is not touched. If a status cannot be put back the version
+	// is left in swapping_*, which is ErrSwapIncomplete.
 	var marked []statusRestore
 	statusesArmed := true
 	defer func() {
@@ -160,44 +173,40 @@ func RunVersionSwap(
 			return
 		}
 		if rbErr := restoreStatuses(store, marked); rbErr != nil {
-			retErr = fmt.Errorf("%w (and the versions could not be put back: %w)", retErr, rbErr)
+			retErr = fmt.Errorf("%w (and the versions could not be put back: %w): %w", retErr, rbErr, ErrSwapIncomplete)
 		}
 	}()
-	if fromVer.Status != database.BookVersionStatusSwappingOut {
-		was := fromVer.Status
-		fromVer.Status = database.BookVersionStatusSwappingOut
-		if err := store.UpdateBookVersion(fromVer); err != nil {
-			fromVer.Status = was
-			return fmt.Errorf("mark from swapping_out: %w", err)
-		}
-		marked = append(marked, statusRestore{fromVer, was})
+	was := fromVer.Status
+	fromVer.Status = database.BookVersionStatusSwappingOut
+	if err := store.UpdateBookVersion(fromVer); err != nil {
+		fromVer.Status = was
+		return fmt.Errorf("mark from swapping_out: %w", err)
 	}
-	if toVer.Status != database.BookVersionStatusSwappingIn {
-		was := toVer.Status
-		toVer.Status = database.BookVersionStatusSwappingIn
-		if err := store.UpdateBookVersion(toVer); err != nil {
-			toVer.Status = was
-			return fmt.Errorf("mark to swapping_in: %w", err)
-		}
-		marked = append(marked, statusRestore{toVer, was})
+	marked = append(marked, statusRestore{fromVer, was})
+	was = toVer.Status
+	toVer.Status = database.BookVersionStatusSwappingIn
+	if err := store.UpdateBookVersion(toVer); err != nil {
+		toVer.Status = was
+		return fmt.Errorf("mark to swapping_in: %w", err)
 	}
+	marked = append(marked, statusRestore{toVer, was})
 	progress("db_transitional", 10)
 
 	// stuck is the error for a failed move whose undo failed too: the files are
 	// in two places, so the statuses stay as they are for a person to finish.
 	stuck := func(cause error, undoErr error) error {
 		statusesArmed = false
-		return fmt.Errorf("%w (and moving back what had moved failed: %w; the files are in two places and the versions are left in swapping_out/swapping_in)", cause, undoErr)
+		return fmt.Errorf("%w: %w (and moving back what had moved failed: %w; the files are in two places and the versions are left in swapping_out/swapping_in)", ErrSwapIncomplete, cause, undoErr)
 	}
 
 	// ── Step 2: Move current primary files into .versions/{from} ─
-	newFromPaths, errs := MoveToVersionsDir(bookDir, params.FromVersionID, fromPaths)
+	// What each Move* call reports as renamed is exactly what this call may
+	// move back: the undo never infers it from what is on disk.
+	newFromPaths, fromRenamed, errs := MoveToVersionsDir(bookDir, params.FromVersionID, fromPaths)
 	if len(errs) > 0 {
 		cause := fmt.Errorf("move-to-versions: %v", errs)
-		if anyMoved(fromPaths, fromDst) {
-			if undoErr := undoMoves(fromPaths, fromDst, fromAlready); undoErr != nil {
-				return stuck(cause, undoErr)
-			}
+		if undoErr := undoMoves(fromPaths, newFromPaths, fromRenamed); undoErr != nil {
+			return stuck(cause, undoErr)
 		}
 		pruneEmptySlot(bookDir, params.FromVersionID)
 		return cause
@@ -205,17 +214,16 @@ func RunVersionSwap(
 	progress("fs_move_from", 40)
 
 	// ── Step 3: Move target version files up to book root ────────
-	newToPaths, errs := MoveFromVersionsDir(bookDir, params.ToVersionID, toPaths)
+	newToPaths, toRenamed, errs := MoveFromVersionsDir(bookDir, params.ToVersionID, toPaths)
 	if len(errs) > 0 {
 		// Whatever of the entering version moved goes back first (it may sit on
-		// a root path the leaving version vacated), then the leaving version's.
+		// a root path the leaving version vacated), then the leaving version's:
+		// step 2 moved all of them.
 		cause := fmt.Errorf("move-from-versions: %v", errs)
-		var undoErr error
-		if anyMoved(toPaths, toDst) {
-			undoErr = undoMoves(toPaths, toDst, toAlready)
-		}
-		// The leaving version's files are always put back: step 2 moved them.
-		undoErr = errors.Join(undoErr, undoMoves(fromPaths, fromDst, fromAlready))
+		undoErr := errors.Join(
+			undoMoves(toPaths, newToPaths, toRenamed),
+			undoMoves(fromPaths, newFromPaths, fromRenamed),
+		)
 		if undoErr != nil {
 			return stuck(cause, undoErr)
 		}
@@ -342,61 +350,22 @@ func filesForVersion(store bookFileLister, bookID, versionID string) ([]database
 	return matched, nil
 }
 
-// destPaths is where each of paths lands when moved into dir.
-func destPaths(dir string, paths []string) []string {
-	out := make([]string, len(paths))
-	for i, p := range paths {
-		out[i] = filepath.Join(dir, filepath.Base(p))
-	}
-	return out
-}
-
-// lexists reports whether p is there, a dangling symbolic link included.
-func lexists(p string) bool {
-	_, err := os.Lstat(p)
-	return err == nil
-}
-
-// fileMoved reports whether a file has gone from oldPath to newPath: its source
-// is absent AND its destination is present. A destination that exists while the
-// source is still there is not a move (the file was not taken, or the
-// destination is someone else's), and neither is a source that is gone with no
-// destination (the file is lost, which a move did not do).
-func fileMoved(oldPath, newPath string) bool {
-	return oldPath != newPath && !lexists(oldPath) && lexists(newPath)
-}
-
-// anyMoved reports whether any of the files has gone from its old path to its
-// new one (see fileMoved).
-func anyMoved(oldPaths, newPaths []string) bool {
-	for i, old := range oldPaths {
-		if i < len(newPaths) && fileMoved(old, newPaths[i]) {
-			return true
-		}
-	}
-	return false
-}
-
-// movedFlags reports, per file, fileMoved.
-func movedFlags(oldPaths, newPaths []string) []bool {
-	out := make([]bool, len(oldPaths))
-	for i, old := range oldPaths {
-		out[i] = i < len(newPaths) && fileMoved(old, newPaths[i])
-	}
-	return out
-}
-
-// undoMoves renames each file that has moved from oldPaths[i] to newPaths[i]
-// back, except those flagged in already (they were moved before this call and
-// are not its to undo). It tries every file and returns what failed.
-func undoMoves(oldPaths, newPaths []string, already []bool) error {
+// undoMoves puts back the files a Move* call renamed: for each i with
+// renamed[i], newPaths[i] goes back to oldPaths[i], last first. It is a
+// no-replace rename (renameNoReplace): if something now sits at the original
+// path it is not overwritten, and the file stays at its new path with an error
+// that names both. It tries every file and returns what failed.
+func undoMoves(oldPaths, newPaths []string, renamed []bool) error {
 	var errs []error
-	for i, old := range oldPaths {
-		if (i < len(already) && already[i]) || i >= len(newPaths) || !fileMoved(old, newPaths[i]) {
+	for i := len(oldPaths) - 1; i >= 0; i-- {
+		if i >= len(renamed) || !renamed[i] || i >= len(newPaths) {
 			continue
 		}
-		if err := os.Rename(newPaths[i], old); err != nil {
-			errs = append(errs, fmt.Errorf("move %s back to %s: %w", newPaths[i], old, err))
+		if err := renameNoReplace(newPaths[i], oldPaths[i]); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				err = fmt.Errorf("the original path is occupied: %w", err)
+			}
+			errs = append(errs, fmt.Errorf("move %s back to %s: %w", newPaths[i], oldPaths[i], err))
 		}
 	}
 	return errors.Join(errs...)

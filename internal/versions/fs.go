@@ -1,5 +1,5 @@
 // file: internal/versions/fs.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 6c2a1f8d-4b3e-4f70-a9c5-2e8d0f1b9a47
 // last-edited: 2026-10-28
 //
@@ -10,15 +10,21 @@
 // same call sequence degrades to standard POSIX rename, which is
 // still atomic within a single directory hierarchy.
 //
-// All functions are safe to call under partial state: if a move
-// was already half-done by a previous run, repeat calls are no-ops
-// on the already-moved side. This matches the resumable-tracked-op
-// semantics described in spec 3.1 §4.
+// A move is made only of a source that is there and a destination that is free.
+// A source that is missing is an error, never "already moved": taking a file at
+// the destination to be the missing source adopts whatever is there (another
+// book's file with the same name), and the swap that rests on it then
+// trashes and purges the real audio. Resuming a half-done swap is not
+// implemented (ResumeVersionSwaps is a stub); when it is, it has to prove a
+// file was moved by the swap (the transitional statuses and the same inode),
+// not infer it from names.
 
 package versions
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -51,55 +57,62 @@ func EnsureVersionsDir(bookDir, versionID string) (string, error) {
 }
 
 // MoveToVersionsDir moves each file in `filePaths` from its current
-// location into `bookDir/.versions/{versionID}/`. Returns the list
-// of new paths (same order as input) plus any per-file errors
-// encountered. A file that's already in the version slot is treated
-// as a success (idempotent under partial completion).
-func MoveToVersionsDir(bookDir, versionID string, filePaths []string) ([]string, []error) {
+// location into `bookDir/.versions/{versionID}/`. It returns the new paths
+// (same order as input), which of the files THIS call renamed (same order; a
+// file that failed is false), and the per-file errors. A source that is missing
+// or a destination that is taken is an error for that file (see the package
+// comment above): nothing is clobbered, and nothing is taken to be already moved.
+func MoveToVersionsDir(bookDir, versionID string, filePaths []string) (newPaths []string, renamed []bool, errs []error) {
 	slot, err := EnsureVersionsDir(bookDir, versionID)
 	if err != nil {
-		return nil, []error{err}
+		return nil, nil, []error{err}
 	}
-	newPaths := make([]string, len(filePaths))
-	var errs []error
+	newPaths = make([]string, len(filePaths))
+	renamed = make([]bool, len(filePaths))
 	for i, src := range filePaths {
 		dst := filepath.Join(slot, filepath.Base(src))
 		newPaths[i] = dst
-		if _, err := movePreservingAttrs(src, dst); err != nil {
+		ok, err := movePreservingAttrs(src, dst)
+		renamed[i] = ok
+		if err != nil {
 			errs = append(errs, fmt.Errorf("move %s → %s: %w", src, dst, err))
 		}
 	}
-	return newPaths, errs
+	return newPaths, renamed, errs
 }
 
 // MoveFromVersionsDir is the reverse: move each file from its
 // version slot up to `bookDir/<basename>`. Used when an alt
-// becomes the primary. Returns the list of new natural-path
-// locations.
-func MoveFromVersionsDir(bookDir, versionID string, filePaths []string) ([]string, []error) {
-	newPaths := make([]string, len(filePaths))
-	var errs []error
+// becomes the primary. Returns the new natural-path locations, which of the
+// files this call renamed, and the per-file errors, like MoveToVersionsDir.
+func MoveFromVersionsDir(bookDir, versionID string, filePaths []string) (newPaths []string, renamed []bool, errs []error) {
+	newPaths = make([]string, len(filePaths))
+	renamed = make([]bool, len(filePaths))
 	for i, src := range filePaths {
 		dst := filepath.Join(bookDir, filepath.Base(src))
 		newPaths[i] = dst
-		if _, err := movePreservingAttrs(src, dst); err != nil {
+		ok, err := movePreservingAttrs(src, dst)
+		renamed[i] = ok
+		if err != nil {
 			errs = append(errs, fmt.Errorf("move %s → %s: %w", src, dst, err))
 		}
 	}
-	return newPaths, errs
+	return newPaths, renamed, errs
 }
 
-// movePreservingAttrs renames src to dst. Returns (alreadyThere,
-// err) — alreadyThere is true when src doesn't exist but dst does
-// (previous run completed this move; current call is a no-op).
+// movePreservingAttrs renames src to dst and reports whether it did. The source
+// must exist (Lstat: a dangling link is a source that is there, and is moved as
+// the link it is) and the destination must be free: it is made by a no-replace
+// rename (renameNoReplace), so a file that appears at dst between the check and
+// the rename is not overwritten either.
 //
 // Permission bits are preserved by rename on the same filesystem.
 // Cross-filesystem moves need a copy path, which we don't implement
 // here — callers on ZFS have guaranteed same-fs and callers on
 // other filesystems should be within a single disk.
-func movePreservingAttrs(src, dst string) (bool, error) {
+func movePreservingAttrs(src, dst string) (renamed bool, err error) {
 	if src == dst {
-		return true, nil
+		return false, fmt.Errorf("source and destination are the same path: %s", src)
 	}
 	// Create the parent for dst if needed (version slot already
 	// exists when called via MoveToVersionsDir, but MoveFromVersionsDir
@@ -110,33 +123,25 @@ func movePreservingAttrs(src, dst string) (bool, error) {
 		return false, fmt.Errorf("mkdir %s: %w", parent, err)
 	}
 
-	srcInfo, srcErr := os.Stat(src)
-	_, dstErr := os.Stat(dst)
-
-	// Case: src gone, dst present — already-moved.
-	if os.IsNotExist(srcErr) && dstErr == nil {
-		return true, nil
+	srcInfo, err := os.Lstat(src)
+	if err != nil {
+		return false, fmt.Errorf("source: %w", err)
 	}
-	if srcErr != nil {
-		return false, srcErr
-	}
-	// Case: dst already present AND src also present — don't clobber
-	// silently; caller likely has a bug / partial state.
-	if dstErr == nil {
-		return false, fmt.Errorf("destination already exists: %s", dst)
-	}
-
-	// Execute the rename.
-	if err := os.Rename(src, dst); err != nil {
+	if err := renameNoReplace(src, dst); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, fmt.Errorf("destination already exists: %s", dst)
+		}
 		return false, err
 	}
 
 	// Best-effort permission fix: many target filesystems (NFS, some
 	// SMB) silently rewrite mode bits on rename. Re-apply the source
 	// file's mode explicitly. Ignore failure — not everyone can
-	// chmod on every fs.
-	_ = os.Chmod(dst, srcInfo.Mode())
-	return false, nil
+	// chmod on every fs. A link keeps its own (Chmod would follow it).
+	if srcInfo.Mode()&os.ModeSymlink == 0 {
+		_ = os.Chmod(dst, srcInfo.Mode())
+	}
+	return true, nil
 }
 
 // PruneEmptyVersionsDir removes `bookDir/.versions/` if empty, so
