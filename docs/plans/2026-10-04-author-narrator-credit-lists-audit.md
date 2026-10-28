@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.2.6 -->
+<!-- version: 1.2.7 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
-<!-- last-edited: 2026-10-27 -->
+<!-- last-edited: 2026-10-28 -->
 
 # Author and narrator credit lists: read-only audit and draft migration plan
 
@@ -662,8 +662,13 @@ the row above:
   lists it as a fill and a single full apply writes it. **A split book never creates a
   record without the allow.** It links to a record another book creates, and that
   holds at every step: at plan time the spelling settle runs to a fixpoint over the
-  creating books that survive it, and a split book left without one goes back to
-  `narrator_new_from_split`; in a cohort that leaves the creating book out the split
+  creating books that survive it. The split books' own spellings vote in the count, and
+  that vote can refuse their only creator; a key that loses every creator that way is
+  settled again by its creators' spellings alone (once per key, so the loop ends: the
+  live set only shrinks and each key is recomputed at most once), the split books are
+  respelled to the result and checked against it, and only a key no book creates at
+  all sends its split books back to `narrator_new_from_split`. So the dry run, one full
+  apply and the cohorts of a `limit` write the same books in the same spelling; in a cohort that leaves the creating book out the split
   book waits (`narrator_waiting_on_creator`, informational, no `limit` place used) and is
   written in the cohort that creates the record or a later one, which links to the
   record that exists by then; at apply time the books that create records are written
@@ -672,8 +677,13 @@ the row above:
   its dependents back to `narrator_new_from_split`, unwritten. A record the run created
   that no written book credits (a creator that failed after creating, or an apply-time
   spelling refusal) is reported as `narrators_created_unused` with
-  `unused_narrator_names`, and a book that still has an author write names it in its
-  journal row; `maintenance.purge-empty-narrators` removes it. A name that stands as whole words in more than one credit ("Jean Paul
+  `unused_narrator_names`, and deleted again at the end of the apply, under the scan
+  stand-down, when this run made it and no book links it (the live count
+  `maintenance.purge-empty-narrators` uses; each delete is a journaled
+  `narrator_delete` row), so a later run cannot link a split credit to it; the result
+  says which were deleted (`unused_narrators_deleted`) and which kept and why
+  (`unused_narrators_kept`). A book that still has an author write names the record in
+  its journal row. A name that stands as whole words in more than one credit ("Jean Paul
   Valley Jr." beside "Jean Paul Valley") is respelled only in the credit that is the
   name (preferring the exact entry across the whole stored list), and every credit of
   the same person in the column is respelled, whatever its case ("Renee Montoya,

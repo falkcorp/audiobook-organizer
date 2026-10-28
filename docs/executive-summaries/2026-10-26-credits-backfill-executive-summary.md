@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
-<!-- version: 1.2.2 -->
+<!-- version: 1.2.3 -->
 <!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
-<!-- last-edited: 2026-10-27 -->
+<!-- last-edited: 2026-10-28 -->
 
 # A repair job that makes every book's author and narrator lists agree with the book
 
@@ -57,9 +57,13 @@
   leaves the other book out, the longer credit simply waits (the report lists it as
   waiting and it does not use up the batch size), and a later batch links it. If the
   other book cannot be written, because its spelling cannot be settled or its write
-  fails, the longer credit is not written either and goes back to review. A record
-  the job created that no written book ends up using is reported by name, so it can be
-  removed with the existing empty-narrator cleanup.
+  fails, the longer credit is not written either and goes back to review. When the
+  longer credit's own spelling of the name is what would have kept the other book from
+  being written, the name is settled by the other book's spelling and both are written
+  in the same run, so a second run finds nothing left to do. A record the job created
+  that no written book ends up using is removed again before the run ends (only when the
+  job made it and nothing links it) and is listed by name, with what was removed and what
+  was kept.
 - **Review lists are kept.** Every run, a limited one too, stores the full list of book
   ids behind each count so each count can be clicked through. For a full library that
   is roughly 5 to 12 MB per run, and nothing removes it by age: it stays until the

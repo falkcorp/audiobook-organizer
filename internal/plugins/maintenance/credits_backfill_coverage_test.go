@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_coverage_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b0e2a0e-6b8e-4d63-9c1e-7f7c5c1a2d31
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -47,25 +47,28 @@ func cbCreatorRefusedFixture(t *testing.T) *cbFixture {
 }
 
 // The split book's only creator is at risk of being refused by the spelling
-// settle (the fixture above), and the split book's own spelling is what puts it
-// at risk. The replan counted y as the creator before the settle ran, so x was
-// kept as a fill and, with y refused, was the book that created the record from
-// a split credit. The settle now runs to a fixpoint over the creators that
-// survive: x can have no surviving creator, so it goes back to review under
-// narrator_new_from_split, which takes its spelling out of the count, and y is
-// then written as it names itself. No record is made from the split credit, and
-// the dry run says exactly what the apply writes.
-func TestCreditsBackfill_SplitBookWhoseCreatorTheSettleWouldRefuseGoesBackToReview(t *testing.T) {
+// settle (the fixture above), and the split book's own vote is what puts it at
+// risk. Demoting the split book for good would be wrong: the creator then
+// survives under its own spelling and the NEXT run links the split book to the
+// record it created, so one full apply would write less than the cohorts that
+// follow each other. The key is settled again by its creators alone, the split
+// book is respelled to "Renee Montoya" and checked against it, and both books
+// are written in one run, as the dry run says. No record is made from the split
+// credit.
+func TestCreditsBackfill_SplitBookWhoseSpellingWouldRefuseItsCreatorIsWrittenWithIt(t *testing.T) {
 	f := cbCreatorRefusedFixture(t)
 	dry, err := f.run(creditsBackfillParams{}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cbClassIDs(dry, cbNarratorNewFromSplit); !slices.Equal(got, []string{"x"}) {
-		t.Errorf("dry run %s = %v, want [x]: nothing creates Renée Montoya for it to link to", cbNarratorNewFromSplit, got)
+	if got := cbClassIDs(dry, cbNarratorNewFromSplit); len(got) != 0 {
+		t.Errorf("dry run %s = %v, want none: y creates Renee Montoya for x to link to", cbNarratorNewFromSplit, got)
 	}
-	if got := cbClassIDs(dry, cbNarratorFillFromColumn); !slices.Equal(got, []string{"y"}) {
-		t.Errorf("dry run %s = %v, want [y]", cbNarratorFillFromColumn, got)
+	if got := cbClassIDs(dry, cbNarratorFillFromColumn); !slices.Equal(got, []string{"x", "y"}) {
+		t.Errorf("dry run %s = %v, want [x y]", cbNarratorFillFromColumn, got)
+	}
+	if got := cbClassIDs(dry, cbNarratorCreatesRecord); !slices.Equal(got, []string{"y"}) {
+		t.Errorf("dry run %s = %v, want [y]: x only links", cbNarratorCreatesRecord, got)
 	}
 	if !slices.Equal(dry.NarratorNames, []string{"Renee Montoya"}) {
 		t.Errorf("dry run creates %v, want only the record y names", dry.NarratorNames)
@@ -76,16 +79,19 @@ func TestCreditsBackfill_SplitBookWhoseCreatorTheSettleWouldRefuseGoesBackToRevi
 		t.Fatal(err)
 	}
 	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock", "Renee Montoya"}) {
-		t.Errorf("narrator records = %v: a split credit created a record on its own", got)
+		t.Errorf("narrator records = %v, want y's record and no record made from a split credit", got)
 	}
-	if st := f.state("x"); len(st.Narrators) != 0 {
-		t.Errorf("x was written: %v", st.Narrators)
+	if st := f.state("x"); len(st.Narrators) != 2 {
+		t.Errorf("x narrators = %v, want Renee Montoya and Harvey Bullock", st.Narrators)
+	}
+	if b, err := f.s.GetBookByID("x"); err != nil || b.Narrator == nil || *b.Narrator != "Renee Montoya and Harvey Bullock" {
+		t.Errorf("x narrator text = %v (%v), want it respelled to the record", b.Narrator, err)
 	}
 	if got := cbClassIDs(res, cbNarratorFillFromColumn); !slices.Equal(got, cbClassIDs(dry, cbNarratorFillFromColumn)) {
 		t.Errorf("apply wrote %v, the dry run listed %v", got, cbClassIDs(dry, cbNarratorFillFromColumn))
 	}
-	if got := cbClassIDs(res, cbNarratorNewFromSplit); !slices.Equal(got, []string{"x"}) {
-		t.Errorf("apply %s = %v, want [x]", cbNarratorNewFromSplit, got)
+	if got := cbClassIDs(res, cbNarratorNewFromSplit); len(got) != 0 {
+		t.Errorf("apply %s = %v, want none", cbNarratorNewFromSplit, got)
 	}
 }
 
@@ -147,6 +153,12 @@ func TestCreditsBackfill_ApplyTimeFailureOfTheCreatorSendsTheSplitBookBackToRevi
 	if res.NarratorsCreated != 0 || res.NarratorsCreatedUnused != 1 || !slices.Equal(res.UnusedNarratorNames, []string{"Renee Montoya"}) {
 		t.Errorf("created=%d unused=%d %v, want 0 created and the one record the failed creator made reported unused",
 			res.NarratorsCreated, res.NarratorsCreatedUnused, res.UnusedNarratorNames)
+	}
+	if res.UnusedNarratorsDeleted != 1 {
+		t.Errorf("unused records deleted = %d, want the failed creator's record removed again", res.UnusedNarratorsDeleted)
+	}
+	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock"}) {
+		t.Errorf("narrator records = %v, want only Harvey Bullock: the unused record is deleted", got)
 	}
 }
 
@@ -222,9 +234,9 @@ func TestCreditsBackfill_ApplyTimeSpellingRefusalOfTheCreatorSendsTheSplitBookBa
 			t.Errorf("%s was written: %v", id, st.Narrators)
 		}
 	}
-	if res.NarratorsCreated != 0 || res.NarratorsCreatedUnused != 1 {
-		t.Errorf("created=%d unused=%d %v, want the one record nobody credits reported unused",
-			res.NarratorsCreated, res.NarratorsCreatedUnused, res.UnusedNarratorNames)
+	if res.NarratorsCreated != 0 || res.NarratorsCreatedUnused != 1 || res.UnusedNarratorsDeleted != 1 {
+		t.Errorf("created=%d unused=%d deleted=%d %v kept=%v, want the one record nobody credits reported unused and deleted",
+			res.NarratorsCreated, res.NarratorsCreatedUnused, res.UnusedNarratorsDeleted, res.UnusedNarratorNames, res.UnusedNarratorsKept)
 	}
 }
 
