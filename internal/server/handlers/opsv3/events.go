@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
 // last-edited: 2026-10-28
 
@@ -42,7 +42,7 @@ import (
 // bounded only by MaxClients: there is no account to tell apart, and keying on
 // the client address would put every caller behind one reverse proxy into the
 // same small bucket. MaxWatched bounds the runs the broker re-reads until they
-// settle (see Run).
+// settle (see loop).
 const (
 	DefaultHeartbeat    = 15 * time.Second
 	DefaultRingSize     = 512
@@ -128,13 +128,13 @@ type Broker struct {
 	// signed-in user's session, or all of that user's API keys together.
 	perUser map[string]int
 
-	// Lazy start (StartOnFirstSubscriber): Run begins with the first client.
+	// Lazy start (StartOnFirstSubscriber): the loop begins with the first client.
 	startCtx  context.Context
 	spawn     func(func())
 	startOnce sync.Once
 
 	// watch is the runs published while not settled, with the JSON last
-	// published for each. Only Run's goroutine touches it.
+	// published for each. Only the loop's goroutine touches it.
 	watch map[string][]byte
 }
 
@@ -188,7 +188,7 @@ func (b *Broker) parseEventID(raw string) (n uint64, ok bool) {
 	return n, err == nil
 }
 
-// StartOnFirstSubscriber makes the first subscribe start Run(ctx) through
+// StartOnFirstSubscriber makes the first subscribe start the loop through
 // spawn (the server's tracked goroutine group), so a server nobody streams
 // from never runs the loop. The hub subscription is made before subscribe
 // returns; only the loop that drains it runs in the spawned goroutine.
@@ -221,7 +221,7 @@ func (b *Broker) ensureRunning() {
 	})
 }
 
-// Run drains the feed until ctx ends. The feed's events name a run; each
+// loop drains the feed until ctx ends. The feed's events name a run; each
 // named run is re-read once per FlushEvery and published with its progress
 // chunks and workers.
 //
@@ -235,16 +235,9 @@ func (b *Broker) ensureRunning() {
 // clients showing the run running forever, so every run published while not
 // settled is also re-read each tick until a read finds it settled, and
 // published again when it changed. That set is bounded by MaxWatched.
-func (b *Broker) Run(ctx context.Context) {
-	if b.hub == nil || b.runs == nil {
-		return
-	}
-	ch, unsubscribe := b.hub.Subscribe()
-	b.loop(ctx, ch, unsubscribe)
-}
-
-// loop is Run after its hub subscription exists: it drains ch until ctx ends or
-// the feed closes, then calls unsubscribe.
+//
+// ensureRunning subscribes before the first stream writes a byte and hands the
+// subscription here; loop calls unsubscribe when ctx ends or the feed closes.
 func (b *Broker) loop(ctx context.Context, ch <-chan opsregistry.Event, unsubscribe func()) {
 	defer unsubscribe()
 	dirty := map[string]struct{}{}
@@ -338,7 +331,7 @@ func (b *Broker) refresh(id string, zs map[string]bool, always bool) {
 	}
 }
 
-// recheckWatched re-reads every watched run (see Run).
+// recheckWatched re-reads every watched run (see loop).
 func (b *Broker) recheckWatched() {
 	if len(b.watch) == 0 {
 		return
