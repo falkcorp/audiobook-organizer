@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-28
 
@@ -132,7 +132,16 @@ func (f *servedFixture) status(id string) string {
 
 // afterWindow runs the nightly cleanup 40 days on, well past the 14-day window.
 func (f *servedFixture) afterWindow() CleanupResult {
-	return cleanupTrashedVersionsAt(f.store, time.Now().Add(40*day))
+	return servedCleanup(f.store, time.Now().Add(40*day))
+}
+
+// servedCleanup is the nightly cleanup with the permissive guard and the
+// clock passed in, reduced to its result: these tests assert on the result's
+// Purged and Kept and on the disk, and a run in which a read failed (the
+// fail-closed cases) has also returned an error that they do not look at.
+func servedCleanup(store TrashedVersionCleaner, now time.Time) CleanupResult {
+	res, _ := cleanupTrashedVersionsAt(store, now, testGuard)
+	return res
 }
 
 func (f *servedFixture) requireKept(res CleanupResult, v *database.BookVersion, paths int) {
@@ -140,8 +149,13 @@ func (f *servedFixture) requireKept(res CleanupResult, v *database.BookVersion, 
 	if res.Purged != 0 {
 		f.t.Fatalf("purged %d, want 0", res.Purged)
 	}
-	if len(res.Kept) != 1 || res.Kept[0] != (KeptVersion{BookID: f.book.ID, VersionID: v.ID, Paths: paths}) {
-		f.t.Fatalf("Kept = %+v, want exactly {%s %s %d}", res.Kept, f.book.ID, v.ID, paths)
+	if len(res.Kept) != 1 || res.Kept[0].BookID != f.book.ID || res.Kept[0].VersionID != v.ID || len(res.Kept[0].Files) != paths {
+		f.t.Fatalf("Kept = %+v, want exactly one entry for book %s version %s with %d path(s)", res.Kept, f.book.ID, v.ID, paths)
+	}
+	for _, n := range res.Kept[0].Files {
+		if n.Reason != KeptReason {
+			f.t.Fatalf("Kept path %s has reason %q, want %q", n.Path, n.Reason, KeptReason)
+		}
 	}
 	if got := f.status(v.ID); got != database.BookVersionStatusTrash {
 		f.t.Fatalf("status = %s, want trash (not purged)", got)
@@ -243,7 +257,7 @@ func TestPurgeNowKeepsServedFiles(t *testing.T) {
 	f.trashLikeHandler(v1.ID)
 
 	v, _ := f.store.GetBookVersion(v1.ID)
-	err := PurgeVersion(f.store, v)
+	err := PurgeVersion(f.store, v, testGuard)
 	var served *BookServesFilesError
 	if !errors.As(err, &served) {
 		t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
@@ -338,7 +352,7 @@ func TestPurgeFailsClosedWhenVersionsCannotBeRead(t *testing.T) {
 	f.row(v1.ID, f.active, 1)
 	f.trashLikeHandler(v1.ID)
 
-	res := cleanupTrashedVersionsAt(failingVersionsStore{f.store}, time.Now().Add(40*day))
+	res := servedCleanup(failingVersionsStore{f.store}, time.Now().Add(40*day))
 
 	if res.Purged != 0 {
 		t.Fatalf("purged %d on a read error, want 0", res.Purged)
@@ -406,7 +420,7 @@ func TestPurgeKeepsServedFiles_MultiFileBookFolderFilePath(t *testing.T) {
 				} else {
 					v, _ := f.store.GetBookVersion(v1.ID)
 					var served *BookServesFilesError
-					if err := PurgeVersion(f.store, v); !errors.As(err, &served) || len(served.Paths) != 2 {
+					if err := PurgeVersion(f.store, v, testGuard); !errors.As(err, &served) || len(served.Paths) != 2 {
 						t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError with 2 paths", err)
 					}
 					f.requireAllOnDisk(p1, p2)
@@ -500,7 +514,7 @@ func TestPurgeKeepsOwnRows_StaleFilePath(t *testing.T) {
 			}
 			v, _ := f.store.GetBookVersion(v1.ID)
 			var served *BookServesFilesError
-			if err := PurgeVersion(f.store, v); !errors.As(err, &served) {
+			if err := PurgeVersion(f.store, v, testGuard); !errors.As(err, &served) {
 				t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
 			}
 			f.requireAllOnDisk(real)
@@ -657,7 +671,7 @@ func TestPurgeKeepsServedFiles_ServedByAnotherLiveBook(t *testing.T) {
 				}
 				got, _ := f.store.GetBookVersion(v.ID)
 				var served *BookServesFilesError
-				if err := PurgeVersion(f.store, got); !errors.As(err, &served) {
+				if err := PurgeVersion(f.store, got, testGuard); !errors.As(err, &served) {
 					t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
 				}
 				f.requireAllOnDisk(shared)
@@ -667,7 +681,15 @@ func TestPurgeKeepsServedFiles_ServedByAnotherLiveBook(t *testing.T) {
 }
 
 // Another book that is itself trashed, or names the file only through a
-// trashed or purged version, does not serve it: the version still purges.
+// trashed or purged version, does not serve it: the guard does not hold the
+// version back, it still purges (Purged 1, nothing in Kept).
+//
+// What the purge does with the FILE differs from the hotfix this test came in
+// with, on purpose: that hotfix deleted it, but a trashed book is restorable and
+// wants its audio back, and a row that still names the path is an owner (the
+// rule the book purge applies, see otherOwnerOf). So the file stays on disk, the
+// version ends purged, and the file is reported as kept on the version and in
+// CleanupResult.KeptFiles, with the version's other files removed.
 func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
 	for name, setup := range map[string]func(f *servedFixture, shared string){
 		"other book trashed": func(f *servedFixture, shared string) {
@@ -701,8 +723,11 @@ func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
 
 			res := f.afterWindow()
 
-			if res.Purged != 1 || len(res.Kept) != 0 || onDisk(shared) {
-				t.Fatalf("result = %+v, shared on disk = %v, want purged and deleted", res, onDisk(shared))
+			if res.Purged != 1 || len(res.Kept) != 0 || !onDisk(shared) {
+				t.Fatalf("result = %+v, shared on disk = %v, want purged with the shared file left alone", res, onDisk(shared))
+			}
+			if len(res.KeptFiles) != 1 || res.KeptFiles[0].VersionID != v.ID || len(res.KeptFiles[0].Files) != 1 || res.KeptFiles[0].Files[0].Path != shared {
+				t.Fatalf("KeptFiles = %+v, want the shared file reported as kept for version %s", res.KeptFiles, v.ID)
 			}
 		})
 	}
@@ -739,7 +764,7 @@ func TestPurgeFailsClosedWhenOtherBooksCannotBeRead(t *testing.T) {
 			v, own := f.altWithSlotFile("alt.m4b")
 			f.trashLikeHandler(v.ID)
 
-			res := cleanupTrashedVersionsAt(wrap(f.store), time.Now().Add(40*day))
+			res := servedCleanup(wrap(f.store), time.Now().Add(40*day))
 
 			if res.Purged != 0 {
 				t.Fatalf("purged %d on a read error, want 0", res.Purged)
@@ -792,7 +817,7 @@ func TestPurgeKeepsFileAnotherLiveBookServes_WhenOwnBookTrashed(t *testing.T) {
 				}
 				got, _ := f.store.GetBookVersion(v.ID)
 				var served *BookServesFilesError
-				if err := PurgeVersion(f.store, got); !errors.As(err, &served) {
+				if err := PurgeVersion(f.store, got, testGuard); !errors.As(err, &served) {
 					t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
 				}
 				f.requireAllOnDisk(shared)
@@ -849,7 +874,7 @@ func TestPurgeKeepsFile_WhenAnotherBookFolderIsAnyAncestor(t *testing.T) {
 				}
 				got, _ := f.store.GetBookVersion(v.ID)
 				var served *BookServesFilesError
-				if err := PurgeVersion(f.store, got); !errors.As(err, &served) {
+				if err := PurgeVersion(f.store, got, testGuard); !errors.As(err, &served) {
 					t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
 				}
 				f.requireAllOnDisk(shared)
@@ -920,7 +945,7 @@ func TestPurgeFailsClosedOnAncestorReadError(t *testing.T) {
 	v := f.trashedAltNaming(shared)
 	f.trashBook() // only the other-book rules may serve it
 
-	res := cleanupTrashedVersionsAt(failingAtPathPrefixStore{f.store, canonPath(filepath.Dir(deep))}, time.Now().Add(40*day))
+	res := servedCleanup(failingAtPathPrefixStore{f.store, canonPath(filepath.Dir(deep))}, time.Now().Add(40*day))
 
 	if res.Purged != 0 {
 		t.Fatalf("purged %d on an ancestor read error, want 0", res.Purged)

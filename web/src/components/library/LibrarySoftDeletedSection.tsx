@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: 26804E8D-51BA-462C-9BBE-45ED69E17B9F
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 import { useState } from 'react';
 import {
@@ -141,6 +141,7 @@ export function PurgeBreakdownLine({ breakdown }: { breakdown: PurgeBreakdown | 
 
 const KEPT_SHORT = {
   owns_files: 'own files',
+  holds_retired_versions: 'hold retired versions',
   undo_possible: 'undo possible',
   has_progress: 'listening progress',
 } as const;

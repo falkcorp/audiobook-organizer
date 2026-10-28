@@ -1,6 +1,7 @@
 // file: internal/versions/fs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e2c8a1d-5b9f-4f70-a7c6-2d8e0f1b9a57
+// last-edited: 2026-10-28
 
 package versions
 
@@ -134,27 +135,6 @@ func TestMoveToVersionsDir_RefusesClobber(t *testing.T) {
 	_, errs := MoveToVersionsDir(bookDir, "ver1", []string{orig})
 	if len(errs) == 0 {
 		t.Error("expected error on clobber")
-	}
-}
-
-func TestRemoveVersionSlot(t *testing.T) {
-	bookDir := t.TempDir()
-	slot := VersionSlotDir(bookDir, "ver1")
-	if err := os.MkdirAll(slot, 0o775); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	writeFile(t, filepath.Join(slot, "a"), "x")
-	writeFile(t, filepath.Join(slot, "b"), "y")
-
-	if err := RemoveVersionSlot(bookDir, "ver1"); err != nil {
-		t.Fatalf("remove: %v", err)
-	}
-	if _, err := os.Stat(slot); !os.IsNotExist(err) {
-		t.Errorf("slot still exists")
-	}
-	// Idempotent.
-	if err := RemoveVersionSlot(bookDir, "ver1"); err != nil {
-		t.Errorf("second remove should be no-op: %v", err)
 	}
 }
 

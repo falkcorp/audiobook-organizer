@@ -1,7 +1,7 @@
 // file: internal/merge/trash_restore.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package merge
 
@@ -50,10 +50,45 @@ type pendingRepairScanner interface {
 	DeleteRaw(key string) error
 }
 
+// refuseRetiredShell returns database.ErrBookIsRetiredShell when id is the
+// shell of a retired version that still holds retired rows. Such a book's audio
+// was re-keyed under another book (the holder), so restoring the shell would
+// bring back a live book with no files that ABS never lists, and take it out of
+// the trash where the retire's later steps look for it. The book stays in the
+// trash and its files stay safe, listed as retired versions of the holder.
+//
+// Fail closed: a store that cannot say whether the book has retired versions
+// (database.ErrRetiredReaderUnavailable) or an unreadable list is an error, not
+// "none". A retired version that holds no rows any more (its rows were
+// un-retired) does not block the restore.
+func refuseRetiredShell(store TrashRestoreStore, id string) error {
+	vers, err := database.RetiredVersionsFromBook(store, id)
+	if err != nil {
+		return fmt.Errorf("restore %s: cannot verify it is not the shell of a retired version: %w", id, err)
+	}
+	for i := range vers {
+		rows, err := database.BookFilesIncludingRetired(store, vers[i].BookID)
+		if err != nil {
+			return fmt.Errorf("restore %s: cannot verify retired version %s holds no rows: %w", id, vers[i].ID, err)
+		}
+		for j := range rows {
+			if rows[j].Retired && rows[j].VersionID == vers[i].ID {
+				return fmt.Errorf("restore %s: %w (version %s keeps its files under book %s, so this book would come back with none); leave it in the trash, its files are safe and listed as retired versions of book %s, and restoring them as a separate book is not available yet",
+					id, database.ErrBookIsRetiredShell, vers[i].ID, vers[i].BookID, vers[i].BookID)
+			}
+		}
+	}
+	return nil
+}
+
 // RestoreFromTrashLocked is the user-facing restore of one book (the single
 // restore, the bulk "restore" action and a batch update setting
 // marked_for_deletion=false). Owner decision 2026-10-01: a book restored from
 // the trash is a book of its own again.
+//
+// A trashed book that is the shell of a retired version still holding rows is
+// refused with database.ErrBookIsRetiredShell before anything is written
+// (refuseRetiredShell).
 //
 // When the row is in the trash (database.IsInTrash) it:
 //
@@ -202,6 +237,12 @@ func RestoreFromTrashLocked(store TrashRestoreStore, id string, apply func(*data
 		res.Book = book
 		return res, nil
 	}
+	if trashed {
+		if err := refuseRetiredShell(store, id); err != nil {
+			res.Book = book
+			return res, err
+		}
+	}
 
 	var files []database.BookFile
 	var env database.TrashRestoreEnv
@@ -209,6 +250,17 @@ func RestoreFromTrashLocked(store TrashRestoreStore, id string, apply func(*data
 		// The file rows decide whether the row may come back "organized"
 		// (database.RestoreLibraryStateFromTrash) and whether it keeps its
 		// merge redirect (database.RestoredRowIsABSListable).
+		//
+		// This read is LIVE rows only on purpose, though a trashed book can be the
+		// holder of retired versions (the reader census listed this site as one
+		// that includes them; that was wrong for this read). Both predicates
+		// demote the row when ANY row sits outside the library folder, and a
+		// retired row is a version of another book that routinely does (iTunes
+		// paths, /newbooks): counting it would take a holder whose own audio is
+		// organized out of ABS the moment it is restored. The retired versions
+		// need no carrying here: they are keyed under the holder and a restore
+		// never moves a row, so they come back with it untouched
+		// (TestRestoreFromTrash_HolderKeepsRetiredVersionsAndStaysOrganized).
 		if files, err = store.GetBookFiles(id); err != nil {
 			return res, fmt.Errorf("read files of %s: %w", id, err)
 		}

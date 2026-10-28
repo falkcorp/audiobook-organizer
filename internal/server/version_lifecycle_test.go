@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
 // last-edited: 2026-10-28
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/gin-gonic/gin"
@@ -38,8 +39,28 @@ func setupVersionLifecycleServer(t *testing.T) (*Server, database.Store) {
 		store.Close()
 	})
 
+	// A version purge deletes files only inside the library root (the book
+	// purge's rule), so the server under test has one.
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = filepath.Join(t.TempDir(), "lib")
+	if err := os.MkdirAll(config.AppConfig.RootDir, 0o755); err != nil {
+		t.Fatalf("library root: %v", err)
+	}
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+
 	srv := newTestServer(t, store)
 	return srv, store
+}
+
+// libraryDir makes a folder inside the test server's library root (/lib/Gotham
+// in the stories the tests tell), where a purge is allowed to delete.
+func libraryDir(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(config.AppConfig.RootDir, "Gotham", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("library dir: %v", err)
+	}
+	return dir
 }
 
 func TestHandleTrashVersion(t *testing.T) {
@@ -222,8 +243,8 @@ func TestHandleTrashVersion_StampsTrashedAt(t *testing.T) {
 	}
 
 	// The daily cleanup must leave it alone: it was trashed seconds ago.
-	if n := CleanupTrashedVersions(store).Purged; n != 0 {
-		t.Fatalf("cleanup purged %d version(s) trashed seconds ago", n)
+	if res, _ := CleanupTrashedVersions(store, srv.versionPurgeGuard()); res.Purged != 0 {
+		t.Fatalf("cleanup purged %d version(s) trashed seconds ago", res.Purged)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
@@ -298,7 +319,7 @@ func TestHandlePurgeVersion_RefusesUntrashed(t *testing.T) {
 func TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows(t *testing.T) {
 	srv, store := setupVersionLifecycleServer(t)
 
-	bookDir := t.TempDir()
+	bookDir := libraryDir(t, "Year One")
 	played := filepath.Join(bookDir, "book.m4b")
 	if err := os.WriteFile(played, []byte("audio"), 0o644); err != nil {
 		t.Fatal(err)

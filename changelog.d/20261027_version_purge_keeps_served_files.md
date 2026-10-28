@@ -34,3 +34,17 @@ A book that is itself in the trash (soft-deleted or library state "deleted")
 serves nothing, so its own `FilePath` and rows no longer protect a file; its
 versions purge as before unless ANOTHER live book serves the file, which is still
 checked.
+
+Combined with the retired-version purge guards (the claim-then-unlink purge): the
+served-file check runs in the read-only pass before the version is claimed, ahead
+of the other-owner check. A served file on a trashed version ends the whole purge
+with `BookServesFilesError`: nothing is claimed or unlinked and the version stays
+in the trash, restorable. On a version already `purging` or `purge_failed` a served
+path is kept (reported in `Kept`) and the purge finishes the rest. One
+`versions.CleanupResult` carries `Purged`, `Failed`, `Kept` (served versions, each
+with its paths and the reason), `KeptFiles`, `NeedsAttention` and `CannotTell`; the
+`maintenance.trash-cleanup` result adds `served_kept*` fields and the Activity page
+links the count to the versions it names (`set=served_kept`, Trash tab). A file
+named only by a trashed book, or by a purged version's lingering row, is kept on
+disk and listed under kept files rather than deleted, because the trashed book can
+be restored and wants its audio back.

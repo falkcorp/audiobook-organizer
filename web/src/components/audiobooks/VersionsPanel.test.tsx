@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/VersionsPanel.test.tsx
-// version: 1.1.0
+// version: 1.2.1
 // guid: 686a1f6e-d9f1-43c4-9dca-1a77f89cd996
-// last-edited: 2026-10-10
+// last-edited: 2026-10-28
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
@@ -47,5 +47,34 @@ describe('VersionsPanel', () => {
     );
     renderWithProviders(<VersionsPanel bookId="book-1" />);
     expect(await screen.findByText(/m4b/i)).toBeInTheDocument();
+  });
+
+  it('shows a purging version with no restore control', async () => {
+    const row = (id: string, status: string, format: string) => ({
+      id,
+      book_id: 'book-1',
+      status,
+      format,
+      source: 'test',
+      ingest_date: '2026-01-01T00:00:00Z',
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: { versions: [row('t', 'trash', 'm4b'), row('p', 'purging', 'mp3')] },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+      )
+    );
+    renderWithProviders(<VersionsPanel bookId="book-1" />);
+    await screen.findByText(/m4b/i);
+    expect(screen.getByText('purging')).toBeInTheDocument();
+    // Only the trashed row has a Restore button; the purging one has none.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
   });
 });
