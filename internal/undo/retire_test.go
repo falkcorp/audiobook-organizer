@@ -1,7 +1,7 @@
 // file: internal/undo/retire_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 54f67c90-9235-45fd-b826-66a6f3be19d9
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package undo
 
@@ -251,14 +251,14 @@ func TestPreflightUndoConflicts_RetireRowsOnPurgedShell(t *testing.T) {
 	if err := st.CreateOperationChange(row); err != nil {
 		t.Fatal(err)
 	}
-	report, err := PreflightUndoConflicts(st, "op1")
+	report, err := preflightUndoConflicts(st, "op1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(report.BookMissing) != 1 {
 		t.Fatalf("without a snapshot: %+v", report)
 	}
-	report, err = PreflightUndoConflicts(recreatingShells{PebbleStore: st, has: map[string]bool{shell.ID: true}}, "op1")
+	report, err = preflightUndoConflicts(recreatingShells{PebbleStore: st, has: map[string]bool{shell.ID: true}}, "op1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestPreflightUndoConflicts_RehomeToATrashedOrPurgedOldHolder(t *testing.T) 
 	if _, err := st.UpdateBook(oldHolder.ID, oldHolder); err != nil {
 		t.Fatal(err)
 	}
-	report, err := PreflightUndoConflicts(st, "op1")
+	report, err := preflightUndoConflicts(st, "op1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestPreflightUndoConflicts_RehomeToATrashedOrPurgedOldHolder(t *testing.T) 
 	if err := st.DeleteBook(oldHolder.ID); err != nil {
 		t.Fatal(err)
 	}
-	report, err = PreflightUndoConflicts(st, "op1")
+	report, err = preflightUndoConflicts(st, "op1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestPreflightUndoConflicts_RehomeToATrashedOrPurgedOldHolder(t *testing.T) 
 		t.Fatalf("a purged old holder with no snapshot is refused: %+v", report)
 	}
 	// Purged, recreatable: restorable again.
-	report, err = PreflightUndoConflicts(recreatingShells{PebbleStore: st, has: map[string]bool{oldHolder.ID: true}}, "op1")
+	report, err = preflightUndoConflicts(recreatingShells{PebbleStore: st, has: map[string]bool{oldHolder.ID: true}}, "op1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/undo/user_data.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
 // last-edited: 2026-10-28
 
@@ -81,6 +81,14 @@ var changeTypeHoldsUserData = map[string]bool{
 	// One book's credit lists and flat author/narrator fields, before and
 	// after the credits backfill.
 	ChangeTypeCreditsBackfill: false,
+	// A retire of a combine's shell (retired-versions undo): the version row
+	// created, each file row flagged retired and moved under the holder, and a
+	// retired version rehomed to another holder. File, version and book ids
+	// and paths only; the user content a retire carries is journaled in
+	// ChangeTypeUserContentFollow above.
+	ChangeTypeBookVersionCreate:    false,
+	ChangeTypeBookFileRetire:       false,
+	ChangeTypeRetiredVersionRehome: false,
 	// The merge pointers hold only a journal id. The journal they name does
 	// hold every user's progress; the routes that serve it strip that for
 	// callers who may not manage users (GET /merge/combine-journal and

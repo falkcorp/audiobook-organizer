@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
 // version: 1.12.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package audiobooks
 

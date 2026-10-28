@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index_test.go
 // version: 1.8.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-10-23
+// last-edited: 2026-10-28
 
 package database
 
