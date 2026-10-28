@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_paths_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7e2c4d91-a508-4b36-9f1d-c63a08e5b274
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -239,4 +239,29 @@ func TestRetiredVersions_ReplanSeesWhatChangedAfterThePlanThroughASharedRowCache
 	lateAgain, err := rf.f.Replan(context.Background(), nil, latePlanned, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, retCatVetoed, lateAgain.Class)
+}
+
+// The owner's rejects are resolved against the books as they are when each row
+// is applied, not once for the whole run. Joker and Penguin are two shells of
+// Batman's group, rejected as the same work; neither row is vetoed in the plan.
+// Once the first is retired into Batman, the owner's "these two are not the same"
+// reaches the other row's pair (the retired shell now IS Batman), so that row
+// must be held, whichever goes first. A snapshot resolved before the first
+// retire would apply both and drop the reject.
+func TestRetiredApply_RejectIsResolvedAgainstTheBooksAsTheyAreAtEachRow(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.live("batman", "g", rf.file("g/batman.mp3"))
+	rf.trashed("joker", "g", 30, rf.file("g/joker.mp3"))
+	rf.trashed("penguin", "g", 30, rf.file("g/penguin.mp3"))
+	rf.reject("joker", "penguin", decisions.FamilySameWork)
+
+	res := rf.planAll()
+	ids := rf.applicableIDs(res)
+	require.ElementsMatch(t, []string{rf.ids["joker"], rf.ids["penguin"]}, ids, "neither row is vetoed in the plan")
+
+	out := rf.applyRows(rf.f, res, ids, false, "op-two-shells")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	require.Equal(t, 1, out.ChangedSincePlan, "%v %+v", out.ByOutcome, out.Rows)
+	require.Zero(t, out.Failed)
 }

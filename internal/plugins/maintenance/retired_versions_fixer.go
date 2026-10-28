@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-28
 
@@ -465,13 +465,14 @@ func (f *retiredVersionsFixer) newRun(ctx context.Context, params json.RawMessag
 // retiredShared is what every row of one run needs and no row changes: the
 // series names the owner-manual check reads, the listing of users the
 // listening-state probe asks, and the index of unreversed combine journals.
+// The owner's rejects are NOT here: they are resolved against the books as they
+// are now, and an apply changes that between rows (newRunWithMinAge).
 // Each is a whole-library read (every series, every user, every combine
 // journal), so a run reads them ONCE. An apply row reads them from its
 // retiredSession; a plan reads them once for its single run.
 type retiredShared struct {
 	series  repairs.SeriesNamer
 	probe   *merge.UserStateProbe
-	vetoes  OwnerVetoReader
 	journal CombineJournalScanner
 	// plans caches the plan records of each retire op a row reads, by op id
 	// (retiredRun.opPlanRecords): read lazily, at most once per op per session.
@@ -491,22 +492,15 @@ func (f *retiredVersionsFixer) loadShared(ctx context.Context) (*retiredShared, 
 	if err != nil {
 		return nil, fmt.Errorf("%s: list series for the owner-manual check: %w", retiredVersionsFixerID, err)
 	}
-	vetoes, journals := f.p.deps.OwnerVetoes(), f.p.deps.CombineJournals()
-	if vetoes == nil || journals == nil {
-		return nil, fmt.Errorf("%s: the owner's rejects or the combine journal cannot be read on this server; refusing to plan without them", retiredVersionsFixerID)
-	}
-	// The reader loads its snapshot now, so a run that cannot READ the rejects
-	// (the store or a journal failed) is refused whole instead of becoming a
-	// plan of error rows. An id that cannot be resolved is not such a failure:
-	// the rows it touches are held (owner_veto_unresolvable), the rest planned.
-	if err := vetoes.Load(ctx); err != nil {
-		return nil, fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
+	journals := f.p.deps.CombineJournals()
+	if journals == nil {
+		return nil, fmt.Errorf("%s: the combine journal cannot be read on this server; refusing to plan without it", retiredVersionsFixerID)
 	}
 	probe, err := merge.NewUserStateProbe(users)
 	if err != nil {
 		return nil, fmt.Errorf("%s: list users for the listening-state check: %w", retiredVersionsFixerID, err)
 	}
-	return &retiredShared{series: repairs.SeriesNamesFrom(all), probe: probe, vetoes: vetoes, journal: journals}, nil
+	return &retiredShared{series: repairs.SeriesNamesFrom(all), probe: probe, journal: journals}, nil
 }
 
 // newRunWithMinAge is newRun for a caller that already holds the age gate: an
@@ -533,6 +527,23 @@ func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time
 			return nil, err
 		}
 	}
+	// The owner's rejects are read for THIS run, never shared across the rows of
+	// an apply session: every stored id is resolved through the retired-version
+	// index and the merge chain, and the row before this one may just have
+	// retired a shell a reject names. A snapshot resolved before that retire
+	// would not see that the reject now reaches the holder, and the veto would be
+	// dropped (decisions.RowCache keeps only the raw log rows, so the scan is
+	// still shared). The reader loads now, so a run that cannot READ the rejects
+	// (the store or a journal failed) is refused whole instead of becoming a plan
+	// of error rows. An id that cannot be resolved is not such a failure: the rows
+	// it touches are held (owner_veto_unresolvable), the rest planned.
+	vetoes := f.p.deps.OwnerVetoes()
+	if vetoes == nil {
+		return nil, fmt.Errorf("%s: the owner's rejects cannot be read on this server; refusing to plan without them", retiredVersionsFixerID)
+	}
+	if err := vetoes.Load(ctx); err != nil {
+		return nil, fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
+	}
 	now := time.Now
 	if f.now != nil {
 		now = f.now
@@ -545,7 +556,7 @@ func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time
 	if bound <= 0 {
 		bound = 15 * time.Second
 	}
-	run := &retiredRun{f: f, store: ops, paths: paths, probe: sh.probe, vetoes: sh.vetoes, journals: sh.journal,
+	run := &retiredRun{f: f, store: ops, paths: paths, probe: sh.probe, vetoes: vetoes, journals: sh.journal,
 		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: sh.series,
 		minAge: minAge, now: now(), plans: &sh.plans,
 		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}
