@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies_test.go
 // version: 1.2.0
 // guid: 8b2a931b-6ce8-4a3d-89ad-38f8bb08e66b
-// last-edited: 2026-10-23
+// last-edited: 2026-10-28
 
 package database
 

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_history_test.go
 // version: 1.5.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package audiobooks
 

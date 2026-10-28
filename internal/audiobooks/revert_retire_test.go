@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -47,12 +47,14 @@ func newRetireRevertFx(t *testing.T) *retireRevertFx {
 		fx.rows = append(fx.rows, &row)
 	}
 	// A retire acts on a trashed shell; the writer refuses a live one.
-	trashBook(t, st, shell)
+	trashBookRow(t, st, shell)
 	return fx
 }
 
-// trashBook soft-deletes b, as a combine or an earlier retire leaves a shell.
-func trashBook(t *testing.T, st *database.PebbleStore, b *database.Book) {
+// trashBookRow soft-deletes b in place, as a combine or an earlier retire
+// leaves a shell. Unlike trashBook it takes the book itself and marks that
+// value too, so a later UpdateBook(b.ID, b) does not write it back live.
+func trashBookRow(t *testing.T, st *database.PebbleStore, b *database.Book) {
 	t.Helper()
 	trashed, at := true, time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
 	b.MarkedForDeletion, b.MarkedForDeletionAt = &trashed, &at
@@ -205,7 +207,7 @@ func TestRevertRetire_PurgedShellRefusesWhenNothingCanRecreateIt(t *testing.T) {
 		assert.True(t, f.Retired, "nothing was written")
 	}
 	// The preflight says the same before the user clicks.
-	report, perr := undo.PreflightUndoConflicts(fx.st, "op-purged")
+	report, perr := preflightUndoConflicts(fx.st, "op-purged")
 	require.NoError(t, perr)
 	assert.Len(t, report.BookMissing, 2)
 }
@@ -256,7 +258,7 @@ func TestRevertRetire_RecreatesPurgedShellBeforeTheShellsOtherRows(t *testing.T)
 	store := &recreatingStore{PebbleStore: fx.st, snapshots: map[string]database.Book{fx.shell.ID: *snap}}
 
 	// The preflight does not call the shell's rows book_missing.
-	report, err := undo.PreflightUndoConflicts(store, "op-recreate")
+	report, err := preflightUndoConflicts(store, "op-recreate")
 	require.NoError(t, err)
 	assert.Empty(t, report.BookMissing, "a shell a purge snapshot can recreate is restorable")
 
@@ -342,7 +344,7 @@ func TestRevertRetire_RetiredRowIsChangedSinceForEarlierOperations(t *testing.T)
 	}))
 	fx.retire(t, fx.writer("op-later-retire"), "ver-later")
 
-	report, err := undo.PreflightUndoConflicts(fx.st, "op-track")
+	report, err := preflightUndoConflicts(fx.st, "op-track")
 	require.NoError(t, err)
 	require.Len(t, report.CheckFailed, 1, "%+v", report)
 	assert.Equal(t, undo.ReasonChangedSince, report.CheckFailed[0].Reason)
@@ -363,7 +365,7 @@ func TestRevertOperationForBooks_RevertsOneShellAtATime(t *testing.T) {
 	require.NoError(t, err)
 	row2 := &database.BookFile{BookID: shell2.ID, FilePath: "/lib/syn/shell2/01.mp3", FileHash: "hash-c", TrackNumber: 1}
 	require.NoError(t, fx.st.CreateBookFile(row2))
-	trashBook(t, fx.st, shell2)
+	trashBookRow(t, fx.st, shell2)
 	w := fx.writer("op-two")
 	fx.retire(t, w, "ver-one")
 	require.NoError(t, w.RetireVersion(repairs.RetireSpec{Shell: shell2.ID, Holder: fx.holder.ID, VersionID: "ver-two",

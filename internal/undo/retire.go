@@ -1,7 +1,7 @@
 // file: internal/undo/retire.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 78716d7c-a378-4584-9b30-edcdab627347
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package undo
 
@@ -391,7 +391,7 @@ func RehomeFromShell(c *database.OperationChange, shellID string) bool {
 // (audiobooks' revertScope.filter). It returns one sentence per refusal, naming
 // the row, and an empty slice when every row reverts.
 //
-// It judges the rows exactly as PreflightUndoConflicts does (same plan, same
+// It judges the rows exactly as PreflightUndoConflictsFromChanges does (same plan, same
 // gate, same row checks, the shell a purge deleted counted present when a
 // snapshot can recreate it, whether or not the retire moved any file row off
 // it), with these refusals of its own. The combine undo reverses a retire and

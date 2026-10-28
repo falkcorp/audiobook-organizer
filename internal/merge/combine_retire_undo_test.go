@@ -1,7 +1,7 @@
 // file: internal/merge/combine_retire_undo_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 169db87a-6f56-43c0-91a1-9a1fa5f526ea
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package merge
 
@@ -343,7 +343,7 @@ func TestCombineUndoHelpers_TreatARetiredRowAsNotTheCombinesToRestore(t *testing
 	_, err = store.ModifyBook(f.absA, func(b *database.Book) error { b.MarkedForDeletion = &no; b.MarkedForDeletionAt = nil; return nil })
 	require.NoError(t, err)
 	retireRowInto(t, store, fm.FileID, f.survivor, f.absA, "ver-helpers")
-	assert.False(t, ms.fileAlreadyUndone(j, fm), "a retired row on its old owner is not where a completed undo puts it")
+	assert.False(t, ms.fileAlreadyUndone(j, fm, ""), "a retired row on its old owner is not where a completed undo puts it")
 
 	// The same row retired under the survivor: numbers are not restored.
 	store2, f2, ms2, journalID2 := combined(t)

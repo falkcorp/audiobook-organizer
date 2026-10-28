@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_scope_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5b0e7c2d-41a6-4f93-8d17-c3a92e6f0b58
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -51,7 +51,7 @@ func runWithTimeout(t *testing.T, d time.Duration, fn func()) {
 func newChainRehomeFx(t *testing.T, op string) (*retireRevertFx, *database.Book) {
 	t.Helper()
 	fx, newHolder := newLiveChainRehomeFx(t, op)
-	trashBook(t, fx.st, fx.holder)
+	trashBookRow(t, fx.st, fx.holder)
 	return fx, newHolder
 }
 
@@ -74,7 +74,7 @@ func newLiveChainRehomeFx(t *testing.T, op string) (*retireRevertFx, *database.B
 // every row safe: exactly what RevertOperation then restores.
 func requireChainPreflightMatchesRevert(t *testing.T, fx *retireRevertFx, op string) {
 	t.Helper()
-	report, err := undo.PreflightUndoConflicts(fx.st, op)
+	report, err := preflightUndoConflicts(fx.st, op)
 	require.NoError(t, err)
 	assert.Empty(t, report.CheckFailed, "%+v", report)
 	assert.Empty(t, report.BookMissing, "%+v", report)
@@ -93,7 +93,7 @@ func TestRevertRetire_RehomeBackOntoATrashedOldHolder(t *testing.T) {
 	// The whole operation is restorable, the retire rows of the same op
 	// included: they name a version that is on the new holder until the rehome
 	// is reversed, and the preflight judges them against where it goes back to.
-	report, err := undo.PreflightUndoConflicts(fx.st, "op-chain-trashed")
+	report, err := preflightUndoConflicts(fx.st, "op-chain-trashed")
 	require.NoError(t, err)
 	assert.Empty(t, report.CheckFailed, "%+v", report)
 	assert.Empty(t, report.BookMissing, "%+v", report)
@@ -170,7 +170,7 @@ func TestPreflightUndoConflicts_RefusedRehomeKeepsTheRetireRowsRefused(t *testin
 	// compare-and-set no longer holds.
 	require.NoError(t, fx.writer("op-later").RehomeRetiredVersion("ver-chain", other.ID))
 	_ = newHolder
-	report, err := undo.PreflightUndoConflicts(fx.st, "op-chain-refused")
+	report, err := preflightUndoConflicts(fx.st, "op-chain-refused")
 	require.NoError(t, err)
 	assert.NotEmpty(t, report.CheckFailed, "%+v", report)
 	assert.Less(t, report.Safe, report.TotalChanges, "%+v", report)
@@ -185,7 +185,7 @@ func TestRevertRetire_RehomeBackOntoAPurgedOldHolderRecreatesIt(t *testing.T) {
 	require.NoError(t, fx.st.DeleteBook(fx.holder.ID))
 
 	// Nothing can recreate it: refused, named, and nothing written.
-	report, err := undo.PreflightUndoConflicts(fx.st, "op-chain-purged")
+	report, err := preflightUndoConflicts(fx.st, "op-chain-purged")
 	require.NoError(t, err)
 	require.NotEmpty(t, report.BookMissing, "%+v", report)
 	res, err := NewRevertService(fx.st).RevertOperation("op-chain-purged")
@@ -197,7 +197,7 @@ func TestRevertRetire_RehomeBackOntoAPurgedOldHolderRecreatesIt(t *testing.T) {
 	assert.NotEqual(t, fx.holder.ID, v.BookID, "the version did not move")
 
 	store := &recreatingStore{PebbleStore: fx.st, snapshots: map[string]database.Book{fx.holder.ID: *snap}}
-	report, err = undo.PreflightUndoConflicts(store, "op-chain-purged")
+	report, err = preflightUndoConflicts(store, "op-chain-purged")
 	require.NoError(t, err)
 	assert.Empty(t, report.BookMissing, "a purged old holder a snapshot can recreate is restorable: %+v", report)
 	res, err = NewRevertService(store).RevertOperation("op-chain-purged")
@@ -219,13 +219,13 @@ func newShellHeldVersionFx(t *testing.T, laterOp string) (*retireRevertFx, *data
 	require.NoError(t, err)
 	older := &database.BookFile{BookID: scratch.ID, FilePath: "/lib/syn/scratch/01.mp3", FileHash: "hash-older", TrackNumber: 1}
 	require.NoError(t, fx.st.CreateBookFile(older))
-	trashBook(t, fx.st, scratch)
+	trashBookRow(t, fx.st, scratch)
 	untrashBook(t, fx.st, fx.shell)
 	require.NoError(t, fx.writer("op-earlier").RetireVersion(repairs.RetireSpec{
 		Shell: scratch.ID, Holder: fx.shell.ID, VersionID: "ver-older", FileIDs: []string{older.ID},
 		Format: "mp3", Source: "retired_book", Now: time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
 	}))
-	trashBook(t, fx.st, fx.shell)
+	trashBookRow(t, fx.st, fx.shell)
 
 	w := fx.writer(laterOp)
 	fx.retire(t, w, "ver-later")
@@ -455,7 +455,7 @@ func TestRevertCombine_EndToEndReversesALinkedRetireUnderTheMergeLock(t *testing
 	require.NoError(t, err)
 	older := &database.BookFile{BookID: scratch.ID, FilePath: "/tmp/crash/scratch/01.mp3", FileHash: "hash-e2e-older", TrackNumber: 1}
 	require.NoError(t, store.CreateBookFile(older))
-	trashBook(t, store, scratch)
+	trashBookRow(t, store, scratch)
 	require.NoError(t, mkWriter("op-e2e-earlier").RetireVersion(repairs.RetireSpec{
 		Shell: scratch.ID, Holder: f.a, VersionID: "ver-e2e-older", FileIDs: []string{older.ID},
 		Format: "mp3", Source: "retired_book", Now: time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
@@ -539,11 +539,11 @@ func TestRevertBookSoftDelete_RetiredVersionsDoNotDemoteAnOrganizedHolder(t *tes
 	require.NoError(t, err)
 	outside := &database.BookFile{BookID: shell.ID, FilePath: "/old/newbooks/shell/01.mp3", FileHash: "hash-outside", TrackNumber: 1}
 	require.NoError(t, st.CreateBookFile(outside))
-	trashBook(t, st, shell)
+	trashBookRow(t, st, shell)
 	require.NoError(t, repairs.NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-s8").RetireVersion(repairs.RetireSpec{
 		Shell: shell.ID, Holder: holder.ID, VersionID: "ver-s8", FileIDs: []string{outside.ID}, Format: "mp3", Source: "retired_book",
 	}))
-	trashBook(t, st, holder)
+	trashBookRow(t, st, holder)
 
 	revertSoftDelete := func(id string) {
 		t.Helper()
@@ -577,11 +577,11 @@ func TestRevertBookSoftDelete_HolderWithOnlyRetiredVersionsIsJudgedOnThem(t *tes
 	require.NoError(t, err)
 	inside := &database.BookFile{BookID: shell.ID, FilePath: filepath.Join(root, "shell", "01.mp3"), FileHash: "hash-inside", TrackNumber: 1}
 	require.NoError(t, st.CreateBookFile(inside))
-	trashBook(t, st, shell)
+	trashBookRow(t, st, shell)
 	require.NoError(t, repairs.NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-s8b").RetireVersion(repairs.RetireSpec{
 		Shell: shell.ID, Holder: holder.ID, VersionID: "ver-s8b", FileIDs: []string{inside.ID}, Format: "mp3", Source: "retired_book",
 	}))
-	trashBook(t, st, holder)
+	trashBookRow(t, st, holder)
 
 	require.NoError(t, NewRevertService(st).revertBookSoftDelete(&database.OperationChange{
 		ID: "chg-only", OperationID: "op-s8b-restore", BookID: holder.ID, ChangeType: undo.ChangeTypeBookSoftDelete, FieldName: "marked_for_deletion",
