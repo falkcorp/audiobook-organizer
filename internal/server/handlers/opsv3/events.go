@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4a1ad0ef-2930-46eb-bac3-35772875dfa4
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package opsv3
 
@@ -190,7 +190,9 @@ func (b *Broker) parseEventID(raw string) (n uint64, ok bool) {
 
 // StartOnFirstSubscriber makes the first subscribe start Run(ctx) through
 // spawn (the server's tracked goroutine group), so a server nobody streams
-// from never runs the loop. Nothing starts once ctx is done.
+// from never runs the loop. The hub subscription is made before subscribe
+// returns; only the loop that drains it runs in the spawned goroutine.
+// Nothing starts once ctx is done.
 func (b *Broker) StartOnFirstSubscriber(ctx context.Context, spawn func(func())) {
 	b.mu.Lock()
 	b.startCtx, b.spawn = ctx, spawn
@@ -204,7 +206,19 @@ func (b *Broker) ensureRunning() {
 	if spawn == nil || ctx.Err() != nil {
 		return
 	}
-	b.startOnce.Do(func() { spawn(func() { b.Run(ctx) }) })
+	b.startOnce.Do(func() {
+		if b.hub == nil || b.runs == nil {
+			return
+		}
+		// Subscribed here, before subscribe returns and so before Events writes
+		// the stream's first byte, not inside the spawned goroutine. The
+		// heartbeat tells the client the stream is open; the registry hub drops
+		// an event for a subscriber that is not registered yet, so a loop that
+		// registered whenever its goroutine first got scheduled lost whatever
+		// was published between the heartbeat and that moment.
+		ch, unsubscribe := b.hub.Subscribe()
+		spawn(func() { b.loop(ctx, ch, unsubscribe) })
+	})
 }
 
 // Run drains the feed until ctx ends. The feed's events name a run; each
@@ -226,6 +240,12 @@ func (b *Broker) Run(ctx context.Context) {
 		return
 	}
 	ch, unsubscribe := b.hub.Subscribe()
+	b.loop(ctx, ch, unsubscribe)
+}
+
+// loop is Run after its hub subscription exists: it drains ch until ctx ends or
+// the feed closes, then calls unsubscribe.
+func (b *Broker) loop(ctx context.Context, ch <-chan opsregistry.Event, unsubscribe func()) {
 	defer unsubscribe()
 	dirty := map[string]struct{}{}
 	tick := time.NewTicker(b.opt.FlushEvery)
