@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.test.tsx
-// version: 1.4.1
+// version: 1.4.2
 // guid: d74a1824-3f19-49fe-9a4f-fdbbea124f4b
 // last-edited: 2026-10-28
 
@@ -16,7 +16,10 @@ afterEach(() => {
 
 describe('TrashedVersions', () => {
   it('shows an error, not "No trashed versions.", when the session has expired', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => loginPageResponse()));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => loginPageResponse())
+    );
     renderWithProviders(<TrashedVersions />);
     expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
     expect(screen.queryByText('No trashed versions.')).not.toBeInTheDocument();
@@ -81,10 +84,14 @@ describe('TrashedVersions', () => {
     );
     renderWithProviders(<TrashedVersions />);
     await screen.findByText(/m4b/i);
-    expect(screen.getByText(new Date('2026-03-15T12:00:00Z').toLocaleDateString())).toBeInTheDocument();
+    expect(
+      screen.getByText(new Date('2026-03-15T12:00:00Z').toLocaleDateString())
+    ).toBeInTheDocument();
     expect(screen.getByText('\u2014')).toBeInTheDocument();
     // The legacy row's created date must not stand in for a trash date.
-    expect(screen.queryByText(new Date('2026-01-01T00:00:00Z').toLocaleDateString())).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(new Date('2026-01-01T00:00:00Z').toLocaleDateString())
+    ).not.toBeInTheDocument();
   });
 
   it('offers no Restore for a purging row, only a retry of the purge', async () => {
@@ -118,10 +125,17 @@ describe('TrashedVersions', () => {
     expect(screen.getByRole('button', { name: 'Retry Purge' })).toBeInTheDocument();
     expect(screen.getByText('purging')).toBeInTheDocument();
     // Its created date must not stand in for a trash date.
-    expect(screen.queryByText(new Date('2026-01-01T00:00:00Z').toLocaleDateString())).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(new Date('2026-01-01T00:00:00Z').toLocaleDateString())
+    ).not.toBeInTheDocument();
   });
 
-  const versionRow = (id: string, status: string, format: string, extra: Record<string, unknown> = {}) => ({
+  const versionRow = (
+    id: string,
+    status: string,
+    format: string,
+    extra: Record<string, unknown> = {}
+  ) => ({
     id,
     book_id: `book-${id}`,
     status,
@@ -143,7 +157,9 @@ describe('TrashedVersions', () => {
       vi.fn(async () =>
         listResponse([
           versionRow('f', 'purge_failed', 'm4b', {
-            purge_failed: [{ path: '/lib/Gotham/Hush/hush.m4b', reason: 'operation not permitted' }],
+            purge_failed: [
+              { path: '/lib/Gotham/Hush/hush.m4b', reason: 'operation not permitted' },
+            ],
             purge_failed_at: '2026-10-20T00:00:00Z',
           }),
         ])
@@ -161,7 +177,10 @@ describe('TrashedVersions', () => {
   });
 
   it('a purging row keeps Retry Purge only: the nightly cleanup retries it, there is nothing to give up on', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => listResponse([versionRow('p', 'purging', 'mp3')])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => listResponse([versionRow('p', 'purging', 'mp3')]))
+    );
     renderWithProviders(<TrashedVersions />);
     await screen.findByText(/mp3/i);
     expect(screen.getByRole('button', { name: 'Retry Purge' })).toBeInTheDocument();
@@ -185,16 +204,21 @@ describe('TrashedVersions', () => {
     renderWithProviders(<TrashedVersions />);
     await screen.findByText(/m4b/i);
     const note = screen.getByText('2 files kept');
-    expect(note.getAttribute('title')).toContain('/lib/Gotham/Knightfall/part2.m4b: another book names it');
+    expect(note.getAttribute('title')).toContain(
+      '/lib/Gotham/Knightfall/part2.m4b: another book names it'
+    );
   });
 
   it('shows why a purge-now was refused instead of dropping the rejection', async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {
-        return new Response(JSON.stringify({ error: 'a merge or combine is running; nothing was deleted' }), {
-          status: 409,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({ error: 'a merge or combine is running; nothing was deleted' }),
+          {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
       }
       return listResponse([versionRow('t', 'trash', 'm4b')]);
     });
@@ -203,7 +227,9 @@ describe('TrashedVersions', () => {
     renderWithProviders(<TrashedVersions />);
     await screen.findByText(/m4b/i);
     await userEvent.click(screen.getByRole('button', { name: 'Purge Now' }));
-    expect(await screen.findByText(/Purge failed: a merge or combine is running/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Purge failed: a merge or combine is running/)
+    ).toBeInTheDocument();
   });
 
   // A trash cleanup run's counts link here as ?op=<id>&set=<group>: the page
@@ -224,7 +250,11 @@ describe('TrashedVersions', () => {
     it('lists only the kept versions of the run, on the Purged tab, with the book linked', async () => {
       const fetchMock = routed({
         '/operations/op-night/result': () =>
-          resultResponse({ kept_files: 1, kept_version_ids: ['v-kept'], kept_book_ids: ['book-kept'] }),
+          resultResponse({
+            kept_files: 1,
+            kept_version_ids: ['v-kept'],
+            kept_book_ids: ['book-kept'],
+          }),
         '/audiobooks/purged-versions': () =>
           listResponse([
             versionRow('v-kept', 'inactive_purged', 'm4b'),
@@ -238,7 +268,9 @@ describe('TrashedVersions', () => {
       expect(await screen.findByText(/m4b/i)).toBeInTheDocument();
       // The control: the other purged version is on the list but not in the run.
       expect(screen.queryByText(/mp3/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/Showing the 1 version that cleanup run purged with files kept/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Showing the 1 version that cleanup run purged with files kept/)
+      ).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'book-v-kept…' })).toHaveAttribute(
         'href',
         '/library/book-v-kept'
@@ -264,22 +296,39 @@ describe('TrashedVersions', () => {
       });
       expect(await screen.findByText(/m4b/i)).toBeInTheDocument();
       expect(screen.queryByText(/mp3/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/Showing the 2 versions that cleanup run could not purge because a file cannot be removed\. It does not retry them/)).toBeInTheDocument();
-      expect(screen.getByText(/1 is not on this tab: hard deleted since, or on the other tab/)).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          /Showing the 2 versions that cleanup run could not purge because a file cannot be removed\. It does not retry them/
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/1 is not on this tab: hard deleted since, or on the other tab/)
+      ).toBeInTheDocument();
     });
 
     // Only needs_attention is left alone; the other trash groups are tried
     // again by every run, and the banner must not say otherwise.
     it.each([
-      ['cannot_tell', /left alone because it could not tell whether their files are gone.*next run tries them again/],
-      ['nothing_served', /left in the trash because their book serves nothing that exists on disk.*every run lists them again until the book's path is fixed/],
-      ['served_kept', /kept in the trash because their book still plays one of their files.*every run tries them again/],
+      [
+        'cannot_tell',
+        /left alone because it could not tell whether their files are gone.*next run tries them again/,
+      ],
+      [
+        'nothing_served',
+        /left in the trash because their book serves nothing that exists on disk.*every run lists them again until the book's path is fixed/,
+      ],
+      [
+        'served_kept',
+        /kept in the trash because their book still plays one of their files.*every run tries them again/,
+      ],
     ])('says what the %s group means and that the run retries it', async (set, banner) => {
       const fetchMock = routed({
-        '/operations/op-night/result': () =>
-          resultResponse({ [`${set}_version_ids`]: ['v-held'] }),
+        '/operations/op-night/result': () => resultResponse({ [`${set}_version_ids`]: ['v-held'] }),
         '/audiobooks/trashed-versions': () =>
-          listResponse([versionRow('v-held', 'trash', 'm4b'), versionRow('v-fine', 'trash', 'mp3')]),
+          listResponse([
+            versionRow('v-held', 'trash', 'm4b'),
+            versionRow('v-fine', 'trash', 'mp3'),
+          ]),
       });
       vi.stubGlobal('fetch', fetchMock);
       renderWithProviders(<TrashedVersions />, {
@@ -318,7 +367,8 @@ describe('TrashedVersions', () => {
             status: 404,
             headers: { 'Content-Type': 'application/json' },
           }),
-        '/audiobooks/purged-versions': () => listResponse([versionRow('v-other', 'inactive_purged', 'mp3')]),
+        '/audiobooks/purged-versions': () =>
+          listResponse([versionRow('v-other', 'inactive_purged', 'mp3')]),
       });
       vi.stubGlobal('fetch', fetchMock);
       renderWithProviders(<TrashedVersions />, {

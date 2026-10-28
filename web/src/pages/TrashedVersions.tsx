@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.6.1
+// version: 1.6.2
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 
@@ -189,7 +189,7 @@ const CLEANUP_SET_TEXT: Record<TrashCleanupSet, string> = {
   cannot_tell:
     'that cleanup run left alone because it could not tell whether their files are gone (a drive that is down looks the same). Nothing was deleted, and the next run tries them again.',
   nothing_served:
-    'that cleanup run left in the trash because their book serves nothing that exists on disk. Nothing was deleted, and every run lists them again until the book\'s path is fixed or the version is restored.',
+    "that cleanup run left in the trash because their book serves nothing that exists on disk. Nothing was deleted, and every run lists them again until the book's path is fixed or the version is restored.",
   served_kept:
     'that cleanup run kept in the trash because their book still plays one of their files. Nothing was deleted, and every run tries them again until the version is restored or the book plays something else.',
 };
@@ -333,7 +333,9 @@ export default function TrashedVersions() {
         v.status === 'purge_failed'
           ? ' The files the purge could not remove stay on disk where they are.'
           : '';
-      if (!confirm(`Remove all traces of this version? Fingerprint data will be lost.${failedNote}`))
+      if (
+        !confirm(`Remove all traces of this version? Fingerprint data will be lost.${failedNote}`)
+      )
         return;
       await run('Hard delete', () => hardDeleteVersion(v.id));
     },
@@ -440,7 +442,7 @@ export default function TrashedVersions() {
           }}
         >
           {filtering && versions.length > 0
-            ? 'None of that cleanup run\'s versions are on this tab.'
+            ? "None of that cleanup run's versions are on this tab."
             : tab === 'trash'
               ? 'No trashed versions.'
               : 'No purged versions.'}

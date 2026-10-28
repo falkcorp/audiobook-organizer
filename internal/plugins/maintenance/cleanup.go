@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-28
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -564,43 +565,54 @@ type TrashCleanupResult struct {
 	StoppedForMergeRepeatedly bool `json:"stopped_for_merge_repeatedly,omitempty"`
 }
 
+// appendOnce appends each of vals to dst that dst does not already hold, in the
+// order met. A book with several trashed versions in one group is listed once
+// per version, but its id (and a file path two versions name) is one thing to
+// look at; the page keys its lists by id and by path. Version ids are not run
+// through this: one per version is the count.
+func appendOnce(dst []string, vals ...string) []string {
+	for _, v := range vals {
+		if v != "" && !slices.Contains(dst, v) {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+
+func notePaths(files []database.PurgeFileNote) []string {
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	return paths
+}
+
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	res, err := p.deps.CleanupTrashedVersions()
 	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), CannotTell: len(res.CannotTell), NothingServed: len(res.NothingServed), ServedKept: len(res.Kept), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
 	for _, k := range res.KeptFiles {
 		payload.KeptVersionIDs = append(payload.KeptVersionIDs, k.VersionID)
-		payload.KeptBookIDs = append(payload.KeptBookIDs, k.BookID)
-		for _, f := range k.Files {
-			payload.KeptFilePaths = append(payload.KeptFilePaths, f.Path)
-		}
+		payload.KeptBookIDs = appendOnce(payload.KeptBookIDs, k.BookID)
+		payload.KeptFilePaths = appendOnce(payload.KeptFilePaths, notePaths(k.Files)...)
 	}
 	for _, k := range res.NeedsAttention {
 		payload.NeedsAttentionVersionIDs = append(payload.NeedsAttentionVersionIDs, k.VersionID)
-		payload.NeedsAttentionBookIDs = append(payload.NeedsAttentionBookIDs, k.BookID)
+		payload.NeedsAttentionBookIDs = appendOnce(payload.NeedsAttentionBookIDs, k.BookID)
 	}
 	for _, k := range res.Kept {
 		payload.ServedKeptVersionIDs = append(payload.ServedKeptVersionIDs, k.VersionID)
-		payload.ServedKeptBookIDs = append(payload.ServedKeptBookIDs, k.BookID)
-		for _, f := range k.Files {
-			payload.ServedKeptFilePaths = append(payload.ServedKeptFilePaths, f.Path)
-		}
+		payload.ServedKeptBookIDs = appendOnce(payload.ServedKeptBookIDs, k.BookID)
+		payload.ServedKeptFilePaths = appendOnce(payload.ServedKeptFilePaths, notePaths(k.Files)...)
 	}
 	for _, k := range res.CannotTell {
 		payload.CannotTellVersionIDs = append(payload.CannotTellVersionIDs, k.VersionID)
-		payload.CannotTellBookIDs = append(payload.CannotTellBookIDs, k.BookID)
+		payload.CannotTellBookIDs = appendOnce(payload.CannotTellBookIDs, k.BookID)
 	}
-	// A book with several trashed versions is listed once per version, but its
-	// path is one thing to fix: each path is named once (the page keys its
-	// list by path).
-	servedPaths := map[string]bool{}
 	for _, k := range res.NothingServed {
 		payload.NothingServedVersionIDs = append(payload.NothingServedVersionIDs, k.VersionID)
-		payload.NothingServedBookIDs = append(payload.NothingServedBookIDs, k.BookID)
+		payload.NothingServedBookIDs = appendOnce(payload.NothingServedBookIDs, k.BookID)
 		// The book's own path; a book with none is listed by its id alone.
-		if k.BookPath != "" && !servedPaths[k.BookPath] {
-			servedPaths[k.BookPath] = true
-			payload.NothingServedFilePaths = append(payload.NothingServedFilePaths, k.BookPath)
-		}
+		payload.NothingServedFilePaths = appendOnce(payload.NothingServedFilePaths, k.BookPath)
 	}
 	// A result the page cannot read back would leave a run that purged versions
 	// looking like a run that did nothing; a failed write is reported on the op.
