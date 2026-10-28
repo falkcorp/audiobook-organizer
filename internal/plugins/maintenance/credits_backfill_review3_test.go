@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_review3_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c9f6b13-7a4e-48d0-b5e1-0d83a7c4f956
 // last-edited: 2026-10-27
 
@@ -178,22 +178,13 @@ func TestCreditsBackfill_FoldLinkedNarratorsJSONIsRespelledInTheSameWrite(t *tes
 	}
 }
 
-// A respelled NarratorsJSON that would still match neither the junction nor
-// the column is this op's own refusal, with its own class: a dry run can size
-// it, and it is not folded into the census keys of the same name.
+// A spelling move that cannot be settled is this op's own refusal, with its own
+// class: a dry run can size it, and it is not folded into the census keys of
+// the same name. Here the record's name carries a separator, so replacing the
+// name in the column does not read back as one person.
 func TestCreditsBackfill_UnreconcilableSpellingMoveHasItsOwnClassAndWritesNothing(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
-	f.narrator("Renée Montoya")
-	// The JSON entry agrees with the column only by case, so the respelling
-	// (case-sensitive, to touch nothing but the exact name) leaves it as it is.
-	f.book("uj-json", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
-		b.NarratorsJSON = strp(`["RENEE MONTOYA"]`)
-	}, ba("uj-json", [2]int{bruce, 0}), nil)
-	// The record's own name carries a separator: replacing the name in the
-	// column does not read back as one person.
 	f.narrator("Dick & Grayson")
 	f.book("uj-sep", "Batman: Year Two", func(b *database.Book) {
 		b.AuthorID = intp(bruce)
@@ -209,9 +200,6 @@ func TestCreditsBackfill_UnreconcilableSpellingMoveHasItsOwnClassAndWritesNothin
 		t.Fatal(err)
 	}
 	for name, r := range map[string]*creditsBackfillResult{"dry run": dry, "apply": res} {
-		if got := cbClassIDs(r, cbNarratorSpellingJSONConflict); !slices.Equal(got, []string{"uj-json"}) {
-			t.Errorf("%s: %s = %v, want [uj-json]", name, cbNarratorSpellingJSONConflict, got)
-		}
 		if got := cbClassIDs(r, cbNarratorSpellingUnreconcilable); !slices.Equal(got, []string{"uj-sep"}) {
 			t.Errorf("%s: %s = %v, want [uj-sep]", name, cbNarratorSpellingUnreconcilable, got)
 		}
@@ -221,13 +209,58 @@ func TestCreditsBackfill_UnreconcilableSpellingMoveHasItsOwnClassAndWritesNothin
 			}
 		}
 	}
-	for _, id := range []string{"uj-json", "uj-sep"} {
-		if st := f.state(id); len(st.Narrators) != 0 {
-			t.Errorf("%s was written: junction %v", id, cbNarratorIDs(st.Narrators))
-		}
+	if st := f.state("uj-sep"); len(st.Narrators) != 0 {
+		t.Errorf("uj-sep was written: junction %v", cbNarratorIDs(st.Narrators))
 	}
-	if got := cbStr(f.state("uj-json").NarratorsJSON, ""); got != `["RENEE MONTOYA"]` {
-		t.Errorf("uj-json NarratorsJSON = %q, want it untouched", got)
+}
+
+// A NarratorsJSON entry that agrees with the column only by case is the same
+// person to the cleaner (util.NormalizeAuthor), so the respelling reaches it
+// too: the book is written, the entry takes the record's spelling, and the book
+// plans clean. (It used to be refused as a JSON conflict, because the respelling
+// matched the exact spelling only.)
+func TestCreditsBackfill_NarratorsJSONEntryThatDiffersOnlyByCaseIsRespelledToo(t *testing.T) {
+	f := newCBFixture(t)
+	bruce := f.author("Bruce Wayne")
+	f.narrator("Renée Montoya")
+	f.book("uj-json", "Gotham Central: Half a Life", func(b *database.Book) {
+		b.AuthorID = intp(bruce)
+		b.Narrator = strp("Renee Montoya")
+		b.NarratorsJSON = strp(`["RENEE MONTOYA"]`)
+	}, ba("uj-json", [2]int{bruce, 0}), nil)
+	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cbClassIDs(res, cbNarratorFillFromColumn); !slices.Equal(got, []string{"uj-json"}) {
+		t.Fatalf("%s = %v, want [uj-json]", cbNarratorFillFromColumn, got)
+	}
+	st := f.state("uj-json")
+	if got := cbStr(st.NarratorsJSON, ""); got != `["Renée Montoya"]` {
+		t.Errorf("NarratorsJSON = %q, want the entry respelled to the record", got)
+	}
+	if got := cbStr(st.Narrator, ""); got != "Renée Montoya" {
+		t.Errorf("column = %q", got)
+	}
+	assertPlansClean(t, f, "uj-json")
+}
+
+// The backstop of the respelling: a NarratorsJSON that, respelled, would still
+// match neither the slots nor the column is the JSON-conflict refusal. (The plan
+// only keeps a book whose JSON agrees with its credit, and a respelling reaches
+// every entry naming the person, so a planned book does not get here; the check
+// stays for a plan built any other way.)
+func TestCreditsBackfill_SettleNarratorSpellingRefusesAJSONThatStaysInConflict(t *testing.T) {
+	raw := `["Harvey Bullock"]`
+	pl := &cbPlan{
+		requested:  []string{"Renee Montoya"},
+		columnText: "Renee Montoya",
+		rawJSON:    &raw,
+		jsonNames:  []string{"Harvey Bullock"},
+	}
+	slots := []cbNarratorSlot{{Name: "Renée Montoya", ID: 7}}
+	if _, _, refuse := settleNarratorSpelling(pl, slots); refuse != cbNarratorSpellingJSONConflict {
+		t.Errorf("refuse = %q, want %q", refuse, cbNarratorSpellingJSONConflict)
 	}
 }
 

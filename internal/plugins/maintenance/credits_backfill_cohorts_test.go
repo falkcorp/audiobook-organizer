@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_cohorts_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a1146b61-8486-4d68-8496-fefd5b154a64
 // last-edited: 2026-10-27
 
@@ -422,7 +422,7 @@ func TestCreditsBackfill_CreditNameOffsetPrefersThePieceTheCleanerTakesThePerson
 		{"Thomas Wayne Jr. and Read by Thomas Wayne", "Thomas Wayne", 29}, // the longer name's piece does not take it
 		{"Narrated by Harvey Dent / Two-Face", "Harvey Dent", 12},         // slash split and prefix
 		{"Harvey Dent with Harvey Dent - editor", "Harvey Dent", 0},       // a role piece is skipped
-		{"Read by Harvey  Dent", "Harvey Dent", -1},                       // a double space is no occurrence
+		{"Read by Harvey  Dent", "Harvey Dent", 8},                        // the cleaner reads a double space as one space
 		{"Harvey Dent - editor; Read by Harvey Dent", "Harvey Dent", 30},  // the role piece first
 		{"Thomas Wayne Jr. and Thomas Wayne", "Thomas Wayne", 21},         // exact piece, not the first holding the name
 		{"Harvey Dent (abridged)", "Harvey Dent", 0},                      // no piece IS the name: whole words stand in

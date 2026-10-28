@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-27
 
@@ -3203,7 +3203,9 @@ func settleNarratorSpelling(plan *cbPlan, slots []cbNarratorSlot) (column string
 // (util.NarratorCreditPiecePerson: the piece without its "Read by" prefix,
 // never a role credit such as "- translator"). Every piece that yields that
 // person is respelled, because the cleaner reads "Renee Montoya, Read by Renee
-// Montoya" as one person and the read-back must too. A name that is only part
+// Montoya" as one person and the read-back must too, and so does it read
+// "Renee Montoya, RENEE MONTOYA" (persons match by util.NormalizeAuthor, each
+// piece is replaced over its own bytes). A name that is only part
 // of another credited name does not count: "Renee Montoya" is not found inside
 // "Renee Montoya-Sawyer" or "Anne Renee Montoya's", so the respelling lands on
 // the credit that names the person, wherever it stands in the text. Only when no
@@ -3213,22 +3215,27 @@ func settleNarratorSpelling(plan *cbPlan, slots []cbNarratorSlot) (column string
 // the backstop.
 func respellCreditText(text string, pairs [][2]string) string {
 	for _, p := range pairs {
-		offsets := creditPersonOffsets(text, p[0])
-		if len(offsets) == 0 {
+		spans := creditPersonSpans(text, p[0])
+		if len(spans) == 0 {
 			if i := creditNameOffset(text, p[0]); i >= 0 {
-				offsets = []int{i}
+				spans = []creditSpan{{i, len(p[0])}}
 			}
 		}
-		text = replaceAtOffsets(text, offsets, len(p[0]), p[1])
+		text = replaceSpans(text, spans, p[1])
 	}
 	return text
 }
 
-// replaceAtOffsets replaces the n bytes at each of the (ascending) offsets with
-// repl, last first so the earlier offsets stay valid.
-func replaceAtOffsets(text string, offsets []int, n int, repl string) string {
-	for i := len(offsets) - 1; i >= 0; i-- {
-		text = text[:offsets[i]] + repl + text[offsets[i]+n:]
+// creditSpan is a run of n bytes at byte offset start of a text.
+type creditSpan struct{ start, n int }
+
+// replaceSpans replaces each of the (ascending, disjoint) spans with repl, last
+// first so the earlier spans stay valid. Each span has its own length: the
+// pieces that name one person need not be spelled alike ("Renee Montoya" and
+// "RENÉE MONTOYA" differ in bytes).
+func replaceSpans(text string, spans []creditSpan, repl string) string {
+	for i := len(spans) - 1; i >= 0; i-- {
+		text = text[:spans[i].start] + repl + text[spans[i].start+spans[i].n:]
 	}
 	return text
 }
@@ -3239,12 +3246,14 @@ type creditPiece struct {
 	text  string
 }
 
-// creditPieces are the pieces util.SplitCreditNames cuts text into, located in
-// text.
+// creditPieces are the pieces util.SplitCreditPieces cuts text into, located in
+// text. Repeats are kept (util.SplitCreditNames drops a piece that repeats an
+// earlier one in lower case): "Renee Montoya, RENEE MONTOYA" has two, and the
+// respelling must reach both.
 func creditPieces(text string) []creditPiece {
 	var pieces []creditPiece
 	cursor := 0
-	for _, p := range util.SplitCreditNames(text) {
+	for _, p := range util.SplitCreditPieces(text) {
 		i := strings.Index(text[cursor:], p)
 		if i < 0 || p == "" {
 			continue
@@ -3255,20 +3264,25 @@ func creditPieces(text string) []creditPiece {
 	return pieces
 }
 
-// creditPersonOffsets are the byte offsets in text of name in every credit
-// piece the cleaner takes name from (the piece, minus a "Read by" prefix, is
-// exactly name; role pieces are no narrator and never count), in text order.
-func creditPersonOffsets(text, name string) []int {
-	if name == "" {
+// creditPersonSpans are the spans in text of the person name in every credit
+// piece the cleaner takes name from, in text order. The cleaner reads two
+// pieces as one person when their names agree normalized
+// (util.NormalizeAuthor: case and runs of spaces), so a piece matches when its
+// person does, however it is cased ("Renee Montoya, RENEE MONTOYA" is one
+// person twice), and the span covers that piece's own spelling. Role pieces are
+// no narrator and never count.
+func creditPersonSpans(text, name string) []creditSpan {
+	key := util.NormalizeAuthor(strings.TrimSpace(name))
+	if key == "" {
 		return nil
 	}
-	var offsets []int
+	var spans []creditSpan
 	for _, p := range creditPieces(text) {
-		if person, off, ok := util.NarratorCreditPiecePerson(p.text); ok && person == name {
-			offsets = append(offsets, p.start+off)
+		if person, off, ok := util.NarratorCreditPiecePerson(p.text); ok && util.NormalizeAuthor(person) == key {
+			spans = append(spans, creditSpan{p.start + off, len(person)})
 		}
 	}
-	return offsets
+	return spans
 }
 
 // creditNameOffset is the byte offset in text of the occurrence of name that
@@ -3279,8 +3293,8 @@ func creditNameOffset(text, name string) int {
 	if name == "" {
 		return -1
 	}
-	if offsets := creditPersonOffsets(text, name); len(offsets) > 0 {
-		return offsets[0]
+	if spans := creditPersonSpans(text, name); len(spans) > 0 {
+		return spans[0].start
 	}
 	for _, p := range creditPieces(text) {
 		if _, _, ok := util.NarratorCreditPiecePerson(p.text); !ok {
@@ -3341,7 +3355,7 @@ func respellNarratorsJSON(raw string, pairs [][2]string) string {
 	for _, p := range pairs {
 		var hit []int
 		for i, entry := range arr {
-			if len(creditPersonOffsets(entry, p[0])) > 0 {
+			if len(creditPersonSpans(entry, p[0])) > 0 {
 				hit = append(hit, i)
 			}
 		}
