@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -119,12 +119,12 @@ func bookIsTrashed(b *database.Book) bool {
 // PurgeVersion physically deletes the version's files and marks it
 // inactive_purged. Keeps the DB rows for fingerprint matching.
 //
-// While the version's book is live, only files inside a .versions/ slot are
-// ever purged: trashing never moves files, so a file of the book outside a slot
-// is still where the book plays it. Beyond that, a file is kept when a live book
-// serves it (see servedGuard for the rules: the book's FilePath or its folder, a
-// row of its active or no version, the same file by symlink or hard link, and
-// the same for ANOTHER live book). In that case PurgeVersion deletes nothing,
+// While the version's book is live, only files inside this version's own
+// .versions/{id}/ slot are ever purged: trashing never moves files, so a file
+// of the book outside that slot is still where the book plays it. Beyond that,
+// a file is kept when a live book serves it (see servedGuard for the rules: the
+// book's FilePath or its folder, a row of its active or no version, the same
+// file by symlink or hard link, and the same for ANOTHER live book). In that case PurgeVersion deletes nothing,
 // leaves the version in the trash and returns a *BookServesFilesError. It fails
 // closed: if the book, its versions, its rows or another book's rows cannot be
 // read, or the version's slot cannot be walked, nothing is deleted and the error
@@ -170,7 +170,7 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 		}
 	}
 
-	guard, err := newServedGuard(store, book, files)
+	guard, err := newServedGuard(store, book, files, ver.ID)
 	if err != nil {
 		return err
 	}

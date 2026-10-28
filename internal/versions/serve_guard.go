@@ -1,5 +1,5 @@
 // file: internal/versions/serve_guard.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
 // last-edited: 2026-10-27
 
@@ -19,11 +19,11 @@ import (
 // servedGuard answers "does a live book still serve this file?" for the purge
 // of a trashed version. A file is served when
 //
-//   - it is a file of the version's own book that is NOT inside a .versions/
-//     slot: trashing a version never moves its files, so a file outside a slot
+//   - it is a file of the version's own book that is NOT inside this version's
+//     own .versions/{id}/ slot: trashing a version never moves its files, so a file outside a slot
 //     is still where the book plays it (the player streams the book's rows with
 //     no version filter, and Book.FilePath is often stale, so FilePath is not
-//     the test). Only files inside a slot are ever purged;
+//     the test). Only files inside the version's own slot are ever purged;
 //   - it is the version's own book's FilePath, or lies inside it when that is a
 //     folder (a multi-file book's FilePath is its containing folder; the rule
 //     is database.BookOwnFolder's), outside any .versions/ slot;
@@ -44,6 +44,10 @@ import (
 type servedGuard struct {
 	store versionPurger
 	book  *database.Book
+
+	// verID is the version being purged; only files inside ITS slot,
+	// .versions/{verID}/, are purgeable while the own book is live.
+	verID string
 
 	// skipOwn is set when the own book is itself trashed: it serves nothing.
 	skipOwn bool
@@ -75,8 +79,8 @@ func canonPath(p string) string {
 	return abs
 }
 
-func newServedGuard(store versionPurger, book *database.Book, files []database.BookFile) (*servedGuard, error) {
-	g := &servedGuard{store: store, book: book, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
+func newServedGuard(store versionPurger, book *database.Book, files []database.BookFile, verID string) (*servedGuard, error) {
+	g := &servedGuard{store: store, book: book, verID: verID, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
 	if bookIsTrashed(book) {
 		g.skipOwn = true
 		return g, nil
@@ -131,21 +135,33 @@ func (g *servedGuard) serves(p string) (bool, error) {
 	return g.otherBookServes(p)
 }
 
-// inSlot reports whether p has a .versions path component.
-func inSlot(p string) bool {
-	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(p)), "/") {
-		if part == VersionsDirName {
+// hasSlotPair reports whether p has the consecutive path parts
+// .versions/{verID}.
+func hasSlotPair(p, verID string) bool {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(p)), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == VersionsDirName && parts[i+1] == verID {
 			return true
 		}
 	}
 	return false
 }
 
+// inVersionSlot reports whether p lies inside the version's own slot,
+// .versions/{verID}/. Both the path as stored and its symlink-resolved form
+// must contain the pair: a slot directory that is a symlink out to the book's
+// folder is not a slot, and os.Remove on a path through it would delete the real
+// file. A .versions directory that is not this version's (a copied library tree
+// in an import folder, another version's slot) is not its slot either.
+func (g *servedGuard) inVersionSlot(p string) bool {
+	return hasSlotPair(p, g.verID) && hasSlotPair(canonPath(p), g.verID)
+}
+
 func (g *servedGuard) ownBookServes(p string) bool {
 	if g.skipOwn {
 		return false
 	}
-	if !inSlot(p) {
+	if !g.inVersionSlot(p) {
 		return true
 	}
 	c := canonPath(p)

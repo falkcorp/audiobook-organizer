@@ -4,8 +4,8 @@ never deletes a file a live book still serves. Trashing the ACTIVE version only
 flips its status, so its files stay where the book plays them; 14 days later the
 purge deleted them and left the book pointing at a missing file.
 
-While the book is live, only files inside a `.versions/` version slot are ever purged. Trashing a version
-never moves its files, and the player streams a book's rows with no version
+While the book is live, only files inside this version's own `.versions/<id>` slot are
+ever purged. Trashing a version never moves its files, and the player streams a book's rows with no version
 filter (and `Book.FilePath` is often stale), so a file of the version's own book
 that is not inside a slot is still where the book plays it and is always kept.
 Inside a slot, a file is still kept when the book is not itself trashed and it is
