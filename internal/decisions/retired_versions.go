@@ -1,7 +1,7 @@
 // file: internal/decisions/retired_versions.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7c41e2a9-0d58-4b36-a1f3-5e92b6d08c74
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package decisions
 
@@ -148,12 +148,11 @@ type RetiredVersionsEvent struct {
 	// VersionID is the retired book_versions row the retire minted. Required:
 	// it is what tells one retire of the shell from another.
 	VersionID string
-	// OpID is the operation that performed the event, whose journal carries it:
-	// the apply op for an applied record, the revert (undo) op for an undone
-	// one. Required. The apply op an undone record took back is the op_id of the
-	// applied record before it on the same chain. With VersionID and the
-	// decision it makes the record idempotent: a retry of the same event is the
-	// same record.
+	// OpID is the operation the event belongs to, whose journal carries it:
+	// the apply op for an applied record, and for an undone one the apply op
+	// that was taken back (a revert has no operation of its own to name). With
+	// VersionID and the decision it makes the record idempotent: a retry of the
+	// same event is the same record. Required.
 	OpID string
 	// PlanOpID and PlanRowID are the repairs plan op and row the retire came
 	// from (provenance; the row id is the shell's).

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
 // last-edited: 2026-10-28
 
@@ -175,6 +175,10 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) er
 // one record is made per reverted row, however the revert reached it (a whole
 // operation, a scoped revert, the combine undo's retire reversal).
 //
+// The retired-versions fixer is the only production writer of these versions
+// (Writer.RetireVersion, the other, has no caller outside tests), so a version
+// create row is the fixer's retire.
+//
 // The record is a label, not a veto (the shell stays plannable), so a failure
 // to write it is logged and never fails or rolls back a revert whose rows are
 // already back. It names the reverted retire op (c.OperationID) as the op: the
@@ -190,7 +194,9 @@ func (rs *RevertService) recordRetireUndone(c *database.OperationChange) {
 	}
 	kv, ok := database.AsCapability[decisions.KV](rs.db)
 	if !ok {
-		return // a store with no decision log has no ledger to write
+		revertLog.Warn("revert: retired-versions undone record not written for shell=%s version=%s: the store has no decision log",
+			logger.SanitizeLogValue(made.RetiredFromBookID), logger.SanitizeLogValue(made.ID))
+		return
 	}
 	if _, err := decisions.RecordRetiredUndone(decisions.New(kv), decisions.RetiredVersionsEvent{
 		ShellID: made.RetiredFromBookID, TargetID: made.BookID, VersionID: made.ID,
