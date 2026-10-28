@@ -1,5 +1,5 @@
 // file: internal/versions/serve_guard.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
 // last-edited: 2026-10-27
 
@@ -19,15 +19,22 @@ import (
 // servedGuard answers "does a live book still serve this file?" for the purge
 // of a trashed version. A file is served when
 //
+//   - it is a file of the version's own book that is NOT inside a .versions/
+//     slot: trashing a version never moves its files, so a file outside a slot
+//     is still where the book plays it (the player streams the book's rows with
+//     no version filter, and Book.FilePath is often stale, so FilePath is not
+//     the test). Only files inside a slot are ever purged;
 //   - it is the version's own book's FilePath, or lies inside it when that is a
 //     folder (a multi-file book's FilePath is its containing folder; the rule
 //     is database.BookOwnFolder's), outside any .versions/ slot;
 //   - it is named by a book_file row of the book's ACTIVE version, or of no
 //     version;
 //   - it is the same file as one of those, reached by a symlink or a hard link;
-//   - or ANOTHER live book names it the same ways (its FilePath, any ancestor
-//     folder its FilePath names, a row of its active version or of no
-//     version): deluge and import folders are shared between books.
+//   - or ANOTHER live book names it: its FilePath, any ancestor folder its
+//     FilePath names, or any non-retired row of it whose version is not
+//     trashed or purged (alt versions included, because the player streams rows
+//     regardless of version): deluge and import folders are shared between
+//     books.
 //
 // When the version's own book is itself trashed it serves nothing, so only the
 // ANOTHER-live-book rules apply.
@@ -38,17 +45,21 @@ type servedGuard struct {
 	store versionPurger
 	book  *database.Book
 
+	// skipOwn is set when the own book is itself trashed: it serves nothing.
+	skipOwn bool
+
 	exact  map[string]struct{} // canonical served file paths of the own book
 	folder string              // canonical folder the own book's FilePath names, or ""
 	infos  []os.FileInfo       // stat of each served file, for hard links
 
-	// live caches, per other book, whether it is live and its active version ids.
+	// others caches, per other book, whether it is live and which of its
+	// versions are dead (trashed or purged).
 	others map[string]*otherBook
 }
 
 type otherBook struct {
-	live   bool
-	active map[string]struct{}
+	live bool
+	dead map[string]struct{}
 }
 
 // canonPath is p made absolute and cleaned, with symlinks resolved when the
@@ -67,6 +78,7 @@ func canonPath(p string) string {
 func newServedGuard(store versionPurger, book *database.Book, files []database.BookFile) (*servedGuard, error) {
 	g := &servedGuard{store: store, book: book, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
 	if bookIsTrashed(book) {
+		g.skipOwn = true
 		return g, nil
 	}
 
@@ -119,7 +131,23 @@ func (g *servedGuard) serves(p string) (bool, error) {
 	return g.otherBookServes(p)
 }
 
+// inSlot reports whether p has a .versions path component.
+func inSlot(p string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(p)), "/") {
+		if part == VersionsDirName {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *servedGuard) ownBookServes(p string) bool {
+	if g.skipOwn {
+		return false
+	}
+	if !inSlot(p) {
+		return true
+	}
 	c := canonPath(p)
 	if _, ok := g.exact[c]; ok {
 		return true
@@ -174,7 +202,7 @@ func (g *servedGuard) otherBookServes(p string) (bool, error) {
 			if !ob.live {
 				continue
 			}
-			if _, ok := ob.active[r.VersionID]; ok || r.VersionID == "" {
+			if _, dead := ob.dead[r.VersionID]; !dead {
 				return true, nil
 			}
 		}
@@ -202,11 +230,16 @@ func (g *servedGuard) other(bookID string) (*otherBook, error) {
 	}
 	ob := &otherBook{}
 	if b != nil && !bookIsTrashed(b) {
-		active, err := g.activeVersionIDs(bookID)
+		vers, err := g.store.GetBookVersionsByBookID(bookID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("list versions of book %s: %w", bookID, err)
 		}
-		ob.live, ob.active = true, active
+		ob.live, ob.dead = true, map[string]struct{}{}
+		for i := range vers {
+			if st := vers[i].Status; st == database.BookVersionStatusTrash || st == database.BookVersionStatusInactivePurged {
+				ob.dead[vers[i].ID] = struct{}{}
+			}
+		}
 	}
 	g.others[bookID] = ob
 	return ob, nil

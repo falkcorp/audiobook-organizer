@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -119,16 +119,17 @@ func bookIsTrashed(b *database.Book) bool {
 // PurgeVersion physically deletes the version's files and marks it
 // inactive_purged. Keeps the DB rows for fingerprint matching.
 //
-// A file a live book still serves is never deleted: when a file is served (see
-// servedGuard: the version's own book, unless that is itself trashed, serving it
-// as its FilePath or, for a multi-file book, the folder it names; a row of its active
-// version or of no version; the same file reached by a symlink or hard link;
-// or any of those for ANOTHER live book), PurgeVersion deletes nothing, leaves
-// the version in the trash and returns a *BookServesFilesError. It fails
+// While the version's book is live, only files inside a .versions/ slot are
+// ever purged: trashing never moves files, so a file of the book outside a slot
+// is still where the book plays it. Beyond that, a file is kept when a live book
+// serves it (see servedGuard for the rules: the book's FilePath or its folder, a
+// row of its active or no version, the same file by symlink or hard link, and
+// the same for ANOTHER live book). In that case PurgeVersion deletes nothing,
+// leaves the version in the trash and returns a *BookServesFilesError. It fails
 // closed: if the book, its versions, its rows or another book's rows cannot be
-// read, or the version's slot cannot be walked, nothing is deleted and the
-// error is returned. When the version's own book is itself in the trash it
-// serves nothing, so only the other-live-book check applies.
+// read, or the version's slot cannot be walked, nothing is deleted and the error
+// is returned. When the version's own book is itself in the trash it serves
+// nothing, so only the other-live-book check applies.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	book, err := store.GetBookByID(ver.BookID)
 	if err != nil || book == nil {

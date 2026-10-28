@@ -4,22 +4,27 @@ never deletes a file a live book still serves. Trashing the ACTIVE version only
 flips its status, so its files stay where the book plays them; 14 days later the
 purge deleted them and left the book pointing at a missing file.
 
-A file of the version is now kept when the version's book is not itself trashed
-and the file is the book's `FilePath`, lies inside it when it is a folder (a
-multi-file book's `FilePath` is its containing folder; the rule is the exported
-`database.BookOwnFolder`, and anything under a `.versions/` slot is excluded), or
-is named by a `book_file` row of the book's active version or of no version.
-Another live (non-trashed) book counts the same way: its `FilePath`, any
-ancestor folder of the file that is a live book's `FilePath` (the walk goes up to
-the filesystem root or the configured library root, whichever comes first, and
-never through a `.versions/` slot), or a row of its active or no version, because
-deluge and import folders are shared. Paths are compared after resolving symlinks, and two names for one
-file (hard links) count as the same file. If any file of the version is served,
-nothing is deleted, the version stays in the trash, one WARN per version is
-logged (book id, version id, path count, "book still serves this file") and
-`*versions.BookServesFilesError` is returned; purge-now answers 409. If the book,
-its versions or rows, or another book's rows cannot be read the purge fails
-closed and deletes nothing.
+While the book is live, only files inside a `.versions/` version slot are ever purged. Trashing a version
+never moves its files, and the player streams a book's rows with no version
+filter (and `Book.FilePath` is often stale), so a file of the version's own book
+that is not inside a slot is still where the book plays it and is always kept.
+Inside a slot, a file is still kept when the book is not itself trashed and it is
+the book's `FilePath` (symlinks resolved, hard links count as the same file) or
+lies in the folder `FilePath` names (the exported `database.BookOwnFolder` rule),
+or is named by a row of the book's active version or of no version.
+
+Another live (non-trashed) book counts too: its `FilePath`, any ancestor folder
+of the file that is a live book's `FilePath` (the walk goes up to the filesystem
+root or the configured library root, whichever comes first, and never through a
+`.versions/` slot), or any non-retired row of it whose version is not trashed or
+purged (alt versions included, because the player streams rows regardless of
+version). Deluge and import folders are shared between books.
+
+If any file of the version is served, nothing is deleted, the version stays in
+the trash, one WARN per version is logged (book id, version id, path count,
+"book still serves this file") and `*versions.BookServesFilesError` is returned;
+purge-now answers 409. If the book, its versions or rows, or another book's rows
+cannot be read the purge fails closed and deletes nothing.
 
 `CleanupTrashedVersions` now returns a `CleanupResult` (purged count plus the kept
 versions); the op logs one WARN per kept version to its own log and its summary
