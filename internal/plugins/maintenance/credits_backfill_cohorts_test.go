@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_cohorts_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a1146b61-8486-4d68-8496-fefd5b154a64
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -539,6 +539,13 @@ func TestCreditsBackfill_ApplySpellingListsTheColumnOnlyWhenItsTextChanged(t *te
 // respelled to ("& Co" is a credit separator), as when a record of another
 // spelling appears between the plan and the write.
 type cbSpellingStore struct{ creditsBackfillStore }
+
+// Unwrap lets database.AsCapability reach the store's link count through the
+// wrapper, as it does through the server's own decorators.
+func (s cbSpellingStore) Unwrap() database.Store {
+	st, _ := s.creditsBackfillStore.(database.Store)
+	return st
+}
 
 func (s cbSpellingStore) CreateNarrator(name string) (*database.Narrator, error) {
 	n, err := s.creditsBackfillStore.CreateNarrator(name)

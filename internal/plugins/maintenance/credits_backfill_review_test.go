@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_review_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b0f2c1e-8a47-4d3b-9e6a-27c4d1f08b93
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -610,7 +610,8 @@ func TestCreditsBackfillReview_ApplyWritesConcurrently(t *testing.T) {
 
 // N3: narrators_created counts the records a successful write credits, not
 // every create call: a book whose write was refused after its narrator was
-// created does not count (the record exists, and the next attempt uses it).
+// created does not count (the record is deleted again at the end of the apply,
+// since no book credits it and this run made it).
 func TestCreditsBackfillReview_NarratorsCreatedCountsOnlySuccessfulWrites(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
@@ -632,8 +633,11 @@ func TestCreditsBackfillReview_NarratorsCreatedCountsOnlySuccessfulWrites(t *tes
 	if err == nil {
 		t.Fatal("a refused write reported a clean run")
 	}
-	if ns, _ := f.s.ListNarrators(); len(ns) != 1 {
-		t.Fatalf("narrators = %d, want the one the refused attempt created", len(ns))
+	if ns, _ := f.s.ListNarrators(); len(ns) != 0 {
+		t.Fatalf("narrators = %d, want the record the refused attempt created deleted again", len(ns))
+	}
+	if res.NarratorsCreatedUnused != 1 || res.UnusedNarratorsDeleted != 1 {
+		t.Fatalf("unused=%d deleted=%d, want the one record reported unused and deleted", res.NarratorsCreatedUnused, res.UnusedNarratorsDeleted)
 	}
 	if res.NarratorsCreated != 0 {
 		t.Fatalf("narrators_created = %d, want 0 (no write landed)", res.NarratorsCreated)
