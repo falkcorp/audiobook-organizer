@@ -1,0 +1,3 @@
+### Fixed
+
+- `TestPool_AStrikeASickWorkerAnsweredBeforeItFaultedIsWithheld` failed on Linux CI with "the sick worker decoded 0 clips" (no error, 0.00s) on PR #4216, whose merge tree predated the cooldown resets of bab99ce4f (`useEndpoints`) and ff611d5f6 (`newSplitHarness`): an earlier test had benched a port, the OS gave the closed server's port to this test's sick worker, and round 1 sent it nothing, so the sound worker decoded all 32 files alone. Main already resets every port's cooldown in both harnesses (verified by re-creating the failure with the resets removed and a port pre-benched: same message, then green with them); the test now also checks that both of its ports start out of cooldown and says so if one does not, and its failure message lists the sends.

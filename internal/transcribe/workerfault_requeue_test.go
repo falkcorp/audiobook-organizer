@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-28
 
@@ -688,13 +688,24 @@ func TestPool_AStrikeASickWorkerAnsweredBeforeItFaultedIsWithheld(t *testing.T) 
 		}
 	})
 	useEndpoints(t, 16, endpointURLs(p.h.eps)...) // requests of 16, decoded in chunks of 4
+	// The scenario needs the sick worker to take the first request of 16. A
+	// benched port takes no work in round 1 and the sound one decodes all 32
+	// files alone (this test then failed with "decoded 0 clips", err nil, in
+	// 0.00s on Linux CI, where the OS hands a closed server's benched port to a
+	// later one). Both harnesses clear the cooldown of every port they start; say
+	// so here if that ever stops holding, instead of leaving the symptom.
+	for _, ep := range p.h.eps {
+		if endpointInCooldown(ep.URL) {
+			t.Fatalf("%s started in a cooldown (a port an earlier test benched and the OS reused?), so round 1 would not send it work", ep.URL)
+		}
+	}
 	ids := loopers(32, "chap")
 	res, err := p.run(t, ids...)
 	if err != nil {
 		t.Fatalf("err = %v, want none", err)
 	}
 	if calls.Load() < 5 {
-		t.Fatalf("the sick worker decoded %d clips, so the scenario never reached its fault", calls.Load())
+		t.Fatalf("the sick worker decoded %d clips, so the scenario never reached its fault (sends: %v)", calls.Load(), p.sendLog())
 	}
 	for _, id := range ids {
 		if r := res[id]; r.Text != "T:"+id {
