@@ -1,7 +1,7 @@
 // file: internal/server/wire_versions_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b1e4d27-3c60-4a85-8f12-d7a5c0e63b49
-// last-edited: 2026-10-18
+// last-edited: 2026-10-28
 
 package server
 
@@ -116,6 +116,9 @@ func TestRetiredVersionAliasRoutes_TouchNothingAndTwinsStillWork(t *testing.T) {
 	}
 
 	active, trashed := newVersion(database.BookVersionStatusActive), newVersion(database.BookVersionStatusTrash)
+	// The live DELETE twin trashes an alt: trashing the ACTIVE version swaps
+	// another one in first, and is refused when none can take over.
+	alt := newVersion(database.BookVersionStatusAlt)
 
 	// Retired aliases: 410, and the rows keep their status.
 	w := f.do(t, f.sessionToken, http.MethodDelete, "/api/v1/books/"+book.ID+"/versions/"+active, nil)
@@ -129,12 +132,12 @@ func TestRetiredVersionAliasRoutes_TouchNothingAndTwinsStillWork(t *testing.T) {
 	assert.Equal(t, database.BookVersionStatusTrash, status(trashed), "alias purge-now must not purge the version")
 
 	// Live twins on the same rows: they really run (200, row changes).
-	w = f.do(t, f.sessionToken, http.MethodDelete, "/api/v1/audiobooks/"+book.ID+"/versions/"+active, nil)
+	w = f.do(t, f.sessionToken, http.MethodDelete, "/api/v1/audiobooks/"+book.ID+"/versions/"+alt, nil)
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Equal(t, database.BookVersionStatusTrash, status(active))
-	w = f.do(t, f.sessionToken, http.MethodPost, "/api/v1/audiobooks/"+book.ID+"/versions/"+active+"/restore", nil)
+	assert.Equal(t, database.BookVersionStatusTrash, status(alt))
+	w = f.do(t, f.sessionToken, http.MethodPost, "/api/v1/audiobooks/"+book.ID+"/versions/"+alt+"/restore", nil)
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Equal(t, database.BookVersionStatusAlt, status(active))
+	assert.Equal(t, database.BookVersionStatusAlt, status(alt))
 	w = f.do(t, f.sessionToken, http.MethodPost, "/api/v1/audiobooks/"+book.ID+"/versions/"+trashed+"/purge-now", nil)
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.Equal(t, database.BookVersionStatusInactivePurged, status(trashed))

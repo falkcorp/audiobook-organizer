@@ -101,8 +101,11 @@ func (f *servedFixture) row(versionID, path string, track int) {
 	}
 }
 
-// trashLikeHandler is handleTrashVersion's body: MarkTrashed, persist, and
-// when the version was active, promote the newest alt.
+// trashLikeHandler is the OLD handleTrashVersion body: MarkTrashed, persist,
+// and when the version was active, promote the newest alt WITHOUT moving any
+// file. The handler swaps first now; this is kept to model the state the old
+// flow left (a trashed version whose files the book still served), which the
+// purge guard must still refuse to delete.
 func (f *servedFixture) trashLikeHandler(id string) {
 	f.t.Helper()
 	v, err := f.store.GetBookVersion(id)
@@ -115,7 +118,7 @@ func (f *servedFixture) trashLikeHandler(id string) {
 		f.t.Fatalf("trash: %v", err)
 	}
 	if wasActive {
-		if err := AutoPromoteAlt(f.store, f.book.ID); err != nil {
+		if err := promoteNewestAltForTest(f.store, f.book.ID); err != nil {
 			f.t.Fatalf("promote: %v", err)
 		}
 	}

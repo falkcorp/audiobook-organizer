@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_retired_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 0f4b7d29-6a1c-4e83-9d52-c8e1a7b30f64
 // last-edited: 2026-10-28
 
@@ -189,54 +189,6 @@ func TestPurgeVersion_RefusesRetiredBeforeTouchingDisk(t *testing.T) {
 		t.Fatalf("control: purging a trashed version failed: %v", err)
 	}
 	tf.requireFile(t, false)
-}
-
-// AutoPromoteAlt never promotes a retired version, even one newer than every
-// alt: the alt wins and the retired version is not rewritten. With only a
-// retired version there is nothing to promote and nothing is written.
-func TestAutoPromoteAlt_IgnoresRetired(t *testing.T) {
-	f := newRetiredFixture(t, true)
-	retiredBefore := f.reread(t)
-
-	alt, err := f.store.CreateBookVersion(&database.BookVersion{
-		BookID: f.holderID, Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
-		IngestDate: retiredBefore.IngestDate.Add(-48 * time.Hour), // older than the retired version
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !retiredBefore.IngestDate.After(alt.IngestDate) {
-		t.Fatalf("fixture: the retired version (%v) must be newer than the alt (%v)", retiredBefore.IngestDate, alt.IngestDate)
-	}
-
-	if err := AutoPromoteAlt(f.store, f.holderID); err != nil {
-		t.Fatalf("AutoPromoteAlt: %v", err)
-	}
-	gotAlt, _ := f.store.GetBookVersion(alt.ID)
-	if gotAlt.Status != database.BookVersionStatusActive {
-		t.Errorf("alt status = %s, want active (the control: the same call promotes a real alt)", gotAlt.Status)
-	}
-	gotRetired := f.reread(t)
-	if gotRetired.Status != database.BookVersionStatusRetired {
-		t.Errorf("retired version status = %s, want retired", gotRetired.Status)
-	}
-	if gotRetired.Version != retiredBefore.Version {
-		t.Errorf("retired version was rewritten (row version %d -> %d)", retiredBefore.Version, gotRetired.Version)
-	}
-
-	// Only a retired version on the book: nothing to promote, nothing written.
-	only := newRetiredFixture(t, true)
-	before := only.reread(t)
-	if err := AutoPromoteAlt(only.store, only.holderID); err != nil {
-		t.Fatalf("AutoPromoteAlt with only a retired version: %v", err)
-	}
-	after := only.reread(t)
-	if after.Status != database.BookVersionStatusRetired || after.Version != before.Version {
-		t.Errorf("retired-only book: status=%s row version %d -> %d, want untouched", after.Status, before.Version, after.Version)
-	}
-	if active, _ := only.store.GetActiveVersionForBook(only.holderID); active != nil {
-		t.Errorf("retired-only book got an active version %s", active.ID)
-	}
 }
 
 // A retired version named by a stale trash listing is never purged, however
