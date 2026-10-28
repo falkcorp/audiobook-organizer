@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.7
+// version: 1.234.8
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-28
 
@@ -4126,7 +4126,8 @@ func (p *PebbleStore) deleteBook(id string, opts deleteBookOpts) error {
 	// its audio went, and nothing journals this delete yet. Same stripes, so a
 	// retire cannot commit between this read and the commit below
 	// (retired_shell.go). The bypass, opts.allowRetiredShell, is the seam of
-	// the journaled purge and is never set today.
+	// the journaled purge; only DeleteRetiredShellForTest sets it today, and
+	// that deletes nothing outside a test binary.
 	if !opts.allowRetiredShell {
 		if err := p.refuseDeleteIfRetiredShell(id); err != nil {
 			return err

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-28
 
@@ -149,6 +149,14 @@ const (
 	// row while apply is on: retiring it must be reversible by undoing its
 	// combine (plan section 6.5), and that link is not built yet.
 	retCatCombineLinkPending = "combine_undo_link_pending"
+	// retCatSwapUnfinished is the transient hold on a row whose shell has a
+	// version stuck in swapping_in/swapping_out (a crashed swap; see
+	// versions.RunVersionSwap and TODO-SWAP-STUCK-RECOVERY). Its files are in
+	// two places until the swap is resumed, so retiring them now would retire
+	// rows the swap still owes moves for. The row is held (retry_later, nothing
+	// written) under the fingerprint it would have without the hold, so the same
+	// plan applies once the swap is finished.
+	retCatSwapUnfinished = "swap_unfinished"
 	// retCatGone is only ever produced by a re-plan: the book left the trash
 	// (restored or purged) after the plan.
 	retCatGone = "gone"
@@ -237,6 +245,13 @@ type retiredVersionsReader interface {
 	// GetOperationChanges reads a retire op's journal for its plan records (the
 	// external ids a retire planned to move, retirePlanRecord).
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+}
+
+// retiredShellVersions reads a shell's versions, for the unfinished-swap hold
+// (retCatSwapUnfinished). Resolved with database.AsCapability; it is not on
+// OpsStore.
+type retiredShellVersions interface {
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 }
 
 // retiredVersionsFixer moves every soft-deleted book's file rows onto the
@@ -406,6 +421,9 @@ type retiredRun struct {
 	// retired reads the retired side of the book_file table; nil when the store
 	// cannot (a test double), in which case no book is reported already retired.
 	retired database.RetiredBookFileReader
+	// versions reads a shell's versions; nil when the store cannot (a test
+	// double): the plan then makes no swap check, and Apply refuses.
+	versions retiredShellVersions
 	// detail makes buildRow attach a retiredDetail (the shell's rows, the
 	// resolved target, the age gate) to the row. Only a Replan or an under-lock
 	// re-check sets it: a whole-library Plan holds every row in memory until
@@ -517,6 +535,9 @@ func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time
 	}
 	if rr, ok := database.AsCapability[database.RetiredBookFileReader](ops); ok {
 		run.retired = rr
+	}
+	if vr, ok := database.AsCapability[retiredShellVersions](ops); ok {
+		run.versions = vr
 	}
 	return run, nil
 }
@@ -711,6 +732,10 @@ type retiredFacts struct {
 	// owner-manual check ("shell" or "target"; "" when neither did).
 	ownerManualSide string
 	ownerManualWhy  string
+	// swapStuck says which version of the shell is stuck in a swap ("" when
+	// none): set for a row that would otherwise be applicable, it turns the row
+	// into the retCatSwapUnfinished hold (buildRow).
+	swapStuck string
 }
 
 func retiredDeref(s *string) string {
@@ -771,7 +796,32 @@ func (r *retiredRun) classify(ctx context.Context, shell database.BookCore) (rep
 	if err != nil {
 		return repairs.Row{}, err
 	}
+	if cat == retCatWouldRetire || cat == retCatSamePath {
+		// Only a row that would be applied needs the read.
+		if fa.swapStuck, err = r.stuckSwap(shell.ID); err != nil {
+			return repairs.Row{}, err
+		}
+	}
 	return r.buildRow(&fa, cat, why), nil
+}
+
+// stuckSwap names a version of book id left in swapping_in/swapping_out by a
+// swap that did not finish, or "". A read error is returned: the row becomes an
+// error row rather than being retired on an unknown.
+func (r *retiredRun) stuckSwap(id string) (string, error) {
+	if r.versions == nil {
+		return "", nil
+	}
+	vers, err := r.versions.GetBookVersionsByBookID(id)
+	if err != nil {
+		return "", fmt.Errorf("read the versions of %s: %w", id, err)
+	}
+	for _, v := range vers {
+		if v.Status == database.BookVersionStatusSwappingIn || v.Status == database.BookVersionStatusSwappingOut {
+			return fmt.Sprintf("version %s is %s", v.ID, v.Status), nil
+		}
+	}
+	return "", nil
 }
 
 // loadGroup reads the shell's version group and sets its shape. A member is
@@ -1218,6 +1268,11 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 		row.Skipped, row.SkipReason = cat, why
 	}
 	row.Fingerprint = retiredFingerprint(fa, cat)
+	if fa.swapStuck != "" && row.Applicable() {
+		return holdRow(row, retCatSwapUnfinished, "a swap of this book did not finish ("+fa.swapStuck+
+			"), so its files are in two places until it is resumed; retiring them now would strand the moves the swap still owes. "+
+			"The row is held, nothing written")
+	}
 	if r.detail {
 		row.Detail = &retiredDetail{minAge: r.minAge, shell: sh, files: fa.files, targetID: fa.targetID,
 			targetMethod: fa.targetMethod, category: cat, sharedWith: fa.sharedWith, sharedRows: fa.sharedRows,
@@ -1418,14 +1473,22 @@ func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessag
 // so the engine matches it to the plan. The row's Detail is dropped; nothing of
 // it may be applied.
 func holdCombineLink(row repairs.Row) repairs.Row {
-	why := "an unreversed combine journal names this book as absorbed, and retiring it must be undone by undoing that combine; " +
-		"that link is not built yet (plan section 6.5), so the row is held, nothing written"
+	return holdRow(row, retCatCombineLinkPending,
+		"an unreversed combine journal names this book as absorbed, and retiring it must be undone by undoing that combine; "+
+			"that link is not built yet (plan section 6.5), so the row is held, nothing written")
+}
+
+// holdRow turns an applicable row into a transient hold of kind: skipped,
+// retry_later, with RetryFingerprint the fingerprint the row had so the engine
+// matches it to the plan. The row's Detail is dropped; nothing of it may be
+// applied.
+func holdRow(row repairs.Row, kind, why string) repairs.Row {
 	held := row
 	held.Detail = nil
-	held.Skipped, held.SkipReason, held.Reason = retCatCombineLinkPending, why, why
+	held.Skipped, held.SkipReason, held.Reason = kind, why, why
 	held.RetryLater = true
 	held.RetryFingerprint = row.Fingerprint
-	h := sha256.Sum256([]byte(row.Fingerprint + "\x00" + retCatCombineLinkPending))
+	h := sha256.Sum256([]byte(row.Fingerprint + "\x00" + kind))
 	held.Fingerprint = hex.EncodeToString(h[:])
 	return held
 }

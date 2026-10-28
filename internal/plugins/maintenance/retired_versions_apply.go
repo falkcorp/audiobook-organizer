@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-28
 
@@ -772,6 +772,9 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 	if run.retired == nil {
 		return fmt.Errorf("%s: the store cannot read retired rows, so a retire cannot be checked", retiredVersionsFixerID)
 	}
+	if run.versions == nil {
+		return fmt.Errorf("%s: the store cannot read book versions, so an unfinished swap cannot be ruled out", retiredVersionsFixerID)
+	}
 	b, err := run.store.GetBookByID(fresh.RowID)
 	if err != nil {
 		return fmt.Errorf("read book %s: %w", fresh.RowID, err)
@@ -795,6 +798,11 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.Reason)
 		}
 		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0, ld.planned)
+	}
+	if locked.RetryLater {
+		// A transient hold that appeared since the re-plan (a swap of the shell
+		// stuck in between): nothing written, the same plan applies once it clears.
+		return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrRetryLater, locked.SkipReason)
 	}
 	if locked.Fingerprint != fresh.Fingerprint || !locked.Applicable() {
 		why := locked.Reason
