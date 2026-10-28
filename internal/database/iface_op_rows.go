@@ -1,5 +1,5 @@
 // file: internal/database/iface_op_rows.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: afe6c0bf-64dc-4200-9150-d9262fe2a512
 // last-edited: 2026-10-27
 
@@ -37,25 +37,27 @@ type OpRow struct {
 // (registry.Discard); nothing prunes operation rows, or their row sets, by age,
 // so a set stays until the operation is discarded.
 type OpRowStore interface {
-	// ReplaceOpRows makes the operation's row set exactly the n rows at(0) ..
-	// at(n-1): it deletes EVERY row already stored under opID, whatever its
-	// namespace (a writer that must leave another kind of row alone uses
-	// ReplaceOpRowsPrefix), then writes the
-	// new ones in bounded batches, calling at once per row so the caller never
-	// holds the whole encoded set. The write is NOT atomic across batches: a
-	// failure leaves a partial set, which is why a caller that fails calls
-	// ReplaceOpRows(opID, 0, nil) and why a reader checks the row count its
-	// own summary recorded. n == 0 only clears the set.
-	ReplaceOpRows(opID string, n int, at func(i int) (OpRow, error)) error
-	// ReplaceOpRowsPrefix is ReplaceOpRows for one namespace of the operation's
-	// rows: it makes the rows whose ID begins with rowPrefix exactly the n rows
-	// at(0) .. at(n-1) and leaves every other row of the operation alone, so a
-	// writer of one kind of row (a result's class lists) never deletes another
-	// kind's (a plan's rows, repairs.PlanRowPrefix) under the same operation
-	// id: every kind of row has its own prefix. Every row at returns
-	// must have an ID that begins with rowPrefix, or the call fails: otherwise
-	// the set it replaces would not be the set it wrote. An empty rowPrefix is
-	// ReplaceOpRows. The write is no more atomic than ReplaceOpRows's.
+	// ReplaceOpRowsPrefix makes the rows of one namespace of the operation's
+	// rows, the rows whose ID begins with rowPrefix, exactly the n rows at(0) ..
+	// at(n-1): it deletes every row already stored under opID and rowPrefix,
+	// then writes the new ones in bounded batches, calling at once per row so
+	// the caller never holds the whole encoded set. Every other row of the
+	// operation is left alone, so a writer of one kind of row (a result's class
+	// lists) never deletes another kind's (a plan's rows, repairs.PlanRowPrefix)
+	// under the same operation id: every kind of row has its own prefix. Every
+	// row at returns must have an ID that begins with rowPrefix, or the call
+	// fails: otherwise the set it replaces would not be the set it wrote.
+	//
+	// There is deliberately no call that replaces EVERY row of an operation, and
+	// an empty rowPrefix is refused: a writer that wiped the operation's whole
+	// row set would delete the rows of whichever other writer shares its id.
+	// (A discard removes the whole set, by the operation id: see
+	// opv2RunScopedPrefixes.)
+	//
+	// The write is NOT atomic across batches: a failure leaves a partial set,
+	// which is why a caller that fails clears its prefix again
+	// (ReplaceOpRowsPrefix(opID, rowPrefix, 0, nil)) and why a reader checks the
+	// row count its own summary recorded. n == 0 only clears the namespace.
 	ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (OpRow, error)) error
 	// ScanOpRowIndex calls fn with the ID and Index of every row of the
 	// operation, in ID order, without reading any Data. index is valid only

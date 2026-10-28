@@ -1,5 +1,5 @@
 // file: internal/database/dbtest/memoprows.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d2169091-2ad9-44a3-aa72-502009e2a522
 // last-edited: 2026-10-27
 
@@ -31,15 +31,13 @@ func NewMemOpRows() *MemOpRows { return &MemOpRows{rows: map[string]map[string]d
 
 func clone(b []byte) []byte { return append([]byte(nil), b...) }
 
-// ReplaceOpRows implements database.OpRowStore.
-func (m *MemOpRows) ReplaceOpRows(opID string, n int, at func(i int) (database.OpRow, error)) error {
-	return m.ReplaceOpRowsPrefix(opID, "", n, at)
-}
-
 // ReplaceOpRowsPrefix implements database.OpRowStore.
 func (m *MemOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
 	if opID == "" {
-		return errors.New("opv2: ReplaceOpRows: empty operation id")
+		return errors.New("opv2: ReplaceOpRowsPrefix: empty operation id")
+	}
+	if rowPrefix == "" {
+		return errors.New("opv2: ReplaceOpRowsPrefix: empty row prefix (it would replace every namespace of the operation)")
 	}
 	set := make(map[string]database.OpRow, n)
 	for i := 0; i < n; i++ {
@@ -48,10 +46,10 @@ func (m *MemOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i
 			return err
 		}
 		if row.ID == "" {
-			return fmt.Errorf("opv2: ReplaceOpRows %s: row %d has no id", opID, i)
+			return fmt.Errorf("opv2: ReplaceOpRowsPrefix %s: row %d has no id", opID, i)
 		}
 		if !strings.HasPrefix(row.ID, rowPrefix) {
-			return fmt.Errorf("opv2: ReplaceOpRows %s: row %q is outside the replaced prefix %q", opID, row.ID, rowPrefix)
+			return fmt.Errorf("opv2: ReplaceOpRowsPrefix %s: row %q is outside the replaced prefix %q", opID, row.ID, rowPrefix)
 		}
 		set[row.ID] = database.OpRow{ID: row.ID, Index: clone(row.Index), Data: clone(row.Data)}
 	}
