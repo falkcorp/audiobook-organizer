@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 package metadata
 
@@ -37,6 +37,9 @@ type CircuitBreaker struct {
 	cooldown     time.Duration // How long to stay open before allowing a probe
 	lastFailedAt time.Time
 	sourceName   string
+	// now is the breaker's clock. Production uses time.Now; tests replace it
+	// so cooldown expiry is driven by the test rather than by wall-clock sleeps.
+	now func() time.Time
 }
 
 // NewCircuitBreaker creates a breaker with the given threshold and cooldown.
@@ -46,6 +49,7 @@ func NewCircuitBreaker(sourceName string, threshold int, cooldown time.Duration)
 		threshold:  threshold,
 		cooldown:   cooldown,
 		sourceName: sourceName,
+		now:        time.Now,
 	}
 }
 
@@ -59,7 +63,7 @@ func (cb *CircuitBreaker) AllowRequest() error {
 	case StateClosed:
 		return nil
 	case StateOpen:
-		if time.Since(cb.lastFailedAt) > cb.cooldown {
+		if cb.now().Sub(cb.lastFailedAt) > cb.cooldown {
 			cb.state = StateHalfOpen
 			return nil
 		}
@@ -84,7 +88,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	defer cb.mu.Unlock()
 
 	cb.failures++
-	cb.lastFailedAt = time.Now()
+	cb.lastFailedAt = cb.now()
 
 	if cb.state == StateHalfOpen {
 		cb.state = StateOpen

@@ -1,0 +1,1 @@
+The metadata circuit breaker now reads time through an injectable clock (defaulting to `time.Now`), and its cooldown tests advance a fake clock instead of sleeping 10-20ms. This fixes the intermittent `TestCircuitBreaker_HalfOpenAfterCooldown` failure under loaded race runs, where the 10ms cooldown could expire before the first `AllowRequest`. Production behavior does not change.
