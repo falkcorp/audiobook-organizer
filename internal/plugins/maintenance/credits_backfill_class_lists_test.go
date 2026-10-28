@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_class_lists_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b4d81e07-93c2-4a5f-8e16-5f0c2a7d9e38
 // last-edited: 2026-10-27
 
@@ -185,7 +185,7 @@ func TestCreditsBackfill_FailedResultWriteClearsTheClassListRows(t *testing.T) {
 func TestCreditsBackfill_StoringTheResultLeavesTheOperationsOtherRowsIntact(t *testing.T) {
 	f := newCBFixture(t)
 	const planRow = "fixer.merge-authors/000001"
-	if err := f.s.ReplaceOpRows(cbTestOpID, 1, func(int) (database.OpRow, error) {
+	if err := f.s.ReplaceOpRowsPrefix(cbTestOpID, "fixer.merge-authors/", 1, func(int) (database.OpRow, error) {
 		return database.OpRow{ID: planRow, Index: []byte("ix"), Data: []byte(`{"book":"bk"}`)}, nil
 	}); err != nil {
 		t.Fatal(err)

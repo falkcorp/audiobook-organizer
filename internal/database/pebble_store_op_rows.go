@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_op_rows.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d45025bc-200a-4342-a7e6-2d64d54a63fe
 // last-edited: 2026-10-27
 
@@ -29,7 +29,7 @@ const (
 	opv2RowPrefix   = "opv2:row:"
 	opv2RowIxPrefix = "opv2:rowix:"
 
-	// opRowBatchRows / opRowBatchBytes bound one commit of ReplaceOpRows.
+	// opRowBatchRows / opRowBatchBytes bound one commit of ReplaceOpRowsPrefix.
 	opRowBatchRows  = 2000
 	opRowBatchBytes = 8 << 20
 )
@@ -41,7 +41,7 @@ func opv2RowKey(opID, rowID string) []byte   { return []byte(opv2RowPrefix + opI
 func opv2RowIxKey(opID, rowID string) []byte { return []byte(opv2RowIxPrefix + opID + ":" + rowID) }
 
 // opv2RowFamilyPrefixes are the key ranges of one operation's row set: the two
-// families above. ReplaceOpRows clears them before a write, stageOpRowsDelete
+// families above. ReplaceOpRowsPrefix clears its range of them before a write, stageOpRowsDelete
 // removes them in the hollow-operation sweep, and opv2RunScopedPrefixes appends
 // them to the other per-operation families, so a row family added here is
 // cleared, swept and deleted by all three.
@@ -53,7 +53,7 @@ func opv2RowFamilyPrefixes(opID string) [][]byte {
 // one, or one holding the key separator, which would make "a" + row "b:c" and
 // "a:b" + row "c" the same key and a prefix delete of "a" reach "a:b"'s rows.
 // Operation ids are ULIDs, so this refuses nothing real; no row set can exist
-// under an id it refuses, because ReplaceOpRows checks it too.
+// under an id it refuses, because ReplaceOpRowsPrefix checks it too.
 func validOpRowsID(opID string) error {
 	if opID == "" {
 		return errors.New("opv2: empty operation id")
@@ -99,7 +99,10 @@ func opv2RunScopedPrefixes(id string) [][]byte {
 	}, opv2RowFamilyPrefixes(id)...)
 }
 
-// ReplaceOpRows implements OpRowStore.
+// ReplaceOpRowsPrefix implements OpRowStore. It clears the keys of both row
+// families under {op_id}:{rowPrefix} only (the other rows of the operation are
+// not in that range) and writes rows whose IDs all begin with rowPrefix. An
+// empty rowPrefix is refused: it would clear every namespace of the operation.
 //
 // It does not take opsMu: the rows are keyed by the operation id and nothing
 // else reads them while the writer is still running the operation, and
@@ -109,17 +112,13 @@ func opv2RunScopedPrefixes(id string) [][]byte {
 // is somehow gone leaves rows no delete will find, so the caller treats a
 // failure of the write that follows (SetOperationV2Result refuses a missing
 // row) as a reason to clear the set again.
-func (p *PebbleStore) ReplaceOpRows(opID string, n int, at func(i int) (OpRow, error)) error {
-	return p.ReplaceOpRowsPrefix(opID, "", n, at)
-}
-
-// ReplaceOpRowsPrefix implements OpRowStore. It clears the keys of both row
-// families under {op_id}:{rowPrefix} only (the other rows of the operation are
-// not in that range) and writes rows whose IDs all begin with rowPrefix.
 func (p *PebbleStore) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (OpRow, error)) (err error) {
 	defer recoverPebbleClosed("ReplaceOpRowsPrefix", &err)
 	if err := validOpRowsID(opID); err != nil {
-		return fmt.Errorf("ReplaceOpRows: %w", err)
+		return fmt.Errorf("ReplaceOpRowsPrefix: %w", err)
+	}
+	if rowPrefix == "" {
+		return errors.New("opv2: ReplaceOpRowsPrefix: empty row prefix (it would replace every namespace of the operation)")
 	}
 	for _, pfx := range opv2RowFamilyPrefixes(opID) {
 		pfx = append(pfx, rowPrefix...)
@@ -128,7 +127,7 @@ func (p *PebbleStore) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func
 		}
 	}
 	if n > 0 && at == nil {
-		return errors.New("opv2: ReplaceOpRows: rows requested without a row source")
+		return errors.New("opv2: ReplaceOpRowsPrefix: rows requested without a row source")
 	}
 	for lo := 0; lo < n; {
 		batch := p.db.NewBatch()
@@ -142,11 +141,11 @@ func (p *PebbleStore) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func
 			}
 			if row.ID == "" {
 				batch.Close()
-				return fmt.Errorf("opv2: ReplaceOpRows %s: row %d has no id", opID, hi)
+				return fmt.Errorf("opv2: ReplaceOpRowsPrefix %s: row %d has no id", opID, hi)
 			}
 			if !strings.HasPrefix(row.ID, rowPrefix) {
 				batch.Close()
-				return fmt.Errorf("opv2: ReplaceOpRows %s: row %q is outside the replaced prefix %q", opID, row.ID, rowPrefix)
+				return fmt.Errorf("opv2: ReplaceOpRowsPrefix %s: row %q is outside the replaced prefix %q", opID, row.ID, rowPrefix)
 			}
 			if serr := batch.Set(opv2RowKey(opID, row.ID), row.Data, nil); serr != nil {
 				batch.Close()
