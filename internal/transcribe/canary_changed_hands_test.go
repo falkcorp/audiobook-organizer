@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_changed_hands_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5d0c7e2a-83b1-4f6e-9a47-2c1e6b0d8f35
 // last-edited: 2026-10-27
 
@@ -197,13 +197,15 @@ func rememberedPorts(key string) (bool, []string) {
 }
 
 // poolWhoseBatPortGainedAnotherMachinesId is review 7 of #4201. Port 1 was bat's
-// only port. Its tunnel dropped (a refused probe ends the link of the address to
-// its machine), then a worker answered there as a weak "u:" (an id-capable mlx
-// worker that missed MACHINE_ID_WAIT_S), so the dispatch freezes it as "u:"
-// while bat's port set still groups it under bat. While the dispatch waits out
-// port 1's cooldown the worker reports a machine id, and it is catwoman's.
-// reprobed keeps such a worker (a weak worker that gained its id), so only the
-// group tells that this is not bat.
+// only port and reports bat's id when the dispatch begins, so bat is one group
+// and the dispatch waits out port 1's cooldown to ask it. While it waits, the
+// worker there reports another machine's id, and it is catwoman's: the port
+// changed hands, so it is dropped from the group and asked nothing of bat's.
+//
+// (This pool used to freeze port 1 as a weak "u:" that bat's port set still
+// grouped under bat. A weak port is no longer a member of a remembered machine's
+// group, however its URL is listed: only a port that reports the machine's own id
+// is asked its clip or clears its failure, TestRememberedMachine_AWeakPortListedAmongItsPortsIsNotAskedItsCanaryAndDoesNotClearIt)
 //
 // Port 0 is robin's, and its /health does not answer when the dispatch begins,
 // so it cannot stand in for bat (a stand-in is an endpoint whose health was read)
@@ -217,7 +219,7 @@ func poolWhoseBatPortGainedAnotherMachinesId(t *testing.T) *faultPool {
 	// lengths after it, so a loaded -race agent that is slow to start the gate
 	// cannot reorder them.
 	shortenHealthProbe(t, 250*time.Millisecond)
-	p := machineFaultPool(t, []string{robinMachine, ""}, answerWithTranscripts)
+	p := machineFaultPool(t, []string{robinMachine, batMachine}, answerWithTranscripts)
 	t.Cleanup(func() {
 		for _, ep := range p.h.eps {
 			clearCooldown(ep.URL)
@@ -227,7 +229,6 @@ func poolWhoseBatPortGainedAnotherMachinesId(t *testing.T) *faultPool {
 	p.h.eps[1].Priority = 0
 	noteCanaryPort(batKey, port1, true)
 	markCanaryFailed(batKey, port1)
-	refuseProbe(port1)
 	p.h.delayHealth(port0, time.Minute)
 	clearCooldown(port1) // no earlier failure count
 	markEndpointFailure(port1)

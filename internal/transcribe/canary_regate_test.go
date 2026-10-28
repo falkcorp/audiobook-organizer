@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_regate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f7b1c84-6d39-4e05-8a1b-93c0d5e7f126
 // last-edited: 2026-10-27
 
@@ -491,5 +491,111 @@ func TestChangedHands_TheNextDispatchKeysADroppedPortByTheIdItReportsAndAsksItTh
 	}
 	if !slices.Contains(c2.askedPorts(), w0) {
 		t.Errorf("dispatch 2 did not ask port 0 (m:%s, carrying %s's failure): %v", newID, oldKey, c2.askedPorts())
+	}
+}
+
+// Owner decision on review 9 of #4201: a machine is known only by what its port
+// reports. A port whose /health could not be read when the dispatch began (a "?"
+// key) is evidence of no machine, so it is never counted as one for a
+// condemnation, with or without a cooldown wait; and only a port that reports a
+// remembered machine's own id is asked that machine's canary clip on its behalf
+// or forgets its failure.
+
+// hangingChap1 is a send that never answers a request holding chap1: the worker
+// is past its own deadline when asked (wedged) and the request is stuck.
+func hangingChap1(p *faultPool) func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+	return func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		if _, ok := sub["chap1"]; ok {
+			p.h.wedge(g.Endpoint.URL)
+			return nil, &WorkerStuckError{URL: g.Endpoint.URL, After: time.Minute, Jobs: sortedIDs(sub)}
+		}
+		return p.send(ctx, g, sub, pf)
+	}
+}
+
+// No wait at all: port 1's /health cannot be read when the dispatch begins and
+// the pool requires nothing, so it is kept as "?hash" next to robin on port 0.
+// Nothing is remembered and nothing is in cooldown. A lone job that hangs the
+// decoder is condemned by the machines it left stuck, and port 1 is none: it
+// used to make "two machines" and a verdict that two workers were stuck.
+func TestUnknownPort_AnUnreadablePortIsNotASecondMachineForACondemnationWithNoWaitAtAll(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenHealthProbe(t, 150*time.Millisecond)
+	shortenPacing(t, 10*time.Millisecond, time.Minute)
+	p := machineFaultPool(t, []string{robinMachine, robinMachine}, answerWithTranscripts)
+	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
+	p.h.delayHealth(port1, time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := dispatchPool(ctx, p.h.eps, nil, map[string]string{"chap1": "unused"}, poolOptions{canary: (&urlCanary{}).fn}, hangingChap1(p))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	r := res["chap1"]
+	if !r.Condemned || r.Endpoint != port0 || r.Worker != robinKey {
+		t.Errorf("verdict = %+v, want a condemnation by %s on port 0 alone", r, robinKey)
+	}
+	if !strings.Contains(r.Error, "left 1 worker(s)") {
+		t.Errorf("error = %q, want ONE worker left stuck: the unreadable port is no machine", r.Error)
+	}
+	if strings.Contains(r.Endpoint, port1) {
+		t.Errorf("verdict names port 1: %q", r.Endpoint)
+	}
+}
+
+// A pool in which no port could be read knows no machine at all (soloLimit 0):
+// nothing can be condemned on the word of ports that identify nothing. The job is
+// not given a verdict about the file.
+func TestUnknownPort_APoolOfUnreadablePortsKnowsNoMachineAndCondemnsNothing(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenHealthProbe(t, 150*time.Millisecond)
+	shortenPacing(t, 10*time.Millisecond, time.Minute)
+	p := machineFaultPool(t, []string{robinMachine, robinMachine}, answerWithTranscripts)
+	for _, ep := range p.h.eps {
+		p.h.delayHealth(ep.URL, time.Minute)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := dispatchPool(ctx, p.h.eps, nil, map[string]string{"chap1": "unused"}, poolOptions{canary: (&urlCanary{}).fn}, hangingChap1(p))
+	for id, r := range res {
+		if r.Condemned {
+			t.Errorf("%s = %+v: a condemnation from ports that identify no machine", id, r)
+		}
+	}
+	if err == nil && len(res) == 0 {
+		t.Error("the job vanished: want a result or an error")
+	}
+}
+
+// RR9-D. Port 1 was bat's only port. Its tunnel dropped (a refused probe ends the
+// link of the address to its machine) and an id-capable worker answers there as a
+// weak "u:", so bat's port set still lists it. The worker never reported bat's
+// id, so it is not bat: it is not asked bat's clip on bat's behalf, and its
+// answer cannot clear bat's failure. It used to be the only port asked, passed,
+// and bat was forgotten without bat's machine ever being asked.
+func TestRememberedMachine_AWeakPortListedAmongItsPortsIsNotAskedItsCanaryAndDoesNotClearIt(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenPacing(t, 10*time.Millisecond, time.Minute)
+	p := machineFaultPool(t, []string{robinMachine, ""}, answerWithTranscripts)
+	t.Cleanup(func() {
+		for _, ep := range p.h.eps {
+			clearCooldown(ep.URL)
+		}
+	})
+	port1 := p.h.eps[1].URL
+	noteCanaryPort(batKey, port1, true)
+	markCanaryFailed(batKey, port1)
+	refuseProbe(port1)
+	c := &urlCanary{}
+	res, err := dispatchWith(testCtx(t), p, c.fn, 4)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	requireTranscripts(t, res, 4)
+	if slices.Contains(c.askedPorts(), port1) {
+		t.Errorf("the weak port was asked %s's canary clip on its behalf: %v", batKey, c.askedPorts())
+	}
+	if !failedCanaryBefore(batKey) {
+		t.Errorf("%s was forgotten on the answer of a port that never reported its id", batKey)
 	}
 }
