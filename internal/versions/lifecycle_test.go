@@ -1,51 +1,44 @@
 // file: internal/versions/lifecycle_test.go
-// version: 1.0.0
+// version: 1.1.0
+// guid: 8f2c6d1a-4b7e-4c93-a5d0-1e9b3f7a2c58
+// last-edited: 2026-10-28
 
 package versions
 
 import (
-	"path/filepath"
-	"testing"
-	"time"
+	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-func TestAutoPromoteAlt(t *testing.T) {
-	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
+// promoteNewestAltForTest flips the status of the book's most recently
+// ingested alt to active and moves no file. It is a fixture, not a lifecycle
+// step: the trash handler used to do this to the book's next version after it
+// trashed the active one, which is how a book came to serve the files of a
+// trashed version (see BookServesFilesError). Production now swaps first
+// (PickSwapTarget, RunVersionSwap); the tests that model the old flow, to check
+// the purge-side guards against exactly it, build the state with this.
+func promoteNewestAltForTest(store database.Store, bookID string) error {
+	all, err := store.GetBookVersionsByBookID(bookID)
 	if err != nil {
-		t.Fatalf("open pebble: %v", err)
+		return fmt.Errorf("list versions: %w", err)
 	}
-	t.Cleanup(func() { store.Close() })
-
-	_, _ = store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1"})
-
-	// Create two alt versions with different ingest dates.
-	older := time.Now().Add(-48 * time.Hour)
-	newer := time.Now().Add(-1 * time.Hour)
-
-	v1, _ := store.CreateBookVersion(&database.BookVersion{
-		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "mp3",
-		Source: "imported", IngestDate: older,
-	})
-	v2, _ := store.CreateBookVersion(&database.BookVersion{
-		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b",
-		Source: "imported", IngestDate: newer,
-	})
-
-	if err := AutoPromoteAlt(store, "b1"); err != nil {
-		t.Fatalf("auto-promote: %v", err)
+	var best *database.BookVersion
+	for i := range all {
+		v := &all[i]
+		if v.Status != database.BookVersionStatusAlt {
+			continue
+		}
+		if best == nil || v.IngestDate.After(best.IngestDate) {
+			best = v
+		}
 	}
-
-	got1, _ := store.GetBookVersion(v1.ID)
-	got2, _ := store.GetBookVersion(v2.ID)
-
-	// The newer alt should become active.
-	if got2.Status != database.BookVersionStatusActive {
-		t.Errorf("newer version status = %s, want active", got2.Status)
+	if best == nil {
+		return nil
 	}
-	if got1.Status != database.BookVersionStatusAlt {
-		t.Errorf("older version status = %s, want alt", got1.Status)
+	best.Status = database.BookVersionStatusActive
+	if err := store.UpdateBookVersion(best); err != nil {
+		return fmt.Errorf("promote %s: %w", best.ID, err)
 	}
+	return nil
 }

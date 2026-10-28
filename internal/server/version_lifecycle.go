@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -9,7 +9,9 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -56,12 +58,40 @@ func respondIfPurgedVersion(c *gin.Context, err error) bool {
 	return true
 }
 
+// codeNoSwapTarget is the error code of the 409 that refuses to trash a book's
+// active version because no other version can take over as the active one
+// (versions.ErrNoSwapTarget). Nothing was written.
+const codeNoSwapTarget = "NO_SWAP_TARGET"
+
+// codeVersionSwapFailed is the error code of the 500 that says the swap that
+// had to come before trashing the active version failed. The version was not
+// trashed.
+const codeVersionSwapFailed = "VERSION_SWAP_FAILED"
+
 // handleTrashVersion moves a version to trash.
 // DELETE /api/v1/audiobooks/:id/versions/:vid
+//
+// Trashing the book's ACTIVE version is "swap first, then trash" (owner
+// decision, 2026-10-25): the book keeps serving the files of the active
+// version, and the nightly cleanup deletes a trashed version's files, so a
+// version trashed while the book still plays it lost the book its audio. The
+// handler first makes another version active (versions.PickSwapTarget chooses
+// the newest alt that owns movable files; versions.RunVersionSwap moves the
+// files and the book's file_path), and only then trashes the version that left.
+// With no eligible version it answers 409 NO_SWAP_TARGET and writes nothing; if
+// the swap fails the version is not trashed.
+//
+// The merge lock is held from the re-read of the version to the end of the
+// trash, for every version, not only the active one: a trash of an alt that
+// read the version as alt would otherwise write "trash" over a version a
+// concurrent swap had just made active (UpdateBookVersion has no
+// compare-and-swap on the status), which is the loss again. Purge takes the same
+// lock. It is waited for only as long as an interactive click should hang.
 func (s *Server) handleTrashVersion(c *gin.Context) {
 	bookID := c.Param("id")
 	versionID := c.Param("vid")
 
+	// The cheap refusals come first, without the lock.
 	ver, err := s.Ops().GetBookVersion(versionID)
 	if err != nil || ver == nil {
 		httputil.RespondWithNotFound(c, "version", "")
@@ -72,7 +102,59 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 		return
 	}
 
-	wasActive := ver.Status == database.BookVersionStatusActive
+	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
+	if err != nil {
+		if errors.Is(err, merge.ErrMergeBusy) {
+			httputil.RespondWithConflict(c, "a merge or combine is running; the version was not trashed, try again in a moment: "+err.Error())
+			return
+		}
+		httputil.InternalError(c, "trash version", err)
+		return
+	}
+	// Deluge is told after the lock is released: it is a network call.
+	afterUnlock := func() func() {
+		defer unlock()
+		return s.trashVersionLocked(c, bookID, versionID)
+	}()
+	if afterUnlock != nil {
+		afterUnlock()
+	}
+}
+
+// trashVersionLocked is handleTrashVersion with the merge lock held. It answers
+// the request itself and returns what is to run once the lock is released.
+func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (afterUnlock func()) {
+	// Re-read under the lock: the version may have changed since the unlocked
+	// read (another request swapped it in, trashed it, purged it).
+	ver, err := s.Ops().GetBookVersion(versionID)
+	if err != nil || ver == nil {
+		httputil.RespondWithNotFound(c, "version", "")
+		return nil
+	}
+	if ver.BookID != bookID {
+		httputil.RespondWithBadRequest(c, "version/book mismatch")
+		return nil
+	}
+
+	// Only the active version needs a swap first. Every other status goes
+	// straight to MarkTrashed below, which refuses a retired, purging or
+	// purged version before anything is written.
+	var swappedTo string
+	if ver.Status == database.BookVersionStatusActive {
+		target, notify, ok := s.swapActiveVersionOut(c, ver)
+		if !ok {
+			return nil
+		}
+		swappedTo = target
+		afterUnlock = notify
+		// ver is a copy from before the swap (still "active", old row
+		// version): the trash below must write the row as it is now.
+		ver, err = s.Ops().GetBookVersion(versionID)
+		if err != nil || ver == nil {
+			httputil.InternalError(c, "trash version", fmt.Errorf("re-read version %s after the swap: %w", versionID, err))
+			return afterUnlock
+		}
+	}
 
 	// Stamps TrashedAt: the 14-day window before the trash cleanup purges
 	// this version's files is counted from now.
@@ -84,24 +166,62 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 		if !respondIfRetiredVersion(c, err) && !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
 			httputil.InternalError(c, "trash version", err)
 		}
-		return
+		return afterUnlock
 	}
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		if !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
 			httputil.InternalError(c, "trash version", err)
 		}
-		return
-	}
-
-	if wasActive {
-		if err := versions.AutoPromoteAlt(s.storeForWiring(), bookID); err != nil {
-			slog.Warn("auto-promote after trash", "err", err)
-		}
+		return afterUnlock
 	}
 
 	httputil.RespondWithOK(c, struct {
 		Version any `json:"version"`
-	}{Version: ver})
+		// SwappedTo is the version that became active because the trashed
+		// one was; unset when the trashed version was not the active one.
+		SwappedTo string `json:"swapped_to,omitempty"`
+	}{Version: ver, SwappedTo: swappedTo})
+	return afterUnlock
+}
+
+// swapActiveVersionOut makes another version of the book active in place of
+// the active version ver, which is about to be trashed. The merge lock is held.
+// ok is false when it has answered the request (no eligible version: 409; the
+// swap failed: 500) and the version must not be trashed. notifyDeluge, which may
+// be nil, is for the caller to run once the lock is released.
+func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion) (targetID string, notifyDeluge func(), ok bool) {
+	store := s.storeForWiring()
+	target, err := versions.PickSwapTarget(store, ver.BookID, ver.ID)
+	if err != nil {
+		var none *versions.NoSwapTargetError
+		if errors.As(err, &none) {
+			httputil.RespondWithError(c, http.StatusConflict,
+				"The version was not trashed: it is the book's active version and no other version can take over as the active one ("+
+					none.Why()+"). Add or restore another version first.", codeNoSwapTarget)
+			return "", nil, false
+		}
+		httputil.InternalError(c, "trash version", err)
+		return "", nil, false
+	}
+
+	var from, to *database.BookVersion
+	var bookPath string
+	err = versions.RunVersionSwap(c.Request.Context(), store, versions.VersionSwapParams{
+		BookID:        ver.BookID,
+		FromVersionID: ver.ID,
+		ToVersionID:   target.ID,
+	}, nil, nil, func(fromVer, toVer *database.BookVersion, bookFilePath string) {
+		from, to, bookPath = fromVer, toVer, bookFilePath
+	})
+	if err != nil {
+		slog.Error("swap before trashing the active version failed; the version was not trashed",
+			"book", ver.BookID, "from", ver.ID, "to", target.ID, "err", err)
+		httputil.RespondWithError(c, http.StatusInternalServerError,
+			"the version was not trashed: switching the book to version "+target.ID+" first failed: "+err.Error(),
+			codeVersionSwapFailed)
+		return "", nil, false
+	}
+	return target.ID, func() { NotifyDelugeAfterVersionSwap(store, from, to, bookPath) }, true
 }
 
 // handleRestoreVersion restores a trashed version to alt.
