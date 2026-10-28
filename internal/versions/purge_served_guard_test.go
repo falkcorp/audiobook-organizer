@@ -1,7 +1,7 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package versions
 
@@ -28,13 +28,12 @@ import (
 // the file, the version's status, the result and the journal line.
 
 type servedFixture struct {
-	t       *testing.T
-	store   *database.PebbleStore
-	dir     string // the book's folder
-	book    *database.Book
-	active  string // path book.FilePath names
-	logBuf  *bytes.Buffer
-	restore func()
+	t      *testing.T
+	store  *database.PebbleStore
+	dir    string // the book's folder
+	book   *database.Book
+	active string // path book.FilePath names
+	logBuf *bytes.Buffer
 }
 
 func newServedFixture(t *testing.T) *servedFixture {
