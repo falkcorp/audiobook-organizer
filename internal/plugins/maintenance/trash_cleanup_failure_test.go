@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/trash_cleanup_failure_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9e2c4a17-5b83-4d60-a1f9-0c7d3e8b5a42
 // last-edited: 2026-10-28
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -272,5 +273,32 @@ func TestRunTrashCleanup_NothingServedIsItsOwnBucketWithTheBookPath(t *testing.T
 	}
 	if strings.Contains(joined, "drive that is down") {
 		t.Errorf("logs %q describe a nothing-served version as a down drive", joined)
+	}
+}
+
+// Two trashed versions of one book are two entries, but the book's path is one
+// thing to fix: it is named once, in the order first met, and the per-version
+// ids stay one each.
+func TestRunTrashCleanup_NothingServedNamesABookPathOnce(t *testing.T) {
+	hush := "/lib/Gotham/Hush/hush.m4b"
+	res := versions.CleanupResult{
+		NothingServed: []versions.KeptVersion{
+			{VersionID: "ver-hush-1", BookID: "book-hush", BookPath: hush},
+			{VersionID: "ver-year-one", BookID: "book-year-one", BookPath: "/lib/Gotham/Year One/year-one.m4b"},
+			{VersionID: "ver-hush-2", BookID: "book-hush", BookPath: hush},
+		},
+	}
+	p := &Plugin{deps: trashCleanupDeps{res: res}}
+	rep := &levelReporter{}
+	if err := p.runTrashCleanup(context.Background(), nil, rep); err != nil {
+		t.Fatalf("runTrashCleanup = %v, want nil", err)
+	}
+	got := rep.result.(TrashCleanupResult)
+	want := []string{hush, "/lib/Gotham/Year One/year-one.m4b"}
+	if !reflect.DeepEqual(got.NothingServedFilePaths, want) {
+		t.Errorf("nothing_served_file_paths = %v, want %v", got.NothingServedFilePaths, want)
+	}
+	if got.NothingServed != 3 || len(got.NothingServedVersionIDs) != 3 {
+		t.Errorf("result = %#v, want all three versions still counted", got)
 	}
 }

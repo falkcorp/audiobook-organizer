@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.test.tsx
-// version: 1.4.0
+// version: 1.4.1
 // guid: d74a1824-3f19-49fe-9a4f-fdbbea124f4b
 // last-edited: 2026-10-28
 
@@ -264,8 +264,31 @@ describe('TrashedVersions', () => {
       });
       expect(await screen.findByText(/m4b/i)).toBeInTheDocument();
       expect(screen.queryByText(/mp3/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/Showing the 2 versions that cleanup run could not purge/)).toBeInTheDocument();
+      expect(screen.getByText(/Showing the 2 versions that cleanup run could not purge because a file cannot be removed\. It does not retry them/)).toBeInTheDocument();
       expect(screen.getByText(/1 is not on this tab: hard deleted since, or on the other tab/)).toBeInTheDocument();
+    });
+
+    // Only needs_attention is left alone; the other trash groups are tried
+    // again by every run, and the banner must not say otherwise.
+    it.each([
+      ['cannot_tell', /left alone because it could not tell whether their files are gone.*next run tries them again/],
+      ['nothing_served', /left in the trash because their book serves nothing that exists on disk.*every run lists them again until the book's path is fixed/],
+      ['served_kept', /kept in the trash because their book still plays one of their files.*every run tries them again/],
+    ])('says what the %s group means and that the run retries it', async (set, banner) => {
+      const fetchMock = routed({
+        '/operations/op-night/result': () =>
+          resultResponse({ [`${set}_version_ids`]: ['v-held'] }),
+        '/audiobooks/trashed-versions': () =>
+          listResponse([versionRow('v-held', 'trash', 'm4b'), versionRow('v-fine', 'trash', 'mp3')]),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      renderWithProviders(<TrashedVersions />, {
+        initialEntries: [`/versions?op=op-night&set=${set}`],
+      });
+      expect(await screen.findByText(/m4b/i)).toBeInTheDocument();
+      const text = screen.getByText(/Showing the 1 version/).textContent ?? '';
+      expect(text).toMatch(banner);
+      expect(text).not.toMatch(/does not retry/);
     });
 
     it('Show all drops the narrowing and lists every version again', async () => {

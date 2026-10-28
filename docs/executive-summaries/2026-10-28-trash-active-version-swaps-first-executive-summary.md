@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-28-trash-active-version-swaps-first-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: c4e8a2d6-3f17-4b59-8d0a-9e1b6f7c2a35 -->
 <!-- last-edited: 2026-10-28 -->
 
@@ -61,7 +61,9 @@ then trashes the old one.
 - **Trying again after a half-finished switch does not make it worse.** A version
   that is stuck in the middle of a switch cannot be trashed or switched again, and
   the error says plainly that the book needs repair and that deleting again will
-  not help.
+  not repair it. (In one narrow case the version being moved out had already
+  finished its part, and deleting it again then does trash it; the version moving
+  in stays stuck, so the book still needs repair.)
 - **Versions set aside by the library are never switched in.** A "retired"
   version holds files that belong to another book. The switch refuses to touch
   one, in either direction, and the check is in place before anything is written.
