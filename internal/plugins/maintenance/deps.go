@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.101.0
+// version: 1.102.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -723,7 +723,10 @@ type CleanupRunners interface {
 	// book; the op fails with it.
 	RunAutoPurgeSoftDeleted(ctx context.Context, opID string) error
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
-	CleanupTrashedVersions() int
+	// CleanupTrashedVersions purges trashed versions past their window. A
+	// version whose book still serves its files is left in the trash and
+	// reported in the result's Kept list, never purged.
+	CleanupTrashedVersions() versions.CleanupResult
 	// PruneOldLogs prunes legacy operation log rows and system log rows older
 	// than retentionDays, in bounded chunks; it never touches undo history
 	// (opchange: rows). It stops between chunks or mid-scan when ctx is

@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 package versions
 
@@ -43,6 +43,10 @@ type altPromoter interface {
 type versionPurger interface {
 	versionUpdater
 	bookFileLister
+
+	// GetBookVersionsByBookID finds the book's active version, whose files
+	// the purge must not delete.
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
 
 	GetBookByID(id string) (*database.Book, error)
 }

@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.5.0
+// version: 1.7.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-27
 
 package server
 
@@ -219,7 +219,7 @@ func TestHandleTrashVersion_StampsTrashedAt(t *testing.T) {
 	}
 
 	// The daily cleanup must leave it alone: it was trashed seconds ago.
-	if n := CleanupTrashedVersions(store); n != 0 {
+	if n := CleanupTrashedVersions(store).Purged; n != 0 {
 		t.Fatalf("cleanup purged %d version(s) trashed seconds ago", n)
 	}
 
@@ -290,15 +290,17 @@ func TestHandlePurgeVersion_RefusesUntrashed(t *testing.T) {
 
 // TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows: the allowed case.
 // The version's files are removed from disk; its book_file row is kept.
+// The file is the trashed version's own (in its .versions/{vid}/ slot), not
+// one the book still plays: see TestHandlePurgeVersion_KeepsFileTheBookServes.
 func TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows(t *testing.T) {
 	srv, store := setupVersionLifecycleServer(t)
 
 	bookDir := t.TempDir()
-	audio := filepath.Join(bookDir, "book.m4b")
-	if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+	played := filepath.Join(bookDir, "book.m4b")
+	if err := os.WriteFile(played, []byte("audio"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: audio}); err != nil {
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: played}); err != nil {
 		t.Fatalf("create book: %v", err)
 	}
 	ver, err := store.CreateBookVersion(&database.BookVersion{
@@ -306,6 +308,13 @@ func TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
+	}
+	audio := filepath.Join(versions.VersionSlotDir(bookDir, ver.ID), "book.m4b")
+	if err := os.MkdirAll(filepath.Dir(audio), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if err := store.CreateBookFile(&database.BookFile{
 		BookID: "b1", FilePath: audio, VersionID: ver.ID, TrackNumber: 1,
@@ -421,5 +430,54 @@ func TestHandleHardDeleteVersion_NotPurged(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for non-purged, got %d", w.Code)
+	}
+}
+
+// TestHandlePurgeVersion_KeepsFileTheBookServes: trashing the ACTIVE version
+// leaves its files where the book plays them. "Purge now" on it must refuse
+// with 409, delete nothing and leave the version in the trash, instead of
+// deleting the book's playable file.
+func TestHandlePurgeVersion_KeepsFileTheBookServes(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+
+	audio := filepath.Join(t.TempDir(), "Gotham", "hush.m4b")
+	if err := os.MkdirAll(filepath.Dir(audio), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audio, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBook(&database.Book{ID: "hush", Title: "Batman: Hush", FilePath: audio}); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "hush", Status: database.BookVersionStatusActive, Format: "m4b", Source: "imported",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := store.CreateBookFile(&database.BookFile{
+		BookID: "hush", FilePath: audio, VersionID: ver.ID, TrackNumber: 1,
+	}); err != nil {
+		t.Fatalf("create book file: %v", err)
+	}
+
+	del := httptest.NewRecorder()
+	srv.router.ServeHTTP(del, httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/hush/versions/"+ver.ID, nil))
+	if del.Code != http.StatusOK {
+		t.Fatalf("trash: expected 200, got %d: %s", del.Code, del.Body.String())
+	}
+
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/hush/versions/"+ver.ID+"/purge-now", nil))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("purge-now: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(audio); err != nil {
+		t.Errorf("purge-now deleted the file the book serves: %v", err)
+	}
+	got, _ := store.GetBookVersion(ver.ID)
+	if got.Status != database.BookVersionStatusTrash {
+		t.Errorf("status = %s, want trash", got.Status)
 	}
 }

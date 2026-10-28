@@ -1,13 +1,14 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-18
+// last-edited: 2026-10-27
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
 package server
 
 import (
+	"errors"
 	"log/slog"
 	"time"
 
@@ -115,6 +116,12 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 	}
 
 	if err := versions.PurgeVersion(s.Ops(), ver); err != nil {
+		var served *versions.BookServesFilesError
+		if errors.As(err, &served) {
+			// The version is still in the trash with every file intact.
+			httputil.RespondWithConflict(c, "version not purged: the book still serves its file(s); restore the version or change what the book plays first")
+			return
+		}
 		httputil.InternalError(c, "purge version", err)
 		return
 	}
@@ -150,7 +157,7 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 }
 
 // CleanupTrashedVersions delegates to versions.CleanupTrashedVersions.
-func CleanupTrashedVersions(store trashedVersionCleaner) (purged int) {
+func CleanupTrashedVersions(store trashedVersionCleaner) versions.CleanupResult {
 	return versions.CleanupTrashedVersions(store)
 }
 
