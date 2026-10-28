@@ -1,7 +1,7 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package versions
 
@@ -49,6 +49,9 @@ func newTrashFixtureStamped(t *testing.T, createdAt time.Time, status string, tr
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
+	// BookFilesAtPath fails closed until the async memdb warmup publishes, and the
+	// purge guard then deletes nothing; wait so the purge sees real answers.
+	store.WaitForWarmup()
 	t.Cleanup(func() { store.Close() })
 
 	bookDir := t.TempDir()

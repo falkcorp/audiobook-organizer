@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package server
 
@@ -28,6 +28,9 @@ func setupVersionLifecycleServer(t *testing.T) (*Server, database.Store) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
+	// BookFilesAtPath fails closed until the async memdb warmup publishes, and the
+	// purge guard then deletes nothing; wait so the purge sees real answers.
+	store.WaitForWarmup()
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(store)
 	t.Cleanup(func() {
@@ -352,6 +355,9 @@ func TestAutoPromoteAlt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
+	// BookFilesAtPath fails closed until the async memdb warmup publishes, and the
+	// purge guard then deletes nothing; wait so the purge sees real answers.
+	store.WaitForWarmup()
 	t.Cleanup(func() { store.Close() })
 
 	_, _ = store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1"})
