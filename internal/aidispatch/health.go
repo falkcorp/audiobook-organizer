@@ -1,7 +1,7 @@
 // file: internal/aidispatch/health.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: eacb4ad5-2ec7-46df-b430-903591356e6c
-// last-edited: 2026-09-13
+// last-edited: 2026-10-28
 
 package aidispatch
 
@@ -26,6 +26,9 @@ const (
 type endpointHealth struct {
 	consecFails   int
 	cooldownUntil time.Time
+	// failures counts every failure ever marked for the endpoint
+	// (FailureGeneration). Unlike consecFails, MarkSuccess never resets it.
+	failures uint64
 }
 
 // Health tracks per-endpoint consecutive failures and cooldown windows. It is
@@ -70,6 +73,7 @@ func (h *Health) MarkFailure(id string) {
 	defer h.mu.Unlock()
 	e := h.entry(id)
 	e.consecFails++
+	e.failures++
 	d := min(time.Duration(e.consecFails)*CooldownBase, CooldownMax)
 	e.cooldownUntil = h.now().Add(d)
 }
@@ -80,6 +84,7 @@ func (h *Health) MarkQuotaExhausted(id string) {
 	defer h.mu.Unlock()
 	e := h.entry(id)
 	e.consecFails++
+	e.failures++
 	e.cooldownUntil = h.now().Add(QuotaCooldown)
 }
 
@@ -109,4 +114,36 @@ func (h *Health) CooldownUntil(id string) time.Time {
 		return e.cooldownUntil
 	}
 	return time.Time{}
+}
+
+// FailureGeneration is how many failures have ever been marked for id
+// (MarkFailure, MarkQuotaExhausted). It only grows: a success, another
+// dispatch's, or the end of a cooldown does not take it back. A caller that
+// reads it before it probes an endpoint, and again later, learns whether the
+// endpoint failed in between even if the cooldown that failure started began
+// and ended while the caller was not looking (InCooldown samples; this does
+// not).
+func (h *Health) FailureGeneration(id string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if e := h.m[id]; e != nil {
+		return e.failures
+	}
+	return 0
+}
+
+// SetClockForTest replaces the clock the cooldowns are measured by and returns
+// the function that puts the wall clock back. It exists so a test of a caller can
+// let a cooldown end by the passage of time, as it does in production, without
+// waiting CooldownBase for it.
+func (h *Health) SetClockForTest(now func() time.Time) (restore func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	old := h.now
+	h.now = now
+	return func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.now = old
+	}
 }

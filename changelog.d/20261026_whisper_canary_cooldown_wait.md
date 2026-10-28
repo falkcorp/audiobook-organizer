@@ -333,3 +333,22 @@ no longer claims a wait the dispatch did not make; it says how long it slept.
 The part-placing wait looks for a port that came out of its cooldown a second
 time, after it finds nothing to wait for, so a cooldown that ends between the two
 looks no longer ends the dispatch as stuck.
+
+Whether a port needs to be probed again no longer depends on a look at its
+cooldown. The pool's health now counts every failure ever marked for an endpoint
+(`aidispatch.Health.FailureGeneration`, which a success never takes back), and
+the dispatch records, for each port, that count and whether it was in a cooldown
+when it last probed it. A port is probed again before it takes work or is sent
+the canary clip when it has failed since, or was in a cooldown then. This
+catches a cooldown that another dispatch starts and ends inside one round (a 30
+second one inside a request of several minutes), which a sample of
+`InCooldown` never sees: such a port is no longer sent the clip, and the next
+round's work, as the machine it answered as before the cooldown.
+
+A pool left with only ports it does not wait for (`?` keys) in cooldown after a
+port was dropped ends as the pool emptied only when a port changed hands. A
+port that wedged during the wait beside a port in a long cooldown is an outage
+of the pool again (`ErrPoolUnavailable`), not a stuck one, and the "all N
+endpoints are stuck" count is of the ports the refusals judged. The ports the
+canary's probes drop are dropped after the round's answers are judged, not
+before.
