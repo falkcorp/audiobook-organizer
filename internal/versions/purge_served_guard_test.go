@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-27
 
@@ -44,6 +44,11 @@ func newServedFixture(t *testing.T) *servedFixture {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// The guard asks BookFilesAtPath, which refuses (fail closed) until the
+	// async memdb warmup has published. Without this wait the nightly cleanup
+	// logs "purging version failed" and skips, and a test sees neither a purge
+	// nor a keep (about 1 run in 6 under GOMAXPROCS=2).
+	store.WaitForWarmup()
 
 	dir := filepath.Join(t.TempDir(), "Gotham", "Batman Hush")
 	active := filepath.Join(dir, "hush.m4b")
@@ -594,6 +599,20 @@ func (f *servedFixture) otherBook(id, path string, versioned bool, setFilePath b
 }
 
 // trashedAltNaming trashes an alt of the fixture book whose row names path.
+// altWithSlotFile creates the fixture's active version and an alt whose single
+// row names name inside the alt's OWN slot (.versions/{alt}/), and returns the
+// alt and the file's path. Nothing is trashed yet.
+func (f *servedFixture) altWithSlotFile(name string) (*database.BookVersion, string) {
+	f.t.Helper()
+	active := f.version(database.BookVersionStatusActive, 10*day)
+	f.row(active.ID, f.active, 1)
+	v := f.version(database.BookVersionStatusAlt, 30*day)
+	path := filepath.Join(VersionSlotDir(f.dir, v.ID), name)
+	writeServed(f.t, path)
+	f.row(v.ID, path, 1)
+	return v, path
+}
+
 func (f *servedFixture) trashedAltNaming(path string) *database.BookVersion {
 	f.t.Helper()
 	active := f.version(database.BookVersionStatusActive, 10*day)
@@ -649,7 +668,7 @@ func TestPurgeKeepsServedFiles_ServedByAnotherLiveBook(t *testing.T) {
 }
 
 // Another book that is itself trashed, or names the file only through a
-// trashed version, does not serve it: the version still purges.
+// trashed or purged version, does not serve it: the version still purges.
 func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
 	for name, setup := range map[string]func(f *servedFixture, shared string){
 		"other book trashed": func(f *servedFixture, shared string) {
@@ -658,7 +677,7 @@ func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
 				f.t.Fatal(err)
 			}
 		},
-		"other book names it through a trashed version": func(f *servedFixture, shared string) {
+		"other book names it through a purged version": func(f *servedFixture, shared string) {
 			if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One"}); err != nil {
 				f.t.Fatal(err)
 			}
@@ -669,7 +688,7 @@ func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
 			if err := f.store.CreateBookFile(&database.BookFile{BookID: "other", FilePath: shared, VersionID: ov.ID, TrackNumber: 1}); err != nil {
 				f.t.Fatal(err)
 			}
-			ov.Status = database.BookVersionStatusTrash
+			ov.Status = database.BookVersionStatusInactivePurged
 			if err := f.store.UpdateBookVersion(ov); err != nil {
 				f.t.Fatal(err)
 			}
@@ -677,14 +696,13 @@ func TestPurgeStillPurgesWhenOtherBookDoesNotServe(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newServedFixture(t)
-			shared := filepath.Join(f.dir, ".versions", "x", "shared.m4b")
-			writeServed(t, shared)
+			v, shared := f.altWithSlotFile("shared.m4b") // in the version's real slot
 			setup(f, shared)
-			f.trashedAltNaming(shared)
+			f.trashLikeHandler(v.ID)
 
 			res := f.afterWindow()
 
-			if res.Purged < 1 || len(res.Kept) != 0 || onDisk(shared) {
+			if res.Purged != 1 || len(res.Kept) != 0 || onDisk(shared) {
 				t.Fatalf("result = %+v, shared on disk = %v, want purged and deleted", res, onDisk(shared))
 			}
 		})
@@ -719,9 +737,8 @@ func TestPurgeFailsClosedWhenOtherBooksCannotBeRead(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newServedFixture(t)
-			own := filepath.Join(VersionSlotDir(f.dir, "slotid"), "alt.m4b")
-			writeServed(t, own)
-			v := f.trashedAltNaming(own)
+			v, own := f.altWithSlotFile("alt.m4b")
+			f.trashLikeHandler(v.ID)
 
 			res := cleanupTrashedVersionsAt(wrap(f.store), time.Now().Add(40*day))
 
@@ -867,13 +884,12 @@ func TestPurgeAncestorWalkStops(t *testing.T) {
 	})
 	t.Run("versions slot", func(t *testing.T) {
 		f := newServedFixture(t)
-		folder := filepath.Join(t.TempDir(), "Gotham", "Batman Hush")
-		shared := filepath.Join(VersionSlotDir(folder, "someversion"), "alt.m4b")
-		writeServed(t, shared)
-		if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One", FilePath: folder}); err != nil {
+		v, shared := f.altWithSlotFile("alt.m4b") // in the version's real slot
+		// Another live book's FilePath is the folder holding the .versions/ dir.
+		if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One", FilePath: f.dir}); err != nil {
 			t.Fatal(err)
 		}
-		f.trashedAltNaming(shared)
+		f.trashLikeHandler(v.ID)
 
 		res := f.afterWindow()
 
@@ -948,4 +964,76 @@ func TestPurgeKeepsFile_NamedByAnotherBooksAltVersionRow(t *testing.T) {
 			f.requireKept(res, v, 1)
 		})
 	}
+}
+
+// A .versions directory that is not THIS version's slot (a copied library tree
+// in an import folder) is no slot: the version's row there is a file the book
+// plays, whatever a stale FilePath says.
+func TestPurgeKeepsOwnRow_UnderForeignVersionsDir(t *testing.T) {
+	f := newServedFixture(t)
+	if err := os.Remove(f.active); err != nil { // FilePath is stale
+		t.Fatal(err)
+	}
+	real := filepath.Join(t.TempDir(), "deluge", "Library Backup", VersionsDirName, "01OLD", "hush.m4b")
+	writeServed(t, real)
+	v1 := f.version(database.BookVersionStatusActive, 90*day)
+	f.row(v1.ID, real, 1)
+	f.trashLikeHandler(v1.ID)
+
+	res := f.afterWindow()
+
+	f.requireAllOnDisk(real)
+	f.requireKept(res, v1, 1)
+}
+
+// The version's slot directory is a symlink out to the book's folder: the row
+// path has .versions/{id} in it, but os.Remove would follow the link and delete
+// the real played file. Not a slot.
+func TestPurgeKeepsOwnRow_SymlinkedSlotDirEscapes(t *testing.T) {
+	f := newServedFixture(t)
+	if err := os.Remove(f.active); err != nil { // FilePath is stale
+		t.Fatal(err)
+	}
+	real := filepath.Join(f.dir, "hush_copy1.m4b")
+	writeServed(t, real)
+	v1 := f.version(database.BookVersionStatusActive, 90*day)
+	slot := VersionSlotDir(f.dir, v1.ID)
+	if err := os.MkdirAll(filepath.Dir(slot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(f.dir, slot); err != nil {
+		t.Fatal(err)
+	}
+	f.row(v1.ID, filepath.Join(slot, "hush_copy1.m4b"), 1)
+	f.trashLikeHandler(v1.ID)
+
+	res := f.afterWindow()
+
+	f.requireAllOnDisk(real)
+	// Two kept paths: the row through the link, and the slot link itself (the
+	// slot walk reports a symlinked slot directory as one entry).
+	f.requireKept(res, v1, 2)
+}
+
+// A live own book's slot file that another live book plays through an alt
+// version's row is kept.
+func TestPurgeKeepsSlotFile_ServedByOtherBookWhileOwnBookLive(t *testing.T) {
+	f := newServedFixture(t)
+	v, slotFile := f.altWithSlotFile("alt.m4b")
+	if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One"}); err != nil {
+		t.Fatal(err)
+	}
+	ov, err := f.store.CreateBookVersion(&database.BookVersion{BookID: "other", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.CreateBookFile(&database.BookFile{BookID: "other", FilePath: slotFile, VersionID: ov.ID, TrackNumber: 1}); err != nil {
+		t.Fatal(err)
+	}
+	f.trashLikeHandler(v.ID)
+
+	res := f.afterWindow()
+
+	f.requireAllOnDisk(slotFile)
+	f.requireKept(res, v, 1)
 }
