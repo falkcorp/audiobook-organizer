@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.37.0
+// version: 2.38.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-19
+// last-edited: 2026-10-28
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
@@ -63,6 +63,8 @@ import { STORAGE_KEYS } from '../lib/storageKeys';
 import { tagChipProps } from '../utils/activityTagColors';
 import { isInterrupted, isRetryable, isTerminal } from '../utils/operationPolling';
 import { operationDisplayName } from '../components/layout/operationsFormat';
+import TrashCleanupResultPanel from '../components/operations/TrashCleanupResultPanel';
+import { isTrashCleanupDef } from '../utils/trashCleanupResult';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250];
 
@@ -2410,6 +2412,10 @@ export default function ActivityLog() {
                         </Tooltip>
                       )}
                       <Collapse in={expandedOpId === op.id}>
+                        {/* Mounted only while open: it reads the stored result. */}
+                        {expandedOpId === op.id &&
+                          isTrashCleanupDef(op.def_id) &&
+                          isTerminal(op.status) && <TrashCleanupResultPanel opId={op.id} />}
                         <Box
                           ref={expandedOpId === op.id ? opLogsRef : undefined}
                           sx={{

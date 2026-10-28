@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package versions
 
@@ -47,23 +47,39 @@ type versionPurger interface {
 	// GetBookVersionsByBookID finds a book's active version, whose files
 	// the purge must not delete.
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-	// BookFilesAtPath and GetBookByFilePath find ANOTHER live book that
-	// serves a file of the version: deluge and import folders are shared.
-	// BookFilesAtPath returns database.ErrBookFilesAtPathUnavailable when it
-	// cannot be complete; the purge then deletes nothing.
+	// BookFilesAtPath lists EVERY row at a path, retired rows included, so a
+	// purge never removes a file another row (a retired version's) still names,
+	// and finds ANOTHER live book that serves a file of the version: deluge and
+	// import folders are shared. It returns database.ErrBookFilesAtPathUnavailable
+	// when it cannot be complete; the purge then deletes nothing.
 	BookFilesAtPath(path string) ([]database.BookFile, error)
+	// GetBookByFilePath finds a book whose own FilePath is the path or a folder
+	// above it (the served-file guard walks the ancestors).
 	GetBookByFilePath(path string) (*database.Book, error)
 
+	// The book-row side of "another book names it" (a book can name a file no
+	// book_file row does, and a trashed book is restorable) is not here:
+	// database.BookRowPathReader is not on Store, so otherBooksNamingPath finds
+	// it with database.AsCapability and fails closed without it.
+
 	GetBookByID(id string) (*database.Book, error)
+
+	// GetBookVersion re-reads the version under the merge lock, after a wait
+	// that can last minutes (purgeVersionLocked).
+	GetBookVersion(id string) (*database.BookVersion, error)
 }
 
 type TrashedVersionCleaner interface {
 	versionPurger
 
+	// ListTrashedBookVersions lists the trash, the purges that were claimed and
+	// did not finish (status purging), so the cleanup retries those too, and
+	// the purges that gave up (status purge_failed), which it counts as
+	// needing attention and does not retry.
 	ListTrashedBookVersions() ([]database.BookVersion, error)
-	// GetBookVersion re-reads each listed row before it is stamped or
-	// purged, narrowing the window in which a mid-run restore is undone.
-	GetBookVersion(id string) (*database.BookVersion, error)
+	// GetBookVersion (from versionPurger) also re-reads each listed row before
+	// it is stamped or purged, narrowing the window in which a mid-run restore
+	// is undone.
 }
 
 // Exported: internal/importer forwards its store into CreateIngestVersion.

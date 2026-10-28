@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package versions
 
@@ -36,8 +36,8 @@ import (
 //     regardless of version): deluge and import folders are shared between
 //     books.
 //
-// When the version's own book is itself trashed it serves nothing, so only the
-// ANOTHER-live-book rules apply.
+// When the version's own book is itself trashed, or no longer exists, it serves
+// nothing, so only the ANOTHER-live-book rules apply.
 //
 // Everything errs toward keeping the file: an unreadable book, version list or
 // row list is an error, never "not served".
@@ -79,9 +79,16 @@ func canonPath(p string) string {
 	return abs
 }
 
-func newServedGuard(store versionPurger, book *database.Book, files []database.BookFile, verID string) (*servedGuard, error) {
+// newServedGuard builds the guard for one version purge. book is the version's
+// own book, nil when it no longer exists (bookID is then its id): a book that is
+// gone serves nothing, like a trashed one.
+func newServedGuard(store versionPurger, book *database.Book, bookID string, files []database.BookFile, verID string) (*servedGuard, error) {
+	missing := book == nil
+	if missing {
+		book = &database.Book{ID: bookID}
+	}
 	g := &servedGuard{store: store, book: book, verID: verID, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
-	if bookIsTrashed(book) {
+	if missing || bookIsTrashed(book) {
 		g.skipOwn = true
 		return g, nil
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.1
+// version: 1.234.5
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package database
 
@@ -5266,6 +5266,9 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 	if err := p.refuseRetiredVersionChange(prev, v); err != nil {
 		return err
 	}
+	if err := refusePurgeTransition(prev, v); err != nil {
+		return err
+	}
 	now := time.Now()
 	maintainTrashedAt(prev, v, now)
 	v.UpdatedAt = now
@@ -5321,6 +5324,65 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 	return b.Commit(pebble.Sync)
 }
 
+// refusePurgeTransition enforces the purging claim, under the version's stripe
+// (the caller holds it, so the stored row cannot change between this check and
+// the commit):
+//
+//   - a write that sets purging needs the stored status to be trash (the
+//     claim), purging (a retry) or purge_failed (the owner's retry of a purge
+//     that gave up): a version restored since the caller read it is
+//     ErrVersionPurgeClaimLost, and its files stay;
+//   - a write that sets purge_failed needs the stored status to be purging or
+//     purge_failed: only a purge that was claimed can fail, and anything else
+//     is ErrVersionPurgeClaimLost;
+//   - a stored purging or purge_failed version may only stay in the purge
+//     states or become inactive_purged: anything else (a restore, a re-trash, a
+//     stale copy written back) is ErrVersionPurging, because some of its files
+//     may already be gone;
+//   - a stored inactive_purged version is not put back in the trash
+//     (ErrVersionPurged): its files are gone, and a trash row would start a
+//     clock that ends in a purge of nothing.
+//
+// This is the one place the restore-versus-purge race is closed: whichever
+// write reaches the stripe second sees the other's status and is refused.
+func refusePurgeTransition(prev, v *BookVersion) error {
+	if v.Status == BookVersionStatusTrash && prev.Status == BookVersionStatusInactivePurged {
+		return fmt.Errorf("book version %s: cannot move from %q to %q: %w",
+			v.ID, prev.Status, v.Status, ErrVersionPurged)
+	}
+	if v.Status == BookVersionStatusPurging &&
+		prev.Status != BookVersionStatusTrash && prev.Status != BookVersionStatusPurging &&
+		prev.Status != BookVersionStatusPurgeFailed {
+		return fmt.Errorf("book version %s has status %q: %w", v.ID, prev.Status, ErrVersionPurgeClaimLost)
+	}
+	if v.Status == BookVersionStatusPurgeFailed &&
+		prev.Status != BookVersionStatusPurging && prev.Status != BookVersionStatusPurgeFailed {
+		return fmt.Errorf("book version %s has status %q, so its purge cannot be recorded as failed: %w",
+			v.ID, prev.Status, ErrVersionPurgeClaimLost)
+	}
+	if (prev.Status == BookVersionStatusPurging || prev.Status == BookVersionStatusPurgeFailed) &&
+		v.Status != BookVersionStatusPurging && v.Status != BookVersionStatusPurgeFailed &&
+		v.Status != BookVersionStatusInactivePurged {
+		return fmt.Errorf("book version %s: cannot move from %q to %q: %w",
+			v.ID, prev.Status, v.Status, ErrVersionPurging)
+	}
+	return nil
+}
+
+// refusePurgingVersionDelete is refusePurgeTransition's counterpart for a hard
+// delete, under the same stripe: a version in the purging status has a purge
+// running (or interrupted) that is still reading its record to know which files
+// it owes a removal and which it has already taken, so deleting the record in
+// the middle would strand the rest of its files on disk with nothing naming
+// them. purge_failed is not refused: a purge that gave up is exactly what the
+// owner hard-deletes, and its files are named in the record the owner was shown.
+func refusePurgingVersionDelete(v *BookVersion) error {
+	if v.Status == BookVersionStatusPurging {
+		return fmt.Errorf("book version %s: cannot delete it while its purge is running: %w", v.ID, ErrVersionPurging)
+	}
+	return nil
+}
+
 // maintainTrashedAt keeps BookVersion.TrashedAt consistent with Status on
 // every write. It is bookkeeping, like UpdatedAt -- not a transition rule
 // (those stay in the server layer, see the BookVersionStatus comment) -- and
@@ -5366,6 +5428,9 @@ func (p *PebbleStore) DeleteBookVersion(id string) error {
 		return nil
 	}
 	if err := p.refuseRetiredVersionDelete(v); err != nil {
+		return err
+	}
+	if err := refusePurgingVersionDelete(v); err != nil {
 		return err
 	}
 	b := p.db.NewBatch()
@@ -5414,8 +5479,14 @@ func (p *PebbleStore) GetBookVersionByTorrentHash(hash string) (*BookVersion, er
 	return p.GetBookVersion(versionID)
 }
 
+// ListTrashedBookVersions lists every version still in the trash: those in
+// BookVersionStatusTrash, those in BookVersionStatusPurging (a purge that was
+// claimed and has not finished) and those in BookVersionStatusPurgeFailed (a
+// purge that gave up). The trash cleanup needs all three: it retries a purging
+// version, and counts a purge_failed one as needing attention without retrying
+// it. The trash page lists them too, which is where the owner acts on them.
 func (p *PebbleStore) ListTrashedBookVersions() ([]BookVersion, error) {
-	return p.listBookVersionsByStatus(BookVersionStatusTrash)
+	return p.listBookVersionsByStatus(BookVersionStatusTrash, BookVersionStatusPurging, BookVersionStatusPurgeFailed)
 }
 
 func (p *PebbleStore) ListPurgedBookVersions() ([]BookVersion, error) {
@@ -5430,7 +5501,7 @@ func (p *PebbleStore) ListPurgedBookVersions() ([]BookVersion, error) {
 	return append(purged, blocked...), nil
 }
 
-func (p *PebbleStore) listBookVersionsByStatus(status string) ([]BookVersion, error) {
+func (p *PebbleStore) listBookVersionsByStatus(statuses ...string) ([]BookVersion, error) {
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte("bv:"),
 		UpperBound: []byte("bv:~"),
@@ -5445,7 +5516,7 @@ func (p *PebbleStore) listBookVersionsByStatus(status string) ([]BookVersion, er
 		if err := json.Unmarshal(iter.Value(), &v); err != nil {
 			continue
 		}
-		if v.Status == status {
+		if slices.Contains(statuses, v.Status) {
 			out = append(out, v)
 		}
 	}

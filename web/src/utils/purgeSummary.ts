@@ -1,13 +1,13 @@
 // file: web/src/utils/purgeSummary.ts
-// version: 1.0.0
+// version: 1.1.1
 // guid: 7c3a9e15-2d84-4b60-a1f7-5e0d8b4c6a29
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 import type { PurgeBreakdown, PurgeResult } from '../services/api';
 
 /** One reason a trashed book is kept by the purge, with how many. */
 export interface KeptReason {
-  key: 'owns_files' | 'undo_possible' | 'has_progress';
+  key: 'owns_files' | 'holds_retired_versions' | 'undo_possible' | 'has_progress';
   count: number;
   /** Plain-language reason, starting with a lowercase verb phrase. */
   label: string;
@@ -18,11 +18,13 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 /**
  * The reasons the purge keeps books, in the order the dialog lists them,
  * omitting any reason with a zero count. A book is counted under exactly one
- * reason: owning book_file rows first, then a combine, merge or other change that can still be undone,
- * then listening progress.
+ * reason: owning book_file rows first, then holding only retired versions, then
+ * a combine, merge or other change that can still be undone, then listening
+ * progress.
  */
 export function keptReasons(counts: {
   ownsFiles: number;
+  holdsRetiredVersions: number;
   undoPossible: number;
   hasProgress: number;
 }): KeptReason[] {
@@ -32,6 +34,17 @@ export function keptReasons(counts: {
       key: 'owns_files',
       count: counts.ownsFiles,
       label: `still ${plural(counts.ownsFiles, 'owns', 'own')} file records (the purge never deletes those)`,
+    });
+  }
+  if (counts.holdsRetiredVersions > 0) {
+    out.push({
+      key: 'holds_retired_versions',
+      count: counts.holdsRetiredVersions,
+      label: `${plural(
+        counts.holdsRetiredVersions,
+        'holds',
+        'hold'
+      )} file rows kept for another version of the book (retired versions; the purge never deletes those)`,
     });
   }
   if (counts.undoPossible > 0) {
@@ -58,6 +71,7 @@ export function keptReasons(counts: {
 export function keptReasonsOfResult(r: PurgeResult): KeptReason[] {
   return keptReasons({
     ownsFiles: r.skipped_owns_files ?? 0,
+    holdsRetiredVersions: r.skipped_holds_retired_versions ?? 0,
     undoPossible: r.kept_undo_possible ?? 0,
     hasProgress: r.kept_has_progress ?? 0,
   });
@@ -66,6 +80,10 @@ export function keptReasonsOfResult(r: PurgeResult): KeptReason[] {
 export function keptReasonsOfBreakdown(b: PurgeBreakdown): KeptReason[] {
   return keptReasons({
     ownsFiles: b.owns_files,
+    // The server folds the books that hold only retired versions into
+    // `owns_files` in the breakdown (PurgeBreakdown.OwnsFiles); it has no
+    // separate figure for them.
+    holdsRetiredVersions: 0,
     undoPossible: b.undo_possible,
     hasProgress: b.has_listening_state,
   });
@@ -167,6 +185,7 @@ export function decidedCount(r: PurgeResult): number {
     r.purged +
     (r.purgeable ?? 0) +
     (r.skipped_owns_files ?? 0) +
+    (r.skipped_holds_retired_versions ?? 0) +
     (r.kept_undo_possible ?? 0) +
     (r.kept_has_progress ?? 0) +
     (r.carry_failed ?? 0) +

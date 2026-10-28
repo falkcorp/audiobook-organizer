@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.0
+// version: 1.27.3
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -426,7 +426,16 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, env
 	if err := r.deleteErr; err != nil {
 		if errors.Is(err, database.ErrBookOwnsFiles) {
 			// A file row landed between the pre-check and the delete.
-			return purgeOutcome{kind: purgeOwnsFiles}
+			// DeleteBook's refusal only says "owns files"; the pre-check's
+			// question (CheckBookOwnsNoFiles) is asked again so that a holder of
+			// retired versions only (every row retired) is reported as
+			// holds_retired_versions here, with the text that names them, exactly
+			// as the pre-check reports it. When it cannot tell (or the rows are
+			// gone again) the outcome carries DeleteBook's own error.
+			if oerr := database.CheckBookOwnsNoFiles(svc.store, book.ID, "purge"); errors.Is(oerr, database.ErrBookOwnsFiles) {
+				err = oerr
+			}
+			return ownsFilesOutcome(err)
 		}
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: %v", book.ID, err)}}
 	}
@@ -656,7 +665,7 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		// before anything moved, so the state is where it was.
 		// Counted once, as skipped (SkippedOwnsFilesIDs), so no Errors line;
 		// the reason travels in detail for "Purge now".
-		return purgeOutcome{kind: purgeOwnsFiles, ownsFilesErr: fmt.Errorf("%w; nothing moved", merge.PrecheckCause(err))}
+		return ownsFilesOutcome(fmt.Errorf("%w; nothing moved", merge.PrecheckCause(err)))
 	case errors.Is(err, merge.ErrCarryPrecheckRefused) && errors.Is(err, merge.ErrBookHasListeningState):
 		// Nothing moved; with no listed version to carry to, the book stays
 		// in the trash flagged "has progress", as when there was none.
@@ -913,9 +922,8 @@ func (svc *AudiobookService) removeSingleBookFile(book *database.Book, v purgeFi
 
 // purgeFileVerdict is what a purge with delete_files does about a purged
 // book's own file, decided by planPurgeFile with no side effect. At most one of
-// protected, keptErr and remove is set; none is set when there is nothing to do
-// (the book names no file, it is already gone, or it is a directory that is not
-// empty).
+// protected, keptErr, remove and notEmptyDir is set; none is set when there is
+// nothing to do (the book names no file, or it is already gone).
 type purgeFileVerdict struct {
 	// remove is the file, or empty directory (isDir), the purge removes.
 	remove string
@@ -929,6 +937,11 @@ type purgeFileVerdict struct {
 	protected bool
 	// keptErr: why the file stays, reported on the book's purge line.
 	keptErr error
+	// notEmptyDir: the path is a directory that still holds something, so it
+	// stays. The book purge reads it as "nothing to do" (remove is empty, like a
+	// path that is gone); a version purge reports it as a kept file
+	// (VersionPurgeDecider), because for it the silence would read as removed.
+	notEmptyDir bool
 }
 
 // planPurgeFile is purgeFinish's decision about book's file, split out so the
@@ -953,17 +966,39 @@ func (svc *AudiobookService) planPurgeFileIn(book *database.Book, emptied *dirSe
 	if book.FilePath == "" {
 		return purgeFileVerdict{}
 	}
+	return svc.planPurgePathIn(book.FilePath, emptied, svc.purgePathStillReferenced)
+}
+
+// planPurgePathIn is the whole decision about one path: protected, inside the
+// library root, not still referenced (the referenced check, which the caller
+// chooses: a book's purge asks whether any row or live book names the path, a
+// version's purge has its own owners to tell apart and passes nil), then what is
+// on disk (a file, an empty directory, gone, a folder that cannot vouch for
+// "gone"). A version purge (VersionPurgeDecider) and a book purge decide a path
+// with this one function, so they cannot disagree about protected paths, the
+// library root, or an unmounted folder.
+func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, referenced func(path string) error) purgeFileVerdict {
 	root := config.Snapshot().RootDir
-	if isProtectedPath(svc.store, book.FilePath) {
+	// A deletion decision: an import-path list that cannot be read is not "no
+	// import paths". The protected answer still wins when the other checks found
+	// one; otherwise the question could not be answered and the file stays
+	// (errPathLookupFailed: transient, retried).
+	protected, protErr := protectedPathChecked(svc.store, path)
+	if protected {
 		return purgeFileVerdict{protected: true}
 	}
-	if rootErr := purgePathInsideRoot(book.FilePath, root); rootErr != nil {
+	if protErr != nil {
+		return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is not under an import path: import-path lookup: %w: %w", path, errPathLookupFailed, protErr)}
+	}
+	if rootErr := purgePathInsideRoot(path, root); rootErr != nil {
 		return purgeFileVerdict{keptErr: rootErr}
 	}
-	if refErr := svc.purgePathStillReferenced(book.FilePath); refErr != nil {
-		return purgeFileVerdict{keptErr: refErr}
+	if referenced != nil {
+		if refErr := referenced(path); refErr != nil {
+			return purgeFileVerdict{keptErr: refErr}
+		}
 	}
-	info, statErr := os.Stat(book.FilePath)
+	info, statErr := os.Stat(path)
 	switch {
 	case pathIsGone(statErr):
 		// ENOENT, or ENOTDIR (a parent is not a directory, so the path cannot
@@ -972,9 +1007,9 @@ func (svc *AudiobookService) planPurgeFileIn(book *database.Book, emptied *dirSe
 		// the file is there: a path that names a file once cleaned is not gone.
 		// Kept and reported (not removed: the removal path is not the file's name),
 		// never silently read as gone.
-		if clean := filepath.Clean(book.FilePath); clean != book.FilePath {
+		if clean := filepath.Clean(path); clean != path {
 			if cinfo, cerr := os.Stat(clean); cerr == nil && !cinfo.IsDir() {
-				return purgeFileVerdict{keptErr: fmt.Errorf("%s has a trailing path separator but names a file, so it is not removed; the file stays at %s", book.FilePath, clean)}
+				return purgeFileVerdict{keptErr: fmt.Errorf("%s has a trailing path separator but names a file, so it is not removed; the file stays at %s", path, clean)}
 			}
 		}
 		// ENOENT is "gone" only when the folder is there and holds something. With
@@ -983,14 +1018,14 @@ func (svc *AudiobookService) planPurgeFileIn(book *database.Book, emptied *dirSe
 		// (errPathFolderMissing; folderCheck says what exempts a folder). ENOTDIR
 		// needs no such check: a parent that is not a directory is there.
 		if errors.Is(statErr, fs.ErrNotExist) {
-			missing, empty, ferr := folderCheck(book.FilePath, root, emptied)
+			missing, empty, ferr := folderCheck(path, root, emptied)
 			switch {
 			case ferr != nil:
-				return purgeFileVerdict{keptErr: statLookupError(filepath.Dir(book.FilePath), "stat of the folder", ferr)}
+				return purgeFileVerdict{keptErr: statLookupError(filepath.Dir(path), "stat of the folder", ferr)}
 			case missing:
-				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is missing too, which is also how a library that is not (fully) mounted looks: %w: %w", book.FilePath, filepath.Dir(book.FilePath), errPathLookupFailed, errPathFolderMissing)}
+				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is missing too, which is also how a library that is not (fully) mounted looks: %w: %w", path, filepath.Dir(path), errPathLookupFailed, errPathFolderMissing)}
 			case empty:
-				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is there but empty, which is also how the mount point of a filesystem that is not mounted looks: %w: %w", book.FilePath, filepath.Dir(book.FilePath), errPathLookupFailed, errPathFolderMissing)}
+				return purgeFileVerdict{keptErr: fmt.Errorf("cannot tell whether %s is gone: its folder %s is there but empty, which is also how the mount point of a filesystem that is not mounted looks: %w: %w", path, filepath.Dir(path), errPathLookupFailed, errPathFolderMissing)}
 			}
 		}
 		return purgeFileVerdict{}
@@ -1003,21 +1038,21 @@ func (svc *AudiobookService) planPurgeFileIn(book *database.Book, emptied *dirSe
 		// journal record is kept, for the next pass (errPathLookupFailed). (A
 		// mount that is not up reads as ENOENT, not as an error: the library-root
 		// check (libraryRootReady) and the folder check above are what catch it.)
-		return purgeFileVerdict{keptErr: statLookupError(book.FilePath, "stat", statErr)}
+		return purgeFileVerdict{keptErr: statLookupError(path, "stat", statErr)}
 	case info.IsDir():
 		// Remove the directory only if it is already empty.
-		entries, rdErr := os.ReadDir(book.FilePath)
+		entries, rdErr := os.ReadDir(path)
 		switch {
 		case pathIsGone(rdErr):
 			return purgeFileVerdict{}
 		case rdErr != nil:
-			return purgeFileVerdict{keptErr: statLookupError(book.FilePath, "read", rdErr)}
+			return purgeFileVerdict{keptErr: statLookupError(path, "read", rdErr)}
 		case len(entries) == 0:
-			return purgeFileVerdict{remove: book.FilePath, isDir: true, id: identityOf(info)}
+			return purgeFileVerdict{remove: path, isDir: true, id: identityOf(info)}
 		}
-		return purgeFileVerdict{}
+		return purgeFileVerdict{notEmptyDir: true}
 	}
-	return purgeFileVerdict{remove: book.FilePath, id: identityOf(info)}
+	return purgeFileVerdict{remove: path, id: identityOf(info)}
 }
 
 // purgePathInsideRoot returns nil only when path is strictly inside the
@@ -1139,7 +1174,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 		return nil, err
 	}
 	if res.Book == nil {
-		return nil, fmt.Errorf("audiobook not found")
+		return nil, ErrAudiobookNotFound
 	}
 	if !res.Restored {
 		return res.Book, nil
