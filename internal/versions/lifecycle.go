@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -378,6 +378,13 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGua
 // has removed files and cannot go back to the trash, so a path a book has come
 // to serve since is kept on disk like any other kept path and the purge goes on.
 //
+// A trashed version is also not purged while the book is not known to serve
+// anything that exists: when none of the paths the book serves (its FilePath, the
+// rows of its active version) is on disk the guard has nothing to compare
+// against, and "nothing served" would be a guess. The purge then returns a
+// *CannotTellError (errors.Is ErrPurgeCannotTell) and leaves the version in the
+// trash, restorable (servedGuard.requireServedFileOnDisk).
+//
 // It never removes a file that some other book_file row still names. A
 // retired version keeps the rows of a book that was retired into this one's
 // book, and those rows can name the very paths this version's own rows name
@@ -584,7 +591,6 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 	if err != nil {
 		return fmt.Errorf("purge version %s: %w", ver.ID, err)
 	}
-
 	// Decide EVERY path first, read-only, before the version is claimed: a
 	// lookup failure, or a state nothing can be removed from, leaves the version
 	// exactly as it was (a trashed version stays restorable trash). Only a purge
@@ -633,6 +639,19 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 		for _, p := range served {
 			lifecycleLog.Warn("purge version %s: keeping %s: %s (the purge was already under way)", ver.ID, p, KeptReason)
 			kept[p] = KeptReason
+		}
+	}
+
+	// A trashed version is deleted only while the book is known to serve a file
+	// that exists: with none, the guard has nothing to compare against (a stale
+	// FilePath, a lost file) and "nothing served" would be a guess. It comes
+	// after the served files above, so a file the book is found to serve still
+	// answers BookServesFilesError. A purge that is already under way has removed
+	// files and is not held back by this.
+	if len(doomed) > 0 && ver.Status == database.BookVersionStatusTrash {
+		if err := sg.requireServedFileOnDisk(); err != nil {
+			lifecycleLog.Warn("trash purge kept version %s of book %s in the trash: %v", ver.ID, ver.BookID, err)
+			return err
 		}
 	}
 

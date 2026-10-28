@@ -47,6 +47,11 @@ func newRetiredFixture(t *testing.T, withRow bool) *retiredFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The file the book plays. A trashed version is purged only while the book
+	// is known to serve a file that exists (servedGuard.requireServedFileOnDisk);
+	// a fixture whose book names a file that is not there would be testing that
+	// refusal, not the purge it is about.
+	writeTestFile(t, filepath.Join(bookDir, "book.m4b"), "audio")
 	shellDir := t.TempDir()
 	shell, err := store.CreateBook(&database.Book{Title: "Shell", FilePath: shellDir})
 	if err != nil {
@@ -282,6 +287,11 @@ func newSharedPathFixture(t *testing.T) *sharedPathFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The file the book plays. A trashed version is purged only while the book
+	// is known to serve a file that exists (servedGuard.requireServedFileOnDisk);
+	// a fixture whose book names a file that is not there would be testing that
+	// refusal, not the purge it is about.
+	writeTestFile(t, filepath.Join(bookDir, "book.m4b"), "audio")
 	shell, err := store.CreateBook(&database.Book{Title: "Shell", FilePath: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

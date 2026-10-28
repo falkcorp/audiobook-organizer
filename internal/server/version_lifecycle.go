@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/gin-gonic/gin"
@@ -57,6 +58,8 @@ func respondIfPurgedVersion(c *gin.Context, err error) bool {
 	httputil.RespondWithConflict(c, err.Error())
 	return true
 }
+
+var versionLifecycleLog = logger.New("server.version-lifecycle")
 
 // codeNoSwapTarget is the error code of the 409 that refuses to trash a book's
 // active version because no other version can take over as the active one
@@ -151,7 +154,10 @@ func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (a
 		// version): the trash below must write the row as it is now.
 		ver, err = s.Ops().GetBookVersion(versionID)
 		if err != nil || ver == nil {
-			httputil.InternalError(c, "trash version", fmt.Errorf("re-read version %s after the swap: %w", versionID, err))
+			if err == nil {
+				err = errors.New("the version is gone")
+			}
+			s.respondTrashFailedAfterSwap(c, swappedTo, fmt.Errorf("re-read version %s after the swap: %w", versionID, err))
 			return afterUnlock
 		}
 	}
@@ -164,13 +170,13 @@ func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (a
 	// retired version in the trash would be purged from disk 14 days later.
 	if err := versions.MarkTrashed(ver, time.Now()); err != nil {
 		if !respondIfRetiredVersion(c, err) && !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
-			httputil.InternalError(c, "trash version", err)
+			s.respondTrashFailedAfterSwap(c, swappedTo, err)
 		}
 		return afterUnlock
 	}
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
 		if !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
-			httputil.InternalError(c, "trash version", err)
+			s.respondTrashFailedAfterSwap(c, swappedTo, err)
 		}
 		return afterUnlock
 	}
@@ -182,6 +188,22 @@ func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (a
 		SwappedTo string `json:"swapped_to,omitempty"`
 	}{Version: ver, SwappedTo: swappedTo})
 	return afterUnlock
+}
+
+// respondTrashFailedAfterSwap answers the 500 for a trash that failed. When the
+// swap before it had gone through (swappedTo is set) the book now plays another
+// version although this one was not trashed, and the answer says which: a client
+// that only saw "500" would think nothing had changed.
+func (s *Server) respondTrashFailedAfterSwap(c *gin.Context, swappedTo string, err error) {
+	if swappedTo == "" {
+		httputil.InternalError(c, "trash version", err)
+		return
+	}
+	versionLifecycleLog.Error("trash version %s of book %s failed after the swap; the book already plays version %s: %v",
+		c.Param("vid"), c.Param("id"), swappedTo, err)
+	httputil.RespondWithErrorFields(c, http.StatusInternalServerError,
+		"the book was switched to version "+swappedTo+" but trashing this version failed; it is no longer the active version and can be trashed again",
+		"INTERNAL_ERROR", map[string]any{"swapped_to": swappedTo})
 }
 
 // swapActiveVersionOut makes another version of the book active in place of
@@ -214,6 +236,18 @@ func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion)
 		from, to, bookPath = fromVer, toVer, bookFilePath
 	})
 	if err != nil {
+		// Refused before anything was written (the files are not where the
+		// picker saw them, a retired version): a conflict with the library's
+		// state, answered like the picker's own refusal.
+		if errors.Is(err, versions.ErrSwapRefused) {
+			httputil.RespondWithError(c, http.StatusConflict,
+				"The version was not trashed: it is the book's active version and switching the book to version "+target.ID+
+					" was refused before anything was changed ("+err.Error()+"). Add or restore another version first.", codeNoSwapTarget)
+			return "", nil, false
+		}
+		if respondIfRetiredVersion(c, err) {
+			return "", nil, false
+		}
 		slog.Error("swap before trashing the active version failed; the version was not trashed",
 			"book", ver.BookID, "from", ver.ID, "to", target.ID, "err", err)
 		httputil.RespondWithError(c, http.StatusInternalServerError,

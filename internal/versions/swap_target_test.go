@@ -1,5 +1,5 @@
 // file: internal/versions/swap_target_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c9e1b7d-52a4-4e68-b0f3-8d6a2c4e9175
 // last-edited: 2026-10-28
 
@@ -397,20 +397,16 @@ func TestRunVersionSwap_RefusesRetiredVersion(t *testing.T) {
 func TestRunVersionSwap_NothingMovedRestoresStatuses(t *testing.T) {
 	f := newSwapFixture(t)
 	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
-	// A regular file where the .versions folder must be: EnsureVersionsDir fails
-	// for the leaving version's slot before it moves anything. (The alt's own
-	// slot lives under .versions too, so replace the directory with a file.)
-	versionsDir := VersionsDir(f.bookDir)
-	if err := os.Rename(versionsDir, versionsDir+".moved"); err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, versionsDir, "not a directory")
+	// A regular file where the leaving version's slot must be: EnsureVersionsDir
+	// fails for it before anything moves, and the preflight (which only looks at
+	// the destination's file, not its folder) still passes.
+	writeTestFile(t, VersionSlotDir(f.bookDir, f.active.ID), "not a directory")
 
 	err := RunVersionSwap(context.Background(), f.store, VersionSwapParams{
 		BookID: f.book.ID, FromVersionID: f.active.ID, ToVersionID: alt.ID,
 	}, nil, nil, nil)
-	if err == nil {
-		t.Fatal("swap succeeded with .versions blocked by a file")
+	if err == nil || !strings.Contains(err.Error(), "move-to-versions") {
+		t.Fatalf("err = %v, want the move-to-versions failure (the slot is a file)", err)
 	}
 	if v, _ := f.store.GetBookVersion(f.active.ID); v.Status != database.BookVersionStatusActive {
 		t.Errorf("leaving version status = %s, want active again", v.Status)

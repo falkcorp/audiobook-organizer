@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-28
 
@@ -1079,4 +1079,71 @@ func TestPurgeKeepsSlotFile_ServedByOtherBookWhileOwnBookLive(t *testing.T) {
 
 	f.requireAllOnDisk(slotFile)
 	f.requireKept(res, v, 1)
+}
+
+// When none of the files the book serves exists on disk (FilePath gone, no row
+// of the active version on disk) the guard has nothing to compare against, and
+// the purge refuses instead of treating "nothing served" as the answer: the
+// state the twin-path swap left, where the only copy had been moved into the
+// trashed version's slot. The trashed version stays in the trash, restorable,
+// and its file stays on disk.
+func TestPurgeRefusesWhenNothingTheBookServesExists(t *testing.T) {
+	for _, mode := range []string{"purge", "nightly-cleanup"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newServedFixture(t)
+			if err := os.Remove(f.active); err != nil { // the file FilePath names is gone
+				t.Fatal(err)
+			}
+			v := f.version(database.BookVersionStatusAlt, 30*day)
+			slotFile := filepath.Join(VersionSlotDir(f.dir, v.ID), "hush-alt.m4b")
+			writeServed(t, slotFile)
+			f.row(v.ID, slotFile, 1)
+			// A trashed version, with no other version active: the book's
+			// active rows are none.
+			f.trashLikeHandler(v.ID)
+
+			var res CleanupResult
+			if mode == "purge" {
+				ver, _ := f.store.GetBookVersion(v.ID)
+				err := PurgeVersion(f.store, ver, testGuard)
+				var ct *CannotTellError
+				if !errors.Is(err, ErrPurgeCannotTell) || !errors.As(err, &ct) || !strings.Contains(err.Error(), "unknown") {
+					t.Fatalf("PurgeVersion err = %v, want a *CannotTellError saying what is unknown", err)
+				}
+			} else {
+				res = f.afterWindow()
+				if res.Purged != 0 || len(res.CannotTell) != 1 || res.CannotTell[0].VersionID != v.ID {
+					t.Fatalf("result = %+v, want nothing purged and the version listed under CannotTell", res)
+				}
+			}
+			if !onDisk(slotFile) {
+				t.Fatal("the trashed version's file was deleted although nothing the book serves exists")
+			}
+			if got := f.status(v.ID); got != database.BookVersionStatusTrash {
+				t.Fatalf("status = %s, want trash (restorable)", got)
+			}
+		})
+	}
+}
+
+// The control for the test above: the same trashed version is purged once the
+// book serves a file that exists.
+func TestPurgeProceedsWhenTheBookServesAFileThatExists(t *testing.T) {
+	f := newServedFixture(t)
+	v := f.version(database.BookVersionStatusAlt, 30*day)
+	slotFile := filepath.Join(VersionSlotDir(f.dir, v.ID), "hush-alt.m4b")
+	writeServed(t, slotFile)
+	f.row(v.ID, slotFile, 1)
+	f.trashLikeHandler(v.ID)
+
+	ver, _ := f.store.GetBookVersion(v.ID)
+	if err := PurgeVersion(f.store, ver, testGuard); err != nil {
+		t.Fatal(err)
+	}
+	if onDisk(slotFile) {
+		t.Error("the trashed version's own file survived")
+	}
+	if !onDisk(f.active) {
+		t.Error("the file the book plays was deleted")
+	}
 }

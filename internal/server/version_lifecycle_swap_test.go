@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_swap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1d8e3f-7a24-4c95-8e0b-d2f4a9c1b753
 // last-edited: 2026-10-28
 
@@ -7,12 +7,19 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -29,6 +36,9 @@ type swapTrashFixture struct {
 	dir     string
 	rootAud string
 	active  *database.BookVersion
+	// bookPath is the book's file_path a refused or failed trash must leave
+	// alone; rootAud unless a test changed the book's path first.
+	bookPath string
 }
 
 func newSwapTrashFixture(t *testing.T) *swapTrashFixture {
@@ -55,7 +65,7 @@ func newSwapTrashFixture(t *testing.T) *swapTrashFixture {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return &swapTrashFixture{t: t, srv: srv, store: store, book: book, dir: dir, rootAud: rootAud, active: active}
+	return &swapTrashFixture{t: t, srv: srv, store: store, book: book, dir: dir, rootAud: rootAud, active: active, bookPath: rootAud}
 }
 
 // add makes a version of the book in status, ingested ago ago; a name also gives
@@ -138,8 +148,8 @@ func (f *swapTrashFixture) requireSameStatuses(before map[string][2]any, rowVers
 			f.t.Errorf("version %s: status/row-version %v -> %v, want untouched", id, b, after[id])
 		}
 	}
-	if b, _ := f.store.GetBookByID(f.book.ID); b.FilePath != f.rootAud {
-		f.t.Errorf("book file_path = %s, want %s", b.FilePath, f.rootAud)
+	if b, _ := f.store.GetBookByID(f.book.ID); b.FilePath != f.bookPath {
+		f.t.Errorf("book file_path = %q, want %q", b.FilePath, f.bookPath)
 	}
 	if _, err := os.Stat(f.rootAud); err != nil {
 		f.t.Errorf("the active version's file moved: %v", err)
@@ -302,7 +312,7 @@ func TestHandleTrashVersion_FolderBookRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	f.rootAud = f.dir // what requireUntouched compares the book's path with
+	f.bookPath = f.dir // what requireUntouched compares the book's path with
 	before := f.snapshot()
 
 	w := f.trash(f.active.ID)
@@ -322,27 +332,15 @@ func TestHandleTrashVersion_FolderBookRefused(t *testing.T) {
 // versions are back as they were because nothing had moved yet.
 func TestHandleTrashVersion_SwapFailureDoesNotTrash(t *testing.T) {
 	f := newSwapTrashFixture(t)
-	alt, _ := f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
-	// A regular file where the .versions folder must be, so the leaving
-	// version's slot cannot be created. The alt's file is moved aside with the
-	// folder and its row follows it, so the preflight still passes and the
-	// failure is the swap's own, before anything has moved.
-	versionsDir := versions.VersionsDir(f.dir)
-	moved := versionsDir + ".aside"
-	if err := os.Rename(versionsDir, moved); err != nil {
+	f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	// A regular file where the leaving version's slot must be: the slot cannot
+	// be created, before anything has moved. The preflight only looks at the
+	// destination file, so it still passes and the failure is the swap's own.
+	if err := os.MkdirAll(versions.VersionsDir(f.dir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(versionsDir, []byte("not a directory"), 0o644); err != nil {
+	if err := os.WriteFile(versions.VersionSlotDir(f.dir, f.active.ID), []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
-	}
-	rows, _ := f.store.GetBookFiles(f.book.ID)
-	for _, r := range rows {
-		if r.VersionID == alt.ID {
-			r.FilePath = filepath.Join(moved, alt.ID, "Year One.mp3")
-			if err := f.store.UpdateBookFile(r.ID, &r); err != nil {
-				t.Fatal(err)
-			}
-		}
 	}
 	before := f.snapshot()
 
@@ -360,6 +358,265 @@ func TestHandleTrashVersion_SwapFailureDoesNotTrash(t *testing.T) {
 	// Nothing had moved, so the swap put the statuses back (each version was
 	// written twice, marked and restored, so only the statuses are compared).
 	f.requireSameStatuses(before, false)
+}
+
+// diskTree describes every entry under roots (type, link target, content), so
+// "nothing moved on disk" is a comparison of two strings.
+func diskTree(t *testing.T, roots ...string) string {
+	t.Helper()
+	var lines []string
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			switch {
+			case d.Type()&fs.ModeSymlink != 0:
+				target, _ := os.Readlink(p)
+				lines = append(lines, fmt.Sprintf("%s -> %s", p, target))
+			case d.IsDir():
+				lines = append(lines, p+"/")
+			default:
+				b, _ := os.ReadFile(p)
+				lines = append(lines, fmt.Sprintf("%s = %q", p, b))
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+// requireRefusedTrash trashes the active version and expects the 409
+// NO_SWAP_TARGET that names why, with the disk (the book's folder and watch)
+// and every version exactly as they were, and the version not trashed.
+func (f *swapTrashFixture) requireRefusedTrash(why string, watch ...string) {
+	f.t.Helper()
+	roots := append([]string{f.dir}, watch...)
+	diskBefore, before := diskTree(f.t, roots...), f.snapshot()
+
+	w := f.trash(f.active.ID)
+	if w.Code != http.StatusConflict {
+		f.t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if code := errorCodeOf(f.t, w); code != codeNoSwapTarget {
+		f.t.Errorf("code = %q, want %q", code, codeNoSwapTarget)
+	}
+	if !strings.Contains(w.Body.String(), why) {
+		f.t.Errorf("the 409 does not give the reason %q: %s", why, w.Body.String())
+	}
+	if got := diskTree(f.t, roots...); got != diskBefore {
+		f.t.Errorf("the disk changed:\nbefore:\n%s\nafter:\n%s", diskBefore, got)
+	}
+	f.requireUntouched(before)
+	if got := f.version(f.active.ID); got.Status != database.BookVersionStatusActive || got.TrashedAt != nil {
+		f.t.Errorf("status=%s TrashedAt=%v, want active and unstamped", got.Status, got.TrashedAt)
+	}
+}
+
+// addAltRow makes an alt version whose one file row names path (the file is
+// whatever the test put there).
+func (f *swapTrashFixture) addAltRow(path string) *database.BookVersion {
+	f.t.Helper()
+	v, err := f.store.CreateBookVersion(&database.BookVersion{
+		BookID: f.book.ID, Status: database.BookVersionStatusAlt, Format: "m4b", Source: "deluge",
+		IngestDate: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.store.CreateBookFile(&database.BookFile{BookID: f.book.ID, VersionID: v.ID, FilePath: path, Format: "m4b"}); err != nil {
+		f.t.Fatal(err)
+	}
+	return v
+}
+
+// Twin rows: the alt's row names the active version's own file. The swap used
+// to rename that file into the active version's slot, call the move up to the
+// root done, trash the active version, and the purge then deleted the only copy.
+func TestHandleTrashVersion_TwinPathRefused(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	f.addAltRow(f.rootAud)
+	f.requireRefusedTrash("same file")
+}
+
+// The alt's row is a symlink, in its own slot, to the active version's file: the
+// pre-flight passed (stat follows the link), the swap moved the target and its
+// third step failed with no way back, leaving the book swapping_out/swapping_in
+// and every later trash a 409.
+func TestHandleTrashVersion_SymlinkAltRefused(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	alt := f.addAltRow(filepath.Join(f.dir, "placeholder"))
+	link := filepath.Join(versions.VersionSlotDir(f.dir, alt.ID), "The Long Halloween.m4b")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(f.rootAud, link); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := f.store.GetBookFiles(f.book.ID)
+	for _, r := range rows {
+		if r.VersionID == alt.ID {
+			r.FilePath = link
+			if err := f.store.UpdateBookFile(r.ID, &r); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	f.requireRefusedTrash("same file")
+}
+
+// The book row names a folder the active file is not in: the entering audio
+// would go into the stale folder.
+func TestHandleTrashVersion_StaleBookPathRefused(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	stale := filepath.Join(filepath.Dir(f.dir), "Arkham", "The Long Halloween.m4b")
+	if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error { b.FilePath = stale; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	f.bookPath = stale
+	f.requireRefusedTrash("book path is stale", filepath.Dir(stale))
+	if _, err := os.Stat(filepath.Dir(stale)); !os.IsNotExist(err) {
+		t.Errorf("the stale folder was created: %v", err)
+	}
+}
+
+// An empty file_path makes the book's folder ".", the process's working
+// directory: the entering audio would be moved there.
+func TestHandleTrashVersion_EmptyBookPathRefused(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error { b.FilePath = ""; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	f.bookPath = ""
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	f.requireRefusedTrash("no file path", cwd)
+	if entries, _ := os.ReadDir(cwd); len(entries) != 0 {
+		t.Errorf("the working directory has %d entries, want none", len(entries))
+	}
+}
+
+// An alt whose file is in a download folder (or any folder but its own slot) is
+// not the swap's to take.
+func TestHandleTrashVersion_AltOutsideBookFolderRefused(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	dl := filepath.Join(t.TempDir(), "downloads", "Hush.m4b")
+	if err := os.MkdirAll(filepath.Dir(dl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dl, []byte("download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.addAltRow(dl)
+	f.requireRefusedTrash("not inside its own slot", filepath.Dir(dl))
+}
+
+// A step-3 failure (the entering file cannot be taken out of its slot: the same
+// shape as an alt on another filesystem, EXDEV, or a permission error) is rolled
+// back: the leaving file is moved back, the statuses are restored, the book
+// keeps its active version, and the version is not trashed. It used to leave the
+// book swapping_out/swapping_in with no active index, and every later trash a 409.
+func TestHandleTrashVersion_Step3FailureRollsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newSwapTrashFixture(t)
+	alt, _ := f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	altSlot := versions.VersionSlotDir(f.dir, alt.ID)
+	if err := os.Chmod(altSlot, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(altSlot, 0o755) })
+	diskBefore, before := diskTree(t, f.dir), f.snapshot()
+
+	w := f.trash(f.active.ID)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if code := errorCodeOf(t, w); code != codeVersionSwapFailed {
+		t.Errorf("code = %q, want %q", code, codeVersionSwapFailed)
+	}
+	if got := diskTree(t, f.dir); got != diskBefore {
+		t.Errorf("the files were not put back:\nbefore:\n%s\nafter:\n%s", diskBefore, got)
+	}
+	f.requireSameStatuses(before, false)
+	if got, _ := f.store.GetActiveVersionForBook(f.book.ID); got == nil || got.ID != f.active.ID {
+		t.Errorf("active version = %v, want %s: the book is left without one", got, f.active.ID)
+	}
+	if got := f.version(f.active.ID); got.Status == database.BookVersionStatusTrash || got.TrashedAt != nil {
+		t.Errorf("the version was trashed despite the failed swap: status=%s", got.Status)
+	}
+
+	// Not stuck: once the obstacle is gone the same trash goes through.
+	if err := os.Chmod(altSlot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.trash(f.active.ID); w.Code != http.StatusOK {
+		t.Fatalf("retry: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The purge's last line of defence: when none of the files the book serves
+// exists on disk the guard cannot tell what is served, and the purge refuses (409)
+// instead of deleting. Here the file the swap put in the book's folder is gone
+// (the shape the twin-path bug left behind).
+func TestHandlePurgeVersion_NothingServedExistsRefuses(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	if w := f.trash(f.active.ID); w.Code != http.StatusOK {
+		t.Fatalf("trash: %d %s", w.Code, w.Body.String())
+	}
+	slotFile := filepath.Join(versions.VersionSlotDir(f.dir, f.active.ID), "The Long Halloween.m4b")
+	if err := os.Remove(filepath.Join(f.dir, "Year One.mp3")); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/"+f.book.ID+"/versions/"+f.active.ID+"/purge-now", nil)
+	w := httptest.NewRecorder()
+	f.srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("purge-now: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "unknown") {
+		t.Errorf("the 409 does not say what is unknown: %s", w.Body.String())
+	}
+	if _, err := os.Stat(slotFile); err != nil {
+		t.Errorf("the purge deleted the trashed version's file although nothing the book serves exists: %v", err)
+	}
+	if got := f.version(f.active.ID); got.Status != database.BookVersionStatusTrash {
+		t.Errorf("status = %s, want trash (restorable)", got.Status)
+	}
+}
+
+// A trash that fails after the swap went through says so: the book now plays the
+// other version, and a bare 500 would read as "nothing changed".
+func TestRespondTrashFailedAfterSwap_NamesTheVersionSwappedTo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		swappedTo string
+		want      bool
+	}{{"01ALT", true}, {"", false}} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/", nil)
+		(&Server{}).respondTrashFailedAfterSwap(c, tc.swappedTo, errors.New("write failed"))
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("code = %d, want 500", w.Code)
+		}
+		got, _ := decodeBody(t, w)["swapped_to"].(string)
+		if tc.want && got != tc.swappedTo {
+			t.Errorf("swapped_to = %q, want %q in %s", got, tc.swappedTo, w.Body.String())
+		}
+		if !tc.want && got != "" {
+			t.Errorf("swapped_to = %q for a trash that swapped nothing: %s", got, w.Body.String())
+		}
+	}
 }
 
 // (e) A version that is not the active one is trashed as before: no swap, the
