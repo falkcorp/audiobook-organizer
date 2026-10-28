@@ -1,5 +1,5 @@
 // file: internal/undo/user_data.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
 // last-edited: 2026-10-28
 
@@ -89,6 +89,9 @@ var changeTypeHoldsUserData = map[string]bool{
 	ChangeTypeBookVersionCreate:    false,
 	ChangeTypeBookFileRetire:       false,
 	ChangeTypeRetiredVersionRehome: false,
+	// A narrator name the credits backfill is about to create: a library
+	// record's name, no one user's data.
+	ChangeTypeNarratorCreateIntent: false,
 	// The merge pointers hold only a journal id. The journal they name does
 	// hold every user's progress; the routes that serve it strip that for
 	// callers who may not manage users (GET /merge/combine-journal and

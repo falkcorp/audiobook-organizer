@@ -1,7 +1,7 @@
 // file: internal/undo/credits_backfill.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 28847eaf-80d0-49cd-95a2-6de0cb8f0381
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package undo
 
@@ -50,6 +50,16 @@ import (
 // not as the duplicate positions themselves. Everything else, the flat fields
 // included, comes back exactly.
 const ChangeTypeCreditsBackfill = "credits_backfill"
+
+// ChangeTypeNarratorCreateIntent: maintenance.credits-backfill is about to create
+// a narrator record named NewValue. It is written BEFORE the create, so a crash
+// between the store's commit and the credits_backfill row that would name the
+// record leaves a trace: a later attempt of the same operation finds the record
+// by this name and deletes it if nothing links it (it was made by the operation
+// and nobody credits it). A ledger record only: the revert has no case for it, so
+// POST /operations/:id/revert reports it under not_restorable_types, like the
+// narrator_delete rows the same op writes when it removes such a record.
+const ChangeTypeNarratorCreateIntent = "narrator_create_intent"
 
 // CreditsBackfillState is one book's credit state as a credits_backfill row
 // records it.
