@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
 // last-edited: 2026-10-28
 
@@ -72,8 +72,10 @@ func TestHandleTrashVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create book: %v", err)
 	}
+	// An alt: trashing the ACTIVE version is a swap first (see
+	// version_lifecycle_swap_test.go).
 	ver, err := store.CreateBookVersion(&database.BookVersion{
-		BookID: "b1", Status: database.BookVersionStatusActive, Format: "m4b", Source: "imported",
+		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
 	})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
@@ -165,7 +167,7 @@ func TestHandleTrashRestoreVersion_CanonicalAudiobooksPath(t *testing.T) {
 		t.Fatalf("create book: %v", err)
 	}
 	ver, err := store.CreateBookVersion(&database.BookVersion{
-		BookID: "b1", Status: database.BookVersionStatusActive, Format: "m4b", Source: "imported",
+		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b", Source: "imported",
 	})
 	if err != nil {
 		t.Fatalf("create version: %v", err)
@@ -368,50 +370,6 @@ func TestHandlePurgeVersion_TrashedPurgesFilesKeepsRows(t *testing.T) {
 	}
 }
 
-func TestAutoPromoteAlt(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStoreInMemory(pebblePath)
-	if err != nil {
-		t.Fatalf("open pebble: %v", err)
-	}
-	// BookFilesAtPath fails closed until the async memdb warmup publishes, and the
-	// purge guard then deletes nothing; wait so the purge sees real answers.
-	store.WaitForWarmup()
-	t.Cleanup(func() { store.Close() })
-
-	_, _ = store.CreateBook(&database.Book{ID: "b1", Title: "Test Book", FilePath: "/tmp/b1"})
-
-	// Create two alt versions with different ingest dates.
-	older := time.Now().Add(-48 * time.Hour)
-	newer := time.Now().Add(-1 * time.Hour)
-
-	v1, _ := store.CreateBookVersion(&database.BookVersion{
-		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "mp3",
-		Source: "imported", IngestDate: older,
-	})
-	v2, _ := store.CreateBookVersion(&database.BookVersion{
-		BookID: "b1", Status: database.BookVersionStatusAlt, Format: "m4b",
-		Source: "imported", IngestDate: newer,
-	})
-
-	if err := versions.AutoPromoteAlt(store, "b1"); err != nil {
-		t.Fatalf("auto-promote: %v", err)
-	}
-
-	got1, _ := store.GetBookVersion(v1.ID)
-	got2, _ := store.GetBookVersion(v2.ID)
-
-	// The newer alt should become active.
-	if got2.Status != database.BookVersionStatusActive {
-		t.Errorf("newer version status = %s, want active", got2.Status)
-	}
-	if got1.Status != database.BookVersionStatusAlt {
-		t.Errorf("older version status = %s, want alt", got1.Status)
-	}
-}
-
 func TestHandleHardDeleteVersion(t *testing.T) {
 	srv, store := setupVersionLifecycleServer(t)
 
@@ -460,8 +418,9 @@ func TestHandleHardDeleteVersion_NotPurged(t *testing.T) {
 	}
 }
 
-// TestHandlePurgeVersion_KeepsFileTheBookServes: trashing the ACTIVE version
-// leaves its files where the book plays them. "Purge now" on it must refuse
+// TestHandlePurgeVersion_KeepsFileTheBookServes: a version trashed while it was
+// the ACTIVE one (before the trash handler swapped first) has its files where
+// the book plays them. "Purge now" on it must refuse
 // with 409, delete nothing and leave the version in the trash, instead of
 // deleting the book's playable file.
 func TestHandlePurgeVersion_KeepsFileTheBookServes(t *testing.T) {
@@ -489,10 +448,15 @@ func TestHandlePurgeVersion_KeepsFileTheBookServes(t *testing.T) {
 		t.Fatalf("create book file: %v", err)
 	}
 
-	del := httptest.NewRecorder()
-	srv.router.ServeHTTP(del, httptest.NewRequest(http.MethodDelete, "/api/v1/audiobooks/hush/versions/"+ver.ID, nil))
-	if del.Code != http.StatusOK {
-		t.Fatalf("trash: expected 200, got %d: %s", del.Code, del.Body.String())
+	// The state the old trash handler left: the ACTIVE version flipped to trash
+	// with no swap, its file still the book's. The handler swaps first now (and
+	// refuses a book with no other version), so the state is written directly:
+	// the purge guard must still refuse it.
+	if err := versions.MarkTrashed(ver, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateBookVersion(ver); err != nil {
+		t.Fatalf("trash: %v", err)
 	}
 
 	w := httptest.NewRecorder()

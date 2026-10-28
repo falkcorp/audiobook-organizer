@@ -1,7 +1,7 @@
 // file: internal/versions/swap.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6c3d5a2e-8b4c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-14
+// last-edited: 2026-10-28
 //
 // Primary-version swap tracked operation (spec 3.1 task 3).
 //
@@ -18,8 +18,10 @@ package versions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -69,15 +71,31 @@ func RunVersionSwap(
 	if fromVer.BookID != params.BookID || toVer.BookID != params.BookID {
 		return fmt.Errorf("version/book mismatch")
 	}
+	// A retired version holds the retired files of another book and is outside
+	// the version lifecycle: swapping one in would put those files in this
+	// book's active slot, swapping one out would move them. Refused before the
+	// first status write, so a refusal leaves both versions exactly as they were.
+	if err := refuseRetired(fromVer, "swap out"); err != nil {
+		return err
+	}
+	if err := refuseRetired(toVer, "swap in"); err != nil {
+		return err
+	}
 
 	book, err := store.GetBookByID(params.BookID)
 	if err != nil || book == nil {
 		return fmt.Errorf("book %s not found", params.BookID)
 	}
+	// Refused before the first status write, like a retired version: the swap
+	// takes the book's folder to be the parent of FilePath (see bookPathIsFolder).
+	if bookPathIsFolder(book.FilePath) {
+		return fmt.Errorf("swap versions of book %s: %s", book.ID, folderBookReason(book.FilePath))
+	}
 	bookDir := filepath.Dir(book.FilePath)
 
 	// ── Step 1: Mark DB transitional states ─────────────────────
 	// Only set if not already in the transitional state (resume path).
+	fromWas, toWas := fromVer.Status, toVer.Status
 	if fromVer.Status != database.BookVersionStatusSwappingOut {
 		fromVer.Status = database.BookVersionStatusSwappingOut
 		if err := store.UpdateBookVersion(fromVer); err != nil {
@@ -100,6 +118,16 @@ func RunVersionSwap(
 	fromPaths := filePaths(fromFiles)
 	newFromPaths, errs := MoveToVersionsDir(bookDir, params.FromVersionID, fromPaths)
 	if len(errs) > 0 {
+		// Nothing has moved when every file is still where it was: the
+		// transitional statuses (which also drop the book's active index) are
+		// put back, so a swap that never started does not leave the book with
+		// no active version. A partial move keeps them: the files are in two
+		// places and a resume has to finish it.
+		if !anyMoved(fromPaths, newFromPaths) {
+			if rbErr := rollbackSwapStatuses(store, fromVer, fromWas, toVer, toWas); rbErr != nil {
+				return fmt.Errorf("move-to-versions: %v (and the versions could not be put back: %w)", errs, rbErr)
+			}
+		}
 		return fmt.Errorf("move-to-versions: %v", errs)
 	}
 	progress("fs_move_from", 40)
@@ -205,6 +233,32 @@ func filesForVersion(store bookFileLister, bookID, versionID string) ([]database
 		}
 	}
 	return matched, nil
+}
+
+// anyMoved reports whether any of the files has left its old path for its new
+// one.
+func anyMoved(oldPaths, newPaths []string) bool {
+	for i, old := range oldPaths {
+		if i >= len(newPaths) || newPaths[i] == old {
+			continue
+		}
+		if _, err := os.Stat(newPaths[i]); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// rollbackSwapStatuses puts the two versions back to the statuses they had
+// before the swap marked them. It tries both whatever the first one does, and
+// returns what failed: the versions are then still in the transitional statuses
+// and the swap's error tells the caller so.
+func rollbackSwapStatuses(store versionUpdater, fromVer *database.BookVersion, fromWas string, toVer *database.BookVersion, toWas string) error {
+	fromVer.Status = fromWas
+	fromErr := store.UpdateBookVersion(fromVer)
+	toVer.Status = toWas
+	toErr := store.UpdateBookVersion(toVer)
+	return errors.Join(fromErr, toErr)
 }
 
 func filePaths(files []database.BookFile) []string {

@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_prop_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: d4c4cd2b-c578-4a11-8229-83a516271b1b
 // last-edited: 2026-10-28
 
@@ -10,7 +10,7 @@
 //
 // Each property uses a fresh PebbleStore per rapid.Check invocation so rapid
 // can shrink freely without cross-iteration state bleed. Tests call the
-// lifecycle primitives (AutoPromoteAlt, PurgeVersion, UpdateBookVersion)
+// lifecycle primitives (PurgeVersion, UpdateBookVersion)
 // directly rather than going through the HTTP layer — the handlers are thin
 // wrappers that delegate to those primitives after parameter parsing.
 // last-edited: 2026-09-02
@@ -64,8 +64,9 @@ func newPropLifecycleStore(t *rapid.T) database.Store {
 	return store
 }
 
-// trashVersion mimics handleTrashVersion's core logic: sets status to trash
-// and auto-promotes an alt if the trashed version was active.
+// trashVersion mimics the status side of handleTrashVersion: sets status to
+// trash and promotes the newest alt if the trashed version was active. It moves
+// no file (the handler's swap does; these properties are about statuses).
 func trashVersion(store database.Store, ver *database.BookVersion) error {
 	wasActive := ver.Status == database.BookVersionStatusActive
 	if err := MarkTrashed(ver, time.Now()); err != nil {
@@ -75,7 +76,7 @@ func trashVersion(store database.Store, ver *database.BookVersion) error {
 		return err
 	}
 	if wasActive {
-		return AutoPromoteAlt(store, ver.BookID)
+		return promoteNewestAltForTest(store, ver.BookID)
 	}
 	return nil
 }
@@ -220,7 +221,7 @@ func TestProp_AutoPromotePicksMostRecent(t *testing.T) {
 			}
 		}
 
-		// Trash the active version; this triggers AutoPromoteAlt.
+		// Trash the active version; this promotes the newest alt.
 		if err := trashVersion(store, active); err != nil {
 			t.Fatalf("trash active: %v", err)
 		}

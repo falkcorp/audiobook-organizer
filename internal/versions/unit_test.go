@@ -1,5 +1,5 @@
 // file: internal/versions/unit_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
 // last-edited: 2026-10-28
 
@@ -8,7 +8,6 @@ package versions
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
@@ -205,49 +204,6 @@ func TestCheckFingerprint_ActiveNotBlocked(t *testing.T) {
 
 	match := CheckFingerprint(mockStore, "active-hash", nil)
 	assert.False(t, match.Matched)
-}
-
-// --------------------------------------------------------------------------
-// AutoPromoteAlt — mock-based unit tests
-// --------------------------------------------------------------------------
-
-func TestAutoPromoteAlt_NoAlts(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return([]database.BookVersion{
-		{ID: "v-1", BookID: "book-1", Status: database.BookVersionStatusTrash},
-	}, nil)
-
-	err := AutoPromoteAlt(mockStore, "book-1")
-	require.NoError(t, err)
-	// No UpdateBookVersion call expected — bestAlt is nil, returns nil.
-}
-
-func TestAutoPromoteAlt_PicksNewestAlt(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-
-	older := time.Now().Add(-48 * time.Hour)
-	newer := time.Now().Add(-1 * time.Hour)
-
-	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return([]database.BookVersion{
-		{ID: "v-old", BookID: "book-1", Status: database.BookVersionStatusAlt, IngestDate: older},
-		{ID: "v-new", BookID: "book-1", Status: database.BookVersionStatusAlt, IngestDate: newer},
-		{ID: "v-trashed", BookID: "book-1", Status: database.BookVersionStatusTrash, IngestDate: time.Now()},
-	}, nil)
-
-	mockStore.EXPECT().UpdateBookVersion(mock.MatchedBy(func(v *database.BookVersion) bool {
-		return v.ID == "v-new" && v.Status == database.BookVersionStatusActive
-	})).Return(nil)
-
-	err := AutoPromoteAlt(mockStore, "book-1")
-	require.NoError(t, err)
-}
-
-func TestAutoPromoteAlt_StoreError(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return(nil, errors.New("db error"))
-
-	err := AutoPromoteAlt(mockStore, "book-1")
-	require.Error(t, err)
 }
 
 // --------------------------------------------------------------------------

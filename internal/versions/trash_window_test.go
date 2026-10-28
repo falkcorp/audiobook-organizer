@@ -1,5 +1,5 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
 // last-edited: 2026-10-28
 
@@ -402,7 +402,7 @@ func TestTrashedAt_StaysPutWhileTrashed(t *testing.T) {
 // (internal/server/version_lifecycle.go handleTrashVersion, via MarkTrashed),
 // covered end to end by TestHandleTrashVersion_StampsTrashedAt. No other code
 // sets BookVersionStatusTrash: swap moves versions between active, alt and
-// swapping_*; AutoPromoteAlt only promotes alt to active; ingest creates
+// swapping_*; RunVersionSwap only moves versions between active and alt; ingest creates
 // active or alt. The store stamps any write that enters the trash, so the
 // rows below cover a direct UpdateBookVersion from every other status too --
 // a future path that forgets MarkTrashed is still stamped.

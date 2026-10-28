@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -26,8 +26,10 @@
 // back through purging), or by hard delete.
 //
 // Delete puts a version in trash (14-day TTL, counted from TrashedAt --
-// when it entered the trash, not when it was created). Auto-promote selects
-// the most recent alt if the active version was trashed. Restore
+// when it entered the trash, not when it was created). The active version is
+// not trashed in place: the server first swaps another version in (PickSwapTarget
+// chooses it, RunVersionSwap moves the files), then trashes the one that left.
+// Restore
 // moves trash back to alt. Purge physically deletes files and
 // marks inactive_purged (keeps metadata for fingerprint). Hard
 // delete removes all traces.
@@ -87,9 +89,10 @@ var ErrVersionDeleted = errors.New("version was deleted")
 
 // ErrRetiredVersion is returned by the lifecycle steps that refuse a retired
 // version: MarkTrashed, MarkRestored and PurgeVersion. Callers branch on it
-// with errors.Is; the server answers it with a 409. AutoPromoteAlt never
-// returns it (it skips a retired version silently), and swap has no guard yet:
-// it is tracked in the todo fragment for this stack.
+// with errors.Is; the server answers it with a 409. RunVersionSwap refuses it
+// too, on either of its two versions, before it writes anything. PickSwapTarget
+// never returns a retired version (only an alt is a candidate), so it does not
+// produce it.
 var ErrRetiredVersion = errors.New("a retired version is not part of the version lifecycle")
 
 // refuseRetired is the one place a lifecycle step checks for a retired
@@ -172,36 +175,6 @@ func MarkRestored(v *database.BookVersion) error {
 	return nil
 }
 
-// AutoPromoteAlt selects the most recent alt version and promotes it
-// to active. Called when the active version is trashed.
-//
-// Only an alt version is a candidate, so a retired version is never promoted
-// even when it is newer than every alt: the status test runs before the date
-// comparison. Promoting it would put the retired files of another book into the
-// holder's active slot. TestAutoPromoteAlt_IgnoresRetired pins this; it fails if
-// the status test is loosened to admit any status but trash.
-func AutoPromoteAlt(store altPromoter, bookID string) error {
-	allVers, err := store.GetBookVersionsByBookID(bookID)
-	if err != nil {
-		return err
-	}
-	var bestAlt *database.BookVersion
-	for i := range allVers {
-		v := &allVers[i]
-		if v.Status != database.BookVersionStatusAlt {
-			continue
-		}
-		if bestAlt == nil || v.IngestDate.After(bestAlt.IngestDate) {
-			bestAlt = v
-		}
-	}
-	if bestAlt == nil {
-		return nil
-	}
-	bestAlt.Status = database.BookVersionStatusActive
-	return store.UpdateBookVersion(bestAlt)
-}
-
 // BookServesFilesError is what PurgeVersion returns, having deleted nothing,
 // when a live book still serves one of the version's files: the version's own
 // book (a file outside this version's own .versions/{id}/ slot, the book's
@@ -210,10 +183,13 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 // failure of the purge machinery: the version stays in the trash, files intact
 // and restorable, never claimed, and a later run tries again.
 //
-// How it happens: trashing the ACTIVE version only flips its status. Its files
-// stay where the book plays them (book.FilePath and the book_file rows of the
-// version), so 14 days later the purge was deleting the playable files and
-// leaving the book pointing at a missing file.
+// How it happens: trashing the ACTIVE version used to flip its status and
+// nothing else. Its files stayed where the book plays them (book.FilePath and
+// the book_file rows of the version), so 14 days later the purge was deleting
+// the playable files and leaving the book pointing at a missing file. The trash
+// handler now swaps another version in first (PickSwapTarget, RunVersionSwap);
+// this guard stays as the second line, for a version that became active again
+// or was never swapped out.
 type BookServesFilesError struct {
 	BookID    string
 	VersionID string

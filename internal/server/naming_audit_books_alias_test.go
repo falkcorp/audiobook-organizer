@@ -1,5 +1,5 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-28
 
@@ -113,8 +113,10 @@ func TestDeprecatedBooksAliases_RemainingSixRoutesAnswer(t *testing.T) {
 	call(http.MethodPost, "/api/v1/books/b1/status/repair", "")
 	call(http.MethodPost, "/api/v1/audiobooks/b1/status/repair", "")
 
-	// 7. DELETE versions/:vid (trash); the /books alias is retired
-	call(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusActive), "")
+	// 7. DELETE versions/:vid (trash); the /books alias is retired. An alt:
+	// trashing the active version swaps another in first and is refused when
+	// none can take over (TestHandleTrashVersion_ActiveSwapsFirst and friends).
+	call(http.MethodDelete, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusAlt), "")
 
 	// 8. POST versions/:vid/restore (version must start in trash); alias retired
 	call(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+newVersion(database.BookVersionStatusTrash)+"/restore", "")
