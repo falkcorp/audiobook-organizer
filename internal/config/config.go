@@ -1,7 +1,7 @@
 // file: internal/config/config.go
 // version: 1.174.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-23
+// last-edited: 2026-10-28
 
 package config
 

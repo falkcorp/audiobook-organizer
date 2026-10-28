@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_gates_test.go
 // version: 1.2.4
 // guid: 5d0b7a96-3c41-4e8f-a2d7-91f6c8e03b54
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package maintenance
 

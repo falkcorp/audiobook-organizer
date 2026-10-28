@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retired_shell_test.go
 // version: 1.0.0
 // guid: 8a4d1f60-e2b7-4c93-a5d8-0f6b3c7e9124
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package audiobooks
 

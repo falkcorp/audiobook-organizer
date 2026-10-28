@@ -1,7 +1,7 @@
 // file: internal/httputil/respond.go
 // version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 // Package httputil provides shared HTTP response helpers for all packages
 // that handle gin HTTP requests (server, middleware, itunes/service, etc).

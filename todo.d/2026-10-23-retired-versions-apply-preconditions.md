@@ -1,12 +1,13 @@
 - [ ] **TODO-RETIRED-APPLY-PRECONDITIONS** before `retire_versions_apply_enabled`
-      is turned on in production: (1) PR 5 must land the undo cases for
-      `book_version_create`, `book_file_retire` and `retired_version_rehome`
-      (PR 7 declares the strings locally in
-      `internal/plugins/maintenance/retired_versions_apply.go` and journals
-      through `Writer.JournalStep`/`JournalSteps`; swap in PR 5's Writer
-      primitives behind the `retireWriter` interface); (2) the combine-undo link
+      is turned on in production: (1) move the fixer's journaling onto PR 5's `repairs.Writer.RetireVersion`
+      and `RehomeRetiredVersion` (the rows it writes already use the undo
+      package's change types and formats, so an Apply is revertible today; the
+      swap is behind the `retireWriter` interface in
+      `internal/plugins/maintenance/retired_versions_apply.go`); (2) the combine-undo link
       of plan section 6.5 (`combine_undo_aware` rows are held as retry_later
-      until `merge/combine_journal.go` UndoCombine reverses a retire first);
+      until the fixer passes `RetireSpec.CombineJournalID` to
+      `Writer.RetireVersion`, which links the retire so UndoCombine reverses it
+      first);
       (3) the `dedup:automerge:` journals are not read (the plugin deps cannot
       reach the embedding store; the 14-day minimum age is the only guard); (4)
       a trashed book that holds only retired rows for other shells and owns no
@@ -26,11 +27,9 @@
       `ErrBookOwnsFiles`; this predates the retire work, and adding the check
       changes the batch's behaviour for live rows too, so it is left for its own
       change (`DiscardProgressAndPurge`, the `DeleteAudiobook` live branch and
-      the purge pre-check now count retired rows); (9) the comment at
-      `internal/repairs/writer_files.go:29` still says a whole apply is undone
-      from the Operations page, which is not true until PR 5 (#4146); (10) decorator
+      the purge pre-check now count retired rows); (9) decorator
       stores that do not implement `Unwrap() database.Store` cannot be read for
-      retired rows and now fail closed; (11) PR 5's revert of a
+      retired rows and now fail closed; (10) PR 5's revert of a
       `book_version_create` row must refuse to delete a version that still holds
       rows (reverting the create after the rows' own retire rows are reverted is
       the only order that leaves it empty; a create reverted while rows remain,

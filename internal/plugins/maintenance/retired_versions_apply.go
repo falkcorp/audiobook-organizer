@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -85,26 +85,11 @@ import (
 //
 // WHAT IT DOES NOT DO YET. A shell an unreversed combine journal names as
 // absorbed (combine_undo_aware) is held, not retired: plan section 6.5 requires
-// the retire to be undone by undoing the combine, and that link lives in
-// merge/combine_journal.go, which PR 5 owns. The dedup auto-merge journals
+// the retire to be undone by undoing the combine, and that link is written by
+// repairs.Writer.RetireVersion (RetireSpec.CombineJournalID), which this
+// fixer does not call yet. The dedup auto-merge journals
 // (dedup:automerge:) are not read either; both are pre-conditions of turning the
 // flag on in production (docs/executive-summaries and the PR body say so).
-
-// The change types this PR journals. They are declared HERE because the undo
-// package is PR 5's: its revert cases, preflight classification and restorable
-// set for these three strings land there.
-//
-// TODO(PR 5, retire plan 6.2): move these into internal/undo as
-// ChangeTypeBookVersionCreate, ChangeTypeBookFileRetire and
-// ChangeTypeRetiredVersionRehome (same strings), and let the journaledRetireWriter
-// below call the Writer primitives PR 5 adds instead of Writer.JournalStep and
-// Writer.JournalSteps. Until then an op revert of a retire does not know how to
-// undo these rows; nothing creates one while the flag is off (the default).
-const (
-	retChangeBookVersionCreate = "book_version_create"
-	retChangeBookFileRetire    = "book_file_retire"
-	retChangeVersionRehome     = "retired_version_rehome"
-)
 
 // retiredVersionSource is BookVersion.Source of a version made by this fixer.
 const retiredVersionSource = "retired_book"
@@ -398,11 +383,16 @@ type retireRow struct {
 // journal row cannot be recorded. The fixer reaches the store only through it
 // for these six writes; tests wrap it to observe the order and the calls.
 //
-// TODO(PR 5, retire plan 6.2): the Writer primitives PR 5 adds in
-// internal/repairs (RetireBookFiles, CreateRetiredVersion, RehomeRetiredVersion,
-// with their undo.ChangeType* constants and revert cases) replace the bodies of
-// journaledRetireWriter's RetireRows, CreateRetiredVersion and RehomeVersion.
-// This interface does not change.
+// The rows it journals are the undo package's own (undo.ChangeTypeBookVersionCreate,
+// ChangeTypeBookFileRetire, ChangeTypeRetiredVersionRehome, with RetirePlace
+// values and BookVersionField), so an op revert undoes them.
+//
+// TODO(retire plan 6.2): internal/repairs now has Writer.RetireVersion (which
+// also links a retire to the combine it absorbed, CombineJournalID) and
+// Writer.RehomeRetiredVersion. Moving journaledRetireWriter's
+// CreateRetiredVersion, RetireRows and RehomeVersion onto them, and passing the
+// combine journal id so combine_undo_aware rows stop being held, is the part-5
+// integration still to do; this interface does not change.
 type retireWriter interface {
 	// RecordPlan journals the decision a run worked from (repair_plan_record,
 	// FieldName "row:<shellID>") on the holder, before the run's first write.
@@ -471,11 +461,11 @@ func (a *journaledRetireWriter) RecordPlan(holderID, shellID string, rec []byte)
 }
 
 func (a *journaledRetireWriter) CreateRetiredVersion(holderID string, v *database.BookVersion) error {
-	field := "book_version:" + v.ID
+	field := undo.BookVersionField(v.ID)
 	// A resumed run reuses the version its cut-off run journaled: its RetiredAt
 	// is a clock reading, so a second candidate would journal a second,
 	// different row for the same version.
-	prev, ok, err := a.w.JournaledValue(holderID, retChangeBookVersionCreate, field)
+	prev, ok, err := a.w.JournaledValue(holderID, undo.ChangeTypeBookVersionCreate, field)
 	if err != nil {
 		return err
 	}
@@ -490,7 +480,7 @@ func (a *journaledRetireWriter) CreateRetiredVersion(holderID string, v *databas
 	if err != nil {
 		return fmt.Errorf("encode version %s: %w", v.ID, err)
 	}
-	return a.w.JournalStep(holderID, repairs.UndoEntry{ChangeType: retChangeBookVersionCreate, Field: field, New: string(enc)}, func() error {
+	return a.w.JournalStep(holderID, repairs.UndoEntry{ChangeType: undo.ChangeTypeBookVersionCreate, Field: field, New: string(enc)}, func() error {
 		cur, err := a.rows.GetBookVersion(v.ID)
 		if err != nil {
 			return fmt.Errorf("read version %s: %w", v.ID, err)
@@ -506,27 +496,16 @@ func (a *journaledRetireWriter) CreateRetiredVersion(holderID string, v *databas
 	})
 }
 
-// retireRowState is the book and version a retired row names, before and after
-// (OldValue and NewValue of a book_file_retire row, plan section 6.2).
-type retireRowState struct {
-	BookID    string `json:"book_id"`
-	VersionID string `json:"version_id"`
-}
-
 func (a *journaledRetireWriter) RetireRows(shellID, holderID, versionID string, rows []retireRow) error {
 	steps := make([]repairs.BookStep, len(rows))
 	ids := make([]string, len(rows))
 	for i, r := range rows {
-		old, err := json.Marshal(retireRowState{BookID: shellID, VersionID: r.PrevVersionID})
-		if err != nil {
-			return err
-		}
-		nw, err := json.Marshal(retireRowState{BookID: holderID, VersionID: versionID})
-		if err != nil {
-			return err
-		}
+		// The place values the undo's DecodeBookFileRetire reads (plan
+		// section 6.2): where the row stood, and where the retire put it.
+		old := undo.RetirePlace{BookID: shellID, VersionID: r.PrevVersionID}.Encode()
+		nw := undo.RetirePlace{BookID: holderID, VersionID: versionID}.Encode()
 		steps[i] = repairs.BookStep{BookID: holderID, Entry: repairs.UndoEntry{
-			ChangeType: retChangeBookFileRetire, Field: "book_file:" + r.ID, Old: string(old), New: string(nw)}}
+			ChangeType: undo.ChangeTypeBookFileRetire, Field: "book_file:" + r.ID, Old: old, New: nw}}
 		ids[i] = r.ID
 	}
 	return a.w.JournalSteps(steps, func() ([]bool, error) {
@@ -584,7 +563,7 @@ func (a *journaledRetireWriter) SetMergedInto(shellID, holderID string) (bool, e
 }
 
 func (a *journaledRetireWriter) RehomeVersion(versionID, shellID, holderID string) error {
-	return a.w.JournalStep(holderID, repairs.UndoEntry{ChangeType: retChangeVersionRehome, Field: "book_version:" + versionID, Old: shellID, New: holderID}, func() error {
+	return a.w.JournalStep(holderID, repairs.UndoEntry{ChangeType: undo.ChangeTypeRetiredVersionRehome, Field: undo.BookVersionField(versionID), Old: shellID, New: holderID}, func() error {
 		return a.rows.RehomeRetiredVersion(versionID, holderID)
 	})
 }

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_progress_partial_test.go
 // version: 1.0.1
 // guid: 1e5a9c7d-2b48-4f36-8d0e-b7c4f2a9e613
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package merge
 

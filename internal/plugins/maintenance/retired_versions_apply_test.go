@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -237,8 +237,8 @@ func TestRetiredApply_LiveApplyEveryCategory(t *testing.T) {
 	// Every write was journaled first.
 	j := rf.journalByType(opID)
 	require.Equal(t, 2, j[undo.ChangeTypeRepairPlanRecord], "%v", j)
-	require.Equal(t, 2, j[retChangeBookVersionCreate], "%v", j)
-	require.Equal(t, 3, j[retChangeBookFileRetire], "%v", j)
+	require.Equal(t, 2, j[undo.ChangeTypeBookVersionCreate], "%v", j)
+	require.Equal(t, 3, j[undo.ChangeTypeBookFileRetire], "%v", j)
 	require.Equal(t, 1, j[undo.ChangeTypeExternalIDReassign], "%v", j)
 	require.Equal(t, 2, j[undo.ChangeTypeBookMergedInto], "%v", j)
 }
@@ -317,8 +317,8 @@ func TestRetiredApply_ResumeFinishesTheTail(t *testing.T) {
 	out = rf.applyRows(rf.f, res, ids, false, "op-resume")
 	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
 	j := rf.journalByType("op-resume")
-	require.Zero(t, j[retChangeBookVersionCreate], "a resume mints no second version: %v", j)
-	require.Zero(t, j[retChangeBookFileRetire], "a resume retires no row again: %v", j)
+	require.Zero(t, j[undo.ChangeTypeBookVersionCreate], "a resume mints no second version: %v", j)
+	require.Zero(t, j[undo.ChangeTypeBookFileRetire], "a resume retires no row again: %v", j)
 	require.Equal(t, 1, j[undo.ChangeTypeExternalIDReassign], "%v", j)
 	b, err = rf.st.GetBookByID(wr)
 	require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestRetiredApply_ChainRehomesTheShellsRetiredVersions(t *testing.T) {
 	atHolder, err := rf.st.GetRetiredBookFiles(rf.ids["primary"])
 	require.NoError(t, err)
 	require.Len(t, atHolder, 2, "inner's version and middle's own")
-	require.Equal(t, 1, rf.journalByType("op-chain-2")[retChangeVersionRehome])
+	require.Equal(t, 1, rf.journalByType("op-chain-2")[undo.ChangeTypeRetiredVersionRehome])
 }
 
 // holderProbe measures how many rows of one holder are in flight at once
@@ -548,8 +548,8 @@ func TestRetiredApply_FreshPlanFinishesACutOffRetire(t *testing.T) {
 	out = rf.applyRows(rf.f, fresh, []string{wr}, false, "op-fresh")
 	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
 	j := rf.journalByType("op-fresh")
-	require.Zero(t, j[retChangeBookVersionCreate], "%v", j)
-	require.Zero(t, j[retChangeBookFileRetire], "%v", j)
+	require.Zero(t, j[undo.ChangeTypeBookVersionCreate], "%v", j)
+	require.Zero(t, j[undo.ChangeTypeBookFileRetire], "%v", j)
 	require.Zero(t, j[undo.ChangeTypeRepairPlanRecord], "the tail needs no plan record: %v", j)
 	require.Equal(t, 1, j[undo.ChangeTypeExternalIDReassign], "%v", j)
 	require.Equal(t, 1, j[undo.ChangeTypeBookMergedInto], "%v", j)
@@ -631,8 +631,8 @@ func TestRetiredApply_DoesNotAdoptAnotherOpsEmptyVersion(t *testing.T) {
 	require.Len(t, held, 1)
 	require.Equal(t, minted, held[0].VersionID, "the rows went into the op's own version, not the leftover")
 	j := rf.journalByType("op-other")
-	require.Equal(t, 1, j[retChangeBookVersionCreate], "the op journals the create of the version it put rows into: %v", j)
-	require.Equal(t, 1, j[retChangeBookFileRetire], "%v", j)
+	require.Equal(t, 1, j[undo.ChangeTypeBookVersionCreate], "the op journals the create of the version it put rows into: %v", j)
+	require.Equal(t, 1, j[undo.ChangeTypeBookFileRetire], "%v", j)
 }
 
 // A resume of the SAME op that cut a retire off before its commit point adopts
@@ -661,8 +661,8 @@ func TestRetiredApply_ResumeOfTheSameOpAdoptsItsEmptyVersion(t *testing.T) {
 	require.Len(t, held, 1)
 	require.Equal(t, "rv-same-op", held[0].VersionID)
 	j := rf.journalByType("op-resume")
-	require.Zero(t, j[retChangeBookVersionCreate], "%v", j)
-	require.Equal(t, 1, j[retChangeBookFileRetire], "%v", j)
+	require.Zero(t, j[undo.ChangeTypeBookVersionCreate], "%v", j)
+	require.Equal(t, 1, j[undo.ChangeTypeBookFileRetire], "%v", j)
 }
 
 // staleMergedIntoReader reports the shell with no merged-into link whatever the

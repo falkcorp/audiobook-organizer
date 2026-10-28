@@ -1,7 +1,7 @@
 // file: internal/dedup/unmerge_auto_retired_shell_test.go
 // version: 1.1.0
 // guid: 3e9b5c71-a204-4d68-b1f7-82c0d6e4a915
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package dedup
 
