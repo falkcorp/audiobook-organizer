@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_paths_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7e2c4d91-a508-4b36-9f1d-c63a08e5b274
 // last-edited: 2026-10-28
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,55 @@ func (d rowCacheDeps) OwnerVetoes() OwnerVetoReader { return NewOwnerVetoReader(
 // sharedRows points the fixture's fixer at readers that share one RowCache.
 func (rf *retiredFixture) sharedRows() {
 	rf.withDeps(rowCacheDeps{fakeDeps: fakeDeps{store: rf.st}, rows: decisions.NewRowCache()})
+}
+
+// loadCountingVetoes counts the loads of the readers it wraps.
+type loadCountingVetoes struct {
+	OwnerVetoReader
+	loads *atomic.Int32
+}
+
+func (c loadCountingVetoes) Load(ctx context.Context) error {
+	c.loads.Add(1)
+	return c.OwnerVetoReader.Load(ctx)
+}
+
+// loadCountingDeps is fakeDeps whose owner-veto readers count their loads.
+type loadCountingDeps struct {
+	fakeDeps
+	loads *atomic.Int32
+}
+
+func (d loadCountingDeps) OwnerVetoes() OwnerVetoReader {
+	return loadCountingVetoes{OwnerVetoReader: NewOwnerVetoReader(d.store, nil), loads: d.loads}
+}
+
+// A re-plan of a book that left the trash answers "gone" before it reads the
+// owner's rejects, so it pays no load; a book still in the trash loads them
+// exactly once.
+func TestRetiredVersions_ReplanLoadsTheRejectsOnlyAfterTheTrashCheck(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	rf.trashed("shell", "g", 20, rf.file("g/shell.mp3"))
+	rf.trashed("left", "g", 20, rf.file("g/left.mp3"))
+	planned := rf.plan()
+	loads := &atomic.Int32{}
+	rf.withDeps(loadCountingDeps{fakeDeps: fakeDeps{store: rf.st}, loads: loads})
+
+	b, err := rf.st.GetBookByID(rf.ids["left"])
+	require.NoError(t, err)
+	b.MarkedForDeletion, b.MarkedForDeletionAt = retiredPtr(false), nil
+	_, err = rf.st.UpdateBook(b.ID, b)
+	require.NoError(t, err)
+
+	gone, err := rf.f.Replan(context.Background(), nil, planned[rf.ids["left"]], &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, retCatGone, gone.Skipped)
+	require.Zero(t, loads.Load(), "a gone row reads no rejects")
+
+	_, err = rf.f.Replan(context.Background(), nil, planned[rf.ids["shell"]], &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), loads.Load(), "a row still in the trash loads the rejects once")
 }
 
 // A veto on (A, shell) holds the shell's row whenever A's work ended up in the

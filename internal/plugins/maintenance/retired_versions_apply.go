@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-28
 
@@ -799,6 +799,12 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		if locked.Class != retCatTailPending || !ld.done || ld.holder != d.holder {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.Reason)
 		}
+		// A run cut off between RetireRows and recordApplied (or whose record
+		// write failed) left these versions with no `applied` record, and the
+		// tail is the only thing that will ever visit them again. recordApplied
+		// is idempotent (RecordUnlessSeen), so a version that already has its
+		// record gets none.
+		f.recordAppliedForVersions(run, ld.shell.ID, ld.holder, ld.versionIDs)
 		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0, ld.planned)
 	}
 	if locked.RetryLater {
@@ -939,6 +945,30 @@ func (f *retiredVersionsFixer) recordApplied(opID, shell, holder, versionID stri
 		retiredApplyLog.Error("retired-versions: applied decision record not written for shell=%s holder=%s version=%s op=%s: %v",
 			logger.SanitizeLogValue(shell), logger.SanitizeLogValue(holder), logger.SanitizeLogValue(versionID),
 			logger.SanitizeLogValue(opID), err)
+	}
+}
+
+// recordAppliedForVersions writes the `applied` record of each of the shell's
+// retired versions in versionIDs that holds rows, from the version's own id and
+// the op that retired it (recordApplied). The finish-the-tail path calls it: a
+// retire that was cut off after its commit point never reached recordApplied in
+// the run that made it. A version with no retire op id predates the records and
+// cannot be told from any other, so it gets none. As the record is a label, a
+// failure to read the versions is logged and never stops the tail.
+func (f *retiredVersionsFixer) recordAppliedForVersions(run *retiredRun, shell, holder string, versionIDs []string) {
+	if len(versionIDs) == 0 {
+		return
+	}
+	vs, err := run.retired.GetRetiredVersionsFromBook(shell)
+	if err != nil {
+		retiredApplyLog.Error("retired-versions: applied decision records not written for shell=%s holder=%s: read its retired versions: %v",
+			logger.SanitizeLogValue(shell), logger.SanitizeLogValue(holder), err)
+		return
+	}
+	for i := range vs {
+		if v := &vs[i]; v.RetireOpID != "" && slices.Contains(versionIDs, v.ID) {
+			f.recordApplied(v.RetireOpID, shell, holder, v.ID)
+		}
 	}
 }
 

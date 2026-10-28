@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-28
 
@@ -88,6 +88,9 @@ type RevertPlan struct {
 	// each was Recorded restored (Gate): the id and the link go back to a shell
 	// only together with its files, never alone.
 	shellRetires map[string][]string
+	// retiredInto: the retired versions a non-voided book_file_retire row of
+	// the operation moved a row into, reverted or not (NoteRetiredInto).
+	retiredInto map[string]bool
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -104,7 +107,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
 		refusedAuthor: map[int]bool{}, primaries: map[string]*int{},
 		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{},
-		shellRetires: map[string][]string{}}
+		shellRetires: map[string][]string{}, retiredInto: map[string]bool{}}
 	for _, c := range rows {
 		if shell, ok := retireRowShell(c); ok {
 			p.shellRetires[shell] = append(p.shellRetires[shell], c.ID)
@@ -366,6 +369,33 @@ func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 			}
 		}
 	}
+}
+
+// NoteRetiredInto takes every row of the operation, reverted or not, and notes
+// the retired versions it has a non-voided ChangeTypeBookFileRetire row for. A
+// voided row describes a write that never happened. It reads every row, not
+// Order: a revert cut off after it un-retired the rows (and marked them) must
+// still see that the operation retired into the version.
+func (p *RevertPlan) NoteRetiredInto(all []*database.OperationChange) {
+	for _, c := range all {
+		if c.ChangeType != ChangeTypeBookFileRetire || c.Voided {
+			continue
+		}
+		// A row whose place does not parse is not noted; the revert refuses an
+		// operation holding one (RetireRevertBlock) before it gets here.
+		if to, err := DecodeRetirePlace(c.NewValue); err == nil && to.VersionID != "" {
+			p.retiredInto[to.VersionID] = true
+		}
+	}
+}
+
+// RetiredInto reports whether the operation retired book_file rows into the
+// retired version versionID (NoteRetiredInto). A version the operation created
+// but never moved a row into (a run cut off between the two) was never in force
+// as a retire, and reverting it is not the undo of an applied retire. A nil
+// plan (a row reverted alone) knows nothing of the operation and says no.
+func (p *RevertPlan) RetiredInto(versionID string) bool {
+	return p != nil && p.retiredInto[versionID]
 }
 
 // SeriesLinkOf returns this operation's series_id row for c's book, or nil

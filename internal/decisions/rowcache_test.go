@@ -1,12 +1,13 @@
 // file: internal/decisions/rowcache_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 40be71d2-95a3-4c08-b6e1-7f2d83a9c514
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package decisions
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // With a RowCache the log is scanned once while nothing is written; a record
@@ -50,6 +53,96 @@ func TestRowCache_ScansOnceUntilTheLogChanges(t *testing.T) {
 	ov, err := other.Load(context.Background(), nil)
 	require.NoError(t, err)
 	require.False(t, snapVetoed(t, ov, testType, "b1", "b2", FamilySameWork))
+}
+
+// The cache holds the veto rows alone, so only a commit that writes (or
+// deletes) one of them may invalidate it. A label-only decision (applied,
+// undone, approve, skip, auto_applied, a reopen) writes a record, a verdict and
+// lookup indexes and must leave the cache warm: the retired-versions apply
+// writes one applied record per row, and a cache emptied by each defeats the
+// point of sharing the scan across the run.
+func TestRowCache_OnlyVetoRowWritesInvalidate(t *testing.T) {
+	// A member-shaped reject needs more entities than MaxEdgeSet.
+	big := make([]string, MaxEdgeSet+1)
+	for i := range big {
+		big[i] = fmt.Sprintf("big%02d", i)
+	}
+	// stage is one write and whether it must invalidate the cache.
+	type stage struct {
+		name       string
+		do         func(*testing.T, *Store)
+		invalidate bool
+	}
+	// The cache is filled over an edge reject, a single-entity (active row)
+	// reject and a member reject, so each family has rows to be stale about.
+	setup := func(t *testing.T, s *Store) {
+		mustRecord(t, s, humanReject("p1", "p2"))
+		mustRecord(t, s, rewriteReject(hashOld))
+		mustRecord(t, s, humanReject(big...))
+	}
+	stages := []stage{
+		{"approve", func(t *testing.T, s *Store) { mustRecord(t, s, labelInput(DecisionApprove, "a1", "a2")) }, false},
+		{"skip", func(t *testing.T, s *Store) { mustRecord(t, s, labelInput(DecisionSkip, "a1", "a2")) }, false},
+		{"applied", func(t *testing.T, s *Store) { mustRecord(t, s, labelInput(DecisionApplied, "a1", "a2")) }, false},
+		{"undone", func(t *testing.T, s *Store) { mustRecord(t, s, labelInput(DecisionUndone, "a1", "a2")) }, false},
+		{"auto_applied", func(t *testing.T, s *Store) { mustRecord(t, s, labelInput(DecisionAutoApplied, "a1", "a2")) }, false},
+		{"reopened", func(t *testing.T, s *Store) { mustRecord(t, s, reopenOf(rewriteReject(hashOld), hashNew)) }, false},
+		{"label on a rejected pair", func(t *testing.T, s *Store) { mustRecord(t, s, labelInput(DecisionApplied, "p1", "p2")) }, false},
+		{"edge reject", func(t *testing.T, s *Store) { mustRecord(t, s, humanReject("e1", "e2")) }, true},
+		{"single-entity reject (active row)", func(t *testing.T, s *Store) {
+			in := rewriteReject(hashOld)
+			in.Scope = "row-2"
+			mustRecord(t, s, in)
+		}, true},
+		{"member reject", func(t *testing.T, s *Store) {
+			ids := make([]string, len(big))
+			for i := range big {
+				ids[i] = "m" + big[i]
+			}
+			mustRecord(t, s, humanReject(ids...))
+		}, true},
+		{"unreject (edges and active row deleted)", func(t *testing.T, s *Store) {
+			mustRecord(t, s, labelInput(DecisionUnreject, "p1", "p2"))
+		}, true},
+	}
+	for _, st := range stages {
+		t.Run(st.name, func(t *testing.T) {
+			kv := &closeTrackKV{KV: newKV(t)}
+			cache := NewRowCache()
+			s := New(kv, WithRowCache(cache))
+			setup(t, s)
+			load := func() {
+				_, err := New(kv, WithRowCache(cache)).Load(context.Background(), nil)
+				require.NoError(t, err)
+			}
+			load()
+			warm := kv.opened.Load()
+			load()
+			require.Equal(t, warm, kv.opened.Load(), "the cache is warm before the stage")
+
+			st.do(t, s)
+			load()
+			if st.invalidate {
+				require.Equal(t, warm+1, kv.opened.Load(), "a write of a veto row must invalidate the cache")
+			} else {
+				require.Equal(t, warm, kv.opened.Load(), "a label-only commit must keep the cache warm")
+			}
+		})
+	}
+}
+
+// The rows a RowCache holds are exactly the prefixes scanRows reads and
+// writesVetoRows recognises: a prefix added to one and not the other would
+// leave the cache stale or needlessly cold.
+func TestWritesVetoRows_NamesTheScannedPrefixes(t *testing.T) {
+	for _, prefix := range []string{prefixActive, prefixEdge, prefixMember} {
+		require.True(t, writesVetoRows([]database.RawWrite{{Key: prefix + "x"}}), prefix)
+		require.True(t, writesVetoRows([]database.RawWrite{{Key: prefix + "x", Delete: true}}), prefix+" delete")
+	}
+	for _, prefix := range []string{prefixRecord, prefixVerdict, prefixEntity, prefixOp} {
+		require.False(t, writesVetoRows([]database.RawWrite{{Key: prefix + "x"}}), prefix)
+	}
+	require.False(t, writesVetoRows(nil))
 }
 
 // Only the scan is cached: ids are resolved afresh by every Load, so a book

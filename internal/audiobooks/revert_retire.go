@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
 // last-edited: 2026-10-28
 
@@ -134,7 +134,13 @@ func (rs *RevertService) revertBookFileRetire(c *database.OperationChange) error
 // The compare-and-set (undo.CheckVersionCreateCurrent) runs inside the store's
 // delete, under the version stripe, so an edit of the version cannot land
 // between the check and the delete and be lost.
-func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) error {
+//
+// The `undone` decision record is written only when the operation retired rows
+// into the version (plan.RetiredInto): the retire journals the version's create
+// first, so a run cut off after that and before RetireRows leaves a version, or
+// a journal row with no version, of a retire that never took effect, and
+// reverting it undoes nothing the owner applied.
+func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange, plan *undo.RevertPlan) error {
 	id, ok := undo.BookVersionIDFromField(c.FieldName)
 	if !ok {
 		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable,
@@ -145,15 +151,19 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) er
 		return retireStoreMissing("delete book versions")
 	}
 	defer rs.lockMerge()()
+	retired := plan.RetiredInto(id)
 	var verdict error
 	if err := deleter.DeleteBookVersionIf(id, func(cur *database.BookVersion) error {
 		verdict = undo.CheckVersionCreateCurrent(cur, c)
 		return verdict
 	}); err != nil {
 		if verdict != nil {
-			if errors.Is(verdict, undo.ErrAlreadyRestored) {
+			if errors.Is(verdict, undo.ErrAlreadyRestored) && retired {
 				// A cut-off revert deleted the version and died before it wrote
 				// the record; the write is idempotent, so a repeat completes it.
+				// Only for a retire that took effect: a version deleted by hand,
+				// or one the operation never retired a row into, was no retire
+				// to undo.
 				rs.recordRetireUndone(c)
 			}
 			return verdict
@@ -164,7 +174,9 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) er
 		}
 		return fmt.Errorf("delete book version %s: %w", id, err)
 	}
-	rs.recordRetireUndone(c)
+	if retired {
+		rs.recordRetireUndone(c)
+	}
 	return nil
 }
 

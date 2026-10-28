@@ -1,7 +1,7 @@
 // file: internal/decisions/store.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0f7b3a91-d542-4e86-a1c3-78e9b60d2f15
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package decisions
 
@@ -323,13 +323,17 @@ func (s *Store) recordLocked(in Input, ids []string, subject string) (*Record, e
 }
 
 // commit is the ONE way this package writes the decision keys: it applies the
-// batch and counts the write. The count is bumped whether or not the commit
-// reported success, because a cached read of the log (RowCache) must never
-// outlive a write that may have landed. TestDecisionKeysHaveOneWriter holds
-// the package to it.
+// batch and, when the batch touches a veto row, counts the write. The count is
+// bumped whether or not the commit reported success, because a cached read of
+// the veto rows (RowCache) must never outlive a write that may have landed. A
+// batch that writes only labels (a record, its verdict and lookup indexes)
+// leaves the count alone: the cache holds nothing it could change.
+// TestDecisionKeysHaveOneWriter holds the package to it.
 func (s *Store) commit(writes []database.RawWrite) error {
 	err := s.kv.ApplyRawBatch(writes)
-	bumpLogGeneration(s.lockScope)
+	if writesVetoRows(writes) {
+		bumpLogGeneration(s.lockScope)
+	}
 	return err
 }
 

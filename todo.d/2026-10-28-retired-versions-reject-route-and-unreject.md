@@ -19,10 +19,3 @@
       `RevertService` has neither. Thread them through (the apply op's row
       carries `ActorUserID`; `repairs.ApplyDeps` has the plan op id) so the
       records say who ran the apply or the revert.
-- [ ] **TODO-RETIRED-APPLIED-RECORD-GAP** a retire whose process dies, or whose
-      decision-log write fails, between the batch commit and `recordApplied`
-      leaves the row with no `applied` record for good: the finish-the-tail path
-      (`Apply` of a `tail_pending` row) never writes one, and a failed write is
-      only logged. Write it there too, from the retired version's id and
-      `RetireOpID` (`RecordUnlessSeen` makes a repeat safe), and decide whether
-      retires that predate the records get a backfill.

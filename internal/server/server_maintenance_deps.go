@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.75.3
+// version: 1.75.4
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-28
 
@@ -173,12 +173,16 @@ func (s *Server) ReviewStatusIndexStore() database.ReviewStatusIndexRepairer {
 // plan.
 //
 // Every call returns a fresh reader (a replan must see the book state of its
-// own moment), but the readers share the Server's decisions.RowCache: the scan
-// of the decision log is read once and reused until a record is written, so a
-// replan per row does not re-read the whole log. Only that scan is shared. The
-// stored ids are resolved again by each reader; what is left per replan is the
-// merge-journal scan for the flag-holder follows and the resolution of every
-// stored id (a few reads each).
+// own moment), but the readers share the Server's decisions.RowCache: the raw
+// rows of the decision log (live rejects, pair edges, set members) are scanned
+// once and reused until a veto row is written. A label-only record (the applied
+// record each retired row writes, an undone, approve or skip) does not touch
+// them, so across the rows of one apply the log is not re-scanned. What every
+// reader still does, each time it loads (a replan and an apply each load per
+// row), is resolve every stored id afresh through the book state, a few reads
+// each, and scan the merge journals for the flag-holder follows. Only the log
+// scan is shared; the resolution is not, because a retire between two rows
+// changes where a stored id leads.
 func (s *Server) OwnerVetoes() maintenanceplugin.OwnerVetoReader {
 	s.ownerVetoRowsOnce.Do(func() { s.ownerVetoRows = decisions.NewRowCache() })
 	return maintenanceplugin.NewOwnerVetoReader(s.store, s.ownerVetoRows)
