@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -570,23 +570,34 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 	if err != nil {
 		return fmt.Errorf("purge version %s: list book files: %w", ver.ID, err)
 	}
-	targets := make(map[string]struct{})
+	// One entry per FILE, not per spelling of it: a slot walk that reaches a
+	// file through a symlinked library root and a row that names it through the
+	// real path are the same target, and counting it twice would report it twice
+	// (and unlink it twice). The first spelling met is the one kept: the slot
+	// walk's, then the rows'.
+	targets := make(map[string]string)
+	addTarget := func(p string) {
+		k := targetKey(p)
+		if _, ok := targets[k]; !ok {
+			targets[k] = p
+		}
+	}
 	if bookDir != "" {
 		slotFiles, err := versionSlotFiles(bookDir, ver.ID)
 		if err != nil {
 			return fmt.Errorf("purge version %s: list slot: %w", ver.ID, err)
 		}
 		for _, p := range slotFiles {
-			targets[p] = struct{}{}
+			addTarget(p)
 		}
 	}
 	for _, f := range own {
 		if f.VersionID == ver.ID && f.FilePath != "" {
-			targets[f.FilePath] = struct{}{}
+			addTarget(f.FilePath)
 		}
 	}
 	paths := make([]string, 0, len(targets))
-	for p := range targets {
+	for _, p := range targets {
 		paths = append(paths, p)
 	}
 	slices.Sort(paths)
@@ -667,6 +678,24 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 	// Claim the version before the first removal. Everything above only reads.
 	if err := claimPurge(store, ver); err != nil {
 		return err
+	}
+
+	// The served guard above was built from the book and rows as they were
+	// before the claim. Each removal below asks it again, so it is rebuilt now,
+	// from what the store says after the claim: a book that came to serve a path
+	// (a FilePath re-pointed, a row written, a version promoted) while the
+	// version was being claimed is seen at the unlink and not only in the pass
+	// that has already ended. A rebuild that cannot read is a lookup that cannot
+	// answer: nothing is unlinked, and the version, now purging, counts the
+	// attempt like any other stuck purge.
+	sg, err = rebuildServedGuard(store, ver)
+	if err != nil {
+		var stuck stuckPaths
+		stuck.undecided = undecided
+		for _, p := range doomed {
+			stuck.failed = append(stuck.failed, stuckFailure{path: p, err: err})
+		}
+		return settleStuck(store, ver, kept, stuck, 0, len(paths))
 	}
 
 	// recordUnlinked persists the removal of p before anything else happens to
@@ -1101,18 +1130,22 @@ func markPurged(store versionPurger, ver *database.BookVersion) error {
 
 // otherRowNamingPath returns a book_file row that names path and is not one of
 // ver's own rows (same book, same version), or nil when none does. Retired
-// rows are included: BookFilesAtPath does not filter them. Any lookup error is
-// returned, so the caller fails closed.
+// rows are included: BookFilesAtPath does not filter them. Every spelling of
+// the path is asked (pathSpellings): the lookup matches strings exactly, and
+// the row may have been written through a symlinked library root. Any lookup
+// error is returned, so the caller fails closed.
 func otherRowNamingPath(store versionPurger, path string, ver *database.BookVersion) (*database.BookFile, error) {
-	rows, err := store.BookFilesAtPath(path)
-	if err != nil {
-		return nil, err
-	}
-	for i := range rows {
-		if rows[i].BookID == ver.BookID && rows[i].VersionID == ver.ID {
-			continue
+	for _, v := range pathSpellings(path) {
+		rows, err := store.BookFilesAtPath(v)
+		if err != nil {
+			return nil, err
 		}
-		return &rows[i], nil
+		for i := range rows {
+			if rows[i].BookID == ver.BookID && rows[i].VersionID == ver.ID {
+				continue
+			}
+			return &rows[i], nil
+		}
 	}
 	return nil, nil
 }
@@ -1124,22 +1157,25 @@ func otherRowNamingPath(store versionPurger, path string, ver *database.BookVers
 // database.BookRowPathReader, which is not on database.Store, so it is resolved
 // with database.AsCapability; a store without it, or a lookup that errors, is
 // an error: the caller fails closed and deletes nothing, never "no owner".
+// Every spelling of the path is asked (pathSpellings), each id once.
 func otherBooksNamingPath(store versionPurger, path, ownBookID string) ([]string, error) {
 	rows, ok := database.AsCapability[database.BookRowPathReader](store)
 	if !ok {
 		return nil, fmt.Errorf("store %T does not provide the all-rows book path lookup (database.BookRowPathReader)", store)
 	}
-	ids, err := rows.BookIDsAtPath(path)
-	if err != nil {
-		return nil, fmt.Errorf("books-at-path lookup: %w", err)
-	}
 	var others []string
-	for _, id := range ids {
-		// The version's own book naming its file is the normal case, not a
-		// second owner: the file is the version's, and the version is what is
-		// being purged.
-		if id != ownBookID {
-			others = append(others, id)
+	for _, v := range pathSpellings(path) {
+		ids, err := rows.BookIDsAtPath(v)
+		if err != nil {
+			return nil, fmt.Errorf("books-at-path lookup: %w", err)
+		}
+		for _, id := range ids {
+			// The version's own book naming its file is the normal case, not a
+			// second owner: the file is the version's, and the version is what is
+			// being purged.
+			if id != ownBookID && !slices.Contains(others, id) {
+				others = append(others, id)
+			}
 		}
 	}
 	return others, nil
