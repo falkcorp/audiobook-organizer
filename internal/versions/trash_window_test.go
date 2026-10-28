@@ -1,5 +1,5 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
 // last-edited: 2026-10-27
 
@@ -423,7 +423,9 @@ func TestTrashedAt_EveryPathIn_StampsEveryPathOut_Clears(t *testing.T) {
 		database.BookVersionStatusPending,
 		database.BookVersionStatusSwappingIn,
 		database.BookVersionStatusSwappingOut,
-		database.BookVersionStatusInactivePurged,
+		// inactive_purged is not here: its files are gone and the store refuses to
+		// put it back in the trash (database.ErrVersionPurged;
+		// TestMarkTrashed_RefusesAPurgedVersionAndSoDoesTheStore).
 		database.BookVersionStatusBlockedForRedownload,
 	} {
 		entries = append(entries,

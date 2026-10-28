@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.10.1
+// version: 1.11.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -10,6 +10,7 @@ package server
 import (
 	"errors"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
@@ -44,6 +45,17 @@ func respondIfPurgingVersion(c *gin.Context, err error) bool {
 	return true
 }
 
+// respondIfPurgedVersion answers 409 and reports true when err says the version
+// is already purged (database.ErrVersionPurged): its files are gone, so it cannot
+// be put back in the trash.
+func respondIfPurgedVersion(c *gin.Context, err error) bool {
+	if !errors.Is(err, database.ErrVersionPurged) {
+		return false
+	}
+	httputil.RespondWithConflict(c, err.Error())
+	return true
+}
+
 // handleTrashVersion moves a version to trash.
 // DELETE /api/v1/audiobooks/:id/versions/:vid
 func (s *Server) handleTrashVersion(c *gin.Context) {
@@ -69,13 +81,13 @@ func (s *Server) handleTrashVersion(c *gin.Context) {
 	// refuses to change one only while it still holds retired rows, and a
 	// retired version in the trash would be purged from disk 14 days later.
 	if err := versions.MarkTrashed(ver, time.Now()); err != nil {
-		if !respondIfRetiredVersion(c, err) && !respondIfPurgingVersion(c, err) {
+		if !respondIfRetiredVersion(c, err) && !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
 			httputil.InternalError(c, "trash version", err)
 		}
 		return
 	}
 	if err := s.Ops().UpdateBookVersion(ver); err != nil {
-		if !respondIfPurgingVersion(c, err) {
+		if !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
 			httputil.InternalError(c, "trash version", err)
 		}
 		return
@@ -122,7 +134,8 @@ func (s *Server) handleRestoreVersion(c *gin.Context) {
 	switch ver.Status {
 	case database.BookVersionStatusPurging:
 		httputil.RespondWithConflict(c, "version cannot be restored: an earlier purge of it removed some of its files and did not finish; "+
-			"the nightly cleanup (or Purge now) finishes it")
+			"the nightly cleanup (or Purge now) finishes it, and if it cannot it becomes purge_failed after "+
+			strconv.Itoa(versions.PurgeUndecidedEscalateAfter)+" attempts, which can be hard-deleted")
 		return
 	case database.BookVersionStatusPurgeFailed:
 		httputil.RespondWithConflict(c, "version cannot be restored: an earlier purge of it removed some of its files and could not remove the rest; "+
@@ -198,6 +211,10 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		}
 		// Restored after the read above: the claim was refused, nothing was
 		// deleted, and the restore stands.
+		if errors.Is(err, versions.ErrVersionDeleted) {
+			httputil.RespondWithConflict(c, "the version was deleted while the purge was starting; nothing more was deleted: "+err.Error())
+			return
+		}
 		if errors.Is(err, versions.ErrVersionAlreadyPurged) {
 			httputil.RespondWithConflict(c, "the version was already purged (by the nightly cleanup or another purge) while this purge was starting; nothing more was deleted: "+err.Error())
 			return
@@ -213,6 +230,16 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		// The library does not look mounted: nothing was deleted or claimed.
 		if errors.Is(err, audiobooks.ErrLibraryRootNotReady) {
 			httputil.RespondWithServiceUnavailable(c, "the library does not look mounted, so nothing was deleted; try again once it is: "+err.Error())
+			return
+		}
+		// Nothing was removed because the files that are left are not there and
+		// nothing vouches that they were removed (their folder is missing or
+		// empty, which is also how a dataset that is not mounted looks). A trashed
+		// version is still in the trash and can be restored; a purging one that
+		// has not settled for several attempts becomes purge_failed (the branch
+		// below) and can be hard-deleted.
+		if errors.Is(err, versions.ErrPurgeCannotTell) {
+			httputil.RespondWithConflict(c, err.Error())
 			return
 		}
 		// A file that cannot be removed and never will be (permission, a
@@ -294,6 +321,15 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 	ver, err := s.Ops().GetBookVersion(versionID)
 	if err != nil || ver == nil {
 		httputil.RespondWithNotFound(c, "version", "")
+		return
+	}
+	// A purging version has a purge that is not finished: its record is what tells
+	// the retry which files it still owes, so it stays until the purge ends. A
+	// purge that cannot finish becomes purge_failed after
+	// versions.PurgeUndecidedEscalateAfter attempts, and that is hard-deletable.
+	if ver.Status == database.BookVersionStatusPurging {
+		httputil.RespondWithConflict(c, "version's purge is not finished, so it cannot be deleted yet; the nightly cleanup (or Purge now) finishes it, "+
+			"and if it cannot it becomes purge_failed after "+strconv.Itoa(versions.PurgeUndecidedEscalateAfter)+" attempts, which can be hard-deleted")
 		return
 	}
 	// A purge_failed version is hard-deletable: its record goes, the files named

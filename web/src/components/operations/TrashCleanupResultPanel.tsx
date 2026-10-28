@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: 142d4823-4f1c-4c19-95fe-7a3c0f9f05b4
 // last-edited: 2026-10-27
 
@@ -160,6 +160,14 @@ export default function TrashCleanupResultPanel({ opId }: { opId: string }) {
           (permission or a read-only filesystem), so the cleanup does not retry{' '}
           {plural(result.needs_attention, 'it', 'them')}. Purge now retries one; hard delete drops
           it.
+        </SetLine>
+      )}
+      {result.cannot_tell > 0 && (
+        <SetLine opId={opId} set="cannot_tell" count={result.cannot_tell} result={result}>
+          {plural(result.cannot_tell, 'was', 'were')} left alone: the files left are not there and
+          nothing shows they were removed (a drive that is down looks the same). Nothing was
+          deleted; {plural(result.cannot_tell, 'it is', 'they are')} tried again next run, and a
+          purge that gets nowhere three times becomes purge failed, which can be hard-deleted.
         </SetLine>
       )}
       {result.stopped_for_merge && (

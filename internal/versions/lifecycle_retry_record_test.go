@@ -1,5 +1,5 @@
-// file: internal/versions/lifecycle_retry_seed_test.go
-// version: 1.0.0
+// file: internal/versions/lifecycle_retry_record_test.go
+// version: 2.0.0
 // guid: 2b6f8d13-9a47-4e50-8c1d-5e0a7f3b9d64
 // last-edited: 2026-10-27
 
@@ -19,27 +19,31 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
-// seedGuard is the permissive guard that remembers the seed folders each
-// purge's decider was started with and how often the root was asked about.
-type seedGuard struct {
+// askGuard is the permissive guard that remembers every path its deciders were
+// asked about, so a test can tell a path the purge trusted from the record (never
+// asked) from one it decided from the disk.
+type askGuard struct {
 	fsGuard
-	seeds [][]string
+	asked []string
 }
 
-func (g *seedGuard) NewDecider(seedDirs []string) PurgeDecider {
-	g.seeds = append(g.seeds, slices.Clone(seedDirs))
-	return g.fsGuard.NewDecider(seedDirs)
+func (g *askGuard) NewDecider() PurgeDecider {
+	return &askDecider{g: g, inner: g.fsGuard.NewDecider()}
 }
 
-func (g *seedGuard) lastSeeds(t *testing.T) []string {
-	t.Helper()
-	if len(g.seeds) == 0 {
-		t.Fatal("no decider was started")
-	}
-	return g.seeds[len(g.seeds)-1]
+type askDecider struct {
+	g     *askGuard
+	inner PurgeDecider
 }
 
-// ---- the retry seeds only what the earlier attempt emptied ----
+func (d *askDecider) InsideRoot(dir string) error { return d.inner.InsideRoot(dir) }
+
+func (d *askDecider) Decide(path string) (PurgeDecision, string, error) {
+	d.g.asked = append(d.g.asked, path)
+	return d.inner.Decide(path)
+}
+
+// ---- the retry trusts the paths the earlier attempt unlinked, one by one ----
 
 // Every removal is recorded on the version as it happens, and a file that could
 // not be removed is not recorded.
@@ -63,57 +67,135 @@ func TestPurgeVersion_RecordsEachUnlinkedPathAndNotTheOneThatFailed(t *testing.T
 	requireOnDisk(t, flaky)
 }
 
-// The retry seeds the folder the first attempt unlinked in, and not the folder
-// of the file it could not remove: a folder where nothing was unlinked is not
-// explained by this purge, and an empty one may be a mount point that is down.
-func TestPurgeVersion_RetrySeedsOnlyTheFoldersItUnlinkedIn(t *testing.T) {
+// The retry trusts the paths the first attempt unlinked and recorded, path by
+// path, and decides every other path from the disk: the recorded ones are not put
+// to the guard at all (they read "not there" and that is enough), the one the
+// first attempt could not remove is.
+func TestPurgeVersion_RetryTrustsOnlyTheRecordedPathsAndDecidesTheRest(t *testing.T) {
 	f := newSharedPathFixture(t)
 	flaky, clear := f.flakyRow(t)
-	guard := &seedGuard{}
+	guard := &askGuard{}
 
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
 	if err := PurgeVersion(f.store, v, guard); err == nil {
 		t.Fatal("first attempt succeeded although one removal failed")
 	}
-	if got := guard.lastSeeds(t); len(got) != 0 {
-		t.Errorf("first attempt seeds = %v, want none", got)
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if len(got.PurgeUnlinked) != 2 {
+		t.Fatalf("PurgeUnlinked = %v, want the two paths the first attempt unlinked", got.PurgeUnlinked)
 	}
 
 	clear()
+	guard.asked = nil
 	v, _ = f.store.GetBookVersion(f.trashed.ID)
 	if err := PurgeVersion(f.store, v, guard); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	for _, dir := range guard.lastSeeds(t) {
-		if dir == filepath.Dir(flaky) {
-			t.Errorf("retry seeded %s, the folder of a file no attempt had unlinked", dir)
-		}
-		if dir != filepath.Dir(f.ownOnly) {
-			t.Errorf("retry seeded %s, want only %s", dir, filepath.Dir(f.ownOnly))
+	for _, p := range []string{f.ownOnly, f.unrowed} {
+		if slices.Contains(guard.asked, p) {
+			t.Errorf("retry put %s to the guard although the first attempt had unlinked and recorded it", p)
 		}
 	}
-	if len(guard.lastSeeds(t)) == 0 {
-		t.Errorf("retry seeded nothing, want the slot folder the first attempt emptied")
+	if !slices.Contains(guard.asked, flaky) {
+		t.Errorf("retry never decided %s, the path the first attempt could not remove (asked %v)", flaky, guard.asked)
+	}
+	requireGone(t, flaky)
+}
+
+// A recorded path is gone because THIS purge unlinked it; that says nothing about
+// a neighbour it never unlinked, in the same folder, which reads "not there" only
+// because the folder is empty (a dataset that is down). The retry must not call
+// the neighbour gone, and must say so: cannot tell.
+func TestPurgeVersion_RecordedPathDoesNotVouchForAnUnrecordedNeighbourInTheSameFolder(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	v.Status = database.BookVersionStatusPurging
+	v.PurgeUnlinked = []string{f.ownOnly}
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	// The neighbour has a row of the version's own (it is a file of the version
+	// that this purge never reached).
+	if err := f.store.CreateBookFile(&database.BookFile{BookID: f.holderID, FilePath: f.unrowed, VersionID: f.trashed.ID, TrackNumber: 9}); err != nil {
+		t.Fatal(err)
+	}
+	// Attempt 1 unlinked ownOnly and recorded it; the dataset then went down: the
+	// neighbour is "not there" too, and its folder (the slot) now looks empty.
+	for _, p := range []string{f.ownOnly, f.unrowed} {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guard := &fsGuard{undecidable: func(p string) error {
+		if p == f.unrowed {
+			return errors.New("its folder is empty, which is also how an unmounted dataset looks")
+		}
+		return nil
+	}}
+
+	v, _ = f.store.GetBookVersion(f.trashed.ID)
+	err := PurgeVersion(f.store, v, guard)
+
+	var ct *CannotTellError
+	if !errors.Is(err, ErrPurgeCannotTell) || !errors.As(err, &ct) {
+		t.Fatalf("PurgeVersion = %v, want a *CannotTellError", err)
+	}
+	if len(ct.Files) != 1 || ct.Files[0].Path != f.unrowed {
+		t.Errorf("CannotTellError.Files = %+v, want only %s", ct.Files, f.unrowed)
+	}
+	requirePurging(t, f)
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if !slices.Equal(got.PurgeUnlinked, []string{f.ownOnly}) {
+		t.Errorf("PurgeUnlinked = %v, want only the path unlinked by this purge", got.PurgeUnlinked)
 	}
 }
 
-// A retry that has no record of any unlink (a purge interrupted right after the
-// claim) seeds nothing at all.
-func TestPurgeVersion_RetryWithNothingUnlinkedSeedsNothing(t *testing.T) {
+// A recorded path that reads "not there" is gone however its folder looks: the
+// purge unlinked it, and the guard is not even asked.
+func TestPurgeVersion_RecordedPathReadingNotThereIsGoneWhateverItsFolderLooksLike(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	v.Status = database.BookVersionStatusPurging
+	v.PurgeUnlinked = []string{f.ownOnly, f.unrowed}
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{f.ownOnly, f.unrowed} {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guard := &fsGuard{undecidable: func(string) error { return errors.New("every folder looks like an unmounted dataset") }}
+
+	v, _ = f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v, guard); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if got.Status != database.BookVersionStatusInactivePurged || len(got.PurgeUnlinked) != 0 {
+		t.Errorf("status=%s PurgeUnlinked=%v, want inactive_purged with the record cleared", got.Status, got.PurgeUnlinked)
+	}
+}
+
+// A retry with no record of any unlink (a purge interrupted right after the
+// claim) trusts no path: every one is decided from the disk.
+func TestPurgeVersion_RetryWithNothingRecordedTrustsNoPath(t *testing.T) {
 	f := newSharedPathFixture(t)
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
 	v.Status = database.BookVersionStatusPurging
 	if err := f.store.UpdateBookVersion(v); err != nil {
 		t.Fatal(err)
 	}
-	guard := &seedGuard{}
+	guard := &askGuard{}
 
 	v, _ = f.store.GetBookVersion(f.trashed.ID)
 	if err := PurgeVersion(f.store, v, guard); err != nil {
 		t.Fatalf("PurgeVersion: %v", err)
 	}
-	if got := guard.lastSeeds(t); len(got) != 0 {
-		t.Errorf("seeds = %v, want none: nothing was recorded as unlinked", got)
+	for _, p := range []string{f.ownOnly, f.unrowed} {
+		if !slices.Contains(guard.asked, p) {
+			t.Errorf("%s was never decided although nothing recorded it as unlinked (asked %v)", p, guard.asked)
+		}
 	}
 }
 
@@ -156,17 +238,30 @@ func (s failRecordStore) UpdateBookVersion(v *database.BookVersion) error {
 }
 
 // A removal whose record could not be written is a failure to retry, not a
-// success: the version stays purging with the error, and the retry finds the
-// file gone (and the folder, once recorded, explained).
-func TestPurgeVersion_UnrecordedUnlinkLeavesTheVersionPurging(t *testing.T) {
+// success: the version stays purging with the error, and the purge STOPS there.
+// The path after it is left untouched on disk, because a removal that cannot be
+// recorded is one the retry cannot trust, and the store is the thing that is not
+// answering.
+func TestPurgeVersion_FailedRecordWriteStopsTheUnlinks(t *testing.T) {
 	f := newSharedPathFixture(t)
+	attempted := failRemovals(t, func(string) error { return nil })
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
 	err := PurgeVersion(failRecordStore{f.store}, v, testGuard)
 	if err == nil {
 		t.Fatal("PurgeVersion succeeded although it could not record what it removed")
 	}
 	requirePurging(t, f)
-	requireGone(t, f.ownOnly)
+	if len(*attempted) != 1 {
+		t.Fatalf("%d removals were attempted (%v), want exactly 1: the record write failed after the first", len(*attempted), *attempted)
+	}
+	removed := (*attempted)[0]
+	for _, p := range []string{f.ownOnly, f.unrowed} {
+		if p == removed {
+			requireGone(t, p)
+		} else {
+			requireOnDisk(t, p)
+		}
+	}
 }
 
 // ---- the version is read again under the lock ----
@@ -174,7 +269,7 @@ func TestPurgeVersion_UnrecordedUnlinkLeavesTheVersionPurging(t *testing.T) {
 // The caller's copy is from before a lock wait that can last minutes. The stored
 // version is purging with a record of what an earlier attempt unlinked; the
 // purge must go by that, not by the stale copy that says "trash, no record": it
-// is a retry, and it seeds the folder the earlier attempt emptied.
+// is a retry, and it trusts the path the earlier attempt unlinked.
 func TestPurgeVersion_StaleCopyOfAPurgingVersionIsStillARetry(t *testing.T) {
 	f := newSharedPathFixture(t)
 	stale, _ := f.store.GetBookVersion(f.trashed.ID)
@@ -187,13 +282,13 @@ func TestPurgeVersion_StaleCopyOfAPurgingVersionIsStillARetry(t *testing.T) {
 	if err := os.Remove(f.ownOnly); err != nil {
 		t.Fatal(err)
 	}
-	guard := &seedGuard{}
+	guard := &askGuard{}
 
 	if err := PurgeVersion(f.store, stale, guard); err != nil {
 		t.Fatalf("PurgeVersion: %v", err)
 	}
-	if got := guard.lastSeeds(t); !slices.Equal(got, []string{filepath.Dir(f.ownOnly)}) {
-		t.Errorf("seeds = %v, want the folder the earlier attempt unlinked in", got)
+	if slices.Contains(guard.asked, f.ownOnly) {
+		t.Errorf("%s was put to the guard although the stored record says an earlier attempt unlinked it", f.ownOnly)
 	}
 	if stale.Status != database.BookVersionStatusInactivePurged {
 		t.Errorf("the caller's copy is %s, want it refreshed to inactive_purged", stale.Status)
@@ -288,14 +383,14 @@ type scriptedGuard struct {
 	calls  map[string]int
 }
 
-func (g *scriptedGuard) NewDecider(seedDirs []string) PurgeDecider {
+func (g *scriptedGuard) NewDecider() PurgeDecider {
 	g.calls = map[string]int{}
 	return &scriptedDecider{g: g}
 }
 
 type scriptedDecider struct{ g *scriptedGuard }
 
-func (d *scriptedDecider) Unlinked(string) {}
+func (d *scriptedDecider) InsideRoot(string) error { return nil }
 
 func (d *scriptedDecider) Decide(path string) (PurgeDecision, string, error) {
 	d.g.calls[path]++
@@ -315,61 +410,57 @@ func notThereOnUnlink(t *testing.T, path string) {
 	})
 }
 
-// The unlink said "not there" and the folder cannot vouch for that (it reads as
-// an empty mount point): the path is not counted as removed. The version stays
-// purging, the path is not recorded as unlinked, and the file is still there.
-func TestPurgeVersion_NotThereOnUnlinkWithAFolderThatCannotVouchIsTransient(t *testing.T) {
-	f := newSharedPathFixture(t)
-	notThereOnUnlink(t, f.ownOnly)
-	guard := &scriptedGuard{decide: func(path string, n int) (PurgeDecision, string, error) {
-		if path == f.ownOnly && n > 1 {
-			return PurgeKeep, "", errors.New("its folder is empty, which is also how an unmounted dataset looks")
-		}
-		return PurgeRemove, "", nil
-	}}
-
-	v, _ := f.store.GetBookVersion(f.trashed.ID)
-	if err := PurgeVersion(f.store, v, guard); err == nil {
-		t.Fatal("PurgeVersion succeeded although a path could not be shown to be gone")
-	}
-
-	requirePurging(t, f)
-	requireOnDisk(t, f.ownOnly)
-	got, _ := f.store.GetBookVersion(f.trashed.ID)
-	if slices.Contains(got.PurgeUnlinked, f.ownOnly) {
-		t.Errorf("PurgeUnlinked = %v names %s, which was never unlinked", got.PurgeUnlinked, f.ownOnly)
-	}
-}
-
-// A path that is there again after "not there" is a race to retry, not gone.
-func TestPurgeVersion_NotThereOnUnlinkButThereAgainIsRetried(t *testing.T) {
+// The unlink said "not there" for a path the decision said was there. This purge
+// did not unlink it, so it is not counted as removed and not recorded as
+// unlinked: it is "cannot tell", the version stays purging, and the file (the
+// fake removal never touched it) is still there.
+func TestPurgeVersion_NotThereOnUnlinkIsCannotTellAndNeverRecorded(t *testing.T) {
 	f := newSharedPathFixture(t)
 	notThereOnUnlink(t, f.ownOnly)
 	guard := &scriptedGuard{decide: func(string, int) (PurgeDecision, string, error) { return PurgeRemove, "", nil }}
 
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
-	if err := PurgeVersion(f.store, v, guard); err == nil {
-		t.Fatal("PurgeVersion succeeded although a path it could not unlink is still there")
+	err := PurgeVersion(f.store, v, guard)
+
+	var ct *CannotTellError
+	if !errors.As(err, &ct) {
+		t.Fatalf("PurgeVersion = %v, want a *CannotTellError", err)
+	}
+	if len(ct.Files) != 1 || ct.Files[0].Path != f.ownOnly {
+		t.Errorf("CannotTellError.Files = %+v, want %s", ct.Files, f.ownOnly)
 	}
 	requirePurging(t, f)
 	requireOnDisk(t, f.ownOnly)
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if slices.Contains(got.PurgeUnlinked, f.ownOnly) {
+		t.Errorf("PurgeUnlinked = %v names %s, which this purge never unlinked", got.PurgeUnlinked, f.ownOnly)
+	}
 }
 
-// The control: the unlink said "not there" and the decision, asked again, says
-// gone (the folder vouches for it): removed, recorded, and the purge completes.
-func TestPurgeVersion_NotThereOnUnlinkWithAFolderThatVouchesCountsAsRemoved(t *testing.T) {
+// The control: the path that was "not there" at the unlink is decided again by
+// the next attempt, from the disk, and when it is gone and its folder vouches for
+// that the purge completes.
+func TestPurgeVersion_NotThereOnUnlinkIsSettledByTheNextAttempt(t *testing.T) {
 	f := newSharedPathFixture(t)
-	notThereOnUnlink(t, f.ownOnly)
-	guard := &scriptedGuard{decide: func(path string, n int) (PurgeDecision, string, error) {
-		if path == f.ownOnly && n > 1 {
-			return PurgeGone, "", nil
+	// Removed by someone else between the decision and the unlink.
+	failRemovals(t, func(p string) error {
+		if p == f.ownOnly {
+			_ = os.Remove(p)
+			return syscall.ENOENT
 		}
-		return PurgeRemove, "", nil
-	}}
+		return nil
+	})
 
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
-	if err := PurgeVersion(f.store, v, guard); err != nil {
-		t.Fatalf("PurgeVersion: %v", err)
+	if err := PurgeVersion(f.store, v, testGuard); !errors.Is(err, ErrPurgeCannotTell) {
+		t.Fatalf("first attempt = %v, want ErrPurgeCannotTell", err)
+	}
+	requirePurging(t, f)
+
+	removeFile = os.Remove
+	v, _ = f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v, testGuard); err != nil {
+		t.Fatalf("second attempt: %v", err)
 	}
 	got, _ := f.store.GetBookVersion(f.trashed.ID)
 	if got.Status != database.BookVersionStatusInactivePurged {
@@ -450,6 +541,59 @@ func TestPruneEmptyDirs_StillPrunesARealEmptySlot(t *testing.T) {
 	}
 	pruneEmptyDirs(slot)
 	requireGone(t, slot)
+}
+
+// R4. A .versions folder that is a symlink to somewhere outside the library is
+// not followed: the empty directories under the target's <versionID> folder stay.
+func TestR4210b_PruneFollowsSymlinkedVersionsDir(t *testing.T) {
+	base := t.TempDir()
+	bookDir := filepath.Join(base, "lib", "Gotham", "Hush")
+	outside := filepath.Join(base, "elsewhere")
+	vid := "01TESTVERSIONID"
+	victim := filepath.Join(outside, vid, "empty-mountpoint")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(bookDir, ".versions")); err != nil {
+		t.Fatal(err)
+	}
+
+	pruneEmptyDirs(VersionSlotDir(bookDir, vid))
+	if err := PruneEmptyVersionsDir(bookDir); err != nil {
+		t.Fatal(err)
+	}
+
+	requireOnDisk(t, victim)
+	requireOnDisk(t, filepath.Join(outside, vid))
+	if _, err := os.Lstat(filepath.Join(bookDir, ".versions")); err != nil {
+		t.Errorf("the .versions symlink itself was removed: %v", err)
+	}
+}
+
+// refuseRootDecider says no folder is inside the library root.
+type refuseRootDecider struct{ PurgeDecider }
+
+func (refuseRootDecider) InsideRoot(string) error { return errors.New("outside the library root") }
+
+// A slot that is a real folder but resolves outside the library root is not
+// pruned by a finished purge.
+func TestPruneVersionDirs_LeavesASlotOutsideTheLibraryRoot(t *testing.T) {
+	bookDir := t.TempDir()
+	slot := VersionSlotDir(bookDir, "v1")
+	if err := os.MkdirAll(filepath.Join(slot, "Disc 1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dec := testGuard.NewDecider()
+
+	pruneVersionDirs(refuseRootDecider{dec}, bookDir, "v1")
+	requireOnDisk(t, slot)
+
+	pruneVersionDirs(dec, bookDir, "v1")
+	requireGone(t, slot)
+	requireGone(t, VersionsDir(bookDir))
 }
 
 // ---- the stopped-for-merge streak ----

@@ -1,0 +1,304 @@
+// file: internal/versions/lifecycle_stuck_purge_test.go
+// version: 1.0.0
+// guid: 4e8b1d27-6c93-4f05-a7d2-9b3e5f0c8a61
+// last-edited: 2026-10-27
+
+package versions
+
+import (
+	"errors"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
+
+// undecidableOwn is a guard that cannot tell, for the two paths the trashed
+// version alone owns, whether they are gone: the shape of a dataset that is down.
+// The paths other rows name are kept by the owners question before the guard is
+// asked.
+func undecidableOwn(f *sharedPathFixture) *fsGuard {
+	return &fsGuard{undecidable: func(p string) error {
+		if p == f.ownOnly || p == f.unrowed {
+			return errors.New("its folder is empty, which is also how an unmounted dataset looks")
+		}
+		return nil
+	}}
+}
+
+func setStatus(t *testing.T, f *sharedPathFixture, status string) {
+	t.Helper()
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	v.Status = status
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A trashed version with nothing removable and paths that cannot be told apart
+// from a dataset that is down is NOT claimed: it stays restorable trash, nothing
+// is deleted, and the error names the paths and why.
+func TestPurgeVersion_NothingRemovableAndCannotTellLeavesTheTrashedVersionInTheTrash(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+
+	err := PurgeVersion(f.store, v, undecidableOwn(f))
+
+	var ct *CannotTellError
+	if !errors.As(err, &ct) || !errors.Is(err, ErrPurgeCannotTell) {
+		t.Fatalf("PurgeVersion = %v, want a *CannotTellError", err)
+	}
+	if len(ct.Files) != 2 {
+		t.Errorf("CannotTellError.Files = %+v, want the two paths the version alone owns", ct.Files)
+	}
+	requireTrashed(t, f)
+	requireOnDisk(t, f.ownOnly)
+	requireOnDisk(t, f.unrowed)
+	// Still restorable.
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if err := MarkRestored(got); err != nil {
+		t.Fatalf("MarkRestored: %v", err)
+	}
+	if err := f.store.UpdateBookVersion(got); err != nil {
+		t.Fatalf("the store refused the restore of a version that was never claimed: %v", err)
+	}
+}
+
+// The nightly cleanup files such a version under CannotTell: not purged, not a
+// failure, still trash.
+func TestCleanup_VersionThatCannotBeToldApartFromAnUnmountedDatasetIsListedNotFailed(t *testing.T) {
+	f := newSharedPathFixture(t)
+
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), undecidableOwn(f))
+
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if res.Purged != 0 || res.Failed != 0 || len(res.CannotTell) != 1 || res.CannotTell[0].VersionID != f.trashed.ID {
+		t.Fatalf("Purged=%d Failed=%d CannotTell=%+v, want 0, 0 and the trashed version", res.Purged, res.Failed, res.CannotTell)
+	}
+	if len(res.CannotTell[0].Files) != 2 {
+		t.Errorf("CannotTell files = %+v, want the two paths", res.CannotTell[0].Files)
+	}
+	requireTrashed(t, f)
+}
+
+// The way out. A purging version whose paths can never be settled (the file was
+// unlinked but the record never written, or the dataset is down for days) is
+// counted each attempt and, at PurgeUndecidedEscalateAfter, becomes purge_failed
+// with the paths and the reason, which makes hard delete available. Before that
+// hard delete is refused, as it must be while a purge may still be running.
+func TestPurgeVersion_PurgingVersionThatNeverSettlesEscalatesToPurgeFailedAndCanBeHardDeleted(t *testing.T) {
+	f := newSharedPathFixture(t)
+	setStatus(t, f, database.BookVersionStatusPurging)
+	guard := undecidableOwn(f)
+
+	for n := 1; n < PurgeUndecidedEscalateAfter; n++ {
+		v, _ := f.store.GetBookVersion(f.trashed.ID)
+		if err := PurgeVersion(f.store, v, guard); !errors.Is(err, ErrPurgeCannotTell) {
+			t.Fatalf("attempt %d = %v, want ErrPurgeCannotTell", n, err)
+		}
+		requirePurging(t, f)
+		got, _ := f.store.GetBookVersion(f.trashed.ID)
+		if got.PurgeUndecidedNights != n {
+			t.Fatalf("attempt %d: PurgeUndecidedNights = %d, want %d", n, got.PurgeUndecidedNights, n)
+		}
+		if err := f.store.DeleteBookVersion(f.trashed.ID); !errors.Is(err, database.ErrVersionPurging) {
+			t.Fatalf("attempt %d: hard delete = %v, want it refused while purging", n, err)
+		}
+	}
+
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	err := PurgeVersion(f.store, v, guard)
+	if !errors.Is(err, ErrPurgeFailed) {
+		t.Fatalf("attempt %d = %v, want ErrPurgeFailed", PurgeUndecidedEscalateAfter, err)
+	}
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if got.Status != database.BookVersionStatusPurgeFailed || got.PurgeFailedAt == nil {
+		t.Fatalf("status = %s, want purge_failed", got.Status)
+	}
+	var paths []string
+	for _, n := range got.PurgeFailed {
+		paths = append(paths, n.Path)
+		if !strings.Contains(n.Reason, "cannot tell whether") {
+			t.Errorf("reason for %s = %q, want it to say it cannot tell whether the file is gone", n.Path, n.Reason)
+		}
+	}
+	slices.Sort(paths)
+	want := []string{f.ownOnly, f.unrowed}
+	slices.Sort(want)
+	if !slices.Equal(paths, want) {
+		t.Errorf("PurgeFailed paths = %v, want %v", paths, want)
+	}
+	if got.PurgeUndecidedNights != 0 {
+		t.Errorf("PurgeUndecidedNights = %d after escalating, want it reset", got.PurgeUndecidedNights)
+	}
+	// purge_failed is deletable, and is listed by the cleanup rather than retried.
+	res, cerr := cleanupTrashedVersionsAt(f.store, time.Now(), guard)
+	if cerr != nil || len(res.NeedsAttention) != 1 {
+		t.Errorf("cleanup: err=%v NeedsAttention=%v, want the version listed and no failure", cerr, res.NeedsAttention)
+	}
+	if err := f.store.DeleteBookVersion(f.trashed.ID); err != nil {
+		t.Fatalf("hard delete of the escalated version: %v", err)
+	}
+	if gone, _ := f.store.GetBookVersion(f.trashed.ID); gone != nil {
+		t.Errorf("the version is still there after the hard delete: %+v", gone)
+	}
+}
+
+// The count is of attempts that settled nothing. An attempt that unlinks something
+// is progress and resets it, so a purge that is slowly getting through is not
+// escalated.
+func TestPurgeVersion_AnAttemptThatUnlinksSomethingResetsTheUndecidedCount(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	v.Status = database.BookVersionStatusPurging
+	v.PurgeUndecidedNights = PurgeUndecidedEscalateAfter - 1
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	// ownOnly cannot be decided; unrowed can, and is removed.
+	guard := &fsGuard{undecidable: func(p string) error {
+		if p == f.ownOnly {
+			return errors.New("cannot vouch")
+		}
+		return nil
+	}}
+
+	v, _ = f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v, guard); !errors.Is(err, ErrPurgeCannotTell) {
+		t.Fatalf("PurgeVersion = %v, want ErrPurgeCannotTell (and not purge_failed)", err)
+	}
+	requirePurging(t, f)
+	requireGone(t, f.unrowed)
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if got.PurgeUndecidedNights != 0 {
+		t.Errorf("PurgeUndecidedNights = %d, want 0 after an attempt that unlinked %s", got.PurgeUndecidedNights, f.unrowed)
+	}
+}
+
+// A purge that gets through clears the count with the rest of the record.
+func TestPurgeVersion_FinishedPurgeClearsTheUndecidedCount(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	v.Status = database.BookVersionStatusPurging
+	v.PurgeUndecidedNights = PurgeUndecidedEscalateAfter - 1
+	if err := f.store.UpdateBookVersion(v); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v, testGuard); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	got, _ := f.store.GetBookVersion(f.trashed.ID)
+	if got.Status != database.BookVersionStatusInactivePurged || got.PurgeUndecidedNights != 0 {
+		t.Errorf("status=%s PurgeUndecidedNights=%d, want inactive_purged and 0", got.Status, got.PurgeUndecidedNights)
+	}
+}
+
+// A version that was claimed, had its only file unlinked and never recorded that
+// (the crash window) is exactly this: nothing recorded, nothing on disk, the
+// folder cannot vouch. It used to sit in purging for ever.
+func TestPurgeVersion_UnlinkedButNeverRecordedFileDoesNotWedgeTheVersion(t *testing.T) {
+	f := newSharedPathFixture(t)
+	setStatus(t, f, database.BookVersionStatusPurging)
+	for _, p := range []string{f.ownOnly, f.unrowed} {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guard := undecidableOwn(f)
+
+	var last error
+	for n := 1; n <= PurgeUndecidedEscalateAfter; n++ {
+		v, _ := f.store.GetBookVersion(f.trashed.ID)
+		last = PurgeVersion(f.store, v, guard)
+	}
+	if !errors.Is(last, ErrPurgeFailed) {
+		t.Fatalf("attempt %d = %v, want ErrPurgeFailed", PurgeUndecidedEscalateAfter, last)
+	}
+	if err := f.store.DeleteBookVersion(f.trashed.ID); err != nil {
+		t.Fatalf("hard delete: %v", err)
+	}
+}
+
+// ---- a version that was deleted is not a version that was restored ----
+
+func TestPurgeVersion_HardDeletedWhileWaitingIsSaidSoNotRestored(t *testing.T) {
+	f := newSharedPathFixture(t)
+	stale, _ := f.store.GetBookVersion(f.trashed.ID)
+	if err := f.store.DeleteBookVersion(f.trashed.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	err := PurgeVersion(f.store, stale, testGuard)
+
+	if !errors.Is(err, ErrVersionNotInTrash) || !errors.Is(err, ErrVersionDeleted) || errors.Is(err, ErrVersionAlreadyPurged) {
+		t.Fatalf("PurgeVersion = %v, want ErrVersionNotInTrash and ErrVersionDeleted", err)
+	}
+	requireOnDisk(t, f.ownOnly)
+}
+
+// deleteAtClaimStore hard-deletes the version the moment the claim is written.
+type deleteAtClaimStore struct {
+	*database.PebbleStore
+	id   string
+	done bool
+}
+
+func (s *deleteAtClaimStore) UpdateBookVersion(v *database.BookVersion) error {
+	if v.Status == database.BookVersionStatusPurging && !s.done {
+		s.done = true
+		if err := s.PebbleStore.DeleteBookVersion(s.id); err != nil {
+			return err
+		}
+	}
+	return s.PebbleStore.UpdateBookVersion(v)
+}
+
+func TestPurgeVersion_HardDeletedBetweenTheDecisionAndTheClaimIsSaidSo(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+
+	err := PurgeVersion(&deleteAtClaimStore{PebbleStore: f.store, id: f.trashed.ID}, v, testGuard)
+
+	if !errors.Is(err, ErrVersionNotInTrash) || !errors.Is(err, ErrVersionDeleted) {
+		t.Fatalf("PurgeVersion = %v, want ErrVersionNotInTrash and ErrVersionDeleted", err)
+	}
+	requireOnDisk(t, f.ownOnly)
+}
+
+// ---- a purged version is not put back in the trash ----
+
+func TestMarkTrashed_RefusesAPurgedVersionAndSoDoesTheStore(t *testing.T) {
+	f := newSharedPathFixture(t)
+	v, _ := f.store.GetBookVersion(f.trashed.ID)
+	if err := PurgeVersion(f.store, v, testGuard); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	purged, _ := f.store.GetBookVersion(f.trashed.ID)
+	if purged.Status != database.BookVersionStatusInactivePurged {
+		t.Fatalf("status = %s, want inactive_purged", purged.Status)
+	}
+
+	if err := MarkTrashed(purged, time.Now()); !errors.Is(err, database.ErrVersionPurged) {
+		t.Errorf("MarkTrashed = %v, want database.ErrVersionPurged", err)
+	}
+	if purged.Status != database.BookVersionStatusInactivePurged || purged.TrashedAt != nil {
+		t.Errorf("MarkTrashed changed the caller's copy: status=%s TrashedAt=%v", purged.Status, purged.TrashedAt)
+	}
+
+	// A caller that skips MarkTrashed and writes the status itself is refused by
+	// the store, under the version's stripe.
+	purged.Status = database.BookVersionStatusTrash
+	if err := f.store.UpdateBookVersion(purged); !errors.Is(err, database.ErrVersionPurged) {
+		t.Errorf("UpdateBookVersion(trash) = %v, want database.ErrVersionPurged", err)
+	}
+	stored, _ := f.store.GetBookVersion(f.trashed.ID)
+	if stored.Status != database.BookVersionStatusInactivePurged {
+		t.Errorf("stored status = %s, want it left inactive_purged", stored.Status)
+	}
+}

@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_review_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7b1e4c92-5d38-4a06-b9f7-2c6a8d0e3f15
 // last-edited: 2026-10-27
 
@@ -35,11 +35,12 @@ type fsGuard struct {
 
 func (g *fsGuard) RootReady() error { g.rootAsked++; return g.rootErr }
 
-func (g *fsGuard) NewDecider(seedDirs []string) PurgeDecider { return &fsDecider{g: g} }
+func (g *fsGuard) NewDecider() PurgeDecider { return &fsDecider{g: g} }
 
 type fsDecider struct{ g *fsGuard }
 
-func (d *fsDecider) Unlinked(string) {}
+// InsideRoot: this guard has no library root, every folder is inside it.
+func (d *fsDecider) InsideRoot(string) error { return nil }
 
 func (d *fsDecider) Decide(path string) (PurgeDecision, string, error) {
 	if d.g.protected != nil && d.g.protected(path) {

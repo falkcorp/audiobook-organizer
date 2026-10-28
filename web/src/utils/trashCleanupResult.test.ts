@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.test.ts
-// version: 1.0.1
+// version: 1.1.0
 // guid: 63a5ee65-33c3-4d7d-b8dc-cc5de376cdcd
 // last-edited: 2026-10-27
 
@@ -27,6 +27,9 @@ describe('parseTrashCleanupResult', () => {
       needs_attention: 0,
       needs_attention_version_ids: [],
       needs_attention_book_ids: [],
+      cannot_tell: 0,
+      cannot_tell_version_ids: [],
+      cannot_tell_book_ids: [],
       stopped_for_merge: false,
       stopped_for_merge_nights: 0,
       stopped_for_merge_repeatedly: false,
@@ -78,6 +81,9 @@ describe('links', () => {
     );
     expect(cleanupSetTab('kept')).toBe('purged');
     expect(cleanupSetTab('needs_attention')).toBe('trash');
+    expect(cleanupVersionsLink('op-3', 'cannot_tell')).toBe('/versions?op=op-3&set=cannot_tell');
+    expect(cleanupSetTab('cannot_tell')).toBe('trash');
+    expect(parseCleanupSet('cannot_tell')).toBe('cannot_tell');
   });
 
   it('reads back only the two known sets', () => {

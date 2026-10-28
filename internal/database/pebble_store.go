@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.3
+// version: 1.234.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-27
 
@@ -5330,11 +5330,18 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 //   - a stored purging or purge_failed version may only stay in the purge
 //     states or become inactive_purged: anything else (a restore, a re-trash, a
 //     stale copy written back) is ErrVersionPurging, because some of its files
-//     may already be gone.
+//     may already be gone;
+//   - a stored inactive_purged version is not put back in the trash
+//     (ErrVersionPurged): its files are gone, and a trash row would start a
+//     clock that ends in a purge of nothing.
 //
 // This is the one place the restore-versus-purge race is closed: whichever
 // write reaches the stripe second sees the other's status and is refused.
 func refusePurgeTransition(prev, v *BookVersion) error {
+	if v.Status == BookVersionStatusTrash && prev.Status == BookVersionStatusInactivePurged {
+		return fmt.Errorf("book version %s: cannot move from %q to %q: %w",
+			v.ID, prev.Status, v.Status, ErrVersionPurged)
+	}
 	if v.Status == BookVersionStatusPurging &&
 		prev.Status != BookVersionStatusTrash && prev.Status != BookVersionStatusPurging &&
 		prev.Status != BookVersionStatusPurgeFailed {

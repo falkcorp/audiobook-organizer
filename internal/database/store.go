@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.128.4
+// version: 2.129.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-27
 
@@ -833,21 +833,31 @@ type BookVersion struct {
 	// BookVersionStatusPurgeFailed. Empty in every other status.
 	PurgeFailed   []PurgeFileNote `json:"purge_failed,omitempty"`
 	PurgeFailedAt *time.Time      `json:"purge_failed_at,omitempty"`
-	// PurgeUnlinked lists the paths an attempt of the purge actually took off
-	// the disk (or found gone with its folder vouching for it), written one by
-	// one AFTER each removal, while the version is purging or purge_failed;
-	// cleared when the purge finishes. A retry reads it to know which folders
-	// its own earlier attempt emptied (versions.PurgeVersion): a folder that is
-	// empty only because the purge emptied it is not a mount point whose
-	// dataset is down. It is written after the removal, never before, so a
-	// crash between the two leaves a path unrecorded (the retry then refuses to
-	// call it gone and the version stays purging) and can never leave an
-	// unremoved path recorded as unlinked.
-	PurgeUnlinked []string  `json:"purge_unlinked,omitempty"`
-	MetadataJSON  string    `json:"metadata_json,omitempty"` // source-specific catch-all
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	Version       int       `json:"version"`
+	// PurgeUnlinked lists the paths an attempt of the purge itself took off the
+	// disk (a real unlink, never a path that was merely found missing), written
+	// one by one AFTER each removal, while the version is purging or
+	// purge_failed; cleared when the purge finishes. A retry trusts it PATH BY
+	// PATH and nothing wider: a recorded path that reads "not there" is gone
+	// (this purge removed it), whatever its folder looks like. The folder of a
+	// recorded path is never trusted for its neighbours, because a neighbour the
+	// purge never unlinked can sit in a folder that is empty only because its
+	// dataset is not mounted (versions.PurgeVersion). It is written after the
+	// removal, never before, so a crash between the two leaves a path
+	// unrecorded and can never leave an unremoved path recorded as unlinked; an
+	// unrecorded path that is already gone is "cannot tell" to a retry, which is
+	// what PurgeUndecidedNights counts.
+	PurgeUnlinked []string `json:"purge_unlinked,omitempty"`
+	// PurgeUndecidedNights is how many purge attempts in a row, while the version
+	// was purging, left a path unresolved (could not tell whether it is gone, or
+	// could not remove it for a reason that may pass) and made no progress. At
+	// versions.PurgeUndecidedEscalateAfter the version moves to purge_failed,
+	// which is the exit: purge_failed can be hard-deleted. Reset by an attempt
+	// that unlinks something, and cleared when the purge finishes.
+	PurgeUndecidedNights int       `json:"purge_undecided_nights,omitempty"`
+	MetadataJSON         string    `json:"metadata_json,omitempty"` // source-specific catch-all
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	Version              int       `json:"version"`
 }
 
 // PurgeFileNote is one file a purge left on disk (BookVersion.PurgeKept) or
@@ -894,7 +904,10 @@ const (
 	// The owner can retry the purge ("Purge now": the claim accepts it), or
 	// hard-delete the version, which removes the record and leaves the files
 	// named in BookVersion.PurgeFailed where they are. Only PurgeVersion sets
-	// it, from purging.
+	// it, from purging: for a file it cannot remove, and for a purge that could
+	// not tell whether a file is gone, or could not finish, for
+	// versions.PurgeUndecidedEscalateAfter attempts in a row (the version would
+	// otherwise sit in purging, which refuses restore and hard delete, for ever).
 	BookVersionStatusPurgeFailed = "purge_failed"
 )
 
@@ -905,6 +918,12 @@ const (
 // returns it too for a version that is purging (a hard delete in the middle of
 // a purge would strand the files it has not removed yet).
 var ErrVersionPurging = errors.New("version is being purged and cannot change status")
+
+// ErrVersionPurged is returned by UpdateBookVersion when the stored version is
+// inactive_purged and the write would put it back in the trash: its files are
+// gone, a trash row would start a new 14-day clock that ends in a purge of
+// nothing, and the trash page would offer a Restore of files that do not exist.
+var ErrVersionPurged = errors.New("version is already purged and cannot be trashed")
 
 // ErrVersionPurgeClaimLost is returned by UpdateBookVersion when a write sets
 // BookVersionStatusPurging and the stored version is none of trash, purging

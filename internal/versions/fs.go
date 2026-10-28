@@ -1,5 +1,5 @@
 // file: internal/versions/fs.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6c2a1f8d-4b3e-4f70-a9c5-2e8d0f1b9a47
 // last-edited: 2026-10-27
 //
@@ -142,8 +142,14 @@ func movePreservingAttrs(src, dst string) (bool, error) {
 // PruneEmptyVersionsDir removes `bookDir/.versions/` if empty, so
 // a book with all its versions gone doesn't leave an empty dot
 // folder lying around.
+//
+// A .versions that is a symlink is left alone, whatever it points at: ReadDir
+// would follow it, and removing "the empty folder" would remove the link.
 func PruneEmptyVersionsDir(bookDir string) error {
 	dir := VersionsDir(bookDir)
+	if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

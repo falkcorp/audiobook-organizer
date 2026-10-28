@@ -95,15 +95,12 @@ and several smaller ones.
   a folder the earlier attempt had emptied, so a nested folder on an unmounted
   drive read as legitimately gone. `database.BookVersion` now records
   `purge_unlinked` (each path actually removed, written after the removal and
-  cleared when the purge finishes), and a retry seeds only those folders. A
-  crash between the removal and the record leaves a path unrecorded, which only
-  makes the retry stricter.
+  cleared when the purge finishes). See the third review below for what a retry
+  does with it (it trusts those paths one by one, never their folders).
 - `guard.RootReady()` runs again once the merge lock is held, and a
   `PurgeDecider.Decide` that cannot resolve the library root (the path vanished,
   `fs.ErrNotExist`) answers with a transient error instead of a permanent keep,
-  so the version stays `purging` and the next run decides again. The rename of
-  `PurgeDecider.Unlinking` to `Unlinked` reflects that it is now called after
-  the removal.
+  so the version stays `purging` and the next run decides again.
 - `PebbleStore.DeleteBookVersion` refuses a `purging` version
   (`ErrVersionPurging`); the hard-delete route answers 409 for it.
 - `purgeVersionLocked` re-reads the version after taking the lock, so a version
@@ -111,9 +108,7 @@ and several smaller ones.
   copy. Purge now answers 409 "already purged" (`ErrVersionAlreadyPurged`) when
   the nightly cleanup got there first, instead of saying it was restored.
 - ENOTEMPTY and EEXIST are transient removal errors, not permanent ones.
-  `pruneEmptyDirs` no longer enters a symlink. An ENOENT from a removal the
-  decider had approved re-runs the decider before the file counts as removed.
-  The import-path lookup failing now keeps the file (`isProtectedPath` fails
+  `pruneEmptyDirs` no longer enters a symlink. The import-path lookup failing now keeps the file (`isProtectedPath` fails
   closed on the deletion paths).
 - The trash cleanup counts consecutive nights it stopped for the merge lock
   (`MergeStopStreak`, kept in the raw KV store). At
@@ -123,3 +118,40 @@ and several smaller ones.
   `sync.Mutex.TryLock` based, which can starve under Go's starvation mode; that
   limit is documented on `BackgroundMergeLockWait`. A failed run now logs the
   same summary line a successful one does.
+
+#### Version purge: decide before the claim, trust the record path by path, a stuck purge has an exit
+
+A third review found that the retry still trusted whole folders, and that a
+version could be stuck in `purging` with no way out.
+
+- `versions.PurgeVersion` decides EVERY path read-only before it claims the
+  version, and claims only when it is going to unlink something. A trashed
+  version with nothing removable and a path it cannot tell from an unmounted
+  dataset stays `trash` (restorable) and the error is a `*CannotTellError`
+  (`errors.Is` `ErrPurgeCannotTell`); the trash cleanup lists it under the new
+  `CleanupResult.CannotTell` instead of failing the night. Before, the claim came
+  first, so a trashed version whose file and folder were already gone became an
+  unrestorable, undeletable `purging` row.
+- A retry trusts `purge_unlinked` path by path: a recorded path that reads "not
+  there" is gone. Folder seeding is gone entirely: `PurgeGuard.NewDecider` takes
+  no folders, `PurgeDecider.Unlinked` is removed, and the version decider no
+  longer exempts an empty folder, so a never-unlinked neighbour in an unmounted
+  folder is "cannot tell". An unlink that answers "not there" for a path this
+  purge did not unlink is "cannot tell" too and is never recorded; only a real
+  unlink is. Once the record write fails, the purge stops unlinking.
+- The way out: a purging version whose attempts keep ending with a path unsettled
+  and nothing unlinked is counted (`purge_undecided_nights` on the version) and,
+  at `versions.PurgeUndecidedEscalateAfter` (3, the merge-stop streak's count),
+  becomes `purge_failed` with the paths and the reason "cannot tell whether
+  gone", which makes Hard Delete available. An attempt that unlinks something
+  resets the count. The hard-delete route answers 409 for a `purging` version
+  with that explanation; hard-deleting it under the merge lock was not added.
+- `pruneEmptyDirs` requires the slot to resolve to where its name says (no
+  symlinked `.versions` or slot) and the finished purge prunes only inside the
+  library root (`PurgeDecider.InsideRoot`); `PruneEmptyVersionsDir` leaves a
+  symlinked `.versions` alone.
+- `recordMergeStopStreak` logs once that escalation is unavailable when the store
+  has no raw key-value space. Purge now says "deleted" (`ErrVersionDeleted`), not
+  "restored", when the version was hard-deleted under it. `MarkTrashed` and the
+  store refuse to put an `inactive_purged` version back in the trash
+  (`database.ErrVersionPurged`; the trash route answers 409).

@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.test.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6255d3b3-6c19-482d-a750-5e14a4ad74e5
 // last-edited: 2026-10-27
 
@@ -58,6 +58,26 @@ describe('TrashCleanupResultPanel', () => {
     await userEvent.setup().click(button);
     expect(await screen.findByText('/lib/Gotham/Year One/part1.m4b')).toBeInTheDocument();
     expect(screen.getByText('/lib/Gotham/Year One/part2.m4b')).toBeInTheDocument();
+  });
+
+  it('links the cannot-tell count to its versions and says nothing was deleted', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: {
+        purged: 0,
+        cannot_tell: 1,
+        cannot_tell_version_ids: ['v-down'],
+        cannot_tell_book_ids: ['book-long-halloween'],
+      },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-3" />);
+
+    const line = await screen.findByTestId('trash-cleanup-cannot_tell');
+    expect(screen.getByRole('link', { name: '1 version' })).toHaveAttribute(
+      'href',
+      '/versions?op=op-night-3&set=cannot_tell'
+    );
+    expect(line).toHaveTextContent('left alone');
+    expect(line).toHaveTextContent('Nothing was deleted');
   });
 
   it('links the needs-attention count to its versions and explains it', async () => {

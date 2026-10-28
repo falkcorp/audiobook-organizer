@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.ts
-// version: 1.0.1
+// version: 1.1.0
 // guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
 // last-edited: 2026-10-27
 
@@ -30,6 +30,10 @@ export interface TrashCleanupResult {
   needs_attention: number;
   needs_attention_version_ids: string[];
   needs_attention_book_ids: string[];
+  /** versions left alone because the purge could not tell whether their files are gone (a drive that is down looks the same); still in the trash, not counted in failed */
+  cannot_tell: number;
+  cannot_tell_version_ids: string[];
+  cannot_tell_book_ids: string[];
   /** a merge or combine held the merge lock for the whole wait, so the run stopped and left the rest for the next night */
   stopped_for_merge: boolean;
   /** how many nights in a row, this one included, the run stopped for the merge lock */
@@ -38,8 +42,8 @@ export interface TrashCleanupResult {
   stopped_for_merge_repeatedly: boolean;
 }
 
-/** The two groups of versions the result points at. */
-export type TrashCleanupSet = 'kept' | 'needs_attention';
+/** The groups of versions the result points at. */
+export type TrashCleanupSet = 'kept' | 'needs_attention' | 'cannot_tell';
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const strings = (v: unknown): string[] =>
@@ -63,6 +67,9 @@ export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null
     needs_attention: num(r.needs_attention),
     needs_attention_version_ids: strings(r.needs_attention_version_ids),
     needs_attention_book_ids: strings(r.needs_attention_book_ids),
+    cannot_tell: num(r.cannot_tell),
+    cannot_tell_version_ids: strings(r.cannot_tell_version_ids),
+    cannot_tell_book_ids: strings(r.cannot_tell_book_ids),
     stopped_for_merge: r.stopped_for_merge === true,
     stopped_for_merge_nights: num(r.stopped_for_merge_nights),
     stopped_for_merge_repeatedly: r.stopped_for_merge_repeatedly === true,
@@ -71,12 +78,23 @@ export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null
 
 /** The version ids behind one of the result's counts. */
 export function cleanupVersionIds(r: TrashCleanupResult, set: TrashCleanupSet): string[] {
-  return set === 'kept' ? r.kept_version_ids : r.needs_attention_version_ids;
+  switch (set) {
+    case 'kept':
+      return r.kept_version_ids;
+    case 'needs_attention':
+      return r.needs_attention_version_ids;
+    case 'cannot_tell':
+      return r.cannot_tell_version_ids;
+  }
 }
 
 /** The distinct book ids behind one of the result's counts. */
 export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): string[] {
-  const ids = set === 'kept' ? r.kept_book_ids : r.needs_attention_book_ids;
+  const ids = {
+    kept: r.kept_book_ids,
+    needs_attention: r.needs_attention_book_ids,
+    cannot_tell: r.cannot_tell_book_ids,
+  }[set];
   return [...new Set(ids)];
 }
 
@@ -85,7 +103,8 @@ export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): str
  * to the versions of that run's group. The page reads the ids from the
  * operation's stored result (op), so the link stays short however many
  * versions the run named. Kept versions have finished purging (Purged tab);
- * versions that need attention are still listed in the Trash tab.
+ * versions that need attention, and those the cleanup could not judge, are
+ * still listed in the Trash tab.
  */
 export function cleanupVersionsLink(opId: string, set: TrashCleanupSet): string {
   return `/versions?op=${encodeURIComponent(opId)}&set=${set}`;
@@ -98,5 +117,5 @@ export function cleanupSetTab(set: TrashCleanupSet): 'trash' | 'purged' {
 
 /** Reads the set query value back; null for anything but the two known sets. */
 export function parseCleanupSet(v: string | null): TrashCleanupSet | null {
-  return v === 'kept' || v === 'needs_attention' ? v : null;
+  return v === 'kept' || v === 'needs_attention' || v === 'cannot_tell' ? v : null;
 }

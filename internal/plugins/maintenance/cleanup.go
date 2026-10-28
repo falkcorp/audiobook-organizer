@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-27
 
@@ -524,6 +524,12 @@ type TrashCleanupResult struct {
 	NeedsAttention           int      `json:"needs_attention"`
 	NeedsAttentionVersionIDs []string `json:"needs_attention_version_ids,omitempty"`
 	NeedsAttentionBookIDs    []string `json:"needs_attention_book_ids,omitempty"`
+	// CannotTell counts the versions left alone because the purge could not tell
+	// whether the files that are left are gone (a drive that is down looks the
+	// same); they are still in the trash or purging, and are not counted in Failed.
+	CannotTell           int      `json:"cannot_tell"`
+	CannotTellVersionIDs []string `json:"cannot_tell_version_ids,omitempty"`
+	CannotTellBookIDs    []string `json:"cannot_tell_book_ids,omitempty"`
 	// StoppedForMerge is true when a merge or combine held the merge lock for
 	// the whole wait, so the run stopped there and left the remaining versions
 	// for the next night. It is not a failure and does not turn the op red.
@@ -540,7 +546,7 @@ type TrashCleanupResult struct {
 
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	res, err := p.deps.CleanupTrashedVersions()
-	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
+	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), CannotTell: len(res.CannotTell), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
 	for _, k := range res.KeptFiles {
 		payload.KeptVersionIDs = append(payload.KeptVersionIDs, k.VersionID)
 		payload.KeptBookIDs = append(payload.KeptBookIDs, k.BookID)
@@ -551,6 +557,10 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	for _, k := range res.NeedsAttention {
 		payload.NeedsAttentionVersionIDs = append(payload.NeedsAttentionVersionIDs, k.VersionID)
 		payload.NeedsAttentionBookIDs = append(payload.NeedsAttentionBookIDs, k.BookID)
+	}
+	for _, k := range res.CannotTell {
+		payload.CannotTellVersionIDs = append(payload.CannotTellVersionIDs, k.VersionID)
+		payload.CannotTellBookIDs = append(payload.CannotTellBookIDs, k.BookID)
 	}
 	// A result the page cannot read back would leave a run that purged versions
 	// looking like a run that did nothing; a failed write is reported on the op.
@@ -564,12 +574,19 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) cannot be purged (a file cannot be removed: permission or a read-only filesystem) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
 			len(res.NeedsAttention), strings.Join(payload.NeedsAttentionVersionIDs, ", "), strings.Join(payload.NeedsAttentionBookIDs, ", ")))
 	}
+	if len(res.CannotTell) > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left alone because the files that are left are not there and nothing shows they were removed (a drive that is down looks the same); nothing was deleted and they are tried again next run (versions %s, books %s)",
+			len(res.CannotTell), strings.Join(payload.CannotTellVersionIDs, ", "), strings.Join(payload.CannotTellBookIDs, ", ")))
+	}
 	// The summary line is built before the error is looked at: a run that failed
 	// some purges has still purged, kept, deferred and stopped for the lock, and
 	// the log of the night it failed is the one the owner reads.
 	msg := fmt.Sprintf("Trash cleanup: purged %d versions", res.Purged)
 	if n := len(res.KeptFiles); n > 0 {
 		msg = fmt.Sprintf("Trash cleanup: purged %d versions, %d of them with files kept (versions %s)", res.Purged, n, strings.Join(payload.KeptVersionIDs, ", "))
+	}
+	if n := len(res.CannotTell); n > 0 {
+		msg += fmt.Sprintf("; %d left alone, cannot tell whether their files are gone (versions %s)", n, strings.Join(payload.CannotTellVersionIDs, ", "))
 	}
 	if n := len(res.NeedsAttention); n > 0 {
 		msg += fmt.Sprintf("; %d need attention (versions %s)", n, strings.Join(payload.NeedsAttentionVersionIDs, ", "))

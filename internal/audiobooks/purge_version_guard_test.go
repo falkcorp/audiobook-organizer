@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_version_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e9a2d71-4c06-4f83-b1d8-0a7c3e6f9b24
 // last-edited: 2026-10-27
 
@@ -169,8 +169,9 @@ func TestVersionPurgeGuard_AnUnmountedLibraryDoesNotCountEveryFileAsRemoved(t *t
 }
 
 // A file that is not there under a folder that is not there either is "cannot
-// tell", not "already removed": the version stays purging for the next run, and
-// is not marked purged with the file unaccounted for.
+// tell", not "already removed": nothing was unlinked, so the version is not even
+// claimed (it stays restorable trash) and is not marked purged with the file
+// unaccounted for.
 func TestVersionPurgeGuard_AMissingFileUnderAMissingFolderIsNotRemoved(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	// Two library files that are there, so the root check (a majority of the
@@ -186,7 +187,7 @@ func TestVersionPurgeGuard_AMissingFileUnderAMissingFolderIsNotRemoved(t *testin
 	assert.True(t, strings.Contains(err.Error(), "cannot tell whether"), "error = %v", err)
 	assert.False(t, errors.Is(err, versions.ErrPurgeFailed), "it may pass; it is not terminal")
 	got := f.reread(t)
-	assert.Equal(t, database.BookVersionStatusPurging, got.Status)
+	assert.Equal(t, database.BookVersionStatusTrash, got.Status, "nothing was unlinked, so no claim was taken")
 	assert.Nil(t, got.PurgedDate)
 
 	// With the folder there (and holding something), the file is simply gone.

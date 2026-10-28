@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_version_guard.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3c8e1f5a-9d27-4b60-a4e3-7f1b2c9d6e58
 // last-edited: 2026-10-27
 
@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path/filepath"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
@@ -38,26 +37,29 @@ func (g versionPurgeGuard) RootReady() error {
 	return g.svc.libraryRootReady(config.Snapshot().RootDir)
 }
 
-func (g versionPurgeGuard) NewDecider(seedDirs []string) versions.PurgeDecider {
-	d := &versionPurgeDecider{svc: g.svc, emptied: &dirSet{}}
-	for _, dir := range seedDirs {
-		d.emptied.add(dir)
-	}
-	return d
+func (g versionPurgeGuard) NewDecider() versions.PurgeDecider {
+	return &versionPurgeDecider{svc: g.svc}
 }
 
-// versionPurgeDecider decides the paths of one version purge. emptied holds the
-// folders this purge is (or, on a retry, was) unlinking in, so a folder it
-// emptied is not mistaken for the mount point of a filesystem that is not up.
+// versionPurgeDecider decides the paths of one version purge attempt. It keeps no
+// set of folders it "emptied": an empty folder is never explained by this purge's
+// own work here (planPurgePathIn gets no dirSet), because a path of a version that
+// is not there is vouched for only when the purge itself unlinked it and recorded
+// that (versions.PurgeVersion decides those before it asks) or when its folder
+// holds something. The book purge keeps its own set for the folders its workers
+// unlink in; a version purge decides every path before it unlinks any.
 type versionPurgeDecider struct {
-	svc     *AudiobookService
-	emptied *dirSet
+	svc *AudiobookService
 }
 
-func (d *versionPurgeDecider) Unlinked(path string) { d.emptied.add(filepath.Dir(path)) }
+// InsideRoot is purgePathInsideRoot on the configured root: nil only for a
+// folder strictly inside the library once its symlinks are resolved.
+func (d *versionPurgeDecider) InsideRoot(dir string) error {
+	return purgePathInsideRoot(dir, config.Snapshot().RootDir)
+}
 
 func (d *versionPurgeDecider) Decide(path string) (versions.PurgeDecision, string, error) {
-	v := d.svc.planPurgePathIn(path, d.emptied, nil)
+	v := d.svc.planPurgePathIn(path, nil, nil)
 	switch {
 	case v.protected:
 		return versions.PurgeKeep, "it is under an import path, the iTunes library or a .failed folder, which a purge never deletes", nil

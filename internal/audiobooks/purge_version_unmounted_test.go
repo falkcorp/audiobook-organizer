@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_version_unmounted_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2c9e41-0b58-4a3f-9c6e-1f8a5b3d7e20
 // last-edited: 2026-10-27
 
@@ -52,11 +52,10 @@ func unmountNested(t *testing.T, dir string) (remount func()) {
 	}
 }
 
-// Run 1 cannot tell whether a file in an empty mount point is gone and leaves
-// the version purging. Run 2, with the mount state unchanged, must come to the
-// same answer: nothing was unlinked in that folder, so nothing explains it being
-// empty. It used to seed every doomed path's folder on a retry, which made the
-// second run read the file as gone and mark the version purged.
+// Run 1 cannot tell whether a file in an empty mount point is gone. Nothing is
+// removable, so the version is not even claimed: it stays restorable trash. Run 2,
+// with the mount state unchanged, comes to the same answer, and once the dataset
+// is up the purge removes the file.
 func TestVersionPurgeRetry_EmptyMountPointStaysUnexplainedOnTheSecondRun(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
@@ -66,15 +65,21 @@ func TestVersionPurgeRetry_EmptyMountPointStaysUnexplainedOnTheSecondRun(t *test
 	f.ownRow(t, own, 1)
 	remount := unmountNested(t, mnt)
 
-	require.Error(t, f.purge(t), "run 1: the folder is an empty mount point, so the file cannot be called gone")
-	require.Equal(t, database.BookVersionStatusPurging, f.reread(t).Status)
-	require.Error(t, f.purge(t), "run 2: same mount state, same answer")
+	err1 := f.purge(t)
+	require.ErrorIs(t, err1, versions.ErrPurgeCannotTell, "run 1: the folder is an empty mount point, so the file cannot be called gone")
+	require.Equal(t, database.BookVersionStatusTrash, f.reread(t).Status, "nothing is removable, so the version is not claimed")
+	err2 := f.purge(t)
+	require.ErrorIs(t, err2, versions.ErrPurgeCannotTell, "run 2: same mount state, same answer")
 	got := f.reread(t)
 	remount()
 
-	assert.Equal(t, database.BookVersionStatusPurging, got.Status, "the version stays purging, to be retried once the dataset is up")
+	assert.Equal(t, database.BookVersionStatusTrash, got.Status, "the version stays in the trash, restorable")
 	assert.Empty(t, got.PurgeUnlinked, "nothing was unlinked, so nothing is recorded as unlinked")
 	assert.True(t, fileExists(own), "the file is still on the dataset")
+
+	require.NoError(t, f.purge(t), "run 3: the dataset is up again")
+	assert.False(t, fileExists(own))
+	assert.Equal(t, database.BookVersionStatusInactivePurged, f.reread(t).Status)
 }
 
 // The same on the first retry of a version that was left purging by something
@@ -101,10 +106,10 @@ func TestVersionPurgeRetry_UnmountedNestedFolderOfAnInterruptedPurgeIsNotGone(t 
 	assert.True(t, fileExists(own))
 }
 
-// The positive half: a folder the earlier attempt itself emptied IS explained.
-// The attempt recorded the file it unlinked (PurgeUnlinked), the folder is empty
-// because of that, and the retry finishes the purge instead of refusing for ever.
-func TestVersionPurgeRetry_FolderTheEarlierAttemptEmptiedReadsAsGone(t *testing.T) {
+// The positive half, per path: a path the earlier attempt unlinked and recorded
+// (PurgeUnlinked) reads "not there" and that is enough, even though its folder is
+// empty. The retry finishes the purge instead of refusing for ever.
+func TestVersionPurgeRetry_RecordedPathReadsAsGoneEvenInAnEmptyFolder(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
 	folder := filepath.Join(config.AppConfig.RootDir, "Arkham", "Asylum")
@@ -123,6 +128,169 @@ func TestVersionPurgeRetry_FolderTheEarlierAttemptEmptiedReadsAsGone(t *testing.
 	assert.Equal(t, database.BookVersionStatusInactivePurged, got.Status)
 	assert.Empty(t, got.PurgeUnlinked, "the record is cleared once the purge is done")
 	assert.Empty(t, got.PurgeKept)
+}
+
+// R1. The record is per path: attempt 1 unlinked and recorded joker.m4b in the
+// nested mount point Arkham and stopped before harley.m4b. Before the retry the
+// Arkham dataset goes down: Arkham is an empty mount point and harley.m4b is still
+// on the dataset. The recorded joker is gone; harley, which this purge never
+// unlinked, must not be called gone because of it.
+func TestR4210b_RetryRecordedSiblingDoesNotVouchForAnUnrecordedOneInAnUnmountedFolder(t *testing.T) {
+	f := newVersionGuardFixture(t)
+	libraryWitnesses(t, f)
+	mnt := filepath.Join(config.AppConfig.RootDir, "Arkham")
+	joker := filepath.Join(mnt, "joker.m4b")
+	harley := filepath.Join(mnt, "harley.m4b")
+	writeFile(t, joker)
+	writeFile(t, harley)
+	f.ownRow(t, joker, 1)
+	f.ownRow(t, harley, 2)
+
+	// State left by attempt 1: joker unlinked and recorded, harley not reached.
+	require.NoError(t, os.Remove(joker))
+	v := f.reread(t)
+	v.Status = database.BookVersionStatusPurging
+	v.PurgeUnlinked = []string{joker}
+	require.NoError(t, f.store.UpdateBookVersion(v))
+
+	remount := unmountNested(t, mnt)
+	perr := f.purge(t)
+	got := f.reread(t)
+	remount()
+
+	assert.ErrorIs(t, perr, versions.ErrPurgeCannotTell)
+	assert.True(t, fileExists(harley), "harley.m4b is still on the dataset")
+	assert.Equal(t, database.BookVersionStatusPurging, got.Status,
+		"the version must stay purging: harley.m4b was never unlinked and its folder is an empty mount point")
+	assert.Equal(t, []string{joker}, got.PurgeUnlinked)
+}
+
+// flakyAtPath fails BookFilesAtPath(path) on its second call: the per-path
+// owner re-check after the claim (a transient lookup failure, the EIO-class
+// error a dataset that is going bad produces).
+type flakyAtPath struct {
+	*database.PebbleStore
+	path  string
+	calls int
+}
+
+func (s *flakyAtPath) BookFilesAtPath(p string) ([]database.BookFile, error) {
+	if p == s.path {
+		s.calls++
+		if s.calls == 2 {
+			return nil, errors.New("injected transient lookup failure")
+		}
+	}
+	return s.PebbleStore.BookFilesAtPath(p)
+}
+
+// R1b. R1 reached through the real code, no hand-built row: run 1 removes
+// joker.m4b and records it, harley.m4b fails transiently; the Arkham dataset then
+// drops (empty mount point); run 2 must not mark the version purged with
+// harley.m4b still on the dataset.
+func TestR4210b_RetrySeedExemptsSibling_RealSequence(t *testing.T) {
+	f := newVersionGuardFixture(t)
+	libraryWitnesses(t, f)
+	mnt := filepath.Join(config.AppConfig.RootDir, "Arkham")
+	joker := filepath.Join(mnt, "joker.m4b")
+	harley := filepath.Join(mnt, "harley.m4b")
+	writeFile(t, joker)
+	writeFile(t, harley)
+	f.ownRow(t, joker, 1)
+	f.ownRow(t, harley, 2)
+
+	flaky := &flakyAtPath{PebbleStore: f.store, path: harley}
+	v := f.reread(t)
+	err1 := versions.PurgeVersion(flaky, v, f.svc.VersionPurgeGuard())
+	after1 := f.reread(t)
+	require.Error(t, err1)
+	require.Equal(t, database.BookVersionStatusPurging, after1.Status)
+	require.Equal(t, []string{joker}, after1.PurgeUnlinked)
+	require.True(t, fileExists(harley))
+
+	remount := unmountNested(t, mnt)
+	err2 := f.purge(t)
+	got := f.reread(t)
+	remount()
+
+	assert.ErrorIs(t, err2, versions.ErrPurgeCannotTell)
+	assert.True(t, fileExists(harley), "harley.m4b is still on the dataset")
+	assert.Equal(t, database.BookVersionStatusPurging, got.Status,
+		"harley.m4b was never unlinked and its folder is an empty mount point; the version must stay purging")
+	assert.Equal(t, []string{joker}, got.PurgeUnlinked)
+
+	// And with the dataset back up, the next attempt finishes the job.
+	require.NoError(t, f.purge(t))
+	assert.False(t, fileExists(harley))
+	assert.Equal(t, database.BookVersionStatusInactivePurged, f.reread(t).Status)
+}
+
+// R2. Crash between the unlink and its record (or the record write failing): the
+// only file of the slot is gone, the slot folder is empty, and nothing is
+// recorded. The purge cannot tell that from a dataset that is down, and the
+// version used to sit in purging for ever (restore and hard delete both refuse
+// it). The attempts are counted and the version becomes purge_failed, which can
+// be hard-deleted.
+func TestR4210b_UnrecordedUnlinkEscalatesToPurgeFailedSoItCanBeHardDeleted(t *testing.T) {
+	f := newVersionGuardFixture(t)
+	libraryWitnesses(t, f)
+	slot := versions.VersionSlotDir(f.bookDir, f.ver.ID)
+	own := filepath.Join(slot, "part1.m4b")
+	writeFile(t, own)
+	f.ownRow(t, own, 1)
+
+	// Attempt 1: claimed, unlinked, crashed before the record.
+	v := f.reread(t)
+	v.Status = database.BookVersionStatusPurging
+	require.NoError(t, f.store.UpdateBookVersion(v))
+	require.NoError(t, os.Remove(own))
+
+	for i := 1; i < versions.PurgeUndecidedEscalateAfter; i++ {
+		err := f.purge(t)
+		require.ErrorIs(t, err, versions.ErrPurgeCannotTell, "retry %d", i)
+		require.Equal(t, database.BookVersionStatusPurging, f.reread(t).Status, "retry %d", i)
+	}
+	assert.ErrorIs(t, f.store.DeleteBookVersion(f.ver.ID), database.ErrVersionPurging, "hard delete is refused while purging")
+	assert.Error(t, versions.MarkRestored(f.reread(t)), "restore is refused: some files are gone")
+
+	err := f.purge(t)
+	require.ErrorIs(t, err, versions.ErrPurgeFailed)
+	got := f.reread(t)
+	require.Equal(t, database.BookVersionStatusPurgeFailed, got.Status)
+	require.Len(t, got.PurgeFailed, 1)
+	assert.Equal(t, own, got.PurgeFailed[0].Path)
+	assert.Contains(t, got.PurgeFailed[0].Reason, "cannot tell whether")
+
+	require.NoError(t, f.store.DeleteBookVersion(f.ver.ID), "purge_failed can be hard-deleted: that is the way out")
+	gone, err := f.store.GetBookVersion(f.ver.ID)
+	require.NoError(t, err)
+	assert.Nil(t, gone)
+}
+
+// R3. A trashed version whose only file is already gone from a folder that is gone
+// too (the owner tidied up by hand), or whose dataset is down at 06:00. The first
+// purge used to CLAIM it (purging) before deciding, and a version that was
+// restorable trash became an unrestorable, undeletable row. Nothing is removable
+// and nothing was ever unlinked, so it stays trash.
+func TestR4210b_AlreadyMissingFolderLeavesRestorableTrashInTheTrash(t *testing.T) {
+	f := newVersionGuardFixture(t)
+	libraryWitnesses(t, f)
+	own := filepath.Join(config.AppConfig.RootDir, "Gotham", "No Mans Land", "nml.m4b")
+	f.ownRow(t, own, 1) // never on disk / folder deleted by hand
+
+	require.Equal(t, database.BookVersionStatusTrash, f.reread(t).Status)
+	err := f.purge(t)
+	var ct *versions.CannotTellError
+	require.ErrorAs(t, err, &ct)
+	require.Len(t, ct.Files, 1)
+	assert.Equal(t, own, ct.Files[0].Path)
+	got := f.reread(t)
+	assert.Equal(t, database.BookVersionStatusTrash, got.Status,
+		"nothing was removed, so the version should still be restorable trash, not purging")
+	assert.Empty(t, got.PurgeUnlinked)
+	assert.Zero(t, got.PurgeUndecidedNights)
+	require.NoError(t, versions.MarkRestored(got))
+	require.NoError(t, f.store.UpdateBookVersion(got), "the restore goes through")
 }
 
 // signalingGuard tells the test when the purge has asked the real guard whether
@@ -196,7 +364,7 @@ func TestVersionPurgeGuard_UnresolvableRootIsTransientNotAPermanentKeep(t *testi
 	require.NoError(t, os.Rename(root, away))
 	defer func() { require.NoError(t, os.Rename(away, root)) }()
 
-	decision, reason, err := f.svc.VersionPurgeGuard().NewDecider(nil).Decide(own)
+	decision, reason, err := f.svc.VersionPurgeGuard().NewDecider().Decide(own)
 
 	require.Error(t, err, "decision=%v reason=%q: a missing root is not a verdict", decision, reason)
 	assert.ErrorIs(t, err, fs.ErrNotExist)
@@ -231,7 +399,7 @@ func TestVersionPurgeGuard_UnreadableImportPathListLeavesTheFileAlone(t *testing
 	resetImportPathCache()
 	t.Cleanup(resetImportPathCache)
 
-	decision, _, err := svc.VersionPurgeGuard().NewDecider(nil).Decide(own)
+	decision, _, err := svc.VersionPurgeGuard().NewDecider().Decide(own)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errPathLookupFailed)
