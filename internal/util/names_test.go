@@ -1,7 +1,7 @@
 // file: internal/util/names_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c05f39a-71b4-4e28-9d1a-3f8b0c27e5d6
-// last-edited: 2026-08-17
+// last-edited: 2026-10-27
 
 package util_test
 
@@ -119,6 +119,30 @@ func TestSplitCreditNames_KeepsPunctuationThatBelongsToTheName(t *testing.T) {
 	for _, s := range keep {
 		if got := util.SplitCreditNames(s); len(got) != 1 || got[0] != s {
 			t.Errorf("SplitCreditNames(%q) = %#v, want it left exactly alone", s, got)
+		}
+	}
+}
+
+// SplitCreditPieces keeps the repeats SplitCreditNames drops, and everything
+// else about the cut is the same: a caller that edits a credit in place needs
+// every piece, and a case repeat is still text in the credit.
+func TestSplitCreditPieces_KeepsRepeatsAndSplitsLikeSplitCreditNames(t *testing.T) {
+	for _, tc := range []struct {
+		in         string
+		pieces     []string
+		dedupNames []string
+	}{
+		{"Renee Montoya, RENEE MONTOYA", []string{"Renee Montoya", "RENEE MONTOYA"}, []string{"Renee Montoya"}},
+		{"Renee Montoya & Renee Montoya", []string{"Renee Montoya", "Renee Montoya"}, []string{"Renee Montoya"}},
+		{"Montoya, Renee", []string{"Montoya, Renee"}, []string{"Montoya, Renee"}},
+		{"Harvey Bullock and Renee Montoya", []string{"Harvey Bullock", "Renee Montoya"}, []string{"Harvey Bullock", "Renee Montoya"}},
+		{"  ", []string{"  "}, []string{"  "}},
+	} {
+		if got := util.SplitCreditPieces(tc.in); !reflect.DeepEqual(got, tc.pieces) {
+			t.Errorf("SplitCreditPieces(%q) = %#v, want %#v", tc.in, got, tc.pieces)
+		}
+		if got := util.SplitCreditNames(tc.in); !reflect.DeepEqual(got, tc.dedupNames) {
+			t.Errorf("SplitCreditNames(%q) = %#v, want %#v", tc.in, got, tc.dedupNames)
 		}
 	}
 }
