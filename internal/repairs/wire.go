@@ -1,5 +1,5 @@
 // file: internal/repairs/wire.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4c7d2e91-5b0a-4e38-8f16-a93d6b1c0e57
 // last-edited: 2026-10-27
 
@@ -44,7 +44,7 @@ type PlanResult struct {
 	// RowStore names where the plan's rows are stored: PlanRowStoreV2 means
 	// beside the operation (SavePlan), one key per row under PlanRowPrefix. A
 	// stored plan without it is the older shape (every row inside the
-	// operation's result), and one marked PlanRowStoreV1 kept its rows without
+	// operation's result), and one marked "op_rows.v1" kept its rows without
 	// the prefix; both are refused with ErrPlanLegacyFormat: run the plan again.
 	RowStore string `json:"row_store,omitempty"`
 	// Rows are every row of the plan, in RowID order. They are NOT part of the

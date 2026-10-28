@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-27
 
@@ -403,6 +403,25 @@ func TestPlanRowsRoute_UnreadableStoredPlanAsksForARerun(t *testing.T) {
 			require.Contains(t, w.Body.String(), "run the plan again")
 		})
 	}
+}
+
+// A plan stored under bare row ids with the old summary marker (op_rows.v1, the
+// layout before plan rows had their own namespace) is answered like the older
+// formats: a 409 carrying PlanNeedsRerunCode, for the rows page and for an
+// apply, so the lane offers Run plan again.
+func TestPlanStoredUnderBareRowIDsAsksForARerun(t *testing.T) {
+	r, _, ops := setup(t)
+	v1 := `{"fixer_id":"version-group-primary-repair","total":1,"applicable":1,"skipped_by_kind":{},"row_store":"op_rows.v1"}`
+	ops.rows["op-v1-plan"] = &database.OperationV2Row{ID: "op-v1-plan", DefID: repairs.PlanOpID, Status: "completed", ResultData: &v1}
+	require.NoError(t, ops.ReplaceOpRowsPrefix("op-v1-plan", "vg-", 1, func(int) (database.OpRow, error) {
+		return database.OpRow{ID: "vg-000", Index: []byte("ix"), Data: []byte(`{"row_id":"vg-000"}`)}, nil
+	}))
+	w := do(r, http.MethodGet, "/api/v1/repairs/version-group-primary-repair/plan/op-v1-plan/rows?offset=0&limit=5", "")
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
+	w = do(r, http.MethodPost, "/api/v1/repairs/version-group-primary-repair/apply", `{"plan_op_id":"op-v1-plan","row_ids":["vg-000"]}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"code":"`+PlanNeedsRerunCode+`"`)
 }
 
 // A plan op whose stored summary is not a plan summary at all is the same 409
