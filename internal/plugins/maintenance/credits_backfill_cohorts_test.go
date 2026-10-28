@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_cohorts_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1146b61-8486-4d68-8496-fefd5b154a64
 // last-edited: 2026-10-27
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -120,19 +121,37 @@ func TestCreditsBackfill_SingleApplyWritesTheSplitBookWhoseNameTheRunCreates(t *
 }
 
 // The split book sorts BEFORE the book that names the person alone, so a limit
-// of one puts the split book in the first cohort: it creates the record, and
-// the second cohort links the unsplit book to it. The two cohorts end where a
-// full apply ends.
-func TestCreditsBackfill_SplitBookInTheFirstCohortCreatesTheRecordTheLaterBookLinksTo(t *testing.T) {
+// of one would put the split book in the first cohort. A split book is never the
+// one to create a record without the owner's allow, so the unsplit book, which
+// does create the record, takes the place; the split book is outside the limit
+// (its creator is in the cohort, it has no room) and the second cohort links it
+// to the record that exists by then. The two cohorts end where a full apply ends.
+func TestCreditsBackfill_SplitBookIsNotTheOneToCreateTheRecordInTheFirstCohort(t *testing.T) {
 	f := cbSplitFixture(t, "z-solo", "a-split")
+	full, err := f.run(creditsBackfillParams{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cbClassIDs(full, cbNarratorFillFromColumn); !slices.Equal(got, []string{"a-split", "z-solo"}) {
+		t.Fatalf("full dry run %s = %v, want both books", cbNarratorFillFromColumn, got)
+	}
+	if got := cbClassIDs(full, cbNarratorWaitingOnCreator); len(got) != 0 {
+		t.Errorf("full dry run %s = %v, want none: the creator is in the cohort", cbNarratorWaitingOnCreator, got)
+	}
 	dry, err := f.run(creditsBackfillParams{Limit: 1}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cbClassIDs(dry, cbNarratorFillFromColumn); !slices.Equal(got, []string{"a-split"}) {
-		t.Fatalf("limit-1 dry run %s = %v, want [a-split]", cbNarratorFillFromColumn, got)
+	if got := cbClassIDs(dry, cbNarratorFillFromColumn); !slices.Equal(got, []string{"z-solo"}) {
+		t.Fatalf("limit-1 dry run %s = %v, want [z-solo], the book that creates the record", cbNarratorFillFromColumn, got)
 	}
-	for i, want := range [][]string{{"a-split"}, {"z-solo"}} {
+	if got := cbClassIDs(dry, cbLimitReached); !slices.Equal(got, []string{"a-split"}) {
+		t.Errorf("limit-1 dry run %s = %v, want [a-split]: its creator is in the cohort and it has no room", cbLimitReached, got)
+	}
+	if got := cbClassIDs(dry, cbNarratorNewFromSplit); len(got) != 0 {
+		t.Errorf("limit-1 dry run %s = %v, want none: the record is created, just not by this book", cbNarratorNewFromSplit, got)
+	}
+	for i, want := range [][]string{{"z-solo"}, {"a-split"}} {
 		res, err := f.runWith(context.Background(), &cbReporter{id: "01COHORT" + string(rune('A'+i))}, creditsBackfillParams{Apply: true, Limit: 1}, 2)
 		if err != nil {
 			t.Fatal(err)
@@ -140,10 +159,16 @@ func TestCreditsBackfill_SplitBookInTheFirstCohortCreatesTheRecordTheLaterBookLi
 		if got := cbClassIDs(res, cbNarratorFillFromColumn); !slices.Equal(got, want) {
 			t.Fatalf("cohort %d wrote %v, want %v", i+1, got, want)
 		}
+		if i == 0 {
+			if st := f.state("a-split"); len(st.Narrators) != 0 {
+				t.Fatalf("cohort 1 wrote the split book: %v", st.Narrators)
+			}
+		}
 	}
 	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock", "Renee Montoya"}) {
 		t.Errorf("narrator records = %v, want Harvey Bullock and ONE Renee Montoya", got)
 	}
+	assertPlansClean(t, f, "z-solo", "a-split")
 }
 
 // A split book that also names someone no other book creates stays under
@@ -566,11 +591,18 @@ func TestCreditsBackfill_ApplyTimeSpellingRefusalKeepsTheAuthorWrite(t *testing.
 			t.Errorf("journal row carries narrator class %s", c)
 		}
 	}
-	if len(w.CreatedNarrators) != 0 {
-		t.Errorf("journal row names created narrators %v for a book whose narrator side was dropped", w.CreatedNarrators)
+	// The record the refused fill created exists and no book credits it. The
+	// book's journal row names it (it is informational: a revert never deletes a
+	// record) so the record is not unaccounted for, and the result reports it as
+	// unused for purge-empty-narrators.
+	if len(w.CreatedNarrators) != 1 || !strings.HasPrefix(w.CreatedNarrators[0].Name, "Renee Montoya") {
+		t.Errorf("journal row names created narrators %v, want the one record the refused fill created", w.CreatedNarrators)
 	}
 	if res.NarratorsCreated != 0 {
 		t.Errorf("narrators_created = %d, want 0: no written book credits the record", res.NarratorsCreated)
+	}
+	if res.NarratorsCreatedUnused != 1 || len(res.UnusedNarratorNames) != 1 || !strings.HasPrefix(res.UnusedNarratorNames[0], "Renee Montoya") {
+		t.Errorf("narrators_created_unused = %d %v, want the one record no book credits", res.NarratorsCreatedUnused, res.UnusedNarratorNames)
 	}
 	cbRevert(t, f)
 	cbUntouched(t, f, "ap", before)
