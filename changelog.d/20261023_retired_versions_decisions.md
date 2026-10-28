@@ -27,9 +27,9 @@
   store or a merge journal failed), as before. When BOTH ends of a stored reject
   are unresolvable, the rows held are the ones that touch a book the failed
   resolutions went through; that is best effort, and the log lists the ids.
-- `RetiredBookResolver` ignores a retired version that holds no rows. A revert
-  puts the rows back and leaves the version, so a shell that was retired,
-  reverted and retired again used to look as if it had two holders.
+- `RetiredBookResolver` ignores a retired version that holds no rows. A retire
+  that was cut off before its batch (or whose rows were put back some other way)
+  can leave one, and it used to make a shell look as if it had two holders.
 - A re-plan of one row no longer re-reads the whole decision log. The Server
   hands each plan or re-plan its own owner-veto reader (a re-plan must see the
   books as they are now) over a shared `decisions.RowCache`, which keeps only the
