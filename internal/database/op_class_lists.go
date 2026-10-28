@@ -1,5 +1,5 @@
 // file: internal/database/op_class_lists.go
-// version: 1.0.2
+// version: 1.0.1
 // guid: 3b0e1f5a-6a0c-4d57-9c1e-72d5f1e3a4b8
 // last-edited: 2026-10-27
 
