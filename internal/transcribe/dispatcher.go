@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.22.5
+// version: 1.22.6
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -401,9 +401,24 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// key is remembered. One that is merely a known port of a remembered machine
 	// is not asked: it is down, and its machine stays remembered for as long as it
 	// is (hasUnheardPort) while the ports that answer take work.
+	//
+	// Only a port that reports the remembered machine's own id (an "m:" key the
+	// dispatch resolved for it, by what it reports or by the machine its address
+	// last reported: resolveMachine) is asked that machine's canary clip on its
+	// behalf and can forget it. A port with a weak or unknown identity ("u:", "?")
+	// is in a group only if the entry is its own (rk == its key): being listed
+	// among a machine's ports is where the machine's memory was recorded, not
+	// evidence that this worker is that machine (a refused probe ends the link, and
+	// whatever answers there afterwards stands for itself), and its answer must not
+	// clear the failure of a machine that never reported its id.
 	memGroup := make(map[string]string)
 	for _, ep := range ordered {
-		if rk := canaryMemoryKey(keyOf(ep.URL), ep.URL); rk != "" && (probeByURL[ep.URL].Probed || rk == keyOf(ep.URL)) {
+		k := keyOf(ep.URL)
+		rk := canaryMemoryKey(k, ep.URL)
+		if rk == "" || (!isStrongKey(k) && rk != k) {
+			continue
+		}
+		if probeByURL[ep.URL].Probed || rk == k {
 			memGroup[ep.URL] = rk
 		}
 	}
@@ -431,10 +446,19 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// need them: the machines a lone job's condemnation needs, and the endpoints
 	// a faulted job can run out of. It is the one place that counts them, at the
 	// start and again whenever ports are dropped.
+	//
+	// An endpoint whose identity is unknown (an unreadable /health at the start:
+	// a "?" key) is never counted as a machine, with or without a wait: it is
+	// evidence of none, and counting it made one box with a readable port and an
+	// unreadable one into "two machines" for a condemnation. It still counts as
+	// an endpoint (faultLimit). A pool with no known machine has soloLimit 0 and
+	// condemns nothing (see the condemnation in the round loop).
 	countLimits := func() {
 		clear(machines)
 		for _, ep := range ordered {
-			machines[keyOf(ep.URL)] = true
+			if k := keyOf(ep.URL); !unknownKey(k) {
+				machines[k] = true
+			}
 		}
 		soloLimit = min(2, len(machines))
 		faultLimit = min(2, len(ordered))
@@ -446,7 +470,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// machines and endpoints are counted again, or a lone job could never find the
 	// second machine its condemnation needs and a faulted job could never run out
 	// of workers. A port may have taken work earlier in the dispatch; what it
-	// answered stays in the results.
+	// answered stays in the results. The stuck record of a job (soloStuck) keeps
+	// the machines it was stuck on alone, dropped or not, so a machine dropped
+	// mid-dispatch still counts toward that job's condemnation while the limit,
+	// counted again, can fall to one machine: the verdict is about the file and
+	// every machine that left it stuck, not about the ports that are left.
 	dropPorts := func(urls map[string]bool) {
 		ordered = slices.DeleteFunc(ordered, func(ep Endpoint) bool { return urls[ep.URL] })
 		countLimits()
@@ -1808,7 +1836,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					soloStuck[id] = make(map[string]string)
 				}
 				soloStuck[id][keyOf(ep.URL)] = ep.URL
-				if len(soloStuck[id]) >= soloLimit {
+				// Only machines count: a "?" entry only keeps the job off that
+				// endpoint (it is never a second machine, countLimits).
+				stuckOn := maps.Clone(soloStuck[id])
+				maps.DeleteFunc(stuckOn, func(k, _ string) bool { return unknownKey(k) })
+				if len(stuckOn) > 0 && len(stuckOn) >= soloLimit {
 					// Stuck by itself on soloLimit different machines: a verdict
 					// about this file, not about any worker. Byte-identical
 					// followers are the same audio and get the same verdict. It
@@ -1819,13 +1851,13 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					// after a wait only while that identity is still the one the
 					// dispatch froze for it (regate drops it otherwise), so no key
 					// here stands for two machines. An endpoint whose /health could
-					// not be read when the dispatch began is a machine of its own
-					// (a "?" key, never stored: joinWorkers).
+					// not be read when the dispatch began is no machine (a "?" key:
+					// stuckOn leaves it out).
 					verdict := BatchResult{Condemned: true, Error: fmt.Sprintf(
 						"%s%sno result: this file alone left %d worker(s) stuck past their deadline",
-						PathErrTranscribeTimeout, pathErrSeparator, len(soloStuck[id])),
-						Endpoint: strings.Join(slices.Sorted(maps.Values(soloStuck[id])), WorkerSeparator),
-						Worker:   joinWorkers(slices.Collect(maps.Keys(soloStuck[id])))}
+						PathErrTranscribeTimeout, pathErrSeparator, len(stuckOn)),
+						Endpoint: strings.Join(slices.Sorted(maps.Values(stuckOn)), WorkerSeparator),
+						Worker:   joinWorkers(slices.Collect(maps.Keys(stuckOn)))}
 					settled := 0
 					for _, cid := range append([]string{id}, followersOf[id]...) {
 						if _, ok := remaining[cid]; !ok {

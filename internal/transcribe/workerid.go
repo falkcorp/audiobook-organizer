@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerid.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: 41850903-354a-4f35-819b-d4acdeea1adb
 // last-edited: 2026-10-27
 
@@ -208,12 +208,19 @@ func splitWorkers(v string) map[string]bool {
 	return out
 }
 
+// unknownKey reports whether a machine key stands for no machine: the key of an
+// endpoint whose /health could not be read (machineKey: "?" plus a hash of the
+// URL). It is its own key so two such endpoints are not assumed to be one box,
+// but it is not evidence of a machine: nothing counts it toward a total of
+// machines, and it is never stored (joinWorkers).
+func unknownKey(k string) bool { return strings.HasPrefix(k, "?") }
+
 // joinWorkers is the stored form of a set of machine keys: the sorted,
 // distinct, storable ones (an unprobed endpoint's key is dropped), joined.
 func joinWorkers(keys []string) string {
 	var ids []string
 	for _, k := range keys {
-		if k != "" && !strings.HasPrefix(k, "?") && !slices.Contains(ids, k) {
+		if k != "" && !unknownKey(k) && !slices.Contains(ids, k) {
 			ids = append(ids, k)
 		}
 	}

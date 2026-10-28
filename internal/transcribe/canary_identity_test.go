@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_identity_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3e7a9c52-81d4-4f6b-b0a3-6d2c15e8f947
 // last-edited: 2026-10-27
 
@@ -176,7 +176,11 @@ func TestCanaryIdentity_AMachineWhoseWorkerLostItsIdIsStillRemembered(t *testing
 	})
 	w0 := h.eps[0].URL
 	key := "m:" + catwomanMachine
-	markCanaryFailed(key, w0) // it failed while it reported its id
+	// It failed while it reported its id, and its address has answered
+	// continuously since: the link (noteCanaryPort) is what makes the worker that
+	// lost its id this machine's. Without one, a weak worker stands for itself.
+	noteCanaryPort(key, w0, true)
+	markCanaryFailed(key, w0)
 	rec := &canaryRecorder{err: timeoutCanaryErr}
 	res, err := dispatchOn(testCtx(t), h.eps, nil, p.send, rec.fn, 8)
 	if err != nil {
@@ -252,6 +256,11 @@ func TestCanaryIdentity_APortThatAnswersAsUIsAskedWithItsMachinesOtherPorts(t *t
 				}
 			})
 			ports := endpointURLs(h.eps[:3])
+			// The u: port's address was last seen reporting bat's id and has
+			// answered since, so a worker that lost its id there is still bat's
+			// (resolveMachine through the link): a weak port with no such link
+			// stands for itself and is not part of the machine's group.
+			noteCanaryPort(batKey, ports[0], true)
 			markCanaryFailed(batKey, ports...)
 			rec := &canaryRecorder{}
 			canary := func(ctx context.Context, g gatedEndpoint) error {

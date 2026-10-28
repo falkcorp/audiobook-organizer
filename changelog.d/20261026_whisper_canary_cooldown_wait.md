@@ -246,3 +246,35 @@ so the ops do not count the page toward their stuck streak. A pool of nothing bu
 stuck ports is still a stuck pool, a pool of nothing but unreachable ports is
 still `ErrPoolUnavailable`, and a capability refusal beside them keeps the error
 that names it.
+
+#### A port that identifies no machine is never counted as one, and only a port that reports a machine's id answers for it
+
+A port whose `/health` could not be read when a dispatch began is frozen as `?`
+plus the hash of its URL. It is evidence of no machine, so it is no longer counted
+as one toward the number of machines a condemnation needs, with or without a
+cooldown wait: one box with a readable port and an unreadable one used to be "two
+machines", and a lone file that hung the decoder on both was condemned by "two
+workers". The unreadable port still counts as an endpoint, and a job stuck on it
+is kept off it, but only the machines it left stuck count toward the verdict
+(which names them alone). A pool in which no port could be read knows no machine
+and condemns nothing.
+
+A remembered machine is asked its canary clip, and forgotten, only through a port
+that reports the machine's own id, or one whose address has answered continuously
+since it last reported that id (a worker that lost its id for a moment). A port
+that answers weakly (`u:`) or not at all (`?`) is not part of a machine's group
+merely because the machine's port list names its address: a refused probe ends
+the link of an address to its machine, and the worker that answers there next
+stands for itself. It used to be asked the machine's clip on the machine's behalf
+and, by passing, forgot a machine that had never been asked, so the machine's
+other ports were sent work with no canary. A weak port with no link takes work as
+itself and leaves the machine's failure standing; the machine is still asked on
+any port that reports its id. The cost is that a machine which restarted behind a
+port refused in between takes work on that port, as a worker of its own, until a
+port of it reports its id and is asked.
+
+A job's condemnation keeps the machines it was stuck on alone, dropped or not: a
+port dropped in the middle of a dispatch (it changed hands, or could not be read
+after a wait) still counts toward that job's verdict, while the number of
+machines needed is counted again from the ports that are left and can fall to
+one. This is as it was and is now stated in the code.
