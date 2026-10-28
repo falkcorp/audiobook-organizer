@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -143,7 +143,8 @@ import (
 //     canceled run) is filed under narrator_new_from_split as phase 1 left it.
 //  2. Settle the library serially (settleLibrary: the spelling each new record
 //     takes, the books that spelling refuses, the split books left without a
-//     surviving creator, to a fixpoint), then pick the limit cohort: the first
+//     surviving creator, to a fixpoint; a key whose creators the split books'
+//     own votes refused is settled again by its creators alone first), then pick the limit cohort: the first
 //     N eligible books by sorted id, N reduced by the books earlier attempts of
 //     this operation already wrote. Books that create or link to existing
 //     records take the places first; a split book takes a place the others
@@ -155,7 +156,10 @@ import (
 //     records (or link to existing ones) first, then the split books, which
 //     link only to a record whose creating write has LANDED (cbRun.landed). A
 //     creator that fails, is locked, changed or is refused at apply time sends
-//     its dependents back to narrator_new_from_split, unwritten.
+//     its dependents back to narrator_new_from_split, unwritten. Then, still
+//     under the stand-down and after the last write, the records the run
+//     created that no written book credits are deleted again
+//     (deleteUnusedCreated), so a later run cannot link a split credit to one.
 //
 // Shared state is the class accumulator (mutex), the plan map (mutex) and
 // atomics; Label runs inside the workers and reads atomics only. Narrator
@@ -567,6 +571,9 @@ type creditsBackfillStore interface {
 // creditsBackfillWriter is the op's write surface besides ModifyBookCredits.
 type creditsBackfillWriter interface {
 	CreateNarrator(name string) (*database.Narrator, error)
+	// DeleteNarrator removes a record this run created and no written book
+	// credits (deleteUnusedCreated).
+	DeleteNarrator(id int) error
 	CreateOperationChange(change *database.OperationChange) error
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 }
@@ -657,10 +664,18 @@ type creditsBackfillResult struct {
 	NarratorsCreated  int      `json:"narrators_created"`
 	// NarratorsCreatedUnused is the records the run created that no written
 	// book credits (UnusedNarratorNames): a creating book whose write failed, or
-	// whose narrator side was refused after the record existed. They are normally empty
-	// records; maintenance.purge-empty-narrators removes them.
+	// whose narrator side was refused after the record existed. A record that
+	// is both unused and new to this run is deleted again before the apply ends
+	// (deleteUnusedCreated).
 	NarratorsCreatedUnused int      `json:"narrators_created_unused,omitempty"`
 	UnusedNarratorNames    []string `json:"unused_narrator_names,omitempty"`
+	// Of those, the ones the run deleted again at the end of the apply (the
+	// record had no link in any book and this run had created it) and the ones
+	// it kept, with the reason. Deleted ones are not left for a later run to
+	// link a split credit to.
+	UnusedNarratorsDeleted     int      `json:"unused_narrators_deleted,omitempty"`
+	DeletedUnusedNarratorNames []string `json:"deleted_unused_narrator_names,omitempty"`
+	UnusedNarratorsKept        []string `json:"unused_narrators_kept,omitempty"`
 	// CensusBefore is the credit-census class counts over the books this run
 	// read, before it wrote anything.
 	CensusBefore map[string]int `json:"census_before"`
@@ -857,6 +872,13 @@ type cbAccumulator struct {
 	// one. A record in here that no successful write credits
 	// (writtenCreatedIDs) is reported as unused.
 	createdIDs map[int]string
+	// createdRecs are the same records as returned by the store, for the
+	// cleanup at the end of an apply (deleteUnusedCreated).
+	createdRecs map[int]database.Narrator
+	// unusedDeleted / unusedKept are the cleanup's outcome: names of the
+	// created-but-unused records it deleted, and "name (reason)" for the ones
+	// it kept.
+	unusedDeleted, unusedKept []string
 	// writtenCreatedIDs are the created records a SUCCESSFUL book write
 	// credits (narrators_created counts these, not every create call).
 	writtenCreatedIDs map[int]bool
@@ -864,11 +886,12 @@ type cbAccumulator struct {
 
 func newCBAccumulator() *cbAccumulator {
 	return &cbAccumulator{
-		byClass:    map[string]map[string]bool{},
-		samples:    map[string][]*cbSample{},
-		census:     map[string]int{},
-		newNames:   map[string]string{},
-		createdIDs: map[int]string{},
+		byClass:     map[string]map[string]bool{},
+		samples:     map[string][]*cbSample{},
+		census:      map[string]int{},
+		newNames:    map[string]string{},
+		createdIDs:  map[int]string{},
+		createdRecs: map[int]database.Narrator{},
 
 		writtenCreatedIDs: map[int]bool{},
 	}
@@ -922,6 +945,7 @@ func (a *cbAccumulator) claimCreated(created []database.Narrator) []database.Nar
 			continue
 		}
 		a.createdIDs[n.ID] = n.Name
+		a.createdRecs[n.ID] = n
 		claimed = append(claimed, n)
 	}
 	return claimed
@@ -985,6 +1009,14 @@ type cbRun struct {
 	// narrator_new_from_split, as read, for phase 2 to plan again
 	// (replanPending); also under plansMu.
 	pending map[string]*cbBookRead
+	// preexisting are the narrator records the run started with (by id), and
+	// startedAt when it started: a record returned by CreateNarrator that is
+	// in the one or older than the other was not created by this run.
+	preexisting map[int]bool
+	startedAt   time.Time
+	// settled is what settleLibrary decided (selectCohort sets it; the run logs
+	// its pass count).
+	settled cbLibrarySettle
 	// scope is the set of books a book_ids run reports on and writes (nil: the
 	// whole library). Every book is planned either way.
 	scope map[string]bool
@@ -1110,6 +1142,11 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		foldIdx:     map[string][]database.Narrator{},
 		createdFold: map[string]database.Narrator{},
 		landed:      map[string]database.Narrator{},
+		preexisting: make(map[int]bool, len(idx.narrators)),
+		startedAt:   started,
+	}
+	for id := range idx.narrators {
+		run.preexisting[id] = true
 	}
 	// Ids in ascending order: a name shared by two records resolves to the
 	// lower id, deterministically. The store's name index (byName) wins when
@@ -1200,6 +1237,12 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	var selected []string
 	if runErr == nil || !params.Apply {
 		selected, eligible = run.selectCohort(eligible)
+		level := slog.LevelInfo
+		if run.settled.boundHit {
+			level = slog.LevelWarn
+		}
+		_ = reporter.Log(level, fmt.Sprintf("credits-backfill: spellings settled in %d pass(es), %d split book(s) sent back to review, %d key(s) settled by their creators alone, bound hit %t",
+			run.settled.passes, len(run.settled.demoted), len(run.settled.recomputed), run.settled.boundHit))
 	}
 
 	// PHASE 3: apply the cohort (a dry run already recorded it in phase 2). The
@@ -1252,6 +1295,12 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// hold's cancel seen by a worker that had not yet beaten the lease).
 	if hold != nil && hold.Lost() {
 		runErr = registry.ErrScanStandDownLost
+	}
+
+	// Still under the stand-down: a record this run created and no written book
+	// credits is deleted again, so a later run cannot link a split credit to it.
+	if params.Apply {
+		run.deleteUnusedCreated(hold == nil || !hold.Lost())
 	}
 
 	earlier := 0
@@ -1485,6 +1534,9 @@ func (r *cbRun) result(ids []string, started time.Time) *creditsBackfillResult {
 	}
 	sort.Strings(res.UnusedNarratorNames)
 	res.NarratorsCreatedUnused = len(res.UnusedNarratorNames)
+	res.DeletedUnusedNarratorNames = slices.Clone(r.acc.unusedDeleted)
+	res.UnusedNarratorsDeleted = len(res.DeletedUnusedNarratorNames)
+	res.UnusedNarratorsKept = slices.Clone(r.acc.unusedKept)
 	res.OutOfScopeReadErrors = int(r.outOfScopeFailed.Load())
 	toWrite, review, held := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, def := range creditsBackfillClasses {
@@ -1872,6 +1924,7 @@ func (r *cbRun) inScopeIDs(ids []string) []string {
 // books after the demotions (what BooksEligible counts).
 func (r *cbRun) selectCohort(allEligible []string) (selected, eligible []string) {
 	st := r.settleLibrary(allEligible)
+	r.settled = st
 	for _, id := range st.demoted {
 		pl := r.plans[id].plan
 		pl.dropNarratorSide()
@@ -1984,6 +2037,14 @@ type cbLibrarySettle struct {
 	creators map[string][]string
 	// demoted are the split books whose records no surviving book creates.
 	demoted []string
+	// passes is how many times the settle ran before it converged (1: the
+	// first pass settled it); recomputed are the keys settled again by their
+	// creators alone, sorted.
+	passes     int
+	recomputed []string
+	// boundHit is set if the loop reached its pass bound, which the argument
+	// in settleLibrary says it cannot.
+	boundHit bool
 }
 
 // canonSpellings is the spelling every new record takes: the most frequent
@@ -2011,15 +2072,44 @@ func (r *cbRun) canonSpellings(live map[string]bool) map[string]string {
 		if len(spellings) < 2 {
 			continue
 		}
-		best, most := "", 0
-		for spelling, n := range spellings {
-			if n > most || (n == most && betterSpelling(spelling, best)) {
-				best, most = spelling, n
-			}
-		}
-		canon[k] = best
+		canon[k] = mostCommonSpelling(spellings)
 	}
 	return canon
+}
+
+// mostCommonSpelling is the spelling a record takes among the spellings books
+// name it by (spelling -> books): the most frequent; ties go to betterSpelling.
+func mostCommonSpelling(spellings map[string]int) string {
+	best, most := "", 0
+	for spelling, n := range spellings {
+		if n > most || (n == most && betterSpelling(spelling, best)) {
+			best, most = spelling, n
+		}
+	}
+	return best
+}
+
+// creatorSpelling is the spelling the books that CREATE the record of a fold
+// key (live plans that depend on nothing and have a new-record slot of that
+// key, refused or not) give it among themselves, and false when there are none.
+// It is what the record takes once the books that only link to it stop voting.
+func (r *cbRun) creatorSpelling(live map[string]bool, key string) (string, bool) {
+	spellings := map[string]int{}
+	for id := range live {
+		pl := r.plans[id].plan
+		if !pl.narratorWrite || len(pl.dependsOn) > 0 {
+			continue
+		}
+		for _, slot := range pl.narrators {
+			if slot.ID == 0 && authorjunk.FoldKey(slot.Name) == key {
+				spellings[slot.Name]++
+			}
+		}
+	}
+	if len(spellings) == 0 {
+		return "", false
+	}
+	return mostCommonSpelling(spellings), true
 }
 
 // renamedSlots is slots with every new-record slot renamed to its canonical
@@ -2050,19 +2140,54 @@ func renamedSlots(slots []cbNarratorSlot, canon map[string]string) ([]cbNarrator
 // A split book that depends on a record (cbPlan.dependsOn) needs a book that
 // creates it and that survives the settle. The replan counted every phase-1
 // plan as a creator, but the settle can refuse the creator (its spelling cannot
-// be settled) and drop its narrator side, and then nobody creates the record:
-// the dependent must not, so it is demoted. Demoting a book takes its spellings
-// out of the count, which can change the canonical spelling and so the
-// refusals; the loop runs to a fixpoint (the live set only shrinks, so it ends).
+// be settled) and drop its narrator side, and then nobody creates the record.
+//
+// The dependents' own spellings vote in the count, and that vote can be what
+// refuses the creator: "Renee Montoya" (the creator's own spelling) against
+// "Renée Montoya" (the split credit's) ties, the accent wins, and the creator,
+// whose author is spelled "Renée Montoya", reads back as its own author and is
+// refused. Demoting the dependent for good would be wrong, because the creator
+// then survives under its own spelling and the NEXT run links the dependent to
+// the record it created: the cohorts of a limit would write more than one full
+// apply, and the dry run would predict less than the runs after it do. So a key
+// that loses every creator is first settled again with the creators' vote alone
+// (creatorSpelling), the dependents' slots are renamed to that spelling and
+// checked against it (they can be refused too, which leaves their narrator side
+// to review exactly as a link to the existing record would), and only a key
+// whose creators are refused even then demotes its dependents.
+//
+// Termination: a pass ends in one of three ways. It returns; it demotes at
+// least one dependent, and a demoted book never comes back (the live set only
+// shrinks); or it settles one more key by its creators alone, and a key is
+// settled that way at most once (recomputed). Both are bounded by the books
+// and the keys, so the loop ends after at most len(dependents)+len(keys)+1
+// passes; the bound below is that number, kept as a guard so an unforeseen
+// state files the remaining dependents for review instead of spinning.
 func (r *cbRun) settleLibrary(eligible []string) cbLibrarySettle {
 	live := make(map[string]bool, len(eligible))
+	dependents, keys := 0, map[string]bool{}
 	for _, id := range eligible {
 		live[id] = true
+		if deps := r.plans[id].plan.dependsOn; len(deps) > 0 {
+			dependents++
+			for _, k := range deps {
+				keys[k] = true
+			}
+		}
 	}
+	maxPasses := dependents + len(keys) + 1
 	var demoted []string
-	for {
-		st := cbLibrarySettle{refused: map[string]string{}, creators: map[string][]string{}}
+	// creatorCanon is the spelling of a key whose record the creators name
+	// alone (see above); tried are the keys already settled that way.
+	creatorCanon := map[string]string{}
+	tried := map[string]bool{}
+	boundHit := false
+	for pass := 1; ; pass++ {
+		st := cbLibrarySettle{refused: map[string]string{}, creators: map[string][]string{}, passes: pass}
 		st.canon = r.canonSpellings(live)
+		for k, c := range creatorCanon {
+			st.canon[k] = c
+		}
 		for id := range live {
 			pl := r.plans[id].plan
 			if !pl.narratorWrite {
@@ -2089,24 +2214,54 @@ func (r *cbRun) settleLibrary(eligible []string) cbLibrarySettle {
 			slices.Sort(st.creators[k])
 		}
 		var fallen []string
+		uncovered := map[string]bool{}
 		for id := range live {
 			pl := r.plans[id].plan
 			if len(pl.dependsOn) == 0 || st.refused[id] != "" {
 				continue
 			}
-			if slices.ContainsFunc(pl.dependsOn, func(k string) bool { return len(st.creators[k]) == 0 }) {
-				fallen = append(fallen, id)
+			for _, k := range pl.dependsOn {
+				if len(st.creators[k]) == 0 {
+					uncovered[k] = true
+					if !slices.Contains(fallen, id) {
+						fallen = append(fallen, id)
+					}
+				}
 			}
 		}
+		st.recomputed = slices.Sorted(maps.Keys(creatorCanon))
 		if len(fallen) == 0 {
 			slices.Sort(demoted)
-			st.demoted = demoted
+			st.demoted, st.boundHit = demoted, boundHit
 			return st
 		}
+		// A key that lost every creator is settled again by its creators alone,
+		// once; the pass is then repeated before anything is demoted.
+		retry := false
+		for _, k := range slices.Sorted(maps.Keys(uncovered)) {
+			if tried[k] {
+				continue
+			}
+			tried[k] = true
+			if spelling, ok := r.creatorSpelling(live, k); ok {
+				creatorCanon[k] = spelling
+				retry = true
+			}
+		}
+		if retry && pass < maxPasses {
+			continue
+		}
+		slices.Sort(fallen)
 		for _, id := range fallen {
 			delete(live, id)
 		}
 		demoted = append(demoted, fallen...)
+		if pass >= maxPasses {
+			// Unreachable by the argument above. From here on every pass
+			// demotes what fell (no retry), so the loop still ends; the caller
+			// logs that the bound was hit.
+			boundHit = true
+		}
 	}
 }
 
@@ -2593,6 +2748,79 @@ func (r *cbRun) apply(pb *cbPlanned) {
 	r.acc.markCreatedWritten(newIDs)
 	r.markLanded(landing)
 	r.acc.sample(r.sampleOf(pb), plan.writes)
+}
+
+// deleteUnusedCreated removes the narrator records this run created and no
+// written book credits: a creating book whose write failed or was refused after
+// CreateNarrator made the record. Left behind, such a record is found by the next
+// run's plan, which then links a split credit to it although no creating write
+// ever landed, and the record ends up credited by that split credit alone.
+//
+// It deletes a record only when
+//   - this run made it: not in the index the run started with, and not created
+//     before the run started (CreateNarrator is resolve-or-create and can return
+//     a record somebody else made); and
+//   - nothing links it, by the live per-record count purge-empty-narrators uses
+//     (database.NarratorLinkCount, which fails closed): a record that gained a
+//     link is kept.
+//
+// Each delete is preceded by a narrator_delete row (id and name) in this
+// operation's journal, as purge-empty-narrators writes; a row that cannot be
+// written keeps the record. Sequential: a run has few of these. When the
+// stand-down was lost nothing is deleted (the scanner may be writing again);
+// the records are reported as kept.
+func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
+	r.acc.mu.Lock()
+	var unused []database.Narrator
+	for id, rec := range r.acc.createdRecs {
+		if !r.acc.writtenCreatedIDs[id] {
+			unused = append(unused, rec)
+		}
+	}
+	r.acc.mu.Unlock()
+	slices.SortFunc(unused, func(a, b database.Narrator) int { return a.ID - b.ID })
+	var deleted, kept []string
+	for _, rec := range unused {
+		keep := func(why string) { kept = append(kept, fmt.Sprintf("%s (%s)", rec.Name, why)) }
+		switch {
+		case !standDownHeld:
+			keep("scan stand-down lost")
+			continue
+		case r.preexisting[rec.ID] || (!rec.CreatedAt.IsZero() && rec.CreatedAt.Before(r.startedAt)):
+			keep("existed before the run")
+			continue
+		}
+		links, err := database.NarratorLinkCount(r.env.store, rec.ID)
+		if err != nil {
+			keep("links could not be counted")
+			continue
+		}
+		if links > 0 {
+			keep(fmt.Sprintf("linked by %d book(s)", links))
+			continue
+		}
+		if err := r.env.store.CreateOperationChange(&database.OperationChange{
+			ID:          ulid.Make().String(),
+			OperationID: r.env.opID,
+			ChangeType:  "narrator_delete",
+			FieldName:   "narrator",
+			OldValue:    fmt.Sprintf("%d:%s", rec.ID, rec.Name),
+			NewValue:    "credits_backfill_unused",
+		}); err != nil {
+			keep("journal row could not be written")
+			continue
+		}
+		if err := r.env.store.DeleteNarrator(rec.ID); err != nil {
+			keep("delete failed")
+			continue
+		}
+		deleted = append(deleted, rec.Name)
+	}
+	sort.Strings(deleted)
+	sort.Strings(kept)
+	r.acc.mu.Lock()
+	r.acc.unusedDeleted, r.acc.unusedKept = deleted, kept
+	r.acc.mu.Unlock()
 }
 
 // cbLanding is a narrator record a book created for a name, by the fold key of
@@ -3474,7 +3702,11 @@ func planNarratorSide(idx *creditCensusIndex, lookup narratorLookup, willCreate 
 		}
 		plan.writes = append(plan.writes, fillClass)
 		if len(newNames) > 0 {
-			plan.infos = append(plan.infos, cbNarratorCreatesRecord)
+			// A split book that depends on other books' records only links to
+			// them: it does not create one.
+			if len(plan.dependsOn) == 0 {
+				plan.infos = append(plan.infos, cbNarratorCreatesRecord)
+			}
 			if fromSplit && len(uncovered) > 0 {
 				plan.writes = append(plan.writes, cbNarratorNewFromSplit)
 			}
