@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.9
+// version: 1.97.10
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -1070,9 +1070,9 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		// refused one wrote nothing).
 		return nil
 	case undo.ChangeTypeExternalIDReassign:
-		return rs.revertExternalIDReassign(c, plan)
+		return rs.revertExternalIDReassign(c)
 	case undo.ChangeTypeBookMergedInto:
-		return rs.revertBookMergedInto(c, plan)
+		return rs.revertBookMergedInto(c)
 	case undo.ChangeTypeUserStateFollow:
 		return rs.revertUserStateFollow(c)
 	case undo.ChangeTypeTitleRelinkCredits:
@@ -2242,9 +2242,11 @@ func (rs *RevertService) reindexVacatedPath(atPath bookFilesAtPathReader, path, 
 
 // revertBookMergedInto puts a retired book's merged_into_book_id back
 // (OldValue "" is unset) while it still names the book the operation set, and
-// while the book is not the shell of a retire this operation did not do
-// (RevertPlan.CheckNotRetiredShellReceiver; a nil plan has no exemption).
-func (rs *RevertService) revertBookMergedInto(c *database.OperationChange, plan *undo.RevertPlan) error {
+// while the book holds no retired rows (undo.CheckNotRetiredShell). A retire's
+// own operation un-retires its shell's rows first: the plan orders this row
+// after them and refuses it unless each was restored (RevertPlan.Gate), so the
+// store shows them back by the time this runs.
+func (rs *RevertService) revertBookMergedInto(c *database.OperationChange) error {
 	defer rs.lockMerge()()
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 		if err := undo.CheckMergedIntoCurrent(book, c); err != nil {
@@ -2253,7 +2255,7 @@ func (rs *RevertService) revertBookMergedInto(c *database.OperationChange, plan 
 		// Under the merge lock every retire holds, and the book's write stripe
 		// (the retired-row reads are lock-free); before the write, and after
 		// the currency check so a link already put back still counts restored.
-		if err := plan.CheckNotRetiredShellReceiver(rs.db, c.BookID, "clear the merged-into link of"); err != nil {
+		if err := undo.CheckNotRetiredShell(rs.db, c.BookID, "clear the merged-into link of"); err != nil {
 			return err
 		}
 		if c.OldValue == "" {
@@ -2616,11 +2618,12 @@ func (rs *RevertService) revertBookPrimaryDemote(c *database.OperationChange) er
 
 // revertExternalIDReassign moves one external id back from the book it was
 // moved onto (NewValue) to the book it came from (OldValue), while the id
-// still names NewValue, and while that book is not the shell of a retire this
-// operation did not do (RevertPlan.CheckNotRetiredShellReceiver; a nil plan has
-// no exemption): handing the id back to a shell whose rows stay retired under
-// another book would leave a live-looking book that owns no file.
-func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange, plan *undo.RevertPlan) error {
+// still names NewValue, and while that book holds no retired rows
+// (undo.CheckNotRetiredShell): handing the id back to a shell whose rows stay
+// retired under another book would leave a live-looking book that owns no file.
+// A retire's own operation un-retires its shell's rows first (the plan orders
+// this row after them and refuses it unless each was restored, RevertPlan.Gate).
+func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange) error {
 	source, extID, ok := undo.ExternalIDFromField(c.FieldName)
 	if !ok {
 		return fmt.Errorf("no external id in field %q", c.FieldName)
@@ -2636,7 +2639,7 @@ func (rs *RevertService) revertExternalIDReassign(c *database.OperationChange, p
 	if err := undo.CheckExternalIDOwnerCurrent(owner, c); err != nil {
 		return err
 	}
-	if err := plan.CheckNotRetiredShellReceiver(rs.db, c.OldValue, "give an external id back to"); err != nil {
+	if err := undo.CheckNotRetiredShell(rs.db, c.OldValue, "give an external id back to"); err != nil {
 		return err
 	}
 	if err := rs.db.ReassignExternalID(source, extID, c.OldValue); err != nil {

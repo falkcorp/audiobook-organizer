@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.54.4
+// version: 1.54.5
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-28
 //
@@ -753,9 +753,10 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		if err := CheckMergedIntoCurrent(book, c); err != nil {
 			return err
 		}
-		// The revert clears the link on c.BookID: not while that book is the
-		// shell of a retire this operation did not do (plan.CheckNotRetiredShellReceiver).
-		return plan.CheckNotRetiredShellReceiver(store, c.BookID, "clear the merged-into link of")
+		// The revert clears the link on c.BookID: not while that book still
+		// holds retired rows once this operation's own retire rows are reverted
+		// (plan.PredictNotRetiredShellReceiver).
+		return plan.PredictNotRetiredShellReceiver(store, c.BookID, "clear the merged-into link of")
 	case ChangeTypeBookSoftDelete:
 		if err := CheckSoftDeleteCurrent(book, c, stamps); err != nil {
 			return err
@@ -797,9 +798,9 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 				return err
 			}
 		}
-		// The revert hands the id back to c.OldValue: not while that book is
-		// the shell of a retire this operation did not do.
-		return plan.CheckNotRetiredShellReceiver(store, c.OldValue, "give an external id back to")
+		// The revert hands the id back to c.OldValue: not while that book still
+		// holds retired rows once this operation's own retire rows are reverted.
+		return plan.PredictNotRetiredShellReceiver(store, c.OldValue, "give an external id back to")
 	}
 	return nil
 }

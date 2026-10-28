@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply_revert_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b2e5d74-1c38-4f06-a7d9-6e0b3f8a2c51
 // last-edited: 2026-10-28
 
@@ -246,4 +246,128 @@ func TestRetiredApply_RevertOfAWholeApplyRestoresTheShell(t *testing.T) {
 	files, err := rf.st.GetBookFiles(shell)
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
+}
+
+// retiredHandBack is what a revert of op leaves on the shell: its merged-into
+// link, its external ids, and the retired rows it still holds.
+func (rf *retiredFixture) retiredHandBack(shell string) (mergedInto bool, extIDs, heldRows int) {
+	rf.t.Helper()
+	b, err := rf.st.GetBookByID(shell)
+	require.NoError(rf.t, err)
+	ids, err := rf.st.GetExternalIDsForBook(shell)
+	require.NoError(rf.t, err)
+	n, err := database.RetiredRowsHeldFor(rf.st, shell)
+	require.NoError(rf.t, err)
+	return b.MergedIntoBookID != nil, len(ids), n
+}
+
+// refusedTypes counts the rows of a preflight report that were refused, by
+// change type.
+func refusedTypes(report *undo.UndoConflictReport) map[string]int {
+	out := map[string]int{}
+	for _, it := range report.CheckFailed {
+		out[it.ChangeType]++
+	}
+	for _, it := range report.ContentChanged {
+		out[it.ChangeType]++
+	}
+	return out
+}
+
+// F1 of the review of #4236 (store-level repro): after an Apply, the retired
+// version is re-homed under another book (RehomeRetiredVersion, as a later
+// operation's chain step does). Reverting the Apply could not un-retire the
+// shell's rows (they are no longer the holder's), yet its hand-back rows ran
+// first and put the external id and the merged-into link back on the shell,
+// leaving a shell that looks live and owns no file. The id and link go back
+// only together with the files: here neither does, the preflight offers no
+// Undo of those rows, and the revert reports them failed.
+func TestRetiredApply_RevertAfterTheVersionWasRehomedKeepsTheShellWhole(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	h2 := rf.live("robin-holder", "g2")
+	res := rf.planAll()
+	shell, holder := rf.ids["would-retire"], rf.ids["primary"]
+	out := rf.applyRows(rf.f, res, []string{shell}, false, "op-whole")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	ids0, err := rf.st.GetExternalIDsForBook(holder)
+	require.NoError(t, err)
+	require.NotEmpty(t, ids0, "fixture: the retire moved an external id onto the holder")
+	held, err := rf.st.GetRetiredBookFiles(holder)
+	require.NoError(t, err)
+	require.NotEmpty(t, held)
+	require.NoError(t, rf.st.RehomeRetiredVersion(held[0].VersionID, h2))
+	linked0, _, heldBefore := rf.retiredHandBack(shell)
+	require.True(t, linked0)
+	require.Equal(t, len(held), heldBefore)
+
+	report, err := preflightUndoConflicts(rf.st, "op-whole")
+	require.NoError(t, err)
+	refused := refusedTypes(report)
+	require.NotZero(t, refused[undo.ChangeTypeBookFileRetire], "the retire rows cannot be un-retired: %+v", report)
+	require.NotZero(t, refused[undo.ChangeTypeBookMergedInto], "the link must not be offered alone: %+v", report)
+	require.NotZero(t, refused[undo.ChangeTypeExternalIDReassign], "the id must not be offered alone: %+v", report)
+	for _, it := range report.CheckFailed {
+		if it.ChangeType == undo.ChangeTypeBookMergedInto || it.ChangeType == undo.ChangeTypeExternalIDReassign {
+			require.Equal(t, undo.ReasonDependentNotReverted, it.Reason, "%+v", it)
+		}
+	}
+
+	rev, err := audiobooks.NewRevertService(rf.st).RevertOperation("op-whole")
+	require.ErrorContains(t, err, "partially reverted", "a revert that left the shell's files retired is reported, not a success")
+	require.NotNil(t, rev)
+	require.NotZero(t, rev.Failed, "a revert that could not un-retire the shell is not a success: %+v", rev)
+	require.Zero(t, rev.RestoredTypes[undo.ChangeTypeBookMergedInto], "%+v", rev)
+	require.Zero(t, rev.RestoredTypes[undo.ChangeTypeExternalIDReassign], "%+v", rev)
+	linked, extIDs, heldAfter := rf.retiredHandBack(shell)
+	require.True(t, linked, "the shell keeps its merged-into link")
+	require.Zero(t, extIDs, "the shell is not given its external id back")
+	require.Equal(t, heldBefore, heldAfter, "its files stay retired")
+}
+
+// F1, production path: the holder is trashed and a second Apply retires it onto
+// a live book; its chain step re-homes the first Apply's version. Reverting the
+// first Apply restored the shell's merged-into link while both its retire rows
+// and the version's creation failed as changed-since.
+func TestRetiredApply_RevertAfterAChainApplyKeepsTheShellWhole(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	shared := rf.file("g1/shared.mp3")
+	rf.live("batman", "g1", shared)
+	rf.trashed("robin", "g1", 30, rf.file("g1/own-1.mp3"), rf.file("g1/own-2.mp3"))
+	rf.addExternalID("robin", "PID-ROBIN-1")
+	shell, holder := rf.ids["robin"], rf.ids["batman"]
+	res := rf.planAll()
+	out := rf.applyRows(rf.f, res, []string{shell}, false, "op-1")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+
+	rf.live("nightwing", "g1", rf.file("g1/new.mp3"))
+	_, err := rf.st.ModifyBook(holder, func(b *database.Book) error {
+		b.MarkedForDeletion = retiredPtr(true)
+		b.MarkedForDeletionAt = retiredPtr(rf.now.Add(-30 * 24 * time.Hour))
+		b.IsPrimaryVersion = retiredPtr(false)
+		return nil
+	})
+	require.NoError(t, err)
+	res2 := rf.planAll()
+	out2 := rf.applyRows(rf.f, res2, []string{holder}, false, "op-2")
+	require.Equal(t, 1, out2.Applied, "the second Apply must run: %v %+v", out2.ByOutcome, out2.Rows)
+	_, _, heldBefore := rf.retiredHandBack(shell)
+	require.NotZero(t, heldBefore)
+
+	report, err := preflightUndoConflicts(rf.st, "op-1")
+	require.NoError(t, err)
+	refused := refusedTypes(report)
+	require.NotZero(t, refused[undo.ChangeTypeBookMergedInto], "%+v", report)
+	require.NotZero(t, refused[undo.ChangeTypeExternalIDReassign], "%+v", report)
+
+	rev, err := audiobooks.NewRevertService(rf.st).RevertOperation("op-1")
+	require.ErrorContains(t, err, "partially reverted", "a revert that left the shell's files retired is reported, not a success")
+	require.NotNil(t, rev)
+	require.NotZero(t, rev.Failed, "%+v", rev)
+	linked, extIDs, heldAfter := rf.retiredHandBack(shell)
+	require.True(t, linked, "the shell keeps its merged-into link")
+	require.Zero(t, extIDs, "the shell is not given its external id back")
+	require.Equal(t, heldBefore, heldAfter, "its files stay retired")
 }

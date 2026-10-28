@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retired_shell_receiver_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d6b8e25-71c4-4a90-b2f8-5e1a9c0d7b43
 // last-edited: 2026-10-28
 
@@ -13,15 +13,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
-
-// retireRowFor is the book_file_retire row a retire Apply journals for one file
-// of shell (BookID is the holder; OldValue names the shell the row left).
-func retireRowFor(opID, shell, holder string) *database.OperationChange {
-	return &database.OperationChange{ID: "retire-" + shell, OperationID: opID, BookID: holder,
-		ChangeType: "book_file_retire", FieldName: "book_file:shell-f",
-		OldValue: `{"book_id":"` + shell + `","version_id":""}`,
-		NewValue: `{"book_id":"` + holder + `","version_id":"rv-` + shell + `"}`}
-}
 
 func idReassignRow(opID, from, to string) *database.OperationChange {
 	return &database.OperationChange{ID: "ext-" + opID, OperationID: opID, BookID: from,
@@ -57,12 +48,12 @@ func TestRevertExternalIDReassign_RefusesAnIDBackToARetiredShell(t *testing.T) {
 	rs := NewRevertService(store)
 	seedMovedID(t, store, "holder")
 
-	err := rs.revertExternalIDReassign(idReassignRow("op-tail", shell, "holder"), nil)
+	err := rs.revertExternalIDReassign(idReassignRow("op-tail", shell, "holder"))
 	require.Error(t, err)
 	require.Equal(t, undo.ReasonBookIsRetiredShell, undo.RefusalReason(err), "got %v", err)
 	require.Equal(t, "holder", ownerOf(t, store), "a refused revert leaves the id on the holder")
 
-	require.NoError(t, rs.revertExternalIDReassign(idReassignRow("op-plain", plain, "holder"), nil))
+	require.NoError(t, rs.revertExternalIDReassign(idReassignRow("op-plain", plain, "holder")))
 	require.Equal(t, plain, ownerOf(t, store), "control: an ordinary trashed book takes the id back")
 }
 
@@ -79,56 +70,13 @@ func TestRevertBookMergedInto_RefusesAnOlderRowOnARetiredShell(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err := rs.revertBookMergedInto(mergedIntoRow("op-older", shell, "holder"), nil)
+	err := rs.revertBookMergedInto(mergedIntoRow("op-older", shell, "holder"))
 	require.Error(t, err)
 	require.Equal(t, undo.ReasonBookIsRetiredShell, undo.RefusalReason(err), "got %v", err)
 	require.NotNil(t, mustBook(t, store, shell).MergedIntoBookID, "a refused revert leaves the link")
 
-	require.NoError(t, rs.revertBookMergedInto(mergedIntoRow("op-plain", plain, "holder"), nil))
+	require.NoError(t, rs.revertBookMergedInto(mergedIntoRow("op-plain", plain, "holder")))
 	require.Nil(t, mustBook(t, store, plain).MergedIntoBookID, "control: an ordinary trashed book's link clears")
-}
-
-// An operation that retired the shell itself (it holds a book_file_retire row
-// naming it) is exempt: its revert un-retires the shell's rows and may put the
-// ids and the link back. A plan that did not note such a row is not exempt, and
-// neither is a voided row or one whose OldValue names no shell.
-func TestRevertPlan_RetireRowOfTheSameOperationExemptsItsShell(t *testing.T) {
-	_, store, shell, _ := retiredShellFixture(t)
-	rs := NewRevertService(store)
-	seedMovedID(t, store, "holder")
-	holder := "holder"
-	_, err := store.ModifyBook(shell, func(b *database.Book) error { b.MergedIntoBookID = &holder; return nil })
-	require.NoError(t, err)
-	idRow, miRow := idReassignRow("op-full", shell, "holder"), mergedIntoRow("op-full", shell, "holder")
-
-	planOf := func(extra ...*database.OperationChange) *undo.RevertPlan {
-		rows := []*database.OperationChange{idRow, miRow}
-		plan, err := undo.PlanRevert(rows, nil)
-		require.NoError(t, err)
-		plan.NoteHandOffs(append(append([]*database.OperationChange{}, rows...), extra...))
-		return plan
-	}
-	voided := retireRowFor("op-full", shell, "holder")
-	voided.Voided = true
-	garbled := retireRowFor("op-full", shell, "holder")
-	garbled.OldValue = shell // not the JSON a retire journals
-	other := retireRowFor("op-full", "some-other-shell", "holder")
-	for name, plan := range map[string]*undo.RevertPlan{
-		"no retire row": planOf(), "voided retire row": planOf(voided),
-		"unparsable retire row": planOf(garbled), "another shell's retire row": planOf(other),
-	} {
-		err := rs.revertExternalIDReassign(idRow, plan)
-		require.Equal(t, undo.ReasonBookIsRetiredShell, undo.RefusalReason(err), "%s: id: %v", name, err)
-		err = rs.revertBookMergedInto(miRow, plan)
-		require.Equal(t, undo.ReasonBookIsRetiredShell, undo.RefusalReason(err), "%s: link: %v", name, err)
-	}
-	require.Equal(t, "holder", ownerOf(t, store))
-
-	exempt := planOf(retireRowFor("op-full", shell, "holder"))
-	require.NoError(t, rs.revertExternalIDReassign(idRow, exempt))
-	require.Equal(t, shell, ownerOf(t, store), "the retire's own operation hands the id back")
-	require.NoError(t, rs.revertBookMergedInto(miRow, exempt))
-	require.Nil(t, mustBook(t, store, shell).MergedIntoBookID)
 }
 
 // The preflight predicts the same refusals, so no Undo is offered for rows the

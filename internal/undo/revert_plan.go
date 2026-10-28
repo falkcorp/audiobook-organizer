@@ -1,5 +1,5 @@
 // file: internal/undo/revert_plan.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
 // last-edited: 2026-10-28
 
@@ -81,11 +81,13 @@ type RevertPlan struct {
 	// run newest-first, so a retire row of the same version reads the holder
 	// the newer rehomes put it back on, not the one the store shows now.
 	heldAfter map[string]string
-	// retires: the shells this operation holds a (non-voided) book_file_retire
-	// row for, from every row of the operation (NoteHandOffs). A revert of the
-	// whole retire un-retires those shells' rows, so it may hand the shell's
-	// external ids and merged-into link back (CheckNotRetiredShellReceiver).
-	retires map[string]bool
+	// shellRetires: for each shell, the ids of the (non-voided) book_file_retire
+	// rows in rows that moved one of its files into a holder's version. The
+	// shell's hand-back rows (external_id_reassign back to it, book_merged_into
+	// on it) wait for every one of them (handBackRow) and are refused unless
+	// each was Recorded restored (Gate): the id and the link go back to a shell
+	// only together with its files, never alone.
+	shellRetires map[string][]string
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -102,21 +104,37 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{},
 		refusedAuthor: map[int]bool{}, primaries: map[string]*int{},
 		newerMain: newerMainRows(rows), unrestored: map[string]bool{}, heldAfter: map[string]string{},
-		retires: map[string]bool{}}
+		shellRetires: map[string][]string{}}
+	for _, c := range rows {
+		if shell, ok := retireRowShell(c); ok {
+			p.shellRetires[shell] = append(p.shellRetires[shell], c.ID)
+		}
+	}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
 		}
 	}
-	var deferred []*database.OperationChange
+	// handBack: the external-id and merged-into rows that give a retired shell
+	// back what the retire moved off it. The fixer journals the retire rows
+	// BEFORE them, so newest-first would revert them first and let them succeed
+	// when the retire rows then fail; they run last instead, once every retire
+	// row of their shell has had its turn (Gate refuses them if one did not
+	// restore). A shell the operation soft-deleted has its rows in deferred,
+	// already after its retire rows and gated on them, and stays there.
+	var deferred, handBack []*database.OperationChange
 	for _, c := range slices.Backward(rows) {
-		if p.retiredRow(c) {
+		switch {
+		case p.retiredRow(c):
 			deferred = append(deferred, c)
-			continue
+		case p.handBackRow(c):
+			handBack = append(handBack, c)
+		default:
+			p.Order = append(p.Order, c)
 		}
-		p.Order = append(p.Order, c)
 	}
 	p.Order = append(softDeleteFirst(p.Order), softDeleteFirst(deferred)...)
+	p.Order = append(p.Order, handBack...)
 	return p, nil
 }
 
@@ -157,6 +175,26 @@ func softDeleteFirst(list []*database.OperationChange) []*database.OperationChan
 	return out
 }
 
+// handBackShell is the shell a row hands back to: the book whose merged-into
+// link a book_merged_into row clears, or the book (OldValue) an
+// external_id_reassign row gives the id back to.
+func handBackShell(c *database.OperationChange) (string, bool) {
+	switch c.ChangeType {
+	case ChangeTypeBookMergedInto:
+		return c.BookID, c.BookID != ""
+	case ChangeTypeExternalIDReassign:
+		return c.OldValue, c.OldValue != ""
+	}
+	return "", false
+}
+
+// handBackRow reports whether c hands an id or a link back to a shell this
+// operation also retires files of.
+func (p *RevertPlan) handBackRow(c *database.OperationChange) bool {
+	shell, ok := handBackShell(c)
+	return ok && len(p.shellRetires[shell]) > 0
+}
+
 func (p *RevertPlan) retiredRow(c *database.OperationChange) bool {
 	_, ok := p.deps[c.BookID]
 	return ok && !p.depIDs[c.ID]
@@ -186,6 +224,20 @@ func (p *RevertPlan) Gate(c *database.OperationChange) error {
 		return &ReferentError{Reason: ReasonDependentNotReverted,
 			Detail: fmt.Sprintf("author %d was not restored, so its credit on book %s is not either", from, c.BookID)}
 	}
+	if shell, ok := handBackShell(c); ok {
+		// All or nothing for a shell: its id and link go back only when every
+		// file the operation retired off it is back (a retire row that fails,
+		// say because a later operation re-homed its version, leaves the files
+		// retired, and a shell given its id and link alone would look live and
+		// own nothing).
+		for _, id := range p.shellRetires[shell] {
+			if !p.restored[id] {
+				return &ReferentError{Reason: ReasonDependentNotReverted,
+					Detail: fmt.Sprintf("change %s (the retire of a file of book %s) was not restored, so book %s keeps its files retired and is not given its %s back",
+						id, shell, shell, handBackNoun(c))}
+			}
+		}
+	}
 	if !p.retiredRow(c) {
 		if p.refusedBook[c.BookID] {
 			return &ReferentError{Reason: ReasonDependentNotReverted,
@@ -209,6 +261,13 @@ func (p *RevertPlan) Gate(c *database.OperationChange) error {
 		p.refusedBook[c.BookID] = true
 	}
 	return err
+}
+
+func handBackNoun(c *database.OperationChange) string {
+	if c.ChangeType == ChangeTypeBookMergedInto {
+		return "merged-into link"
+	}
+	return "external id"
 }
 
 // Record notes a row's outcome: err nil is restored (ErrAlreadyRestored
@@ -288,15 +347,9 @@ func newerMainRows(rows []*database.OperationChange) map[string]*database.Operat
 
 // NoteHandOffs takes every row of the operation, reverted or not, and notes
 // the books it has a ChangeTypeBookPrimaryHandoff row for (and the field-lock
-// and series_id rows the paired checks read, and the shells it holds a
-// book_file_retire row for, see CheckNotRetiredShellReceiver). It reads every
-// row, not Order: a retire row the engine cannot restore, or one already
-// reverted, is not in Order but still says the operation retired that shell.
+// and series_id rows the paired checks read). It reads every row, not Order.
 func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 	for _, c := range all {
-		if shell, ok := retireRowShell(c); ok {
-			p.retires[shell] = true
-		}
 		switch c.ChangeType {
 		case ChangeTypeBookPrimaryHandoff:
 			p.handedOff[c.BookID] = true
