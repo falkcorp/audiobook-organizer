@@ -1,5 +1,5 @@
 // file: internal/versions/serve_guard.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
 // last-edited: 2026-10-28
 
@@ -77,6 +77,43 @@ func canonPath(p string) string {
 		return real
 	}
 	return abs
+}
+
+// pathSpellings is every way a path can be written that the stores key on:
+// the path as given, and canonPath(path) (absolute, symlinks resolved) when
+// that differs. The stores match path strings exactly, so a row written through
+// a symlinked library root (/link/lib) and a lookup through its real path
+// (/tank/lib) do not meet. Every "who else names this file?" question is asked
+// of each spelling, and a hit on any is a hit. It cannot find a row stored under
+// a spelling the question never produces (a row written with the link when the
+// question holds the real path): a symlink is followed one way only.
+func pathSpellings(p string) []string {
+	if c := canonPath(p); c != p {
+		return []string{p, c}
+	}
+	return []string{p}
+}
+
+// targetKey identifies a purge target across spellings of its folder: the
+// folder is canonical, the file name is not resolved. A file that is itself a
+// symlink is a different target from the file it points at (removing it unlinks
+// the link and leaves the file), so the leaf is never followed.
+func targetKey(p string) string {
+	return filepath.Join(canonPath(filepath.Dir(p)), filepath.Base(p))
+}
+
+// rebuildServedGuard is newServedGuard from the book and rows as the store has
+// them now, for the guard to be asked again after the version was claimed.
+func rebuildServedGuard(store versionPurger, ver *database.BookVersion) (*servedGuard, error) {
+	book, err := store.GetBookByID(ver.BookID)
+	if err != nil {
+		return nil, fmt.Errorf("read book %s: %w", ver.BookID, err)
+	}
+	own, err := store.GetBookFiles(ver.BookID)
+	if err != nil {
+		return nil, fmt.Errorf("list book files of %s: %w", ver.BookID, err)
+	}
+	return newServedGuard(store, book, ver.BookID, own, ver.ID)
 }
 
 // newServedGuard builds the guard for one version purge. book is the version's
@@ -204,11 +241,7 @@ func (g *servedGuard) ownBookServes(p string) bool {
 // otherBookServes reports whether a live book other than the version's own
 // names p. Any read error is returned: the purge then deletes nothing.
 func (g *servedGuard) otherBookServes(p string) (bool, error) {
-	variants := []string{p}
-	if c := canonPath(p); c != p {
-		variants = append(variants, c)
-	}
-	for _, v := range variants {
+	for _, v := range pathSpellings(p) {
 		rows, err := g.store.BookFilesAtPath(v)
 		if err != nil {
 			return false, fmt.Errorf("find other books naming %s: %w", v, err)
@@ -275,7 +308,7 @@ func (g *servedGuard) other(bookID string) (*otherBook, error) {
 // by a book whose FilePath is X.
 func pathAndAncestors(p string) []string {
 	libRoot := ""
-	if root := config.AppConfig.RootDir; root != "" {
+	if root := config.Snapshot().RootDir; root != "" {
 		libRoot = canonPath(root)
 	}
 	out := []string{p}

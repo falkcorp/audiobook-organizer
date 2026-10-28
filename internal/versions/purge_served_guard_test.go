@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-28
 
@@ -132,16 +132,30 @@ func (f *servedFixture) status(id string) string {
 
 // afterWindow runs the nightly cleanup 40 days on, well past the 14-day window.
 func (f *servedFixture) afterWindow() CleanupResult {
-	return servedCleanup(f.store, time.Now().Add(40*day))
+	res, _ := servedCleanup(f.store, time.Now().Add(40*day))
+	return res
 }
 
 // servedCleanup is the nightly cleanup with the permissive guard and the
-// clock passed in, reduced to its result: these tests assert on the result's
-// Purged and Kept and on the disk, and a run in which a read failed (the
-// fail-closed cases) has also returned an error that they do not look at.
-func servedCleanup(store TrashedVersionCleaner, now time.Time) CleanupResult {
-	res, _ := cleanupTrashedVersionsAt(store, now, testGuard)
-	return res
+// clock passed in. Both the result and the error come back: a run in which a
+// read failed (the fail-closed cases) must be seen to have failed, not only to
+// have deleted nothing (see requireFailedClosed).
+func servedCleanup(store TrashedVersionCleaner, now time.Time) (CleanupResult, error) {
+	return cleanupTrashedVersionsAt(store, now, testGuard)
+}
+
+// requireFailedClosed asserts a run whose read failed: the version is counted
+// as failed (not kept, not "cannot tell", not purged), and the error wraps the
+// injected cause. A run that deleted nothing for some other reason would not
+// pass this.
+func requireFailedClosed(t *testing.T, res CleanupResult, err, cause error) {
+	t.Helper()
+	if res.Failed != 1 || res.Purged != 0 || len(res.Kept) != 0 || len(res.CannotTell) != 0 {
+		t.Fatalf("result = %+v, want Failed 1 and nothing purged, kept or cannot-tell", res)
+	}
+	if err == nil || !errors.Is(err, cause) {
+		t.Fatalf("err = %v, want an error wrapping the injected %v", err, cause)
+	}
 }
 
 func (f *servedFixture) requireKept(res CleanupResult, v *database.BookVersion, paths int) {
@@ -335,13 +349,17 @@ func TestPurgeStillPurgesWhenBookItselfTrashed(t *testing.T) {
 	}
 }
 
+// errPebbleBusy is the injected read failure the fail-closed tests look for in
+// the error the cleanup returns.
+var errPebbleBusy = errors.New("transient: pebble busy")
+
 // failingVersionsStore makes reading the book's versions fail.
 type failingVersionsStore struct {
 	*database.PebbleStore
 }
 
 func (failingVersionsStore) GetBookVersionsByBookID(string) ([]database.BookVersion, error) {
-	return nil, errors.New("transient: pebble busy")
+	return nil, errPebbleBusy
 }
 
 // Fail closed: when the guard cannot tell what the book serves, nothing is
@@ -352,11 +370,9 @@ func TestPurgeFailsClosedWhenVersionsCannotBeRead(t *testing.T) {
 	f.row(v1.ID, f.active, 1)
 	f.trashLikeHandler(v1.ID)
 
-	res := servedCleanup(failingVersionsStore{f.store}, time.Now().Add(40*day))
+	res, err := servedCleanup(failingVersionsStore{f.store}, time.Now().Add(40*day))
 
-	if res.Purged != 0 {
-		t.Fatalf("purged %d on a read error, want 0", res.Purged)
-	}
+	requireFailedClosed(t, res, err, errPebbleBusy)
 	if !onDisk(f.active) {
 		t.Fatal("a read error let the purge delete the file")
 	}
@@ -744,31 +760,33 @@ func (s failingAtPathStore) BookFilesAtPath(string) ([]database.BookFile, error)
 type failingByFilePathStore struct{ *database.PebbleStore }
 
 func (failingByFilePathStore) GetBookByFilePath(string) (*database.Book, error) {
-	return nil, errors.New("transient: pebble busy")
+	return nil, errPebbleBusy
 }
 
 // Fail closed: when the guard cannot tell whether another book serves a file,
 // nothing is deleted and the version is not purged.
 func TestPurgeFailsClosedWhenOtherBooksCannotBeRead(t *testing.T) {
-	for name, wrap := range map[string]func(*database.PebbleStore) TrashedVersionCleaner{
-		"index unavailable": func(s *database.PebbleStore) TrashedVersionCleaner {
+	rowErr := fmt.Errorf("transient: %w", errPebbleBusy)
+	for name, tc := range map[string]struct {
+		wrap  func(*database.PebbleStore) TrashedVersionCleaner
+		cause error
+	}{
+		"index unavailable": {func(s *database.PebbleStore) TrashedVersionCleaner {
 			return failingAtPathStore{s, database.ErrBookFilesAtPathUnavailable}
-		},
-		"row lookup error": func(s *database.PebbleStore) TrashedVersionCleaner {
-			return failingAtPathStore{s, fmt.Errorf("transient: %w", errors.New("pebble busy"))}
-		},
-		"book-by-path error": func(s *database.PebbleStore) TrashedVersionCleaner { return failingByFilePathStore{s} },
+		}, database.ErrBookFilesAtPathUnavailable},
+		"row lookup error": {func(s *database.PebbleStore) TrashedVersionCleaner {
+			return failingAtPathStore{s, rowErr}
+		}, rowErr},
+		"book-by-path error": {func(s *database.PebbleStore) TrashedVersionCleaner { return failingByFilePathStore{s} }, errPebbleBusy},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newServedFixture(t)
 			v, own := f.altWithSlotFile("alt.m4b")
 			f.trashLikeHandler(v.ID)
 
-			res := servedCleanup(wrap(f.store), time.Now().Add(40*day))
+			res, err := servedCleanup(tc.wrap(f.store), time.Now().Add(40*day))
 
-			if res.Purged != 0 {
-				t.Fatalf("purged %d on a read error, want 0", res.Purged)
-			}
+			requireFailedClosed(t, res, err, tc.cause)
 			f.requireAllOnDisk(own, f.active)
 			if got := f.status(v.ID); got != database.BookVersionStatusTrash {
 				t.Fatalf("status = %s, want trash", got)
@@ -931,7 +949,7 @@ type failingAtPathPrefixStore struct {
 
 func (s failingAtPathPrefixStore) GetBookByFilePath(p string) (*database.Book, error) {
 	if p == s.path {
-		return nil, errors.New("transient: pebble busy")
+		return nil, errPebbleBusy
 	}
 	return s.PebbleStore.GetBookByFilePath(p)
 }
@@ -945,11 +963,9 @@ func TestPurgeFailsClosedOnAncestorReadError(t *testing.T) {
 	v := f.trashedAltNaming(shared)
 	f.trashBook() // only the other-book rules may serve it
 
-	res := servedCleanup(failingAtPathPrefixStore{f.store, canonPath(filepath.Dir(deep))}, time.Now().Add(40*day))
+	res, err := servedCleanup(failingAtPathPrefixStore{f.store, canonPath(filepath.Dir(deep))}, time.Now().Add(40*day))
 
-	if res.Purged != 0 {
-		t.Fatalf("purged %d on an ancestor read error, want 0", res.Purged)
-	}
+	requireFailedClosed(t, res, err, errPebbleBusy)
 	f.requireAllOnDisk(shared)
 	if got := f.status(v.ID); got != database.BookVersionStatusTrash {
 		t.Fatalf("status = %s, want trash", got)
