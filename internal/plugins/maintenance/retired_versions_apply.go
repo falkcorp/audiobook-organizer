@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.3.2
+// version: 1.4.1
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-28
 
@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -907,12 +909,37 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 		return retiredApplyErr(err)
 	}
 	steps++
-	// TODO(PR 8, #4143): the retire has committed; record it for the decisions
-	// ledger here with recordRetiredVersionApplied(f.p.deps.OpsStore(), ev), ev
-	// a decisions.RetiredVersionsEvent keyed by
-	// decisions.RetiredVersionsSubjectKey(shell). Not wired in this PR because
-	// PR 8 is not in this branch's base; wire it when the two are stacked.
+	// The retire has committed: write its decision record. It is a label, so
+	// the tail below runs whether or not it lands.
+	f.recordApplied(w.OpID(), shell, holder, v.ID)
 	return f.finishRetire(ctx, rw, run, shell, holder, steps, planned)
+}
+
+// retiredApplyLog logs the decision-record failures of an apply, which the
+// engine's per-row result has no place for.
+var retiredApplyLog = logger.New("maintenance")
+
+// recordApplied writes the `applied` decision record of one retired-versions
+// row whose retire has committed (decisions.RecordRetiredApplied): the entity is
+// the shell, the target the holder, and (version, op) is what makes a retry of
+// the same row the same record (RecordUnlessSeen), so a run resumed after a
+// cut-off writes it once.
+//
+// `applied` is a label that vetoes nothing, so a failure to write it never
+// fails the row or stops its tail: the rows are retired and journaled, which is
+// what a revert reads. The failure is logged with the ids so the record can be
+// found missing. The record carries no plan op id and no actor: the fixer is
+// handed neither (the engine keeps them), so its source is auto.
+func (f *retiredVersionsFixer) recordApplied(opID, shell, holder, versionID string) {
+	_, err := recordRetiredVersionApplied(f.p.deps.OpsStore(), decisions.RetiredVersionsEvent{
+		ShellID: shell, TargetID: holder, VersionID: versionID, OpID: opID, PlanRowID: shell,
+		ReasonText: "the shell's files were retired under its holder",
+	})
+	if err != nil {
+		retiredApplyLog.Error("retired-versions: applied decision record not written for shell=%s holder=%s version=%s op=%s: %v",
+			logger.SanitizeLogValue(shell), logger.SanitizeLogValue(holder), logger.SanitizeLogValue(versionID),
+			logger.SanitizeLogValue(opID), err)
+	}
 }
 
 // finishRetire is steps 4 to 6: the shell's external ids, its merged-into link

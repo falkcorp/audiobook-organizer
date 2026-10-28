@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d3a96b50-1e87-4f2c-8a64-b05c7e19f3d2
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -207,9 +207,11 @@ func mergeSurvivorPathResolver(store retiredVetoReaderStore, follows map[string]
 }
 
 // recordRetiredVersionApplied writes the `applied` decision record of one
-// retired-versions row. The Apply calls it after the row's retire has
-// committed, with the store it already holds (fixer.p.deps.OpsStore()). The
-// record is a label: it vetoes nothing. A retry that finds the same record
+// retired-versions row. The Apply calls it (recordApplied) after the row's
+// retire has committed, with the store it already holds
+// (fixer.p.deps.OpsStore()). The revert writes the `undone` record itself
+// (audiobooks.RevertService.recordRetireUndone), as the undo does not reach
+// into this package. The record is a label: it vetoes nothing. A retry that finds the same record
 // already there writes nothing (decisions.RecordRetiredApplied).
 func recordRetiredVersionApplied(store any, ev decisions.RetiredVersionsEvent) (*decisions.Record, error) {
 	rec, err := retiredDecisionRecorder(store)
@@ -217,17 +219,6 @@ func recordRetiredVersionApplied(store any, ev decisions.RetiredVersionsEvent) (
 		return nil, err
 	}
 	return decisions.RecordRetiredApplied(rec, ev)
-}
-
-// recordRetiredVersionUndone writes the `undone` record of a retired-versions
-// row that a revert took back (a label, not a veto: the shell stays plannable).
-// The revert path calls it once per reverted row.
-func recordRetiredVersionUndone(store any, ev decisions.RetiredVersionsEvent) (*decisions.Record, error) {
-	rec, err := retiredDecisionRecorder(store)
-	if err != nil {
-		return nil, err
-	}
-	return decisions.RecordRetiredUndone(rec, ev)
 }
 
 func retiredDecisionRecorder(store any) (decisions.Recorder, error) {
