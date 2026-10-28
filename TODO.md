@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.10 -->
+<!-- version: 10.78.11 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-27 -->
+<!-- last-edited: 2026-10-28 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,227 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-REPAIRS-DIGEST-AGGREGATES** A compacted daily digest's `counts`, `original_count` and `tag_counts` still include rows of Repairs operations the caller may not read (only `Details.items` is redacted by `redactDigest`). Either store per-operation aggregates in the digest so they can be recomputed per caller, or stop serving the aggregates to callers who hold fewer than every fixer permission.
+- [ ] **TODO-REPAIRS-CANCEL-NO-FIXER-RUNS** `CancelRun` refuses (before `mayCancel`) an admin who did not start a legacy Repairs run that names no fixer, because such a run is hidden from everyone. New starts are rejected with 400 now; decide whether an admin may cancel or purge the legacy rows.
+- [ ] **TODO-REPAIRS-EXISTENCE-ORACLES** 403 versus 404 on `runs/:id`, `operations/:id/activity` and the merged-activity route still tells a caller whether an id exists, and the counts census and the page read are not one snapshot, so a total can be off by one under a concurrent start. Decide whether to answer 404 for hidden runs.
+- [ ] **TODO-ACTIVITY-VISIBILITY-DECODE-COST** The activity visibility check decodes one `operations_v2` row per distinct operation id per request (`GetOperationV2`); a by-definition id set would be cheaper. The counts census and `hiddenFor` still decode every Repairs run per request (`hiddenIDs` in the v3 handlers does the same census over the Repairs definition indexes), although the run list itself no longer decodes a hidden run (`RunQuery.SkipID`).
+- [ ] **TODO-REPAIRS-OPERATIONS-PAUSE-SOURCES** `GET /operations/pause` (definition ids), `GET /operations/stale` and the other overview lists still list Repairs operations without the visibility check.
+- [ ] **TODO-ACTIVITY-SOURCES-COUNTS** `GET /activity/sources` counts entries per source through `GetDistinctSources`, which does not honour `ActivityFilter.ExcludeEntry`, so its counts include hidden Repairs runs and user-data lines. Give the store call the exclusion, or compute the counts from the filtered page.
+- [ ] **TODO-SYSTEM-LOGS-OPERATION-ID** `GET /system/logs?operation_id=` hands `OperationsV2Handler.GetOperationLogs` an empty `c.Param("id")`, so the branch returns nothing for every caller. It is not a leak (it fails closed), but the filter never works; pass the query value, keeping `mayReadLogsOf`.
+- [ ] **TODO-REVERT-RESULT-WORD-MATCH** `RevertResult.WithoutUserData` withholds a note when it contains the word "user" (`undo.NamesUser`), a deny-list that also hides notes that use the word for another reason. Carry the user ids as structured fields on the warnings and withhold by field.
+- [ ] **TODO-ACTIVITY-USER-DATA-TAG-HEURISTIC** The activity writer tags a log line as user data by matching its text (`activity.NamesUserText`), so a line that names a user in a way the pattern misses is served to everyone. Tag at the call site that knows (the merge, the ABS and Audible importers) instead of from the string.
+- [ ] **TODO-ACTIVITY-WRITER-BATCH-BRANCH** `Writer.sendEntry` has its own batch branch that is unreachable, because the entry type is always "system"; only the `LogBatch` path batches. Remove the dead branch or route the batching through one path.
+- [ ] **TODO-OPSV3-CENSUS-CORRUPT-RECORD** A corrupt run record in the counts census (`hiddenFor`) still answers 500 on `/api/v3/ops/runs/counts`; the list path now skips and logs it (`RunQuery.OnUndecodable`), the census does not.
+- [ ] **TODO-OPSV3-TOTAL-UNDECODABLE-PAGE** `RunQuery.Total` with a nil `Keep` counts index keys, so a record that cannot be decoded still adds to the total while its row is skipped from the page.
+- [ ] **TODO-JOURNAL-DIRECT-WRITERS** `repairs.Writer` now refuses an unclassified change type, but several writers create `OperationChange` rows directly and bypass it (`repoint_book_file_rows.go` `book_file_repoint`, `author_strip_merge_relink.go`, `fs_regroup_xml.go`, `series_phantom_repair.go`, `authormerge.Step`). Route them through the Writer or give `database.CreateOperationChange` the same classification check, then add a ratchet that fails on a new direct writer.
+- [ ] **TODO-SYSTEM-LOGS-REPAIRS-READABILITY** `GET /system/logs` walks recent operations and reads their v1 operation logs without asking `opaccess.Reader.MayRead` for each operation, so it does not apply the Repairs-run visibility rule (only the user-text filter). The keyspace has no writer and is empty in production, so nothing leaks today; source the endpoint from the activity store and gate each operation when that is done.
+- [ ] **TODO-REPAIRS-RENDER-SUMMARY-FRAGMENT** `RenderSummary` can still produce a preposition fragment ("for <id>") that the user-text pattern does not catch, because book ids share the shape; this was not addressed in the R4 change.
+- [ ] **TODO-V1SHAPE-OP-ACTOR-ID** The v1-shaped operation served by the reconcile and candidate-fetch routes carries the starting account's id as `user_id`, as the v2 `actor_user_id` and v3 `started_by` do for every op. If actor ids are to be withheld from a caller without `users.manage`, all three need the same rule at once.
+
+- [ ] **TODO-BF-CAS-RETIRE-BACKOFF-UNDER-LOCK** `retireBookFilesAttempt`, `unretireBookFilesAttempt`
+      and `rehomeRetiredVersionAttempt` (`internal/database/retired_book_files.go`) hold the
+      version stripe (`lockBookVersion`) across `restageBookFileBatch`, whose backoff sleeps
+      between whole-batch re-stage rounds (up to 9 sleeps of 5-100 ms, under 1 s in all) therefore
+      happen with the stripe held, and batch upserts that touch that version wait for them.
+      Added latency under contention, not a deadlock. Fix: release the stripe around the sleep
+      and re-read the version's rows after re-taking it (the compare already makes that safe),
+      at the cost of reshaping the three attempt loops around a shared helper.
+- [ ] **TODO-BF-CAS-UPSERT-RETRY-MULTIPLIER** `UpsertBookFile` (`internal/database/pebble_store_bookfiles.go`)
+      runs up to `maxStageRetries` match rounds, each calling `updateBookFile`, which has its own
+      `maxStageRetries` compare-and-swap rounds: up to 25 attempts under sustained churn on one
+      row, each match round taking and releasing the file stripe. Bounded, but undocumented.
+      Fix: a comment at the match loop naming the multiplication, or one shared budget passed
+      down to `updateBookFile` (changes its signature and every caller).
+- [ ] **TODO-BF-ACOUSTID-SEG-KEYS-NOT-PERSISTED** `UpdateBookFile` writes `book_file_acoustid:<seg>`
+      index keys for `AcoustIDSeg*` values that `marshalBookFileDropSegs` does not persist in the
+      row. A later `SweepBookFileSegDrop` then sees no segment needle in the stored row and skips
+      it, so those index keys outlive any row that names them. Pre-dates PR #4180 (which replaced #4177). Fix: stop
+      writing the index keys for values the row does not store (or persist the values), and add a
+      one-off repair that deletes `book_file_acoustid:` keys whose row has no matching segment.
+
+- [ ] **TODO-BF-DELETE-SHARED-INDEX-GUARD** `deleteSingleOwnerIndexIfOwned`
+      (`internal/database/pebble_store_bookfiles.go`) reads the shared `book_file_hash:`
+      or `book_file_path:` key at stage time, before the owner stripes and the
+      single-owner index mutex are taken, and stages a delete if the value names the
+      row being deleted. Another row that claims the same key between that read and
+      the apply has its entry deleted: the compare-and-swap on the deleted row does
+      not cover the index key, and the index mutex serializes the APPLIES of writers
+      of these keys but does not re-check what the delete decided from. Older than
+      PR #4169.
+      Fix: record the observed index value the way the retired-version writers do
+      (`indexCAS.note` / `indexCAS.verify`) and commit the delete through
+      `commitBookFileBatchVerified`, so the value is re-read under the stripes and
+      the index mutex and the batch is refused as stale (re-staged) when it moved.
+      Cost: `commitBookFileDeletes` / `commitDeleteWithWindowCascade` and the
+      move paths gain a verify hook and an `indexCAS` each, and the stage helpers
+      (`deleteBookFileSecondaryIndexes` and its callers) must record the keys they
+      read; `indexCAS` today lives with the retired-version writers and would move to
+      a shared file. Writers that take no stripe are already ordered against the
+      apply by the index mutex, so only the stage-to-apply window is left to close.
+
+- [ ] **TODO-BF-HASH-WRITERS-RECOMPUTE** `SetBookFileHash` and `UpdateBookFileHashes`
+      skip the per-book `RecomputeBookAggregates` because their comment says
+      "Hashes feed no book aggregate" (`internal/database/pebble_store_bookfiles.go`,
+      both `updateBookFileOver(..., false)` calls). That is no longer true:
+      `internal/database/book_runtime.go` reads `FileHash` and `OriginalFileHash`
+      to drop a missing row that repoints a present duplicate from the stored
+      aggregate, and the backfill-file-hashes job's own `storeHash` comment says
+      so and recomputes each book once per chunk. Callers that store a hash
+      through these two methods (extract-wav-clips, write_tags_safe,
+      `book_file_hash_recorder`) can leave `Book.Duration` stale until something
+      else recomputes the book. Decide per caller: recompute in the store, or keep
+      the skip and have the batch caller recompute once (the backfill job's
+      pattern). Found in the review of #4190; pre-existing on main, not changed there.
+
+- [ ] **TODO-BF-REPOINT-ORPHAN-JOURNAL** A crash between `maintenance.repoint-book-file-rows`
+      journaling a repoint (`rbfApplyOne` in `internal/plugins/maintenance/repoint_book_file_rows.go`,
+      a Sync write inside the `ModifyBookFile` callback) and the row commit leaves
+      a live `book_file_repoint` journal row for a repoint that never happened. The op
+      uses `ResumeDrop`, so a re-apply is a new op with a new op id and a new change id;
+      a stable change id cannot replace the orphan, and an id derived from op id and
+      row id would not either. This is the JOURNAL FIRST design, older than PR #4169.
+      Fix: a two-phase journal. Write the row as pending, mark it applied after the
+      commit, and have the next run of the op (or a sweep) resolve pending rows by
+      comparing the stored row with the journal's pre-image and new path, voiding the
+      ones that never applied. Cost: a new journal state, a change to every reader
+      that counts or reverts these rows (revert, count, preflight), and a resolver
+      pass. Needs a design decision before work starts.
+
+- [ ] **TODO-CANDIDATE-FETCH-V1-TYPE-CHECK** `metabatch.ResolveCandidateFetch`'s v1 fallback (`internal/metabatch/fetch_ops_index.go`, the `GetOperationByID` branch) returns any v1 operation row for any id, with no type check, on `GET /operations/:id/results` (`library.view`). It predates the Repairs visibility work, and a Repairs run is unreachable through it (Repairs runs are v2-only and the v1 keyspace is legacy), so nothing leaks today. Close it with an `op.Type == candidateFetchOpType` check on the fallback, and a test that a v1 row of another type answers 404.
+
+- [ ] **CREDITS-PR3-RUN** Run `maintenance.credits-backfill` on prod: the dry run
+      first (`{}`), owner reads the classes, samples and `filing_author_changes`,
+      then the owner runs the apply in `limit` cohorts (each write rewrites the
+      book row: a `book_ver` snapshot and a search reindex, up to ~55k books).
+      `limit` is the first N eligible books by id in both modes, so a dry run with
+      the same `limit` shows the apply's cohort. Read `books_to_reidentify` first:
+      those books re-search Google Books (1,000/day) at their next metadata run.
+      Re-run `maintenance.credit-census` after it. The fixed classes drop to the
+      books the run held or left for review (iTunes without the opt-in,
+      owner-manual, user-locked author or narrator, split-name or self-read
+      narrators, placeholder authors, junk narrators, books past `limit`), each listed in the run's result; the census-only review classes (dangling/tombstoned/combined ids, `author_id_not_primary`,
+      narrator column vs junction disagreements) need owner decisions. Decide
+      `allow: narrator_new_from_split` / `narrator_self_read` / `itunes` from the
+      dry run. Gate for credits plan PR 4.
+
+- [ ] **TODO-HASH-BACKFILL-SLIDING-WINDOW** `backfill-file-hashes` already hashes
+      on a pool of 8 (`ABK_HASH_BACKFILL_WORKERS`) in ordered 512-row chunks, but
+      each chunk is a barrier: one slow 100 MB file idles the other 7 workers,
+      and the chunk's commit (journal, stores, report fsync) runs while no row is
+      being hashed. A sliding window that hashes ahead and commits the contiguous
+      completed prefix would remove both. Measure first: a prod dry run reached
+      about 21 rows/s, which may simply be the ZFS read ceiling, in which case
+      neither more workers nor a window helps. Needs the per-chunk journal and
+      report-fsync invariants kept (a chunk is still all-or-nothing).
+
+- [ ] **TODO-HASH-BACKFILL-SUPERSEDED-REPORT-ORPHANED** The boot resume sweep's
+      `supersedeStaleQuiesced` (internal/operations/registry/resume.go) drops an
+      `interrupted_quiesced` row when a newer queued or running row of the same
+      def exists, or a newer quiesced one. For `backfill-file-hashes`, which now
+      pauses and continues under one operation id, that row may be a half-finished
+      operation whose per-run report
+      (`{root}/.reports/backfill-file-hashes-<opID>.tsv`) is the ONLY record of its
+      progress. Superseding it orphans that report and the newer operation starts
+      from row zero, redoing hours of hashing (in a dry run nothing is stored, so
+      nothing else remembers it). Decide whether such a row should be resumed
+      rather than superseded (the job is one-run-at-a-time by ConcurrencyKey, so
+      two never run together), or whether the newer run should adopt the older
+      report. Found in review of the in-place continue; pre-existing, not changed
+      there.
+
+- [ ] **CI-REPIN-REUSABLE-CI-HELPERS** Re-pin `reusable-ci` in `.github/workflows/frontend-ci.yml` once falkcorp/github-common bumps its `gha-ci-workflow-helpers` pin from `4b5f4d45` (labelled v1.1.4, but tag v1.1.4 is `9272530a`) to `v1.1.7-rc.8` (`ca7caa417`, the `frontend-run` exit-code fix). The bump is committed locally as `f7cbb9727` on branch `fix/bump-ci-helpers-frontend-run` of github-common, not pushed. The reusable E2E step stays skipped either way, because it duplicates `e2e.yml`.
+
+- [ ] **TODO-CI-FRONTEND-RUN-SWALLOWS** `falkcorp/gha-ci-workflow-helpers` `frontend_run` exits 0 when its npm
+      script fails, so reusable-ci's frontend lint/build/unit-test/E2E steps gate nothing in any repo that relies on
+      them (this repo is covered by Minimal CI and the separate E2E (chromium) workflow; #4208 skips the dead E2E step).
+      Fix is open upstream (gha-ci-workflow-helpers#29, github-common#381 for the Playwright install path), NOT merged:
+      owner decides release/tag/pin bumps. Expect consumers with broken frontends to go red after the pins move
+      (migrate-loop, magnet-handler, subtitle-manager, ubuntu-autoinstall-agent). Owner 2026-10-27: note only.
+
+- [ ] **NARRATOR-SYNC-FOLD-MATCH** Narrator sync should fold-match existing
+      records instead of minting a second one. `maintenance.credits-backfill`
+      links a narrator name that matches a record only by its fold key
+      (`authorjunk.FoldKey`: case, accents, punctuation, spaces; "Renee Montoya"
+      for the record "Renée Montoya", "Jean Paul Valley" for "Jean-Paul Valley")
+      to that record and respells the name inside the Narrator column. A rescan
+      with an UNLOCKED narrator field reads the tag's spelling back into the
+      column, and `syncNarratorJunctionAfterWrite`
+      (`internal/database/narrator_credit_sync.go:124`) resolves each name with
+      `resolveNarratorCredit` -> `CreateNarrator(name)`, which is resolve-or-create
+      by exact normalized name, so it creates an unaccented duplicate record and
+      re-credits the book to it. Fix site: `resolveNarratorCredit` (line 43; its
+      `CreateNarrator(name)` call is at line 49).
+      Look the name up by fold key first (the store has no fold index; either add
+      a `foldKey -> []id` index to the narrator name index next to the exact one,
+      kept in `CreateNarrator`, merge and delete, or scan `ListNarrators` once
+      per sync, which is O(records) per book write), link to the single fold
+      match, and leave an ambiguous fold (several records) to create nothing and
+      log, as the backfill's `narrator_name_ambiguous` does. Cost: a new index
+      maintained on every narrator write plus its rebuild on boot, and a
+      behaviour change for every book write that carries a narrator column
+      (CreateBook, UpdateBook, ModifyBook), so it needs its own tests for
+      concurrent creates of two spellings. Until then the credit census after a
+      rescan is the check, and re-running the backfill finds the book again.
+
+- [ ] **TODO-VERSION-PURGE-GUARD-FOLLOWUPS** Three follow-ups to the trash-purge
+      guard (`internal/versions/serve_guard.go`, PR #4215) that were left out of
+      that PR on purpose.
+      (1) Another book's symlink-strategy link. When another live book holds a
+      symlink (library strategy "symlink") that points at one of the trashed
+      version's files, the guard compares the link's own path, not its target,
+      so the purge can delete the file the link resolves to. Fix: for each of the
+      version's files, find rows and FilePaths that resolve (EvalSymlinks) to it,
+      not only rows that name it, and keep the version when a live book's link
+      resolves to it; fail closed when the resolution cannot be completed.
+      (2) The player's timeline includes `.versions/` slot rows.
+      `SplitOwnFolderFiles` (`internal/database/book_own_folder.go`, the
+      `s.Dir`/`inside` loop) treats any row under the book's own folder as the
+      book's own, and a slot lives under that folder, so a trashed or alt
+      version's slot rows are counted in the timeline the ABS mapper and stream
+      build from `GetBookFiles`. Fix: skip rows with a `.versions` path component
+      there (or filter on the version's status), with a test on a book that has
+      an alt slot.
+      (3) The frontend shows the purge 409 as a generic error.
+      `purgeVersion` (`web/src/services/versionApi.ts`) turns the new 409 from
+      `POST /audiobooks/:id/versions/:vid/purge-now` ("the book still serves its
+      file(s)") into the same generic failure as any other error. Fix: detect the
+      409 and show the server's message, and keep the version listed in the trash.
+
+- [ ] **TODO-WHISPER-COOLDOWN-REJOIN-CANARY** Check (unverified finding from the 2026-10-27 canary-flake
+      investigation): a sick machine's port that is already in cooldown when a dispatch starts never faults, so
+      `runCanaries` never asks it (it only treats a port that faulted *and* is in cooldown as unaskable), while the
+      machine passes the canary on its sibling ports and `canaryRan[machine]` is set. If that port's cooldown ends
+      mid-dispatch it takes work with no canary of its own; if it is truly sick its sub-breaker units could produce
+      believed per-clip strikes — the gap the per-port canary ("SF2") was meant to close. Write a repro first
+      (internal/transcribe dispatcher; land after #4201, which rewrites the canary path).
+
+- [ ] **TODO-WHISPER-MIDREQUEST-IDENTITY** Detect a whisper worker that is swapped
+      for another machine in the middle of a request — a pool probes a port again
+      after every cooldown wait and uses it only if the worker that answers is
+      the one the dispatch froze for it (D60/D62, PR #4201), but nothing checks
+      again after that re-probe. A tunnel that comes back from another Mac while
+      a request is in flight (the request timeout is minutes) hands its answer,
+      or its timeout, to the old machine's name: the answer is stored with the
+      frozen identity, and a timeout strike or a condemnation names a machine
+      that never saw the file. `pollWorkerLiveness` in
+      `internal/transcribe/liveness.go` already reads `/health` every
+      `livenessInterval` for the whole request and throws away `machine_id`.
+      Proposal: compare the
+      `machine_id` it reads (through the same `resolveMachine` rules the gate
+      uses, so a worker that missed its id and answers as `u:` is not a swap)
+      with the identity frozen for the port, and cancel the request with a new
+      cause on a mismatch. The outcome must be neither stuck (it must not count
+      toward the ops' stuck streak) nor an outage (it must not bench the
+      endpoint process-wide): the jobs are deferred without a strike, the port
+      is dropped from the dispatch like a port that changed hands, and the next
+      dispatch's gate keys it. Decide what happens to results the swapped worker
+      has already returned for the request before the probe saw the swap (they
+      cannot be told apart from the old machine's): withhold the whole request's
+      answers and strikes, as a worker fault does, rather than store them under
+      the frozen identity. Done means a test with a worker whose `machine_id`
+      changes while its request is running, asserting no result and no strike is
+      stored under the old identity and the dispatch continues on the other ports.
 
 - [ ] **PURGE-MERGE-FOLLOWUPS-4113** purge/merge follow-ups (#4113), two items
       found in review and left out of that PR on purpose:
