@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerid_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: f008da3b-b827-4ee4-b116-679d66568c3c
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package transcribe
 
@@ -77,6 +77,12 @@ func machineHarness(t *testing.T, machines []string, poison ...string) *splitHar
 			_ = json.NewEncoder(rw).Encode(body)
 		}))
 		t.Cleanup(srv.Close)
+		// The pool's health is process-global and keyed by URL, and the OS hands a
+		// closed test server's port to a later one: a failure streak an earlier test
+		// left on it (cooldown = streak x 30 s) would be this worker's, and one
+		// more failure then outlasts a 40 s pacing allowance at once. A new worker
+		// starts with a clean slate.
+		clearCooldown(srv.URL)
 		h.srvs = append(h.srvs, srv)
 		h.eps = append(h.eps, Endpoint{URL: srv.URL, Concurrency: 1, Priority: i + 1, Label: fmt.Sprintf("w%d", i)})
 	}

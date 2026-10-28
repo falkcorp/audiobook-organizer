@@ -295,8 +295,9 @@ port cannot take the job in this dispatch (it is in cooldown, unreadable,
 benched, or only overran), the job is not condemned and not struck, and the
 dispatch ends as `ErrWorkerStuck`: it counts toward the ops' stuck streak, so a
 pool that keeps hitting this stops the run instead of spinning on the same jobs
-(when the unknown port's `/health` stays unreadable the error is a recognised
-transport failure instead, which the ops count as an outage). An unknown port is
+(only when the unknown port was sent the job and its `/health` could not be read
+afterwards is the error a recognised transport failure instead, which the ops
+count as an outage). An unknown port is
 never waited for through a cooldown, since after the wait it could only be
 dropped: the dispatch ends at once and not after the pacing allowance (six
 minutes). Once the job has been stuck on that port too the verdict stands,
@@ -311,3 +312,24 @@ port dropped in the middle of a dispatch (it changed hands, or could not be read
 after a wait) still counts toward that job's verdict, while the number of
 machines needed is counted again from the ports that are left and can fall to
 one. This is as it was and is now stated in the code.
+
+A port whose cooldown ended is now probed again before the canary clip is sent to
+it, in both places the clip is sent: the pool-wide canary that runs when every
+port has faulted, and the clip a machine that failed it in an earlier dispatch is
+asked at the start. Until now a port that faulted in an earlier round, was in
+cooldown, and came out of it while a later round ran could be sent the clip
+without a probe, and a tunnel that had come back from another Mac was credited
+(or blamed) under the machine the dispatch had known. A port that changed hands
+is dropped and never asked, one whose `/health` cannot be read is not asked, and
+a pool left with no port ends as the pool emptied. The answers of the round in
+which this is found are still read before the dispatch ends.
+
+A pool left with only ports it does not wait for (a `?` key) in cooldown, after
+a port was dropped in the middle of the dispatch, ends as the pool emptied again
+(a deferral the ops do not count as an outage), as it did before unknown ports
+stopped being waited for, and not as `ErrPoolUnavailable`. The unavailable error
+no longer claims a wait the dispatch did not make; it says how long it slept.
+
+The part-placing wait looks for a port that came out of its cooldown a second
+time, after it finds nothing to wait for, so a cooldown that ends between the two
+looks no longer ends the dispatch as stuck.
