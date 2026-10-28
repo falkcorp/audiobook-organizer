@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8885f927-1097-4448-a36b-4a903c887c6d
 // last-edited: 2026-10-27
 
@@ -38,17 +38,12 @@ import (
 //
 // CUT-OVER, NO BACKWARD COMPATIBILITY. A plan stored the old way carries no
 // RowStore marker (rows inside its operation row), and one stored before the
-// namespace carries PlanRowStoreV1 (rows under their bare RowID). LoadPlan
-// refuses both with ErrPlanLegacyFormat: run the plan again. Their rows stay
-// where they are until the operation is deleted; nothing rewrites them.
+// namespace carries the marker "op_rows.v1" (rows under their bare RowID).
+// LoadPlan refuses both with ErrPlanLegacyFormat: run the plan again. Their rows
+// stay where they are until the operation is deleted; nothing rewrites them.
 
 // PlanRowPrefix begins the stored id of every plan row.
 const PlanRowPrefix = "plan/"
-
-// PlanRowStoreV1 was the PlanResult.RowStore of a plan whose rows SavePlan
-// wrote beside the operation under their bare RowID. LoadPlan no longer reads
-// such a plan.
-const PlanRowStoreV1 = "op_rows.v1"
 
 // PlanRowStoreV2 is the PlanResult.RowStore of a plan whose rows SavePlan wrote
 // beside the operation under PlanRowPrefix.

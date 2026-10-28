@@ -1,5 +1,5 @@
 // file: internal/repairs/planstore_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f9c1b7a-6d42-4e08-b5a1-7c20e4d9f813
 // last-edited: 2026-10-27
 
@@ -153,6 +153,26 @@ func TestLoadPlan_LegacyFormatIsRefused(t *testing.T) {
 	s.ops["old"] = &database.OperationV2Row{ID: "old", DefID: PlanOpID, Status: "completed", ResultData: &legacy}
 	_, err := LoadPlan(s, s, "old", "fx")
 	require.ErrorIs(t, err, ErrPlanLegacyFormat)
+	require.Contains(t, err.Error(), "run the plan again")
+}
+
+// TestLoadPlan_PlanStoredUnderBareRowIDsIsRefused: a plan stored before plan rows
+// had their own namespace (summary row_store "op_rows.v1", rows under their bare
+// RowID, the layout that let a class-list write wipe them) is not read: its
+// rows are not where LoadPlan looks, so LoadPlan says the plan needs a re-run
+// rather than paging an empty or partial plan. Nothing reads it as the current
+// layout (cut over, no backward compatibility).
+func TestLoadPlan_PlanStoredUnderBareRowIDsIsRefused(t *testing.T) {
+	s := newMemStore()
+	v1 := `{"fixer_id":"fx","total":2,"applicable":2,"skipped_by_kind":{},"row_store":"op_rows.v1"}`
+	s.ops["v1"] = &database.OperationV2Row{ID: "v1", DefID: PlanOpID, Status: "completed", ResultData: &v1}
+	require.NoError(t, s.ReplaceOpRowsPrefix("v1", "r", 2, func(i int) (database.OpRow, error) {
+		id := fmt.Sprintf("r%d", i)
+		return database.OpRow{ID: id, Index: []byte("ix"), Data: []byte(`{"row_id":"` + id + `"}`)}, nil
+	}))
+	_, err := LoadPlan(s, s, "v1", "fx")
+	require.ErrorIs(t, err, ErrPlanLegacyFormat)
+	require.True(t, PlanNeedsRerun(err))
 	require.Contains(t, err.Error(), "run the plan again")
 }
 
