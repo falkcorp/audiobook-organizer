@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-27
 //
@@ -119,16 +119,16 @@ func bookIsTrashed(b *database.Book) bool {
 // PurgeVersion physically deletes the version's files and marks it
 // inactive_purged. Keeps the DB rows for fingerprint matching.
 //
-// A file a live book still serves is never deleted: when the version's book is
-// not itself trashed and a file is served (see servedGuard: the book's
-// FilePath or, for a multi-file book, the folder it names; a row of its active
+// A file a live book still serves is never deleted: when a file is served (see
+// servedGuard: the version's own book, unless that is itself trashed, serving it
+// as its FilePath or, for a multi-file book, the folder it names; a row of its active
 // version or of no version; the same file reached by a symlink or hard link;
 // or any of those for ANOTHER live book), PurgeVersion deletes nothing, leaves
 // the version in the trash and returns a *BookServesFilesError. It fails
 // closed: if the book, its versions, its rows or another book's rows cannot be
 // read, or the version's slot cannot be walked, nothing is deleted and the
-// error is returned. A book that is itself in the trash is not guarded, as
-// before.
+// error is returned. When the version's own book is itself in the trash it
+// serves nothing, so only the other-live-book check applies.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	book, err := store.GetBookByID(ver.BookID)
 	if err != nil || book == nil {
@@ -169,32 +169,30 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 		}
 	}
 
-	if !bookIsTrashed(book) {
-		guard, err := newServedGuard(store, book, files)
+	guard, err := newServedGuard(store, book, files)
+	if err != nil {
+		return err
+	}
+	var kept []string
+	seen := make(map[string]struct{})
+	for _, p := range own {
+		c := canonPath(p)
+		if _, dup := seen[c]; dup {
+			continue
+		}
+		seen[c] = struct{}{}
+		served, err := guard.serves(p)
 		if err != nil {
 			return err
 		}
-		var kept []string
-		seen := make(map[string]struct{})
-		for _, p := range own {
-			c := canonPath(p)
-			if _, dup := seen[c]; dup {
-				continue
-			}
-			seen[c] = struct{}{}
-			served, err := guard.serves(p)
-			if err != nil {
-				return err
-			}
-			if served {
-				kept = append(kept, p)
-			}
+		if served {
+			kept = append(kept, p)
 		}
-		if len(kept) > 0 {
-			lifecycleLog.Warn("trash purge kept version %s of book %s in the trash: %d path(s) kept, reason: %s",
-				ver.ID, ver.BookID, len(kept), keptReason)
-			return &BookServesFilesError{BookID: ver.BookID, VersionID: ver.ID, Paths: kept}
-		}
+	}
+	if len(kept) > 0 {
+		lifecycleLog.Warn("trash purge kept version %s of book %s in the trash: %d path(s) kept, reason: %s",
+			ver.ID, ver.BookID, len(kept), keptReason)
+		return &BookServesFilesError{BookID: ver.BookID, VersionID: ver.ID, Paths: kept}
 	}
 
 	if bookDir != "" {

@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-27
 
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -668,5 +669,182 @@ func TestPurgeFailsClosedWhenOtherBooksCannotBeRead(t *testing.T) {
 				t.Fatalf("status = %s, want trash", got)
 			}
 		})
+	}
+}
+
+// trashBook soft-deletes the fixture book.
+func (f *servedFixture) trashBook() {
+	f.t.Helper()
+	if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil }); err != nil {
+		f.t.Fatalf("trash book: %v", err)
+	}
+}
+
+// A trashed own book serves nothing itself, but a file ANOTHER live book
+// serves is still kept.
+func TestPurgeKeepsFileAnotherLiveBookServes_WhenOwnBookTrashed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(f *servedFixture, shared string)
+	}{
+		{"row of its active version", func(f *servedFixture, shared string) { f.otherBook("other", shared, true, false) }},
+		{"FilePath is the file", func(f *servedFixture, shared string) { f.otherBook("other", shared, true, true) }},
+		{"FilePath is a folder two levels up", func(f *servedFixture, shared string) {
+			if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One", FilePath: filepath.Dir(filepath.Dir(shared))}); err != nil {
+				f.t.Fatal(err)
+			}
+		}},
+	} {
+		for _, mode := range []string{"nightly-cleanup", "purge-now"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				f := newServedFixture(t)
+				shared := filepath.Join(t.TempDir(), "deluge", "torrent", "shared.m4b")
+				writeServed(t, shared)
+				tc.make(f, shared)
+				v := f.trashedAltNaming(shared)
+				f.trashBook()
+
+				if mode == "nightly-cleanup" {
+					res := f.afterWindow()
+					f.requireAllOnDisk(shared)
+					f.requireKept(res, v, 1)
+					return
+				}
+				got, _ := f.store.GetBookVersion(v.ID)
+				var served *BookServesFilesError
+				if err := PurgeVersion(f.store, got); !errors.As(err, &served) {
+					t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
+				}
+				f.requireAllOnDisk(shared)
+			})
+		}
+	}
+}
+
+// Control: a trashed own book with no other owner of the file purges normally,
+// even when its own FilePath and active row name the file.
+func TestPurgeStillPurgesWhenOwnBookTrashedAndNoOtherOwner(t *testing.T) {
+	f := newServedFixture(t)
+	v1 := f.version(database.BookVersionStatusActive, 90*day)
+	f.row(v1.ID, f.active, 1)
+	f.trashLikeHandler(v1.ID)
+	f.trashBook()
+	// A live book elsewhere that does not name the file must not matter.
+	other := filepath.Join(t.TempDir(), "elsewhere", "other.m4b")
+	writeServed(t, other)
+	f.otherBook("other", other, true, true)
+
+	res := f.afterWindow()
+
+	if res.Purged != 1 || len(res.Kept) != 0 || onDisk(f.active) {
+		t.Fatalf("result = %+v, file on disk = %v, want purged and deleted", res, onDisk(f.active))
+	}
+}
+
+// The other-book folder check walks every ancestor, not just the parent.
+func TestPurgeKeepsFile_WhenAnotherBookFolderIsAnyAncestor(t *testing.T) {
+	for _, levels := range []int{1, 2, 3} {
+		for _, mode := range []string{"nightly-cleanup", "purge-now"} {
+			t.Run(fmt.Sprintf("%d levels up/%s", levels, mode), func(t *testing.T) {
+				f := newServedFixture(t)
+				base := filepath.Join(t.TempDir(), "Gotham")
+				deep := filepath.Join(base, "A", "B", "C")
+				shared := filepath.Join(deep, "shared.m4b")
+				writeServed(t, shared)
+				folder := deep
+				for i := 1; i < levels; i++ {
+					folder = filepath.Dir(folder)
+				}
+				if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One", FilePath: folder}); err != nil {
+					t.Fatal(err)
+				}
+				v := f.trashedAltNaming(shared)
+
+				if mode == "nightly-cleanup" {
+					res := f.afterWindow()
+					f.requireAllOnDisk(shared)
+					f.requireKept(res, v, 1)
+					return
+				}
+				got, _ := f.store.GetBookVersion(v.ID)
+				var served *BookServesFilesError
+				if err := PurgeVersion(f.store, got); !errors.As(err, &served) {
+					t.Fatalf("PurgeVersion err = %v, want *BookServesFilesError", err)
+				}
+				f.requireAllOnDisk(shared)
+			})
+		}
+	}
+}
+
+// The ancestor walk stops at the library root (a book at the root would claim
+// everything) and does not reach through a .versions/ slot.
+func TestPurgeAncestorWalkStops(t *testing.T) {
+	t.Run("library root", func(t *testing.T) {
+		f := newServedFixture(t)
+		root := t.TempDir()
+		prev := config.AppConfig.RootDir
+		config.AppConfig.RootDir = root
+		t.Cleanup(func() { config.AppConfig.RootDir = prev })
+		shared := filepath.Join(root, "Gotham", "shared.m4b")
+		writeServed(t, shared)
+		if _, err := f.store.CreateBook(&database.Book{ID: "rootbook", Title: "Batman: Year One", FilePath: root}); err != nil {
+			t.Fatal(err)
+		}
+		f.trashedAltNaming(shared)
+
+		res := f.afterWindow()
+
+		if res.Purged != 1 || onDisk(shared) {
+			t.Fatalf("result = %+v, on disk = %v: a book at the library root must not claim every file", res, onDisk(shared))
+		}
+	})
+	t.Run("versions slot", func(t *testing.T) {
+		f := newServedFixture(t)
+		folder := filepath.Join(t.TempDir(), "Gotham", "Batman Hush")
+		shared := filepath.Join(VersionSlotDir(folder, "someversion"), "alt.m4b")
+		writeServed(t, shared)
+		if _, err := f.store.CreateBook(&database.Book{ID: "other", Title: "Batman: Year One", FilePath: folder}); err != nil {
+			t.Fatal(err)
+		}
+		f.trashedAltNaming(shared)
+
+		res := f.afterWindow()
+
+		if res.Purged != 1 || onDisk(shared) {
+			t.Fatalf("result = %+v, on disk = %v: a slot file is not served by the folder above .versions/", res, onDisk(shared))
+		}
+	})
+}
+
+// failingAtPathPrefixStore fails GetBookByFilePath for one path only.
+type failingAtPathPrefixStore struct {
+	*database.PebbleStore
+	path string
+}
+
+func (s failingAtPathPrefixStore) GetBookByFilePath(p string) (*database.Book, error) {
+	if p == s.path {
+		return nil, errors.New("transient: pebble busy")
+	}
+	return s.PebbleStore.GetBookByFilePath(p)
+}
+
+// Fail closed on a read error at a distant ancestor.
+func TestPurgeFailsClosedOnAncestorReadError(t *testing.T) {
+	f := newServedFixture(t)
+	deep := filepath.Join(t.TempDir(), "Gotham", "A", "B")
+	shared := filepath.Join(deep, "shared.m4b")
+	writeServed(t, shared)
+	v := f.trashedAltNaming(shared)
+
+	res := cleanupTrashedVersionsAt(failingAtPathPrefixStore{f.store, canonPath(filepath.Dir(deep))}, time.Now().Add(40*day))
+
+	if res.Purged != 0 {
+		t.Fatalf("purged %d on an ancestor read error, want 0", res.Purged)
+	}
+	f.requireAllOnDisk(shared)
+	if got := f.status(v.ID); got != database.BookVersionStatusTrash {
+		t.Fatalf("status = %s, want trash", got)
 	}
 }
