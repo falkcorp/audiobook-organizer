@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.22.6
+// version: 1.23.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -213,8 +213,29 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		gated   []gatedEndpoint
 		refused []gpuRefusal
 	)
+	// cooled is every port the dispatch has seen in a cooldown: a port is not
+	// given work, or taken as a stand-in, until it has been probed again once
+	// since its cooldown ended (recheck). The identity the dispatch froze for a
+	// port is only as old as its last probe, and a cooldown is minutes long, in
+	// which a tunnel can come back from another Mac (D60, D62). Every place that
+	// looks at a cooldown records the ports it finds in one (seenInCooldown), and
+	// regate, which is the probe, clears them. The ports in cooldown as the
+	// dispatch begins are recorded before its gate runs and again after, so one
+	// whose cooldown ends while the gate's own probe is in flight is probed again
+	// as well.
+	cooled := make(map[string]bool)
 	for {
+		for _, ep := range endpoints {
+			if endpointInCooldown(ep.URL) {
+				cooled[ep.URL] = true
+			}
+		}
 		gated, refused = gate(endpoints, true)
+		for _, g := range gated {
+			if endpointInCooldown(g.Endpoint.URL) {
+				cooled[g.Endpoint.URL] = true
+			}
+		}
 		if len(gated) > 0 || !allTransient(refused) || !time.Now().Before(paceUntil) {
 			break
 		}
@@ -289,6 +310,14 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	if len(gated) == 0 {
 		return nil, noEndpointError(refused)
 	}
+	// refusedAtGate is how many refusals the start gate made. What came after it
+	// (regate's) is what emptied the pool if the round loop or a wait finds
+	// nothing left: poolEmptied names that, and not the gate's refusals of other
+	// ports, which are not why this pool has nothing left to send to (a capability
+	// refusal at the gate beside two ports that changed hands during the wait is
+	// not a pool "refused by capability requirements").
+	refusedAtGate := len(refused)
+	poolEmptied := func() error { return noEndpointError(refused[refusedAtGate:]) }
 
 	// forget drops a machine from the remembered canary failures once it has
 	// answered, unless a newer failure of it was recorded since gen was taken
@@ -308,8 +337,10 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// by address, so a worker that missed its machine id this time is still the
 	// machine its URL last reported), frozen for the dispatch, and capableFor is
 	// whether its worker could report a machine id then. A pool probes a port
-	// again after every cooldown wait (regate) and uses it only if its identity
-	// then equals keyFor (D60, D62): the probe replaces the endpoint's health (the
+	// again once a cooldown it was seen in has ended (cooled, recheck, regate: the
+	// waits for a cooldown, the rounds of work on other ports that outlast one, and
+	// the moment a stand-in comes out of one all end in that probe) and uses it only
+	// if its identity then equals keyFor (D60, D62): the probe replaces the endpoint's health (the
 	// canary and the work use what the worker says now), but any difference, with
 	// capableFor as the kind of worker, drops the port, and one that cannot be
 	// read is not used, so an answer is never stored as a machine it did not come
@@ -821,6 +852,18 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			return !endpointInCooldown(ep.URL) && !benched(ep.URL) && probeByURL[ep.URL].Probed && lastErr[ep.URL] == nil
 		})
 	}
+	// seenInCooldown records every port still in the dispatch that is in a
+	// cooldown now (see cooled). It is called wherever the dispatch looks at
+	// cooldowns, so that a port that comes out of one, during a sleep, during a
+	// round of work on other ports, or between two checks, is probed again before
+	// anything is sent to it.
+	seenInCooldown := func() {
+		for _, ep := range ordered {
+			if endpointInCooldown(ep.URL) {
+				cooled[ep.URL] = true
+			}
+		}
+	}
 	// regated is what regate found out about the ports it probed again.
 	type regated struct {
 		// live is the ports that answer as the worker the dispatch knew: they may
@@ -855,9 +898,13 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	//   - Wedged, or not meant for the work: refused as the gate refuses it, and
 	//     dropped.
 	//
-	// Both waits of a dispatch use it: the one for a remembered machine's cooldown
-	// (resolvePending) and the round loop's (waitOutCooldown). A pool left with no
-	// port is the caller's to end (noEndpointError). The lone endpoint keeps a
+	// It is the one probe after a cooldown: resolvePending's for a remembered
+	// machine's ports, and the round loop's (recheck) for every other port that was
+	// seen in a cooldown, whether the dispatch slept for it (waitOutCooldown) or it
+	// came out of it while the dispatch did something else (a stand-in waited out
+	// inside resolvePending, a round of work on other ports). A pool left with no
+	// port is the caller's to end (poolEmptied: noEndpointError for the refusals the
+	// waits made). The lone endpoint keeps a
 	// worker that gained a machine id (dispatchSingle, reprobed): it resolves the
 	// memory at call time and has no frozen group to disagree with.
 	regate := func(eps []Endpoint, what string) regated {
@@ -867,6 +914,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			// Every port looks unreachable because nobody could ask.
 			out.cancelled = true
 			return out
+		}
+		// Probed: whatever it found, a port is not waiting for its probe any more
+		// (one that could not be read is kept out of the work by unreadable).
+		for _, ep := range eps {
+			delete(cooled, ep.URL)
 		}
 		for _, g := range kept {
 			u := g.Endpoint.URL
@@ -943,6 +995,10 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		start := time.Now()
 		waitLogged := false
 		for len(pendingCanary) > 0 && ctx.Err() == nil {
+			// Every port seen in a cooldown here is probed again before it takes
+			// work, a stand-in whose cooldown the wait below ends included (the
+			// round loop does it before it looks for ports to send to).
+			seenInCooldown()
 			portsOf := make(map[string][]string)
 			for _, ep := range ordered {
 				if k := groupOf(ep.URL); pendingCanary[k] {
@@ -998,7 +1054,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					waiting[urlKey[u]] = true
 				}
 				if len(re.gone) > 0 && len(ordered) == 0 {
-					return noEndpointError(refused)
+					return poolEmptied()
 				}
 				asks := make(map[string][]string)
 				for _, k := range ready {
@@ -1031,6 +1087,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			// another endpoint from taking work (a stand-in that has not failed
 			// in this dispatch, as standInAble judges it), which needs only its
 			// own end.
+			seenInCooldown()
 			var target time.Time
 			earlier := func(t time.Time) {
 				if !t.IsZero() && (target.IsZero() || t.Before(target)) {
@@ -1071,11 +1128,6 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		}
 		return nil
 	}
-	// cooled is every port the round loop has seen in a cooldown that it waited
-	// for (waitOutCooldown): a port is not used again until recheck has probed it
-	// once since its cooldown ended, whether it came out of it during a step of the
-	// wait or between two of them.
-	cooled := make(map[string]bool)
 	// recheck probes again the ports that were waited for and are out of cooldown
 	// now (regate), before anything is sent to them. The gate that gave a port its
 	// identity ran minutes ago, and the same rule applies as after a remembered
@@ -1103,7 +1155,6 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			return classifyTransport(endpointURLs(ordered), ctx.Err())
 		}
 		for _, ep := range eps {
-			delete(cooled, ep.URL)
 			if re.waiting[ep.URL] {
 				unreadable[ep.URL] = true
 			} else {
@@ -1111,7 +1162,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 		}
 		if len(re.gone) > 0 && len(ordered) == 0 {
-			return noEndpointError(refused)
+			return poolEmptied()
 		}
 		return nil
 	}
@@ -1121,11 +1172,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// ports that are out of it are probed again (recheck). A port that was never
 	// waited for is not.
 	waitOutCooldown := func(wait time.Duration) error {
-		for _, ep := range ordered {
-			if endpointInCooldown(ep.URL) {
-				cooled[ep.URL] = true
-			}
-		}
+		seenInCooldown()
 		if err := sleepCtx(ctx, min(wait, poolPaceInterval)); err != nil {
 			return classifyTransport(endpointURLs(ordered), err)
 		}
@@ -1355,6 +1402,16 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		return false
 	}
 
+	// untriedUnknownPort reports whether some port of the dispatch whose identity is
+	// unknown (a "?" key: its /health could not be read at the start) has not yet
+	// been sent job id alone, stuck or not.
+	untriedUnknownPort := func(id string) bool {
+		return slices.ContainsFunc(ordered, func(ep Endpoint) bool {
+			k := keyOf(ep.URL)
+			return unknownKey(k) && soloStuck[id][k] == "" && !soloOverran[id][ep.URL]
+		})
+	}
+
 	// canTake reports whether a split part may go to url.
 	canTake := func(live []string, url string) bool {
 		if len(live) == 1 && (soloStuck[live[0]][keyOf(url)] != "" || soloOverran[live[0]][url]) {
@@ -1390,15 +1447,21 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		if len(remaining) == 0 {
 			break
 		}
+		seenInCooldown()
 		if err := recheck(false); err != nil {
 			return results, err
 		}
 		// healthy is every endpoint that may take work this round: not in
-		// cooldown, and not soft-benched for a fault in this dispatch (see
-		// benched).
+		// cooldown, not soft-benched for a fault in this dispatch (see benched),
+		// and probed again since its last cooldown ended (cooled: only a port whose
+		// cooldown ended after the recheck above is still waiting for its probe).
 		var healthy []Endpoint
 		for _, ep := range ordered {
-			if !endpointInCooldown(ep.URL) && !benched(ep.URL) {
+			if endpointInCooldown(ep.URL) {
+				cooled[ep.URL] = true
+				continue
+			}
+			if !cooled[ep.URL] && !benched(ep.URL) {
 				healthy = append(healthy, ep)
 			}
 		}
@@ -1433,10 +1496,22 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				ErrPoolUnavailable, len(canaryRan)))
 		}
 		if len(healthy) == 0 {
+			if poolBeforePace != nil {
+				poolBeforePace()
+			}
 			if wait, ok := pace(); ok {
 				if err := waitOutCooldown(wait); err != nil {
 					return results, err
 				}
+				continue
+			}
+			if slices.ContainsFunc(ordered, func(ep Endpoint) bool { return !endpointInCooldown(ep.URL) && !benched(ep.URL) }) {
+				// A port came out of its cooldown after the healthy list was made
+				// (or is out of it but waiting for its probe: cooled), so the pool is
+				// not out of ports and has waited for nothing: look again, as
+				// resolvePending does when the last cooldown ended between its checks.
+				// The same two tests as healthy's, so this does not repeat for a port
+				// that is not usable.
 				continue
 			}
 			if len(lastErr) == 0 {
@@ -1840,7 +1915,17 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				// endpoint (it is never a second machine, countLimits).
 				stuckOn := maps.Clone(soloStuck[id])
 				maps.DeleteFunc(stuckOn, func(k, _ string) bool { return unknownKey(k) })
-				if len(stuckOn) > 0 && len(stuckOn) >= soloLimit {
+				// A verdict on ONE machine waits until the job has been sent to
+				// every port whose machine is not known (D66): such a port is never
+				// counted as a machine (countLimits), but it may well be a second
+				// one, and a file that would have been answered there must not be
+				// condemned for the first machine's hang. If that port cannot take
+				// the job in this dispatch (cooldown past the allowance, unreadable,
+				// benched), the part has nowhere to go and is deferred below with no
+				// strike and no verdict, not condemned on one machine's word. Two
+				// machines are the most a verdict ever asks for, so it does not
+				// apply to them.
+				if len(stuckOn) > 0 && len(stuckOn) >= soloLimit && (len(stuckOn) >= 2 || !untriedUnknownPort(id)) {
 					// Stuck by itself on soloLimit different machines: a verdict
 					// about this file, not about any worker. Byte-identical
 					// followers are the same audio and get the same verdict. It
@@ -2176,6 +2261,12 @@ var (
 	poolPaceInterval = 30 * time.Second
 	poolPaceMax      = 6 * time.Minute
 )
+
+// poolBeforePace is a test seam: when set, the round loop calls it between the
+// moment it finds no endpoint that can take work and the moment it asks how long
+// to wait (pace), which is where a cooldown that ends in between has to be
+// noticed. It is nil in production.
+var poolBeforePace func()
 
 // paceWait is how long to wait for an endpoint this dispatch has no evidence
 // against (no entry in lastErr) to come out of a cooldown an earlier dispatch
