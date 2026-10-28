@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-10-27
 
@@ -126,8 +126,10 @@ type serverBookVersionStore interface {
 	GetBookVersion(id string) (*database.BookVersion, error)
 	// GetBookVersionsByBookID: the purge-now handler's versions.PurgeVersion
 	// finds the book's active version with it, so it never deletes a file
-	// the book still plays.
+	// the book still plays; BookFilesAtPath and GetBookByFilePath find
+	// another live book that serves the file.
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
 	UpdateBookVersion(v *database.BookVersion) error
 	DeleteBookVersion(id string) error
 	// The version-group primary hand-off (versionprimary.EnsureStore) after
