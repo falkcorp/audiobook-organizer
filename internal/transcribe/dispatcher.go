@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-27
 
@@ -124,6 +124,13 @@ type poolOptions struct {
 	// canary sends the canary clip to one endpoint (see canaryFunc); nil is
 	// sendCanary. A test pool answers it like any other clip.
 	canary canaryFunc
+	// beforePace and beforePlacedPace are test seams, nil in production. The round
+	// loop calls beforePace between finding no endpoint that can take work and
+	// asking how long to wait (pace), and beforePlacedPace between finding that
+	// the split parts could be placed on none of the ports that can take work and
+	// asking the same: the two moments at which a cooldown that ends has to be
+	// noticed.
+	beforePace, beforePlacedPace func()
 }
 
 // dispatchPool is the pool round loop shared by every kind of job: gate,
@@ -214,8 +221,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		refused []gpuRefusal
 	)
 	// cooled is every port the dispatch has seen in a cooldown: a port is not
-	// given work, or taken as a stand-in, until it has been probed again once
-	// since its cooldown ended (recheck). The identity the dispatch froze for a
+	// given work until it has been probed again once since its cooldown ended
+	// (recheck; the healthy list leaves it out until then). A stand-in is not
+	// held to it: standInAble ends resolvePending's wait for a cooled stand-in
+	// whose cooldown is over, and the round loop's recheck probes it before the
+	// healthy list is made. The identity the dispatch froze for a
 	// port is only as old as its last probe, and a cooldown is minutes long, in
 	// which a tunnel can come back from another Mac (D60, D62). Every place that
 	// looks at a cooldown records the ports it finds in one (seenInCooldown), and
@@ -1182,11 +1192,17 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// whether it does: paceWait for a cooldown this dispatch has no evidence
 	// against, or one more step for a port that could not be read after a wait,
 	// whose retry is what drops it once the allowance is spent.
+	//
+	// A port whose machine is unknown (a "?" key) is never waited for: after the
+	// wait regate can only drop it (read now, it answers as a different worker than
+	// the nothing it was frozen as; still unreadable, it is not used), so waiting
+	// the pacing allowance for it ends with the same work undone.
 	pace := func() (time.Duration, bool) {
-		if wait, ok := paceWait(ordered, lastErr, paceUntil); ok {
+		known := slices.DeleteFunc(slices.Clone(ordered), func(ep Endpoint) bool { return unknownKey(keyOf(ep.URL)) })
+		if wait, ok := paceWait(known, lastErr, paceUntil); ok {
 			return wait, true
 		}
-		if slices.ContainsFunc(ordered, func(ep Endpoint) bool { return unreadable[ep.URL] && !endpointInCooldown(ep.URL) }) {
+		if slices.ContainsFunc(known, func(ep Endpoint) bool { return unreadable[ep.URL] && !endpointInCooldown(ep.URL) }) {
 			return max(min(poolPaceInterval, time.Until(paceUntil)), time.Millisecond), true
 		}
 		return 0, false
@@ -1403,12 +1419,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	}
 
 	// untriedUnknownPort reports whether some port of the dispatch whose identity is
-	// unknown (a "?" key: its /health could not be read at the start) has not yet
-	// been sent job id alone, stuck or not.
+	// unknown (a "?" key: its /health could not be read at the start) has not been
+	// shown to hang job id alone (soloStuck). A request that only outlived its
+	// ceiling there (soloOverran) is no evidence about the job, so it does not make
+	// the port tried: the verdict must not depend on whether the unknown port
+	// overran before or after the known machine hung.
 	untriedUnknownPort := func(id string) bool {
 		return slices.ContainsFunc(ordered, func(ep Endpoint) bool {
 			k := keyOf(ep.URL)
-			return unknownKey(k) && soloStuck[id][k] == "" && !soloOverran[id][ep.URL]
+			return unknownKey(k) && soloStuck[id][k] == ""
 		})
 	}
 
@@ -1496,8 +1515,8 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				ErrPoolUnavailable, len(canaryRan)))
 		}
 		if len(healthy) == 0 {
-			if poolBeforePace != nil {
-				poolBeforePace()
+			if opts.beforePace != nil {
+				opts.beforePace()
 			}
 			if wait, ok := pace(); ok {
 				if err := waitOutCooldown(wait); err != nil {
@@ -1640,6 +1659,20 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					if err := resolvePending(true); err != nil {
 						return results, err
 					}
+					continue
+				}
+				if opts.beforePlacedPace != nil {
+					opts.beforePlacedPace()
+				}
+				// A port that was cooled and is out of its cooldown now (it came out
+				// while recheck's probes were in flight, so healthy was made without
+				// it) may take the parts once it is probed: look again. Only a port
+				// that is still waiting for its probe: not every port out of
+				// cooldown, which includes the ones the parts cannot go to and would
+				// never end.
+				if slices.ContainsFunc(ordered, func(ep Endpoint) bool {
+					return cooled[ep.URL] && !endpointInCooldown(ep.URL) && !benched(ep.URL)
+				}) {
 					continue
 				}
 				// An endpoint benched by an earlier dispatch may still take the
@@ -1920,11 +1953,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				// counted as a machine (countLimits), but it may well be a second
 				// one, and a file that would have been answered there must not be
 				// condemned for the first machine's hang. If that port cannot take
-				// the job in this dispatch (cooldown past the allowance, unreadable,
-				// benched), the part has nowhere to go and is deferred below with no
-				// strike and no verdict, not condemned on one machine's word. Two
-				// machines are the most a verdict ever asks for, so it does not
-				// apply to them.
+				// the job in this dispatch (in cooldown, unreadable, benched, or
+				// its request only overran), the part has nowhere to go and ends
+				// the dispatch below as ErrWorkerStuck (D69): no strike and no
+				// verdict, but the dispatch counts toward the ops' stuck streak, so
+				// a pool that keeps hitting this stops the run instead of spinning
+				// on the same jobs. (When the unknown port's /health stays
+				// unreadable the error poolFailure builds is a recognised transport
+				// failure instead, which the ops count as an outage.) Two machines
+				// are the most a verdict ever asks for, so it does not apply to them.
 				if len(stuckOn) > 0 && len(stuckOn) >= soloLimit && (len(stuckOn) >= 2 || !untriedUnknownPort(id)) {
 					// Stuck by itself on soloLimit different machines: a verdict
 					// about this file, not about any worker. Byte-identical
@@ -2261,12 +2298,6 @@ var (
 	poolPaceInterval = 30 * time.Second
 	poolPaceMax      = 6 * time.Minute
 )
-
-// poolBeforePace is a test seam: when set, the round loop calls it between the
-// moment it finds no endpoint that can take work and the moment it asks how long
-// to wait (pace), which is where a cooldown that ends in between has to be
-// noticed. It is nil in production.
-var poolBeforePace func()
 
 // paceWait is how long to wait for an endpoint this dispatch has no evidence
 // against (no entry in lastErr) to come out of a cooldown an earlier dispatch

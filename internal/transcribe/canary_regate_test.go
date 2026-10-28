@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_regate_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2f7b1c84-6d39-4e05-8a1b-93c0d5e7f126
 // last-edited: 2026-10-27
 
@@ -88,16 +88,14 @@ func questionFrozenPool(t *testing.T, answer func(p *faultPool) func(url, id str
 }
 
 // atFirstPace runs fn d after the round loop first finds no endpoint that can take
-// work and is about to wait for a cooldown (poolBeforePace). The event, not the
+// work and is about to wait for a cooldown (poolOptions.beforePace). The event, not the
 // start of the test, starts the clock: a loaded -race agent that is slow to begin
 // the dispatch (its gate probes) cannot run fn before the dispatch has seen the
 // state fn changes.
-func atFirstPace(t *testing.T, d time.Duration, fn func()) {
+func atFirstPace(t *testing.T, p *faultPool, d time.Duration, fn func()) {
 	t.Helper()
 	var once sync.Once
-	old := poolBeforePace
-	poolBeforePace = func() { once.Do(func() { after(t, d, fn) }) }
-	t.Cleanup(func() { poolBeforePace = old })
+	p.beforePace = func() { once.Do(func() { after(t, d, fn) }) }
 }
 
 func sentOnPort(p *faultPool, url string) []string {
@@ -295,7 +293,7 @@ func TestPaceWait_APortThatChangesHandsDuringTheRoundLoopsWaitIsDroppedNotStored
 	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	atFirstPace(t, 20*time.Millisecond, func() {
+	atFirstPace(t, p, 20*time.Millisecond, func() {
 		p.h.setMachineID(port0, catwomanMachine)
 		clearCooldown(port0)
 		clearCooldown(port1)
@@ -329,7 +327,7 @@ func TestPaceWait_APortUnreadableAfterTheRoundLoopsWaitTakesNoWork(t *testing.T)
 	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	atFirstPace(t, 20*time.Millisecond, func() {
+	atFirstPace(t, p, 20*time.Millisecond, func() {
 		p.h.delayHealth(port0, time.Minute)
 		clearCooldown(port0)
 		clearCooldown(port1)
@@ -364,7 +362,7 @@ func TestPaceWait_APortThatStaysUnreadableBesideOneThatChangedHandsEndsAsChanged
 	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	atFirstPace(t, 20*time.Millisecond, func() {
+	atFirstPace(t, p, 20*time.Millisecond, func() {
 		p.h.setMachineID(port0, catwomanMachine)
 		p.h.delayHealth(port1, time.Minute)
 		clearCooldown(port0)
@@ -399,7 +397,7 @@ func TestChangedHands_AStuckPortBesideOneThatChangedHandsEndsDeferredNamingBoth(
 	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	atFirstPace(t, 20*time.Millisecond, func() {
+	atFirstPace(t, p, 20*time.Millisecond, func() {
 		p.h.wedge(port0)
 		p.h.setMachineID(port1, catwomanMachine)
 		clearCooldown(port0)
@@ -815,7 +813,7 @@ func TestSatOut_APortWhoseCooldownEndedDuringARoundIsProbedBeforeItIsGivenWork(t
 // F1 of review 10: the healthy list was made while both ports were in cooldown,
 // both cooldowns ended before the loop asked how long to wait, and the pool
 // answered ErrPoolUnavailable ("every endpoint ... in cooldown after waiting
-// 6m") having waited for nothing. poolBeforePace is the moment between the two.
+// 6m") having waited for nothing. poolOptions.beforePace is the moment between the two.
 func TestPaceWait_CooldownsThatEndBetweenTheHealthyListAndTheWaitAreNotAnOutage(t *testing.T) {
 	freshCanaryMemory(t)
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
@@ -827,13 +825,11 @@ func TestPaceWait_CooldownsThatEndBetweenTheHealthyListAndTheWaitAreNotAnOutage(
 	})
 	markEndpointFailure(p.h.eps[0].URL)
 	markEndpointFailure(p.h.eps[1].URL)
-	old := poolBeforePace
-	poolBeforePace = func() {
+	p.beforePace = func() {
 		for _, ep := range p.h.eps {
 			clearCooldown(ep.URL)
 		}
 	}
-	t.Cleanup(func() { poolBeforePace = old })
 	res, err := dispatchWith(testCtx(t), p, (&urlCanary{}).fn, 4)
 	if err != nil || len(res) != 4 {
 		t.Fatalf("res=%d err=%v, want the four jobs answered: nothing was waited for", len(res), err)
@@ -930,13 +926,14 @@ func TestChangedHands_APoolEmptiedByPortsThatChangedHandsBesideACapabilityRefusa
 	p.h.setHealthField(port2, map[string]any{"device": "cpu"})
 	markEndpointFailure(port0)
 	markEndpointFailure(port1)
-	atFirstPace(t, 20*time.Millisecond, func() {
+	atFirstPace(t, p, 20*time.Millisecond, func() {
 		p.h.setMachineID(port0, catwomanMachine)
 		p.h.setMachineID(port1, "eeee0005")
 		clearCooldown(port0)
 		clearCooldown(port1)
 	})
-	_, err := dispatchOn(testCtx(t), p.h.eps, []string{"gpu"}, p.send, (&urlCanary{}).fn, 4)
+	jobs := map[string]string{"chap0": "u", "chap1": "u", "chap2": "u", "chap3": "u"}
+	_, err := dispatchPool(testCtx(t), p.h.eps, []string{"gpu"}, jobs, p.opts((&urlCanary{}).fn), p.send)
 	if !errors.Is(err, errPortChangedHands) {
 		t.Fatalf("err = %v, want one that wraps errPortChangedHands", err)
 	}
@@ -946,4 +943,200 @@ func TestChangedHands_APoolEmptiedByPortsThatChangedHandsBesideACapabilityRefusa
 	if got := p.sendLog(); len(got) != 0 {
 		t.Errorf("sends = %v, want nothing sent (port %s is on the cpu)", got, port2)
 	}
+}
+
+// Review 11 of #4201. The part-placing path of the round loop (some port can take
+// work, but not THESE split parts) asked how long to wait with the same hole the
+// healthy list had: a port whose cooldown ended while recheck's probes were in
+// flight is still waiting for its probe when the healthy list is made, so it is
+// left out, and the wait found nothing in cooldown and ended the dispatch as a
+// stuck pool although the port could take the part.
+
+// placedAnyPool is a pool of robin on port 0, bat on port 1 and robin on port 2.
+// Ports 1 and 2 are in a cooldown an earlier dispatch set (no failure of this
+// dispatch), so the first round has port 0 only. chap1 alone hangs robin on
+// port 0, which is wedged afterwards: stuck on one machine of two, so there is no
+// verdict and the part must go to bat. Port 2, robin too, can never take it.
+// During the round port 2's cooldown ends; port 1 is still in cooldown when the
+// second round makes its healthy list (port 2 only).
+func placedAnyPool(t *testing.T) (*faultPool, endpointSender[string]) {
+	t.Helper()
+	freshCanaryMemory(t)
+	shortenPacing(t, 10*time.Millisecond, 10*time.Second)
+	p := machineFaultPool(t, []string{robinMachine, batMachine, robinMachine}, answerWithTranscripts)
+	t.Cleanup(func() {
+		for _, ep := range p.h.eps {
+			clearCooldown(ep.URL)
+		}
+	})
+	port0, port1, port2 := p.h.eps[0].URL, p.h.eps[1].URL, p.h.eps[2].URL
+	markEndpointFailure(port1)
+	markEndpointFailure(port2)
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		if _, ok := sub["chap1"]; ok && g.Endpoint.URL == port0 {
+			p.h.wedge(port0)
+			clearCooldown(port2)
+			return nil, &WorkerStuckError{URL: port0, After: time.Minute, Jobs: sortedIDs(sub)}
+		}
+		return p.send(ctx, g, sub, pf)
+	}
+	return p, send
+}
+
+func requirePlacedOnBat(t *testing.T, p *faultPool, res map[string]BatchResult, err error) {
+	t.Helper()
+	port1 := p.h.eps[1].URL
+	if err != nil {
+		t.Errorf("err = %v (stuck=%v): bat on port 1 was out of cooldown and could take the part", err, IsWorkerStuck(err))
+	}
+	if r := res["chap1"]; r.Endpoint != port1 || r.Text != "T:chap1" {
+		t.Errorf("chap1 = %+v, want it answered by bat on port 1", r)
+	}
+}
+
+// Control: bat's cooldown ends in the first round too, so the second round probes
+// it and the part goes there. Only the window below is the failure.
+func TestPlacedAny_ThePartGoesToThePortWhoseCooldownEndedDuringTheRound(t *testing.T) {
+	p, send := placedAnyPool(t)
+	port1, port2 := p.h.eps[1].URL, p.h.eps[2].URL
+	inner := send
+	send = func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		clearCooldown(port1)
+		clearCooldown(port2)
+		return inner(ctx, g, sub, pf)
+	}
+	res, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), send)
+	requirePlacedOnBat(t, p, res, err)
+}
+
+// The window, taken at the moment the loop is about to ask how long to wait
+// (beforePlacedPace): bat's cooldown ends there, and bat is cooled and unprobed.
+func TestPlacedAny_ACooledPortWhoseCooldownEndsBeforeTheWaitIsProbedNotGivenUpOn(t *testing.T) {
+	p, send := placedAnyPool(t)
+	port1 := p.h.eps[1].URL
+	var once sync.Once
+	p.beforePlacedPace = func() { once.Do(func() { clearCooldown(port1) }) }
+	res, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), send)
+	requirePlacedOnBat(t, p, res, err)
+}
+
+// The same window opened by the events that open it in production: bat's
+// cooldown ends while the probe of port 2 (recheck's, in the second round) is in
+// flight, after recheck made its list.
+func TestPlacedAny_ACooldownThatEndsWhileRechecksProbesAreInFlightIsNotGivenUpOn(t *testing.T) {
+	p, send := placedAnyPool(t)
+	port0, port1, port2 := p.h.eps[0].URL, p.h.eps[1].URL, p.h.eps[2].URL
+	var armed atomic.Bool
+	var once sync.Once
+	for n := 1; n <= 6; n++ {
+		p.h.onHealthHit(port2, n, func() {
+			if armed.Load() {
+				once.Do(func() { clearCooldown(port1) })
+			}
+		})
+	}
+	inner := send
+	send = func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		if _, ok := sub["chap1"]; ok && g.Endpoint.URL == port0 {
+			armed.Store(true)
+		}
+		return inner(ctx, g, sub, pf)
+	}
+	res, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), send)
+	requirePlacedOnBat(t, p, res, err)
+}
+
+// S1 had a verdict that depended on order. The same evidence (robin hung chap1
+// alone and is wedged; the unknown port only overran it, not wedged) condemned
+// when the unknown port overran first and deferred when robin hung first: an
+// overran request is no evidence about the file, so it must not make the unknown
+// port "tried". Both orders end deferred (D69: ErrWorkerStuck, counted toward the
+// ops' stuck streak), with no verdict and no strike.
+func unknownPortOverranPool(t *testing.T) (*faultPool, string, string) {
+	t.Helper()
+	freshCanaryMemory(t)
+	shortenHealthProbe(t, 150*time.Millisecond)
+	shortenPacing(t, 10*time.Millisecond, 3*time.Second)
+	p := machineFaultPool(t, []string{robinMachine, batMachine}, answerWithTranscripts)
+	t.Cleanup(func() {
+		for _, ep := range p.h.eps {
+			clearCooldown(ep.URL)
+		}
+	})
+	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
+	p.h.delayHealth(port1, time.Minute) // "?" at the gate
+	return p, port0, port1
+}
+
+func requireDeferredStuck(t *testing.T, res map[string]BatchResult, err error) {
+	t.Helper()
+	if r, ok := res["chap1"]; ok {
+		t.Errorf("chap1 = %+v: a verdict or a strike on one machine's word, with the unknown port's request only overran", r)
+	}
+	if !IsWorkerStuck(err) || IsPoolUnavailable(err) {
+		t.Errorf("err = %v, want a stuck pool (D69: no strike, counted toward the stuck streak)", err)
+	}
+}
+
+func TestUnknownPort_AnUnknownPortThatOverranBeforeTheKnownMachineHungDefersTheJobLikeTheReverseOrder(t *testing.T) {
+	p, port0, port1 := unknownPortOverranPool(t)
+	markEndpointFailure(port0) // robin sits out the first round, so the unknown port is tried first
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		if _, ok := sub["chap1"]; ok {
+			if g.Endpoint.URL == port1 {
+				p.h.healthDelay.Delete(strings.TrimPrefix(port1, "http://")) // readable, not wedged: overran
+				clearCooldown(port0)
+				return nil, &WorkerStuckError{URL: port1, After: time.Minute, Jobs: sortedIDs(sub)}
+			}
+			p.h.wedge(port0)
+			return nil, &WorkerStuckError{URL: port0, After: time.Minute, Jobs: sortedIDs(sub)}
+		}
+		return p.send(ctx, g, sub, pf)
+	}
+	res, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), send)
+	requireDeferredStuck(t, res, err)
+}
+
+func TestUnknownPort_AKnownMachineThatHungBeforeTheUnknownPortOverranDefersTheJob(t *testing.T) {
+	p, port0, port1 := unknownPortOverranPool(t)
+	eps := []Endpoint{p.h.eps[0], p.h.eps[1]}
+	eps[1].Priority = 5 // robin first
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		if _, ok := sub["chap1"]; ok {
+			if g.Endpoint.URL == port1 {
+				p.h.healthDelay.Delete(strings.TrimPrefix(port1, "http://"))
+				return nil, &WorkerStuckError{URL: port1, After: time.Minute, Jobs: sortedIDs(sub)}
+			}
+			p.h.wedge(port0)
+			return nil, &WorkerStuckError{URL: port0, After: time.Minute, Jobs: sortedIDs(sub)}
+		}
+		return p.send(ctx, g, sub, pf)
+	}
+	res, err := dispatchPool(testCtx(t), eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), send)
+	requireDeferredStuck(t, res, err)
+}
+
+// SF1: an unknown port in cooldown can never take the job in this dispatch (read
+// after the wait it answers as a different worker than the nothing it was frozen
+// as; still unreadable it is not used), so the dispatch must not wait the whole
+// pacing allowance (six minutes in production) for it before ending the same way.
+func TestUnknownPort_ADispatchDoesNotWaitThePacingAllowanceForAnUnknownPortThatCanNeverTakeTheJob(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenHealthProbe(t, 150*time.Millisecond)
+	shortenPacing(t, 10*time.Millisecond, 2*time.Second)
+	p := machineFaultPool(t, []string{robinMachine, batMachine}, answerWithTranscripts)
+	t.Cleanup(func() {
+		for _, ep := range p.h.eps {
+			clearCooldown(ep.URL)
+		}
+	})
+	port1 := p.h.eps[1].URL
+	p.h.delayHealth(port1, time.Minute)
+	markEndpointFailure(port1)
+	start := time.Now()
+	res, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), hangingChap1(p))
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %s: waited for a port that regate can only drop (pacing allowance %s)", took.Round(10*time.Millisecond), poolPaceMax)
+	}
+	requireDeferredStuck(t, res, err)
 }

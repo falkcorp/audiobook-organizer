@@ -287,11 +287,24 @@ port of it reports its id and is asked.
 
 A lone job that hangs the only known machine is no longer condemned on that
 machine's word while a port whose machine is unknown (a `?` key) has not been
-sent the job: that port may be a second machine, and the job is sent to it first.
-If it cannot take the job in this dispatch (cooldown past the allowance, benched,
-unreadable), or hangs without its `/health` being readable, the job is deferred
-with no verdict and no strike. Once the job has been stuck on that port too the
-verdict stands, naming only the machines.
+shown to hang it: that port may be a second machine, so the job is sent to it
+first. A request there that merely outlived its ceiling (the worker was not
+wedged) is no evidence about the file and does not count as having tried it, so
+the outcome does not depend on the order the two ports failed in. If the unknown
+port cannot take the job in this dispatch (it is in cooldown, unreadable,
+benched, or only overran), the job is not condemned and not struck, and the
+dispatch ends as `ErrWorkerStuck`: it counts toward the ops' stuck streak, so a
+pool that keeps hitting this stops the run instead of spinning on the same jobs
+(when the unknown port's `/health` stays unreadable the error is a recognised
+transport failure instead, which the ops count as an outage). An unknown port is
+never waited for through a cooldown, since after the wait it could only be
+dropped: the dispatch ends at once and not after the pacing allowance (six
+minutes). Once the job has been stuck on that port too the verdict stands,
+naming only the machines.
+
+A pool whose split parts could be placed on none of the ports that could take
+work ended as a stuck pool when a port's cooldown ended while the second probe
+of the round was in flight; it now looks again and probes that port first.
 
 A job's condemnation keeps the machines it was stuck on alone, dropped or not: a
 port dropped in the middle of a dispatch (it changed hands, or could not be read

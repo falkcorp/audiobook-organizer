@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_cooldown_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 768f5a2c-e381-4b86-8e01-15df198a14cb
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -69,7 +69,7 @@ func dispatchWith(ctx context.Context, p *faultPool, canary canaryFunc, n int) (
 	for _, id := range loopers(n, "chap") {
 		jobs[id] = "unused"
 	}
-	return dispatchPool(ctx, p.h.eps, nil, jobs, poolOptions{canary: canary}, p.send)
+	return dispatchPool(ctx, p.h.eps, nil, jobs, p.opts(canary), p.send)
 }
 
 func requireNoStrikes(t *testing.T, res map[string]BatchResult) {

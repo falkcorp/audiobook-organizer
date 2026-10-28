@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package transcribe
 
@@ -56,6 +56,15 @@ type faultPool struct {
 	mu       sync.Mutex
 	sends    []sendRecord
 	canaries []string // the endpoints sent the canary clip, in order
+
+	// beforePace and beforePlacedPace are the dispatch's test seams (poolOptions),
+	// passed on by opts.
+	beforePace, beforePlacedPace func()
+}
+
+// opts is the poolOptions of a dispatch of this pool with the given canary.
+func (p *faultPool) opts(canary canaryFunc) poolOptions {
+	return poolOptions{canary: canary, beforePace: p.beforePace, beforePlacedPace: p.beforePlacedPace}
 }
 
 // canaryJobID is the id a faultPool's answer function sees for the canary clip.
