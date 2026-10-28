@@ -201,10 +201,12 @@ one the link still named. A wrong match only steers a file further away.
 
 #### A port that changes hands while a dispatch waits is not credited to the machine that used to be behind it
 
-A pool probes a port again after every wait (the wait for a remembered machine's
-cooldown, and the round loop's wait for a port an earlier dispatch put into
-cooldown) and uses it only if the worker that answers then is the one the
-dispatch knew when it began. Any difference drops the port from the dispatch like
+A pool probes a port again once a cooldown it was seen in has ended, and uses it
+only if the worker that answers then is the one the dispatch knew when it began.
+That covers the wait for a remembered machine's cooldown, the round loop's wait
+for a port an earlier dispatch put into cooldown, a stand-in whose cooldown ends
+inside the first wait, and a port whose cooldown ends while the dispatch works
+other ports or while its own first probe is in flight. Any difference drops the port from the dispatch like
 a refusal: one machine for another, a machine's port that was refused and now
 answers weakly, a worker that cannot report an id where one could (or the
 reverse), a worker that gained a machine id since it was frozen as `u:`, and a
@@ -228,11 +230,18 @@ other difference defers its jobs.
 
 The round loop's wait steps by `poolPaceInterval`, as the wait for a remembered
 machine does, so a cooldown that another dispatch clears early is noticed at once
-and not after the whole cooldown (up to five minutes). Each port the wait was
-for is probed once after its cooldown ends, before it takes work. A port that
+and not after the whole cooldown (up to five minutes). Every port seen in a
+cooldown (as the dispatch begins, in each step of a wait, and each time the round
+loop makes its list of ports that can take work) is probed once after that
+cooldown ends, before it takes work or is taken as a stand-in: one `/health` per
+port per cooldown end. A port that
 cannot be read then is kept out of the work and read again at the later steps of
 the wait; it is dropped once the pacing allowance is spent, and while other ports
 keep working it simply stays out.
+
+A pool whose last cooldown ended between the round loop making its list of ports
+and asking how long to wait used to answer `ErrPoolUnavailable` ("every endpoint
+... in cooldown after waiting 6m") having waited for nothing; it now looks again.
 
 A pool left with nothing to send to because its ports changed hands ended as
 "refused by capability requirements", which sends an operator hunting for a box
@@ -244,8 +253,11 @@ With stuck ports among them the error names them, but it is not a stuck pool: th
 ports that changed hands are not wedged and the next dispatch's gate keys them,
 so the ops do not count the page toward their stuck streak. A pool of nothing but
 stuck ports is still a stuck pool, a pool of nothing but unreachable ports is
-still `ErrPoolUnavailable`, and a capability refusal beside them keeps the error
-that names it.
+still `ErrPoolUnavailable`, and a capability refusal the wait itself made beside
+them keeps the error that names it. Only the refusals made since the dispatch
+began are what the error is about: a port the start gate refused for what it
+offers (no GPU) was never part of the pool, so it does not turn a pool emptied by
+ports that changed hands into "refused by capability requirements".
 
 #### A port that identifies no machine is never counted as one, and only a port that reports a machine's id answers for it
 
@@ -272,6 +284,14 @@ itself and leaves the machine's failure standing; the machine is still asked on
 any port that reports its id. The cost is that a machine which restarted behind a
 port refused in between takes work on that port, as a worker of its own, until a
 port of it reports its id and is asked.
+
+A lone job that hangs the only known machine is no longer condemned on that
+machine's word while a port whose machine is unknown (a `?` key) has not been
+sent the job: that port may be a second machine, and the job is sent to it first.
+If it cannot take the job in this dispatch (cooldown past the allowance, benched,
+unreadable), or hangs without its `/health` being readable, the job is deferred
+with no verdict and no strike. Once the job has been stuck on that port too the
+verdict stands, naming only the machines.
 
 A job's condemnation keeps the machines it was stuck on alone, dropped or not: a
 port dropped in the middle of a dispatch (it changed hands, or could not be read

@@ -1,5 +1,5 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
 // last-edited: 2026-10-27
 
@@ -395,6 +395,51 @@ type splitHarness struct {
 	// over what machineHarness started it with (see setHealthField): a worker
 	// whose health changed with its identity intact.
 	healthField sync.Map
+	// healthHits counts the /health requests each worker ("host:port" -> int) has
+	// been asked, and healthHooks holds what runs on the Nth one (see onHealthHit).
+	healthMu    sync.Mutex
+	healthHits  map[string]int
+	healthHooks map[string][]healthHook
+}
+
+// healthHook is what onHealthHit runs on the n-th /health request of a worker.
+type healthHook struct {
+	n  int
+	fn func()
+}
+
+// onHealthHit runs fn on the n-th /health request the worker at url is asked
+// (counting from 1, every request), after that request's answer is made and
+// before it is written: the answer reports the worker as it was, and what fn
+// changes (setMachineID, delayHealth, a cooldown) applies from the next request
+// on. A test that must change a worker after the dispatch's gate has read it
+// uses the gate's own request (n = 1) as the event instead of a timer, which a
+// loaded -race agent can run before the dispatch has started.
+func (h *splitHarness) onHealthHit(url string, n int, fn func()) {
+	h.healthMu.Lock()
+	defer h.healthMu.Unlock()
+	if h.healthHooks == nil {
+		h.healthHooks = make(map[string][]healthHook)
+	}
+	host := strings.TrimPrefix(url, "http://")
+	h.healthHooks[host] = append(h.healthHooks[host], healthHook{n: n, fn: fn})
+}
+
+// healthHit counts a /health request of host and returns the hooks it fires.
+func (h *splitHarness) healthHit(host string) []func() {
+	h.healthMu.Lock()
+	defer h.healthMu.Unlock()
+	if h.healthHits == nil {
+		h.healthHits = make(map[string]int)
+	}
+	h.healthHits[host]++
+	var fire []func()
+	for _, k := range h.healthHooks[host] {
+		if k.n == h.healthHits[host] {
+			fire = append(fire, k.fn)
+		}
+	}
+	return fire
 }
 
 // wedge marks the worker at url as wedged from now on.
