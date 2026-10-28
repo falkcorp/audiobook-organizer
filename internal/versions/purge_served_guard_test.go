@@ -1,5 +1,5 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
 // last-edited: 2026-10-28
 
@@ -1106,14 +1106,26 @@ func TestPurgeRefusesWhenNothingTheBookServesExists(t *testing.T) {
 			if mode == "purge" {
 				ver, _ := f.store.GetBookVersion(v.ID)
 				err := PurgeVersion(f.store, ver, testGuard)
-				var ct *CannotTellError
-				if !errors.Is(err, ErrPurgeCannotTell) || !errors.As(err, &ct) || !strings.Contains(err.Error(), "unknown") {
-					t.Fatalf("PurgeVersion err = %v, want a *CannotTellError saying what is unknown", err)
+				var ns *NothingServedError
+				if !errors.Is(err, ErrPurgeNothingServed) || !errors.As(err, &ns) || !strings.Contains(err.Error(), "serves nothing that exists on disk") {
+					t.Fatalf("PurgeVersion err = %v, want a *NothingServedError saying the book serves nothing that exists", err)
+				}
+				if errors.Is(err, ErrPurgeCannotTell) {
+					t.Fatalf("PurgeVersion err = %v matches ErrPurgeCannotTell: it is the book's path that is wrong, not a drive", err)
+				}
+				if ns.BookPath != f.active || len(ns.Files) == 0 || ns.Files[0].Path != f.active {
+					t.Errorf("NothingServedError path = %q files = %+v, want the book's path %s first", ns.BookPath, ns.Files, f.active)
 				}
 			} else {
 				res = f.afterWindow()
-				if res.Purged != 0 || len(res.CannotTell) != 1 || res.CannotTell[0].VersionID != v.ID {
-					t.Fatalf("result = %+v, want nothing purged and the version listed under CannotTell", res)
+				if res.Purged != 0 || len(res.NothingServed) != 1 || res.NothingServed[0].VersionID != v.ID {
+					t.Fatalf("result = %+v, want nothing purged and the version listed under NothingServed", res)
+				}
+				if len(res.CannotTell) != 0 || res.Failed != 0 {
+					t.Fatalf("result = %+v, want it filed under NothingServed only, not CannotTell or Failed", res)
+				}
+				if got := res.NothingServed[0]; got.BookPath != f.active || got.BookID != f.book.ID {
+					t.Errorf("NothingServed entry = %+v, want the book %s and its path %s", got, f.book.ID, f.active)
 				}
 			}
 			if !onDisk(slotFile) {

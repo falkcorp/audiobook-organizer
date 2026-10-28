@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.test.ts
-// version: 1.2.1
+// version: 1.3.0
 // guid: 63a5ee65-33c3-4d7d-b8dc-cc5de376cdcd
 // last-edited: 2026-10-28
 
@@ -30,6 +30,10 @@ describe('parseTrashCleanupResult', () => {
       cannot_tell: 0,
       cannot_tell_version_ids: [],
       cannot_tell_book_ids: [],
+      nothing_served: 0,
+      nothing_served_version_ids: [],
+      nothing_served_book_ids: [],
+      nothing_served_file_paths: [],
       served_kept: 0,
       served_kept_version_ids: [],
       served_kept_book_ids: [],
@@ -80,6 +84,22 @@ describe('parseTrashCleanupResult', () => {
     expect(r?.served_kept_file_paths).toEqual(['/lib/Gotham/Year One/part1.m4b']);
   });
 
+  it("reads the nothing-served set: ids, distinct books and the books' own paths", () => {
+    const r = parseTrashCleanupResult({
+      purged: 0,
+      nothing_served: 2,
+      nothing_served_version_ids: ['v-a', 'v-b'],
+      nothing_served_book_ids: ['b-a', 'b-a'],
+      nothing_served_file_paths: ['/lib/Gotham/Zero Year/zero-year.m4b'],
+    });
+    expect(r?.nothing_served).toBe(2);
+    expect(cleanupVersionIds(r!, 'nothing_served')).toEqual(['v-a', 'v-b']);
+    expect(cleanupBookIds(r!, 'nothing_served')).toEqual(['b-a']);
+    expect(r?.nothing_served_file_paths).toEqual(['/lib/Gotham/Zero Year/zero-year.m4b']);
+    // Not mixed up with the cannot-tell set.
+    expect(cleanupVersionIds(r!, 'cannot_tell')).toEqual([]);
+  });
+
   it('drops non-string ids and non-numeric counts', () => {
     const r = parseTrashCleanupResult({ purged: 'x', kept_version_ids: ['v1', 7, null] });
     expect(r?.purged).toBe(0);
@@ -102,6 +122,11 @@ describe('links', () => {
     expect(cleanupVersionsLink('op-3', 'cannot_tell')).toBe('/versions?op=op-3&set=cannot_tell');
     expect(cleanupSetTab('cannot_tell')).toBe('trash');
     expect(parseCleanupSet('cannot_tell')).toBe('cannot_tell');
+    expect(cleanupVersionsLink('op-5', 'nothing_served')).toBe(
+      '/versions?op=op-5&set=nothing_served'
+    );
+    expect(cleanupSetTab('nothing_served')).toBe('trash');
+    expect(parseCleanupSet('nothing_served')).toBe('nothing_served');
     expect(cleanupVersionsLink('op-4', 'served_kept')).toBe('/versions?op=op-4&set=served_kept');
     expect(cleanupSetTab('served_kept')).toBe('trash');
     expect(parseCleanupSet('served_kept')).toBe('served_kept');

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/trash_cleanup_failure_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e2c4a17-5b83-4d60-a1f9-0c7d3e8b5a42
 // last-edited: 2026-10-28
 
@@ -239,5 +239,38 @@ func TestRunTrashCleanup_RepeatedMergeStopsWarnWithoutFailingTheOp(t *testing.T)
 	}
 	if !warned {
 		t.Errorf("no warning about the repeated stops in %v (levels %v)", rep.logs, rep.levels)
+	}
+}
+
+// A version left in the trash because its book serves nothing that exists on disk
+// is its own line in the result and the log, carrying the book's path (the thing
+// to fix), at Warn, not a failure, and not the "cannot tell / drive down" wording.
+func TestRunTrashCleanup_NothingServedIsItsOwnBucketWithTheBookPath(t *testing.T) {
+	res := versions.CleanupResult{
+		NothingServed: []versions.KeptVersion{{
+			VersionID: "ver-hush", BookID: "book-hush", BookPath: "/lib/Gotham/Hush/hush.m4b",
+			Files: []database.PurgeFileNote{{Path: "/lib/Gotham/Hush/hush.m4b", Reason: "no such file or directory"}},
+		}},
+	}
+	p := &Plugin{deps: trashCleanupDeps{res: res}}
+	rep := &levelReporter{}
+	if err := p.runTrashCleanup(context.Background(), nil, rep); err != nil {
+		t.Fatalf("runTrashCleanup = %v, want nil: a book that serves nothing is not a failure of the night", err)
+	}
+	got := rep.result.(TrashCleanupResult)
+	if got.NothingServed != 1 || got.CannotTell != 0 || got.Failed != 0 ||
+		len(got.NothingServedVersionIDs) != 1 || got.NothingServedVersionIDs[0] != "ver-hush" ||
+		len(got.NothingServedBookIDs) != 1 || got.NothingServedBookIDs[0] != "book-hush" ||
+		len(got.NothingServedFilePaths) != 1 || got.NothingServedFilePaths[0] != "/lib/Gotham/Hush/hush.m4b" {
+		t.Errorf("result = %#v, want the version, book and the book's path under nothing_served only", got)
+	}
+	joined := strings.Join(rep.logs, "\n")
+	for _, want := range []string{"serves nothing that exists on disk", "/lib/Gotham/Hush/hush.m4b", "their book serves nothing that exists on disk (versions ver-hush)"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("logs %q do not contain %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "drive that is down") {
+		t.Errorf("logs %q describe a nothing-served version as a down drive", joined)
 	}
 }

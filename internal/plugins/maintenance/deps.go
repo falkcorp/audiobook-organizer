@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.102.1
+// version: 1.102.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-28
 
@@ -729,7 +729,8 @@ type CleanupRunners interface {
 	// result also names the versions purged with files left on disk (KeptFiles),
 	// the versions left in the trash because a live book still serves their
 	// files (Kept), the purges that gave up for good (NeedsAttention) and the
-	// ones that could not tell whether their files are gone (CannotTell): none
+	// ones that could not tell whether their files are gone (CannotTell) and the
+	// ones whose book serves nothing that exists on disk (NothingServed): none
 	// is a failure, and all must be reported.
 	CleanupTrashedVersions() (versions.CleanupResult, error)
 	// PruneOldLogs prunes legacy operation log rows and system log rows older

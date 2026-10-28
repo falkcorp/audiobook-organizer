@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -266,8 +266,8 @@ func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion)
 		// answer says repair is needed and does not invite a retry, which the
 		// lifecycle refuses anyway (versions.ErrVersionSwapping).
 		if errors.Is(err, versions.ErrSwapIncomplete) {
-			slog.Error("swap before trashing the active version did not finish; the versions are left in swapping_out/swapping_in and the version was not trashed",
-				"book", ver.BookID, "from", ver.ID, "to", target.ID, "err", err)
+			versionLifecycleLog.Error("swap before trashing the active version did not finish; book %s versions %s -> %s are left in swapping_out/swapping_in and the version was not trashed: %v",
+				ver.BookID, ver.ID, target.ID, err)
 			httputil.RespondWithError(c, http.StatusInternalServerError,
 				"the version was not trashed. Switching the book to version "+target.ID+" moved files and then could not finish: "+
 					"the book's versions are stuck mid-swap (swapping_out / swapping_in) and its files may be in new places. "+
@@ -439,6 +439,15 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		// has not settled for several attempts becomes purge_failed (the branch
 		// below) and can be hard-deleted.
 		if errors.Is(err, versions.ErrPurgeCannotTell) {
+			httputil.RespondWithConflict(c, err.Error())
+			return
+		}
+		// The book serves nothing that exists on disk (its path is stale or lost,
+		// or a folder with no file in it): the guard has nothing to compare the
+		// version's files against, so nothing was deleted and the version is
+		// still in the trash. The book's path is what to fix, or restore the
+		// version; the error names it.
+		if errors.Is(err, versions.ErrPurgeNothingServed) {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}

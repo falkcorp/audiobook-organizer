@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-28-trash-active-version-swaps-first-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c4e8a2d6-3f17-4b59-8d0a-9e1b6f7c2a35 -->
 <!-- last-edited: 2026-10-28 -->
 
@@ -44,9 +44,24 @@ then trashes the old one.
   book's audio or leaving a book stuck half-switched, so every later attempt to
   trash a version of it failed.
 - **The clean-up also refuses to delete when it cannot find what the book plays.**
-  If none of the files the book is recorded as playing is actually on disk, the
-  clean-up cannot tell what is in use, so it leaves the trashed version alone
-  instead of guessing.
+  If none of the files the book is recorded as playing is actually on disk, or the
+  book's path is a folder with no file in it, the clean-up cannot tell what is in
+  use, so it leaves the trashed version alone instead of guessing. This now has its
+  own line in the clean-up report, with the book's path to fix, instead of being
+  described as "files missing, or a drive that is down".
+- **A missing file stops the switch.** If a version's audio file is not where its
+  record says it is, the switch refuses and says which file is missing. An earlier
+  form took a stray file with the same name found nearby to be that version's audio
+  and moved it. The switch also refuses to move a file onto a name that is already
+  taken, and checks the storage folders themselves (a shortcut or a plain file in
+  their place, or one pointing outside the book's folder) before it moves anything.
+- **Undoing a failed switch never overwrites anything.** It puts back exactly the
+  files that this attempt moved, and if one of their old names has been taken in
+  the meantime it reports that rather than replacing what is there.
+- **Trying again after a half-finished switch does not make it worse.** A version
+  that is stuck in the middle of a switch cannot be trashed or switched again, and
+  the error says plainly that the book needs repair and that deleting again will
+  not help.
 - **Versions set aside by the library are never switched in.** A "retired"
   version holds files that belong to another book. The switch refuses to touch
   one, in either direction, and the check is in place before anything is written.
@@ -67,6 +82,12 @@ showing the trashed version's files, and any other way of removing them could
 still lose them.
 
 ## Not done
+
+A book left stuck in the middle of a switch (it has no playing version, and the
+library may pick up a second one) is not listed anywhere yet, and there is no
+automatic repair; that is tracked as a follow-up (TODO-SWAP-STUCK-RECOVERY). It
+needs a failure after the files have moved, such as the database refusing a write,
+and the change now refuses the cases that used to cause it.
 
 Today nothing in the app puts another version's files into that version's own
 storage folder, so for most books the switch will answer "no other version can take

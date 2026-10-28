@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6255d3b3-6c19-482d-a750-5e14a4ad74e5
 // last-edited: 2026-10-28
 
@@ -78,6 +78,39 @@ describe('TrashCleanupResultPanel', () => {
     );
     expect(line).toHaveTextContent('left alone');
     expect(line).toHaveTextContent('Nothing was deleted');
+    // It is the drive-down case: the book-path wording belongs to nothing_served.
+    expect(line).not.toHaveTextContent('serves nothing');
+  });
+
+  it('gives a book that serves nothing on disk its own line, with the book path to fix', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: {
+        purged: 0,
+        nothing_served: 1,
+        nothing_served_version_ids: ['v-orphan'],
+        nothing_served_book_ids: ['book-zero-year'],
+        nothing_served_file_paths: ['/lib/Gotham/Zero Year/zero-year.m4b'],
+      },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-5" />);
+
+    const line = await screen.findByTestId('trash-cleanup-nothing_served');
+    expect(screen.getByRole('link', { name: '1 version' })).toHaveAttribute(
+      'href',
+      '/versions?op=op-night-5&set=nothing_served'
+    );
+    expect(line).toHaveTextContent('left in the trash');
+    expect(line).toHaveTextContent('the book serves nothing that exists on disk');
+    expect(line).toHaveTextContent("Fix the book's path");
+    expect(line).toHaveTextContent('Nothing was deleted');
+    // Not the drive-down wording, and not filed under cannot-tell.
+    expect(line).not.toHaveTextContent('drive that is down');
+    expect(screen.queryByTestId('trash-cleanup-cannot_tell')).not.toBeInTheDocument();
+
+    const button = screen.getByRole('button', { name: '1 book path to fix' });
+    expect(screen.queryByText('/lib/Gotham/Zero Year/zero-year.m4b')).not.toBeInTheDocument();
+    await userEvent.setup().click(button);
+    expect(await screen.findByText('/lib/Gotham/Zero Year/zero-year.m4b')).toBeInTheDocument();
   });
 
   it('links the served-file count to its versions and says nothing was deleted', async () => {

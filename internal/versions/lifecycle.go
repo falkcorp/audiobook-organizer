@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -327,6 +327,38 @@ func (e *CannotTellError) Error() string {
 
 func (e *CannotTellError) Is(target error) bool { return target == ErrPurgeCannotTell }
 
+// ErrPurgeNothingServed is what a *NothingServedError matches (errors.Is): the
+// purge of a trashed version deleted nothing because the book does not serve a
+// single file that exists on disk, so the guard has nothing to compare the
+// version's files against. It is not ErrPurgeCannotTell: nothing here is about a
+// drive that may be down or a purge that may have finished; the book's own path
+// is wrong (a stale or lost FilePath, an empty folder) and only fixing the book,
+// or restoring the version, lets the purge go on.
+var ErrPurgeNothingServed = errors.New("the book serves nothing that exists on disk")
+
+// NothingServedError carries the book's path and the paths it serves, with why
+// none of them counts, for an ErrPurgeNothingServed.
+type NothingServedError struct {
+	VersionID string
+	BookID    string
+	// BookPath is the book's FilePath: what to fix. Empty when the book has none.
+	BookPath string
+	// Files are the paths the book is taken to serve (its FilePath and the rows
+	// of its active version), each with why it does not count.
+	Files []database.PurgeFileNote
+}
+
+func (e *NothingServedError) Error() string {
+	where := "the book has no file path"
+	if e.BookPath != "" {
+		where = fmt.Sprintf("the book's path is %s", e.BookPath)
+	}
+	return fmt.Sprintf("version %s of book %s not purged: %v (%s); fix the book's path, or restore the version: %s",
+		e.VersionID, e.BookID, ErrPurgeNothingServed, where, notePaths(e.Files))
+}
+
+func (e *NothingServedError) Is(target error) bool { return target == ErrPurgeNothingServed }
+
 // PurgeUndecidedEscalateAfter is how many purge attempts in a row, while the
 // version is purging, may leave a path unsettled with nothing unlinked before the
 // version moves to purge_failed. The nightly cleanup is one attempt a night, so
@@ -406,10 +438,12 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGua
 //
 // A trashed version is also not purged while the book is not known to serve
 // anything that exists: when none of the paths the book serves (its FilePath, the
-// rows of its active version) is on disk the guard has nothing to compare
-// against, and "nothing served" would be a guess. The purge then returns a
-// *CannotTellError (errors.Is ErrPurgeCannotTell) and leaves the version in the
-// trash, restorable (servedGuard.requireServedFileOnDisk).
+// rows of its active version) is on disk, or the only one is a folder with no
+// file in it, the guard has nothing to compare against, and "nothing served"
+// would be a guess. The purge then returns a *NothingServedError (errors.Is
+// ErrPurgeNothingServed, not ErrPurgeCannotTell: the book's path is what is
+// wrong, not a drive) and leaves the version in the trash, restorable
+// (servedGuard.requireServedFileOnDisk).
 //
 // It never removes a file that some other book_file row still names. A
 // retired version keeps the rows of a book that was retired into this one's
@@ -465,7 +499,9 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGua
 // restore is refused (database.ErrVersionPurging). A trashed version with
 // nothing removable stays in the trash, restorable: the error is a
 // *CannotTellError (errors.Is ErrPurgeCannotTell) naming the paths and why, when
-// all that is in the way is "cannot tell", and the version is not touched.
+// all that is in the way is "cannot tell", and the version is not touched. The
+// same holds, with a *NothingServedError (errors.Is ErrPurgeNothingServed), when
+// the book serves nothing that exists on disk.
 //
 // A file that cannot be removed or decided leaves the version purging when the
 // failure may pass (a lookup, a stat, EIO): marking it purged would orphan the
@@ -1298,6 +1334,14 @@ type CleanupResult struct {
 	// PurgeUndecidedEscalateAfter. The paths and reasons are in Files. Not a
 	// failure (the library may simply be down) and not counted in Failed.
 	CannotTell []KeptVersion
+	// NothingServed are the versions left in the trash, untouched and
+	// restorable, because the book serves nothing that exists on disk
+	// (NothingServedError): its path is stale or lost, or a folder with no file
+	// in it. Each entry carries the book's path (BookPath). Not a failure, not
+	// counted in Failed, and tried again every run: nothing escalates, because
+	// the version is never claimed; it stays listed here until the book's path
+	// is fixed or the version restored.
+	NothingServed []KeptVersion
 	// StoppedForMerge is set when a merge or combine held the merge lock for the
 	// whole of BackgroundMergeLockWait, so the run stopped there: the versions
 	// from that one on were not attempted and are picked up by the next run.
@@ -1320,6 +1364,9 @@ type KeptVersion struct {
 	VersionID string
 	BookID    string
 	Files     []database.PurgeFileNote
+	// BookPath is the book's own path, set for CleanupResult.NothingServed (the
+	// path that has to be fixed); empty otherwise.
+	BookPath string
 }
 
 // CleanupTrashedVersions is the maintenance task that purges versions
@@ -1448,7 +1495,7 @@ trashLoop:
 					stopForMerge(id)
 					break trashLoop
 				}
-				if noteServed(&res, v, err) || noteCannotTell(&res, v, err) {
+				if noteServed(&res, v, err) || noteNothingServed(&res, v, err) || noteCannotTell(&res, v, err) {
 					continue
 				}
 				lifecycleLog.Warn("trash cleanup: retrying the purge of version %s failed: %v", v.ID, err)
@@ -1483,7 +1530,7 @@ trashLoop:
 				stopForMerge(id)
 				break trashLoop
 			}
-			if noteServed(&res, v, err) || noteCannotTell(&res, v, err) {
+			if noteServed(&res, v, err) || noteNothingServed(&res, v, err) || noteCannotTell(&res, v, err) {
 				continue
 			}
 			lifecycleLog.Warn("trash cleanup: purging version %s failed: %v", v.ID, err)
@@ -1498,6 +1545,10 @@ trashLoop:
 	if n := len(res.CannotTell); n > 0 {
 		lifecycleLog.Warn("trash cleanup: %d version(s) have files that cannot be told apart from an unmounted dataset and were left alone: %s",
 			n, keptVersionIDs(res.CannotTell))
+	}
+	if n := len(res.NothingServed); n > 0 {
+		lifecycleLog.Warn("trash cleanup: %d version(s) were left in the trash because their book serves nothing that exists on disk (fix the book's path or restore the version): %s",
+			n, keptVersionIDs(res.NothingServed))
 	}
 	if n := len(res.NeedsAttention); n > 0 {
 		lifecycleLog.Warn("trash cleanup: %d version(s) are purge_failed (a file cannot be removed) and need the owner: %s; not retried",
@@ -1538,6 +1589,20 @@ func noteCannotTell(res *CleanupResult, v *database.BookVersion, err error) bool
 	}
 	lifecycleLog.Warn("trash cleanup: version %s (book %s) left alone: %v", v.ID, v.BookID, err)
 	res.CannotTell = append(res.CannotTell, KeptVersion{VersionID: v.ID, BookID: v.BookID, Files: ct.Files})
+	return true
+}
+
+// noteNothingServed files a purge that left a version in the trash because its
+// book serves nothing that exists on disk under CleanupResult.NothingServed, and
+// reports true. The entry carries the book's path, the thing to fix. It is
+// checked before noteCannotTell: the two are different errors, but the
+// ordering keeps one from ever being filed as the other.
+func noteNothingServed(res *CleanupResult, v *database.BookVersion, err error) bool {
+	var ns *NothingServedError
+	if !errors.As(err, &ns) {
+		return false
+	}
+	res.NothingServed = append(res.NothingServed, KeptVersion{VersionID: v.ID, BookID: v.BookID, Files: ns.Files, BookPath: ns.BookPath})
 	return true
 }
 
