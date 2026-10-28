@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package opsv3
 
@@ -666,5 +666,47 @@ func TestSSEPerUserCapIsPerCredential(t *testing.T) {
 	br.mu.Unlock()
 	if got != 2*perUser {
 		t.Fatalf("user holds %d streams, want the total 2 x %d", got, perUser)
+	}
+}
+
+// slowSubscribeHub is a real registry hub whose Subscribe takes a while, the
+// way a goroutine that has not been scheduled yet does on a loaded machine.
+type slowSubscribeHub struct {
+	*opsregistry.EventHub
+	delay time.Duration
+}
+
+func (h slowSubscribeHub) Subscribe() (<-chan opsregistry.Event, func()) {
+	time.Sleep(h.delay)
+	return h.EventHub.Subscribe()
+}
+
+// TestSSEEventPublishedRightAfterTheOpeningHeartbeatIsNotLost: the opening
+// heartbeat says the stream is open, so an event published the moment a client
+// reads it must reach that client even when the broker's loop is started lazily
+// by that very client and is slow to get going. The registry hub drops events
+// for a subscriber that is not registered yet, so the broker has to be
+// subscribed to the hub before the stream's first byte is written, not by a
+// goroutine that happens to run later.
+func TestSSEEventPublishedRightAfterTheOpeningHeartbeatIsNotLost(t *testing.T) {
+	mem := &memRuns{runs: map[string]database.RunRecord{"b1": batchRecord("b1", 10, 1)}}
+	hub := opsregistry.NewEventHub()
+	br := NewBroker(mem, slowSubscribeHub{EventHub: hub, delay: 300 * time.Millisecond}, nil,
+		BrokerOptions{FlushEvery: 5 * time.Millisecond})
+	ctx := t.Context()
+	br.StartOnFirstSubscriber(ctx, func(fn func()) { go fn() })
+	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
+	t.Cleanup(srv.Close)
+
+	c := openSSE(t, srv, "")
+	if f := c.next(t); !f.comment {
+		t.Fatalf("first frame should be the heartbeat comment: %+v", f)
+	}
+	if err := hub.Publish(ctx, "op.updated", map[string]any{"op_id": "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	f := c.next(t)
+	if f.event != "run" || unmarshalView(t, f.data).ID != "b1" {
+		t.Fatalf("frame = %+v, want the run event for b1", f)
 	}
 }
