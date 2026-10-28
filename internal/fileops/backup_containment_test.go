@@ -1,7 +1,7 @@
 // file: internal/fileops/backup_containment_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: bf4ef376-6572-46ff-aeaf-d7d24fb2cc8d
-// last-edited: 2026-09-10
+// last-edited: 2026-10-28
 
 package fileops
 
@@ -136,11 +136,12 @@ func libraryFixture(t *testing.T) (root, libraryRoot, work string) {
 // escaped directory on disk, outside the library, before any copy happens.
 func TestNewFileOperation_TraversingTargetPathEscapesBackupDir(t *testing.T) {
 	t.Skip(`BLOCKED — TASK-083. The escape is real; the fix is a design change awaiting owner sign-off.
-Measured 2026-09-10 at HEAD 7196a2365 with this Skip removed:
-  backup_containment_test.go: NewFileOperation accepted a traversing targetPath; backupPath="<tmp>/001/escape/.audiobook-backups/dest.m4b.20260910_163043.backup"
-  backup_containment_test.go: backupPath "<tmp>/001/escape/..." resolved OUTSIDE the library root "<tmp>/001/library"
-  backup_containment_test.go: escaped backup directory "<tmp>/001/escape" exists (stat err <nil>)
-  --- FAIL: TestNewFileOperation_TraversingTargetPathEscapesBackupDir (0.00s)
+Measured 2026-09-10 at HEAD 7196a2365 with this Skip removed (output paraphrased:
+CI log scanners read a quoted test-failure marker as a real failure):
+  - NewFileOperation accepted a traversing targetPath; backupPath="<tmp>/001/escape/.audiobook-backups/dest.m4b.20260910_163043.backup"
+  - backupPath "<tmp>/001/escape/..." resolved OUTSIDE the library root "<tmp>/001/library"
+  - escaped backup directory "<tmp>/001/escape" exists (stat err <nil>)
+  - result: TestNewFileOperation_TraversingTargetPathEscapesBackupDir failed in 0.00s
 Un-skip when OperationConfig carries a trusted containment root (see the file comment).`)
 
 	root, libraryRoot, work := libraryFixture(t)
@@ -178,9 +179,10 @@ Un-skip when OperationConfig carries a trusted containment root (see the file co
 // Execute is enough to materialise it — no need to force a copy failure.
 func TestFileOperation_ExecuteWritesBackupOutsideLibrary(t *testing.T) {
 	t.Skip(`BLOCKED — TASK-083. The escape is real; the fix is a design change awaiting owner sign-off.
-Measured 2026-09-10 at HEAD 7196a2365 with this Skip removed:
-  backup_containment_test.go: Execute wrote 1 backup file(s) into "<tmp>/001/escape/.audiobook-backups", outside the library root "<tmp>/001/library"; this is the file the rollback sinks at safe_operations.go:148 and :189 stat and copy back from
-  --- FAIL: TestFileOperation_ExecuteWritesBackupOutsideLibrary (0.04s)
+Measured 2026-09-10 at HEAD 7196a2365 with this Skip removed (output paraphrased:
+CI log scanners read a quoted test-failure marker as a real failure):
+  - Execute wrote 1 backup file(s) into "<tmp>/001/escape/.audiobook-backups", outside the library root "<tmp>/001/library"; this is the file the rollback sinks at safe_operations.go:148 and :189 stat and copy back from
+  - result: TestFileOperation_ExecuteWritesBackupOutsideLibrary failed in 0.04s
 Un-skip when OperationConfig carries a trusted containment root (see the file comment).`)
 
 	root, libraryRoot, work := libraryFixture(t)
