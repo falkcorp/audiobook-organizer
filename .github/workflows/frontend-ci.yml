@@ -1,5 +1,5 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.16.1
+# version: 2.16.2
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
 # last-edited: 2026-10-27
 
@@ -73,6 +73,13 @@ jobs:
       # covers values up to 30m; above that it must be raised upstream first.
       # nightly.yml passes the same value; keep them together.
       go-test-timeout: '25m'
+      # The reusable workflow's E2E step stays off: it runs the same Playwright
+      # suite and config as this repo's own E2E workflow (e2e.yml: chromium on
+      # every PR that touches web/ or Go, chromium+webkit nightly), so here it
+      # would only add ~20 min per run. Also, the pinned reusable-ci still calls
+      # gha-ci-workflow-helpers at 4b5f4d45, whose frontend-run reports a failed
+      # npm script as a pass, so this step could not gate anything anyway.
+      skip-e2e-tests: true
     secrets: inherit
 
   # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an
