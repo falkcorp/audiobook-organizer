@@ -40,10 +40,20 @@
   stored id (a few reads each, memoised within the reader). A resolved snapshot is
   deliberately not cached across re-plans: an Apply changes the book and retire
   state between them, and a stale snapshot would drop a reject.
-- `decisions.RecordRetiredApplied` and `decisions.RecordRetiredUndone` write an
-  `applied` or `undone` record on the shell's subject, for the Apply and the
-  revert path. Both are labels, not vetoes. They need a shell id, a version id
-  and the id of the op that performed the event, and a retry that finds the same
-  (decision, version, op) already on the subject writes nothing, the check and
-  the write under one subject lock (`Store.RecordUnlessSeen`). They are not
-  called yet: the Apply and the revert land in their own PRs.
+- The retired-versions Apply and the revert of a retire now write the decision
+  records. After a row's retire commits, the Apply writes an `applied` record on
+  the shell's subject (`decisions.RecordRetiredApplied`, from
+  `retiredVersionsFixer.recordApplied`); when a revert deletes the retired
+  version a retire made, which it does only once every row is back, it writes an
+  `undone` record (`decisions.RecordRetiredUndone`, from
+  `RevertService.recordRetireUndone`), whichever path reached it: a whole-op
+  revert, a scoped revert, or the combine undo's retire reversal. Both are
+  labels, not vetoes. They need a shell id, a version id and the id of the retire
+  op, and a retry that finds the same (decision, version, op) already on the
+  subject writes nothing, the check and the write under one subject lock
+  (`Store.RecordUnlessSeen`). A failure to write one is logged and never fails the
+  row or the revert. Neither record carries a plan op id or an actor (the Apply
+  and the revert are handed neither), so their source is `auto`.
+- `decisions.ChainResolvers` is removed: the owner-veto reader needs the path of
+  every hop, so it chains with `ChainPathResolvers`, and nothing wanted a chain
+  that returns only the last id.

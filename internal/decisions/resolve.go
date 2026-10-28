@@ -1,7 +1,7 @@
 // file: internal/decisions/resolve.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d03b7a8-6c1e-4f92-b0a4-e28f91c3d576
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package decisions
 
@@ -158,23 +158,6 @@ func ChainPathResolvers(resolvers ...PathResolver) PathResolver {
 		dlog.Error("%s %s: resolver chain longer than %d hops (cycle?); refusing to resolve it",
 			logger.SanitizeLogValue(entityType), logger.SanitizeLogValue(id), maxTombstoneHops)
 		return nil, &UnresolvableIDError{EntityType: entityType, ID: id, Kind: ErrResolverCycle, Related: path}
-	}
-}
-
-// ChainResolvers is ChainPathResolvers for resolvers that only answer where an
-// id ends.
-func ChainResolvers(resolvers ...IDResolver) IDResolver {
-	paths := make([]PathResolver, len(resolvers))
-	for i, r := range resolvers {
-		paths[i] = PathOf(r)
-	}
-	chain := ChainPathResolvers(paths...)
-	return func(entityType, id string) (string, error) {
-		p, err := chain(entityType, id)
-		if err != nil {
-			return "", err
-		}
-		return p[len(p)-1], nil
 	}
 }
 

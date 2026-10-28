@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -149,6 +151,11 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) er
 		return verdict
 	}); err != nil {
 		if verdict != nil {
+			if errors.Is(verdict, undo.ErrAlreadyRestored) {
+				// A cut-off revert deleted the version and died before it wrote
+				// the record; the write is idempotent, so a repeat completes it.
+				rs.recordRetireUndone(c)
+			}
 			return verdict
 		}
 		if errors.Is(err, database.ErrRetiredVersionHasFiles) {
@@ -157,7 +164,43 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange) er
 		}
 		return fmt.Errorf("delete book version %s: %w", id, err)
 	}
+	rs.recordRetireUndone(c)
 	return nil
+}
+
+// recordRetireUndone writes the `undone` decision record of the retired-
+// versions row whose retired version c created, once that version is gone
+// (decisions.RecordRetiredUndone). The version is the end of a row's revert:
+// the store deletes it only after every book_file row it held went back, so
+// one record is made per reverted row, however the revert reached it (a whole
+// operation, a scoped revert, the combine undo's retire reversal).
+//
+// The record is a label, not a veto (the shell stays plannable), so a failure
+// to write it is logged and never fails or rolls back a revert whose rows are
+// already back. It names the reverted retire op (c.OperationID) as the op: the
+// undo has no operation of its own, and the pair (version, retire op) is what
+// makes a repeat of this revert the same record. It carries no actor, so its
+// source is auto: the revert is not told who asked for it.
+func (rs *RevertService) recordRetireUndone(c *database.OperationChange) {
+	made, err := undo.DecodeBookVersionCreate(c)
+	if err != nil {
+		revertLog.Warn("revert: retired-versions undone record not written for operation=%s change=%s: %v",
+			logger.SanitizeLogValue(c.OperationID), logger.SanitizeLogValue(c.ID), err)
+		return
+	}
+	kv, ok := database.AsCapability[decisions.KV](rs.db)
+	if !ok {
+		return // a store with no decision log has no ledger to write
+	}
+	if _, err := decisions.RecordRetiredUndone(decisions.New(kv), decisions.RetiredVersionsEvent{
+		ShellID: made.RetiredFromBookID, TargetID: made.BookID, VersionID: made.ID,
+		OpID: c.OperationID, PlanRowID: made.RetiredFromBookID,
+		ReasonText: "the retire was reverted",
+	}); err != nil {
+		revertLog.Warn("revert: retired-versions undone record not written for shell=%s version=%s operation=%s: %v",
+			logger.SanitizeLogValue(made.RetiredFromBookID), logger.SanitizeLogValue(made.ID),
+			logger.SanitizeLogValue(c.OperationID), err)
+	}
 }
 
 // revertRetiredVersionRehome moves a retired version (and its rows) back to

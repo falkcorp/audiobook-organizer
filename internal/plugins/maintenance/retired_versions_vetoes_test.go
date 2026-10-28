@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_test.go
-// version: 1.1.1
+// version: 1.1.3
 // guid: 91e6c0d4-3b2a-4f75-8d18-6a4f2c97e0b3
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -44,10 +44,13 @@ func (rf *retiredFixture) unretire(shell, holder, versionID, rowID string) {
 	require.NoError(rf.t, rf.st.UnretireBookFiles([]database.BookFileMove{{FileIDs: []string{rowID}, SourceBookID: rf.ids[holder]}}, rf.ids[shell], versionID, nil))
 }
 
-// purge deletes a fixture book's row, as the purge that follows a retire does.
+// purge deletes a fixture book's row, as the purge that follows a retire did
+// before DeleteBook refused a retire shell: the resolver tests need the state
+// that purge left (a shell with no row whose files are retired under a holder),
+// which only the test-binary seam can make now.
 func (rf *retiredFixture) purge(name string) {
 	rf.t.Helper()
-	require.NoError(rf.t, rf.st.DeleteBook(rf.ids[name]))
+	require.NoError(rf.t, rf.st.DeleteRetiredShellForTest(rf.ids[name]))
 }
 
 // trash moves a live fixture book into the trash.
@@ -245,7 +248,9 @@ func TestRetiredVersions_UnloadableRejectsRefuseThePlan(t *testing.T) {
 	require.ErrorContains(t, err, "decisions store unreadable")
 }
 
-// The applied and undone records the Apply and the revert write.
+// The applied and undone records the Apply and the revert write (the helpers;
+// TestRetiredApply_WritesTheAppliedDecisionRecord and
+// TestRevertRetire_WritesTheUndoneDecisionRecord run the real call sites).
 func TestRecordRetiredVersionDecisions(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
@@ -258,7 +263,9 @@ func TestRecordRetiredVersionDecisions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, decisions.DecisionApplied, applied.Decision)
 	ev.OpID = "op-undo"
-	undone, err := recordRetiredVersionUndone(rf.st, ev)
+	kv, ok := database.AsCapability[decisions.KV](rf.st)
+	require.True(t, ok)
+	undone, err := decisions.RecordRetiredUndone(decisions.New(kv), ev)
 	require.NoError(t, err)
 	require.Equal(t, decisions.DecisionUndone, undone.Decision)
 	require.Equal(t, applied.SubjectKey, undone.SubjectKey)
@@ -266,8 +273,6 @@ func TestRecordRetiredVersionDecisions(t *testing.T) {
 	// Neither is a veto: the shell is planned like any other afterwards.
 	require.Equal(t, retCatWouldRetire, rf.plan()[rf.ids["shell"]].Class)
 
-	kv, ok := database.AsCapability[decisions.KV](rf.st)
-	require.True(t, ok)
 	hist, err := decisions.New(kv).History(decisions.OpKindRetiredVersions, applied.SubjectKey)
 	require.NoError(t, err)
 	require.Len(t, hist, 2)
