@@ -1,5 +1,5 @@
 // file: internal/versions/swap_target.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e5b7a4c-83d1-4f6a-9c2e-7d1a5b3f8e64
 // last-edited: 2026-10-28
 
@@ -66,9 +66,12 @@ type swapTargetStore interface {
 //   - it must own files: at least one book_file row whose VersionID is the
 //     version's own, because a swap that moves no file leaves the book serving
 //     the files of the version that is leaving;
-//   - those files, and the leaving version's, must be movable as RunVersionSwap
-//     will move them (see swapPreflight), so the common failure ends here, as a
-//     refusal with nothing written, rather than half way through the moves;
+//   - those files, and the leaving version's, must be where RunVersionSwap
+//     assumes them and movable as it will move them (see swapPreflight): the
+//     leaving version's in the book's own folder, the entering version's in its
+//     own .versions/{id}/ slot and no file of either the same file as one of the
+//     other, so a failure ends here, as a refusal with nothing written, rather
+//     than half way through the moves;
 //   - of the candidates left, the one most recently ingested wins; equal
 //     IngestDates go to the smaller version ID.
 //
@@ -126,10 +129,10 @@ func PickSwapTarget(store swapTargetStore, bookID, fromID string) (*database.Boo
 	if book == nil {
 		return nil, fmt.Errorf("book %s not found", bookID)
 	}
-	if bookPathIsFolder(book.FilePath) {
-		return nil, refused(folderBookReason(book.FilePath))
+	bookDir, why := swapBookDir(book)
+	if why != "" {
+		return nil, refused(why)
 	}
-	bookDir := filepath.Dir(book.FilePath)
 
 	sort.Slice(cands, func(i, j int) bool {
 		if !cands[i].IngestDate.Equal(cands[j].IngestDate) {
@@ -140,13 +143,29 @@ func PickSwapTarget(store swapTargetStore, bookID, fromID string) (*database.Boo
 	reasons := passedOver
 	for i := range cands {
 		v := cands[i]
-		if why := swapPreflight(bookDir, fromID, byVersion[fromID], byVersion[v.ID]); why != "" {
+		if why := swapPreflight(bookDir, fromID, v.ID, byVersion[fromID], byVersion[v.ID]); why != "" {
 			reasons = append(reasons, fmt.Sprintf("version %s: %s", v.ID, why))
 			continue
 		}
 		return &v, nil
 	}
 	return nil, refused(reasons...)
+}
+
+// swapBookDir is the folder RunVersionSwap works in, the parent of the book's
+// FilePath, or why it cannot be trusted: a FilePath that is empty (its parent
+// would be "." and the swap would move files into the process's working
+// directory), not absolute, or a folder (see bookPathIsFolder).
+func swapBookDir(book *database.Book) (dir, why string) {
+	switch {
+	case book.FilePath == "":
+		return "", "the book has no file path, so its folder is unknown"
+	case !filepath.IsAbs(book.FilePath):
+		return "", fmt.Sprintf("the book's path %q is not absolute, so its folder is unknown", book.FilePath)
+	case bookPathIsFolder(book.FilePath):
+		return "", folderBookReason(book.FilePath)
+	}
+	return filepath.Dir(book.FilePath), ""
 }
 
 // bookPathIsFolder reports whether the book's own path is a folder. A multi-file
@@ -166,17 +185,25 @@ func folderBookReason(path string) string {
 }
 
 // swapPreflight reports why RunVersionSwap(from -> to) would fail or not do its
-// job, from what is on disk now, or "" when it should go through. It repeats the
+// job, from what is on disk now, or "" when it should go through. PickSwapTarget
+// asks it of every candidate and RunVersionSwap asks it again before its first
+// write, so what the picker approved is what the swap will see.
+//
+// It checks the layout the swap assumes (swapLayoutBlocker) and then repeats the
 // moves' own checks (movePreservingAttrs) without making them: a file is
 // movable when it exists (or is already at its destination) and its
-// destination is free.
+// destination is free. Existence is NOT part of the layout check, so a file
+// that is already where the swap would put it (a resumed swap) passes.
 //
 // RunVersionSwap moves the leaving version's files into its slot first, so a
 // root path they occupy is free for the entering version's files; that is
 // allowed for here.
-func swapPreflight(bookDir, fromID string, fromFiles, toFiles []database.BookFile) string {
+func swapPreflight(bookDir, fromID, toID string, fromFiles, toFiles []database.BookFile) string {
 	if len(toFiles) == 0 {
 		return "it has no files"
+	}
+	if why := swapLayoutBlocker(bookDir, fromID, toID, fromFiles, toFiles); why != "" {
+		return why
 	}
 	vacated := make(map[string]struct{})
 	seen := make(map[string]string)
@@ -205,6 +232,79 @@ func swapPreflight(bookDir, fromID string, fromFiles, toFiles []database.BookFil
 		}
 	}
 	return ""
+}
+
+// swapLayoutBlocker is the part of the preflight that asks whether the files
+// are where RunVersionSwap assumes they are, which is what its moves rest on.
+// Without it the swap trusts rows it never looked at:
+//
+//   - the leaving version's files must be in the book's own folder, the parent
+//     of Book.FilePath. A FilePath gone stale (the book moved, the row did not)
+//     sends the entering files to the wrong folder and leaves FilePath pointing
+//     at nothing;
+//   - the entering version's files must be in ITS slot, .versions/{toID}/, in the
+//     form stored and with symlinks resolved. A file anywhere else (a download
+//     folder, another book's folder) is not the swap's to take, and the purge's
+//     served-file guard keys on the slot as well;
+//   - no file of the entering version may be the same file as one of the leaving
+//     version's: the same path, the same path once symlinks are resolved, or the
+//     same inode (a hard link, a symlink). The swap would move that file into
+//     the leaving version's slot, treat the move to the root as already done,
+//     and leave FilePath at a path that no longer exists;
+//   - neither side may be a symbolic link itself: moving a link leaves its
+//     target behind, and a relative link breaks when it moves.
+//
+// The checks are on paths, parents and Lstat, never on whether a file exists.
+func swapLayoutBlocker(bookDir, fromID, toID string, fromFiles, toFiles []database.BookFile) string {
+	canonDir := canonPath(bookDir)
+	for _, f := range fromFiles {
+		if !filepath.IsAbs(f.FilePath) {
+			return fmt.Sprintf("book path is stale: the active version's file %q is not an absolute path", f.FilePath)
+		}
+		if got := canonPath(filepath.Dir(f.FilePath)); got != canonDir {
+			return fmt.Sprintf("book path is stale: the active version's file %s is in %s, not in the book's folder %s", f.FilePath, got, canonDir)
+		}
+		if isSymlink(f.FilePath) {
+			return fmt.Sprintf("the active version's file %s is a symbolic link", f.FilePath)
+		}
+	}
+	toSlot := VersionSlotDir(bookDir, toID)
+	canonSlot := canonPath(toSlot)
+	for _, f := range toFiles {
+		if !filepath.IsAbs(f.FilePath) {
+			return fmt.Sprintf("its file %q is not an absolute path", f.FilePath)
+		}
+		for _, from := range fromFiles {
+			if sameFile(f.FilePath, from.FilePath) {
+				return fmt.Sprintf("its file %s is the same file as the active version's file %s", f.FilePath, from.FilePath)
+			}
+		}
+		if isSymlink(f.FilePath) {
+			return fmt.Sprintf("its file %s is a symbolic link", f.FilePath)
+		}
+		if filepath.Dir(f.FilePath) != filepath.Clean(toSlot) || canonPath(filepath.Dir(f.FilePath)) != canonSlot || !inVersionSlot(f.FilePath, toID) {
+			return fmt.Sprintf("its file %s is not inside its own slot %s (a swap only takes the files of a version that are in its slot)", f.FilePath, toSlot)
+		}
+	}
+	return ""
+}
+
+// isSymlink reports whether p itself, not what it points at, is a symbolic link.
+func isSymlink(p string) bool {
+	fi, err := os.Lstat(p)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
+// sameFile reports whether a and b are one file: the same path, the same path
+// with symlinks resolved, or (both readable) the same inode, which is what a
+// hard link or a symlink to the other is.
+func sameFile(a, b string) bool {
+	if a == b || canonPath(a) == canonPath(b) {
+		return true
+	}
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	return aerr == nil && berr == nil && os.SameFile(ai, bi)
 }
 
 // moveBlocker is movePreservingAttrs's decision without the move: "" when src

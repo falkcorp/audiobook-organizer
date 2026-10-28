@@ -1,5 +1,5 @@
 // file: internal/versions/serve_guard.go
-// version: 1.5.0
+// version: 1.6.1
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
 // last-edited: 2026-10-28
 
@@ -55,6 +55,11 @@ type servedGuard struct {
 	exact  map[string]struct{} // canonical served file paths of the own book
 	folder string              // canonical folder the own book's FilePath names, or ""
 	infos  []os.FileInfo       // stat of each served file, for hard links
+
+	// served lists every path the own book is taken to serve (FilePath, and the
+	// rows of its active or no version), whether or not it is on disk, for
+	// requireServedFileOnDisk.
+	served []string
 
 	// others caches, per other book, whether it is live and which of its
 	// versions are dead (trashed or purged).
@@ -139,6 +144,7 @@ func newServedGuard(store versionPurger, book *database.Book, bookID string, fil
 			return
 		}
 		g.exact[canonPath(p)] = struct{}{}
+		g.served = append(g.served, p)
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			g.infos = append(g.infos, fi)
 		}
@@ -155,6 +161,35 @@ func newServedGuard(store versionPurger, book *database.Book, bookID string, fil
 		}
 	}
 	return g, nil
+}
+
+// requireServedFileOnDisk refuses, with a *CannotTellError, when the own book
+// is live and not one of the paths it serves (its FilePath, the rows of its
+// active version) exists on disk. That state is "unknown", not "nothing is
+// served": the rules above compare candidates against what the book serves, by
+// path and by inode, and with no served file to compare against a stale
+// FilePath or a lost file leaves the guard nothing to protect. A trashed or
+// missing book serves nothing, so this does not apply to it.
+func (g *servedGuard) requireServedFileOnDisk() error {
+	if g.skipOwn {
+		return nil
+	}
+	var notes []database.PurgeFileNote
+	for _, p := range g.served {
+		_, err := os.Stat(p)
+		if err == nil {
+			return nil
+		}
+		notes = append(notes, database.PurgeFileNote{Path: p, Reason: err.Error()})
+	}
+	if len(notes) == 0 {
+		notes = append(notes, database.PurgeFileNote{Path: g.book.FilePath, Reason: "the book names no file it serves"})
+	}
+	return &CannotTellError{
+		VersionID: g.verID,
+		Files:     notes,
+		msg:       fmt.Sprintf("version %s of book %s not purged: no file the book serves exists on disk, so what it serves is unknown", g.verID, g.book.ID),
+	}
 }
 
 func (g *servedGuard) activeVersionIDs(bookID string) (map[string]struct{}, error) {
@@ -198,7 +233,13 @@ func hasSlotPair(p, verID string) bool {
 // file. A .versions directory that is not this version's (a copied library tree
 // in an import folder, another version's slot) is not its slot either.
 func (g *servedGuard) inVersionSlot(p string) bool {
-	return hasSlotPair(p, g.verID) && hasSlotPair(canonPath(p), g.verID)
+	return inVersionSlot(p, g.verID)
+}
+
+// inVersionSlot is servedGuard.inVersionSlot without a guard: the swap's
+// preflight asks the same question of the files it is about to move up.
+func inVersionSlot(p, verID string) bool {
+	return hasSlotPair(p, verID) && hasSlotPair(canonPath(p), verID)
 }
 
 func (g *servedGuard) ownBookServes(p string) bool {

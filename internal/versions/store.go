@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-28
 
@@ -113,7 +113,11 @@ type swapStore interface {
 	// lands after the file moves, so it sets only file_path on the stored row
 	// under the book's write lock. See database.BookMutator.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	UpdateBookFile(id string, file *database.BookFile) error
+	// ModifyBookFile replaced UpdateBookFile on 2026-10-28: the swap repoints a
+	// row after its file moved, and writes only file_path, and only if the row
+	// still names the path the file was moved from, so a row another writer
+	// changed meanwhile is reported instead of being written over.
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 // unusedStore is `any` because the two functions that take it are stubs which

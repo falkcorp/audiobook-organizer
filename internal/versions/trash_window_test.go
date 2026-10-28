@@ -56,6 +56,11 @@ func newTrashFixtureStamped(t *testing.T, createdAt time.Time, status string, tr
 	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Trash Window Book", FilePath: filepath.Join(bookDir, "book.m4b")}); err != nil {
 		t.Fatalf("create book: %v", err)
 	}
+	// The file the book plays. A trashed version is purged only while the book
+	// is known to serve a file that exists (servedGuard.requireServedFileOnDisk);
+	// a fixture whose book names a file that is not there would be testing that
+	// refusal, not the purge it is about.
+	writeTestFile(t, filepath.Join(bookDir, "book.m4b"), "audio")
 	ver, err := store.CreateBookVersion(&database.BookVersion{
 		BookID: "b1", Status: status, Format: "m4b", Source: "imported",
 		CreatedAt: createdAt, IngestDate: createdAt, TrashedAt: trashedAt,
