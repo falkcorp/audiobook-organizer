@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 142d4823-4f1c-4c19-95fe-7a3c0f9f05b4
 // last-edited: 2026-10-28
 
@@ -72,8 +72,17 @@ function SetLine({ opId, set, count, children, result }: SetLineProps) {
   );
 }
 
-/** The files kept on disk, behind a button that shows their paths. */
-function KeptPaths({ paths, opId }: { paths: string[]; opId: string }) {
+interface PathListProps {
+  paths: string[];
+  opId: string;
+  /** the group the "and more" link opens */
+  set: TrashCleanupSet;
+  /** the button text for n paths */
+  label: (n: number) => string;
+}
+
+/** A group's paths (files kept on disk, or the books' own paths), behind a button that shows them. */
+function PathList({ paths, opId, set, label }: PathListProps) {
   const [open, setOpen] = useState(false);
   if (paths.length === 0) return null;
   const shown = paths.slice(0, LIST_CAP);
@@ -88,7 +97,7 @@ function KeptPaths({ paths, opId }: { paths: string[]; opId: string }) {
         }}
         aria-expanded={open}
       >
-        {paths.length.toLocaleString()} {plural(paths.length, 'file', 'files')} kept on disk
+        {label(paths.length)}
       </Button>
       <Collapse in={open} unmountOnExit>
         <Box sx={{ pl: 1, fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' }}>
@@ -96,7 +105,7 @@ function KeptPaths({ paths, opId }: { paths: string[]; opId: string }) {
             <div key={p}>{p}</div>
           ))}
           {more > 0 && (
-            <Link component={RouterLink} to={cleanupVersionsLink(opId, 'kept')}>
+            <Link component={RouterLink} to={cleanupVersionsLink(opId, set)}>
               and {more.toLocaleString()} more: see the versions
             </Link>
           )}
@@ -151,7 +160,12 @@ export default function TrashCleanupResultPanel({ opId }: { opId: string }) {
             {plural(result.kept_files, 'was', 'were')} purged with files left on disk, because
             another record or book still names them.
           </SetLine>
-          <KeptPaths paths={result.kept_file_paths} opId={opId} />
+          <PathList
+            paths={result.kept_file_paths}
+            opId={opId}
+            set="kept"
+            label={(n) => `${n.toLocaleString()} ${plural(n, 'file', 'files')} kept on disk`}
+          />
         </>
       )}
       {result.needs_attention > 0 && (
@@ -169,6 +183,23 @@ export default function TrashCleanupResultPanel({ opId }: { opId: string }) {
           deleted; {plural(result.cannot_tell, 'it is', 'they are')} tried again next run, and a
           purge that gets nowhere three times becomes purge failed, which can be hard-deleted.
         </SetLine>
+      )}
+      {result.nothing_served > 0 && (
+        <>
+          <SetLine opId={opId} set="nothing_served" count={result.nothing_served} result={result}>
+            {plural(result.nothing_served, 'was', 'were')} left in the trash: the book serves
+            nothing that exists on disk, so there is nothing to check{' '}
+            {plural(result.nothing_served, 'its files', 'their files')} against. Nothing was
+            deleted. Fix the book&apos;s path, or restore the version; until then{' '}
+            {plural(result.nothing_served, 'it is', 'they are')} listed again every run.
+          </SetLine>
+          <PathList
+            paths={result.nothing_served_file_paths}
+            opId={opId}
+            set="nothing_served"
+            label={(n) => `${n.toLocaleString()} ${plural(n, 'book path', 'book paths')} to fix`}
+          />
+        </>
       )}
       {result.served_kept > 0 && (
         <SetLine opId={opId} set="served_kept" count={result.served_kept} result={result}>

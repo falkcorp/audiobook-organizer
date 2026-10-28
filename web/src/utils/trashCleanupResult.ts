@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.ts
-// version: 1.2.1
+// version: 1.3.0
 // guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
 // last-edited: 2026-10-28
 
@@ -37,6 +37,11 @@ export interface TrashCleanupResult {
   cannot_tell: number;
   cannot_tell_version_ids: string[];
   cannot_tell_book_ids: string[];
+  /** versions left in the trash because the book serves nothing that exists on disk (its path is stale or lost, or a folder with no file in it); nothing was deleted, not counted in failed. The file paths are the books' own paths, the thing to fix */
+  nothing_served: number;
+  nothing_served_version_ids: string[];
+  nothing_served_book_ids: string[];
+  nothing_served_file_paths: string[];
   /** versions kept in the trash because their book still plays one of their files (restore the version or change what the book plays); nothing was deleted, not counted in failed */
   served_kept: number;
   served_kept_version_ids: string[];
@@ -51,7 +56,12 @@ export interface TrashCleanupResult {
 }
 
 /** The groups of versions the result points at. */
-export type TrashCleanupSet = 'kept' | 'needs_attention' | 'cannot_tell' | 'served_kept';
+export type TrashCleanupSet =
+  | 'kept'
+  | 'needs_attention'
+  | 'cannot_tell'
+  | 'nothing_served'
+  | 'served_kept';
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const strings = (v: unknown): string[] =>
@@ -78,6 +88,10 @@ export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null
     cannot_tell: num(r.cannot_tell),
     cannot_tell_version_ids: strings(r.cannot_tell_version_ids),
     cannot_tell_book_ids: strings(r.cannot_tell_book_ids),
+    nothing_served: num(r.nothing_served),
+    nothing_served_version_ids: strings(r.nothing_served_version_ids),
+    nothing_served_book_ids: strings(r.nothing_served_book_ids),
+    nothing_served_file_paths: strings(r.nothing_served_file_paths),
     served_kept: num(r.served_kept),
     served_kept_version_ids: strings(r.served_kept_version_ids),
     served_kept_book_ids: strings(r.served_kept_book_ids),
@@ -97,6 +111,8 @@ export function cleanupVersionIds(r: TrashCleanupResult, set: TrashCleanupSet): 
       return r.needs_attention_version_ids;
     case 'cannot_tell':
       return r.cannot_tell_version_ids;
+    case 'nothing_served':
+      return r.nothing_served_version_ids;
     case 'served_kept':
       return r.served_kept_version_ids;
   }
@@ -108,6 +124,7 @@ export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): str
     kept: r.kept_book_ids,
     needs_attention: r.needs_attention_book_ids,
     cannot_tell: r.cannot_tell_book_ids,
+    nothing_served: r.nothing_served_book_ids,
     served_kept: r.served_kept_book_ids,
   }[set];
   return [...new Set(ids)];
@@ -118,8 +135,9 @@ export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): str
  * to the versions of that run's group. The page reads the ids from the
  * operation's stored result (op), so the link stays short however many
  * versions the run named. Kept versions have finished purging (Purged tab);
- * versions that need attention, those the cleanup could not judge and those
- * a book still plays are still listed in the Trash tab.
+ * versions that need attention, those the cleanup could not judge, those whose
+ * book serves nothing on disk and those a book still plays are still listed in
+ * the Trash tab.
  */
 export function cleanupVersionsLink(opId: string, set: TrashCleanupSet): string {
   return `/versions?op=${encodeURIComponent(opId)}&set=${set}`;
@@ -132,7 +150,11 @@ export function cleanupSetTab(set: TrashCleanupSet): 'trash' | 'purged' {
 
 /** Reads the set query value back; null for anything but the known sets. */
 export function parseCleanupSet(v: string | null): TrashCleanupSet | null {
-  return v === 'kept' || v === 'needs_attention' || v === 'cannot_tell' || v === 'served_kept'
+  return v === 'kept' ||
+    v === 'needs_attention' ||
+    v === 'cannot_tell' ||
+    v === 'nothing_served' ||
+    v === 'served_kept'
     ? v
     : null;
 }

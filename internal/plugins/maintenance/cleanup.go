@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.29.2
+// version: 1.30.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-28
 
@@ -539,6 +539,17 @@ type TrashCleanupResult struct {
 	CannotTell           int      `json:"cannot_tell"`
 	CannotTellVersionIDs []string `json:"cannot_tell_version_ids,omitempty"`
 	CannotTellBookIDs    []string `json:"cannot_tell_book_ids,omitempty"`
+	// NothingServed counts the versions left in the trash, untouched and
+	// restorable, because the book serves nothing that exists on disk (its path
+	// is stale or lost, or a folder with no file in it). It is not CannotTell:
+	// that is files that may be on a drive that is down, this is the book's own
+	// path, which only fixing the book or restoring the version changes. Not a
+	// failure, not counted in Failed, listed again every run.
+	// NothingServedFilePaths are the books' own paths, the thing to fix.
+	NothingServed           int      `json:"nothing_served"`
+	NothingServedVersionIDs []string `json:"nothing_served_version_ids,omitempty"`
+	NothingServedBookIDs    []string `json:"nothing_served_book_ids,omitempty"`
+	NothingServedFilePaths  []string `json:"nothing_served_file_paths,omitempty"`
 	// StoppedForMerge is true when a merge or combine held the merge lock for
 	// the whole wait, so the run stopped there and left the remaining versions
 	// for the next night. It is not a failure and does not turn the op red.
@@ -555,7 +566,7 @@ type TrashCleanupResult struct {
 
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	res, err := p.deps.CleanupTrashedVersions()
-	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), CannotTell: len(res.CannotTell), ServedKept: len(res.Kept), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
+	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), CannotTell: len(res.CannotTell), NothingServed: len(res.NothingServed), ServedKept: len(res.Kept), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
 	for _, k := range res.KeptFiles {
 		payload.KeptVersionIDs = append(payload.KeptVersionIDs, k.VersionID)
 		payload.KeptBookIDs = append(payload.KeptBookIDs, k.BookID)
@@ -578,6 +589,14 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		payload.CannotTellVersionIDs = append(payload.CannotTellVersionIDs, k.VersionID)
 		payload.CannotTellBookIDs = append(payload.CannotTellBookIDs, k.BookID)
 	}
+	for _, k := range res.NothingServed {
+		payload.NothingServedVersionIDs = append(payload.NothingServedVersionIDs, k.VersionID)
+		payload.NothingServedBookIDs = append(payload.NothingServedBookIDs, k.BookID)
+		// The book's own path; a book with none is listed by its id alone.
+		if k.BookPath != "" {
+			payload.NothingServedFilePaths = append(payload.NothingServedFilePaths, k.BookPath)
+		}
+	}
 	// A result the page cannot read back would leave a run that purged versions
 	// looking like a run that did nothing; a failed write is reported on the op.
 	setErr := opsregistry.ReporterSetResult(reporter, payload)
@@ -599,6 +618,10 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left alone because the files that are left are not there and nothing shows they were removed (a drive that is down looks the same); nothing was deleted and they are tried again next run (versions %s, books %s)",
 			len(res.CannotTell), strings.Join(payload.CannotTellVersionIDs, ", "), strings.Join(payload.CannotTellBookIDs, ", ")))
 	}
+	if len(res.NothingServed) > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left in the trash because the book serves nothing that exists on disk; nothing was deleted, and they are listed again every run until the book's path is fixed or the version restored (versions %s, books %s, book paths %s)",
+			len(res.NothingServed), strings.Join(payload.NothingServedVersionIDs, ", "), strings.Join(payload.NothingServedBookIDs, ", "), strings.Join(payload.NothingServedFilePaths, ", ")))
+	}
 	// The summary line is built before the error is looked at: a run that failed
 	// some purges has still purged, kept, deferred and stopped for the lock, and
 	// the log of the night it failed is the one the owner reads.
@@ -611,6 +634,9 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	msg += fmt.Sprintf(", kept %d versions whose files the book still serves", len(res.Kept))
 	if n := len(res.CannotTell); n > 0 {
 		msg += fmt.Sprintf("; %d left alone, cannot tell whether their files are gone (versions %s)", n, strings.Join(payload.CannotTellVersionIDs, ", "))
+	}
+	if n := len(res.NothingServed); n > 0 {
+		msg += fmt.Sprintf("; %d left in the trash, their book serves nothing that exists on disk (versions %s)", n, strings.Join(payload.NothingServedVersionIDs, ", "))
 	}
 	if n := len(res.NeedsAttention); n > 0 {
 		msg += fmt.Sprintf("; %d need attention (versions %s)", n, strings.Join(payload.NeedsAttentionVersionIDs, ", "))

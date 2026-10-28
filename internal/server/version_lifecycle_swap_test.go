@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_swap_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b1d8e3f-7a24-4c95-8e0b-d2f4a9c1b753
 // last-edited: 2026-10-28
 
@@ -691,8 +691,15 @@ func TestHandlePurgeVersion_NothingServedExistsRefuses(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("purge-now: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "unknown") {
-		t.Errorf("the 409 does not say what is unknown: %s", w.Body.String())
+	// It names the real cause, the book's own path, and not a drive that may be
+	// down (which is what "cannot tell" means).
+	for _, want := range []string{"serves nothing that exists on disk", "fix the book's path"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("the 409 does not say %q: %s", want, w.Body.String())
+		}
+	}
+	if strings.Contains(w.Body.String(), "unknown") {
+		t.Errorf("the 409 still reads as the cannot-tell case: %s", w.Body.String())
 	}
 	if _, err := os.Stat(slotFile); err != nil {
 		t.Errorf("the purge deleted the trashed version's file although nothing the book serves exists: %v", err)

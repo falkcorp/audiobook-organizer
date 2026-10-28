@@ -51,8 +51,7 @@ A swap that fails once it has started now puts everything back: the statuses
 (and with them the book's active version) after any failure up to the point the
 files have moved for good, and the files themselves when the third step fails
 (the leaving file is moved back, any entering file that moved goes back to its
-slot, the empty slot folder is removed). `anyMoved` counts a file as moved only
-when its source is gone and its destination is there. After the files have moved,
+slot, the empty slot folder is removed). After the files have moved,
 a failed database write (a file row, the book's `file_path`, the final statuses)
 is returned as an error and the version is not trashed, instead of being logged
 and ignored; the rows are written with `ModifyBookFile`, which refuses a row that
@@ -60,8 +59,39 @@ no longer names the path the file was moved from. A refusal before the first
 write is a 409 `NO_SWAP_TARGET`, not a 500 `VERSION_SWAP_FAILED`, and a trash
 that fails after the swap went through answers with `swapped_to`.
 
+A file that is missing is refused, not skipped. The first form of the swap treated
+"source missing, destination present" as a move that had already happened, so an
+alt whose own file was gone but whose name matched a stray file in the book folder
+(or in the leaving slot) was "adopted" and the stray file was treated as its audio.
+The move now requires its source to exist and its destination to be free: the
+picker and the preflight refuse with "file X is missing, so there is nothing to
+move" or "something is already there", and the rename itself refuses to replace
+anything (`renameat2` `RENAME_NOREPLACE` on Linux, `renamex_np` `RENAME_EXCL` on
+macOS, a checked rename elsewhere). The preflight also refuses a `.versions`
+folder or a version slot that is a symbolic link or a file, or that resolves
+outside the book's folder, and a book path with a trailing separator ("not a
+file"). Undoing a failed swap puts back exactly the files this call renamed, in
+reverse order, and reports an error (leaving the swap `ErrSwapIncomplete`) when an
+original path has been taken in the meantime instead of overwriting it.
+
+A swap that did not finish can no longer be made worse by retrying. A version in
+`swapping_out` / `swapping_in` cannot be trashed (`MarkTrashed` refuses it; 409
+`VERSION_SWAPPING`), nor swapped again (`ErrSwapRefused`: resuming a swap is not
+implemented). An incomplete swap answers 500 `VERSION_SWAP_INCOMPLETE`, which says
+the versions are stuck mid-swap and need repair and that deleting again will not
+help; it no longer reads as a failure that changed nothing. Finding and repairing
+those books is tracked in `todo.d` (TODO-SWAP-STUCK-RECOVERY).
+
 The trash purge refuses to delete a trashed version's files when none of the files
-the book serves (its `file_path`, the rows of its active version) exists on disk:
-that state means the guard cannot tell what is served, not that nothing is. The
-version stays in the trash (409 from Purge now, listed under `CannotTell` by the
-nightly cleanup).
+the book serves (its `file_path`, the rows of its active version) exists on disk,
+and a `file_path` that is a folder counts only if it holds a regular file outside
+`.versions/`: that state means the guard cannot tell what is served, not that
+nothing is. The version stays in the trash (409 from Purge now). This is its own
+case, `NothingServedError` (`errors.Is` `ErrPurgeNothingServed`), not "cannot
+tell": the nightly cleanup lists it under `NothingServed` with the book's path,
+the operation result has `nothing_served` and `nothing_served_version_ids`,
+`nothing_served_book_ids` and `nothing_served_file_paths`, and the Trash cleanup
+panel says "the book serves nothing that exists on disk" and shows the book path
+to fix, instead of "the files are missing / a drive is down". The version is
+never claimed, so there is no attempt count to escalate; it stays listed every
+night until the book's path is fixed or the version restored.

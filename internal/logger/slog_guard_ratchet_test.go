@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package logger
 
@@ -11,7 +11,7 @@ package logger
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
 	slogRatchetFileCeiling = 268
-	slogRatchetCallCeiling = 1487
+	slogRatchetCallCeiling = 1485
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -290,7 +290,7 @@ var slogRatchet = map[string]int{
 	"internal/updater/scheduler.go":                              9,
 	"internal/updater/updater.go":                                3,
 	"internal/versions/ingest.go":                                4,
-	"internal/versions/swap.go":                                  4,
+	"internal/versions/swap.go":                                  2,
 	"internal/watcher/supervisor.go":                             5,
 	"internal/watcher/watcher.go":                                3,
 	"internal/writeback/outbox.go":                               2,
