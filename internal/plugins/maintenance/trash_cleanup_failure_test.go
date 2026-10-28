@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/trash_cleanup_failure_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9e2c4a17-5b83-4d60-a1f9-0c7d3e8b5a42
 // last-edited: 2026-10-28
 
@@ -300,5 +300,62 @@ func TestRunTrashCleanup_NothingServedNamesABookPathOnce(t *testing.T) {
 	}
 	if got.NothingServed != 3 || len(got.NothingServedVersionIDs) != 3 {
 		t.Errorf("result = %#v, want all three versions still counted", got)
+	}
+}
+
+// A book with two versions in one group is two versions but one book, and the
+// files the two name are listed once: the page keys its book and path lists by
+// value, so a repeat is a duplicate key. Version ids stay one per version.
+func TestRunTrashCleanup_ABookWithTwoVersionsInOneSetIsNamedOnce(t *testing.T) {
+	part1 := "/lib/Gotham/Year One/part1.m4b"
+	part2 := "/lib/Gotham/Year One/part2.m4b"
+	note := func(paths ...string) []database.PurgeFileNote {
+		var out []database.PurgeFileNote
+		for _, p := range paths {
+			out = append(out, database.PurgeFileNote{Path: p, Reason: "another row names it"})
+		}
+		return out
+	}
+	twin := func(files []database.PurgeFileNote) []versions.KeptVersion {
+		return []versions.KeptVersion{
+			{VersionID: "ver-1", BookID: "book-year-one", Files: files},
+			{VersionID: "ver-2", BookID: "book-year-one", Files: files},
+			{VersionID: "ver-3", BookID: "book-zero-year", Files: note("/lib/Gotham/Zero Year/zero-year.m4b")},
+		}
+	}
+	res := versions.CleanupResult{
+		KeptFiles:      twin(note(part1, part2)),
+		Kept:           twin(note(part1, part2)),
+		NeedsAttention: twin(nil),
+		CannotTell:     twin(nil),
+		NothingServed:  twin(nil),
+	}
+	p := &Plugin{deps: trashCleanupDeps{res: res}}
+	rep := &levelReporter{}
+	if err := p.runTrashCleanup(context.Background(), nil, rep); err != nil {
+		t.Fatalf("runTrashCleanup = %v, want nil", err)
+	}
+	got := rep.result.(TrashCleanupResult)
+	books := []string{"book-year-one", "book-zero-year"}
+	paths := []string{part1, part2, "/lib/Gotham/Zero Year/zero-year.m4b"}
+	versionIDs := []string{"ver-1", "ver-2", "ver-3"}
+	for name, c := range map[string]struct{ got, want []string }{
+		"kept books":             {got.KeptBookIDs, books},
+		"kept paths":             {got.KeptFilePaths, paths},
+		"served_kept books":      {got.ServedKeptBookIDs, books},
+		"served_kept paths":      {got.ServedKeptFilePaths, paths},
+		"needs_attention books":  {got.NeedsAttentionBookIDs, books},
+		"cannot_tell books":      {got.CannotTellBookIDs, books},
+		"nothing_served books":   {got.NothingServedBookIDs, books},
+		"kept versions":          {got.KeptVersionIDs, versionIDs},
+		"served_kept versions":   {got.ServedKeptVersionIDs, versionIDs},
+		"nothing_served version": {got.NothingServedVersionIDs, versionIDs},
+	} {
+		if !reflect.DeepEqual(c.got, c.want) {
+			t.Errorf("%s = %v, want %v", name, c.got, c.want)
+		}
+	}
+	if got.KeptFiles != 3 || got.ServedKept != 3 || got.NothingServed != 3 {
+		t.Errorf("counts = %d/%d/%d, want 3 versions each", got.KeptFiles, got.ServedKept, got.NothingServed)
 	}
 }
