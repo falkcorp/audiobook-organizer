@@ -1,5 +1,5 @@
 // file: internal/database/retired_shell.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 873c25c2-790a-4312-b6fa-37d376699776
 // last-edited: 2026-10-28
 
@@ -157,12 +157,13 @@ type deleteBookOpts struct {
 	// allowRetiredShell lets the delete proceed for a book that is a retired
 	// shell. It is the seam for the journaled purge (retire plan PR 6), the
 	// one caller that means to delete a shell: it snapshots the shell first, so
-	// a per-version restore can put the book back, and then sets this. Nothing
-	// sets it yet, on purpose: until that purge exists a delete of a shell has
-	// no undo, so DeleteBook refuses it for every caller. It is deliberately
-	// not reachable through DeleteBook(id) or any exported function; the purge
-	// PR adds the exported entry point (its own method, so the refusal is never
-	// bypassed by a flag a caller could pass by accident).
+	// a per-version restore can put the book back, and then sets this. Today
+	// only DeleteRetiredShellForTest sets it (retired_shell_seed.go: it deletes
+	// nothing outside a test binary, ErrShellDeleteOutsideTest), so no
+	// production path deletes a shell and DeleteBook refuses it for every
+	// caller. It is deliberately not reachable through DeleteBook(id) or any
+	// exported function a caller could pass it to by accident; the purge PR adds
+	// its own exported entry point, never a flag.
 	allowRetiredShell bool
 }
 
