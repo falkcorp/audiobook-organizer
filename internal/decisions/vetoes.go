@@ -1,7 +1,7 @@
 // file: internal/decisions/vetoes.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6a2e90c7-35d1-4b48-9f6e-d17b83a40c52
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package decisions
 
@@ -252,8 +252,8 @@ type loadedRows struct {
 }
 
 // readRows returns the three veto families from ONE snapshot, closed before
-// it returns. With a RowCache it is the cached read while no record has been
-// written since; otherwise a fresh scan.
+// it returns. With a RowCache it is the cached read while no veto row has
+// been written since; otherwise a fresh scan.
 func (s *Store) readRows(ctx context.Context) (*loadedRows, error) {
 	if s.cache == nil {
 		return s.scanRows(ctx)

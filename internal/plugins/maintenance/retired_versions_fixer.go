@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-10-28
 
@@ -454,6 +454,7 @@ type retiredRun struct {
 	sessionUndo *retiredUndo
 }
 
+// newRun builds a run with the owner's rejects loaded (newRunWithMinAge).
 func (f *retiredVersionsFixer) newRun(ctx context.Context, params json.RawMessage) (*retiredRun, error) {
 	minAge, err := parseRetiredVersionsParams(params)
 	if err != nil {
@@ -462,11 +463,22 @@ func (f *retiredVersionsFixer) newRun(ctx context.Context, params json.RawMessag
 	return f.newRunWithMinAge(ctx, minAge)
 }
 
+// newRunUnloaded is newRun without loading the owner's rejects: the caller
+// loads them (loadVetoes) at the point it first needs them. Replan uses it so a
+// row that is no longer in the trash answers "gone" without paying the load.
+func (f *retiredVersionsFixer) newRunUnloaded(ctx context.Context, params json.RawMessage) (*retiredRun, error) {
+	minAge, err := parseRetiredVersionsParams(params)
+	if err != nil {
+		return nil, err
+	}
+	return f.buildRun(ctx, minAge)
+}
+
 // retiredShared is what every row of one run needs and no row changes: the
 // series names the owner-manual check reads, the listing of users the
 // listening-state probe asks, and the index of unreversed combine journals.
 // The owner's rejects are NOT here: they are resolved against the books as they
-// are now, and an apply changes that between rows (newRunWithMinAge).
+// are now, and an apply changes that between rows (loadVetoes).
 // Each is a whole-library read (every series, every user, every combine
 // journal), so a run reads them ONCE. An apply row reads them from its
 // retiredSession; a plan reads them once for its single run.
@@ -509,6 +521,39 @@ func (f *retiredVersionsFixer) loadShared(ctx context.Context) (*retiredShared, 
 // is the session's, read before the first row and so never under the merge
 // lock; otherwise it is read now.
 func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time.Duration) (*retiredRun, error) {
+	run, err := f.buildRun(ctx, minAge)
+	if err != nil {
+		return nil, err
+	}
+	if err := run.loadVetoes(ctx); err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+// loadVetoes reads the owner's rejects for THIS run, never shared across the
+// rows of an apply session: every stored id is resolved through the
+// retired-version index and the merge chain, and the row before this one may
+// just have retired a shell a reject names. A snapshot resolved before that
+// retire would not see that the reject now reaches the holder, and the veto
+// would be dropped. Only the raw log rows are shared, through the server's
+// decisions.RowCache, which stays warm until a veto row is written, so what a
+// load costs per row is the resolution of the stored ids, not a scan of the
+// log. The load is explicit, not left to the first query, so a run that cannot
+// READ the rejects (the store or a journal failed) is refused whole instead of
+// becoming a plan of error rows. An id that cannot be resolved is not such a
+// failure: the rows it touches are held (owner_veto_unresolvable), the rest
+// planned.
+func (r *retiredRun) loadVetoes(ctx context.Context) error {
+	if err := r.vetoes.Load(ctx); err != nil {
+		return fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
+	}
+	return nil
+}
+
+// buildRun is the run without the owner's rejects loaded; newRunWithMinAge adds
+// the load.
+func (f *retiredVersionsFixer) buildRun(ctx context.Context, minAge time.Duration) (*retiredRun, error) {
 	ops := f.p.deps.OpsStore()
 	paths := f.p.deps.FragmentRepairReader()
 	if ops == nil || paths == nil {
@@ -527,22 +572,11 @@ func (f *retiredVersionsFixer) newRunWithMinAge(ctx context.Context, minAge time
 			return nil, err
 		}
 	}
-	// The owner's rejects are read for THIS run, never shared across the rows of
-	// an apply session: every stored id is resolved through the retired-version
-	// index and the merge chain, and the row before this one may just have
-	// retired a shell a reject names. A snapshot resolved before that retire
-	// would not see that the reject now reaches the holder, and the veto would be
-	// dropped (decisions.RowCache keeps only the raw log rows, so the scan is
-	// still shared). The reader loads now, so a run that cannot READ the rejects
-	// (the store or a journal failed) is refused whole instead of becoming a plan
-	// of error rows. An id that cannot be resolved is not such a failure: the rows
-	// it touches are held (owner_veto_unresolvable), the rest planned.
+	// The reader is handed over fresh and unloaded (OwnerVetoes); see loadVetoes
+	// for why each run loads its own.
 	vetoes := f.p.deps.OwnerVetoes()
 	if vetoes == nil {
 		return nil, fmt.Errorf("%s: the owner's rejects cannot be read on this server; refusing to plan without them", retiredVersionsFixerID)
-	}
-	if err := vetoes.Load(ctx); err != nil {
-		return nil, fmt.Errorf("%s: read the owner's rejects: %w", retiredVersionsFixerID, err)
 	}
 	now := time.Now
 	if f.now != nil {
@@ -1559,7 +1593,7 @@ func retiredSummary(rows []repairs.Row) string {
 //     under the planned fingerprint, which the engine reports as not_applicable
 //     (skipped), not changed_since_plan: the work is done, not different.
 func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	run, err := f.newRun(ctx, params)
+	run, err := f.newRunUnloaded(ctx, params)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1573,6 +1607,10 @@ func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessag
 			SkipReason: "the book is no longer in the trash", Reason: "the book is no longer in the trash", Risk: repairs.RiskLow}
 		r.Fingerprint = retiredFingerprint(&retiredFacts{shell: database.BookCore{ID: planned.RowID}, absentOnDisk: -1, statUnknown: -1}, retCatGone)
 		return r, nil
+	}
+	// After the trash check: a row that is gone needs no rejects.
+	if err := run.loadVetoes(ctx); err != nil {
+		return repairs.Row{}, err
 	}
 	row, err := run.classify(ctx, b.Core())
 	if err != nil || !f.applyOnFor(ctx) {

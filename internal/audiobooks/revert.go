@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.10
+// version: 1.97.11
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-28
 
@@ -743,6 +743,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 	priorPending := view.priorPending
 	pendingNow := map[string]bool{}
 	plan.NoteHandOffs(changes)
+	plan.NoteRetiredInto(changes)
 	for _, c := range plan.Order {
 		err := plan.Gate(c)
 		already := false
@@ -1120,7 +1121,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeBookFileRetire:
 		return rs.revertBookFileRetire(c)
 	case undo.ChangeTypeBookVersionCreate:
-		return rs.revertBookVersionCreate(c)
+		return rs.revertBookVersionCreate(c, plan)
 	case undo.ChangeTypeRetiredVersionRehome:
 		return rs.revertRetiredVersionRehome(c)
 	case "organize_failed", "organize_skipped", "organize_summary",

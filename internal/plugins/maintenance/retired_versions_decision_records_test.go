@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/retired_versions_decision_records_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7d92b1-5a38-4c06-b2f9-8d1a63c0e745
 // last-edited: 2026-10-28
 
 package maintenance
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
 // retiredHistory is the decision chain of one shell's retired-versions
@@ -123,4 +125,51 @@ func TestRetiredApply_RevertWritesTheUndoneRecordAfterTheApplied(t *testing.T) {
 	require.Equal(t, retiredVersionID(opID, shell), undone.Snapshot.Current["version_id"])
 
 	require.Equal(t, retCatWouldRetire, rf.plan()[shell].Class, "undone is a label, the shell stays plannable")
+}
+
+// cutAfterRetireRows commits the retire batch and then dies, before the
+// caller's recordApplied: the cut-off between RetireRows and the record.
+type cutAfterRetireRows struct{ retireWriter }
+
+func (c cutAfterRetireRows) RetireRows(shellID, holderID, versionID string, rows []retireRow) error {
+	if err := c.retireWriter.RetireRows(shellID, holderID, versionID, rows); err != nil {
+		return err
+	}
+	return errors.New("injected: the process died after the retire batch committed")
+}
+
+// A retire cut off after RetireRows and before its record committed its rows
+// but never wrote `applied`, and nothing visits the shell again except the
+// fresh plan that finishes its tail. That finish writes the record, from the
+// version's own id and retire op (op-cut, not the finishing op), and exactly one.
+func TestRetiredApply_TailFinishWritesTheAppliedRecordACutOffRetireMissed(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	orig := rf.f.retireWriterFor
+	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(w)
+		return cutAfterRetireRows{inner}, err
+	}
+	shell := rf.ids["would-retire"]
+	out := rf.applyRows(rf.f, res, []string{shell}, false, "op-cut")
+	require.Zero(t, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	require.Empty(t, rf.retiredHistory("would-retire"), "the cut-off came before the record")
+	files, err := rf.st.GetBookFiles(shell)
+	require.NoError(t, err)
+	require.Empty(t, files, "the retire batch did commit: the shell owns no row")
+
+	rf.f.retireWriterFor = orig
+	fresh := rf.planAll()
+	require.Equal(t, retCatTailPending, rf.retiredPlanRow(fresh, "would-retire").Class)
+	out = rf.applyRows(rf.f, fresh, []string{shell}, false, "op-fresh")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1, "exactly one applied record")
+	require.Equal(t, decisions.DecisionApplied, hist[0].Decision)
+	require.Equal(t, "op-cut", hist[0].Snapshot.Current["op_id"])
+	require.Equal(t, retiredVersionID("op-cut", shell), hist[0].Snapshot.Current["version_id"])
+	require.Equal(t, rf.ids["primary"], hist[0].Snapshot.Current["target_id"])
 }

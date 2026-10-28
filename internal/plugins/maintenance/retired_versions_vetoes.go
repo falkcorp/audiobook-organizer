@@ -66,7 +66,7 @@ var _ OwnerVetoReader = (*ownerVetoReader)(nil)
 
 // NewOwnerVetoReader builds the owner-veto reader over store. rows (nil is
 // fine) lets the readers a long-lived owner builds share one scan of the
-// decision log while no record is written (decisions.RowCache); the ids are
+// decision log while no veto row is written (decisions.RowCache); the ids are
 // still resolved afresh by every reader. The result is nil (the fixer then
 // refuses to plan) when the store cannot serve the decisions KV or the
 // retired-version index, which a non-Pebble backend cannot.
@@ -213,8 +213,9 @@ func mergeSurvivorPathResolver(store retiredVetoReaderStore, follows map[string]
 // retire has committed, with the store it already holds
 // (fixer.p.deps.OpsStore()). The revert writes the `undone` record itself
 // (audiobooks.RevertService.recordRetireUndone), as the undo does not reach
-// into this package. The record is a label: it vetoes nothing. A retry that finds the same record
-// already there writes nothing (decisions.RecordRetiredApplied).
+// into this package. The record is a label: it vetoes nothing. A retry that
+// finds the same record already there writes nothing
+// (decisions.RecordRetiredApplied).
 func recordRetiredVersionApplied(store any, ev decisions.RetiredVersionsEvent) (*decisions.Record, error) {
 	rec, err := retiredDecisionRecorder(store)
 	if err != nil {

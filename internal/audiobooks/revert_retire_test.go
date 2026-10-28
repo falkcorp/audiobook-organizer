@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
 // last-edited: 2026-10-28
 
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -394,6 +395,13 @@ func TestRevertOperationForBooks_RevertsOneShellAtATime(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 3, reverted, "only the rows of the named shell are marked")
+	// The undone record follows the scope too: the named shell's chain gets
+	// one, the other shell's retire is still in force and gets none.
+	hist := fx.historyOf(t, fx.shell.ID)
+	require.Len(t, hist, 1)
+	assert.Equal(t, decisions.DecisionUndone, hist[0].Decision)
+	assert.Equal(t, "ver-one", hist[0].Snapshot.Current["version_id"])
+	assert.Empty(t, fx.historyOf(t, shell2.ID), "the unscoped shell was not reverted")
 
 	res, err = rs.RevertOperationForBooks("op-two", []string{shell2.ID})
 	require.NoError(t, err, "%+v", res)
