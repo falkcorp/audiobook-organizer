@@ -1,5 +1,5 @@
 // file: internal/database/dbtest/memoprows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: aed47c42-ea13-41db-a55f-21821dbb3d0c
 // last-edited: 2026-10-27
 
@@ -40,22 +40,25 @@ func TestOpRowStoresAgree(t *testing.T) {
 	var want string
 	for _, name := range []string{"mem", "pebble"} {
 		s := stores[name]
-		if err := s.ReplaceOpRows("op-a", 4, rows(4, "1")); err != nil {
+		if err := s.ReplaceOpRowsPrefix("op-a", "r", 4, rows(4, "1")); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.ReplaceOpRows("op-b", 2, rows(2, "b")); err != nil {
+		if err := s.ReplaceOpRowsPrefix("op-b", "r", 2, rows(2, "b")); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.ReplaceOpRows("op-a", 3, rows(3, "2")); err != nil {
+		if err := s.ReplaceOpRowsPrefix("op-a", "r", 3, rows(3, "2")); err != nil {
 			t.Fatal(err)
 		}
 		got := dump(s, "op-a") + "#" + dump(s, "op-b")
-		if err := s.ReplaceOpRows("op-b", 0, nil); err != nil {
+		if err := s.ReplaceOpRowsPrefix("op-b", "r", 0, nil); err != nil {
 			t.Fatal(err)
 		}
 		got += "#" + dump(s, "op-b")
-		if err := s.ReplaceOpRows("", 0, nil); err == nil {
+		if err := s.ReplaceOpRowsPrefix("", "r", 0, nil); err == nil {
 			t.Fatalf("%s: empty operation id accepted", name)
+		}
+		if err := s.ReplaceOpRowsPrefix("op-a", "", 0, nil); err == nil {
+			t.Fatalf("%s: an empty row prefix (every namespace) accepted", name)
 		}
 		if name == "mem" {
 			want = got
@@ -91,8 +94,8 @@ func TestOpRowStoresAgree_ReplaceOpRowsPrefixLeavesOtherRowsAlone(t *testing.T) 
 				t.Fatalf("%s: %v", name, err)
 			}
 		}
-		must(s.ReplaceOpRows("op-a", 2, set("plan/1", "plan/2")))
-		must(s.ReplaceOpRows("op-b", 1, set("lists/x/000000")))
+		must(s.ReplaceOpRowsPrefix("op-a", "plan/", 2, set("plan/1", "plan/2")))
+		must(s.ReplaceOpRowsPrefix("op-b", "lists/", 1, set("lists/x/000000")))
 		must(s.ReplaceOpRowsPrefix("op-a", "lists/", 2, set("lists/x/000000", "lists/x/000001")))
 		must(s.ReplaceOpRowsPrefix("op-a", "lists/", 1, set("lists/y/000000")))
 		if got, want := fmt.Sprint(list(s, "op-a")), "[lists/y/000000 plan/1 plan/2]"; got != want {

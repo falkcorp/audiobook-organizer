@@ -1,5 +1,5 @@
 // file: internal/database/op_class_lists_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e2a4c71-5d03-4b96-a1f8-6c3d9b7e0f24
 // last-edited: 2026-10-27
 
@@ -190,7 +190,7 @@ func TestClassLists_WritesLeaveTheOperationsOtherRowsIntact(t *testing.T) {
 		id := []string{"fixer.merge-authors/0001", "fixer.merge-authors/0002"}[i]
 		return OpRow{ID: id, Index: []byte("ix"), Data: []byte("plan row " + id)}, nil
 	}
-	if err := p.ReplaceOpRows("op-a", 2, other); err != nil {
+	if err := p.ReplaceOpRowsPrefix("op-a", "fixer.merge-authors/", 2, other); err != nil {
 		t.Fatal(err)
 	}
 	rowIDs := func() []string {
