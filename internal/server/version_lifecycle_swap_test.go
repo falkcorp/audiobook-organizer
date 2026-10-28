@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_swap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b1d8e3f-7a24-4c95-8e0b-d2f4a9c1b753
 // last-edited: 2026-10-28
 
@@ -172,7 +172,7 @@ func errorCodeOf(t *testing.T, w *httptest.ResponseRecorder) string {
 // in its slot, and the book's file_path follows.
 func TestHandleTrashVersion_ActiveSwapsFirst(t *testing.T) {
 	f := newSwapTrashFixture(t)
-	f.add(database.BookVersionStatusAlt, 48*time.Hour, "Old.mp3")
+	f.add(database.BookVersionStatusAlt, 48*time.Hour, "Knightfall.mp3")
 	target, _ := f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
 
 	w := f.trash(f.active.ID)
@@ -261,8 +261,8 @@ func TestHandleTrashVersion_OnlyVersionRefused(t *testing.T) {
 // (c) Every other version is trashed, retired, purging or has no files: 409.
 func TestHandleTrashVersion_NoEligibleOtherVersionRefused(t *testing.T) {
 	f := newSwapTrashFixture(t)
-	f.add(database.BookVersionStatusTrash, time.Hour, "Trashed.mp3")
-	f.add(database.BookVersionStatusPurging, time.Hour, "Purging.mp3")
+	f.add(database.BookVersionStatusTrash, time.Hour, "Cry for Blood.mp3")
+	f.add(database.BookVersionStatusPurging, time.Hour, "Battle for the Cowl.mp3")
 	f.add(database.BookVersionStatusInactivePurged, time.Hour, "")
 	f.add(database.BookVersionStatusAlt, time.Minute, "") // an alt, but it owns no files
 	before := f.snapshot()
@@ -328,20 +328,37 @@ func TestHandleTrashVersion_FolderBookRefused(t *testing.T) {
 	}
 }
 
-// (d) The swap fails: the version is not trashed, the answer says so, and the
-// versions are back as they were because nothing had moved yet.
-func TestHandleTrashVersion_SwapFailureDoesNotTrash(t *testing.T) {
+// A regular file where the leaving version's slot must be: the preflight sees
+// that the slot is not a folder and the trash is refused (409) before anything
+// is written. (It used to pass the preflight and fail inside the swap, which is
+// no longer how a swap failure is injected.)
+func TestHandleTrashVersion_SlotThatIsAFileIsRefused(t *testing.T) {
 	f := newSwapTrashFixture(t)
 	f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
-	// A regular file where the leaving version's slot must be: the slot cannot
-	// be created, before anything has moved. The preflight only looks at the
-	// destination file, so it still passes and the failure is the swap's own.
 	if err := os.MkdirAll(versions.VersionsDir(f.dir), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(versions.VersionSlotDir(f.dir, f.active.ID), []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	f.requireRefusedTrash("is a file, not a folder")
+}
+
+// (d) The swap fails after the preflight passed: the version is not trashed,
+// the answer says so, and the versions are back as they were because nothing had
+// moved yet. The failure is a .versions folder the process may not write to: the
+// leaving version's slot cannot be created.
+func TestHandleTrashVersion_SwapFailureDoesNotTrash(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newSwapTrashFixture(t)
+	f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	versionsDir := versions.VersionsDir(f.dir)
+	if err := os.Chmod(versionsDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(versionsDir, 0o755) })
 	before := f.snapshot()
 
 	w := f.trash(f.active.ID)
@@ -358,6 +375,97 @@ func TestHandleTrashVersion_SwapFailureDoesNotTrash(t *testing.T) {
 	// Nothing had moved, so the swap put the statuses back (each version was
 	// written twice, marked and restored, so only the statuses are compared).
 	f.requireSameStatuses(before, false)
+}
+
+// failingFileStore fails the book_file write of one row, so a swap that has moved
+// its files cannot repoint that row: RunVersionSwap returns ErrSwapIncomplete.
+type failingFileStore struct {
+	database.Store
+	failFileID string
+}
+
+func (s *failingFileStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if fileID == s.failFileID {
+		return nil, errors.New("injected: book_file write failed")
+	}
+	return s.Store.ModifyBookFile(bookID, fileID, fn)
+}
+
+// The swap moves the files and then cannot write a row: RunVersionSwap returns
+// ErrSwapIncomplete and the versions are left in swapping_out/swapping_in. The
+// answer is its own code, says the books' versions are stuck and need repair, and
+// does not invite a retry; the version is not trashed. A retried DELETE (with the
+// database healthy again) is refused (409) for BOTH versions and trashes neither:
+// the leaving version is no longer 'active', so without the lifecycle's guard
+// the retry went straight to MarkTrashed, and 14 days later the purge deleted
+// the files the book plays.
+func TestHandleTrashVersion_SwapIncompleteDoesNotTrashAndRetryIsRefused(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	alt, _ := f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	var toRow string
+	rows, err := f.store.GetBookFiles(f.book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.VersionID == alt.ID {
+			toRow = r.ID
+		}
+	}
+	if toRow == "" {
+		t.Fatal("no book_file row for the alt")
+	}
+	healthy := f.srv.store
+	f.srv.store = &failingFileStore{Store: healthy, failFileID: toRow}
+
+	w := f.trash(f.active.ID)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if code := errorCodeOf(t, w); code != codeVersionSwapIncomplete {
+		t.Errorf("code = %q, want %q: %s", code, codeVersionSwapIncomplete, w.Body.String())
+	}
+	body := strings.ToLower(w.Body.String())
+	for _, want := range []string{"moved files", "stuck mid-swap", "needs repair"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the answer does not say %q: %s", want, w.Body.String())
+		}
+	}
+	for _, invites := range []string{"try again", "can be trashed again", "retry"} {
+		if strings.Contains(body, invites) {
+			t.Errorf("the answer invites a retry (%q): %s", invites, w.Body.String())
+		}
+	}
+	for _, id := range []string{f.active.ID, alt.ID} {
+		if got := f.version(id); got.Status == database.BookVersionStatusTrash || got.TrashedAt != nil {
+			t.Errorf("version %s was trashed after an incomplete swap: status=%s", id, got.Status)
+		}
+	}
+	if got := f.version(f.active.ID); got.Status != database.BookVersionStatusSwappingOut {
+		t.Errorf("leaving version status = %s, want swapping_out", got.Status)
+	}
+	if got := f.version(alt.ID); got.Status != database.BookVersionStatusSwappingIn {
+		t.Errorf("entering version status = %s, want swapping_in", got.Status)
+	}
+
+	// The database is healthy again; the client retries the DELETE.
+	f.srv.store = healthy
+	disk := diskTree(t, f.dir)
+	for _, id := range []string{f.active.ID, alt.ID} {
+		w := f.trash(id)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("retry of %s: expected 409, got %d: %s", id, w.Code, w.Body.String())
+		}
+		if code := errorCodeOf(t, w); code != codeVersionSwapping {
+			t.Errorf("retry of %s: code = %q, want %q", id, code, codeVersionSwapping)
+		}
+		if got := f.version(id); got.Status == database.BookVersionStatusTrash || got.TrashedAt != nil {
+			t.Errorf("the retry trashed %s: status=%s TrashedAt=%v", id, got.Status, got.TrashedAt)
+		}
+	}
+	if got := diskTree(t, f.dir); got != disk {
+		t.Errorf("the retry changed the disk:\nbefore:\n%s\nafter:\n%s", disk, got)
+	}
 }
 
 // diskTree describes every entry under roots (type, link target, content), so

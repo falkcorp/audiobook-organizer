@@ -1,5 +1,5 @@
 // file: internal/versions/swap_target_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3c9e1b7d-52a4-4e68-b0f3-8d6a2c4e9175
 // last-edited: 2026-10-28
 
@@ -102,9 +102,9 @@ func requireNoTarget(t *testing.T, err error, wantInReasons ...string) {
 // The newest alt that owns files wins, whatever order the store lists them in.
 func TestPickSwapTarget_NewestAltWithFiles(t *testing.T) {
 	f := newSwapFixture(t)
-	f.add(database.BookVersionStatusAlt, 48*time.Hour, "Old.mp3")
-	newest := f.add(database.BookVersionStatusAlt, time.Hour, "New.mp3")
-	f.add(database.BookVersionStatusAlt, 24*time.Hour, "Mid.mp3")
+	f.add(database.BookVersionStatusAlt, 48*time.Hour, "Knightfall.mp3")
+	newest := f.add(database.BookVersionStatusAlt, time.Hour, "No Mans Land.mp3")
+	f.add(database.BookVersionStatusAlt, 24*time.Hour, "Zero Year.mp3")
 
 	got, err := f.pick()
 	if err != nil {
@@ -121,7 +121,7 @@ func TestPickSwapTarget_TieGoesToSmallerID(t *testing.T) {
 	f := newSwapFixture(t)
 	at := time.Now().Add(-time.Hour)
 	var ids []string
-	for _, name := range []string{"A.mp3", "B.mp3", "C.mp3"} {
+	for _, name := range []string{"Arkham Asylum.mp3", "Death of the Family.mp3", "Under the Red Hood.mp3"} {
 		v, err := f.store.CreateBookVersion(&database.BookVersion{
 			BookID: f.book.ID, Status: database.BookVersionStatusAlt, Format: "mp3", Source: "deluge", IngestDate: at,
 		})
@@ -154,16 +154,17 @@ func TestPickSwapTarget_TieGoesToSmallerID(t *testing.T) {
 // version is never chosen, and is named in the refusal when nothing else is.
 func TestPickSwapTarget_IgnoresEveryStatusButAlt(t *testing.T) {
 	f := newSwapFixture(t)
-	for _, st := range []string{
+	titles := []string{"Gotham Central", "Bane", "Ego", "Officer Down", "Broken City", "Prey"}
+	for i, st := range []string{
 		database.BookVersionStatusTrash, database.BookVersionStatusPurging, database.BookVersionStatusPurgeFailed,
 		database.BookVersionStatusInactivePurged, database.BookVersionStatusPending, database.BookVersionStatusBlockedForRedownload,
 	} {
-		f.add(st, time.Minute, st+".mp3")
+		f.add(st, time.Minute, titles[i]+".mp3")
 	}
 	_, err := f.pick()
 	requireNoTarget(t, err, "is trash", "is purging", "is inactive_purged")
 
-	alt := f.add(database.BookVersionStatusAlt, 72*time.Hour, "Alt.mp3")
+	alt := f.add(database.BookVersionStatusAlt, 72*time.Hour, "Court of Owls.mp3")
 	got, err := f.pick()
 	if err != nil {
 		t.Fatalf("with an alt present: %v", err)
@@ -199,7 +200,7 @@ func TestPickSwapTarget_IgnoresRetired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	altFile := filepath.Join(VersionSlotDir(f.bookDir, alt.ID), "alt.m4b")
+	altFile := filepath.Join(VersionSlotDir(f.bookDir, alt.ID), "Mad Love.m4b")
 	writeTestFile(t, altFile, "alt")
 	if err := f.store.CreateBookFile(&database.BookFile{BookID: f.holderID, VersionID: alt.ID, FilePath: altFile, Format: "m4b"}); err != nil {
 		t.Fatal(err)
@@ -228,7 +229,7 @@ func TestPickSwapTarget_OnlyVersion(t *testing.T) {
 func TestPickSwapTarget_AltWithoutFilesIsSkipped(t *testing.T) {
 	f := newSwapFixture(t)
 	f.add(database.BookVersionStatusAlt, time.Minute, "") // newest, no files
-	withFiles := f.add(database.BookVersionStatusAlt, 10*time.Hour, "Files.mp3")
+	withFiles := f.add(database.BookVersionStatusAlt, 10*time.Hour, "Year Two.mp3")
 	got, err := f.pick()
 	if err != nil {
 		t.Fatal(err)
@@ -247,12 +248,12 @@ func TestPickSwapTarget_AltWithoutFilesIsSkipped(t *testing.T) {
 // is picked instead; the swap would otherwise fail half way through its moves.
 func TestPickSwapTarget_MissingOrBlockedFilesFallThrough(t *testing.T) {
 	f := newSwapFixture(t)
-	gone := f.add(database.BookVersionStatusAlt, time.Minute, "Gone.mp3")
-	fine := f.add(database.BookVersionStatusAlt, time.Hour, "Fine.mp3")
+	gone := f.add(database.BookVersionStatusAlt, time.Minute, "Face the Face.mp3")
+	fine := f.add(database.BookVersionStatusAlt, time.Hour, "Dark Victory.mp3")
 	// blocked's file would land on a file at the book folder that no version owns.
-	blocked := f.add(database.BookVersionStatusAlt, 30*time.Minute, "Stranger.mp3")
-	writeTestFile(t, filepath.Join(f.bookDir, "Stranger.mp3"), "not in any version")
-	if err := os.Remove(filepath.Join(VersionSlotDir(f.bookDir, gone.ID), "Gone.mp3")); err != nil {
+	blocked := f.add(database.BookVersionStatusAlt, 30*time.Minute, "Venom.mp3")
+	writeTestFile(t, filepath.Join(f.bookDir, "Venom.mp3"), "not in any version")
+	if err := os.Remove(filepath.Join(VersionSlotDir(f.bookDir, gone.ID), "Face the Face.mp3")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,18 +265,18 @@ func TestPickSwapTarget_MissingOrBlockedFilesFallThrough(t *testing.T) {
 		t.Errorf("picked %s, want %s (%s has a missing file, %s a file that would land on a stranger's)", got.ID, fine.ID, gone.ID, blocked.ID)
 	}
 
-	if err := os.Remove(filepath.Join(VersionSlotDir(f.bookDir, fine.ID), "Fine.mp3")); err != nil {
+	if err := os.Remove(filepath.Join(VersionSlotDir(f.bookDir, fine.ID), "Dark Victory.mp3")); err != nil {
 		t.Fatal(err)
 	}
 	_, err = f.pick()
-	requireNoTarget(t, err, gone.ID, blocked.ID, fine.ID, "cannot be read", "already there")
+	requireNoTarget(t, err, gone.ID, blocked.ID, fine.ID, "is missing", "already there")
 }
 
 // The active version's own file being gone makes every candidate ineligible: the
 // swap would fail at its first move.
 func TestPickSwapTarget_ActiveVersionFileMissing(t *testing.T) {
 	f := newSwapFixture(t)
-	f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
+	f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
 	if err := os.Remove(f.rootAud); err != nil {
 		t.Fatal(err)
 	}
@@ -287,8 +288,8 @@ func TestPickSwapTarget_ActiveVersionFileMissing(t *testing.T) {
 // rows into both versions' file sets.
 func TestPickSwapTarget_UnmigratedFileRowRefuses(t *testing.T) {
 	f := newSwapFixture(t)
-	f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
-	orphan := filepath.Join(f.bookDir, "Bonus.mp3")
+	f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
+	orphan := filepath.Join(f.bookDir, "The Killing Joke.mp3")
 	writeTestFile(t, orphan, "x")
 	if err := f.store.CreateBookFile(&database.BookFile{BookID: f.book.ID, FilePath: orphan, Format: "mp3"}); err != nil {
 		t.Fatal(err)
@@ -301,8 +302,8 @@ func TestPickSwapTarget_UnmigratedFileRowRefuses(t *testing.T) {
 func TestPickSwapTarget_UnfinishedSwapRefuses(t *testing.T) {
 	for _, st := range []string{database.BookVersionStatusSwappingIn, database.BookVersionStatusSwappingOut} {
 		f := newSwapFixture(t)
-		f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
-		f.add(st, time.Minute, "Half.mp3")
+		f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
+		f.add(st, time.Minute, "Contagion.mp3")
 		_, err := f.pick()
 		requireNoTarget(t, err, "did not finish", st)
 	}
@@ -312,7 +313,7 @@ func TestPickSwapTarget_UnfinishedSwapRefuses(t *testing.T) {
 // preflight on the way: the files move, the statuses flip, file_path follows.
 func TestPickSwapTarget_ThenRunVersionSwap(t *testing.T) {
 	f := newSwapFixture(t)
-	target := f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
+	target := f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
 	got, err := f.pick()
 	if err != nil {
 		t.Fatal(err)
@@ -328,10 +329,10 @@ func TestPickSwapTarget_ThenRunVersionSwap(t *testing.T) {
 	if v, _ := f.store.GetBookVersion(f.active.ID); v.Status != database.BookVersionStatusAlt {
 		t.Errorf("old active status = %s, want alt", v.Status)
 	}
-	if _, err := os.Stat(filepath.Join(f.bookDir, "Alt.mp3")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.bookDir, "Court of Owls.mp3")); err != nil {
 		t.Errorf("the target's file is not at the book folder: %v", err)
 	}
-	if b, _ := f.store.GetBookByID(f.book.ID); b.FilePath != filepath.Join(f.bookDir, "Alt.mp3") {
+	if b, _ := f.store.GetBookByID(f.book.ID); b.FilePath != filepath.Join(f.bookDir, "Court of Owls.mp3") {
 		t.Errorf("book file_path = %s, want the target's file", b.FilePath)
 	}
 }
@@ -348,7 +349,7 @@ func TestRunVersionSwap_RefusesRetiredVersion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ordFile := filepath.Join(VersionSlotDir(f.bookDir, ordinary.ID), "ord.m4b")
+			ordFile := filepath.Join(VersionSlotDir(f.bookDir, ordinary.ID), "Dark Knight Returns.m4b")
 			writeTestFile(t, ordFile, "ordinary")
 			if err := f.store.CreateBookFile(&database.BookFile{BookID: f.holderID, VersionID: ordinary.ID, FilePath: ordFile, Format: "m4b"}); err != nil {
 				t.Fatal(err)
@@ -383,7 +384,7 @@ func TestRunVersionSwap_RefusesRetiredVersion(t *testing.T) {
 
 	// Control: the same two versions, neither retired, swap.
 	f := newSwapFixture(t)
-	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
+	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
 	if err := RunVersionSwap(context.Background(), f.store, VersionSwapParams{
 		BookID: f.book.ID, FromVersionID: f.active.ID, ToVersionID: alt.ID,
 	}, nil, nil, nil); err != nil {
@@ -395,18 +396,28 @@ func TestRunVersionSwap_RefusesRetiredVersion(t *testing.T) {
 // were: otherwise the book is left with no active version (the active index is
 // dropped when the version leaves 'active').
 func TestRunVersionSwap_NothingMovedRestoresStatuses(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
 	f := newSwapFixture(t)
-	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
-	// A regular file where the leaving version's slot must be: EnsureVersionsDir
-	// fails for it before anything moves, and the preflight (which only looks at
-	// the destination's file, not its folder) still passes.
-	writeTestFile(t, VersionSlotDir(f.bookDir, f.active.ID), "not a directory")
+	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
+	// A .versions folder the process may not write to: the leaving version's
+	// slot cannot be created (step 2) before anything has moved, while the
+	// preflight, which only looks, still passes.
+	versionsDir := VersionsDir(f.bookDir)
+	if err := os.Chmod(versionsDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(versionsDir, 0o755) })
 
 	err := RunVersionSwap(context.Background(), f.store, VersionSwapParams{
 		BookID: f.book.ID, FromVersionID: f.active.ID, ToVersionID: alt.ID,
 	}, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "move-to-versions") {
-		t.Fatalf("err = %v, want the move-to-versions failure (the slot is a file)", err)
+		t.Fatalf("err = %v, want the move-to-versions failure (the slot cannot be created)", err)
+	}
+	if errors.Is(err, ErrSwapRefused) || errors.Is(err, ErrSwapIncomplete) {
+		t.Errorf("err = %v: a failure that put everything back is neither a refusal nor an incomplete swap", err)
 	}
 	if v, _ := f.store.GetBookVersion(f.active.ID); v.Status != database.BookVersionStatusActive {
 		t.Errorf("leaving version status = %s, want active again", v.Status)
@@ -429,7 +440,7 @@ func TestRunVersionSwap_NothingMovedRestoresStatuses(t *testing.T) {
 // it before it writes anything.
 func TestSwap_RefusesBookWhosePathIsAFolder(t *testing.T) {
 	f := newSwapFixture(t)
-	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Alt.mp3")
+	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Court of Owls.mp3")
 	if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error {
 		b.FilePath = f.bookDir
 		return nil

@@ -1,12 +1,16 @@
 // file: internal/versions/lifecycle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f2c6d1a-4b7e-4c93-a5d0-1e9b3f7a2c58
 // last-edited: 2026-10-28
 
 package versions
 
 import (
+	"errors"
 	"fmt"
+	"strings"
+	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -41,4 +45,30 @@ func promoteNewestAltForTest(store database.Store, bookID string) error {
 		return fmt.Errorf("promote %s: %w", best.ID, err)
 	}
 	return nil
+}
+
+// MarkTrashed refuses a version in swapping_out/swapping_in and leaves the
+// caller's copy alone: a swap that stopped half way is not undone by trashing the
+// version it left (a retried DELETE after RunVersionSwap returned
+// ErrSwapIncomplete would do exactly that, and the cleanup would then delete
+// files the book plays).
+func TestMarkTrashed_RefusesASwappingVersion(t *testing.T) {
+	for _, st := range []string{database.BookVersionStatusSwappingOut, database.BookVersionStatusSwappingIn} {
+		v := &database.BookVersion{ID: "01BATMANBEGINS", BookID: "book-1", Status: st}
+		err := MarkTrashed(v, time.Now())
+		if !errors.Is(err, ErrVersionSwapping) {
+			t.Fatalf("MarkTrashed(%s) = %v, want ErrVersionSwapping", st, err)
+		}
+		if !strings.Contains(err.Error(), st) || !strings.Contains(err.Error(), "needs repair") {
+			t.Errorf("MarkTrashed(%s) error does not say what to do: %v", st, err)
+		}
+		if v.Status != st || v.TrashedAt != nil {
+			t.Errorf("MarkTrashed changed the caller's copy: status=%s TrashedAt=%v", v.Status, v.TrashedAt)
+		}
+	}
+	// The control: an alt is trashed.
+	alt := &database.BookVersion{ID: "01BATMANBEGINS", BookID: "book-1", Status: database.BookVersionStatusAlt}
+	if err := MarkTrashed(alt, time.Now()); err != nil || alt.Status != database.BookVersionStatusTrash {
+		t.Errorf("MarkTrashed(alt) = %v, status=%s", err, alt.Status)
+	}
 }

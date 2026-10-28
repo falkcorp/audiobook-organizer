@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -59,6 +59,19 @@ func respondIfPurgedVersion(c *gin.Context, err error) bool {
 	return true
 }
 
+// respondIfSwappingVersion answers 409 and reports true when err says the
+// version is in swapping_out/swapping_in (versions.ErrVersionSwapping): a swap of
+// the book stopped half way, and trashing either of its versions would let the
+// nightly cleanup delete files the book plays. A retried DELETE after a
+// VERSION_SWAP_INCOMPLETE lands here.
+func respondIfSwappingVersion(c *gin.Context, err error) bool {
+	if !errors.Is(err, versions.ErrVersionSwapping) {
+		return false
+	}
+	httputil.RespondWithError(c, http.StatusConflict, err.Error(), codeVersionSwapping)
+	return true
+}
+
 var versionLifecycleLog = logger.New("server.version-lifecycle")
 
 // codeNoSwapTarget is the error code of the 409 that refuses to trash a book's
@@ -68,8 +81,18 @@ const codeNoSwapTarget = "NO_SWAP_TARGET"
 
 // codeVersionSwapFailed is the error code of the 500 that says the swap that
 // had to come before trashing the active version failed. The version was not
-// trashed.
+// trashed, and every file and status the swap changed was put back.
 const codeVersionSwapFailed = "VERSION_SWAP_FAILED"
+
+// codeVersionSwapIncomplete is the error code of the 500 that says the swap
+// moved files and could not finish (or undo): the book's versions are stuck in
+// swapping_out/swapping_in and need repair. The version was not trashed and a
+// retry is refused (codeVersionSwapping); repeating the DELETE does not help.
+const codeVersionSwapIncomplete = "VERSION_SWAP_INCOMPLETE"
+
+// codeVersionSwapping is the error code of the 409 for a trash of a version that
+// is in swapping_out/swapping_in (versions.ErrVersionSwapping).
+const codeVersionSwapping = "VERSION_SWAPPING"
 
 // handleTrashVersion moves a version to trash.
 // DELETE /api/v1/audiobooks/:id/versions/:vid
@@ -140,8 +163,10 @@ func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (a
 	}
 
 	// Only the active version needs a swap first. Every other status goes
-	// straight to MarkTrashed below, which refuses a retired, purging or
-	// purged version before anything is written.
+	// straight to MarkTrashed below, which refuses a retired, purging, purged
+	// or swapping_* version (a swap that stopped half way: this is where a
+	// retried DELETE after VERSION_SWAP_INCOMPLETE ends) before anything is
+	// written.
 	var swappedTo string
 	if ver.Status == database.BookVersionStatusActive {
 		target, notify, ok := s.swapActiveVersionOut(c, ver)
@@ -169,7 +194,7 @@ func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (a
 	// refuses to change one only while it still holds retired rows, and a
 	// retired version in the trash would be purged from disk 14 days later.
 	if err := versions.MarkTrashed(ver, time.Now()); err != nil {
-		if !respondIfRetiredVersion(c, err) && !respondIfPurgingVersion(c, err) && !respondIfPurgedVersion(c, err) {
+		if !respondIfRetiredVersion(c, err) && !respondIfPurgingVersion(c, err) && !respondIfSwappingVersion(c, err) && !respondIfPurgedVersion(c, err) {
 			s.respondTrashFailedAfterSwap(c, swappedTo, err)
 		}
 		return afterUnlock
@@ -236,6 +261,20 @@ func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion)
 		from, to, bookPath = fromVer, toVer, bookFilePath
 	})
 	if err != nil {
+		// The files moved (or could not be moved back) and the versions are left
+		// in swapping_*: the book is half switched. Not a plain failure: the
+		// answer says repair is needed and does not invite a retry, which the
+		// lifecycle refuses anyway (versions.ErrVersionSwapping).
+		if errors.Is(err, versions.ErrSwapIncomplete) {
+			slog.Error("swap before trashing the active version did not finish; the versions are left in swapping_out/swapping_in and the version was not trashed",
+				"book", ver.BookID, "from", ver.ID, "to", target.ID, "err", err)
+			httputil.RespondWithError(c, http.StatusInternalServerError,
+				"the version was not trashed. Switching the book to version "+target.ID+" moved files and then could not finish: "+
+					"the book's versions are stuck mid-swap (swapping_out / swapping_in) and its files may be in new places. "+
+					"This needs repair; deleting the version again will not help and is refused. ("+err.Error()+")",
+				codeVersionSwapIncomplete)
+			return "", nil, false
+		}
 		// Refused before anything was written (the files are not where the
 		// picker saw them, a retired version): a conflict with the library's
 		// state, answered like the picker's own refusal.
