@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/events_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 38f6d698-9487-485c-acea-303202e6d6eb
 // last-edited: 2026-10-28
 
@@ -122,7 +122,7 @@ func TestSSEProgressCarriesChunks(t *testing.T) {
 	hub := newFakeHub()
 	br := NewBroker(mem, hub, nil, BrokerOptions{FlushEvery: 5 * time.Millisecond})
 	ctx := t.Context()
-	go br.Run(ctx)
+	br.StartOnFirstSubscriber(ctx, func(fn func()) { go fn() })
 
 	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
 	t.Cleanup(srv.Close)
@@ -372,7 +372,7 @@ func TestSSETerminalSurvivesADroppedEvent(t *testing.T) {
 	hub := newFakeHub()
 	br := NewBroker(mem, hub, nil, BrokerOptions{FlushEvery: 5 * time.Millisecond})
 	ctx := t.Context()
-	go br.Run(ctx)
+	br.StartOnFirstSubscriber(ctx, func(fn func()) { go fn() })
 	srv := httptest.NewServer(newRouter(New(Deps{Runs: mem, Broker: br})))
 	t.Cleanup(srv.Close)
 	c := openSSE(t, srv, "")
