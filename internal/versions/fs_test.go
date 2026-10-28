@@ -1,5 +1,5 @@
 // file: internal/versions/fs_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e2c8a1d-5b9f-4f70-a7c6-2d8e0f1b9a57
 // last-edited: 2026-10-28
 
@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -263,5 +264,30 @@ func TestPruneEmptyVersionsDir(t *testing.T) {
 	// Missing dir is idempotent.
 	if err := PruneEmptyVersionsDir(bookDir); err != nil {
 		t.Errorf("prune missing dir should not error: %v", err)
+	}
+}
+
+// A move onto itself is refused before anything is touched: renaming a file to
+// its own path would be a no-op that reports success, and a caller that took
+// that for a move would believe the file had left.
+func TestMovePreservingAttrs_SamePathIsRefusedAndTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "Hush.m4b")
+	writeFile(t, p, "hush")
+
+	renamed, err := movePreservingAttrs(p, p)
+	if err == nil || !strings.Contains(err.Error(), "same path") {
+		t.Fatalf("err = %v, want the same-path refusal", err)
+	}
+	if renamed {
+		t.Error("renamed = true for a move onto itself")
+	}
+	if b, rerr := os.ReadFile(p); rerr != nil || string(b) != "hush" {
+		t.Errorf("file after refusal = %q, %v, want it untouched", b, rerr)
+	}
+	// Refused before the parent was created or anything renamed: the folder
+	// holds only the file.
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("folder has %d entries after the refusal, want 1", len(entries))
 	}
 }

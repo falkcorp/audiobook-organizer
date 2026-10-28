@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 
@@ -31,6 +31,7 @@ import {
   parseCleanupSet,
   parseTrashCleanupResult,
 } from '../utils/trashCleanupResult';
+import type { TrashCleanupSet } from '../utils/trashCleanupResult';
 import { describeRequestError, SESSION_EXPIRED_MESSAGE, unwrapData } from '../utils/apiResponse';
 import {
   type BookVersion,
@@ -176,6 +177,22 @@ const COLUMNS: ColumnDef<BookVersion>[] = [
     },
   },
 ];
+
+// What each group of a trash cleanup run means, as the banner finishes the
+// sentence "Showing the N versions ...". Each says whether the nightly run
+// tries the version again, because the groups differ: only needs_attention is
+// left alone (internal/versions/lifecycle.go CleanupResult).
+const CLEANUP_SET_TEXT: Record<TrashCleanupSet, string> = {
+  kept: 'that cleanup run purged with files kept on disk.',
+  needs_attention:
+    'that cleanup run could not purge because a file cannot be removed. It does not retry them: Purge now retries one, or hard delete drops it.',
+  cannot_tell:
+    'that cleanup run left alone because it could not tell whether their files are gone (a drive that is down looks the same). Nothing was deleted, and the next run tries them again.',
+  nothing_served:
+    'that cleanup run left in the trash because their book serves nothing that exists on disk. Nothing was deleted, and every run lists them again until the book\'s path is fixed or the version is restored.',
+  served_kept:
+    'that cleanup run kept in the trash because their book still plays one of their files. Nothing was deleted, and every run tries them again until the version is restored or the book plays something else.',
+};
 
 export default function TrashedVersions() {
   // A trash cleanup run's counts link here as ?op=<operation id>&set=kept (or
@@ -382,7 +399,7 @@ export default function TrashedVersions() {
         </Alert>
       )}
 
-      {filtering && filterIds !== null && (
+      {filtering && filterIds !== null && cleanupSet !== null && (
         <Alert
           severity="info"
           sx={{ mb: 2 }}
@@ -392,9 +409,7 @@ export default function TrashedVersions() {
             </Button>
           }
         >
-          {cleanupSet === 'kept'
-            ? `Showing the ${filterIds.length.toLocaleString()} ${filterIds.length === 1 ? 'version' : 'versions'} that cleanup run purged with files kept on disk.`
-            : `Showing the ${filterIds.length.toLocaleString()} ${filterIds.length === 1 ? 'version' : 'versions'} that cleanup run could not purge and does not retry.`}
+          {`Showing the ${filterIds.length.toLocaleString()} ${filterIds.length === 1 ? 'version' : 'versions'} ${CLEANUP_SET_TEXT[cleanupSet]}`}
           {filterElsewhere > 0 &&
             ` ${filterElsewhere.toLocaleString()} ${filterElsewhere === 1 ? 'is' : 'are'} not on this tab: hard deleted since, or on the other tab.`}
         </Alert>

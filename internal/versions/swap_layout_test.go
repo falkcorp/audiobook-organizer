@@ -1,5 +1,5 @@
 // file: internal/versions/swap_layout_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ceae3827-5dd4-4742-9093-b4d214299d8a
 // last-edited: 2026-10-28
 
@@ -381,17 +381,49 @@ func TestRunVersionSwap_SecondMarkFailureRestoresFirst(t *testing.T) {
 	}
 }
 
+// When the second mark fails and putting the leaving version back fails too, the
+// leaving version is left in swapping_out: that has to surface as
+// ErrSwapIncomplete (the handler answers it with a 409 that says a person must
+// repair it), not as a plain error whose 500 claims everything was put back.
+func TestRunVersionSwap_SecondMarkFailureThenRestoreFailureIsIncomplete(t *testing.T) {
+	f := newSwapFixture(t)
+	alt := f.add(database.BookVersionStatusAlt, time.Hour, "Hush.m4b")
+	store := &failingSwapStore{
+		PebbleStore:       f.store,
+		failVersionStatus: database.BookVersionStatusSwappingIn,
+		failAlsoStatus:    database.BookVersionStatusActive, // the restore of the leaving version
+	}
+
+	err := RunVersionSwap(context.Background(), store, VersionSwapParams{
+		BookID: f.book.ID, FromVersionID: f.active.ID, ToVersionID: alt.ID,
+	}, nil, nil, nil)
+	if !errors.Is(err, ErrSwapIncomplete) {
+		t.Fatalf("err = %v, want ErrSwapIncomplete", err)
+	}
+	if !strings.Contains(err.Error(), "mark to swapping_in") {
+		t.Errorf("err = %v, want the failed second mark kept in the chain", err)
+	}
+	if v, _ := f.store.GetBookVersion(f.active.ID); v.Status != database.BookVersionStatusSwappingOut {
+		t.Errorf("leaving version status = %s, want swapping_out (it could not be put back)", v.Status)
+	}
+	if v, _ := f.store.GetBookVersion(alt.ID); v.Status != database.BookVersionStatusAlt {
+		t.Errorf("entering version status = %s, want alt (its mark never landed)", v.Status)
+	}
+}
+
 // failingSwapStore fails the writes a test names.
 type failingSwapStore struct {
 	*database.PebbleStore
 	failVersionStatus string // UpdateBookVersion to this status fails
+	failAlsoStatus    string // ... and to this one too
 	failFileID        string // ModifyBookFile of this row fails
 	changeRowFirst    string // ModifyBookFile of this row first has the row repointed elsewhere
 	failBookWrite     bool   // ModifyBook fails
 }
 
 func (s *failingSwapStore) UpdateBookVersion(v *database.BookVersion) error {
-	if s.failVersionStatus != "" && v.Status == s.failVersionStatus {
+	if (s.failVersionStatus != "" && v.Status == s.failVersionStatus) ||
+		(s.failAlsoStatus != "" && v.Status == s.failAlsoStatus) {
 		return errors.New("injected: version write failed")
 	}
 	return s.PebbleStore.UpdateBookVersion(v)

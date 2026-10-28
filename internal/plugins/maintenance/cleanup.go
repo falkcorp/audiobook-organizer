@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-28
 
@@ -589,11 +589,16 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		payload.CannotTellVersionIDs = append(payload.CannotTellVersionIDs, k.VersionID)
 		payload.CannotTellBookIDs = append(payload.CannotTellBookIDs, k.BookID)
 	}
+	// A book with several trashed versions is listed once per version, but its
+	// path is one thing to fix: each path is named once (the page keys its
+	// list by path).
+	servedPaths := map[string]bool{}
 	for _, k := range res.NothingServed {
 		payload.NothingServedVersionIDs = append(payload.NothingServedVersionIDs, k.VersionID)
 		payload.NothingServedBookIDs = append(payload.NothingServedBookIDs, k.BookID)
 		// The book's own path; a book with none is listed by its id alone.
-		if k.BookPath != "" {
+		if k.BookPath != "" && !servedPaths[k.BookPath] {
+			servedPaths[k.BookPath] = true
 			payload.NothingServedFilePaths = append(payload.NothingServedFilePaths, k.BookPath)
 		}
 	}

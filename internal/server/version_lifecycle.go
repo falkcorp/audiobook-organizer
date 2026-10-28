@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-28
 //
@@ -86,8 +86,10 @@ const codeVersionSwapFailed = "VERSION_SWAP_FAILED"
 
 // codeVersionSwapIncomplete is the error code of the 500 that says the swap
 // moved files and could not finish (or undo): the book's versions are stuck in
-// swapping_out/swapping_in and need repair. The version was not trashed and a
-// retry is refused (codeVersionSwapping); repeating the DELETE does not help.
+// swapping_out/swapping_in and need repair. The version was not trashed.
+// Repeating the DELETE does not repair the book: it is refused (codeVersionSwapping)
+// while the version is still in swapping_*, and only trashes a leaving version
+// that had already reached alt, leaving the entering one swapping_in.
 const codeVersionSwapIncomplete = "VERSION_SWAP_INCOMPLETE"
 
 // codeVersionSwapping is the error code of the 409 for a trash of a version that
@@ -263,15 +265,20 @@ func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion)
 	if err != nil {
 		// The files moved (or could not be moved back) and the versions are left
 		// in swapping_*: the book is half switched. Not a plain failure: the
-		// answer says repair is needed and does not invite a retry, which the
-		// lifecycle refuses anyway (versions.ErrVersionSwapping).
+		// answer says repair is needed and does not invite a retry. A retry is
+		// refused for a version still in swapping_* (versions.ErrVersionSwapping),
+		// but not always for the one asked about: when the final write of the
+		// leaving version to alt landed and the entering version's write to
+		// active failed, the leaving version is alt and a retried DELETE trashes
+		// it; only the entering version stays swapping_in.
 		if errors.Is(err, versions.ErrSwapIncomplete) {
 			versionLifecycleLog.Error("swap before trashing the active version did not finish; book %s versions %s -> %s are left in swapping_out/swapping_in and the version was not trashed: %v",
 				ver.BookID, ver.ID, target.ID, err)
 			httputil.RespondWithError(c, http.StatusInternalServerError,
 				"the version was not trashed. Switching the book to version "+target.ID+" moved files and then could not finish: "+
 					"the book's versions are stuck mid-swap (swapping_out / swapping_in) and its files may be in new places. "+
-					"This needs repair; deleting the version again will not help and is refused. ("+err.Error()+")",
+					"This needs repair. Deleting the version again does not repair it: it is refused while the version is still in swapping_out / swapping_in "+
+					"(if this version had already reached alt, deleting it again can trash it, but the entering version stays swapping_in). ("+err.Error()+")",
 				codeVersionSwapIncomplete)
 			return "", nil, false
 		}
