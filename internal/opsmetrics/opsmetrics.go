@@ -1,7 +1,7 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
-// last-edited: 2026-10-22
+// last-edited: 2026-10-28
 
 // Package opsmetrics holds the OTel instruments for operation runs (spec 11
 // §3.5 and §3.7). One meter, telemetry.Meter("operations"); every instrument
@@ -305,8 +305,9 @@ func (r *Recorder) Started(defID string) {
 		telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(OutcomeStarted)))
 }
 
-// Finished records the end of a run attempt this process timed: one ops.runs
-// point and one ops.run.duration observation. An outcome IsRunEnd rejects
+// Finished records the end of a run attempt this process timed: one
+// ops.run.duration observation and then one ops.runs point (in that order; see
+// below). An outcome IsRunEnd rejects
 // (started, "", anything else) records nothing and Finished reports false.
 func (r *Recorder) Finished(defID, outcome string, took time.Duration) bool {
 	if !IsRunEnd(outcome) {
@@ -314,8 +315,15 @@ func (r *Recorder) Finished(defID, outcome string, took time.Duration) bool {
 	}
 	set := metric.WithAttributes(telemetry.DefID.String(labelFor(defID)), telemetry.Outcome.String(outcome))
 	ctx := context.Background()
-	r.runs.Add(ctx, 1, set)
+	// The duration goes in before the run-end count. The two instruments are
+	// independent, so no reader sees them atomically, but ops.runs{outcome} is
+	// the marker that a run ended: ordering the Record first means any
+	// collection that starts after a run-end point is visible also sees that
+	// run's duration. Counting first left a window (a preempted goroutine under
+	// -race on a loaded runner) where ops.runs{timed_out}=1 read with
+	// ops.run.duration{timed_out}=0.
 	r.duration.Record(ctx, took.Seconds(), set)
+	r.runs.Add(ctx, 1, set)
 	return true
 }
 
