@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.11 -->
+<!-- version: 10.78.12 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-28 -->
 
@@ -258,10 +258,10 @@ into one of the curated sections below, is a normal direct edit.
       `audiobooks/trash_progress.go` (two reads, same as purge),
       `merge/trash_restore.go` (restoring a trashed holder must carry its
       retired versions), `versions/lifecycle.go` `PurgeVersion` (refuse a
-      `retired` version explicitly instead of relying on the default filter),
-      and the revert and combine-undo path/sibling reads in
-      `audiobooks/revert.go` and `merge/combine_journal.go` (a journaled row
-      that is now retired is changed-since). All of them are safe while nothing
+      `retired` version explicitly instead of relying on the default filter).
+      (The revert and combine-undo path/sibling reads in
+      `audiobooks/revert.go` and `merge/combine_journal.go` landed with the
+      undo change, PR 5.) All of them are safe while nothing
       retires a row (the fixer's Apply is not built yet), and must land before
       the first prod retire. Open question for the owner: `deluge/discovery.go` decides whether a
       torrent's intro fingerprint is "already tracked" through
