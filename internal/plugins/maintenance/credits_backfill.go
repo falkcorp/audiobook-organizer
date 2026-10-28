@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-28
 
@@ -160,6 +160,12 @@ import (
 //     under the stand-down and after the last write, the records the run
 //     created that no written book credits are deleted again
 //     (deleteUnusedCreated), so a later run cannot link a split credit to one.
+//     Every create is preceded by a narrator_create_intent journal row, and an
+//     apply begins by finding the unlinked records its own earlier attempts
+//     created (seedLeftovers: named by their rows or intents, not older than
+//     the operation's first row): such a record is treated as new, not as one
+//     that was always there, so a crash or a lost stand-down cannot turn it into
+//     a link target for a split credit.
 //
 // Shared state is the class accumulator (mutex), the plan map (mutex) and
 // atomics; Label runs inside the workers and reads atomics only. Narrator
@@ -671,8 +677,8 @@ type creditsBackfillResult struct {
 	UnusedNarratorNames    []string `json:"unused_narrator_names,omitempty"`
 	// Of those, the ones the run deleted again at the end of the apply (the
 	// record had no link in any book and this run had created it) and the ones
-	// it kept, with the reason. Deleted ones are not left for a later run to
-	// link a split credit to.
+	// it kept, as "name (id N, reason)". Deleted ones are not left for a later
+	// run to link a split credit to.
 	UnusedNarratorsDeleted     int      `json:"unused_narrators_deleted,omitempty"`
 	DeletedUnusedNarratorNames []string `json:"deleted_unused_narrator_names,omitempty"`
 	UnusedNarratorsKept        []string `json:"unused_narrators_kept,omitempty"`
@@ -882,6 +888,11 @@ type cbAccumulator struct {
 	// writtenCreatedIDs are the created records a SUCCESSFUL book write
 	// credits (narrators_created counts these, not every create call).
 	writtenCreatedIDs map[int]bool
+	// seeded are the leftovers of earlier attempts (seedLeftovers) no book of
+	// this attempt has claimed yet: the first creator to credit one is told it
+	// created it, as it would a record it made itself, so its journal row names
+	// it.
+	seeded map[int]bool
 }
 
 func newCBAccumulator() *cbAccumulator {
@@ -894,7 +905,18 @@ func newCBAccumulator() *cbAccumulator {
 		createdRecs: map[int]database.Narrator{},
 
 		writtenCreatedIDs: map[int]bool{},
+		seeded:            map[int]bool{},
 	}
+}
+
+// seedLeftover puts a record an earlier attempt created into the cleanup and
+// reporting set, unclaimed.
+func (a *cbAccumulator) seedLeftover(rec database.Narrator) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.createdIDs[rec.ID] = rec.Name
+	a.createdRecs[rec.ID] = rec
+	a.seeded[rec.ID] = true
 }
 
 // markCreatedWritten records that a successful write credits these created
@@ -941,9 +963,10 @@ func (a *cbAccumulator) claimCreated(created []database.Narrator) []database.Nar
 	defer a.mu.Unlock()
 	var claimed []database.Narrator
 	for _, n := range created {
-		if _, seen := a.createdIDs[n.ID]; seen {
+		if _, seen := a.createdIDs[n.ID]; seen && !a.seeded[n.ID] {
 			continue
 		}
+		delete(a.seeded, n.ID)
 		a.createdIDs[n.ID] = n.Name
 		a.createdRecs[n.ID] = n
 		claimed = append(claimed, n)
@@ -1014,6 +1037,12 @@ type cbRun struct {
 	// in the one or older than the other was not created by this run.
 	preexisting map[int]bool
 	startedAt   time.Time
+	// leftover are narrator records an EARLIER attempt of this operation
+	// created and nothing links (seedLeftovers): they are not preexisting, no
+	// plan links a book to one, and the cleanup may delete them. Judged against
+	// the operation's first journal row, not this attempt's startedAt, so the
+	// per-attempt startedAt above does not apply to them.
+	leftover map[int]bool
 	// settled is what settleLibrary decided (selectCohort sets it; the run logs
 	// its pass count).
 	settled cbLibrarySettle
@@ -1144,29 +1173,12 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		landed:      map[string]database.Narrator{},
 		preexisting: make(map[int]bool, len(idx.narrators)),
 		startedAt:   started,
+		leftover:    map[int]bool{},
 	}
 	for id := range idx.narrators {
 		run.preexisting[id] = true
 	}
-	// Ids in ascending order: a name shared by two records resolves to the
-	// lower id, deterministically. The store's name index (byName) wins when
-	// the store has one.
-	nids := make([]int, 0, len(idx.narrators))
-	for id := range idx.narrators {
-		nids = append(nids, id)
-	}
-	sort.Ints(nids)
-	for _, id := range nids {
-		n := idx.narrators[id]
-		if k := util.NormalizeAuthor(strings.TrimSpace(n.Name)); k != "" {
-			if _, dup := run.narrIdx[k]; !dup {
-				run.narrIdx[k] = n
-			}
-		}
-		if k := authorjunk.FoldKey(n.Name); k != "" {
-			run.foldIdx[k] = append(run.foldIdx[k], n)
-		}
-	}
+	run.indexNarrators()
 	if r, ok := database.AsCapability[narratorByNameReader](env.store); ok {
 		run.byName = r
 	}
@@ -1195,6 +1207,9 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	if params.Apply {
 		if perr := run.verifyPriorAttempts(workCtx); perr != nil {
 			return nil, perr
+		}
+		if serr := run.seedLeftovers(); serr != nil {
+			return nil, serr
 		}
 	}
 
@@ -1381,6 +1396,154 @@ func creditsBackfillJournalBooks(store creditsBackfillWriter, opID string) (map[
 		jb.afters = append(jb.afters, w.After)
 	}
 	return out, nil
+}
+
+// indexNarrators (re)builds the frozen name indexes (narrIdx, foldIdx) from the
+// records the run started with, leaving out the leftovers of earlier attempts
+// (seedLeftovers). Ids in ascending order: a name shared by two records
+// resolves to the lower id, deterministically. The store's name index (byName)
+// wins when the store has one.
+func (r *cbRun) indexNarrators() {
+	r.narrIdx = make(map[string]database.Narrator, len(r.idx.narrators))
+	r.foldIdx = map[string][]database.Narrator{}
+	nids := make([]int, 0, len(r.idx.narrators))
+	for id := range r.idx.narrators {
+		if !r.leftover[id] {
+			nids = append(nids, id)
+		}
+	}
+	sort.Ints(nids)
+	for _, id := range nids {
+		n := r.idx.narrators[id]
+		if k := util.NormalizeAuthor(strings.TrimSpace(n.Name)); k != "" {
+			if _, dup := r.narrIdx[k]; !dup {
+				r.narrIdx[k] = n
+			}
+		}
+		if k := authorjunk.FoldKey(n.Name); k != "" {
+			r.foldIdx[k] = append(r.foldIdx[k], n)
+		}
+	}
+}
+
+// seedLeftovers finds the narrator records an EARLIER attempt of this operation
+// created and nothing links, so that a resumed apply treats them as what they
+// are: not records that were always there.
+//
+// preexisting and startedAt are per attempt. An attempt that crashed (or lost
+// the scan stand-down) after CreateNarrator but before its creating write
+// landed leaves a record this operation made; the next attempt's index
+// contains it, so without this step it would count as preexisting: a split book
+// would link to it although no creating write ever credited it, and the cleanup
+// would keep it as "existed before the run".
+//
+// The candidates are named by this operation's own journal, voided rows
+// included (a refused write voids its row, and the record it created stays):
+//   - the CreatedNarrators of its credits_backfill rows, by id; and
+//   - its narrator_create_intent rows (written before every create), by exact
+//     name, for the crash that happened before any credits_backfill row named
+//     the record.
+//
+// A candidate is kept only when it was not older than the operation (its
+// CreatedAt is not before the operation's FIRST journal row; an intent row
+// bounds the record it names by its own time) and nothing links it now
+// (database.NarratorLinkCount, fail closed: a count that cannot be read stops
+// the run). A record that is linked, or older than the operation, stays an
+// ordinary preexisting record.
+//
+// A leftover is taken out of the lookup indexes, so the plan treats its name as
+// new: some book creates it again (CreateNarrator returns the same record) and
+// split books link to it only once that write has landed. It joins the cleanup
+// set (acc.createdRecs): credited by a creator it is kept; not credited by
+// anyone, deleteUnusedCreated removes it with a narrator_delete row.
+func (r *cbRun) seedLeftovers() error {
+	rows, err := r.env.store.GetOperationChanges(r.env.opID)
+	if err != nil {
+		return fmt.Errorf("read this operation's journal for leftover records: %w", err)
+	}
+	var first time.Time
+	rowTime := func(c *database.OperationChange) (time.Time, bool) {
+		id, perr := ulid.Parse(c.ID)
+		if perr != nil {
+			return time.Time{}, false
+		}
+		return ulid.Time(id.Time()), true
+	}
+	for _, c := range rows {
+		if c == nil {
+			continue
+		}
+		if t, ok := rowTime(c); ok && (first.IsZero() || t.Before(first)) {
+			first = t
+		}
+	}
+	if first.IsZero() {
+		return nil
+	}
+
+	cand := map[int]database.Narrator{}
+	consider := func(rec database.Narrator, notBefore time.Time) {
+		if rec.ID <= 0 || rec.CreatedAt.IsZero() || rec.CreatedAt.Before(notBefore) {
+			return
+		}
+		cand[rec.ID] = rec
+	}
+	for _, c := range rows {
+		if c == nil {
+			continue
+		}
+		switch c.ChangeType {
+		case undo.ChangeTypeCreditsBackfill:
+			_, w, derr := undo.DecodeCreditsBackfill(c)
+			if derr != nil {
+				continue
+			}
+			for _, n := range w.CreatedNarrators {
+				if rec, ok := r.idx.narrators[n.ID]; ok {
+					consider(rec, first)
+				}
+			}
+		case undo.ChangeTypeNarratorCreateIntent:
+			at, ok := rowTime(c)
+			if !ok || strings.TrimSpace(c.NewValue) == "" {
+				continue
+			}
+			if rec, ok := r.recordNamed(c.NewValue); ok {
+				consider(rec, at)
+			}
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(cand)) {
+		links, lerr := database.NarratorLinkCount(r.env.store, id)
+		if lerr != nil {
+			return fmt.Errorf("count the books linking narrator %d (a record an earlier attempt of this operation may have created): %w", id, lerr)
+		}
+		if links > 0 {
+			continue
+		}
+		rec := cand[id]
+		r.leftover[id] = true
+		delete(r.preexisting, id)
+		r.acc.seedLeftover(rec)
+	}
+	if len(r.leftover) > 0 {
+		r.indexNarrators()
+	}
+	return nil
+}
+
+// recordNamed is the record holding exactly this name (the store's name index
+// when it has one, else the frozen index), as an intent row names it.
+func (r *cbRun) recordNamed(name string) (database.Narrator, bool) {
+	if r.byName != nil {
+		n, err := r.byName.GetNarratorByName(name)
+		if err != nil || n == nil {
+			return database.Narrator{}, false
+		}
+		return *n, true
+	}
+	rec, ok := r.narrIdx[util.NormalizeAuthor(strings.TrimSpace(name))]
+	return rec, ok
 }
 
 // verifyPriorAttempts reads this operation's journal before a resumed apply
@@ -2511,7 +2674,9 @@ func (r *cbRun) lookupNarrator(name string) (database.Narrator, bool, error) {
 		if err != nil {
 			return database.Narrator{}, false, fmt.Errorf("look up narrator %q: %w", name, err)
 		}
-		if n != nil {
+		// A record an earlier attempt left behind is not a record a book may
+		// link to: it is as good as absent until a creating book credits it.
+		if n != nil && !r.leftover[n.ID] {
 			return *n, true, nil
 		}
 	} else if n, ok := r.narrIdx[util.NormalizeAuthor(strings.TrimSpace(name))]; ok {
@@ -2538,6 +2703,20 @@ func (r *cbRun) createNarrator(name string) (*database.Narrator, error) {
 	key := authorjunk.FoldKey(name)
 	if rec, ok := r.createdFold[key]; ok && key != "" {
 		return &rec, nil
+	}
+	// The intent is journaled BEFORE the create: a crash between the store's
+	// commit and the credits_backfill row that names the record would otherwise
+	// leave a record nothing in the operation's journal accounts for, and a
+	// later attempt would take it for one that was always there (seedLeftovers).
+	// A journal that cannot be written stops the create (fail closed).
+	if err := r.env.store.CreateOperationChange(&database.OperationChange{
+		ID:          ulid.Make().String(),
+		OperationID: r.env.opID,
+		ChangeType:  undo.ChangeTypeNarratorCreateIntent,
+		FieldName:   "narrator",
+		NewValue:    name,
+	}); err != nil {
+		return nil, fmt.Errorf("journal the intent to create narrator %q: %w", name, err)
 	}
 	n, err := r.env.store.CreateNarrator(name)
 	if err != nil {
@@ -2769,6 +2948,13 @@ func (r *cbRun) apply(pb *cbPlanned) {
 // written keeps the record. Sequential: a run has few of these. When the
 // stand-down was lost nothing is deleted (the scanner may be writing again);
 // the records are reported as kept.
+//
+// The window between the link count and DeleteNarrator is the one
+// purge-empty-narrators documents and accepts: a writer that already resolved the
+// record by name can link it in between (the delete's sweep then strips that
+// credit, and the book's narrator text still names the person for the next
+// edit to mint the record again). Closing it needs a lock every
+// SetBookNarrators caller shares, which the store does not provide.
 func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 	r.acc.mu.Lock()
 	var unused []database.Narrator
@@ -2781,12 +2967,14 @@ func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 	slices.SortFunc(unused, func(a, b database.Narrator) int { return a.ID - b.ID })
 	var deleted, kept []string
 	for _, rec := range unused {
-		keep := func(why string) { kept = append(kept, fmt.Sprintf("%s (%s)", rec.Name, why)) }
+		keep := func(why string) { kept = append(kept, fmt.Sprintf("%s (id %d, %s)", rec.Name, rec.ID, why)) }
 		switch {
 		case !standDownHeld:
 			keep("scan stand-down lost")
 			continue
-		case r.preexisting[rec.ID] || (!rec.CreatedAt.IsZero() && rec.CreatedAt.Before(r.startedAt)):
+		case !r.leftover[rec.ID] && (r.preexisting[rec.ID] || (!rec.CreatedAt.IsZero() && rec.CreatedAt.Before(r.startedAt))):
+			// (A leftover of an earlier attempt was judged against the
+			// operation's first start in seedLeftovers.)
 			keep("existed before the run")
 			continue
 		}
