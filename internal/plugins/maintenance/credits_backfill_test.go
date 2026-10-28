@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6950317d-b65c-41e5-86a8-9cc277a95054
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -144,6 +144,25 @@ func (f *cbFixture) state(id string) undo.CreditsBackfillState {
 		f.t.Fatal(err)
 	}
 	return undo.CreditsBackfillStateOf(b, ja, jn)
+}
+
+// cbBookWriteRows is the operation's credits_backfill rows: one per book
+// written. The operation's journal also holds ledger rows that are not book
+// writes (narrator_create_intent before every create, narrator_delete for a
+// record removed again).
+func cbBookWriteRows(f *cbFixture) []*database.OperationChange {
+	f.t.Helper()
+	all, err := f.s.GetOperationChanges(cbTestOpID)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var rows []*database.OperationChange
+	for _, r := range all {
+		if r.ChangeType == undo.ChangeTypeCreditsBackfill {
+			rows = append(rows, r)
+		}
+	}
+	return rows
 }
 
 func (f *cbFixture) run(params creditsBackfillParams, workers int) (*creditsBackfillResult, error) {
@@ -752,7 +771,7 @@ func TestCreditsBackfill_CensusIsCleanAfterApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
-	rows, _ := f.s.GetOperationChanges(cbTestOpID)
+	rows := cbBookWriteRows(f)
 	if want := res.BooksToWrite; len(rows) != want {
 		t.Fatalf("journal rows after two applies = %d, want %d (one per written book)", len(rows), want)
 	}
@@ -853,7 +872,7 @@ func TestCreditsBackfill_ConcurrentDisjointPartition(t *testing.T) {
 	if res.BooksToWrite != n || !res.Complete {
 		t.Fatalf("to_write=%d complete=%t err=%q", res.BooksToWrite, res.Complete, res.Error)
 	}
-	rows, _ := f.s.GetOperationChanges(cbTestOpID)
+	rows := cbBookWriteRows(f)
 	per := map[string]int{}
 	for _, r := range rows {
 		per[r.BookID]++
@@ -981,7 +1000,7 @@ func TestCreditsBackfill_ResumeAfterPartialRun(t *testing.T) {
 	if second.Attempt != 2 || second.BooksWrittenEarlierAttempts != firstWritten {
 		t.Fatalf("resumed attempt=%d earlier=%d, want 2 and %d", second.Attempt, second.BooksWrittenEarlierAttempts, firstWritten)
 	}
-	rows, _ := f.s.GetOperationChanges(cbTestOpID)
+	rows := cbBookWriteRows(f)
 	per := map[string]int{}
 	for _, r := range rows {
 		per[r.BookID]++

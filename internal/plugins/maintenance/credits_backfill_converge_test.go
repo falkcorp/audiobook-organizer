@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_converge_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 7d1f0c52-3a9e-4b6c-8e04-5f2a9c6b1d73
 // last-edited: 2026-10-28
 
@@ -7,13 +7,20 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // Tests for round 6 of the review of PR #4200 (credits backfill): the settle
@@ -246,7 +253,11 @@ func TestCreditsBackfill_UnusedRecordThatGainedALinkIsKept(t *testing.T) {
 	}
 	env := creditsBackfillEnv{store: f.s, mod: cbCreatorEdit(t, f, link), opID: "01RUNONE", workers: 2}
 	res, _ := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: "01RUNONE"})
-	if res.UnusedNarratorsDeleted != 0 || !slices.Equal(res.UnusedNarratorsKept, []string{"Renee Montoya (linked by 1 book(s))"}) {
+	rec, _ := f.s.GetNarratorByName("Renee Montoya")
+	if rec == nil {
+		t.Fatal("the linked record is gone")
+	}
+	if res.UnusedNarratorsDeleted != 0 || !slices.Equal(res.UnusedNarratorsKept, []string{fmt.Sprintf("Renee Montoya (id %d, linked by 1 book(s))", rec.ID)}) {
 		t.Errorf("deleted=%d kept=%v, want the linked record kept", res.UnusedNarratorsDeleted, res.UnusedNarratorsKept)
 	}
 	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock", "Renee Montoya", "Selina Kyle"}) {
@@ -260,7 +271,11 @@ func TestCreditsBackfill_UnusedRecordOlderThanTheRunIsKept(t *testing.T) {
 	f := cbSplitFixture(t, "z-solo", "a-split")
 	env := creditsBackfillEnv{store: cbOldRecordStore{f.s}, mod: cbFailOneMod{f.s, "z-solo"}, opID: "01RUNONE", workers: 2}
 	res, _ := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: "01RUNONE"})
-	if res.UnusedNarratorsDeleted != 0 || !slices.Equal(res.UnusedNarratorsKept, []string{"Renee Montoya (existed before the run)"}) {
+	rec, _ := f.s.GetNarratorByName("Renee Montoya")
+	if rec == nil {
+		t.Fatal("the old record is gone")
+	}
+	if res.UnusedNarratorsDeleted != 0 || !slices.Equal(res.UnusedNarratorsKept, []string{fmt.Sprintf("Renee Montoya (id %d, existed before the run)", rec.ID)}) {
 		t.Errorf("deleted=%d kept=%v, want the old record kept", res.UnusedNarratorsDeleted, res.UnusedNarratorsKept)
 	}
 	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock", "Renee Montoya"}) {
@@ -292,4 +307,306 @@ func TestCreditsBackfill_FailedCreatorAndOneWorkerLeaveNoSplitOnlyRecord(t *test
 	if res.UnusedNarratorsDeleted != 1 {
 		t.Errorf("unused records deleted = %d, want 1", res.UnusedNarratorsDeleted)
 	}
+}
+
+// --- records an earlier attempt of the operation left behind ----------------
+
+// An attempt that crashed (or lost the stand-down) after CreateNarrator but
+// before its creating write landed leaves a record this operation made. A later
+// attempt must not take it for one that was always there: it is found from the
+// operation's own journal (a credits_backfill row's CreatedNarrators, or the
+// narrator_create_intent row written before every create), judged against the
+// operation's first journal row, and ignored when anything links it.
+
+const cbLeftoverOp = "01LEFTOVEROP"
+
+// cbSeedRow writes one journal row of the operation as an earlier attempt
+// would have, with a row id minted at the given time.
+func cbSeedRow(t *testing.T, f *cbFixture, at time.Time, c database.OperationChange) {
+	t.Helper()
+	c.ID = ulid.MustNew(ulid.Timestamp(at), ulid.DefaultEntropy()).String()
+	c.OperationID = cbLeftoverOp
+	if err := f.s.CreateOperationChange(&c); err != nil {
+		t.Fatalf("seed journal row: %v", err)
+	}
+}
+
+// cbLeftoverFixture is the split fixture with the record an earlier attempt
+// made already in the store. With soloNamesHer false, z-solo no longer names
+// Renee Montoya, so nothing in the library creates her.
+func cbLeftoverFixture(t *testing.T, soloNamesHer bool) (*cbFixture, *database.Narrator) {
+	t.Helper()
+	f := cbSplitFixture(t, "z-solo", "a-split")
+	if !soloNamesHer {
+		b, err := f.s.GetBookByID("z-solo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Narrator = strp("Harvey Bullock")
+		if _, err := f.s.UpdateBook("z-solo", b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec, err := f.s.CreateNarrator("Renee Montoya")
+	if err != nil || rec == nil {
+		t.Fatalf("create the leftover: %v", err)
+	}
+	return f, rec
+}
+
+func cbSeedIntent(t *testing.T, f *cbFixture, at time.Time) {
+	t.Helper()
+	cbSeedRow(t, f, at, database.OperationChange{ChangeType: undo.ChangeTypeNarratorCreateIntent, FieldName: "narrator", NewValue: "Renee Montoya"})
+}
+
+// cbSeedCreatedRow is the credits_backfill row of a creator whose write was
+// refused: voided, naming the record it had created.
+func cbSeedCreatedRow(t *testing.T, f *cbFixture, at time.Time, rec *database.Narrator, voided bool) {
+	t.Helper()
+	old, err := json.Marshal(f.state("z-solo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	neu, err := json.Marshal(undo.CreditsBackfillWrite{
+		After:            f.state("z-solo"),
+		Classes:          []string{cbNarratorFillFromColumn},
+		CreatedNarrators: []database.Narrator{*rec},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbSeedRow(t, f, at, database.OperationChange{
+		BookID: "z-solo", ChangeType: undo.ChangeTypeCreditsBackfill, FieldName: "book_credits",
+		OldValue: string(old), NewValue: string(neu), Voided: voided,
+	})
+}
+
+func cbLeftoverRun(t *testing.T, f *cbFixture) *creditsBackfillResult {
+	t.Helper()
+	res, err := f.runWith(context.Background(), &cbReporter{id: cbLeftoverOp}, creditsBackfillParams{Apply: true}, 2)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	return res
+}
+
+// Nothing creates the record now, so no split book may link to the leftover:
+// the split book goes to review, and the leftover, unlinked and made by this
+// operation, is deleted with a journal row.
+func cbWantLeftoverDeleted(t *testing.T, f *cbFixture, res *creditsBackfillResult) {
+	t.Helper()
+	if got := cbClassIDs(res, cbNarratorNewFromSplit); !slices.Equal(got, []string{"a-split"}) {
+		t.Errorf("%s = %v, want [a-split]: nobody creates Renee Montoya", cbNarratorNewFromSplit, got)
+	}
+	if st := f.state("a-split"); len(st.Narrators) != 0 {
+		t.Errorf("a-split was linked to the leftover record: %v", st.Narrators)
+	}
+	if res.UnusedNarratorsDeleted != 1 || !slices.Equal(res.DeletedUnusedNarratorNames, []string{"Renee Montoya"}) || len(res.UnusedNarratorsKept) != 0 {
+		t.Errorf("deleted=%d %v kept=%v, want the leftover deleted", res.UnusedNarratorsDeleted, res.DeletedUnusedNarratorNames, res.UnusedNarratorsKept)
+	}
+	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock"}) {
+		t.Errorf("narrator records = %v, want the leftover gone", got)
+	}
+	rows, err := f.s.GetOperationChanges(cbLeftoverOp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted := 0
+	for _, c := range rows {
+		if c.ChangeType == "narrator_delete" && strings.HasSuffix(c.OldValue, ":Renee Montoya") {
+			deleted++
+		}
+	}
+	if deleted != 1 {
+		t.Errorf("%d narrator_delete journal rows, want 1", deleted)
+	}
+}
+
+func TestCreditsBackfill_LeftoverNamedByAnIntentRowIsNotALinkTarget(t *testing.T) {
+	f, _ := cbLeftoverFixture(t, false)
+	cbSeedIntent(t, f, time.Now().Add(-time.Hour))
+	cbWantLeftoverDeleted(t, f, cbLeftoverRun(t, f))
+}
+
+func TestCreditsBackfill_LeftoverNamedByAVoidedRowIsNotALinkTarget(t *testing.T) {
+	f, rec := cbLeftoverFixture(t, false)
+	cbSeedCreatedRow(t, f, time.Now().Add(-time.Hour), rec, true)
+	cbWantLeftoverDeleted(t, f, cbLeftoverRun(t, f))
+}
+
+// With a creator in the library the leftover is created again (the store
+// returns the same record), both books are written, and the record is kept,
+// counted once, and named by the creator's journal row.
+func TestCreditsBackfill_LeftoverACreatorCreditsIsKept(t *testing.T) {
+	f, rec := cbLeftoverFixture(t, true)
+	cbSeedIntent(t, f, time.Now().Add(-time.Hour))
+	res := cbLeftoverRun(t, f)
+	if res.NarratorsCreated != 1 || res.NarratorsCreatedUnused != 0 || res.UnusedNarratorsDeleted != 0 || len(res.UnusedNarratorsKept) != 0 {
+		t.Errorf("created=%d unused=%d deleted=%d kept=%v, want 1/0/0/none", res.NarratorsCreated, res.NarratorsCreatedUnused, res.UnusedNarratorsDeleted, res.UnusedNarratorsKept)
+	}
+	for _, id := range []string{"z-solo", "a-split"} {
+		st := f.state(id)
+		if len(st.Narrators) == 0 || st.Narrators[0].NarratorID != rec.ID {
+			t.Errorf("%s narrators = %v, want the record %d first", id, st.Narrators, rec.ID)
+		}
+	}
+	rows, err := f.s.GetOperationChanges(cbLeftoverOp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := 0
+	for _, c := range rows {
+		if c.ChangeType != undo.ChangeTypeCreditsBackfill || c.Voided || c.BookID != "z-solo" {
+			continue
+		}
+		_, w, derr := undo.DecodeCreditsBackfill(c)
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		for _, n := range w.CreatedNarrators {
+			if n.ID == rec.ID {
+				named++
+			}
+		}
+	}
+	if named != 1 {
+		t.Errorf("the creator's journal row names the record %d time(s), want 1", named)
+	}
+}
+
+// A record older than the operation was never this operation's, whatever a row
+// says: the intent row below is dated after the record was made.
+func TestCreditsBackfill_RecordOlderThanTheOperationIsNotALeftover(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed func(t *testing.T, f *cbFixture, rec *database.Narrator)
+	}{
+		{"intent", func(t *testing.T, f *cbFixture, _ *database.Narrator) { cbSeedIntent(t, f, time.Now().Add(time.Hour)) }},
+		{"created_narrators", func(t *testing.T, f *cbFixture, rec *database.Narrator) {
+			cbSeedCreatedRow(t, f, time.Now().Add(time.Hour), rec, true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, rec := cbLeftoverFixture(t, false)
+			tc.seed(t, f, rec)
+			res := cbLeftoverRun(t, f)
+			if st := f.state("a-split"); len(st.Narrators) == 0 || st.Narrators[0].NarratorID != rec.ID {
+				t.Errorf("a-split narrators = %v, want it linked to the preexisting record %d", st.Narrators, rec.ID)
+			}
+			if res.UnusedNarratorsDeleted != 0 {
+				t.Errorf("deleted %d record(s), want the preexisting one kept", res.UnusedNarratorsDeleted)
+			}
+			if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock", "Renee Montoya"}) {
+				t.Errorf("narrator records = %v, want the preexisting record kept", got)
+			}
+		})
+	}
+}
+
+// A record some book links is credited, not a leftover, whoever made it.
+func TestCreditsBackfill_LinkedRecordNamedByTheJournalIsNotALeftover(t *testing.T) {
+	f, rec := cbLeftoverFixture(t, false)
+	cbSeedIntent(t, f, time.Now().Add(-time.Hour))
+	alfred := f.author("Alfred Pennyworth")
+	// f.book deletes the records the fixture did not register; this one is.
+	f.narrators[rec.ID] = true
+	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = intp(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
+	if err := f.s.SetBookNarrators("bystander", []database.BookNarrator{{BookID: "bystander", NarratorID: rec.ID, Role: "narrator"}}); err != nil {
+		t.Fatal(err)
+	}
+	res := cbLeftoverRun(t, f)
+	if st := f.state("a-split"); len(st.Narrators) == 0 || st.Narrators[0].NarratorID != rec.ID {
+		t.Errorf("a-split narrators = %v, want it linked to the credited record %d", st.Narrators, rec.ID)
+	}
+	if res.UnusedNarratorsDeleted != 0 {
+		t.Errorf("deleted %d record(s), want the credited one kept", res.UnusedNarratorsDeleted)
+	}
+}
+
+// Every create is preceded by its intent row, so a crash between the store's
+// commit and the creator's journal row leaves a trace.
+func TestCreditsBackfill_CreateWritesAnIntentRowBeforeTheCreatorsRow(t *testing.T) {
+	f := cbSplitFixture(t, "z-solo", "a-split")
+	cbLeftoverRun(t, f)
+	rows, err := f.s.GetOperationChanges(cbLeftoverOp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var intentID, creatorID string
+	intents := 0
+	for _, c := range rows {
+		switch {
+		case c.ChangeType == undo.ChangeTypeNarratorCreateIntent:
+			intents++
+			intentID = c.ID
+			if c.NewValue != "Renee Montoya" {
+				t.Errorf("intent row names %q, want Renee Montoya", c.NewValue)
+			}
+		case c.ChangeType == undo.ChangeTypeCreditsBackfill && c.BookID == "z-solo":
+			creatorID = c.ID
+		}
+	}
+	if intents != 1 || creatorID == "" || intentID >= creatorID {
+		t.Errorf("intent rows=%d intent=%q creator row=%q, want one intent row ordered before the creator's row", intents, intentID, creatorID)
+	}
+}
+
+// cbIntentFailStore refuses the intent row: the journal cannot be written, so
+// the record must not be made.
+type cbIntentFailStore struct{ creditsBackfillStore }
+
+func (s cbIntentFailStore) Unwrap() database.Store {
+	st, _ := s.creditsBackfillStore.(database.Store)
+	return st
+}
+
+func (s cbIntentFailStore) CreateOperationChange(c *database.OperationChange) error {
+	if c.ChangeType == undo.ChangeTypeNarratorCreateIntent {
+		return errors.New("injected journal failure")
+	}
+	return s.creditsBackfillStore.CreateOperationChange(c)
+}
+
+func TestCreditsBackfill_IntentRowThatCannotBeWrittenStopsTheCreate(t *testing.T) {
+	f := cbSplitFixture(t, "z-solo", "a-split")
+	env := creditsBackfillEnv{store: cbIntentFailStore{f.s}, mod: f.s, opID: cbLeftoverOp, workers: 2}
+	_, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbLeftoverOp})
+	if err == nil {
+		t.Fatal("a create whose intent cannot be journaled must make the run incomplete")
+	}
+	if got := cbRecordNames(t, f); !slices.Equal(got, []string{"Harvey Bullock"}) {
+		t.Errorf("narrator records = %v, want no record made without its intent row", got)
+	}
+	for _, id := range []string{"z-solo", "a-split"} {
+		if st := f.state(id); len(st.Narrators) != 0 {
+			t.Errorf("%s was written: %v", id, st.Narrators)
+		}
+	}
+}
+
+// Reverting the operation reverses its book rows and REPORTS the ledger rows it
+// has no reversal for: the intent row of every create, and the narrator_delete
+// row of a record the run removed again. Neither is restored, neither fails.
+func TestCreditsBackfill_RevertReportsIntentAndDeleteRowsAsNotRestorable(t *testing.T) {
+	t.Run("applied", func(t *testing.T) {
+		f := cbSplitFixture(t, "z-solo", "a-split")
+		if _, err := f.run(creditsBackfillParams{Apply: true}, 2); err != nil {
+			t.Fatal(err)
+		}
+		r := cbRevert(t, f)
+		if r.Restored != 2 || r.Failed != 0 || r.NotRestorable != 1 || r.NotRestorableTypes["narrator_create_intent"] != 1 {
+			t.Errorf("restored=%d failed=%d not_restorable=%d %v, want 2/0/1 with the intent row", r.Restored, r.Failed, r.NotRestorable, r.NotRestorableTypes)
+		}
+	})
+	t.Run("record deleted again", func(t *testing.T) {
+		// No book was written, so the operation holds only ledger rows: the
+		// revert says so (as it does for purge-empty-narrators) and names both.
+		f := cbSplitFixture(t, "z-solo", "a-split")
+		env := creditsBackfillEnv{store: f.s, mod: cbCreatorEdit(t, f, nil), opID: cbTestOpID, workers: 2}
+		f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
+		_, err := audiobooks.NewRevertService(f.s).RevertOperation(cbTestOpID)
+		if err == nil || !strings.Contains(err.Error(), "narrator_create_intent") || !strings.Contains(err.Error(), "narrator_delete") {
+			t.Errorf("revert error = %v, want it to name the narrator_create_intent and narrator_delete rows", err)
+		}
+	})
 }

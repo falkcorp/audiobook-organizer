@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.2.7 -->
+<!-- version: 1.2.8 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-28 -->
 
@@ -673,8 +673,9 @@ the row above:
   written in the cohort that creates the record or a later one, which links to the
   record that exists by then; at apply time the books that create records are written
   first and the split books second, and a split book links only to a record whose
-  creating write landed, so a creator that fails, is locked, changed or is refused sends
-  its dependents back to `narrator_new_from_split`, unwritten. A record the run created
+  creating write landed, so when a creator's write does not land (it fails, is locked,
+  changed since the plan or is refused) its dependents go back to
+  `narrator_new_from_split`, unwritten. A record the run created
   that no written book credits (a creator that failed after creating, or an apply-time
   spelling refusal) is reported as `narrators_created_unused` with
   `unused_narrator_names`, and deleted again at the end of the apply, under the scan
@@ -682,7 +683,14 @@ the row above:
   `maintenance.purge-empty-narrators` uses; each delete is a journaled
   `narrator_delete` row), so a later run cannot link a split credit to it; the result
   says which were deleted (`unused_narrators_deleted`) and which kept and why
-  (`unused_narrators_kept`). A book that still has an author write names the record in
+  (`unused_narrators_kept`, each entry `name (id N, reason)`). The same holds across
+  attempts of one operation: every create is preceded by a `narrator_create_intent`
+  journal row, and a resumed apply finds the unlinked records its own earlier
+  attempts created (named by the `created_narrators` of its `credits_backfill` rows,
+  voided ones included, or by an intent row; not older than the operation's first
+  journal row; no book link) and treats them as new, not as records that were always
+  there. Reverting the operation reports its `narrator_delete` and
+  `narrator_create_intent` rows as not restorable. A book that still has an author write names the record in
   its journal row. A name that stands as whole words in more than one credit ("Jean Paul
   Valley Jr." beside "Jean Paul Valley") is respelled only in the credit that is the
   name (preferring the exact entry across the whole stored list), and every credit of

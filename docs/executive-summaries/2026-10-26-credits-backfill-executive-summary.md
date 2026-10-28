@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
-<!-- version: 1.2.3 -->
+<!-- version: 1.2.4 -->
 <!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
 <!-- last-edited: 2026-10-28 -->
 
@@ -64,6 +64,13 @@
   that no written book ends up using is removed again before the run ends (only when the
   job made it and nothing links it) and is listed by name, with what was removed and what
   was kept.
+  The same holds when a run is stopped (a crash, or the scan pause lost) and started
+  again: before every new person it creates, the job writes a note of what it is about
+  to create, and a restarted run reads its own notes, recognises a record an earlier
+  attempt made that nothing uses, and treats it as new instead of as a record that was
+  always there, so a longer credit is never linked to a record no write of the job ever
+  vouched for. Undo reports those notes (and the removal notes) as records only: they
+  cannot be reversed, and the books it wrote are still undone.
 - **Review lists are kept.** Every run, a limited one too, stores the full list of book
   ids behind each count so each count can be clicked through. For a full library that
   is roughly 5 to 12 MB per run, and nothing removes it by age: it stays until the
