@@ -1,7 +1,7 @@
 // file: internal/transcribe/stuck_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 0b6f3d94-5a1e-4c78-9d02-7e3a8c5b1f46
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package transcribe
 
@@ -503,6 +503,7 @@ func newSplitHarness(t *testing.T, workers int, health map[string]any, poison ..
 			_ = json.NewEncoder(rw).Encode(hh)
 		}))
 		t.Cleanup(srv.Close)
+		clearCooldown(srv.URL) // a reused port starts clean: see machineHarness
 		h.srvs = append(h.srvs, srv)
 		h.eps = append(h.eps, Endpoint{URL: srv.URL, Concurrency: 1, Priority: i + 1, Label: fmt.Sprintf("w%d", i)})
 	}

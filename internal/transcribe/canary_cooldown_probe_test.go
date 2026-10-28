@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_cooldown_probe_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c6c9f65-2b2c-4271-8a11-7648ef7949d8
 // last-edited: 2026-10-28
 
@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 )
 
 func clearCooldownsAtEnd(t *testing.T, p *faultPool) {
@@ -316,4 +318,189 @@ func TestPreflight_APortWhoseCooldownEndedDuringTheGateIsProbedBeforeTheClip(t *
 	if n := healthHitsFor(p, port0); n < 2 {
 		t.Errorf("port 0 was probed %d time(s): want the gate's and the one after its cooldown ended", n)
 	}
+}
+
+// Port 0 (robin) is found wedged when its cooldown ends (a Stuck refusal, dropped);
+// port 1 (bat, a KNOWN machine) stays in a cooldown that outlasts the allowance.
+// The pool is not stuck, bat is only out for a while: ErrPoolUnavailable, not the
+// emptied pool noEndpointError would call "all 2 whisper endpoint(s) are stuck".
+func TestPoolEmptied_AWedgedPortBesideAKnownPortInALongCooldownIsAnOutageNotAStuckPool(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenPacing(t, 10*time.Millisecond, time.Second)
+	p := machineFaultPool(t, []string{robinMachine, batMachine}, answerWithTranscripts)
+	clearCooldownsAtEnd(t, p)
+	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
+	for range 5 {
+		markEndpointFailure(port1) // a long streak: far past the allowance
+	}
+	markEndpointFailure(port0)
+	atFirstPace(t, p, 20*time.Millisecond, func() {
+		p.h.wedge(port0)
+		clearCooldown(port0)
+	})
+	_, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), p.send)
+	if IsWorkerStuck(err) || !errors.Is(err, ErrPoolUnavailable) {
+		t.Errorf("err = %v: a pool with one wedged port and one known port in cooldown is an outage (ErrPoolUnavailable), not a stuck pool", err)
+	}
+}
+
+// The same with port 1 an unknown ("?") port in cooldown, which the dispatch does
+// not wait for. Nothing changed hands, so it is no deferral either.
+func TestPoolEmptied_AWedgedPortBesideAnUnknownPortInCooldownIsAnOutageNotAStuckPool(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenHealthProbe(t, 150*time.Millisecond)
+	shortenPacing(t, 10*time.Millisecond, time.Second)
+	p := machineFaultPool(t, []string{robinMachine, batMachine}, answerWithTranscripts)
+	clearCooldownsAtEnd(t, p)
+	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
+	p.h.delayHealth(port1, time.Minute)
+	markEndpointFailure(port0)
+	markEndpointFailure(port1)
+	atFirstPace(t, p, 20*time.Millisecond, func() {
+		p.h.wedge(port0)
+		clearCooldown(port0)
+	})
+	_, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), p.send)
+	if IsWorkerStuck(err) || !errors.Is(err, ErrPoolUnavailable) {
+		t.Errorf("err = %v: one wedged port beside an unknown port in cooldown is an outage (ErrPoolUnavailable), not a stuck pool", err)
+	}
+}
+
+// The count in "all N whisper endpoint(s) are stuck" is of the ports judged: port 2
+// was wedged at the gate and refused there, and ports 0 and 1 are found wedged
+// when their cooldowns end, so the pool that ends is two ports, not three.
+func TestPoolEmptied_TheStuckCountIsOfThePortsTheRefusalsJudged(t *testing.T) {
+	freshCanaryMemory(t)
+	shortenPacing(t, 10*time.Millisecond, 5*time.Second)
+	p := machineFaultPool(t, []string{robinMachine, batMachine, catwomanMachine}, answerWithTranscripts)
+	clearCooldownsAtEnd(t, p)
+	port0, port1, port2 := p.h.eps[0].URL, p.h.eps[1].URL, p.h.eps[2].URL
+	p.h.wedge(port2)
+	markEndpointFailure(port0)
+	markEndpointFailure(port1)
+	atFirstPace(t, p, 20*time.Millisecond, func() {
+		p.h.wedge(port0)
+		p.h.wedge(port1)
+		clearCooldown(port0)
+		clearCooldown(port1)
+	})
+	_, err := dispatchPool(testCtx(t), p.h.eps, nil, map[string]string{"chap1": "u"}, p.opts((&urlCanary{}).fn), p.send)
+	if !IsWorkerStuck(err) || !strings.Contains(err.Error(), "all 2 whisper endpoint(s) are stuck") {
+		t.Errorf("err = %v: want a stuck pool of the 2 ports found wedged after the wait", err)
+	}
+}
+
+// A cooldown that starts and ends inside one round, as another dispatch's 30 s
+// failure inside a request of several minutes does, is never seen by a look at
+// InCooldown; the failure generation moved all the same, so the port is probed
+// again before runCanaries sends it the clip. Robin's port 0 faults in round 1;
+// in round 2 another dispatch fails it and clears it, and a different machine
+// (catwoman) answers there; bat's port 1 faults worker_misconfigured, so every
+// endpoint is sick and the canary runs. The cooldown ends by MarkSuccess, or by
+// the passage of time (the health clock moved past it).
+func TestRunCanaries_ACooldownThatStartsAndEndsInsideOneRoundStillGetsAProbeBeforeTheClip(t *testing.T) {
+	for _, ending := range []string{"cleared by a success", "ended by time"} {
+		t.Run(ending, func(t *testing.T) {
+			freshCanaryMemory(t)
+			shortenPacing(t, 10*time.Millisecond, 5*time.Second)
+			var offset atomic.Int64
+			restore := aidispatchClock(&offset)
+			t.Cleanup(restore)
+			var port0, port1 string
+			var mu sync.Mutex
+			round1 := map[string]bool{}
+			var switched atomic.Bool
+			var hitsAtSwitch, hitsAtCanary atomic.Int64
+			hitsAtCanary.Store(-1)
+			answer := func(url, id string) BatchResult {
+				if url == port0 && !switched.Load() {
+					return BatchResult{Error: timeoutText}
+				}
+				if url == port1 && switched.Load() {
+					return BatchResult{Error: PathErrWorkerMisconfigured + pathErrSeparator + "no decoder"}
+				}
+				return BatchResult{Text: "T:" + id}
+			}
+			p := machineFaultPool(t, []string{robinMachine, batMachine}, answer)
+			clearCooldownsAtEnd(t, p)
+			port0, port1 = p.h.eps[0].URL, p.h.eps[1].URL
+			reply := func(url string, sub map[string]string) (map[string]BatchResult, error) {
+				res := map[string]BatchResult{}
+				for id := range sub {
+					res[id] = answer(url, id)
+				}
+				kept, fault := splitWorkerFault(url, res)
+				if fault != nil {
+					return kept, fault
+				}
+				return kept, nil
+			}
+			send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+				u := g.Endpoint.URL
+				if u == port0 && !switched.Load() {
+					mu.Lock()
+					for id := range sub {
+						round1[id] = true
+					}
+					mu.Unlock()
+					return reply(u, sub)
+				}
+				if u == port1 && !switched.Load() {
+					mu.Lock()
+					later := false
+					for id := range sub {
+						later = later || round1[id]
+					}
+					mu.Unlock()
+					if later {
+						markEndpointFailure(port0) // another dispatch: a cooldown starts mid-round...
+						p.h.setMachineID(port0, catwomanMachine)
+						if ending == "ended by time" {
+							offset.Store(int64(time.Hour)) // ...and runs out before the round does
+						} else {
+							clearCooldown(port0)
+						}
+						hitsAtSwitch.Store(int64(healthHitsFor(p, port0)))
+						switched.Store(true)
+					}
+				}
+				return reply(u, sub)
+			}
+			c := &urlCanary{fail: map[string]bool{port0: true}}
+			cfn := func(ctx context.Context, g gatedEndpoint) error {
+				if g.Endpoint.URL == port0 {
+					hitsAtCanary.Store(int64(healthHitsFor(p, port0)))
+				}
+				return c.fn(ctx, g)
+			}
+			jobs := map[string]string{}
+			for _, id := range loopers(16, "chap") {
+				jobs[id] = "u"
+			}
+			_, err := dispatchPool(testCtx(t), p.h.eps, nil, jobs, poolOptions{canary: cfn}, send)
+			if !switched.Load() {
+				t.Fatalf("setup did not reach round 2 (err = %v)", err)
+			}
+			if endpointInCooldown(port0) {
+				t.Fatalf("setup: port 0 should be out of its cooldown")
+			}
+			if hitsAtCanary.Load() != -1 {
+				t.Errorf("the canary clip was sent to port 0 (robin at the gate, catwoman since a cooldown began and ended in round 2): err = %v", err)
+			}
+			if got := healthHitsFor(p, port0); got <= int(hitsAtSwitch.Load()) {
+				t.Errorf("port 0 was not probed after the switch: %d request(s), %d at the switch", got, hitsAtSwitch.Load())
+			}
+			if ok, ports := rememberedPorts(robinKey); ok {
+				t.Errorf("robin is remembered as failing the canary clip on catwoman's answer: ports=%v", ports)
+			}
+		})
+	}
+}
+
+// aidispatchClock moves the clock the pool's cooldowns are measured by forward by
+// *offset (nanoseconds), and returns the function that puts the wall clock back.
+func aidispatchClock(offset *atomic.Int64) func() {
+	return aidispatch.DefaultHealth().SetClockForTest(func() time.Time {
+		return time.Now().Add(time.Duration(offset.Load()))
+	})
 }
