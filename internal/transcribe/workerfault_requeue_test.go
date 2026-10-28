@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerfault_requeue_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: f07c4f8d-09cb-4988-bf56-25da7f68d1e9
 // last-edited: 2026-10-28
 
@@ -57,14 +57,16 @@ type faultPool struct {
 	sends    []sendRecord
 	canaries []string // the endpoints sent the canary clip, in order
 
-	// beforePace, beforePlacedPace and afterPlacedCheck are the dispatch's test
+	// beforePace, beforePlacedPace, afterPlacedCheck, afterCanaries and atRoundStart are the dispatch's test
 	// seams (poolOptions), passed on by opts.
 	beforePace, beforePlacedPace, afterPlacedCheck func()
+	afterCanaries, atRoundStart                    func(ordered []string, soloLimit int)
 }
 
 // opts is the poolOptions of a dispatch of this pool with the given canary.
 func (p *faultPool) opts(canary canaryFunc) poolOptions {
-	return poolOptions{canary: canary, beforePace: p.beforePace, beforePlacedPace: p.beforePlacedPace, afterPlacedCheck: p.afterPlacedCheck}
+	return poolOptions{canary: canary, beforePace: p.beforePace, beforePlacedPace: p.beforePlacedPace, afterPlacedCheck: p.afterPlacedCheck,
+		afterCanaries: p.afterCanaries, atRoundStart: p.atRoundStart}
 }
 
 // canaryJobID is the id a faultPool's answer function sees for the canary clip.

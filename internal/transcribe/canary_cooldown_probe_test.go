@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_cooldown_probe_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c6c9f65-2b2c-4271-8a11-7648ef7949d8
 // last-edited: 2026-10-28
 
@@ -404,8 +404,6 @@ func TestRunCanaries_ACooldownThatStartsAndEndsInsideOneRoundStillGetsAProbeBefo
 			freshCanaryMemory(t)
 			shortenPacing(t, 10*time.Millisecond, 5*time.Second)
 			var offset atomic.Int64
-			restore := aidispatchClock(&offset)
-			t.Cleanup(restore)
 			var port0, port1 string
 			var mu sync.Mutex
 			round1 := map[string]bool{}
@@ -422,8 +420,16 @@ func TestRunCanaries_ACooldownThatStartsAndEndsInsideOneRoundStillGetsAProbeBefo
 				return BatchResult{Text: "T:" + id}
 			}
 			p := machineFaultPool(t, []string{robinMachine, batMachine}, answer)
-			clearCooldownsAtEnd(t, p)
 			port0, port1 = p.h.eps[0].URL, p.h.eps[1].URL
+			// The cooldowns the dispatch and the test start while the clock is moved are
+			// measured by it: the ports are cleared before the wall clock is put back.
+			restore := aidispatchClock(&offset)
+			t.Cleanup(func() {
+				for _, ep := range p.h.eps {
+					clearCooldown(ep.URL)
+				}
+				restore()
+			})
 			reply := func(url string, sub map[string]string) (map[string]BatchResult, error) {
 				res := map[string]BatchResult{}
 				for id := range sub {

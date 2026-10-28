@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-28
 
@@ -140,6 +140,13 @@ type poolOptions struct {
 	// how long to wait (pace): the three moments at which a cooldown that ends has
 	// to be noticed.
 	beforePace, beforePlacedPace, afterPlacedCheck func()
+	// afterCanaries and atRoundStart are test seams too, nil in production, given
+	// the URL of every port still in the dispatch and the soloLimit then in force.
+	// The round loop calls afterCanaries when the canary probes of a round whose
+	// every endpoint is sick are over, before that round's answers are read, and
+	// atRoundStart at the top of each pass, after the ports those probes found
+	// changed hands are dropped (holdDrops).
+	afterCanaries, atRoundStart func(ordered []string, soloLimit int)
 }
 
 // dispatchPool is the pool round loop shared by every kind of job: gate,
@@ -1546,6 +1553,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				return results, poolEmptied()
 			}
 		}
+		if opts.atRoundStart != nil {
+			opts.atRoundStart(endpointURLs(ordered), soloLimit)
+		}
 		// Defer every faulted job that has run out of workers. Before the
 		// cooldown check, so jobs that have nowhere left to go cannot hold the
 		// dispatch open, or turn it into "all endpoints in cooldown".
@@ -1870,6 +1880,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		var canaryErr error
 		if allSick() {
 			canaryErr = runCanaries()
+			if opts.afterCanaries != nil {
+				opts.afterCanaries(endpointURLs(ordered), soloLimit)
+			}
 		}
 
 		for _, r := range round {

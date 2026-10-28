@@ -1,5 +1,5 @@
 // file: internal/aidispatch/health.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: eacb4ad5-2ec7-46df-b430-903591356e6c
 // last-edited: 2026-10-28
 
@@ -133,9 +133,16 @@ func (h *Health) FailureGeneration(id string) uint64 {
 }
 
 // SetClockForTest replaces the clock the cooldowns are measured by and returns
-// the function that puts the wall clock back. It exists so a test of a caller can
-// let a cooldown end by the passage of time, as it does in production, without
-// waiting CooldownBase for it.
+// the function that puts back the clock that was in force when it was called. It
+// exists so a test of a caller can let a cooldown end by the passage of time, as
+// it does in production, without waiting CooldownBase for it.
+//
+// The restore functions of nested calls must run in the reverse order of the
+// calls, as t.Cleanup runs them: each puts back the clock of its own call, so
+// one run out of order puts back a clock a later call has already replaced. The
+// clock is the registry's, which every dispatch of the process shares: a test
+// that moves it must not run beside tests that depend on real cooldowns
+// (t.Parallel).
 func (h *Health) SetClockForTest(now func() time.Time) (restore func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
