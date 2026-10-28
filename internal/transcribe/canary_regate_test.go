@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_regate_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2f7b1c84-6d39-4e05-8a1b-93c0d5e7f126
 // last-edited: 2026-10-27
 
@@ -582,6 +582,14 @@ func TestUnknownPort_AnUnreadablePortIsNotASecondMachineForACondemnationWithNoWa
 	if err == nil {
 		t.Error("err = nil, want the job deferred with an error")
 	}
+	// Pinned: what the ops make of it. The book gets no row either way. This ends
+	// as the pool did before an unreadable port stopped counting as a machine:
+	// port 1's request ran out and its /health cannot say it is wedged, so it is a
+	// recognised transport failure (an outage: the ops count it toward their
+	// unavailable streak), not a stuck pool.
+	if te, ok := errors.AsType[*TransportError](err); !ok || !te.Recognized || IsWorkerStuck(err) || IsPoolUnavailable(err) {
+		t.Errorf("err = %v, want a recognised TransportError that is neither a stuck pool nor ErrPoolUnavailable", err)
+	}
 	if !tried.sentTo(port1) {
 		t.Error("the unreadable port was never sent the job: a verdict on one machine would not have waited for it")
 	}
@@ -890,6 +898,13 @@ func TestUnknownPort_ALoneJobThatHangsTheOnlyKnownMachineIsDeferredNotCondemnedW
 	}
 	if err == nil {
 		t.Error("err = nil, want the job deferred with an error")
+	}
+	// Pinned: robin is wedged and the one port that could take the job is out for
+	// the dispatch, which is the stuck pool the split parts end as when no endpoint
+	// is left (the ops count it toward their stuck streak, and write nothing for
+	// the book).
+	if !IsWorkerStuck(err) || IsPoolUnavailable(err) {
+		t.Errorf("err = %v, want a stuck pool", err)
 	}
 	if got := sentOnPort(p, port1); len(got) > 0 {
 		t.Errorf("port 1 was in cooldown and was sent %v", got)
