@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_changed_hands_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5d0c7e2a-83b1-4f6e-9a47-2c1e6b0d8f35
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package transcribe
 
@@ -760,8 +760,7 @@ func TestChangedHands_AWeakPortThatLearnsAMachineWhoFailsTheCanaryOnItsSiblingPo
 // dropped at the re-probe the dispatch has one machine, so the condemnation names
 // it once and never the weak identity of port 1, and port 1 is never tried.
 func TestChangedHands_AMachineThatAWeakPortLearnedIsNeverCountedAsASecondMachineForACondemnation(t *testing.T) {
-	var p *faultPool
-	p = poolWhoseWeakPortLearnsASiblingMachine(t, func(url, id string) BatchResult {
+	p := poolWhoseWeakPortLearnsASiblingMachine(t, func(url, id string) BatchResult {
 		if id == "chap1" {
 			return BatchResult{Error: timeoutText}
 		}

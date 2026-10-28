@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_resolution_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1d9e47-35a2-4b80-8f6e-0d7a2b93c154
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package transcribe
 
@@ -68,7 +68,7 @@ func TestCanaryResolution_AWeakFailureOfAKnownMachinesPortIsTheMachinesFailure(t
 	if !endpointRemembered(catKey, w1) {
 		t.Fatal("the machine's other port is not remembered as sick")
 	}
-	rec := &canaryRecorder{err: timeoutCanaryErr}
+	rec := &canaryRecorder{err: errTimeoutCanary}
 	_, err := dispatchOn(testCtx(t), h.eps, nil, p.send, rec.fn, 8)
 	if err != nil {
 		t.Fatalf("err = %v, want the sound machine to take the page", err)
@@ -98,7 +98,7 @@ func TestCanaryResolution_AWeakPortFailingTheCanaryRemembersTheWholeMachine(t *t
 	p1 := &faultPool{h: h, answer: func(string, string) BatchResult { return BatchResult{Error: timeoutText} }, batch: 16}
 	failW0 := func(_ context.Context, g gatedEndpoint) error {
 		if g.Endpoint.URL == w0 {
-			return timeoutCanaryErr
+			return errTimeoutCanary
 		}
 		return nil
 	}
@@ -113,7 +113,7 @@ func TestCanaryResolution_AWeakPortFailingTheCanaryRemembersTheWholeMachine(t *t
 		clearCooldown(ep.URL)
 	}
 	p2 := &faultPool{h: h, answer: answerWithTranscripts, batch: 16}
-	rec := &canaryRecorder{err: timeoutCanaryErr}
+	rec := &canaryRecorder{err: errTimeoutCanary}
 	if _, err := dispatchOn(testCtx(t), h.eps, nil, p2.send, rec.fn, 8); err != nil {
 		t.Fatalf("err = %v, want the sound machine to take the page", err)
 	}
@@ -373,7 +373,7 @@ func TestCanaryResolution_ALoneWeakEndpointRecordsItsFailureOnTheMachine(t *test
 	noteCanaryPort(catKey, w0, true)
 	markCanaryFailed(catKey, w0)
 	before := failedEntry(catKey).gen
-	rec := &canaryRecorder{err: timeoutCanaryErr}
+	rec := &canaryRecorder{err: errTimeoutCanary}
 	if _, err := dispatchOn(testCtx(t), h.eps, nil, p.send, rec.fn, 8); !IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want ErrPoolUnavailable", err)
 	}
@@ -574,8 +574,7 @@ func TestCanaryResolution_AKillIsStillHeldFromAMachineThatPassedTheCanary(t *tes
 // D55: a sick machine is asked the canary on every port, the one that answers
 // as "u:" included (it is asked, and so cleared, with the machine).
 func TestCanaryResolution_ASickMachineIsAskedTheCanaryOnItsWeakPortToo(t *testing.T) {
-	var p *faultPool
-	p = machineFaultPool(t, []string{catwomanMachine, ""}, func(url, id string) BatchResult {
+	p := machineFaultPool(t, []string{catwomanMachine, ""}, func(url, id string) BatchResult {
 		if id == canaryJobID {
 			return BatchResult{Text: "Welcome to Gotham City."}
 		}
@@ -740,7 +739,7 @@ func TestCanaryResolution_ALoneEndpointRecordsItsFailureUnderTheIdentityItsGateR
 	before := failedEntry(catKey).gen
 	takeOver := func(context.Context, gatedEndpoint) error {
 		noteCanaryPort(weak, w0, false)
-		return timeoutCanaryErr
+		return errTimeoutCanary
 	}
 	if _, err := dispatchOn(testCtx(t), h.eps, nil, p.send, takeOver, 8); !IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want ErrPoolUnavailable", err)
