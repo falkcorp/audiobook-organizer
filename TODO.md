@@ -176,7 +176,7 @@ into one of the curated sections below, is a normal direct edit.
       concurrent creates of two spellings. Until then the credit census after a
       rescan is the check, and re-running the backfill finds the book again.
 
-- [ ] **TODO-VERSION-PURGE-GUARD-FOLLOWUPS** Three follow-ups to the trash-purge
+- [ ] **TODO-VERSION-PURGE-GUARD-FOLLOWUPS** Two follow-ups to the trash-purge
       guard (`internal/versions/serve_guard.go`, PR #4215) that were left out of
       that PR on purpose.
       (1) Another book's symlink-strategy link. When another live book holds a
@@ -194,11 +194,6 @@ into one of the curated sections below, is a normal direct edit.
       build from `GetBookFiles`. Fix: skip rows with a `.versions` path component
       there (or filter on the version's status), with a test on a book that has
       an alt slot.
-      (3) The frontend shows the purge 409 as a generic error.
-      `purgeVersion` (`web/src/services/versionApi.ts`) turns the new 409 from
-      `POST /audiobooks/:id/versions/:vid/purge-now` ("the book still serves its
-      file(s)") into the same generic failure as any other error. Fix: detect the
-      409 and show the server's message, and keep the version listed in the trash.
 
 - [ ] **TODO-WHISPER-COOLDOWN-REJOIN-CANARY** Check (unverified finding from the 2026-10-27 canary-flake
       investigation): a sick machine's port that is already in cooldown when a dispatch starts never faults, so

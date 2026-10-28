@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -26,7 +26,13 @@ import ActivityLog from './ActivityLog';
 import { COMPACT_DAYS_ERROR } from '../components/activity/compactDays';
 import { fetchActivitySources, compactActivityLog } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
-import { cancelOperation, discardOperation, retryOperation, revertOperation } from '../services/api';
+import {
+  cancelOperation,
+  discardOperation,
+  getOperationResult,
+  retryOperation,
+  revertOperation,
+} from '../services/api';
 import { getUndoPreflight } from '../services/versionApi';
 // The real fold, not a stub — see the groupedOperations getter below. The store
 // module itself is mocked; this one is not.
@@ -52,6 +58,7 @@ vi.mock('../services/activityApi', () => ({
 
 vi.mock('../services/api', () => ({
   getOperationLogs: vi.fn().mockResolvedValue([]),
+  getOperationResult: vi.fn(),
   cancelOperation: vi.fn().mockResolvedValue(undefined),
   discardOperation: vi.fn().mockResolvedValue(undefined),
   retryOperation: vi
@@ -995,5 +1002,75 @@ describe('ActivityLog revert asks the preflight first', () => {
     expect(plan).toHaveTextContent('2 change(s) are a record only');
     expect(plan).toHaveTextContent('2 author_delete rows');
     expect(screen.queryByText(/undo all tracked changes/i)).not.toBeInTheDocument();
+  });
+});
+
+// The nightly trash cleanup stores what it kept and what needs attention on its
+// operation. Opening the row shows those counts as links, not only the log line.
+describe('Trash cleanup result on an expanded operation', () => {
+  const cleanupOp = (defId: string) => ({
+    id: 'op-night',
+    def_id: defId,
+    type: 'trash-cleanup',
+    displayName: 'Trash Cleanup',
+    status: 'completed',
+    progress: 1,
+    total: 1,
+    message: 'Trash cleanup: purged 3 versions',
+    parent_id: null,
+    finishedAt: Date.UTC(2026, 9, 27, 6, 0, 0),
+  });
+  const renderOpen = async (opId: string) => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/activity?op=${opId}`]}>
+        <ActivityLog />
+      </MemoryRouter>
+    );
+    await user.click(await screen.findByRole('button', { name: 'Expand All' }));
+  };
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+  });
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('links the kept and needs-attention counts and says a merge stopped the run', async () => {
+    operationsStoreState.activeOperations = [cleanupOp('maintenance.trash-cleanup')];
+    vi.mocked(getOperationResult).mockResolvedValue({
+      result_data: {
+        purged: 3,
+        kept_files: 1,
+        kept_version_ids: ['v-kept'],
+        kept_book_ids: ['book-kept'],
+        needs_attention: 2,
+        needs_attention_version_ids: ['v-a', 'v-b'],
+        needs_attention_book_ids: ['book-a', 'book-b'],
+        stopped_for_merge: true,
+      },
+    });
+    await renderOpen('op-night');
+
+    const panel = await screen.findByTestId('trash-cleanup-result');
+    expect(getOperationResult).toHaveBeenCalledWith('op-night');
+    expect(within(panel).getByRole('link', { name: '1 version' })).toHaveAttribute(
+      'href',
+      '/versions?op=op-night&set=kept'
+    );
+    expect(within(panel).getByRole('link', { name: '2 versions' })).toHaveAttribute(
+      'href',
+      '/versions?op=op-night&set=needs_attention'
+    );
+    expect(panel).toHaveTextContent('Stopped early: a merge or combine was running');
+  });
+
+  it('shows nothing for another kind of operation and does not read its result', async () => {
+    operationsStoreState.activeOperations = [cleanupOp('maintenance.compact-activity-log')];
+    await renderOpen('op-night');
+    await screen.findByText('Trash Cleanup');
+    expect(getOperationResult).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('trash-cleanup-result')).not.toBeInTheDocument();
   });
 });

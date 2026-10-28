@@ -1,7 +1,7 @@
 // file: internal/versions/fingerprint.go
-// version: 1.3.0
+// version: 1.3.3
 // guid: 8d5e7f4c-9c5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-10
+// last-edited: 2026-10-28
 //
 // Fingerprint check for incoming files (spec 3.1 task 4).
 //
@@ -112,7 +112,9 @@ func isPurgedOrBlocked(status string) bool {
 	switch status {
 	case database.BookVersionStatusInactivePurged,
 		database.BookVersionStatusBlockedForRedownload,
-		database.BookVersionStatusTrash:
+		database.BookVersionStatusTrash,
+		database.BookVersionStatusPurging,
+		database.BookVersionStatusPurgeFailed:
 		return true
 	default:
 		return false

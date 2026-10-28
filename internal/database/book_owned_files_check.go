@@ -1,13 +1,25 @@
 // file: internal/database/book_owned_files_check.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7a3c9e15-0b64-4d28-8f1e-c5d2a96b4e07
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package database
 
 import (
+	"errors"
 	"fmt"
 )
+
+// ErrBookHoldsRetiredVersions is the more specific cause CheckBookOwnsNoFiles
+// adds when the rows that keep a book from being deleted are all retired ones:
+// the book owns no live file of its own, it is the holder of retired versions
+// (rows the retire-versions repair keyed under it, which GetBookFiles hides).
+// The refusal then wraps this AND ErrBookOwnsFiles (DeleteBook refuses such a
+// book with that error, so every caller that already maps it keeps working);
+// errors.Is(err, ErrBookHoldsRetiredVersions) tells the two apart. A book with
+// a live row is not reported with it: owning files of its own is the more
+// basic reason.
+var ErrBookHoldsRetiredVersions = errors.New("book holds retired versions")
 
 // CheckBookOwnsNoFiles is the caller-side prediction of DeleteBook's refusal
 // (ErrBookOwnsFiles): it returns an error wrapping ErrBookOwnsFiles when
@@ -65,8 +77,8 @@ func CheckBookOwnsNoFiles(store any, bookID, action string) error {
 		return fmt.Errorf("%s %s: %w (%d row(s)); %s",
 			action, bookID, ErrBookOwnsFiles, live, advice)
 	case live == 0:
-		return fmt.Errorf("%s %s: %w (%d retired row(s) kept for another version of the book; they cannot be moved, so it cannot be deleted while they exist)",
-			action, bookID, ErrBookOwnsFiles, retired)
+		return fmt.Errorf("%s %s: %w: %w (%d retired row(s) kept for another version of the book; they cannot be moved, so it cannot be deleted while they exist)",
+			action, bookID, ErrBookHoldsRetiredVersions, ErrBookOwnsFiles, retired)
 	default:
 		return fmt.Errorf("%s %s: %w (%d live and %d retired row(s)); its live files can be moved to another book first, but its retired rows cannot be moved, so it cannot be deleted while they exist",
 			action, bookID, ErrBookOwnsFiles, live, retired)

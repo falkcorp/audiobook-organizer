@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_prop_test.go
-// version: 1.1.2
+// version: 1.2.2
 // guid: d4c4cd2b-c578-4a11-8229-83a516271b1b
-// last-edited: 2026-10-11
+// last-edited: 2026-10-28
 
 // Property-based tests for BookVersion lifecycle transitions (spec 4.5 task 6).
 //
@@ -58,6 +58,9 @@ func newPropLifecycleStore(t *rapid.T) database.Store {
 		t.Fatalf("open pebble: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// PurgeVersion asks BookFilesAtPath, which needs the memdb the open warms
+	// up asynchronously.
+	store.WaitForWarmup()
 	return store
 }
 
@@ -65,7 +68,9 @@ func newPropLifecycleStore(t *rapid.T) database.Store {
 // and auto-promotes an alt if the trashed version was active.
 func trashVersion(store database.Store, ver *database.BookVersion) error {
 	wasActive := ver.Status == database.BookVersionStatusActive
-	MarkTrashed(ver, time.Now())
+	if err := MarkTrashed(ver, time.Now()); err != nil {
+		return err
+	}
 	if err := store.UpdateBookVersion(ver); err != nil {
 		return err
 	}
@@ -80,7 +85,9 @@ func restoreVersion(store database.Store, ver *database.BookVersion) error {
 	if ver.Status != database.BookVersionStatusTrash {
 		return fmt.Errorf("version is not in trash (status=%s)", ver.Status)
 	}
-	MarkRestored(ver)
+	if err := MarkRestored(ver); err != nil {
+		return err
+	}
 	return store.UpdateBookVersion(ver)
 }
 
@@ -150,7 +157,7 @@ func TestProp_PurgeIsIrreversible(t *testing.T) {
 		}
 
 		// trash → purge
-		if err := PurgeVersion(store, ver); err != nil {
+		if err := PurgeVersion(store, ver, testGuard); err != nil {
 			t.Fatalf("purge: %v", err)
 		}
 		afterPurge, _ := store.GetBookVersion(ver.ID)
@@ -312,7 +319,7 @@ func TestProp_SingleActiveInvariantMaintained(t *testing.T) {
 						t.Fatalf("restore %s: %v", target.ID, err)
 					}
 				case opPurgeFromTrash:
-					if err := PurgeVersion(store, &target); err != nil {
+					if err := PurgeVersion(store, &target, testGuard); err != nil {
 						t.Fatalf("purge %s: %v", target.ID, err)
 					}
 				}

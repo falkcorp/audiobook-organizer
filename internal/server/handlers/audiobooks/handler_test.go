@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.20.1
+// version: 1.21.1
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -42,6 +42,7 @@ import (
 	audiobookshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks"
 	audiobooksmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/audiobooks/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -623,7 +624,7 @@ func TestRestoreAudiobook(t *testing.T) {
 
 func TestRestoreAudiobook_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "x").Return(nil, errString("not found"))
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "x").Return(nil, fmt.Errorf("restore x: %w", audiobookspkg.ErrAudiobookNotFound))
 	c, w := newCtx("POST", "/audiobooks/x/restore", nil, p("id", "x"))
 	h.RestoreAudiobook(c)
 	if w.Code != http.StatusNotFound {
@@ -643,6 +644,65 @@ func TestRestoreAudiobook_MergeBusyIs409(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "MERGE_BUSY") {
 		t.Fatalf("want MERGE_BUSY code, got %s", w.Body.String())
+	}
+}
+
+// A restore that fails for any other reason is not "audiobook not found": the
+// retired-shell check fails closed (database.ErrRetiredReaderUnavailable) and a
+// read can fail, and neither says anything about whether the book exists. Both
+// answer 500 and the body must not claim the book is missing.
+func TestRestoreAudiobook_LookupFailureIsNot404(t *testing.T) {
+	for name, cause := range map[string]error{
+		"retired reader unavailable": fmt.Errorf("restore s1: cannot verify it is not the shell of a retired version: %w", database.ErrRetiredReaderUnavailable),
+		"read error":                 errString("pebble: read failed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, d := newHandler(t)
+			d.svc.EXPECT().RestoreAudiobook(mock.Anything, "s1").Return(nil, cause)
+			c, w := newCtx("POST", "/audiobooks/s1/restore", nil, p("id", "s1"))
+			h.RestoreAudiobook(c)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "not found") {
+				t.Errorf("a failed lookup must not say the audiobook was not found: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+// A restore the service refuses because the book is the shell of a retired
+// version is a 409 that carries the reason, not the 404 every other error maps
+// to: the book exists, its files are kept as a retired version.
+func TestRestoreAudiobook_RetiredShellIsConflict(t *testing.T) {
+	h, d := newHandler(t)
+	refused := fmt.Errorf("restore s1: %w (version v1 keeps its files under book h1)", database.ErrBookIsRetiredShell)
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "s1").Return(nil, refused)
+	c, w := newCtx("POST", "/audiobooks/s1/restore", nil, p("id", "s1"))
+	h.RestoreAudiobook(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "retired version") {
+		t.Errorf("the 409 should carry the reason, got %s", w.Body.String())
+	}
+}
+
+// A restore that loses the version-group lock race (versionprimary.LockBookGroups
+// gives up after five tries) is transient: 409 with "retry", not the 500 of an
+// unclassified failure. Controls: the 500 test above keeps every other error a
+// 500, so the 409 is specific to ErrMembershipChanged.
+func TestRestoreAudiobook_MembershipChangedIsAConflictToRetry(t *testing.T) {
+	h, d := newHandler(t)
+	changed := fmt.Errorf("lock version groups of [s1]: %w", versionprimary.ErrMembershipChanged)
+	d.svc.EXPECT().RestoreAudiobook(mock.Anything, "s1").Return(nil, changed)
+	c, w := newCtx("POST", "/audiobooks/s1/restore", nil, p("id", "s1"))
+	h.RestoreAudiobook(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "retry") {
+		t.Errorf("the 409 should say to retry, got %s", w.Body.String())
 	}
 }
 

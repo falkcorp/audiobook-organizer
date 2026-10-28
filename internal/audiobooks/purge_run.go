@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 package audiobooks
 
@@ -181,7 +181,7 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 	// rows passed a check made with it and was refused after the side effects).
 	if oerr := database.CheckBookOwnsNoFiles(svc.store, book.ID, "purge"); oerr != nil {
 		if errors.Is(oerr, database.ErrBookOwnsFiles) {
-			return purgeOutcome{kind: purgeOwnsFiles, ownsFilesErr: oerr}, true
+			return ownsFilesOutcome(oerr), true
 		}
 		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %v", book.ID, oerr)}}, true
 	}
@@ -193,6 +193,20 @@ func (svc *AudiobookService) purgeGate(book *database.Book, env purgeEnv) (purge
 		return purgeOutcome{kind: purgeKeptUndo}, true
 	}
 	return purgeOutcome{}, false
+}
+
+// ownsFilesOutcome is the outcome of a refusal wrapping database.ErrBookOwnsFiles
+// (CheckBookOwnsNoFiles, or a carry precheck that ran it). A book whose every
+// row is retired also wraps database.ErrBookHoldsRetiredVersions and is kept
+// under its own reason, purgeHoldsRetiredVersions, so a report can tell the
+// holder of retired versions (whose rows another version of the book owns) from
+// a book with files of its own; both are kept and neither is an error line.
+func ownsFilesOutcome(err error) purgeOutcome {
+	kind := purgeOwnsFiles
+	if errors.Is(err, database.ErrBookHoldsRetiredVersions) {
+		kind = purgeHoldsRetiredVersions
+	}
+	return purgeOutcome{kind: kind, ownsFilesErr: err}
 }
 
 // previewOne is purgeOne without a side effect: the gate, then the listening-
@@ -608,11 +622,11 @@ func (r *PurgeResult) summary() string {
 		after += fmt.Sprintf("; %d file(s) an earlier pass had decided to remove were removed too (not in the files deleted count)", r.FilesReplayed)
 	}
 	if r.DryRun {
-		return fmt.Sprintf("Purge preview of %d soft-deleted books: %d purgeable now (%d of them would carry listening state to a sibling), %d kept: still own book_file rows, %d kept: an undo (combine, operation or auto-merge) can still run, %d kept: listening state with no listed sibling, %d could not be decided (carry_failed=%d, failed=%d); with delete_files it would remove %d file(s) and leave %d in place%s",
-			r.Attempted, r.Purgeable, r.CarriedToSibling, r.SkippedOwnsFiles, r.KeptUndoPossible, r.KeptHasProgress, r.CarryFailed+r.Failed, r.CarryFailed, r.Failed, r.FilesToDeleteCount, r.FilesKept, after)
+		return fmt.Sprintf("Purge preview of %d soft-deleted books: %d purgeable now (%d of them would carry listening state to a sibling), %d kept: still own book_file rows, %d kept: hold retired versions, %d kept: an undo (combine, operation or auto-merge) can still run, %d kept: listening state with no listed sibling, %d could not be decided (carry_failed=%d, failed=%d); with delete_files it would remove %d file(s) and leave %d in place%s",
+			r.Attempted, r.Purgeable, r.CarriedToSibling, r.SkippedOwnsFiles, r.SkippedHoldsRetiredVersions, r.KeptUndoPossible, r.KeptHasProgress, r.CarryFailed+r.Failed, r.CarryFailed, r.Failed, r.FilesToDeleteCount, r.FilesKept, after)
 	}
-	return fmt.Sprintf("Purged %d of %d soft-deleted books (%d files deleted); kept %d: still own book_file rows, %d: an undo (combine, operation or auto-merge) can still run, %d: listening state with no listed sibling; carried listening state to a sibling for %d; %d carry failed, %d failed%s",
-		r.Purged, r.Attempted, r.FilesDeleted, r.SkippedOwnsFiles, r.KeptUndoPossible, r.KeptHasProgress, r.CarriedToSibling, r.CarryFailed, r.Failed, after)
+	return fmt.Sprintf("Purged %d of %d soft-deleted books (%d files deleted); kept %d: still own book_file rows, %d: hold retired versions, %d: an undo (combine, operation or auto-merge) can still run, %d: listening state with no listed sibling; carried listening state to a sibling for %d; %d carry failed, %d failed%s",
+		r.Purged, r.Attempted, r.FilesDeleted, r.SkippedOwnsFiles, r.SkippedHoldsRetiredVersions, r.KeptUndoPossible, r.KeptHasProgress, r.CarriedToSibling, r.CarryFailed, r.Failed, after)
 }
 
 // Decided is how many books the pass reached a decision on: every outcome the
@@ -620,7 +634,7 @@ func (r *PurgeResult) summary() string {
 // that was restored or purged meanwhile counts in none of them, so on a very
 // busy trash it can read a little low; it is a progress figure, not a ledger.
 func (r *PurgeResult) Decided() int {
-	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed + r.TrashedAfterPreview + r.NotYetDue + r.NotInPreview
+	n := r.Purged + r.Purgeable + r.SkippedOwnsFiles + r.SkippedHoldsRetiredVersions + r.KeptUndoPossible + r.KeptHasProgress + r.CarryFailed + r.Failed + r.TrashedAfterPreview + r.NotYetDue + r.NotInPreview
 	// CarriedToSibling is also counted in Purged/Purgeable.
 	if n > r.Attempted {
 		return r.Attempted
@@ -642,6 +656,7 @@ func (r *PurgeResult) Capped(n int) *PurgeResult {
 		return s
 	}
 	c.SkippedOwnsFilesIDs = cut(r.SkippedOwnsFilesIDs)
+	c.SkippedHoldsRetiredVersionsIDs = cut(r.SkippedHoldsRetiredVersionsIDs)
 	c.CarriedToSiblingIDs = cut(r.CarriedToSiblingIDs)
 	c.KeptHasProgressIDs = cut(r.KeptHasProgressIDs)
 	c.KeptUndoPossibleIDs = cut(r.KeptUndoPossibleIDs)
@@ -665,7 +680,10 @@ type PurgeBreakdown struct {
 	Total int `json:"total"`
 	// Purgeable is how many a real pass would purge now.
 	Purgeable int `json:"purgeable"`
-	// Blocked, by reason.
+	// Blocked, by reason. OwnsFiles includes the books that hold only retired
+	// versions (PurgeResult.SkippedHoldsRetiredVersions): the listing has no
+	// separate figure for them yet, and each is blocked because book_file rows
+	// are keyed under it.
 	OwnsFiles         int `json:"owns_files"`
 	UndoPossible      int `json:"undo_possible"`
 	HasListeningState int `json:"has_listening_state"`
@@ -682,7 +700,7 @@ func breakdownOf(r *PurgeResult, at time.Time) PurgeBreakdown {
 	b := PurgeBreakdown{
 		ComputedAt:        at,
 		FromPreview:       r.DryRun,
-		OwnsFiles:         r.SkippedOwnsFiles,
+		OwnsFiles:         r.SkippedOwnsFiles + r.SkippedHoldsRetiredVersions,
 		UndoPossible:      r.KeptUndoPossible,
 		HasListeningState: r.KeptHasProgress,
 		Failed:            r.Failed + r.CarryFailed,

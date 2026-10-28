@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.75.0
+// version: 1.75.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-28
 
@@ -301,8 +301,8 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 	return removed
 }
 
-func (s *Server) CleanupTrashedVersions() versions.CleanupResult {
-	return CleanupTrashedVersions(s.storeForWiring())
+func (s *Server) CleanupTrashedVersions() (versions.CleanupResult, error) {
+	return CleanupTrashedVersions(s.storeForWiring(), s.versionPurgeGuard())
 }
 
 // ---- optional component accessors ----

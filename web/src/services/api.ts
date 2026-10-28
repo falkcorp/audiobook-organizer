@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.204.0
+// version: 2.204.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1577,6 +1577,13 @@ export interface PurgeResult {
   purgeable?: number;
   files_deleted: number;
   skipped_owns_files?: number;
+  /**
+   * books kept because they hold retired versions and no live file row of their
+   * own (reason holds_retired_versions): disjoint from `skipped_owns_files`
+   */
+  skipped_holds_retired_versions?: number;
+  /** the ids behind `skipped_holds_retired_versions` (capped; the count is exact) */
+  skipped_holds_retired_versions_ids?: string[];
   kept_undo_possible?: number;
   kept_has_progress?: number;
   carried_to_sibling?: number;
