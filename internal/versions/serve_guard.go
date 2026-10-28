@@ -1,5 +1,5 @@
 // file: internal/versions/serve_guard.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
 // last-edited: 2026-10-27
 
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
@@ -24,9 +25,12 @@ import (
 //   - it is named by a book_file row of the book's ACTIVE version, or of no
 //     version;
 //   - it is the same file as one of those, reached by a symlink or a hard link;
-//   - or ANOTHER live book names it the same ways (its FilePath, the folder its
-//     FilePath names, a row of its active version or of no version): deluge
-//     and import folders are shared between books.
+//   - or ANOTHER live book names it the same ways (its FilePath, any ancestor
+//     folder its FilePath names, a row of its active version or of no
+//     version): deluge and import folders are shared between books.
+//
+// When the version's own book is itself trashed it serves nothing, so only the
+// ANOTHER-live-book rules apply.
 //
 // Everything errs toward keeping the file: an unreadable book, version list or
 // row list is an error, never "not served".
@@ -62,6 +66,9 @@ func canonPath(p string) string {
 
 func newServedGuard(store versionPurger, book *database.Book, files []database.BookFile) (*servedGuard, error) {
 	g := &servedGuard{store: store, book: book, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
+	if bookIsTrashed(book) {
+		return g, nil
+	}
 
 	active, err := g.activeVersionIDs(book.ID)
 	if err != nil {
@@ -171,8 +178,8 @@ func (g *servedGuard) otherBookServes(p string) (bool, error) {
 				return true, nil
 			}
 		}
-		// A book whose FilePath is p itself, or the folder p sits in.
-		for _, path := range []string{v, filepath.Dir(v)} {
+		// A book whose FilePath is v itself, or any folder v sits in.
+		for _, path := range pathAndAncestors(v) {
 			b, err := g.store.GetBookByFilePath(path)
 			if err != nil {
 				return false, fmt.Errorf("find book at %s: %w", path, err)
@@ -203,4 +210,30 @@ func (g *servedGuard) other(bookID string) (*otherBook, error) {
 	}
 	g.others[bookID] = ob
 	return ob, nil
+}
+
+// pathAndAncestors returns p followed by each ancestor directory of p, nearest
+// first, stopping before the filesystem root and before the configured library
+// root (neither is a book's own folder), and before any ancestor that p only
+// reaches through a .versions/ slot: a file in X/.versions/{vid}/ is not served
+// by a book whose FilePath is X.
+func pathAndAncestors(p string) []string {
+	libRoot := ""
+	if root := config.AppConfig.RootDir; root != "" {
+		libRoot = canonPath(root)
+	}
+	out := []string{p}
+	cur := p
+	for {
+		if filepath.Base(cur) == VersionsDirName {
+			break
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur || parent == "." || parent == string(filepath.Separator) || (libRoot != "" && (parent == libRoot || canonPath(parent) == libRoot)) {
+			break
+		}
+		out = append(out, parent)
+		cur = parent
+	}
+	return out
 }
