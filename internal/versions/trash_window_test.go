@@ -1,7 +1,7 @@
 // file: internal/versions/trash_window_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e6f1b8a-52c4-4d97-a0e3-9b7c2f4d81a6
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 
 package versions
 
@@ -125,7 +125,7 @@ func TestCleanupTrashed_OldVersionTrashedNowIsKept(t *testing.T) {
 	f := newTrashFixture(t, time.Now().Add(-30*day), database.BookVersionStatusAlt)
 	f.trash(t, time.Now())
 
-	if n := CleanupTrashedVersions(f.store); n != 0 {
+	if n := CleanupTrashedVersions(f.store).Purged; n != 0 {
 		t.Fatalf("purged %d, want 0: a version trashed seconds ago was purged because it was created 30 days ago", n)
 	}
 	f.requireFile(t, true)
@@ -155,7 +155,7 @@ func TestCleanupTrashed_WindowCountsFromTrashedAt(t *testing.T) {
 			trashedAt := now.Add(-tc.trashedAgo)
 			f := newTrashFixtureStamped(t, now.Add(-1*day), database.BookVersionStatusTrash, &trashedAt)
 
-			if n := cleanupTrashedVersionsAt(f.store, now); n != tc.wantPurged {
+			if n := cleanupTrashedVersionsAt(f.store, now).Purged; n != tc.wantPurged {
 				t.Fatalf("purged %d, want %d", n, tc.wantPurged)
 			}
 			f.requireFile(t, tc.wantFileOnD)
@@ -186,7 +186,7 @@ func TestCleanupTrashed_LegacyRowIsStampedNotPurged(t *testing.T) {
 		t.Fatal("fixture: legacy trashed row should have no TrashedAt")
 	}
 
-	if n := cleanupTrashedVersionsAt(f.store, now); n != 0 {
+	if n := cleanupTrashedVersionsAt(f.store, now).Purged; n != 0 {
 		t.Fatalf("first run purged %d legacy version(s), want 0", n)
 	}
 	f.requireFile(t, true)
@@ -199,7 +199,7 @@ func TestCleanupTrashed_LegacyRowIsStampedNotPurged(t *testing.T) {
 	}
 
 	// Still inside the window counted from the stamp.
-	if n := cleanupTrashedVersionsAt(f.store, now.Add(13*day)); n != 0 {
+	if n := cleanupTrashedVersionsAt(f.store, now.Add(13*day)).Purged; n != 0 {
 		t.Fatalf("run at stamp+13d purged %d, want 0", n)
 	}
 	if got := f.reread(t); !got.TrashedAt.Equal(now) {
@@ -208,7 +208,7 @@ func TestCleanupTrashed_LegacyRowIsStampedNotPurged(t *testing.T) {
 	f.requireFile(t, true)
 
 	// Past it.
-	if n := cleanupTrashedVersionsAt(f.store, now.Add(14*day+time.Minute)); n != 1 {
+	if n := cleanupTrashedVersionsAt(f.store, now.Add(14*day+time.Minute)).Purged; n != 1 {
 		t.Fatalf("run at stamp+14d purged %d, want 1", n)
 	}
 	f.requireFile(t, false)
@@ -226,7 +226,7 @@ func (failingUpdateStore) UpdateBookVersion(*database.BookVersion) error {
 func TestCleanupTrashed_LegacyRowStampFailureNeverPurges(t *testing.T) {
 	f := newTrashFixture(t, time.Now().Add(-90*day), database.BookVersionStatusTrash)
 
-	if n := cleanupTrashedVersionsAt(failingUpdateStore{f.store}, time.Now().Add(365*day)); n != 0 {
+	if n := cleanupTrashedVersionsAt(failingUpdateStore{f.store}, time.Now().Add(365*day)).Purged; n != 0 {
 		t.Fatalf("purged %d, want 0", n)
 	}
 	f.requireFile(t, true)
@@ -261,7 +261,7 @@ func TestCleanupTrashed_RestoreAfterListingWins(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 
-	if n := cleanupTrashedVersionsAt(staleListStore{f.store, snapshot}, now); n != 0 {
+	if n := cleanupTrashedVersionsAt(staleListStore{f.store, snapshot}, now).Purged; n != 0 {
 		t.Fatalf("purged %d restored version(s), want 0", n)
 	}
 	f.requireFile(t, true)
@@ -302,7 +302,7 @@ func TestTrashedAt_RestoreClearsAndRetrashRestamps(t *testing.T) {
 	if got.TrashedAt == nil || got.TrashedAt.Before(before) {
 		t.Fatalf("re-trash kept stale stamp %v; entering the trash must stamp now", got.TrashedAt)
 	}
-	if n := CleanupTrashedVersions(f.store); n != 0 {
+	if n := CleanupTrashedVersions(f.store).Purged; n != 0 {
 		t.Fatalf("purged %d re-trashed version(s), want 0", n)
 	}
 	f.requireFile(t, true)
@@ -342,7 +342,7 @@ func TestTrashedAt_StaleWriteWhileStillTrashedKeepsLaterStamp(t *testing.T) {
 	if got.Status != database.BookVersionStatusTrash || got.TrashedAt == nil || !got.TrashedAt.Equal(*t2) {
 		t.Fatalf("status=%s TrashedAt=%v, want trash with the later stamp %v", got.Status, got.TrashedAt, *t2)
 	}
-	if n := cleanupTrashedVersionsAt(f.store, now); n != 0 {
+	if n := cleanupTrashedVersionsAt(f.store, now).Purged; n != 0 {
 		t.Fatalf("purged %d version(s), want 0: a stale write moved the stamp back and the cleanup purged a version trashed just now", n)
 	}
 	f.requireFile(t, true)
@@ -441,7 +441,7 @@ func TestTrashedAt_EveryPathIn_StampsEveryPathOut_Clears(t *testing.T) {
 			if got.TrashedAt == nil || got.TrashedAt.Before(before) || got.TrashedAt.After(after) {
 				t.Fatalf("TrashedAt = %v, want within [%v, %v]", got.TrashedAt, before, after)
 			}
-			if n := CleanupTrashedVersions(f.store); n != 0 {
+			if n := CleanupTrashedVersions(f.store).Purged; n != 0 {
 				t.Fatalf("cleanup purged %d freshly trashed version(s)", n)
 			}
 			f.requireFile(t, true)

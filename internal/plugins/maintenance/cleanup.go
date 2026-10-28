@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-26
+// last-edited: 2026-10-27
 
 package maintenance
 
@@ -503,8 +503,13 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	purged := p.deps.CleanupTrashedVersions()
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: purged %d versions", purged))
+	res := p.deps.CleanupTrashedVersions()
+	// One WARN per version the book still serves, so the run's journal lists
+	// every one; they stay in the trash and are retried on the next run.
+	for _, k := range res.Kept {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: kept version %s of book %s in the trash: %d path(s) kept, book still serves this file", k.VersionID, k.BookID, k.Paths))
+	}
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: purged %d versions, kept %d versions whose files the book still serves", res.Purged, len(res.Kept)))
 	return nil
 }
 

@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-11
+// last-edited: 2026-10-27
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
@@ -18,8 +18,11 @@
 package versions
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -77,23 +80,152 @@ func AutoPromoteAlt(store altPromoter, bookID string) error {
 	return store.UpdateBookVersion(bestAlt)
 }
 
+// BookServesFilesError is what PurgeVersion returns, having deleted nothing,
+// when the version's own book still serves one of the version's files. It is
+// not a failure of the purge machinery: the version stays in the trash, files
+// intact and restorable, and a later run tries again.
+//
+// How it happens: trashing the ACTIVE version only flips its status. Its files
+// stay where the book plays them (book.FilePath and the book_file rows of the
+// version), so 14 days later the purge was deleting the playable files and
+// leaving the book pointing at a missing file.
+type BookServesFilesError struct {
+	BookID    string
+	VersionID string
+	// Paths are the version's files the book still serves.
+	Paths []string
+}
+
+func (e *BookServesFilesError) Error() string {
+	return fmt.Sprintf("version %s of book %s not purged: book still serves %d of its file(s)", e.VersionID, e.BookID, len(e.Paths))
+}
+
+// keptReason is the journal text for a version left in the trash by the guard.
+const keptReason = "book still serves this file"
+
+// trashedLibraryState is the library_state a soft delete writes
+// (database.trashLibraryState, unexported).
+const trashedLibraryState = "deleted"
+
+// bookIsTrashed reports whether the book is itself in the trash. A trashed
+// book serves nothing, so the guard does not apply to it.
+func bookIsTrashed(b *database.Book) bool {
+	if b.IsSoftDeleted() {
+		return true
+	}
+	return b.LibraryState != nil && *b.LibraryState == trashedLibraryState
+}
+
+// cleanPath normalises p for comparison: absolute and cleaned. A path that
+// cannot be made absolute is only cleaned.
+func cleanPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
+// servedPaths returns the cleaned paths the book serves: its FilePath, and
+// every book_file row that belongs to a currently ACTIVE version of the book
+// or to no version. Rows of alt, trashed or purged versions are not served.
+func servedPaths(store versionPurger, book *database.Book, files []database.BookFile) (map[string]struct{}, error) {
+	vers, err := store.GetBookVersionsByBookID(book.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list versions of book %s: %w", book.ID, err)
+	}
+	active := make(map[string]struct{})
+	for i := range vers {
+		if vers[i].Status == database.BookVersionStatusActive {
+			active[vers[i].ID] = struct{}{}
+		}
+	}
+	served := make(map[string]struct{})
+	if book.FilePath != "" {
+		served[cleanPath(book.FilePath)] = struct{}{}
+	}
+	for i := range files {
+		f := &files[i]
+		if f.FilePath == "" {
+			continue
+		}
+		if _, ok := active[f.VersionID]; ok || f.VersionID == "" {
+			served[cleanPath(f.FilePath)] = struct{}{}
+		}
+	}
+	return served, nil
+}
+
 // PurgeVersion physically deletes the version's files and marks it
 // inactive_purged. Keeps the DB rows for fingerprint matching.
+//
+// A file the version's own book still serves is never deleted: when the book
+// is not itself trashed and the file is the book's FilePath or is named by a
+// book_file row of its active version (or of no version), PurgeVersion deletes
+// nothing, leaves the version in the trash and returns a *BookServesFilesError.
+// It fails closed: if the book, its versions or its rows cannot be read, or
+// the version's slot cannot be walked, nothing is deleted and the error is
+// returned.
 func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	book, err := store.GetBookByID(ver.BookID)
 	if err != nil || book == nil {
 		return fmt.Errorf("book %s not found", ver.BookID)
 	}
+	files, err := store.GetBookFiles(ver.BookID)
+	if err != nil {
+		return fmt.Errorf("list files of book %s: %w", ver.BookID, err)
+	}
 
-	// Remove files from .versions/{vid}/ or book root.
+	// Where the version's files live: its .versions/{vid}/ slot and any
+	// book_file rows keyed to it.
 	bookDir := ""
 	if book.FilePath != "" {
-		// Extract directory by finding the last slash
-		for i := len(book.FilePath) - 1; i >= 0; i-- {
-			if book.FilePath[i] == '/' {
-				bookDir = book.FilePath[:i]
-				break
+		if d := filepath.Dir(book.FilePath); d != "." && d != string(filepath.Separator) {
+			bookDir = d
+		}
+	}
+	var own []string
+	for i := range files {
+		if files[i].VersionID == ver.ID {
+			own = append(own, files[i].FilePath)
+		}
+	}
+	if bookDir != "" {
+		slot := VersionSlotDir(bookDir, ver.ID)
+		walkErr := filepath.WalkDir(slot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
+			if !d.IsDir() {
+				own = append(own, path)
+			}
+			return nil
+		})
+		if walkErr != nil && !errors.Is(walkErr, fs.ErrNotExist) {
+			return fmt.Errorf("list files in version slot %s: %w", slot, walkErr)
+		}
+	}
+
+	if !bookIsTrashed(book) {
+		served, err := servedPaths(store, book, files)
+		if err != nil {
+			return err
+		}
+		var kept []string
+		seen := make(map[string]struct{})
+		for _, p := range own {
+			c := cleanPath(p)
+			if _, dup := seen[c]; dup {
+				continue
+			}
+			seen[c] = struct{}{}
+			if _, ok := served[c]; ok {
+				kept = append(kept, p)
+			}
+		}
+		if len(kept) > 0 {
+			lifecycleLog.Warn("trash purge kept version %s of book %s in the trash: %d path(s) kept, reason: %s",
+				ver.ID, ver.BookID, len(kept), keptReason)
+			return &BookServesFilesError{BookID: ver.BookID, VersionID: ver.ID, Paths: kept}
 		}
 	}
 
@@ -105,10 +237,9 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	}
 
 	// Also remove any files directly associated with this version.
-	files, _ := store.GetBookFiles(ver.BookID)
-	for _, f := range files {
-		if f.VersionID == ver.ID {
-			_ = os.Remove(f.FilePath)
+	for i := range files {
+		if files[i].VersionID == ver.ID {
+			_ = os.Remove(files[i].FilePath)
 		}
 	}
 
@@ -118,9 +249,26 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion) error {
 	return store.UpdateBookVersion(ver)
 }
 
+// KeptVersion is a trashed version the cleanup left alone because its book
+// still serves its files.
+type KeptVersion struct {
+	BookID    string
+	VersionID string
+	Paths     int
+}
+
+// CleanupResult is what one cleanup run did.
+type CleanupResult struct {
+	// Purged is the number of versions purged.
+	Purged int
+	// Kept lists the versions left in the trash because their book still
+	// serves their files; they are retried on every run.
+	Kept []KeptVersion
+}
+
 // CleanupTrashedVersions is the maintenance task that purges versions
 // whose trash window has run out. Called by the scheduler.
-func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
+func CleanupTrashedVersions(store TrashedVersionCleaner) CleanupResult {
 	return cleanupTrashedVersionsAt(store, time.Now())
 }
 
@@ -142,11 +290,11 @@ func CleanupTrashedVersions(store TrashedVersionCleaner) (purged int) {
 // restore between the re-read and the stamp write is re-trashed, and one
 // between the re-read and PurgeVersion still loses its files. Closing it needs
 // an atomic claim of the row before any file is deleted.
-func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purged int) {
+func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (res CleanupResult) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
 		lifecycleLog.Warn("trash cleanup: list trashed versions failed: %v", err)
-		return 0
+		return res
 	}
 
 	ttl := time.Duration(TrashTTLDays) * 24 * time.Hour
@@ -179,13 +327,19 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time) (purge
 			continue
 		}
 		if err := PurgeVersion(store, v); err != nil {
+			var served *BookServesFilesError
+			if errors.As(err, &served) {
+				// Already logged (WARN, one per version) by PurgeVersion.
+				res.Kept = append(res.Kept, KeptVersion{BookID: served.BookID, VersionID: served.VersionID, Paths: len(served.Paths)})
+				continue
+			}
 			lifecycleLog.Warn("trash cleanup: purging version %s failed: %v", v.ID, err)
 			continue
 		}
-		purged++
+		res.Purged++
 	}
 	if stamped > 0 {
 		lifecycleLog.Info("trash cleanup: stamped %d trashed version(s) that had no trashed-at time; none of them were purged", stamped)
 	}
-	return purged
+	return res
 }
