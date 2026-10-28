@@ -50,7 +50,7 @@ export interface PlanResult {
    * RowStore names where the plan's rows are stored: PlanRowStoreV2 means
    * beside the operation (SavePlan), one key per row under PlanRowPrefix. A
    * stored plan without it is the older shape (every row inside the
-   * operation's result), and one marked PlanRowStoreV1 kept its rows without
+   * operation's result), and one marked "op_rows.v1" kept its rows without
    * the prefix; both are refused with ErrPlanLegacyFormat: run the plan again.
    */
   row_store?: string;
