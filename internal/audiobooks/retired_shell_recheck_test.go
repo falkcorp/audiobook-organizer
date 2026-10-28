@@ -1,7 +1,7 @@
 // file: internal/audiobooks/retired_shell_recheck_test.go
 // version: 1.3.0
 // guid: 451c02fe-0c9c-4bd1-9bcd-2b1f5484b71e
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package audiobooks
 

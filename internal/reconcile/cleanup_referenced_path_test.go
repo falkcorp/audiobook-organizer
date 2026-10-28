@@ -1,7 +1,7 @@
 // file: internal/reconcile/cleanup_referenced_path_test.go
 // version: 1.0.0
 // guid: 7d3e0b9a-5c14-4f82-a6e7-2b9c41f8d035
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package reconcile
 

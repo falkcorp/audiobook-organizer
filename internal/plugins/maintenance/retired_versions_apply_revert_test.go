@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_revert_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b2e5d74-1c38-4f06-a7d9-6e0b3f8a2c51
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 package maintenance
 
@@ -44,7 +44,7 @@ func cutOffThenFinishedByAFreshPlan(t *testing.T, rf *retiredFixture) (shell, ho
 	out = rf.applyRows(rf.f, fresh, []string{shell}, false, "op-fresh")
 	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
 	j := rf.journalByType("op-fresh")
-	require.Zero(t, j[retChangeBookFileRetire], "the tail op holds no retire row: %v", j)
+	require.Zero(t, j[undo.ChangeTypeBookFileRetire], "the tail op holds no retire row: %v", j)
 	require.Equal(t, 1, j[undo.ChangeTypeExternalIDReassign], "%v", j)
 	require.Equal(t, 1, j[undo.ChangeTypeBookMergedInto], "%v", j)
 	return shell, holder
@@ -210,4 +210,40 @@ func TestRetiredApply_TailWithoutAPlanRecordMovesNoID(t *testing.T) {
 	onShell, err := rf.st.GetExternalIDsForBook(shell)
 	require.NoError(t, err)
 	require.Len(t, onShell, 1, "the id stays on the shell")
+}
+
+// An Apply's own rows are the ones the undo package reads (part 5), so the
+// operation is offered an Undo and a revert puts the shell's rows back: the
+// retire-operation refusal of part 7 stands only for a retire row the undo
+// cannot read.
+func TestRetiredApply_RevertOfAWholeApplyRestoresTheShell(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	shell, holder := rf.ids["would-retire"], rf.ids["primary"]
+	out := rf.applyRows(rf.f, res, []string{shell}, false, "op-whole")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	held, err := rf.st.GetRetiredBookFiles(holder)
+	require.NoError(t, err)
+	require.NotEmpty(t, held, "fixture: the retire put rows under the holder")
+
+	changes, err := rf.st.GetOperationChanges("op-whole")
+	require.NoError(t, err)
+	require.Nil(t, undo.RetireRevertBlock("op-whole", changes), "a well-formed Apply is not blocked")
+	require.True(t, undo.OperationRevertible(changes))
+	report, err := preflightUndoConflicts(rf.st, "op-whole")
+	require.NoError(t, err)
+	require.Empty(t, report.CheckFailed, "%+v", report)
+	require.NotZero(t, report.Safe, "%+v", report)
+
+	rev, err := audiobooks.NewRevertService(rf.st).RevertOperation("op-whole")
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "%+v", rev)
+	held, err = rf.st.GetRetiredBookFiles(holder)
+	require.NoError(t, err)
+	require.Empty(t, held, "the retired rows are back on the shell")
+	files, err := rf.st.GetBookFiles(shell)
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
 }

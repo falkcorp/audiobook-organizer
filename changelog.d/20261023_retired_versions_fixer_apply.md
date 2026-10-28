@@ -9,9 +9,10 @@ book it lost to (nothing is deleted), its external ids move to that book, its
 merged-into link is set, and any retired versions it held move too. Every write
 is journaled first (`repair_plan_record`, `book_version_create`,
 `book_file_retire`, `external_id_reassign`, `book_merged_into`,
-`retired_version_rehome`). The undo package does not yet understand the three
-new change types (they land with PR 5), so reverting a retire operation from
-the Operations page is refused as a whole with a 409 rather than half-undone. Applies are a dry run unless
+`retired_version_rehome`), in the undo package's own change types and value
+formats, so reverting an Apply from the Operations page undoes it. A retire
+operation that holds a retire row the undo cannot read is refused as a whole
+with a 409 rather than half-undone. Applies are a dry run unless
 explicitly told to write, partition by holder so no two workers touch one book,
 skip a book already retired (a shell only counts once a version naming it
 holds rows, so an empty version is never mistaken for a finished retire), and
@@ -25,7 +26,7 @@ first one retires.
 
 The purge, hard delete and restore paths now refuse a retire shell, a trashed
 book whose file rows were retired onto another book and whose retired versions
-still hold rows (`merge.ErrBookIsRetiredShell`). The nightly auto-purge and
+still hold rows (`database.ErrBookIsRetiredShell`). The nightly auto-purge and
 "Purge now" skip it (new `skipped_retired_shell` count and ids in the purge
 result, also in the auto-purge log line), "Discard progress and purge", the
 single and batch hard delete and `RestoreFromTrash` refuse it (HTTP 409, code

@@ -1,7 +1,7 @@
 // file: internal/database/retired_shell_test.go
 // version: 1.0.0
 // guid: 0f7e3a19-6c2b-4d85-a914-b8e5c1d02f73
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package database
 

@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-23-retired-versions-apply-executive-summary.md -->
 <!-- version: 1.1.1 -->
 <!-- guid: b7e34a18-52c9-4f60-9d1b-8a63c0e5f247 -->
-<!-- last-edited: 2026-10-24 -->
+<!-- last-edited: 2026-10-28 -->
 
 # The trashed-duplicates clean-up can now actually run, behind an off switch
 
@@ -74,14 +74,14 @@ rather than a generic server error.
 
 ## What is not finished, and must be before the switch is turned on in production
 
-- **Undo does not work for these steps yet, and the Operations page now says
-  so.** Reversing a clean-up operation as a whole is refused with a plain
-  message instead of half-undoing it. The undo steps arrive with the undo work
-  (the fifth of nine changes in this series). Do not turn the switch on before
-  it lands.
+- **Undo of a clean-up operation.** The undo work (the fifth of nine changes
+  in this series) can reverse the three kinds of step a clean-up writes, so a
+  whole clean-up operation can be undone from the Operations page. An operation
+  that holds a step the undo cannot read is still refused as a whole, with a
+  plain message, instead of being half-undone.
 - **Books from a combine that can still be undone are held, not cleaned up.**
-  They are reported as "try again later" until undoing a combine also undoes the
-  clean-up. This is also in the undo work.
+  They are reported as "try again later" until the clean-up links itself to the
+  combine it absorbed, so undoing the combine also undoes the clean-up.
 - **The automatic-merge history is not read yet.** The only protection against
   cleaning up a book from a very recent automatic merge is the 14-day minimum age.
 - **A snapshot, not a live view, of combines.** The clean-up reads the list of

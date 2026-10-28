@@ -1,7 +1,7 @@
 // file: internal/dedup/unmerge_auto_followups_test.go
 // version: 1.0.2
 // guid: 5d2a9e64-1c7b-4f03-b8e6-0a4f3c9d7b12
-// last-edited: 2026-10-24
+// last-edited: 2026-10-28
 
 package dedup
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
 // version: 1.45.6
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-25
+// last-edited: 2026-10-28
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
