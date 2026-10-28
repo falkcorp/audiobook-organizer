@@ -1,7 +1,7 @@
 // file: tests/e2e/book-detail.spec.ts
-// version: 1.14.0
+// version: 1.14.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-28
 
 import { expect, test } from '@playwright/test';
 import { mockEventSource } from './utils/test-helpers';
@@ -416,7 +416,8 @@ test.describe('Book Detail page', () => {
     await expect(page.getByRole('heading', { name: /^Files \(/ })).toBeVisible();
     await expect(page.getByText('/library/test-book.m4b').first()).toBeVisible();
 
-    await expect(page.getByRole('heading', { name: 'Versions' })).toBeVisible();
+    // exact: the Retired versions panel also has a heading containing "Versions".
+    await expect(page.getByRole('heading', { name: 'Versions', exact: true })).toBeVisible();
     await expect(page.getByText(/Ingested/).first()).toBeVisible();
   });
 
