@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/trash_cleanup_failure_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e2c4a17-5b83-4d60-a1f9-0c7d3e8b5a42
 // last-edited: 2026-10-28
 
@@ -60,6 +60,29 @@ func TestRunTrashCleanup_FailedPurgesFailTheOp(t *testing.T) {
 		if !strings.Contains(rep.logs[0], want) {
 			t.Errorf("log %q does not contain %q", rep.logs[0], want)
 		}
+	}
+}
+
+// failingSetResultReporter is a levelReporter whose result write fails.
+type failingSetResultReporter struct {
+	levelReporter
+	err error
+}
+
+func (r *failingSetResultReporter) SetResult(any) error { return r.err }
+
+// A night whose purges failed AND whose result could not be stored fails with
+// both: dropping the second left the owner chasing the purge failure while the
+// Activity page had no result to show for the run.
+func TestRunTrashCleanup_FailedPurgesAndUnstoredResultReportBoth(t *testing.T) {
+	cause := errors.New("book_file lookup incomplete")
+	stored := errors.New("result store unavailable")
+	p := &Plugin{deps: trashCleanupDeps{res: versions.CleanupResult{Purged: 1, Failed: 1}, err: cause}}
+	rep := &failingSetResultReporter{err: stored}
+
+	err := p.runTrashCleanup(context.Background(), nil, rep)
+	if !errors.Is(err, cause) || !errors.Is(err, stored) {
+		t.Fatalf("runTrashCleanup = %v, want an error wrapping both the cleanup's (%v) and the result write's (%v)", err, cause, stored)
 	}
 }
 

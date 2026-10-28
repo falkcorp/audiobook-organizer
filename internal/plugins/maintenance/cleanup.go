@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-28
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -628,6 +629,11 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		// the operation log and fail the op, so a night in which nothing could
 		// be purged does not read as "purged 0 versions" with a success status.
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%s; %d failed: %v", msg, res.Failed, err))
+		if setErr != nil {
+			// Both are why the night failed: the purges, and the result the page
+			// reads back not being stored.
+			return errors.Join(err, fmt.Errorf("trash cleanup: persist result: %w", setErr))
+		}
 		return err
 	}
 	_ = reporter.Log(slog.LevelInfo, msg)
