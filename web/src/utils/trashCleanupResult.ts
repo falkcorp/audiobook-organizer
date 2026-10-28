@@ -1,17 +1,20 @@
 // file: web/src/utils/trashCleanupResult.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
 // last-edited: 2026-10-28
 
 /** The def id of the nightly trash cleanup operation. */
 export const TRASH_CLEANUP_DEF_ID = 'maintenance.trash-cleanup';
 
-/** The def id it ran under before the maintenance plugin took it over. */
-const FORMER_TRASH_CLEANUP_DEF_ID = 'scheduler.trash-cleanup';
-
-/** Reports whether an operation is a run of the trash cleanup (under either id). */
+/**
+ * Reports whether an operation is a run of the trash cleanup. Only the current
+ * id counts: the panel it opens reads the kept / needs-attention lists the
+ * maintenance def stores, which a run under its former id (a stored row keeps
+ * the id it was written with) never had, and the op-ID alias guard forbids
+ * code naming a former id.
+ */
 export function isTrashCleanupDef(defId: string | undefined | null): boolean {
-  return defId === TRASH_CLEANUP_DEF_ID || defId === FORMER_TRASH_CLEANUP_DEF_ID;
+  return defId === TRASH_CLEANUP_DEF_ID;
 }
 
 /**

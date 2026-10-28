@@ -1,5 +1,5 @@
 // file: internal/server/server_ops_store.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
 // last-edited: 2026-10-28
 
@@ -121,23 +121,43 @@ type serverBookWriter interface {
 	CreateBookFile(file *database.BookFile) error
 }
 
-// serverBookVersionStore: Reads and writes version rows for a book.
+// serverBookVersionStore: Version rows, the trash page's two lists, and the
+// version-group hand-off. Split into three leaves on 2026-10-28 when the trash
+// page's two list reads took it to 9 entries, past the 8-entry interfacebloat
+// cap; this name is kept as their composition so the method set is
+// byte-identical and no consumer changed. BookFilesAtPath, which used to be
+// declared here as well as in serverBookFileReader, now lives only in the
+// latter: it reads book_file rows, not version rows.
 type serverBookVersionStore interface {
+	serverVersionRowStore
+	serverVersionTrashReader
+	serverVersionGroupReader
+}
+
+// serverVersionRowStore: One version row at a time, and a book's versions.
+type serverVersionRowStore interface {
 	GetBookVersion(id string) (*database.BookVersion, error)
 	// GetBookVersionsByBookID: the purge-now handler's versions.PurgeVersion
 	// finds the book's active version with it, so it never deletes a file
-	// the book still plays; BookFilesAtPath and GetBookByFilePath find
-	// another live book that serves the file.
+	// the book still plays; BookFilesAtPath (serverBookFileReader) and
+	// GetBookByFilePath find another live book that serves the file.
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-	BookFilesAtPath(path string) ([]database.BookFile, error)
 	UpdateBookVersion(v *database.BookVersion) error
 	DeleteBookVersion(id string) error
-	// ListTrashedBookVersions and ListPurgedBookVersions are the trash page's two
-	// tabs (GET /audiobooks/trashed-versions and /purged-versions).
+}
+
+// serverVersionTrashReader: ListTrashedBookVersions and ListPurgedBookVersions
+// are the trash page's two tabs (GET /audiobooks/trashed-versions and
+// /purged-versions).
+type serverVersionTrashReader interface {
 	ListTrashedBookVersions() ([]database.BookVersion, error)
 	ListPurgedBookVersions() ([]database.BookVersion, error)
-	// The version-group primary hand-off (versionprimary.EnsureStore) after
-	// a transcode: the group's members and each member's chapter rows.
+}
+
+// serverVersionGroupReader: The version-group primary hand-off
+// (versionprimary.EnsureStore) after a transcode: the group's members and each
+// member's chapter rows.
+type serverVersionGroupReader interface {
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	database.ChapterReader
 }

@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.test.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: 63a5ee65-33c3-4d7d-b8dc-cc5de376cdcd
 // last-edited: 2026-10-28
 
@@ -114,9 +114,8 @@ describe('links', () => {
     expect(parseCleanupSet(null)).toBeNull();
   });
 
-  it('recognises the cleanup under its current and former id', () => {
+  it('recognises only the maintenance def as the trash cleanup', () => {
     expect(isTrashCleanupDef('maintenance.trash-cleanup')).toBe(true);
-    expect(isTrashCleanupDef('scheduler.trash-cleanup')).toBe(true);
     expect(isTrashCleanupDef('maintenance.compact-activity-log')).toBe(false);
     expect(isTrashCleanupDef(undefined)).toBe(false);
   });
