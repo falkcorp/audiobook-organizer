@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_identity_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3e7a9c52-81d4-4f6b-b0a3-6d2c15e8f947
-// last-edited: 2026-10-27
+// last-edited: 2026-10-28
 
 package transcribe
 
@@ -26,7 +26,7 @@ import (
 
 const catwomanMachine = "cccc0003"
 
-var timeoutCanaryErr = errors.New("canary clip: " + timeoutText)
+var errTimeoutCanary = errors.New("canary clip: " + timeoutText)
 
 // canaryURLMachine is the strong identity a probe last reported for url.
 func canaryURLMachine(url string) string {
@@ -104,7 +104,7 @@ func TestCanaryIdentity_AConcurrentGateMovingTheMemoryDuringTheWaitDoesNotForget
 	rec := &canaryRecorder{}
 	canary := func(ctx context.Context, g gatedEndpoint) error {
 		if g.Endpoint.URL == w1 {
-			return timeoutCanaryErr // the stand-in is sick
+			return errTimeoutCanary // the stand-in is sick
 		}
 		return rec.fn(ctx, g)
 	}
@@ -146,7 +146,7 @@ func TestCanaryIdentity_ALoneEndpointWhoseMemoryMovedDuringTheWaitIsStillAsked(t
 		noteCanaryProbes(kept, refused)
 		clearCooldown(w0)
 	})
-	rec := &canaryRecorder{err: timeoutCanaryErr}
+	rec := &canaryRecorder{err: errTimeoutCanary}
 	_, err := dispatchOn(testCtx(t), h.eps, nil, p.send, rec.fn, 8)
 	if !IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want ErrPoolUnavailable", err)
@@ -181,7 +181,7 @@ func TestCanaryIdentity_AMachineWhoseWorkerLostItsIdIsStillRemembered(t *testing
 	// lost its id this machine's. Without one, a weak worker stands for itself.
 	noteCanaryPort(key, w0, true)
 	markCanaryFailed(key, w0)
-	rec := &canaryRecorder{err: timeoutCanaryErr}
+	rec := &canaryRecorder{err: errTimeoutCanary}
 	res, err := dispatchOn(testCtx(t), h.eps, nil, p.send, rec.fn, 8)
 	if err != nil {
 		t.Fatalf("err = %v, want the other machine to take the page", err)
@@ -214,7 +214,7 @@ func TestCanaryIdentity_ALoneEndpointWhoseWorkerLostItsIdIsStillAsked(t *testing
 	w0 := h.eps[0].URL
 	key := "m:" + catwomanMachine
 	markCanaryFailed(key, w0)
-	rec := &canaryRecorder{err: timeoutCanaryErr}
+	rec := &canaryRecorder{err: errTimeoutCanary}
 	_, err := dispatchOn(testCtx(t), h.eps, nil, p.send, rec.fn, 8)
 	if !IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want ErrPoolUnavailable", err)
@@ -266,7 +266,7 @@ func TestCanaryIdentity_APortThatAnswersAsUIsAskedWithItsMachinesOtherPorts(t *t
 			canary := func(ctx context.Context, g gatedEndpoint) error {
 				_ = rec.fn(ctx, g)
 				if tc.failing >= 0 && g.Endpoint.URL == ports[tc.failing] {
-					return timeoutCanaryErr
+					return errTimeoutCanary
 				}
 				return nil
 			}
@@ -555,7 +555,7 @@ func TestRegate_TheCanaryGetsTheHealthTheProbeAfterTheWaitRead(t *testing.T) {
 			var sawCanary, sawWork string
 			canary := func(_ context.Context, g gatedEndpoint) error {
 				if g.Endpoint.URL != w0 {
-					return timeoutCanaryErr // a pool's other machine is sick: worker 0 is what is waited for
+					return errTimeoutCanary // a pool's other machine is sick: worker 0 is what is waited for
 				}
 				sawCanary = tc.saw(g)
 				return nil
@@ -703,7 +703,7 @@ func TestCanaryMemory_AURLNoLongerConfiguredIsDropped(t *testing.T) {
 	if canaryURLMachine(gone) != batKey || !hasUnheardPort(batKey, []gpuRefusal{{URL: gone}}, nil) {
 		t.Fatal("setup: the URL was not recorded")
 	}
-	rec := &canaryRecorder{err: timeoutCanaryErr} // it stays remembered, so the entry can be read after
+	rec := &canaryRecorder{err: errTimeoutCanary} // it stays remembered, so the entry can be read after
 	if _, err := dispatchWith(testCtx(t), p, rec.fn, 4); !IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want ErrPoolUnavailable", err)
 	}
