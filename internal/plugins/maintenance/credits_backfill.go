@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-27
 
@@ -657,7 +657,7 @@ type creditsBackfillResult struct {
 	NarratorsCreated  int      `json:"narrators_created"`
 	// NarratorsCreatedUnused is the records the run created that no written
 	// book credits (UnusedNarratorNames): a creating book whose write failed, or
-	// whose narrator side was refused after the record existed. They are empty
+	// whose narrator side was refused after the record existed. They are normally empty
 	// records; maintenance.purge-empty-narrators removes them.
 	NarratorsCreatedUnused int      `json:"narrators_created_unused,omitempty"`
 	UnusedNarratorNames    []string `json:"unused_narrator_names,omitempty"`
