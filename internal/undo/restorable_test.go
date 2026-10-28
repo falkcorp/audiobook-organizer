@@ -1,7 +1,7 @@
 // file: internal/undo/restorable_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: b83d2f5e-1a64-4c09-8e7d-5f0a9c2b6e14
-// last-edited: 2026-10-19
+// last-edited: 2026-10-28
 
 package undo
 
@@ -52,6 +52,9 @@ func TestNotRestorableLabel(t *testing.T) {
 		{"metadata_update", "", "metadata_update:(no field)"},
 		{"author_delete", "author", "author_delete"},
 		{"narrator_delete", "narrator", "narrator_delete"},
+		// maintenance.credits-backfill's ledger rows for a record it creates and
+		// deletes again: reported by the revert, never reversed.
+		{ChangeTypeNarratorCreateIntent, "narrator", "narrator_create_intent"},
 		// The revert endpoint has no case for db_update.
 		{"db_update", "title", "db_update"},
 		// maintenance.fs-regroup-xml rows.

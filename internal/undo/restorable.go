@@ -35,7 +35,12 @@ import (
 //     (journalAuthorMerge). The API author merge and the AI scan apply
 //     (server/entities_ops.go) journal restorable author_merge_credits /
 //     author_merge_delete rows instead (undo/author_merge.go).
-//   - narrator_delete: maintenance.purge-empty-narrators.
+//   - narrator_delete: maintenance.purge-empty-narrators, and
+//     maintenance.credits-backfill when it deletes a record it created that
+//     no book credits. Reverting a credits-backfill operation therefore
+//     reports its narrator_delete rows (and its narrator_create_intent rows,
+//     ChangeTypeNarratorCreateIntent) as not restorable; its book rows are
+//     still reverted.
 //   - series_delete / series_merge: series dedup and the duplicates-handler
 //     series merge. Nothing can recreate a deleted series row under its old
 //     id (CreateSeries mints a new one).
