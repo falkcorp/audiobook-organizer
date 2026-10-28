@@ -1,5 +1,5 @@
 // file: internal/undo/retire_revert_block.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5b1d8e47-2c93-4fa6-9d0e-a3c7f6128b54
 // last-edited: 2026-10-28
 
@@ -102,28 +102,31 @@ func retireRowShell(c *database.OperationChange) (string, bool) {
 	return r.Shell, true
 }
 
-// CheckNotRetiredShellReceiver refuses (a *ReferentError, ReasonBookIsRetiredShell
-// or ReasonBookLookupFailed) handing an external id or a merged-into link back
-// to book id while id is the shell of a retired version that still holds rows.
+// PredictNotRetiredShellReceiver is the preflight's check for handing an
+// external id or a merged-into link back to book id (the revert itself runs
+// CheckNotRetiredShell: by then the operation's own retire rows have been
+// reverted, so the store shows what is really still held).
 //
-// Why: an external_id_reassign or book_merged_into row moved the id or the link
-// OFF the shell, onto the holder, because the shell's audio went retired under
-// the holder. Putting them back on a shell whose rows stay retired leaves a
-// shell that looks live (it owns the id, the link is gone) and owns no file,
-// which is the state the retire exists to prevent: the next iTunes import
-// resolves the PID to the trashed shell, and a purge of it deletes the only
-// record of where the audio went. The operation that did the retire may undo
-// the ids and links only together with its book_file_retire rows (the shell is
-// then no shell), so a shell the plan's operation retired is exempt. Any OTHER
-// operation that moved ids or links off a shell, such as the tail a fresh plan
-// finishes for a cut-off retire (it journals no retire row), is refused.
+// Why the hand-back is refused for a shell that still holds retired rows: an
+// external_id_reassign or book_merged_into row moved the id or the link OFF the
+// shell, onto the holder, because the shell's audio went retired under the
+// holder. Putting them back on a shell whose rows stay retired leaves a shell
+// that looks live (it owns the id, the link is gone) and owns no file, which is
+// the state the retire exists to prevent: the next iTunes import resolves the
+// PID to the trashed shell, and a purge of it deletes the only record of where
+// the audio went.
 //
-// A nil plan has no exemption. The exemption is read from every row of the
-// operation (RevertPlan.NoteHandOffs), so the revert and the preflight agree.
-// Callers run it under the merge lock a retire holds, and only for a row that
-// would write, so a row already restored is still counted restored.
-func (p *RevertPlan) CheckNotRetiredShellReceiver(store any, id, action string) error {
-	if p != nil && p.retires[id] {
+// The store the preflight reads has not been reverted yet, so for a shell the
+// operation retired files of it predicts instead: the rows are held back until
+// every retire row of the shell is restored (PlanRevert orders them last and
+// Gate refuses them otherwise), so a row that reaches this check with such a
+// shell will find the shell's retire rows reverted, and passes. Call it only
+// for a row Gate passed. A shell with no retire row in the operation (another
+// operation's, or the tail a fresh plan finishes for a cut-off retire, which
+// journals none) is checked against the store, so a shell still holding rows is
+// refused. A nil plan has no prediction.
+func (p *RevertPlan) PredictNotRetiredShellReceiver(store any, id, action string) error {
+	if p != nil && len(p.shellRetires[id]) > 0 {
 		return nil
 	}
 	return CheckNotRetiredShell(store, id, action)
