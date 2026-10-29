@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_resume_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d71c936-4d00-48ec-b188-ad49586bbd4e
 // last-edited: 2026-10-29
 
@@ -29,6 +29,15 @@ type swapFaultStore struct {
 	failFileID  string
 	failVersion string
 	failStatus  string
+	// failPathLookup: BookFilesAtPath cannot be completed.
+	failPathLookup bool
+}
+
+func (s *swapFaultStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	if s.failPathLookup {
+		return nil, database.ErrBookFilesAtPathUnavailable
+	}
+	return s.Store.BookFilesAtPath(path)
 }
 
 func (s *swapFaultStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
@@ -319,4 +328,106 @@ func TestVersionLifecycleRoutes_ResumeSwapPermissions(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, f.do(t, onlyView, http.MethodPost, resume, nil).Code)
 	assert.Equal(t, http.StatusForbidden, f.do(t, onlyDelete, http.MethodPost, resume, nil).Code)
 	assert.Equal(t, http.StatusForbidden, f.do(t, viewerTok, http.MethodPost, resume, nil).Code)
+}
+
+// delugeCall is one call of the Deluge follow a resume made, and whether the
+// answer had already been written when it was made.
+type delugeCall struct {
+	from, to *database.BookVersion
+	path     string
+	answered bool
+}
+
+// resumeWatchingDeluge resumes the stuck swap with the Deluge follow replaced
+// by a recorder.
+func (f *swapTrashFixture) resumeWatchingDeluge() (*httptest.ResponseRecorder, []delugeCall) {
+	f.t.Helper()
+	var calls []delugeCall
+	w := httptest.NewRecorder()
+	prev := notifyDelugeAfterSwapResume
+	notifyDelugeAfterSwapResume = func(_ interface {
+		GetBookByID(id string) (*database.Book, error)
+	}, from, to *database.BookVersion, path string) {
+		calls = append(calls, delugeCall{from: from, to: to, path: path, answered: w.Body.Len() > 0})
+	}
+	f.t.Cleanup(func() { notifyDelugeAfterSwapResume = prev })
+	f.srv.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/"+f.book.ID+"/versions/resume-swap", nil))
+	notifyDelugeAfterSwapResume = prev
+	return w, calls
+}
+
+// A finished swap tells Deluge, after the answer is written: both versions
+// when both were left swapping_*.
+func TestHandleResumeVersionSwap_FinishTellsDelugeAfterTheAnswer(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	alt := f.stuckAfterRowFailure()
+
+	w, calls := f.resumeWatchingDeluge()
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, calls, 1)
+	require.NotNil(t, calls[0].from)
+	require.NotNil(t, calls[0].to)
+	assert.Equal(t, f.active.ID, calls[0].from.ID)
+	assert.Equal(t, alt.ID, calls[0].to.ID)
+	assert.True(t, calls[0].answered, "Deluge was called before the answer was written")
+}
+
+// The swap got as far as the status writes with only the entering version left
+// swapping_in: Deluge is still told to follow it (the entering version's
+// torrent moves to the book's file), with no leaving version.
+func TestHandleResumeVersionSwap_StatusOnlyFinishTellsDelugeTheEnteringVersion(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	alt, _ := f.add(database.BookVersionStatusAlt, time.Hour, "Year One.mp3")
+	healthy := f.srv.store
+	f.srv.store = &swapFaultStore{Store: healthy, failVersion: alt.ID, failStatus: database.BookVersionStatusActive}
+	require.Equal(t, http.StatusInternalServerError, f.trash(f.active.ID).Code)
+	f.srv.store = healthy
+	require.Equal(t, database.BookVersionStatusSwappingIn, f.version(alt.ID).Status)
+
+	w, calls := f.resumeWatchingDeluge()
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, calls, 1, "a status-only finish did not tell Deluge")
+	assert.Nil(t, calls[0].from)
+	require.NotNil(t, calls[0].to)
+	assert.Equal(t, alt.ID, calls[0].to.ID)
+	book, err := f.store.GetBookByID(f.book.ID)
+	require.NoError(t, err)
+	assert.Equal(t, book.FilePath, calls[0].path)
+	assert.True(t, calls[0].answered)
+}
+
+// An undo puts the swap back: the files are where Deluge already has them.
+func TestHandleResumeVersionSwap_UndoDoesNotTellDeluge(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	f.add(database.BookVersionStatusSwappingIn, time.Hour, "Year One.mp3")
+
+	w, calls := f.resumeWatchingDeluge()
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Empty(t, calls)
+}
+
+// A path lookup the plan could not complete is a fault of the library's, not a
+// statement about the book: 500, not the 409 of a refusal, and nothing written.
+func TestHandleResumeVersionSwap_APathLookupThatCannotBeCompletedAnswers500(t *testing.T) {
+	f := newSwapTrashFixture(t)
+	alt := f.stuckAfterRowFailure()
+	healthy := f.srv.store
+	before := f.snapshot()
+	disk := diskTree(t, f.dir)
+
+	f.srv.store = &swapFaultStore{Store: healthy, failPathLookup: true}
+	w := f.resume()
+	f.srv.store = healthy
+
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	assert.NotEqual(t, codeSwapResumeRefused, errorCodeOf(t, w))
+	assert.Equal(t, before, f.snapshot())
+	assert.Equal(t, disk, diskTree(t, f.dir))
+
+	w = f.resume()
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, database.BookVersionStatusActive, f.version(alt.ID).Status)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-29
 //
@@ -617,6 +617,10 @@ func (s *Server) handleListSwapIncompleteBooks(c *gin.Context) {
 	}{Books: books, Count: len(books)})
 }
 
+// notifyDelugeAfterSwapResume is how the resume handler tells Deluge; a
+// variable so a test can see what a resume hands it without a Deluge to call.
+var notifyDelugeAfterSwapResume = NotifyDelugeAfterVersionSwap
+
 // handleResumeVersionSwap finishes or undoes a version swap that did not finish.
 // POST /api/v1/audiobooks/:id/versions/resume-swap
 //
@@ -624,8 +628,10 @@ func (s *Server) handleListSwapIncompleteBooks(c *gin.Context) {
 // and either completes the swap or moves the files back, whichever the disk
 // allows; it changes nothing and answers 409 when the state is not one it can
 // repair without guessing (SWAP_RESUME_REFUSED, with the reason) or the book has
-// no unfinished swap (NO_SWAP_TO_RESUME). It holds the merge lock, like the swap
-// it repairs; Deluge is told after the lock is released.
+// no unfinished swap (NO_SWAP_TO_RESUME). A lookup the plan could not complete
+// (database.ErrBookFilesAtPathUnavailable) is a fault, not a refusal: it is
+// answered 500. It holds the merge lock, like the swap it repairs; the answer is
+// sent first and Deluge is told after the lock is released.
 func (s *Server) handleResumeVersionSwap(c *gin.Context) {
 	bookID := c.Param("id")
 	store := s.storeForWiring()
@@ -667,9 +673,6 @@ func (s *Server) handleResumeVersionSwap(c *gin.Context) {
 		}
 		return
 	}
-	if res.From != nil && res.To != nil {
-		NotifyDelugeAfterVersionSwap(store, res.From, res.To, res.BookPath)
-	}
 	httputil.RespondWithOK(c, struct {
 		Action            string `json:"action"`
 		BookID            string `json:"book_id"`
@@ -679,6 +682,15 @@ func (s *Server) handleResumeVersionSwap(c *gin.Context) {
 		BookPath          string `json:"book_path"`
 		FilesMoved        int    `json:"files_moved"`
 	}{res.Action, res.BookID, res.LeavingVersionID, res.EnteringVersionID, res.ActiveVersionID, res.BookPath, res.Moved})
+	// Deluge is told after the answer is on its way, as the trash handler does:
+	// the swap is done and Deluge is a network call that can take its time. A
+	// finished swap hands back the entering version always, and the leaving one
+	// when it was still swapping_out too (a swap that stopped at its status
+	// writes may have only the entering one); the notification copes with either.
+	if res.To != nil {
+		c.Writer.Flush()
+		notifyDelugeAfterSwapResume(store, res.From, res.To, res.BookPath)
+	}
 }
 
 // CleanupTrashedVersions delegates to versions.CleanupTrashedVersions.

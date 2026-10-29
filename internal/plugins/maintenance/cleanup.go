@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-29
 
@@ -700,13 +700,20 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	if res.SwapIncompleteErr != nil {
 		// The unfinished swaps could not be listed: the night is reported as
 		// failed, not as one with none to report.
-		err = errors.Join(err, fmt.Errorf("trash cleanup: list the books whose version swap did not finish: %w", res.SwapIncompleteErr))
+		err = errors.Join(err, fmt.Errorf("trash cleanup: the books whose version swap did not finish could not be listed: %w", res.SwapIncompleteErr))
 	}
 	if err != nil {
 		// Some due purges failed (or the trash could not be listed): say so in
 		// the operation log and fail the op, so a night in which nothing could
 		// be purged does not read as "purged 0 versions" with a success status.
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%s; %d failed: %v", msg, res.Failed, err))
+		// The count is of purges: a night that only failed to list the unfinished
+		// swaps purged and failed none, and "0 failed" beside an error read as a
+		// contradiction.
+		failed := ""
+		if res.Failed > 0 {
+			failed = fmt.Sprintf("; %d failed", res.Failed)
+		}
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%s%s: %v", msg, failed, err))
 		if setErr != nil {
 			// Both are why the night failed: the purges, and the result the page
 			// reads back not being stored.

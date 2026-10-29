@@ -1,5 +1,5 @@
 // file: web/src/components/versions/UnfinishedSwaps.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: f5d37b28-9f17-4cef-bd0d-f0e776f027e8
 // last-edited: 2026-10-29
 
@@ -42,7 +42,11 @@ function resumeConfirmText(b: SwapIncompleteBook): string {
     b.resume === 'undo'
       ? 'This puts the files back where they were and makes the version that was leaving the active one again.'
       : 'This finishes the swap: the version that was entering becomes the active one and the other becomes an alternate. No file is moved.';
-  return `Resume the unfinished swap of "${b.title || b.book_id}"? ${what}`;
+  // The list was read when the page loaded; the server reads the disk and the
+  // rows again when the button is clicked, and does what it finds then.
+  const replan =
+    ' The server works out what to do again when you confirm, from what is on disk at that moment, so it may do the other of the two (or refuse and change nothing) if the book has changed since this list was loaded.';
+  return `Resume the unfinished swap of "${b.title || b.book_id}"? ${what}${replan}`;
 }
 
 function describeResult(r: ResumeSwapResult): string {
