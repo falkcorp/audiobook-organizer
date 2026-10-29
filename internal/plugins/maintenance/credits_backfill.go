@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-29
 
@@ -1556,7 +1556,42 @@ func (r *cbRun) seedLeftovers() error {
 // created and still be taken for that operation's: CreateNarrator runs right
 // after the intent row is written (under one mutex), so the gap is a store
 // write, not minutes. Generous enough for a stalled synced write.
+//
+// What the window covers, and what it misses, for ANOTHER writer (the narrator
+// sync of an import, a hand edit, a second operation) that makes a record of
+// the same name:
+//   - Covered (taken for the operation's, and so a candidate): a record of the
+//     intent's exact name created by anyone from the intent row up to 30 s after
+//     it. CreateNarrator returns the existing record for a name, so the two
+//     writers cannot be told apart by the record; what separates them is that
+//     the record is also unlinked when the apply runs. A record another writer
+//     made in that half minute and left unlinked is therefore deleted as a
+//     leftover if no creator of this run credits it. The window is that narrow
+//     so the exposure is that narrow.
+//   - Missed (taken for preexisting, kept): a record the operation really made
+//     more than 30 s after the row that names it (a write stalled that long),
+//     and one made after the operation's CompletedAt + 30 s. That is the safe
+//     direction: a leftover that is missed stays in the store and
+//     purge-empty-narrators can remove it; a record wrongly condemned is gone.
+//   - Not subject to it: a credits_backfill row names its records by id, so
+//     another writer's record of the same name is never mistaken for it; only
+//     its time bounds are applied.
+//
+// A record whose CreatedAt is zero has no time to judge and is never a
+// candidate.
 const cbLeftoverSlack = 30 * time.Second
+
+// cbDiscardRemedy is what an error for an unreadable piece of an operation's
+// evidence tells the person to do. The apply fails closed on it for good (the
+// row will not read tomorrow either), and the way out is to take the operation
+// out of the set this check reads: discard it (the Activity page, or
+// registry.Discard). That removes the operation's row and its row sets, so
+// the operation is no longer listed; its journal rows stay (nothing deletes
+// them), so it can still be reverted, but the records it may have left are no
+// longer looked for here (purge-empty-narrators removes unlinked ones).
+func cbDiscardRemedy(opID string) string {
+	return fmt.Sprintf("; to proceed, discard operation %s (Activity page): the apply then no longer reads it, and the records it may have left are not looked for (its journal stays, so it can still be reverted)", opID)
+}
 
 // cbSourceOp is an earlier operation whose journal names records it may have
 // left behind.
@@ -1602,7 +1637,7 @@ func (r *cbRun) leftoverCandidates(src cbSourceOp, whose string, cand map[int]da
 		}
 		id, perr := ulid.Parse(c.ID)
 		if perr != nil {
-			return fmt.Errorf("%s's journal row %q has no time (its id is not a ULID), so the records it may have left cannot be judged: %w", whose, c.ID, perr)
+			return fmt.Errorf("%s's journal row %q has no time (its id is not a ULID), so the records it may have left cannot be judged: %w%s", whose, c.ID, perr, cbDiscardRemedy(src.id))
 		}
 		times[i] = ulid.Time(id.Time())
 		if first.IsZero() || times[i].Before(first) {
@@ -1630,7 +1665,7 @@ func (r *cbRun) leftoverCandidates(src cbSourceOp, whose string, cand map[int]da
 		case undo.ChangeTypeCreditsBackfill:
 			_, w, derr := undo.DecodeCreditsBackfill(c)
 			if derr != nil {
-				return fmt.Errorf("%s's journal row %s does not decode, so the records it may have created cannot be judged: %w", whose, c.ID, derr)
+				return fmt.Errorf("%s's journal row %s does not decode, so the records it may have created cannot be judged: %w%s", whose, c.ID, derr, cbDiscardRemedy(src.id))
 			}
 			for _, n := range w.CreatedNarrators {
 				if rec, ok := r.idx.narrators[n.ID]; ok {
@@ -1655,6 +1690,22 @@ func (r *cbRun) leftoverCandidates(src cbSourceOp, whose string, cand map[int]da
 
 // cbSwept is the id of the one row, in a source operation's row set
 // (database.OpRowStore), that says an apply has judged its leftovers.
+//
+// The marker is deliberately NOT cleared when the operation is reverted
+// (audiobooks.RevertService, one handler for every operation type, which does
+// not touch the operation's row). A revert puts the credit lists back and leaves
+// the records the backfill created in place (revertCreditsBackfill), so the
+// books that credited them lose their links and the records turn unlinked: the
+// shape of a leftover. A judged operation is skipped exactly so that this
+// question is not re-opened for "a record that was credited and has since lost
+// its book" (otherCreditsBackfillOps). Clearing the marker on revert would make
+// the next apply delete those records as leftovers of the reverted operation,
+// without any of the checks purge-empty-narrators applies, and the revert's own
+// contract is that the empty records are that operation's to remove. A
+// failed operation that is reverted and later resumed or retried changes its row,
+// and that already invalidates the marker (cbSourceFingerprint). Discarding
+// the operation deletes its row set with it, marker included
+// (database.OpRowStore), so there is no orphan to clear there either.
 const cbSwept = "credits-backfill-leftovers-judged"
 
 // cbSourceFingerprint is the state of an operation's row a judgement of its
@@ -1691,6 +1742,15 @@ func cbSourceFingerprint(row database.OperationV2Row) string {
 // The listing is the whole operation history (ListOperationsV2Since with no
 // lower bound and no cap, which decodes every operation row once per apply): a
 // cap would drop the oldest operations silently, which is the unsafe direction.
+// Scale: one opv2 row per operation of any plugin ever recorded, none of them
+// pruned (only a person discarding an operation deletes one). The count was not
+// measured for this change (no production query was made); it is assumed to be
+// thousands, not millions, from one install's run rate over its lifetime, and each
+// row is small now that the class lists live in op rows rather than in the row
+// (see RESULT SIZE). The cost is one pass of that many JSON decodes per apply,
+// paid before any book is read; if the history grows by an order of magnitude,
+// measure ListOperationsV2Since here before adding a cap, and index by DefID
+// rather than cap.
 // A store that cannot list operations stops the apply (fail closed), and so
 // does a marker that cannot be read. A discarded operation (registry.Discard)
 // is gone from this listing although its journal rows stay, and so is a
@@ -1715,7 +1775,7 @@ func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 		if markers != nil {
 			got, gerr := markers.GetOpRows(row.ID, []string{cbSwept})
 			if gerr != nil {
-				return nil, fmt.Errorf("read the judged marker of operation %s: %w", row.ID, gerr)
+				return nil, fmt.Errorf("read the judged marker of operation %s: %w%s", row.ID, gerr, cbDiscardRemedy(row.ID))
 			}
 			if len(got) == 1 && got[0] != nil && string(got[0]) == src.fingerprint {
 				continue
@@ -3272,6 +3332,18 @@ func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 			unsettled("journal row could not be written")
 			continue
 		}
+		// This delete does not apply purge-empty-narrators' RequireNoNameMatch
+		// hold (a record whose name still appears in some book's narrator text).
+		// That hold is for a record of UNKNOWN provenance, where "credited in
+		// text, linked nowhere" may be a book that lost its junction row. This
+		// record's provenance is proven (this run created it, or a journal row
+		// named it inside its operation's window), it is unlinked (counted
+		// just above) and it is not preexisting. Its name is in book text BY
+		// CONSTRUCTION: the backfill creates records only for names it read in
+		// that text, so the hold would match nearly every record this operation
+		// made and refused to write and strand all of them. Nothing is lost by
+		// deleting it either: the text keeps the name, and the next apply
+		// creates the record again (CreateNarrator).
 		if err := r.env.store.DeleteNarrator(rec.ID); err != nil {
 			unsettled("delete failed")
 			continue
