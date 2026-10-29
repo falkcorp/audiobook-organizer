@@ -61,26 +61,26 @@ func (f *parityFixture) verdicts(id, gatedTitle, gatedAuthor string) (plannerSta
 	return plan.Gate.Reason == applygate.ReasonIdentityStale, errors.Is(applyErr, metafetch.ErrStaleMetadataCache), applyErr
 }
 
-// The Valis rows from F1: a row the batch fetch wrote with no author hint
-// before 2026-09-28, for a book whose author is Philip K. Dick. Fresh (its
+// The Hush rows from F1: a row the batch fetch wrote with no author hint
+// before 2026-09-28, for a book whose author is Selina Kyle. Fresh (its
 // fingerprint proves the author), stripped of its fingerprint, and after the
 // author changed -- both readers must agree on every one.
-func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Valis(t *testing.T) {
-	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick", Series: "Valis Trilogy", DurationSec: fixtureTenHourSec}})
-	pkd, err := f.store.CreateAuthor("Philip K. Dick")
+func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Hush(t *testing.T) {
+	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Hush", Author: "Selina Kyle", Series: "Hush Saga", DurationSec: fixtureTenHourSec}})
+	pkd, err := f.store.CreateAuthor("Selina Kyle")
 	require.NoError(t, err)
-	b, err := f.store.CreateBook(&database.Book{Title: "Valis", FilePath: "/lib/Unknown Author/Valis/Valis.m4b", AuthorID: &pkd.ID})
+	b, err := f.store.CreateBook(&database.Book{Title: "Hush", FilePath: "/lib/Unknown Author/Hush/Hush.m4b", AuthorID: &pkd.ID})
 	require.NoError(t, err)
 	f.addTenHourFile(b.ID)
-	_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, "Valis", "", "", "", metafetch.SearchOptions{})
+	_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, "Hush", "", "", "", metafetch.SearchOptions{})
 	require.NoError(t, err)
 
 	top, found, err := f.s.SearchTranscriptionCandidate(context.Background(), b.ID, "", "")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "Valis Trilogy", top.Series, "the op's pre-check needs the candidate's series")
+	require.Equal(t, "Hush Saga", top.Series, "the op's pre-check needs the candidate's series")
 
-	plannerStale, applyStale, applyErr := f.verdicts(b.ID, "Valis", "Philip K. Dick")
+	plannerStale, applyStale, applyErr := f.verdicts(b.ID, "Hush", "Selina Kyle")
 	require.False(t, plannerStale, "fresh: planner")
 	require.False(t, applyStale, "fresh: apply (%v)", applyErr)
 
@@ -89,7 +89,7 @@ func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Valis(t *testing.
 	saved := entry.SearchFingerprint
 	entry.SearchFingerprint = ""
 	require.NoError(t, f.store.PutMetadataCache(entry))
-	plannerStale, applyStale, applyErr = f.verdicts(b.ID, "Valis", "Philip K. Dick")
+	plannerStale, applyStale, applyErr = f.verdicts(b.ID, "Hush", "Selina Kyle")
 	require.True(t, plannerStale, "no fingerprint: planner")
 	require.True(t, applyStale, "no fingerprint: apply (%v)", applyErr)
 	entry.SearchFingerprint = saved
@@ -102,7 +102,7 @@ func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Valis(t *testing.
 	_, err = f.store.UpdateBook(book.ID, book)
 	require.NoError(t, err)
 	require.NoError(t, f.store.PutMetadataCache(entry)) // the store drops the row on an author change
-	plannerStale, applyStale, applyErr = f.verdicts(b.ID, "Valis", "Philip K. Dick")
+	plannerStale, applyStale, applyErr = f.verdicts(b.ID, "Hush", "Selina Kyle")
 	require.True(t, plannerStale, "author changed: planner")
 	require.True(t, applyStale, "author changed: apply (%v)", applyErr)
 }
@@ -113,24 +113,24 @@ func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Valis(t *testing.
 // transcription; the apply must too, and fills the title. The old check
 // (Book.Author snapshot, stored title) refused it.
 func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_TranscribedQuery(t *testing.T) {
-	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick", DurationSec: fixtureTenHourSec}})
-	pkd, err := f.store.CreateAuthor("Philip K. Dick")
+	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Hush", Author: "Selina Kyle", DurationSec: fixtureTenHourSec}})
+	pkd, err := f.store.CreateAuthor("Selina Kyle")
 	require.NoError(t, err)
-	heard := "Valis"
+	heard := "Hush"
 	b, err := f.store.CreateBook(&database.Book{Title: "", FilePath: "/lib/Unknown Author/Unknown Title/book.m4b",
 		AuthorID: &pkd.ID, TranscribedTitle: &heard})
 	require.NoError(t, err)
 	f.addTenHourFile(b.ID)
-	_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, heard, "Philip K. Dick", "", "", metafetch.SearchOptions{})
+	_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, heard, "Selina Kyle", "", "", metafetch.SearchOptions{})
 	require.NoError(t, err)
 
-	plannerStale, applyStale, applyErr := f.verdicts(b.ID, "Valis", "Philip K. Dick")
+	plannerStale, applyStale, applyErr := f.verdicts(b.ID, "Hush", "Selina Kyle")
 	require.False(t, plannerStale, "planner lifts the transcribed query")
 	require.False(t, applyStale, "apply must lift it too (%v)", applyErr)
 	require.NoError(t, applyErr)
 	got, err := f.store.GetBookByID(b.ID)
 	require.NoError(t, err)
-	require.Equal(t, "Valis", got.Title)
+	require.Equal(t, "Hush", got.Title)
 }
 
 // A multi-file book's FilePath is its work folder, a directory. A
