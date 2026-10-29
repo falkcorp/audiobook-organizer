@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_trash_kept_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c8f5a17-6d3b-4e90-b1a4-9e7d0c3f8b52
 // last-edited: 2026-10-29
 
@@ -153,4 +153,9 @@ func TestRunTrashCleanup_UnlistableUnfinishedSwapsFailTheOp(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "injected: list failed")
 	require.Contains(t, err.Error(), "version swap did not finish")
+	// No purge failed, and the log does not claim a count of failures it has no
+	// purge to name ("0 failed" beside an error read as a contradiction).
+	require.Len(t, rep.logs, 1)
+	require.Contains(t, rep.logs[0], "could not be listed")
+	require.NotContains(t, rep.logs[0], "0 failed")
 }

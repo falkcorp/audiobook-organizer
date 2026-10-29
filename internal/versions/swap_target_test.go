@@ -1,7 +1,7 @@
 // file: internal/versions/swap_target_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c9e1b7d-52a4-4e68-b0f3-8d6a2c4e9175
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -53,7 +53,7 @@ func newSwapFixture(t *testing.T) *swapFixture {
 		t.Fatal(err)
 	}
 	if err := store.CreateBookFile(&database.BookFile{
-		BookID: book.ID, VersionID: active.ID, FilePath: rootAud, Format: "m4b",
+		BookID: book.ID, VersionID: active.ID, FilePath: rootAud, Format: "m4b", FileSize: int64(len("active")),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +73,12 @@ func (f *swapFixture) add(status string, ago time.Duration, name string) *databa
 	}
 	if name != "" {
 		path := filepath.Join(VersionSlotDir(f.bookDir, v.ID), name)
-		writeTestFile(f.t, path, "alt-"+v.ID)
+		content := "alt-" + v.ID
+		writeTestFile(f.t, path, content)
+		// The size is what lets a resume vouch for the file once a swap has
+		// moved it away from the path this row names.
 		if err := f.store.CreateBookFile(&database.BookFile{
-			BookID: f.book.ID, VersionID: v.ID, FilePath: path, Format: "mp3",
+			BookID: f.book.ID, VersionID: v.ID, FilePath: path, Format: "mp3", FileSize: int64(len(content)),
 		}); err != nil {
 			f.t.Fatal(err)
 		}
