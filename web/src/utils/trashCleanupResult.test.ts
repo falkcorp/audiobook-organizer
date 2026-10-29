@@ -1,7 +1,7 @@
 // file: web/src/utils/trashCleanupResult.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 63a5ee65-33c3-4d7d-b8dc-cc5de376cdcd
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -38,6 +38,10 @@ describe('parseTrashCleanupResult', () => {
       served_kept_version_ids: [],
       served_kept_book_ids: [],
       served_kept_file_paths: [],
+      swap_incomplete: 0,
+      swap_incomplete_version_ids: [],
+      swap_incomplete_book_ids: [],
+      swap_incomplete_file_paths: [],
       stopped_for_merge: false,
       stopped_for_merge_nights: 0,
       stopped_for_merge_repeatedly: false,
@@ -100,6 +104,21 @@ describe('parseTrashCleanupResult', () => {
     expect(cleanupVersionIds(r!, 'cannot_tell')).toEqual([]);
   });
 
+  it('reads the unfinished-swap set apart from the others', () => {
+    const r = parseTrashCleanupResult({
+      purged: 0,
+      swap_incomplete: 2,
+      swap_incomplete_version_ids: ['v-out', 'v-in'],
+      swap_incomplete_book_ids: ['b-long-halloween', 'b-long-halloween'],
+      swap_incomplete_file_paths: ['/lib/Gotham/The Long Halloween'],
+    });
+    expect(r?.swap_incomplete).toBe(2);
+    expect(cleanupVersionIds(r!, 'swap_incomplete')).toEqual(['v-out', 'v-in']);
+    expect(cleanupBookIds(r!, 'swap_incomplete')).toEqual(['b-long-halloween']);
+    expect(r?.swap_incomplete_file_paths).toEqual(['/lib/Gotham/The Long Halloween']);
+    expect(cleanupVersionIds(r!, 'nothing_served')).toEqual([]);
+  });
+
   it('drops non-string ids and non-numeric counts', () => {
     const r = parseTrashCleanupResult({ purged: 'x', kept_version_ids: ['v1', 7, null] });
     expect(r?.purged).toBe(0);
@@ -130,6 +149,12 @@ describe('links', () => {
     expect(cleanupVersionsLink('op-4', 'served_kept')).toBe('/versions?op=op-4&set=served_kept');
     expect(cleanupSetTab('served_kept')).toBe('trash');
     expect(parseCleanupSet('served_kept')).toBe('served_kept');
+    // The versions of an unfinished swap are in no trash: their books are on their own tab.
+    expect(cleanupVersionsLink('op-6', 'swap_incomplete')).toBe(
+      '/versions?op=op-6&set=swap_incomplete'
+    );
+    expect(cleanupSetTab('swap_incomplete')).toBe('swaps');
+    expect(parseCleanupSet('swap_incomplete')).toBe('swap_incomplete');
   });
 
   it('reads back only the known sets', () => {

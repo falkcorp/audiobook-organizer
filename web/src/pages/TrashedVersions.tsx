@@ -1,7 +1,7 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.6.2
+// version: 1.7.0
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
@@ -40,6 +40,7 @@ import {
   purgeVersion,
   hardDeleteVersion,
 } from '../services/versionApi';
+import UnfinishedSwaps from '../components/versions/UnfinishedSwaps';
 import {
   useConfigurableTable,
   ResizableHeaderCell,
@@ -192,6 +193,8 @@ const CLEANUP_SET_TEXT: Record<TrashCleanupSet, string> = {
     "that cleanup run left in the trash because their book serves nothing that exists on disk. Nothing was deleted, and every run lists them again until the book's path is fixed or the version is restored.",
   served_kept:
     'that cleanup run kept in the trash because their book still plays one of their files. Nothing was deleted, and every run tries them again until the version is restored or the book plays something else.',
+  swap_incomplete:
+    'that cleanup run found in a swap that did not finish. They are in no trash and nothing was moved or deleted; the run does not resume a swap, and lists them again every run until each book is resumed here.',
 };
 
 export default function TrashedVersions() {
@@ -201,7 +204,7 @@ export default function TrashedVersions() {
   const [searchParams, setSearchParams] = useSearchParams();
   const cleanupOp = searchParams.get('op');
   const cleanupSet = parseCleanupSet(searchParams.get('set'));
-  const [tab, setTab] = useState<'trash' | 'purged'>(() =>
+  const [tab, setTab] = useState<'trash' | 'purged' | 'swaps'>(() =>
     cleanupSet ? cleanupSetTab(cleanupSet) : 'trash'
   );
   // What was read for one (op, set): kept with its key so a stale read for a
@@ -241,6 +244,11 @@ export default function TrashedVersions() {
   });
 
   const load = useCallback(async () => {
+    // The Unfinished swaps tab lists books, and loads them itself.
+    if (tab === 'swaps') {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setLoadError('');
     try {
@@ -352,7 +360,7 @@ export default function TrashedVersions() {
   // The run named these versions; the ones not on the open tab were hard
   // deleted since, or sit on the other tab. Said, so the count never looks short.
   const filterElsewhere =
-    filtering && filterIds !== null && !loading && loadError === ''
+    filtering && filterIds !== null && tab !== 'swaps' && !loading && loadError === ''
       ? Math.max(0, new Set(filterIds).size - listed.length)
       : 0;
   const clearFilter = useCallback(() => {
@@ -375,12 +383,14 @@ export default function TrashedVersions() {
         }}
       >
         <Typography variant="h4">Version Management</Typography>
-        <ColumnPicker
-          columns={allColumns}
-          isVisible={isColumnVisible}
-          onToggle={toggleColumn}
-          onReset={resetColumns}
-        />
+        {tab !== 'swaps' && (
+          <ColumnPicker
+            columns={allColumns}
+            isVisible={isColumnVisible}
+            onToggle={toggleColumn}
+            onReset={resetColumns}
+          />
+        )}
       </Stack>
 
       <Tabs
@@ -393,6 +403,7 @@ export default function TrashedVersions() {
       >
         <Tab label="Trash" value="trash" />
         <Tab label="Purged" value="purged" />
+        <Tab label="Unfinished swaps" value="swaps" />
       </Tabs>
 
       {cleanupOp && cleanupSet && filterError !== '' && (
@@ -423,7 +434,13 @@ export default function TrashedVersions() {
         </Alert>
       )}
 
-      {loading ? (
+      {tab === 'swaps' ? (
+        filterWaiting ? (
+          <Typography sx={{ color: 'text.secondary' }}>Loading the cleanup run...</Typography>
+        ) : (
+          <UnfinishedSwaps onlyVersionIds={filtering ? filterIds : null} />
+        )
+      ) : loading ? (
         <Typography
           sx={{
             color: 'text.secondary',

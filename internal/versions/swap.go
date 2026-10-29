@@ -1,7 +1,7 @@
 // file: internal/versions/swap.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6c3d5a2e-8b4c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 //
 // Primary-version swap tracked operation (spec 3.1 task 3).
 //
@@ -10,10 +10,11 @@
 // the target version's files move up to the book's root directory.
 //
 // A swap that stops half way (a crash, or a database write that failed after
-// the files had moved) leaves the versions in swapping_out/swapping_in. Resuming
-// one is NOT implemented (ResumeVersionSwaps is a stub): RunVersionSwap refuses a
-// version that is already swapping_*, the lifecycle refuses to trash one
-// (MarkTrashed), and a person has to repair it. The moves are never "already
+// the files had moved) leaves the versions in swapping_out/swapping_in.
+// ListSwapIncompleteBooks finds the books and ResumeVersionSwap (swap_resume.go)
+// finishes or undoes the swap from what the rows and the disk show.
+// RunVersionSwap itself refuses a version that is already swapping_*, and the
+// lifecycle refuses to trash one (MarkTrashed). The moves are never "already
 // done": a file whose source is missing is an error (see fs.go), because taking
 // a file at the destination to be the missing source adopts a stranger's.
 
@@ -56,9 +57,10 @@ var ErrSwapRefused = errors.New("the swap was refused before anything was writte
 // it leaves the versions in swapping_out/swapping_in: the files have moved but
 // the database could not be brought along (nothing is put back; the files are in
 // their new places), or a move could not be undone (the files are in two
-// places), or the statuses could not be put back. Every one of them needs a
-// person to repair, and none is to be retried: the caller must not trash either
-// version (MarkTrashed refuses a swapping_* version too).
+// places), or the statuses could not be put back. Every one of them is repaired
+// by ResumeVersionSwap (not by retrying the swap), and until it has run the
+// caller must not trash either version (MarkTrashed refuses a swapping_* version
+// too).
 var ErrSwapIncomplete = errors.New("the swap did not finish and the versions are left in swapping_out/swapping_in")
 
 func swapRefusal(bookID, why string) error {
@@ -124,10 +126,10 @@ func RunVersionSwap(
 		return err
 	}
 	// An earlier swap that did not finish: its files may be in two places, and
-	// there is no resume. Refused before the first status write.
+	// ResumeVersionSwap repairs it. Refused before the first status write.
 	for _, v := range []*database.BookVersion{fromVer, toVer} {
 		if v.Status == database.BookVersionStatusSwappingIn || v.Status == database.BookVersionStatusSwappingOut {
-			return swapRefusal(params.BookID, fmt.Sprintf("an earlier swap of this book did not finish (version %s is %s) and resuming one is not implemented", v.ID, v.Status))
+			return swapRefusal(params.BookID, fmt.Sprintf("an earlier swap of this book did not finish (version %s is %s); resume it first", v.ID, v.Status))
 		}
 	}
 
@@ -410,24 +412,4 @@ func filePaths(files []database.BookFile) []string {
 		paths[i] = f.FilePath
 	}
 	return paths
-}
-
-// ResumeVersionSwaps checks for any BookVersions in swapping_in or
-// swapping_out status and resumes the swap operation. Called on
-// server startup to recover from interrupted swaps.
-func ResumeVersionSwaps(ctx context.Context, store unusedStore) {
-	// Find versions in transitional states by scanning all versions.
-	// In a large library this could be slow — a future optimization
-	// would add an index key for transitional statuses. For now,
-	// crash recovery is rare enough that a full scan is acceptable.
-	//
-	// Look for swapping_in versions — each one implies a swap was in
-	// progress and the "to" version tells us the book + partner.
-	// The "from" version is the one with swapping_out for the same book.
-
-	// This is a best-effort scan. If the store doesn't support listing
-	// by status, we skip — the UI can surface the broken state and
-	// let the user manually re-trigger.
-	slog.Info("[INFO] Checking for interrupted version swaps...")
-	// TODO: implement full scan when ListBookVersionsByStatus is available
 }

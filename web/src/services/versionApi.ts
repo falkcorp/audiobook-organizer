@@ -1,7 +1,7 @@
 // file: web/src/services/versionApi.ts
-// version: 1.11.1
+// version: 1.12.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 import type { RevertOperationResult } from './api';
 import { apiFetch } from '../utils/apiFetch';
@@ -78,6 +78,43 @@ export interface RetiredVersion {
   files: RetiredVersionFile[];
 }
 
+/** One file row of a version in a swap that did not finish. */
+export interface SwapIncompleteFile {
+  id: string;
+  path: string;
+}
+
+export interface SwapIncompleteVersion {
+  id: string;
+  status: string;
+  files: SwapIncompleteFile[];
+}
+
+/**
+ * A book with a version left in swapping_out / swapping_in (GET /audiobooks/swap-incomplete).
+ * It has no active version until the swap is resumed. `resume` is what a resume
+ * would do now; it is empty when the resume would refuse, and `resume_refusal` says why.
+ */
+export interface SwapIncompleteBook {
+  book_id: string;
+  title?: string;
+  book_path: string;
+  versions: SwapIncompleteVersion[];
+  resume?: 'finish' | 'undo';
+  resume_refusal?: string;
+}
+
+/** What POST /audiobooks/:id/versions/resume-swap did. */
+export interface ResumeSwapResult {
+  action: 'finish' | 'undo';
+  book_id: string;
+  leaving_version_id?: string;
+  entering_version_id?: string;
+  active_version_id?: string;
+  book_path: string;
+  files_moved: number;
+}
+
 export interface UndoConflictReport {
   total_changes: number;
   already_reverted: number;
@@ -110,28 +147,53 @@ async function jsonFetch(url: string, opts?: RequestInit) {
   });
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
-    throw Object.assign(new Error(body.error || resp.statusText), { response: { data: body, status: resp.status } });
+    throw Object.assign(new Error(body.error || resp.statusText), {
+      response: { data: body, status: resp.status },
+    });
   }
   return resp.json();
 }
 
 export async function trashVersion(bookId: string, versionId: string): Promise<BookVersion> {
-  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}`, { method: 'DELETE' });
+  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}`, {
+    method: 'DELETE',
+  });
   return resp.version;
 }
 
 export async function restoreVersion(bookId: string, versionId: string): Promise<BookVersion> {
-  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}/restore`, { method: 'POST' });
+  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}/restore`, {
+    method: 'POST',
+  });
   return resp.version;
 }
 
 export async function purgeVersion(bookId: string, versionId: string): Promise<BookVersion> {
-  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}/purge-now`, { method: 'POST' });
+  const resp = await jsonFetch(`${API_BASE}/audiobooks/${bookId}/versions/${versionId}/purge-now`, {
+    method: 'POST',
+  });
   return resp.version;
 }
 
 export async function hardDeleteVersion(versionId: string): Promise<void> {
   await jsonFetch(`${API_BASE}/purged-versions/${versionId}`, { method: 'DELETE' });
+}
+
+/** The books whose version swap did not finish, with what a resume would do for each. */
+export async function listSwapIncompleteBooks(): Promise<SwapIncompleteBook[]> {
+  const body = await jsonFetch(`${API_BASE}/audiobooks/swap-incomplete`);
+  return unwrapData<{ books?: SwapIncompleteBook[] }>(body).books ?? [];
+}
+
+/** Finishes or undoes the book's unfinished version swap, whichever its files allow. */
+export async function resumeVersionSwap(bookId: string): Promise<ResumeSwapResult> {
+  const body = await jsonFetch(
+    `${API_BASE}/audiobooks/${encodeURIComponent(bookId)}/versions/resume-swap`,
+    {
+      method: 'POST',
+    }
+  );
+  return unwrapData<ResumeSwapResult>(body);
 }
 
 /** The retired versions bookId holds (files of trashed or merged books moved onto it). */

@@ -1,12 +1,15 @@
 // file: internal/plugins/maintenance/cleanup_trash_kept_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c8f5a17-6d3b-4e90-b1a4-9e7d0c3f8b52
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
 import (
 	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -74,4 +77,80 @@ func TestRunTrashCleanup_NothingKept(t *testing.T) {
 	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
 
 	require.Equal(t, []string{"Trash cleanup: purged 1 versions, kept 0 versions whose files the book still serves"}, rep.logs)
+}
+
+func stuckSwapBook() versions.SwapIncompleteBook {
+	return versions.SwapIncompleteBook{
+		BookID: "long-halloween", Title: "The Long Halloween", BookPath: "/lib/Gotham/The Long Halloween",
+		Versions: []versions.SwapIncompleteVersion{
+			{ID: "ver-out", Status: database.BookVersionStatusSwappingOut},
+			{ID: "ver-in", Status: database.BookVersionStatusSwappingIn},
+			{ID: "ver-other", Status: database.BookVersionStatusAlt},
+		},
+		Resume: versions.SwapResumeFinish,
+	}
+}
+
+// A book whose version swap did not finish is listed by the nightly run: the
+// result carries the swapping versions (not the book's other versions), the
+// book and its path, and the log has one Warn line; the run does not fail, and
+// nothing is resumed by it.
+func TestRunTrashCleanup_ListsBooksWhoseSwapDidNotFinish(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{
+		Purged:         1,
+		SwapIncomplete: []versions.SwapIncompleteBook{stuckSwapBook()},
+	}})
+	rep := &levelReporter{}
+
+	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
+
+	got, ok := rep.result.(TrashCleanupResult)
+	require.True(t, ok, "result = %#v", rep.result)
+	require.Equal(t, 2, got.SwapIncomplete)
+	require.Equal(t, []string{"ver-out", "ver-in"}, got.SwapIncompleteVersionIDs)
+	require.Equal(t, []string{"long-halloween"}, got.SwapIncompleteBookIDs)
+	require.Equal(t, []string{"/lib/Gotham/The Long Halloween"}, got.SwapIncompleteFilePaths)
+	require.Len(t, got.SwapIncompleteBooks, 1)
+	require.Equal(t, versions.SwapResumeFinish, got.SwapIncompleteBooks[0].Resume)
+
+	var warns []string
+	for i, l := range rep.levels {
+		if l == slog.LevelWarn && strings.Contains(rep.logs[i], "swap that did not finish") {
+			warns = append(warns, rep.logs[i])
+		}
+	}
+	require.Len(t, warns, 1, "logs = %v", rep.logs)
+	require.Contains(t, warns[0], "long-halloween")
+	require.Contains(t, rep.logs[len(rep.logs)-1], "1 book(s) have a version swap that did not finish")
+}
+
+// The books are not listed when no swap is stuck.
+func TestRunTrashCleanup_NoUnfinishedSwapsListsNone(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{Purged: 1}})
+	rep := &levelReporter{}
+
+	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
+
+	got := rep.result.(TrashCleanupResult)
+	require.Zero(t, got.SwapIncomplete)
+	require.Empty(t, got.SwapIncompleteBookIDs)
+	for _, l := range rep.logs {
+		require.NotContains(t, l, "swap that did not finish")
+	}
+}
+
+// Not being able to list the unfinished swaps fails the night: a run that
+// could not look must not read as one with nothing to report.
+func TestRunTrashCleanup_UnlistableUnfinishedSwapsFailTheOp(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{
+		Purged:            1,
+		SwapIncompleteErr: errors.New("injected: list failed"),
+	}})
+	rep := &levelReporter{}
+
+	err := p.runTrashCleanup(context.Background(), nil, rep)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "injected: list failed")
+	require.Contains(t, err.Error(), "version swap did not finish")
 }

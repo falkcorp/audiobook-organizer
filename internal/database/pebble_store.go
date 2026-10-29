@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.9
+// version: 1.235.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-29
 
@@ -5556,6 +5556,18 @@ func (p *PebbleStore) GetBookVersionByTorrentHash(hash string) (*BookVersion, er
 // it. The trash page lists them too, which is where the owner acts on them.
 func (p *PebbleStore) ListTrashedBookVersions() ([]BookVersion, error) {
 	return p.listBookVersionsByStatus(BookVersionStatusTrash, BookVersionStatusPurging, BookVersionStatusPurgeFailed)
+}
+
+// ListSwappingBookVersions lists every version a version swap left half done:
+// those in BookVersionStatusSwappingOut and BookVersionStatusSwappingIn. A swap
+// holds a version in either status only while it runs, so a row found in one
+// outside a running swap is a swap that did not finish (versions.ErrSwapIncomplete
+// or a crash), and its book has no active version until it is resumed. Like
+// ListTrashedBookVersions it is a scan of the version rows, not an index lookup:
+// there is no status index, and the nightly cleanup and the repair page are the
+// only callers.
+func (p *PebbleStore) ListSwappingBookVersions() ([]BookVersion, error) {
+	return p.listBookVersionsByStatus(BookVersionStatusSwappingOut, BookVersionStatusSwappingIn)
 }
 
 func (p *PebbleStore) ListPurgedBookVersions() ([]BookVersion, error) {

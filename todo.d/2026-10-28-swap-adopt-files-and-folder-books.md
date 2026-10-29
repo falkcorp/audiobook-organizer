@@ -9,5 +9,7 @@
       a verified copy), then swap. The same task covers a book whose `file_path` is a folder
       (inplace multi-file): the swap must move the whole folder's files, not assume the
       parent of `file_path` is the book's folder. Resuming a swap that did not finish
-      (`ErrSwapIncomplete`, `ResumeVersionSwaps`) is tracked separately as
-      TODO-SWAP-STUCK-RECOVERY.
+      (`ErrSwapIncomplete`) is done: `versions.ResumeVersionSwap`, POST
+      `/audiobooks/:id/versions/resume-swap` and the Version Management "Unfinished swaps"
+      tab. A swap that adopts files or handles folder books must keep that resume able to
+      classify every file row (book folder or its own slot).

@@ -1,7 +1,7 @@
 // file: internal/database/iface_catalog.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 76cf7dcf-546c-424d-8d2b-26c8a4354506
-// last-edited: 2026-10-22
+// last-edited: 2026-10-29
 
 package database
 
@@ -139,6 +139,9 @@ type BookVersionWriter interface {
 type BookVersionDispositionReader interface {
 	ListTrashedBookVersions() ([]BookVersion, error)
 	ListPurgedBookVersions() ([]BookVersion, error)
+	// ListSwappingBookVersions lists the versions in swapping_out / swapping_in:
+	// a version swap that did not finish (see versions.ErrSwapIncomplete).
+	ListSwappingBookVersions() ([]BookVersion, error)
 }
 
 // BookVersionStore covers version CRUD, lifecycle, and lookups.
