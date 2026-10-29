@@ -28,29 +28,29 @@ func TestTranscriptionBoost_AuthorRequiresTitle(t *testing.T) {
 	}{
 		{
 			name:      "author matches but title does NOT -> no boost",
-			cand:      metadata.BookMetadata{Title: "The Wrong Book", Author: "Brandon Sanderson", Narrator: "Michael Kramer"},
-			hints:     transcriptionHints{title: "The Way of Kings", author: "Brandon Sanderson", narrator: "Michael Kramer"},
+			cand:      metadata.BookMetadata{Title: "The Wrong Book", Author: "Bruce Wayne", Narrator: "Alfred Pennyworth"},
+			hints:     transcriptionHints{title: "The Long Halloween", author: "Bruce Wayne", narrator: "Alfred Pennyworth"},
 			wantScore: base, // unchanged: author/narrator must not carry a wrong title
 			wantBoost: false,
 		},
 		{
 			name:      "exact title + author -> title x2 then author x1.6",
-			cand:      metadata.BookMetadata{Title: "The Way of Kings", Author: "Brandon Sanderson"},
-			hints:     transcriptionHints{title: "The Way of Kings", author: "Brandon Sanderson"},
+			cand:      metadata.BookMetadata{Title: "The Long Halloween", Author: "Bruce Wayne"},
+			hints:     transcriptionHints{title: "The Long Halloween", author: "Bruce Wayne"},
 			wantScore: base * 2.0 * 1.6,
 			wantBoost: true,
 		},
 		{
 			name:      "exact title only (no author hint) -> x2",
-			cand:      metadata.BookMetadata{Title: "The Way of Kings", Author: "Brandon Sanderson"},
-			hints:     transcriptionHints{title: "The Way of Kings"},
+			cand:      metadata.BookMetadata{Title: "The Long Halloween", Author: "Bruce Wayne"},
+			hints:     transcriptionHints{title: "The Long Halloween"},
 			wantScore: base * 2.0,
 			wantBoost: true,
 		},
 		{
 			name:      "substring title + author + narrator -> x1.4 x1.6 x1.4",
-			cand:      metadata.BookMetadata{Title: "The Way of Kings (Stormlight 1)", Author: "Brandon Sanderson", Narrator: "Michael Kramer"},
-			hints:     transcriptionHints{title: "The Way of Kings", author: "Brandon Sanderson", narrator: "Michael Kramer"},
+			cand:      metadata.BookMetadata{Title: "The Long Halloween (Dark Knight 1)", Author: "Bruce Wayne", Narrator: "Alfred Pennyworth"},
+			hints:     transcriptionHints{title: "The Long Halloween", author: "Bruce Wayne", narrator: "Alfred Pennyworth"},
 			wantScore: base * 1.4 * 1.6 * 1.4,
 			wantBoost: true,
 		},
@@ -58,8 +58,8 @@ func TestTranscriptionBoost_AuthorRequiresTitle(t *testing.T) {
 			// No transcribed title at all → author is a legitimate tiebreaker
 			// (there is no title to contradict). This is NOT the bug case.
 			name:      "no transcribed title, author only -> author tiebreaker applies",
-			cand:      metadata.BookMetadata{Title: "Some Book", Author: "Brandon Sanderson"},
-			hints:     transcriptionHints{author: "Brandon Sanderson"},
+			cand:      metadata.BookMetadata{Title: "Some Book", Author: "Bruce Wayne"},
+			hints:     transcriptionHints{author: "Bruce Wayne"},
 			wantScore: base * 1.6,
 			wantBoost: true,
 		},
@@ -85,13 +85,13 @@ func TestTranscribedTitleAgrees(t *testing.T) {
 		cand, pos, transcribed string
 		want                   bool
 	}{
-		{"The Way of Kings", "", "The Way of Kings", true},
-		{"the way of kings", "", "The Way of Kings", true}, // normalized
+		{"The Long Halloween", "", "The Long Halloween", true},
+		{"the long halloween", "", "The Long Halloween", true}, // normalized
 		// The raw substring the old rule accepted is refused now.
-		{"The Way of Kings (Stormlight 1)", "", "The Way of Kings", false},
-		{"The Final Empire", "", "The Way of Kings", false},
-		{"", "", "The Way of Kings", false},
-		{"The Way of Kings", "", "", false},
+		{"The Long Halloween (Dark Knight 1)", "", "The Long Halloween", false},
+		{"The Broken Bat", "", "The Long Halloween", false},
+		{"", "", "The Long Halloween", false},
+		{"The Long Halloween", "", "", false},
 		// The strict matcher's trailer strip, within what the old rule allowed:
 		// the heard volume must equal the candidate's series position.
 		{"This Gilded Abyss", "1", "This Gilded Abyss, book one of the Gilded Abyss trilogy", true},
@@ -135,7 +135,7 @@ func TestTranscribedTitleAgrees_HeardVolumeMustMatchPosition(t *testing.T) {
 // positive must refuse, in both orders.
 func TestTranscribedTitleAgrees_ReviewerFalsePositivesRefuse(t *testing.T) {
 	for _, p := range [][2]string{
-		{"Mistborn: The Hero of Ages", "Mistborn"},
+		{"Knightfall: The Knightsend", "Knightfall"},
 		{"Foundation", "Foundation and Empire"},
 		{"The Witches", "The Witcher"},
 	} {
@@ -149,11 +149,11 @@ func TestTranscribedTitleAgrees_ReviewerFalsePositivesRefuse(t *testing.T) {
 // the new rule accepts, the old one accepted too.
 func TestTranscribedTitleAgrees_NeverLooserThanMain(t *testing.T) {
 	titles := []string{
-		"Knaves Over Queens", "Naves Over Queens", "Sojourn", "Mistborn",
-		"Mistborn: The Hero of Ages", "The Witcher", "The Witches", "Foundation",
+		"Knaves Over Queens", "Naves Over Queens", "Sojourn", "Knightfall",
+		"Knightfall: The Knightsend", "The Witcher", "The Witches", "Foundation",
 		"Foundation and Empire", "This Gilded Abyss", "This Gilded Abyss, book one of the Gilded Abyss trilogy",
 		"Witness to a Trial", "Witness to a Trial A short story prequel to The Whistler",
-		"Ready Player One", "Ready Player 1", "The Sandersonian Way Home", "The Sandersinian Way Home",
+		"Ready Player One", "Ready Player 1", "The Wayneian Way Home", "The Sandersinian Way Home",
 		"Blood of Elves", "Blood of Elves (Unabridged)", "It", "",
 	}
 	for _, a := range titles {
