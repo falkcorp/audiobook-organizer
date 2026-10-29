@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.3
+// version: 1.52.4
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
 // last-edited: 2026-10-29
 
@@ -949,9 +949,8 @@ func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFi
 	if !bookFileApplied(durErr) {
 		return false, durErr
 	}
-	if old.Retired || file.Retired {
-		// A rewrite of a retired row can change the hashes it answers to; see
-		// retiredHashCache.
+	if retiredHashRelevantChange(old, file) {
+		// The rewrite changed what a retired row answers to; see retiredHashCache.
 		s.retiredHash.noteRetiredRowsChanged()
 	}
 	s.InvalidateLibraryStats()
@@ -2410,8 +2409,9 @@ func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bo
 	var rewriteKeys []bookFileRewrite
 	newRowsByOwner := map[string][]*BookFile{}
 	rewriteFor := map[string]*BookFile{}
-	// touchedRetired is set when an explicit-ID match is a retired row, whose
-	// rewrite can change the hashes it answers to (retiredHashCache).
+	// touchedRetired is set when a matched row is retired (before or after the
+	// merge) and the rewrite changes what it answers to: a hash, its holder or
+	// version, or its retired flag (retiredHashRelevantChange, retiredHashCache).
 	touchedRetired := false
 	refusals := map[*BookFile]string{}
 
@@ -2541,9 +2541,6 @@ func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bo
 		}
 
 		if existing != nil {
-			if existing.Retired {
-				touchedRetired = true
-			}
 			// A committed row this pass rewrites must be one whose stripe is held
 			// (batchUpsertBookFilesAttempt). A row matched from THIS batch is staged,
 			// not committed, and its stripe is already accounted for.
@@ -2578,6 +2575,9 @@ func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bo
 			// fields (duration, media info, tags, fingerprint, transcript) so the
 			// backfills recompute them for the new bytes.
 			mergeBookFileFromStored(file, existing, bookFileWriteUpsert, scanPresenceOf(present, fileIdx))
+			if retiredHashRelevantChange(existing, file) {
+				touchedRetired = true
+			}
 			if opts.keepStoredPath {
 				keepStoredBookFilePath(file, existing)
 			}

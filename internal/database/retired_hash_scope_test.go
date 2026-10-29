@@ -1,5 +1,5 @@
 // file: internal/database/retired_hash_scope_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4eaca36f-4f66-43fd-8c64-10b5f3a30043
 // last-edited: 2026-10-29
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,7 +44,6 @@ func TestRetiredBookFilesWithHash_ScopeBuildsOnce(t *testing.T) {
 		require.Equal(t, kept.ID, retired[0].ID)
 		require.Equal(t, fx.holder.ID, retired[0].BookID)
 		require.Equal(t, fx.version.ID, retired[0].VersionID)
-		require.True(t, retired[0].Retired)
 	}
 	require.EqualValues(t, 1, fx.ps.retiredHash.builds.Load(), "four lookups, one read of the retired rows")
 }
@@ -73,13 +73,12 @@ func TestRetiredBookFilesWithHash_RetireDuringScopeIsSeen(t *testing.T) {
 	require.Empty(t, retired, "the row is still live on the shell")
 	require.EqualValues(t, 1, fx.ps.retiredHash.builds.Load())
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		require.NoError(t, fx.retire(t, late))
-	}()
-	wg.Wait()
+	// The retire runs on another goroutine, as the retire apply does beside a
+	// scan; its error is checked here, not from inside it (require off the test
+	// goroutine would FailNow the wrong one).
+	retireErr := make(chan error, 1)
+	go func() { retireErr <- fx.retire(t, late) }()
+	require.NoError(t, <-retireErr)
 
 	retired, _, err = fx.ps.RetiredBookFilesWithHash("h-late")
 	require.NoError(t, err)
@@ -211,14 +210,120 @@ type wrappedPebble struct{ Store }
 
 func (w wrappedPebble) Unwrap() Store { return w.Store }
 
-// Lookups racing retires and un-retires: run under -race. Every lookup of a
-// hash whose row is settled in one state must answer that state.
+// A build that reads the retired rows while a retire commits is tagged with the
+// generation it started from, so the retire it missed is not hidden by the map
+// it stored. The hook lands the retire between the build's read of the rows and
+// the store of the map; a build tagged with a generation loaded after the read
+// would carry the post-retire tag over a map without the row.
+func TestRetiredBookFilesWithHash_BuildStraddlingARetireIsRebuilt(t *testing.T) {
+	fx, _ := scopedRetiredFixture(t)
+	late := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/scope/shell/02.mp3", FileHash: "h-late", TrackNumber: 2})
+	end := fx.ps.BeginRetiredHashScope()
+	defer end()
+
+	var fired atomic.Bool
+	var hookErr error
+	hook := func() {
+		if fired.CompareAndSwap(false, true) {
+			hookErr = fx.retire(t, late)
+		}
+	}
+	retiredHashAfterBuildHook.Store(&hook)
+	t.Cleanup(func() { retiredHashAfterBuildHook.Store(nil) })
+
+	// This lookup may answer either way: its build raced the retire.
+	_, _, err := fx.ps.RetiredBookFilesWithHash("h-late")
+	require.NoError(t, err)
+	require.True(t, fired.Load())
+	require.NoError(t, hookErr)
+
+	retired, _, err := fx.ps.RetiredBookFilesWithHash("h-late")
+	require.NoError(t, err)
+	require.Len(t, retired, 1, "the map built across the retire must not be served after it")
+	require.Equal(t, late.ID, retired[0].ID)
+	require.EqualValues(t, 2, fx.ps.retiredHash.builds.Load(), "the stale map was rebuilt")
+}
+
+// A batch upsert that rewrites a retired row's hash is a write the cache must
+// see (BatchUpsertBookFiles is how the scanner and the backfills write rows),
+// and one that changes nothing the index holds must not cost a rebuild.
+func TestRetiredBookFilesWithHash_BatchUpsertOfARetiredRow(t *testing.T) {
+	fx, kept := scopedRetiredFixture(t)
+	end := fx.ps.BeginRetiredHashScope()
+	defer end()
+
+	retired, _, err := fx.ps.RetiredBookFilesWithHash("h-batch")
+	require.NoError(t, err)
+	require.Empty(t, retired)
+	require.EqualValues(t, 1, fx.ps.retiredHash.builds.Load())
+
+	// Same row, same hashes: nothing the index holds changes.
+	genBefore := fx.ps.retiredHash.gen.Load()
+	require.NoError(t, fx.ps.BatchUpsertBookFiles([]*BookFile{
+		{ID: kept.ID, BookID: fx.holder.ID, FilePath: kept.FilePath, Duration: 321}}))
+	require.Equal(t, genBefore, fx.ps.retiredHash.gen.Load(), "a duration-only rewrite of a retired row does not invalidate the index")
+	retired, _, err = fx.ps.RetiredBookFilesWithHash("h-kept")
+	require.NoError(t, err)
+	require.Len(t, retired, 1, "and the row is still retired and indexed")
+	require.EqualValues(t, 1, fx.ps.retiredHash.builds.Load(), "no rebuild")
+
+	// A new hash on the same row.
+	require.NoError(t, fx.ps.BatchUpsertBookFiles([]*BookFile{
+		{ID: kept.ID, BookID: fx.holder.ID, FilePath: kept.FilePath, FileHash: "h-batch"}}))
+	require.Greater(t, fx.ps.retiredHash.gen.Load(), genBefore)
+	retired, _, err = fx.ps.RetiredBookFilesWithHash("h-batch")
+	require.NoError(t, err)
+	require.Len(t, retired, 1, "the batch-written hash is found; a cache that missed the write would say none")
+	require.Equal(t, kept.ID, retired[0].ID)
+	retired, _, err = fx.ps.RetiredBookFilesWithHash("h-kept")
+	require.NoError(t, err)
+	require.Empty(t, retired)
+}
+
+// retiredHashRelevantChange is the filter behind every non-retire bump.
+func TestRetiredHashRelevantChange(t *testing.T) {
+	retired := BookFile{ID: "f", BookID: "holder", VersionID: "v", Retired: true, FileHash: "h", OriginalFileHash: "o"}
+	same := func(mut func(*BookFile)) *BookFile { c := retired; mut(&c); return &c }
+	live := BookFile{ID: "f", BookID: "shell", FileHash: "h"}
+
+	for name, tc := range map[string]struct {
+		old, updated *BookFile
+		want         bool
+	}{
+		"live row, live rewrite":       {&live, same(func(b *BookFile) { b.Retired = false; b.BookID = "shell"; b.VersionID = ""; b.FileHash = "h2" }), false},
+		"retired, duration only":       {&retired, same(func(b *BookFile) { b.Duration = 9 }), false},
+		"retired, file hash":           {&retired, same(func(b *BookFile) { b.FileHash = "h2" }), true},
+		"retired, original hash":       {&retired, same(func(b *BookFile) { b.OriginalFileHash = "o2" }), true},
+		"retired, version":             {&retired, same(func(b *BookFile) { b.VersionID = "v2" }), true},
+		"retired, holder":              {&retired, same(func(b *BookFile) { b.BookID = "other" }), true},
+		"retired to live":              {&retired, same(func(b *BookFile) { b.Retired = false }), true},
+		"live to retired":              {&live, same(func(b *BookFile) {}), true},
+		"retired, path and track only": {&retired, same(func(b *BookFile) { b.FilePath = "/x"; b.TrackNumber = 4 }), false},
+	} {
+		require.Equal(t, tc.want, retiredHashRelevantChange(tc.old, tc.updated), name)
+	}
+}
+
+// Lookups racing retires and un-retires: run under -race. A lookup that starts
+// and ends while its row sits in one settled state must answer that state; one
+// that overlaps a transition may answer either.
 func TestRetiredBookFilesWithHash_ScopeUnderConcurrentRetires(t *testing.T) {
 	fx, _ := scopedRetiredFixture(t)
-	rows := make([]*BookFile, 6)
+	const (
+		phaseLive = iota // never retired
+		phaseRetiring
+		phaseRetired
+		phaseUnretiring
+		phaseLiveAgain
+	)
+	type tracked struct {
+		row   *BookFile
+		phase atomic.Int32
+	}
+	rows := make([]*tracked, 6)
 	for i := range rows {
-		rows[i] = fx.create(t, fx.shell.ID, BookFile{
-			FilePath: "/lib/Gotham/scope/shell/" + string(rune('a'+i)) + ".mp3", FileHash: "h-race-" + string(rune('a'+i)), TrackNumber: i + 10})
+		rows[i] = &tracked{row: fx.create(t, fx.shell.ID, BookFile{
+			FilePath: "/lib/Gotham/scope/shell/" + string(rune('a'+i)) + ".mp3", FileHash: "h-race-" + string(rune('a'+i)), TrackNumber: i + 10})}
 	}
 	end := fx.ps.BeginRetiredHashScope()
 	defer end()
@@ -236,24 +341,46 @@ func TestRetiredBookFilesWithHash_ScopeUnderConcurrentRetires(t *testing.T) {
 				default:
 				}
 				for _, r := range rows {
-					if _, _, err := fx.ps.RetiredBookFilesWithHash(r.FileHash); err != nil {
+					before := r.phase.Load()
+					retired, _, err := fx.ps.RetiredBookFilesWithHash(r.row.FileHash)
+					after := r.phase.Load()
+					if err != nil {
 						t.Error(err)
 						return
+					}
+					if before != after {
+						continue // a transition overlapped the lookup; either answer is true
+					}
+					switch before {
+					case phaseLive, phaseLiveAgain:
+						if len(retired) != 0 {
+							t.Errorf("%s answered %v while live", r.row.FileHash, retired)
+							return
+						}
+					case phaseRetired:
+						if len(retired) != 1 || retired[0].ID != r.row.ID {
+							t.Errorf("%s answered %v while retired as %s", r.row.FileHash, retired, r.row.ID)
+							return
+						}
 					}
 				}
 			}
 		}()
 	}
 	for _, r := range rows {
-		require.NoError(t, fx.retire(t, r))
-		retired, _, err := fx.ps.RetiredBookFilesWithHash(r.FileHash)
+		r.phase.Store(phaseRetiring)
+		require.NoError(t, fx.retire(t, r.row))
+		r.phase.Store(phaseRetired)
+		retired, _, err := fx.ps.RetiredBookFilesWithHash(r.row.FileHash)
 		require.NoError(t, err)
 		require.Len(t, retired, 1, "a retire that returned is visible to the next lookup")
 	}
 	for _, r := range rows {
+		r.phase.Store(phaseUnretiring)
 		require.NoError(t, fx.ps.UnretireBookFiles(
-			[]BookFileMove{{FileIDs: []string{r.ID}, SourceBookID: fx.holder.ID}}, fx.shell.ID, fx.version.ID, nil))
-		retired, _, err := fx.ps.RetiredBookFilesWithHash(r.FileHash)
+			[]BookFileMove{{FileIDs: []string{r.row.ID}, SourceBookID: fx.holder.ID}}, fx.shell.ID, fx.version.ID, nil))
+		r.phase.Store(phaseLiveAgain)
+		retired, _, err := fx.ps.RetiredBookFilesWithHash(r.row.FileHash)
 		require.NoError(t, err)
 		require.Empty(t, retired, "an un-retire that returned is visible to the next lookup")
 	}

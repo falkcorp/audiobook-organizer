@@ -1,7 +1,7 @@
 // file: internal/database/retired_shell_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f7e3a19-6c2b-4d85-a914-b8e5c1d02f73
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -180,4 +181,89 @@ func TestRetiredRowsHeld_RecountsAMovedVersionAndRefusesAnUnsettledOne(t *testin
 	_, err = retiredRowsHeld(&movingReader{flapping: true}, "shell")
 	require.Error(t, err)
 	require.False(t, errors.Is(err, ErrBookIsRetiredShell))
+}
+
+// twoReads exposes only the two reads of retiredShellReader, so retiredRowsHeld
+// takes its generic two-read path instead of the store's own count.
+type twoReads struct{ ps *PebbleStore }
+
+func (r twoReads) GetRetiredVersionsFromBook(id string) ([]BookVersion, error) {
+	return r.ps.GetRetiredVersionsFromBook(id)
+}
+
+func (r twoReads) GetRetiredBookFiles(id string) ([]BookFile, error) {
+	return r.ps.GetRetiredBookFiles(id)
+}
+
+// CountRetiredRowsHeldFor is the same number the generic two-read count gives,
+// for a book with no versions, a shell with rows under two holders, a shell
+// whose version was emptied, and a holder.
+func TestCountRetiredRowsHeldFor_MatchesTheGenericCount(t *testing.T) {
+	fx := newRetiredFixture(t)
+	a := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/count/01.mp3", FileHash: "h-a", TrackNumber: 1})
+	b := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/count/02.mp3", FileHash: "h-b", TrackNumber: 2})
+	require.NoError(t, fx.retire(t, a, b))
+	// A live row on the holder is not counted, and neither is a retired row of
+	// another version.
+	fx.create(t, fx.holder.ID, BookFile{FilePath: "/lib/Gotham/count/holder.mp3", FileHash: "h-live", TrackNumber: 1})
+
+	second, err := fx.ps.CreateBook(&Book{Title: "Year Two", FilePath: "/lib/Gotham/count/second"})
+	require.NoError(t, err)
+	v2, err := fx.ps.CreateBookVersion(&BookVersion{
+		BookID: second.ID, Status: BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
+		RetiredFromBookID: fx.shell.ID, RetireOpID: "op-2", RetiredAt: new(time.Now()),
+	})
+	require.NoError(t, err)
+	c := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/Gotham/count/03.mp3", FileHash: "h-c", TrackNumber: 3})
+	require.NoError(t, fx.ps.RetireBookFiles([]BookFileMove{{FileIDs: []string{c.ID}, SourceBookID: fx.shell.ID}}, second.ID, v2.ID))
+
+	check := func(label, id string, want int) {
+		t.Helper()
+		got, err := fx.ps.CountRetiredRowsHeldFor(id)
+		require.NoError(t, err, label)
+		require.Equal(t, want, got, label+": narrow count")
+		generic, err := retiredRowsHeld(twoReads{fx.ps}, id)
+		require.NoError(t, err, label)
+		require.Equal(t, want, generic, label+": generic count")
+		viaStore, err := RetiredRowsHeldFor(fx.ps, id)
+		require.NoError(t, err, label)
+		require.Equal(t, want, viaStore, label+": through RetiredRowsHeldFor")
+	}
+	check("shell with rows under two holders", fx.shell.ID, 3)
+	check("holder", fx.holder.ID, 0)
+	check("a book with no versions", second.ID, 0)
+	check("an unknown book", "no-such-book", 0)
+	check("empty id", "", 0)
+
+	// Empty one version: the other still counts.
+	require.NoError(t, fx.ps.UnretireBookFiles(
+		[]BookFileMove{{FileIDs: []string{c.ID}, SourceBookID: second.ID}}, fx.shell.ID, v2.ID, nil))
+	check("one version emptied", fx.shell.ID, 2)
+	require.NoError(t, fx.ps.UnretireBookFiles(
+		[]BookFileMove{{FileIDs: []string{a.ID, b.ID}, SourceBookID: fx.holder.ID}}, fx.shell.ID, fx.version.ID, nil))
+	check("every version emptied", fx.shell.ID, 0)
+	vs, err := fx.ps.GetRetiredVersionsFromBook(fx.shell.ID)
+	require.NoError(t, err)
+	require.Len(t, vs, 2, "the emptied versions are still retired versions of the shell")
+}
+
+// failingVersions embeds the Pebble store, so the store's own narrow count is
+// promoted onto it, and overrides the version read to fail.
+type failingVersions struct{ *PebbleStore }
+
+func (failingVersions) GetRetiredVersionsFromBook(string) ([]BookVersion, error) {
+	return nil, errors.New("injected version read failure")
+}
+
+// A decorator's override of the retired reads is honoured: the narrow count is
+// taken only by the bare Pebble store, not by a type that embeds it, so a
+// failing (or filtering) wrapper is not bypassed and the check fails closed.
+func TestRetiredRowsHeldFor_HonoursADecoratorsOverride(t *testing.T) {
+	fx, _ := shellFixture(t)
+	_, err := RetiredRowsHeldFor(failingVersions{fx.ps}, fx.shell.ID)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "injected version read failure")
+	err = RefuseRetiredShell(failingVersions{fx.ps}, fx.shell.ID, "purge")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrBookIsRetiredShell, "an unreadable store is not proof of a shell")
 }

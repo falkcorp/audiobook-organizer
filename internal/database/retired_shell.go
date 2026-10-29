@@ -1,12 +1,17 @@
 // file: internal/database/retired_shell.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 873c25c2-790a-4312-b6fa-37d376699776
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // A retired shell is a book whose live book_file rows the retired-versions
@@ -38,10 +43,83 @@ func RetiredRowsHeldFor(store any, shellID string) (int, error) {
 	return retiredRowsHeld(r, shellID)
 }
 
-// retiredShellReader is the two reads the count needs.
+// retiredShellReader is the two reads the generic count needs.
 type retiredShellReader interface {
 	GetRetiredVersionsFromBook(shellID string) ([]BookVersion, error)
 	GetRetiredBookFiles(holderID string) ([]BookFile, error)
+}
+
+// retiredRowMarker is the part of a stored book_file row the held-row count
+// reads. Decoding into it skips every other field, notably the raw AcoustID
+// fingerprint (about 230 KB a row), which a full BookFile decode allocates.
+type retiredRowMarker struct {
+	VersionID string `json:"version_id"`
+	Retired   bool   `json:"retired"`
+}
+
+// CountRetiredRowsHeldFor is retiredRowsHeld for the Pebble store: the same
+// number, read from one snapshot. The versions retired out of shellID are listed
+// once (an idx:bv:from: prefix seek, empty for almost every book, which then
+// ends here) and each holder's rows are scanned once into a retiredRowMarker.
+// A RehomeRetiredVersion commits the version and its rows in one batch, so a
+// snapshot sees them under the old holder or the new one, never split: the
+// recount retiredRowsHeld needs on a live read is not needed here.
+func (p *PebbleStore) CountRetiredRowsHeldFor(shellID string) (int, error) {
+	if shellID == "" {
+		return 0, nil
+	}
+	snap := p.db.NewSnapshot()
+	defer snap.Close()
+	prefix := []byte(retiredVersionFromPrefix + shellID + ":")
+	var versionIDs []string
+	if err := forEachKeyInRange(snap, prefix, prefixEnd(prefix), func(key, _ []byte) error {
+		versionIDs = append(versionIDs, strings.TrimPrefix(string(key), string(prefix)))
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("read the retired versions of %s: %w", shellID, err)
+	}
+	if len(versionIDs) == 0 {
+		return 0, nil
+	}
+	byHolder := map[string]map[string]bool{}
+	for _, id := range versionIDs {
+		data, closer, err := snap.Get([]byte("bv:" + id))
+		if errors.Is(err, pebble.ErrNotFound) {
+			continue // GetRetiredVersionsFromBook skips a version row that is gone
+		}
+		if err != nil {
+			return 0, fmt.Errorf("read retired version %s of %s: %w", id, shellID, err)
+		}
+		var v struct {
+			BookID string `json:"book_id"`
+		}
+		err = json.Unmarshal(data, &v)
+		_ = closer.Close()
+		if err != nil {
+			return 0, fmt.Errorf("decode retired version %s of %s: %w", id, shellID, err)
+		}
+		if byHolder[v.BookID] == nil {
+			byHolder[v.BookID] = map[string]bool{}
+		}
+		byHolder[v.BookID][id] = true
+	}
+	held := 0
+	for holder, ids := range byHolder {
+		rowPrefix := []byte("book_file:" + holder + ":")
+		if err := forEachKeyInRange(snap, rowPrefix, prefixEnd(rowPrefix), func(_, value []byte) error {
+			var m retiredRowMarker
+			if err := json.Unmarshal(value, &m); err != nil {
+				return err
+			}
+			if m.Retired && ids[m.VersionID] {
+				held++
+			}
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("read the retired rows held by %s: %w", holder, err)
+		}
+	}
+	return held, nil
 }
 
 // retiredHoldCountAttempts bounds the recount when a retired version is moved
@@ -56,6 +134,14 @@ const retiredHoldCountAttempts = 3
 // RehomeRetiredVersion does not take the shell's stripes; if it keeps moving
 // the count is refused rather than guessed.
 func retiredRowsHeld(r retiredShellReader, shellID string) (int, error) {
+	// Only a bare PebbleStore takes the narrow count, by concrete type and not
+	// by an interface: a decorator that embeds the store would be handed the
+	// method by promotion, and its own override of the two reads (a fault
+	// injector, a filter) would be bypassed without anyone noticing, which is
+	// how this check would fail open.
+	if p, ok := r.(*PebbleStore); ok {
+		return p.CountRetiredRowsHeldFor(shellID)
+	}
 	for attempt := 0; attempt < retiredHoldCountAttempts; attempt++ {
 		versions, err := r.GetRetiredVersionsFromBook(shellID)
 		if err != nil {

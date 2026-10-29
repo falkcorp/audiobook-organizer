@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.1
+// version: 1.135.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-29
 
@@ -1364,10 +1364,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// While memdb is not serving, every file's retired-content check re-reads
 	// every retired row. Hold one cache of them for the run; the store drops it
 	// when the last overlapping scan closes, and bumps its generation on any
-	// retire, un-retire, rehome or retired-row hash write, so a worker never
-	// reads a stale answer (database.BeginRetiredHashScope). This is the one
-	// entry every scan path reaches the lookup through: ProcessBooks, the
-	// library scan's chunks and the folder auto-scan.
+	// retire, un-retire, rehome or retired-row hash write that changes what a
+	// retired row answers to, so a worker never reads a stale answer
+	// (database.BeginRetiredHashScope). This is the one entry every scan path
+	// reaches the lookup through: ProcessBooks, the library scan's chunks and
+	// the folder auto-scan. PerformScan opens a scope of its own around all of
+	// its chunks, which this one nests inside (the store counts them), so the
+	// cache survives from chunk to chunk; the other entries get this one.
 	defer database.BeginRetiredHashScope(getStore())()
 
 	// Per-file failures are counted and surfaced into the op log, not just

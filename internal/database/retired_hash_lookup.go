@@ -1,11 +1,12 @@
 // file: internal/database/retired_hash_lookup.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e7b3a6d-52c1-4f89-8d14-b6a39c7e5f20
 // last-edited: 2026-10-29
 
 package database
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,7 +33,7 @@ import (
 // owner. That errs toward "retired content": a caller that skips an import on
 // a retired hit skips a file that imports on a later scan, and never creates a
 // duplicate.
-func (p *PebbleStore) RetiredBookFilesWithHash(hash string) (retired []BookFile, liveHolds bool, err error) {
+func (p *PebbleStore) RetiredBookFilesWithHash(hash string) (retired []RetiredRowRef, liveHolds bool, err error) {
 	if hash == "" {
 		return nil, false, nil
 	}
@@ -41,9 +42,9 @@ func (p *PebbleStore) RetiredBookFilesWithHash(hash string) (retired []BookFile,
 		return nil, false, err
 	}
 	if !cached {
-		if err := p.forEachRetiredRow(func(r BookFile) error {
-			if r.FileHash == hash || r.OriginalFileHash == hash {
-				retired = append(retired, r)
+		if err := p.forEachRetiredRow(func(r retiredHashRow) error {
+			if r.fileHash == hash || r.originalHash == hash {
+				retired = append(retired, r.ref)
 			}
 			return nil
 		}); err != nil {
@@ -75,11 +76,43 @@ func (p *PebbleStore) RetiredBookFilesWithHash(hash string) (retired []BookFile,
 	return retired, liveHolds, nil
 }
 
-// forEachRetiredRow calls fn with every retired row of every retired version,
-// in the order the versions are enumerated. The versions come from the
-// idx:bv:from: keys (each retired version has one) and each version's rows are
-// read from Pebble: one scan per retired version.
-func (p *PebbleStore) forEachRetiredRow(fn func(BookFile) error) error {
+// RetiredRowRef names one retired row: the row, the live book now holding it
+// and the retired version it sits under. It is everything the scanner's
+// retired-content check reads of a row (which holder and version own the
+// content), and the only shape RetiredBookFilesWithHash and RetiredHoldersOfHash
+// return, in a scope or out of one, from Pebble or from memdb, so the answer
+// never depends on which read produced it.
+type RetiredRowRef struct {
+	ID        string
+	BookID    string
+	VersionID string
+}
+
+// retiredHashRow is a retired row as the hash lookups read it: its ref and the
+// two hashes it answers to.
+type retiredHashRow struct {
+	ref          RetiredRowRef
+	fileHash     string
+	originalHash string
+}
+
+// retiredHashMarker is the part of a stored book_file row forEachRetiredRow
+// decodes. Everything else, the raw AcoustID fingerprint (about 230 KB a row)
+// above all, is skipped rather than allocated.
+type retiredHashMarker struct {
+	ID               string `json:"id"`
+	VersionID        string `json:"version_id"`
+	Retired          bool   `json:"retired"`
+	FileHash         string `json:"file_hash"`
+	OriginalFileHash string `json:"original_file_hash"`
+}
+
+// forEachRetiredRow calls fn with every retired row of every retired version.
+// The versions come from the idx:bv:from: keys (each retired version has one)
+// and are grouped by holder, so a holder's rows are scanned once however many
+// retired versions it holds. Rows come holder by holder (holders in the order
+// their first version was enumerated), in key order within a holder.
+func (p *PebbleStore) forEachRetiredRow(fn func(retiredHashRow) error) error {
 	prefix := []byte(retiredVersionFromPrefix)
 	seen := map[string]struct{}{}
 	var versionIDs []string
@@ -96,6 +129,8 @@ func (p *PebbleStore) forEachRetiredRow(fn func(BookFile) error) error {
 	}); err != nil {
 		return fmt.Errorf("enumerate retired versions: %w", err)
 	}
+	var holders []string
+	versionsOf := map[string]map[string]struct{}{}
 	for _, versionID := range versionIDs {
 		v, err := p.GetBookVersion(versionID)
 		if err != nil {
@@ -104,14 +139,29 @@ func (p *PebbleStore) forEachRetiredRow(fn func(BookFile) error) error {
 		if v == nil || v.Status != BookVersionStatusRetired {
 			continue
 		}
-		rows, err := p.retiredRowsOfVersion(v.BookID, v.ID)
-		if err != nil {
-			return fmt.Errorf("read retired rows of version %s: %w", versionID, err)
+		if versionsOf[v.BookID] == nil {
+			versionsOf[v.BookID] = map[string]struct{}{}
+			holders = append(holders, v.BookID)
 		}
-		for _, r := range rows {
-			if err := fn(r); err != nil {
+		versionsOf[v.BookID][v.ID] = struct{}{}
+	}
+	for _, holder := range holders {
+		rowPrefix := []byte("book_file:" + holder + ":")
+		versions := versionsOf[holder]
+		if err := forEachKeyInRange(p.db, rowPrefix, prefixEnd(rowPrefix), func(_, value []byte) error {
+			var m retiredHashMarker
+			if err := json.Unmarshal(value, &m); err != nil {
 				return err
 			}
+			if _, ok := versions[m.VersionID]; !ok || !m.Retired {
+				return nil
+			}
+			return fn(retiredHashRow{
+				ref:      RetiredRowRef{ID: m.ID, BookID: holder, VersionID: m.VersionID},
+				fileHash: m.FileHash, originalHash: m.OriginalFileHash,
+			})
+		}); err != nil {
+			return fmt.Errorf("read retired rows held by %s: %w", holder, err)
 		}
 	}
 	return nil
@@ -120,7 +170,7 @@ func (p *PebbleStore) forEachRetiredRow(fn func(BookFile) error) error {
 // retiredHashReader is the PebbleStore method RetiredHoldersOfHash resolves
 // through AsCapability for the window in which memdb is not serving.
 type retiredHashReader interface {
-	RetiredBookFilesWithHash(hash string) ([]BookFile, bool, error)
+	RetiredBookFilesWithHash(hash string) ([]RetiredRowRef, bool, error)
 }
 
 // RetiredHoldersOfHash answers the scanner's question before it imports a book
@@ -140,7 +190,7 @@ type retiredHashReader interface {
 //     see there).
 //   - A store with none of these returns the refusal, and the caller fails
 //     closed.
-func RetiredHoldersOfHash(s any, hash string) (retired []BookFile, liveHolds bool, err error) {
+func RetiredHoldersOfHash(s any, hash string) (retired []RetiredRowRef, liveHolds bool, err error) {
 	if hash == "" {
 		return nil, false, nil
 	}
@@ -155,7 +205,7 @@ func RetiredHoldersOfHash(s any, hash string) (retired []BookFile, liveHolds boo
 	if err == nil {
 		for _, r := range rows {
 			if r.Retired {
-				retired = append(retired, r)
+				retired = append(retired, RetiredRowRef{ID: r.ID, BookID: r.BookID, VersionID: r.VersionID})
 			} else {
 				liveHolds = true
 			}
