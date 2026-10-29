@@ -20,16 +20,9 @@
       handler and `UnmergeAuto` now take the merge lock around that call, so a
       revert through them cannot race a retire, but any other caller of
       `RevertBookToVersion` that does not hold the merge lock still can; (7) a generic whole-row `UpdateBook` from a
-      stale read can still overwrite the merged-into link; (8) the batch hard delete (`internal/batch/service.go` `hardDelete`) has no
-      owned-files pre-check at all, live or retired, so a book that owns rows
-      has its listening state carried to another version
-      (`merge.HardDeleteKeepingUserState`) before `DeleteBook` refuses with
-      `ErrBookOwnsFiles`; this predates the retire work, and adding the check
-      changes the batch's behaviour for live rows too, so it is left for its own
-      change (`DiscardProgressAndPurge`, the `DeleteAudiobook` live branch and
-      the purge pre-check now count retired rows); (9) decorator
+      stale read can still overwrite the merged-into link; (8) decorator
       stores that do not implement `Unwrap() database.Store` cannot be read for
-      retired rows and now fail closed; (10) PR 5's revert of a
+      retired rows and now fail closed; (9) PR 5's revert of a
       `book_version_create` row must refuse to delete a version that still holds
       rows (reverting the create after the rows' own retire rows are reverted is
       the only order that leaves it empty; a create reverted while rows remain,

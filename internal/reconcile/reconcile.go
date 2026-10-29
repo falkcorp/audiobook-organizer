@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.27.1
+// version: 1.27.2
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package reconcile
 
@@ -1224,13 +1224,34 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 		pathChecked, hasFile, namedBy = true, true, why
 		return nil
 	}
+	// The duplicate's book_file rows are counted again here, under the merge
+	// lock and before the file is touched (database.CheckBookOwnsNoFiles: the
+	// question DeleteBook asks, retired rows included). The caller's count was
+	// made without the lock; a retire (which takes it) can key a row under the
+	// duplicate after that, and os.Remove then deletes audio a retired version
+	// of another book still names before DeleteBook refuses the book.
+	ownsNoRows := func() error {
+		return database.CheckBookOwnsNoFiles(store, dup.ID, "version-group cleanup of duplicate")
+	}
 	// Logged only past the guards, so the log never says a duplicate is
 	// being removed when it is about to be kept.
 	del := func() error {
+		if err := ownsNoRows(); err != nil {
+			return err
+		}
 		if err := checkPath(); err != nil {
 			return err
 		}
 		slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
+		// The book row goes FIRST and the file only after it: DeleteBook can
+		// still refuse (a book_file row from a writer that does not take the
+		// merge lock, landing after the count above), and the old order, file
+		// first, then deleted the audio of a book that stayed. The other way
+		// round the worst case is a file left on disk with no book, which a scan
+		// finds again.
+		if err := store.DeleteBook(dup.ID); err != nil {
+			return err
+		}
 		switch {
 		case hasFile && namedBy != "":
 			// A retired row keeps the path of a shell it was retired out of; a
@@ -1247,11 +1268,16 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 				result.FilesDeleted++
 			}
 		}
-		return store.DeleteBook(dup.ID)
+		return nil
 	}
 	var err error
 	if keepID != "" {
 		precheck := func() error {
+			// First: a duplicate that gained rows is refused before its users'
+			// state is carried anywhere, not after.
+			if err := ownsNoRows(); err != nil {
+				return err
+			}
 			listed, kerr := keepListed(store, groupID, keepID, rootDir, false, nil)
 			if kerr != nil {
 				return fmt.Errorf("%w (read error: %w)", errKeepNotListed, kerr)
@@ -1269,6 +1295,15 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 	case err == nil:
 		result.DuplicatesRemoved++
 		return true
+	case errors.Is(err, database.ErrBookOwnsFiles):
+		// Rows landed since the caller's count (see ownsNoRows): nothing was
+		// carried and the file was not touched.
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s and its file: it gained book_file rows since the check: %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)
+		result.SkippedOwnsFiles++
+		if errors.Is(err, database.ErrBookHoldsRetiredVersions) {
+			result.SkippedHoldsRetired++
+		}
 	case errors.Is(err, errPathUnverifiable):
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s and its file: %v",
 			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)
