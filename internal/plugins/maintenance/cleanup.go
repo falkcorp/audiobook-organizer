@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.31.1
+// version: 1.32.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-29
 
@@ -520,6 +520,21 @@ type TrashCleanupResult struct {
 	KeptVersionIDs []string `json:"kept_version_ids,omitempty"`
 	KeptBookIDs    []string `json:"kept_book_ids,omitempty"`
 	KeptFilePaths  []string `json:"kept_file_paths,omitempty"`
+	// The kept-file sweep (versions.SweepKeptFiles) revisits the files earlier
+	// purges kept because another row or book named them. Counts are of FILES:
+	// KeptSweepRemoved were unlinked (nothing names them any more),
+	// KeptSweepGone had only a stale note dropped, KeptSweepStillKept are still
+	// owned (or kept by the purge guard: an import path, the iTunes library, a
+	// live book that serves them), KeptSweepKeptOnError could not be decided or
+	// acted on (a read error, a busy merge lock, a failed removal) and are tried
+	// again next run.
+	KeptSweepRemoved             int      `json:"kept_sweep_removed"`
+	KeptSweepGone                int      `json:"kept_sweep_gone"`
+	KeptSweepStillKept           int      `json:"kept_sweep_still_kept"`
+	KeptSweepKeptOnError         int      `json:"kept_sweep_kept_on_error"`
+	KeptSweepRemovedFilePaths    []string `json:"kept_sweep_removed_file_paths,omitempty"`
+	KeptSweepKeptOnErrorVersions []string `json:"kept_sweep_kept_on_error_version_ids,omitempty"`
+	KeptSweepKeptOnErrorPaths    []string `json:"kept_sweep_kept_on_error_file_paths,omitempty"`
 	// NeedsAttention counts the versions whose purge gave up on a file it cannot
 	// remove (purge_failed); the cleanup does not retry them and does not count
 	// them in Failed.
@@ -607,6 +622,15 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		payload.KeptBookIDs = appendOnce(payload.KeptBookIDs, k.BookID)
 		payload.KeptFilePaths = appendOnce(payload.KeptFilePaths, notePaths(k.Files)...)
 	}
+	payload.KeptSweepRemoved, payload.KeptSweepGone = res.KeptSweep.Removed, res.KeptSweep.Gone
+	payload.KeptSweepStillKept, payload.KeptSweepKeptOnError = res.KeptSweep.StillKept, res.KeptSweep.KeptOnError
+	for _, k := range res.KeptSweep.RemovedFiles {
+		payload.KeptSweepRemovedFilePaths = appendOnce(payload.KeptSweepRemovedFilePaths, notePaths(k.Files)...)
+	}
+	for _, k := range res.KeptSweep.ErrorFiles {
+		payload.KeptSweepKeptOnErrorVersions = append(payload.KeptSweepKeptOnErrorVersions, k.VersionID)
+		payload.KeptSweepKeptOnErrorPaths = appendOnce(payload.KeptSweepKeptOnErrorPaths, notePaths(k.Files)...)
+	}
 	for _, k := range res.NeedsAttention {
 		payload.NeedsAttentionVersionIDs = append(payload.NeedsAttentionVersionIDs, k.VersionID)
 		payload.NeedsAttentionBookIDs = appendOnce(payload.NeedsAttentionBookIDs, k.BookID)
@@ -645,6 +669,10 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d of the purged versions kept files another row or book names (versions %s, books %s)",
 			len(res.KeptFiles), strings.Join(payload.KeptVersionIDs, ", "), strings.Join(payload.KeptBookIDs, ", ")))
 	}
+	if n := res.KeptSweep.KeptOnError; n > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: the kept-file sweep left %d file(s) of purged versions in place because it could not decide or act on them; nothing was removed for them and they are tried again next run (versions %s, files %s)",
+			n, strings.Join(payload.KeptSweepKeptOnErrorVersions, ", "), strings.Join(payload.KeptSweepKeptOnErrorPaths, ", ")))
+	}
 	if len(res.NeedsAttention) > 0 {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) cannot be purged (a file cannot be removed: permission or a read-only filesystem) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
 			len(res.NeedsAttention), strings.Join(payload.NeedsAttentionVersionIDs, ", "), strings.Join(payload.NeedsAttentionBookIDs, ", ")))
@@ -676,6 +704,10 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	// Always said, zero included, as the run's journal has said it since the
 	// served-file guard: the ids are on the per-version WARN lines and the result.
 	msg += fmt.Sprintf(", kept %d versions whose files the book still serves", len(res.Kept))
+	// Always said, zero included, like the served-file count: a kept file that
+	// stays on disk with no owner is what this sweep exists to find.
+	msg += fmt.Sprintf("; kept-file sweep: removed %d files, %d notes dropped (already gone), %d still owned, %d kept on error",
+		res.KeptSweep.Removed, res.KeptSweep.Gone, res.KeptSweep.StillKept, res.KeptSweep.KeptOnError)
 	if n := len(res.CannotTell); n > 0 {
 		msg += fmt.Sprintf("; %d left alone, cannot tell whether their files are gone (versions %s)", n, strings.Join(payload.CannotTellVersionIDs, ", "))
 	}
@@ -701,6 +733,11 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		// The unfinished swaps could not be listed: the night is reported as
 		// failed, not as one with none to report.
 		err = errors.Join(err, fmt.Errorf("trash cleanup: the books whose version swap did not finish could not be listed: %w", res.SwapIncompleteErr))
+	}
+	if res.KeptSweepErr != nil {
+		// The purged versions could not be listed: the night is reported as
+		// failed, not as one with no kept files to revisit.
+		err = errors.Join(err, fmt.Errorf("trash cleanup: the purged versions whose files were kept could not be listed: %w", res.KeptSweepErr))
 	}
 	if err != nil {
 		// Some due purges failed (or the trash could not be listed): say so in
