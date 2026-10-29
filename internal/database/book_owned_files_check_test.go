@@ -1,12 +1,13 @@
 // file: internal/database/book_owned_files_check_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0d52b8f6-93a1-4e7c-a4b0-1f6e8c3d7952
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -64,7 +65,15 @@ func TestCheckBookOwnsNoFiles_AgreesWithDeleteBook(t *testing.T) {
 				require.Contains(t, check.Error(), "hard delete "+id+": ")
 				for _, s := range c.wantInMsg {
 					require.Contains(t, check.Error(), s)
+					// DeleteBook's own refusal gives the same advice about the
+					// same book (one wording, ownedFilesRefusal), minus the
+					// soft-delete suggestion that only a hard delete is given.
+					require.Contains(t, delErr.Error(), strings.TrimPrefix(s, "soft-delete it instead, or "))
 				}
+				require.Equal(t, c.wantHolds, errors.Is(delErr, ErrBookHoldsRetiredVersions),
+					"DeleteBook's refusal marks a book that holds only retired rows: %v", delErr)
+				require.NotContains(t, delErr.Error(), "move them",
+					"the old advice told users to move rows that cannot be moved")
 			} else {
 				require.NoError(t, check)
 				require.NoError(t, delErr)

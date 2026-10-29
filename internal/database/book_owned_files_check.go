@@ -1,7 +1,7 @@
 // file: internal/database/book_owned_files_check.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7a3c9e15-0b64-4d28-8f1e-c5d2a96b4e07
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
@@ -64,6 +64,16 @@ func CheckBookOwnsNoFiles(store any, bookID, action string) error {
 			live++
 		}
 	}
+	return ownedFilesRefusal(action, bookID, live, retired)
+}
+
+// ownedFilesRefusal is the one wording of "this book owns book_file rows", for
+// the caller-side prediction (CheckBookOwnsNoFiles) and for DeleteBook's own
+// refusal (refuseDeleteIfBookOwnsFiles), so the two cannot give a user different
+// advice about the same book. nil when both counts are 0. Only a live row can be
+// moved to another book; a retired one refuses every move with
+// ErrBookFileRetired, so the advice to move files is given for live rows alone.
+func ownedFilesRefusal(action, bookID string, live, retired int) error {
 	switch {
 	case live == 0 && retired == 0:
 		return nil
