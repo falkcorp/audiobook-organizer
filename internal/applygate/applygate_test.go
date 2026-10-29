@@ -186,12 +186,12 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 		{"Al is a name, not A. L.", "Sojourn", "A. L. Franken", "Sojourn", "Al Franken", false, false},
 		// Heard "book one"; the review row carried no series position.
 		{"This Gilded Abyss", "This Gilded Abyss", "Rebecca Thorne", "This Gilded Abyss, book one of the Gilded Abyss trilogy", "Rebecca Thorne", false, false},
-		{"Mistborn", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false, true},
-		{"same author, different title", "The Well of Ascension", "Brandon Sanderson", "Mistborn", "Brandon Sanderson For Beth Sanderson, who's", false, false},
+		{"Knightfall", "Knightfall", "Bruce Wayne", "Knightfall", "Bruce Wayne For Martha Wayne, who's", false, true},
+		{"same author, different title", "The Who Rules the Night", "Bruce Wayne", "Knightfall", "Bruce Wayne For Martha Wayne, who's", false, false},
 		{"different volume of the same series", "Big Cats 3", "Ann Author", "Big Cats 1", "Ann Author", false, false},
 		{"completely different author", "Blood of Elves", "Morgan Rice", "Blood of Elves", "Andrzej Sapkowski Translated from the Polish", false, false},
 		// Both rules agree on a clean exact match.
-		{"clean exact match", "Mistborn", "Brandon Sanderson", "Mistborn", "Brandon Sanderson", true, true},
+		{"clean exact match", "Knightfall", "Bruce Wayne", "Knightfall", "Bruce Wayne", true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -235,12 +235,12 @@ var mainRefusedCorpus = struct {
 		"Knaves Over Queens", "Naves Over Queens", "Sojourn", "This Gilded Abyss",
 		"This Gilded Abyss, book one of the Gilded Abyss trilogy", "Ready Player One", "Ready Player 1",
 		"Children of Dune Messiah", "Chilren of Dune Messiah", "Dune", "Dune, book two of the Dune Chronicles",
-		"Harry Potter", "Harry Potter book 2", "The Expanse", "The Expanse, volume 3", "Mistborn",
+		"Harry Potter", "Harry Potter book 2", "The Expanse", "The Expanse, volume 3", "Knightfall",
 	},
 	authors: []string{
 		"Andrzej Sapkowski", "Andrzej Sapkowski Translated from the Polish", "George R. R. Martin",
 		"George R. R. Martin, assisted", "R. A. Salvatore", "R.A. Salvator", "Robert Salvatore",
-		"Brandon Sanderson", "Brandon Sanderson For Beth Sanderson, who's", "Frank Herbert", "",
+		"Bruce Wayne", "Bruce Wayne For Martha Wayne, who's", "Frank Herbert", "",
 	},
 }
 
@@ -415,8 +415,8 @@ func TestTranscriptionConfirms_ReviewerFalsePositivesRefuse(t *testing.T) {
 		candTitle, candAuthor          string
 		heardTitle, heardAuthor, intro string
 	}{
-		{"subtitle vs series title", "Mistborn: The Hero of Ages", "Brandon Sanderson", "Mistborn", "Brandon Sanderson", ""},
-		{"series title vs subtitle", "Mistborn", "Brandon Sanderson", "Mistborn: The Hero of Ages", "Brandon Sanderson", ""},
+		{"subtitle vs series title", "Knightfall: The Knightsend", "Bruce Wayne", "Knightfall", "Bruce Wayne", ""},
+		{"series title vs subtitle", "Knightfall", "Bruce Wayne", "Knightfall: The Knightsend", "Bruce Wayne", ""},
 		{"first book vs second", "Foundation", "Isaac Asimov", "Foundation and Empire", "Isaac Asimov", ""},
 		{"second book vs first", "Foundation and Empire", "Isaac Asimov", "Foundation", "Isaac Asimov", ""},
 		{"one letter apart", "The Witches", "Roald Dahl", "The Witcher", "Roald Dahl", ""},

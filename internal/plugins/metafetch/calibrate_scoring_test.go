@@ -43,21 +43,21 @@ func fieldsFromBookMetadata(bm metadata.BookMetadata) candFields {
 // f1) ever drift, this fails. config.AppConfig is zero-value in this test binary
 // so ScoreOneResult resolves the same default literals defaultSweepKnobs encodes.
 func TestScoreCore_PinnedToProductionScorer(t *testing.T) {
-	searchTitle := "The Way of Kings"
+	searchTitle := "The Long Halloween"
 	words := metafetch.SignificantWords(searchTitle)
 	k := defaultSweepKnobs()
 
 	cases := []metadata.BookMetadata{
 		// Exact title, rich metadata (bonus should cap at 0.15).
-		{Title: "The Way of Kings", Author: "Brandon Sanderson", Narrator: "Michael Kramer", Description: "epic", CoverURL: "http://c", ISBN: "9780765326355"},
+		{Title: "The Long Halloween", Author: "Bruce Wayne", Narrator: "Alfred Pennyworth", Description: "epic", CoverURL: "http://c", ISBN: "9780765326355"},
 		// Compilation title exercises the compilation-penalty path.
-		{Title: "The Stormlight Archive Box Set", Description: "collection"},
+		{Title: "The Dark Knight Archive Box Set", Description: "collection"},
 		// Partial overlap.
-		{Title: "Way of Kings Prime"},
+		{Title: "Long Halloween Prime"},
 		// Zero overlap → base 0 → score 0 (early return).
 		{Title: "Completely Unrelated Memoir"},
 		// Numeric-compilation regex path ("3 books").
-		{Title: "Mistborn 3 books omnibus"},
+		{Title: "Knightfall 3 books omnibus"},
 	}
 
 	for i, bm := range cases {
@@ -76,14 +76,14 @@ func TestScoreCore_PinnedToProductionScorer(t *testing.T) {
 func sha256Hex(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
 
 func TestEvaluateBook_AppliedRanksFirst(t *testing.T) {
-	applied := metafetch.MetadataCandidate{Title: "The Way of Kings", Author: "Sanderson", Source: "audible", ASIN: "B00INE24E4", DurationSec: 1000, CoverURL: "http://c", Description: "d"}
+	applied := metafetch.MetadataCandidate{Title: "The Long Halloween", Author: "Wayne", Source: "audible", ASIN: "B00INE24E4", DurationSec: 1000, CoverURL: "http://c", Description: "d"}
 	distractor := metafetch.MetadataCandidate{Title: "Some Other Book", Source: "google", ISBN: "9999999999"}
 
 	hash := candidateSourceHash(applied)
 	if hash == "" {
 		t.Fatal("applied candidate must have a canonical id / source hash")
 	}
-	book := &database.Book{ID: "b1", Title: "The Way of Kings", Duration: new(1000), MetadataSourceHash: &hash}
+	book := &database.Book{ID: "b1", Title: "The Long Halloween", Duration: new(1000), MetadataSourceHash: &hash}
 
 	grid := buildSweepGrid(defaultSweepKnobs(), 3)
 	ev, skip := evaluateBook(book, bookRuntime(book), []metafetch.MetadataCandidate{applied, distractor}, "auto", defaultSweepKnobs(), grid)
@@ -329,10 +329,10 @@ func bookRuntime(b *database.Book) database.BookRuntime {
 // ranked below one that fits, as production scoring does; without a bound
 // (a file size missing) the two tie, so the applied one keeps rank 1.
 func TestEvaluateBook_PartialRuntimeUpperBoundDemotesTooLongCandidate(t *testing.T) {
-	long := metafetch.MetadataCandidate{Title: "The Way of Kings", Author: "Sanderson", Source: "audible", ASIN: "B00LONG001", DurationSec: 14*3600 + 42*60, CoverURL: "http://c"}
-	fits := metafetch.MetadataCandidate{Title: "The Way of Kings", Author: "Sanderson", Source: "audible", ASIN: "B00FITS001", DurationSec: 1000, CoverURL: "http://c"}
+	long := metafetch.MetadataCandidate{Title: "The Long Halloween", Author: "Wayne", Source: "audible", ASIN: "B00LONG001", DurationSec: 14*3600 + 42*60, CoverURL: "http://c"}
+	fits := metafetch.MetadataCandidate{Title: "The Long Halloween", Author: "Wayne", Source: "audible", ASIN: "B00FITS001", DurationSec: 1000, CoverURL: "http://c"}
 	hash := candidateSourceHash(long)
-	book := &database.Book{ID: "b1", Title: "The Way of Kings", MetadataSourceHash: &hash}
+	book := &database.Book{ID: "b1", Title: "The Long Halloween", MetadataSourceHash: &hash}
 	files := []database.BookFile{
 		{ID: "f1", BookID: "b1", FileSize: 4_000_000, Duration: 480},
 		{ID: "f2", BookID: "b1", FileSize: 4_000_000},

@@ -61,12 +61,12 @@ func TestScoreBaseCandidates_DegenerateAllZeroFallsBackToF1(t *testing.T) {
 		scores: []float64{0, 0},
 	})
 
-	book := &database.Book{ID: "b1", Title: "Mistborn"}
+	book := &database.Book{ID: "b1", Title: "Knightfall"}
 	results := []metadata.BookMetadata{
-		{Title: "Mistborn"},
+		{Title: "Knightfall"},
 		{Title: "Completely Different Book"},
 	}
-	searchWords := SignificantWords("Mistborn")
+	searchWords := SignificantWords("Knightfall")
 
 	scores, tier := svc.ScoreBaseCandidates(context.Background(), book, results, searchWords)
 
@@ -89,12 +89,12 @@ func TestScoreBaseCandidates_NonDegenerateStaysOnEmbeddingTier(t *testing.T) {
 		scores: []float64{0.9, 0.1},
 	})
 
-	book := &database.Book{ID: "b1", Title: "Mistborn"}
+	book := &database.Book{ID: "b1", Title: "Knightfall"}
 	results := []metadata.BookMetadata{
-		{Title: "Mistborn"},
+		{Title: "Knightfall"},
 		{Title: "Completely Different Book"},
 	}
-	searchWords := SignificantWords("Mistborn")
+	searchWords := SignificantWords("Knightfall")
 
 	scores, tier := svc.ScoreBaseCandidates(context.Background(), book, results, searchWords)
 
@@ -112,7 +112,7 @@ func TestSearchMetadataForBookWithOptions_DegenerateEmbeddingFallsBackToF1Result
 
 	mock := &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
-			return &database.Book{ID: id, Title: "Mistborn"}, nil
+			return &database.Book{ID: id, Title: "Knightfall"}, nil
 		},
 	}
 	svc := NewService(mock)
@@ -120,8 +120,8 @@ func TestSearchMetadataForBookWithOptions_DegenerateEmbeddingFallsBackToF1Result
 		&mockMetadataSource{
 			name: "test-source",
 			results: []metadata.BookMetadata{
-				{Title: "Mistborn", Author: "Brandon Sanderson"},
-				{Title: "Mistborn: The Final Empire", Author: "Brandon Sanderson"},
+				{Title: "Knightfall", Author: "Bruce Wayne"},
+				{Title: "Knightfall: The Broken Bat", Author: "Bruce Wayne"},
 			},
 		},
 	})
@@ -134,7 +134,7 @@ func TestSearchMetadataForBookWithOptions_DegenerateEmbeddingFallsBackToF1Result
 		scores: []float64{0, 0},
 	})
 
-	resp, err := svc.SearchMetadataForBookWithOptions("b1", "Mistborn", "", "", "", SearchOptions{})
+	resp, err := svc.SearchMetadataForBookWithOptions("b1", "Knightfall", "", "", "", SearchOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.NotEmpty(t, resp.Results, "F1 fallback should surface non-empty results even though the embedding tier degenerated to all-zero scores")
@@ -377,22 +377,22 @@ func TestScoringConfigDefaultsMatchLegacyLiterals(t *testing.T) {
 
 	t.Run("transcriptionBoost", func(t *testing.T) {
 		const base = 1.0
-		cand := metadata.BookMetadata{Title: "The Way of Kings", Author: "Brandon Sanderson", Narrator: "Michael Kramer", DurationSec: 36000}
+		cand := metadata.BookMetadata{Title: "The Long Halloween", Author: "Bruce Wayne", Narrator: "Alfred Pennyworth", DurationSec: 36000}
 		rt := localRuntime{Sec: 36000}
 
-		gotExact, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "The Way of Kings"}, rt)
+		gotExact, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "The Long Halloween"}, rt)
 		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*2.0, gotExact, 1e-9, "legacy exact-title boost was score *= 2.0")
 
-		gotSubstr, boosted := transcriptionBoost(base, metadata.BookMetadata{Title: "The Way of Kings (Stormlight 1)", DurationSec: 36000}, transcriptionHints{title: "The Way of Kings"}, rt)
+		gotSubstr, boosted := transcriptionBoost(base, metadata.BookMetadata{Title: "The Long Halloween (Dark Knight 1)", DurationSec: 36000}, transcriptionHints{title: "The Long Halloween"}, rt)
 		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*1.4, gotSubstr, 1e-9, "legacy substring-title boost was score *= 1.4")
 
-		gotAuthor, boosted := transcriptionBoost(base, cand, transcriptionHints{author: "Brandon Sanderson"}, rt)
+		gotAuthor, boosted := transcriptionBoost(base, cand, transcriptionHints{author: "Bruce Wayne"}, rt)
 		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*1.6, gotAuthor, 1e-9, "legacy author boost was score *= 1.6")
 
-		gotNarrator, boosted := transcriptionBoost(base, cand, transcriptionHints{narrator: "Michael Kramer"}, rt)
+		gotNarrator, boosted := transcriptionBoost(base, cand, transcriptionHints{narrator: "Alfred Pennyworth"}, rt)
 		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*1.4, gotNarrator, 1e-9, "legacy narrator boost was score *= 1.4")
 	})
@@ -444,7 +444,7 @@ func TestScoringConfigZeroMultiplicativeKnobFallsBackToLegacy(t *testing.T) {
 		TranscriptionTitleExactBoost: 0, // explicit zero, indistinguishable from unset for a plain float64
 	})
 
-	got, boosted := transcriptionBoost(1.0, metadata.BookMetadata{Title: "The Way of Kings", DurationSec: 36000}, transcriptionHints{title: "The Way of Kings"}, localRuntime{Sec: 36000})
+	got, boosted := transcriptionBoost(1.0, metadata.BookMetadata{Title: "The Long Halloween", DurationSec: 36000}, transcriptionHints{title: "The Long Halloween"}, localRuntime{Sec: 36000})
 	require.True(t, boosted.Boosted)
 	assert.InDelta(t, 2.0, got, 1e-9, "a zero/missing multiplicative knob must fall back to the legacy literal, never multiply by zero")
 }

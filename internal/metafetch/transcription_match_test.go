@@ -21,40 +21,40 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 	t.Run("transcribed_title_match_wins_over_higher_base", func(t *testing.T) {
 		results := []metadata.BookMetadata{
 			{Title: "The Wrong Book", Author: "A", Narrator: "N", DurationSec: 36000},
-			{Title: "The Way of Kings", Author: "A", Narrator: "N", DurationSec: 36000},
+			{Title: "The Long Halloween", Author: "A", Narrator: "N", DurationSec: 36000},
 		}
 		// The wrong book has the higher base score; the transcription pulls the
 		// right one ahead via the ×2.0 exact-title multiplier.
 		scores := []float64{0.9, 0.6}
-		words := SignificantWords("The Way of Kings")
-		th := transcriptionHints{title: "The Way of Kings"}
+		words := SignificantWords("The Long Halloween")
+		th := transcriptionHints{title: "The Long Halloween"}
 
 		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, th)
 		require.NotEmpty(t, matched)
-		assert.Equal(t, "The Way of Kings", matched[0].Title)
+		assert.Equal(t, "The Long Halloween", matched[0].Title)
 	})
 
 	t.Run("transcribed_author_match_boosts", func(t *testing.T) {
 		results := []metadata.BookMetadata{
-			{Title: "Mistborn", Author: "Wrong Author", Narrator: "N", DurationSec: 36000},
-			{Title: "Mistborn", Author: "Brandon Sanderson", Narrator: "N", DurationSec: 36000},
+			{Title: "Knightfall", Author: "Wrong Author", Narrator: "N", DurationSec: 36000},
+			{Title: "Knightfall", Author: "Bruce Wayne", Narrator: "N", DurationSec: 36000},
 		}
 		scores := []float64{0.8, 0.7}
-		words := SignificantWords("Mistborn")
-		th := transcriptionHints{author: "Brandon Sanderson"}
+		words := SignificantWords("Knightfall")
+		th := transcriptionHints{author: "Bruce Wayne"}
 
 		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, th)
 		require.NotEmpty(t, matched)
-		assert.Equal(t, "Brandon Sanderson", matched[0].Author)
+		assert.Equal(t, "Bruce Wayne", matched[0].Author)
 	})
 
 	t.Run("no_hints_leaves_behavior_unchanged", func(t *testing.T) {
 		results := []metadata.BookMetadata{
-			{Title: "Mistborn", Author: "Brandon Sanderson"},
-			{Title: "Elantris", Author: "Brandon Sanderson"},
+			{Title: "Knightfall", Author: "Bruce Wayne"},
+			{Title: "Elantris", Author: "Bruce Wayne"},
 		}
 		scores := []float64{0.9, 0.5}
-		words := SignificantWords("Mistborn")
+		words := SignificantWords("Knightfall")
 
 		// Empty variadic (no hints) and an explicit-empty hint must both match
 		// the pre-feature result: highest base score wins.
@@ -62,7 +62,7 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		withEmpty := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, transcriptionHints{})
 		require.NotEmpty(t, withoutArg)
 		require.NotEmpty(t, withEmpty)
-		assert.Equal(t, "Mistborn", withoutArg[0].Title)
+		assert.Equal(t, "Knightfall", withoutArg[0].Title)
 		assert.Equal(t, withoutArg[0].Title, withEmpty[0].Title)
 	})
 }
@@ -100,15 +100,15 @@ func TestSearchMetadataForBook_TranscriptionTitleHintBoostsManualResults(t *test
 }
 
 func TestContainsCI(t *testing.T) {
-	assert.True(t, containsCI("Brandon Sanderson", "sanderson"))
-	assert.True(t, containsCI("sanderson", "Brandon Sanderson")) // both-ways
-	assert.False(t, containsCI("Brandon Sanderson", "Tolkien"))
+	assert.True(t, containsCI("Bruce Wayne", "wayne"))
+	assert.True(t, containsCI("wayne", "Bruce Wayne")) // both-ways
+	assert.False(t, containsCI("Bruce Wayne", "Tolkien"))
 	assert.False(t, containsCI("", "x"))
 	assert.False(t, containsCI("x", ""))
 }
 
 func TestHintsFromBook_DropsGarbage(t *testing.T) {
-	good := "The Way of Kings"
+	good := "The Long Halloween"
 	garbage := "Unknown" // matches IsGarbageValue blocklist
 	empty := "   "
 	th := hintsFromBook(&database.Book{
@@ -116,7 +116,7 @@ func TestHintsFromBook_DropsGarbage(t *testing.T) {
 		TranscribedAuthor:   &garbage,
 		TranscribedNarrator: &empty,
 	})
-	assert.Equal(t, "The Way of Kings", th.title)
+	assert.Equal(t, "The Long Halloween", th.title)
 	assert.Equal(t, "", th.author, "garbage transcribed author must be dropped")
 	assert.Equal(t, "", th.narrator, "blank transcribed narrator must be dropped")
 }
