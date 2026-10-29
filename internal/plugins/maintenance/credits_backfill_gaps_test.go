@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_gaps_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 812b813b-fe22-4b23-bf28-6de81d6c94be
 // last-edited: 2026-10-29
 
@@ -446,6 +446,50 @@ func TestCreditsBackfill_CreatedNarratorsRowOfACrashedOperation(t *testing.T) {
 	})
 }
 
+// The 30 s window, at its edges: a record made 29 s after the row that names it
+// is inside (a leftover), one made 31 s after is outside (preexisting). The same
+// edges hold for the operation's end (CompletedAt + 30 s), and for the row of a
+// credits_backfill write that names the record by id.
+func TestCreditsBackfill_LeftoverWindowBoundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		seed func(t *testing.T, f *cbFixture, rec *database.Narrator, gap time.Duration)
+	}{
+		{"intent row", func(t *testing.T, f *cbFixture, rec *database.Narrator, gap time.Duration) {
+			cbInsertOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", nil)
+			cbSeedRow(t, f, rec.CreatedAt.Add(-gap), database.OperationChange{
+				OperationID: cbCrashedOp, ChangeType: undo.ChangeTypeNarratorCreateIntent, FieldName: "narrator", NewValue: "Renee Montoya",
+			})
+		}},
+		{"created_narrators row", func(t *testing.T, f *cbFixture, rec *database.Narrator, gap time.Duration) {
+			cbInsertOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", nil)
+			cbSeedFirstRow(t, f, cbCrashedOp, rec.CreatedAt.Add(-time.Hour))
+			cbSeedCreatedRow(t, f, cbCrashedOp, rec.CreatedAt.Add(-gap), rec, true)
+		}},
+		{"operation end", func(t *testing.T, f *cbFixture, rec *database.Narrator, gap time.Duration) {
+			// The intent row is a second before the record; the operation ended
+			// gap before the record existed.
+			ended := rec.CreatedAt.Add(-gap)
+			cbInsertOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", &ended)
+			cbSeedRow(t, f, rec.CreatedAt.Add(-time.Second), database.OperationChange{
+				OperationID: cbCrashedOp, ChangeType: undo.ChangeTypeNarratorCreateIntent, FieldName: "narrator", NewValue: "Renee Montoya",
+			})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" 29s is inside", func(t *testing.T) {
+			f, rec := cbLeftoverFixture(t, false)
+			tc.seed(t, f, rec, 29*time.Second)
+			cbWantLeftoverDeleted(t, f, cbLeftoverRun(t, f))
+		})
+		t.Run(tc.name+" 31s is outside", func(t *testing.T) {
+			f, rec := cbLeftoverFixture(t, false)
+			tc.seed(t, f, rec, 31*time.Second)
+			cbWantPreexisting(t, f, rec, cbLeftoverRun(t, f))
+		})
+	}
+}
+
 // A crashed operation's record that a book links now is credited, not a
 // leftover.
 func TestCreditsBackfill_LinkedRecordOfACrashedOperationIsNotALeftover(t *testing.T) {
@@ -517,12 +561,17 @@ func (s cbFaultStore) GetNarratorByName(name string) (*database.Narrator, error)
 
 // cbRefusedApply runs an apply on store and checks that it refused to start: an
 // error containing want, and no journal row of the operation (nothing written).
-func cbRefusedApply(t *testing.T, f *cbFixture, store creditsBackfillStore, want string) {
+func cbRefusedApply(t *testing.T, f *cbFixture, store creditsBackfillStore, wants ...string) {
 	t.Helper()
 	env := creditsBackfillEnv{store: store, mod: f.s, opID: cbLeftoverOp, workers: 2}
 	_, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbLeftoverOp})
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("err = %v, want the apply refused with %q", err, want)
+	if err == nil {
+		t.Fatalf("err = nil, want the apply refused with %q", wants)
+	}
+	for _, want := range wants {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want the apply refused with %q", err, want)
+		}
 	}
 	rows, rerr := f.s.GetOperationChanges(cbLeftoverOp)
 	if rerr != nil {
@@ -561,7 +610,8 @@ func TestCreditsBackfill_ApplyFailsClosedOnARowItCannotRead(t *testing.T) {
 			OperationID: cbCrashedOp, BookID: "z-solo", ChangeType: undo.ChangeTypeCreditsBackfill, FieldName: "book_credits",
 			OldValue: "{not json", NewValue: "{not json",
 		})
-		cbRefusedApply(t, f, f.s, cbCrashedOp)
+		// The error names the way out: discard the operation.
+		cbRefusedApply(t, f, f.s, cbCrashedOp, "does not decode", "discard operation "+cbCrashedOp)
 	})
 	t.Run("row whose id is not a ULID", func(t *testing.T) {
 		f, rec := cbLeftoverFixture(t, true)
@@ -571,7 +621,7 @@ func TestCreditsBackfill_ApplyFailsClosedOnARowItCannotRead(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		cbRefusedApply(t, f, f.s, "not a ULID")
+		cbRefusedApply(t, f, f.s, "not a ULID", "discard operation "+cbCrashedOp)
 	})
 }
 
@@ -621,6 +671,41 @@ func TestCreditsBackfill_JudgedOperationIsNotReadAgainUntilItChanges(t *testing.
 	run("01SWEEPTHREE")
 	if got := cbJournalReads(reads, cbCrashedOp); got != 2 {
 		t.Errorf("third apply read the changed operation's journal %d times in all, want 2", got)
+	}
+}
+
+// Discarding a judged operation (registry.Discard, DeleteOperationV2) removes
+// its judged marker with its row, and the operation is no longer listed, so no
+// orphaned marker is left for a reader to trip over. (The journal rows stay.)
+func TestCreditsBackfill_DiscardedOperationLeavesNoJudgedMarker(t *testing.T) {
+	f, rec := cbLeftoverFixture(t, false)
+	cbSeedOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", rec)
+	reads := &sync.Map{}
+	run := func(opID string) {
+		t.Helper()
+		env := creditsBackfillEnv{store: cbFaultStore{creditsBackfillStore: f.s, reads: reads}, mod: f.s, opID: opID, workers: 2}
+		if _, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: opID}); err != nil {
+			t.Fatalf("apply %s: %v", opID, err)
+		}
+	}
+	run("01DISCARDONE")
+	markers, ok := database.AsCapability[database.OpRowStore](f.s)
+	if !ok {
+		t.Fatal("store keeps no op rows")
+	}
+	// GetOpRows answers one slot per id asked for; a missing row is a nil slot.
+	if got, err := markers.GetOpRows(cbCrashedOp, []string{cbSwept}); err != nil || len(got) != 1 || got[0] == nil {
+		t.Fatalf("judged marker = %q, err %v, want the marker written by the first apply", got, err)
+	}
+	if _, deleted, err := f.s.DeleteOperationV2(cbCrashedOp, []string{"failed"}); err != nil || !deleted {
+		t.Fatalf("discard: deleted=%v err=%v", deleted, err)
+	}
+	if got, err := markers.GetOpRows(cbCrashedOp, []string{cbSwept}); err != nil || len(got) != 1 || got[0] != nil {
+		t.Errorf("after the discard the judged marker is %q (err %v), want it gone", got, err)
+	}
+	run("01DISCARDTWO")
+	if got := cbJournalReads(reads, cbCrashedOp); got != 1 {
+		t.Errorf("the discarded operation's journal was read %d times in all, want 1 (only before the discard)", got)
 	}
 }
 
