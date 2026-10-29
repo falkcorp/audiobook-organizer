@@ -28,7 +28,7 @@ type rescanRaceStore struct {
 }
 
 // Unwrap opts the wrapper into database.AsCapability. Without it the scanner's
-// retired-version reads (database.RetiredVersionsFromBook and friends) cannot
+// retired-version reads (database.RetiredRowsHeldFor and friends) cannot
 // reach the Pebble store behind the wrapper and fail closed with
 // ErrRetiredReaderUnavailable, which is what a decorator that has not opted in
 // is meant to get.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_revert_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9b2e5d74-1c38-4f06-a7d9-6e0b3f8a2c51
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -246,6 +246,15 @@ func TestRetiredApply_RevertOfAWholeApplyRestoresTheShell(t *testing.T) {
 	files, err := rf.st.GetBookFiles(shell)
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
+	// The revert un-retires the rows first and deletes the emptied version last,
+	// which needs the version to still be retired at that point (review N5 of
+	// #4173: clearing the status on the last un-retire would leave it behind).
+	vs, err := rf.st.GetRetiredVersionsFromBook(shell)
+	require.NoError(t, err)
+	require.Empty(t, vs, "the revert deleted the version it emptied")
+	n, err := database.RetiredRowsHeldFor(rf.st, shell)
+	require.NoError(t, err)
+	require.Zero(t, n, "and the shell holds no retired row")
 }
 
 // retiredHandBack is what a revert of op leaves on the shell: its merged-into

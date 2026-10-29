@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.234.8
+// version: 1.234.9
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
@@ -120,6 +120,10 @@ type PebbleStore struct {
 	// panics on a second engine close. closeErr is the first call's result.
 	closeOnce sync.Once
 	closeErr  error
+	// retiredHash is the scan-lifetime cache of RetiredBookFilesWithHash
+	// (retired_hash_scope.go); its generation is bumped by every write that
+	// can change which retired rows hold which hash.
+	retiredHash retiredHashCache
 	// metadataCacheLocks serialise writes of one book's metadata_cache row
 	// (striped by book id, metadataCacheLock): PutMetadataCache and
 	// DeleteMetadataCache, and the book write that re-stamps a kept row's
