@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -357,15 +357,26 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 }
 
 // isRetiredShell reports whether bookID is a book some retired version was
-// retired out of: a trashed or merged shell whose files now live as retired
-// rows under another book. A store that cannot say fails the check, and the
-// caller fails closed.
+// retired out of that still holds retired rows: a trashed or merged shell whose
+// files now live as retired rows under another book. A store that cannot say
+// fails the check, and the caller fails closed.
+//
+// It counts rows (database.RetiredRowsHeldFor), not versions. A retired
+// version that UnretireBookFiles emptied stays Status=retired with zero rows,
+// on purpose: undo.CheckVersionCreateCurrent needs the status to delete it when
+// the retire is reverted, and the retire apply adopts an empty retired version
+// of its own op (retiredRun.emptyRetiredVersion). Such a version is a record of
+// a retire that no longer stands, not a claim on any file, so it must not make
+// the book a shell. The cost is one idx:bv:from: seek for almost every book (it
+// has no versions), and one read of the holder's retired rows for a book that
+// has some; the same read the restore and purge guards (RefuseRetiredShell)
+// make, so the scanner and those guards agree on what a shell is.
 func isRetiredShell(store any, bookID string) (bool, error) {
-	versions, err := database.RetiredVersionsFromBook(store, bookID)
+	held, err := database.RetiredRowsHeldFor(store, bookID)
 	if err != nil {
 		return false, err
 	}
-	return len(versions) > 0, nil
+	return held > 0, nil
 }
 
 // retiredClaim is one retired version's claim on a scanned file: the live

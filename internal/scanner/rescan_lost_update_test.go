@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_lost_update_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4d8a1c72-6e05-4b93-8f21-0a7c3e9b5d14
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -28,7 +28,7 @@ type rescanRaceStore struct {
 }
 
 // Unwrap opts the wrapper into database.AsCapability. Without it the scanner's
-// retired-version reads (database.RetiredVersionsFromBook and friends) cannot
+// retired-version reads (database.RetiredRowsHeldFor and friends) cannot
 // reach the Pebble store behind the wrapper and fail closed with
 // ErrRetiredReaderUnavailable, which is what a decorator that has not opted in
 // is meant to get.

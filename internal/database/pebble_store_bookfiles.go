@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.2
+// version: 1.52.3
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package database
 
@@ -948,6 +948,11 @@ func (s *PebbleStore) updateBookFileOver(old *BookFile, raw []byte, file *BookFi
 	durErr := s.commitBookFileBatch(batch, []string{file.BookID}, nil, []bookFileRewrite{bookFileUnchanged(key, raw)})
 	if !bookFileApplied(durErr) {
 		return false, durErr
+	}
+	if old.Retired || file.Retired {
+		// A rewrite of a retired row can change the hashes it answers to; see
+		// retiredHashCache.
+		s.retiredHash.noteRetiredRowsChanged()
 	}
 	s.InvalidateLibraryStats()
 	s.MarkQuickQueryDirty("no_fingerprints", "update_book_file")
@@ -2405,6 +2410,9 @@ func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bo
 	var rewriteKeys []bookFileRewrite
 	newRowsByOwner := map[string][]*BookFile{}
 	rewriteFor := map[string]*BookFile{}
+	// touchedRetired is set when an explicit-ID match is a retired row, whose
+	// rewrite can change the hashes it answers to (retiredHashCache).
+	touchedRetired := false
 	refusals := map[*BookFile]string{}
 
 	// Rows already staged in THIS batch, indexed the same two ways the committed
@@ -2533,6 +2541,9 @@ func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bo
 		}
 
 		if existing != nil {
+			if existing.Retired {
+				touchedRetired = true
+			}
 			// A committed row this pass rewrites must be one whose stripe is held
 			// (batchUpsertBookFilesAttempt). A row matched from THIS batch is staged,
 			// not committed, and its stripe is already accounted for.
@@ -2679,6 +2690,9 @@ func (s *PebbleStore) batchUpsertBookFilesStaged(files []*BookFile, present []bo
 	release()
 	if !bookFileApplied(durErr) {
 		return &stagedBookFileRows{byOwner: newRowsByOwner, byRewriteKey: rewriteFor, refusals: refusals}, nil, durErr
+	}
+	if touchedRetired {
+		s.retiredHash.noteRetiredRowsChanged()
 	}
 	// Refresh memdb for every upserted file. UpdateBookFile does this per row;
 	// BatchUpsertBookFiles historically did not, so after a batch write the memdb
