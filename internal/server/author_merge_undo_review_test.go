@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_undo_review_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 4f448d89-469a-44ec-b6b4-5fd001758a18
-// last-edited: 2026-10-25
+// last-edited: 2026-10-29
 
 package server
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"log/slog"
 	"testing"
 
@@ -332,7 +333,7 @@ func TestRevertOperation_ASecondRunReopensTheResultsTheFirstDidNot(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, f.applied(id))
 
-	res, err := f.s.revertOperation("op-reopen-second")
+	res, err := f.s.revertOperation("op-reopen-second", audiobookspkg.RevertActor{})
 	require.Error(t, err, "already reverted")
 	require.Nil(t, res)
 	require.False(t, f.applied(id), "the second run reopens the result")
@@ -346,7 +347,7 @@ func TestRevertOperation_AnUndoneAuthorMergeDropsTheAuthorCaches(t *testing.T) {
 	f.s.authorsCache.Set("authors-list", nil)
 	f.s.dedupCache.Set("author-duplicates", gin.H{"stale": true})
 
-	_, err := f.s.revertOperation("op-undo-caches")
+	_, err := f.s.revertOperation("op-undo-caches", audiobookspkg.RevertActor{})
 	require.NoError(t, err)
 	require.Zero(t, f.s.authorsCache.Len(), "author list cache dropped")
 	require.Zero(t, f.s.dedupCache.Len(), "dedup cache dropped")
@@ -533,7 +534,7 @@ func TestRevertOperation_APartlyRestoredAuthorWithNoBooksDropsTheAuthorCaches(t 
 	s.authorsCache.Set("authors-list", nil)
 	s.dedupCache.Set("author-duplicates", gin.H{"stale": true})
 
-	res, err := s.revertOperation("op-bookless")
+	res, err := s.revertOperation("op-bookless", audiobookspkg.RevertActor{})
 	require.Error(t, err, "the alias is reported")
 	require.Equal(t, 1, res.AuthorsPartlyRestored)
 	back, gerr := st.GetAuthorByID(from.ID)

@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-13
+// last-edited: 2026-10-29
 
 package repairs
 
@@ -100,6 +100,10 @@ type Writer struct {
 	// waits; zero means defaultLockRenewEvery. RunApply sets it from
 	// WaitOptions.LockRenewEvery.
 	lockRenewEvery time.Duration
+
+	// provenance is the run's plan op and actor (writer_provenance.go); set by
+	// RunApply for the run.
+	provenance atomic.Pointer[ApplyProvenance]
 
 	writes    atomic.Int64
 	journaled atomic.Int64

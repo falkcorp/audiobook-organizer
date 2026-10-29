@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (stale-op clear, pause-state
@@ -66,7 +66,7 @@ func newTestHandler(t *testing.T) (*operations.Handler, *operationsmocks.MockOpe
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
 			return &undo.UndoConflictReport{TotalChanges: 1}, nil
 		},
-		func(id string) (*audiobooks.RevertResult, error) {
+		func(id string, _ audiobooks.RevertActor) (*audiobooks.RevertResult, error) {
 			return &audiobooks.RevertResult{OperationID: id, Total: 1, Restored: 1}, nil
 		},
 	)
@@ -320,7 +320,7 @@ func TestUndoPreflightHandler_UsesInjectedFunc(t *testing.T) {
 			got = changes
 			return &undo.UndoConflictReport{TotalChanges: len(changes)}, nil
 		},
-		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
+		func(id string, _ audiobooks.RevertActor) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)
@@ -339,7 +339,7 @@ func TestUndoPreflightHandler_Error(t *testing.T) {
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
 			return nil, errors.New("boom")
 		},
-		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
+		func(id string, _ audiobooks.RevertActor) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 	w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 		r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)
@@ -372,7 +372,9 @@ func TestRevertOperation_Error(t *testing.T) {
 	allowRevertReads(store)
 	h := operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
-		func(id string) (*audiobooks.RevertResult, error) { return nil, errors.New("revert failed") },
+		func(id string, _ audiobooks.RevertActor) (*audiobooks.RevertResult, error) {
+			return nil, errors.New("revert failed")
+		},
 	)
 	w := run(http.MethodPost, "/operations/:id/revert", "/operations/op-1/revert", nil, func(r *gin.Engine) {
 		r.POST("/operations/:id/revert", h.RevertOperation)
@@ -388,7 +390,7 @@ func newRevertHandler(t *testing.T, result *audiobooks.RevertResult, err error) 
 	allowRevertReads(store)
 	return operations.New(store, nil, nil, nil, nil, nil, nil,
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
-		func(id string) (*audiobooks.RevertResult, error) { return result, err },
+		func(id string, _ audiobooks.RevertActor) (*audiobooks.RevertResult, error) { return result, err },
 	)
 }
 
@@ -478,7 +480,7 @@ func newClearStaleHandler(t *testing.T, v2Count int, v2Err error) *operations.Ha
 	return operations.New(store, nil, nil, nil, nil, nil,
 		func() (int, error) { return v2Count, v2Err },
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
-		func(id string) (*audiobooks.RevertResult, error) { return nil, nil },
+		func(id string, _ audiobooks.RevertActor) (*audiobooks.RevertResult, error) { return nil, nil },
 	)
 }
 

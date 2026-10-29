@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -96,10 +97,12 @@ type Handler struct {
 	// controller closes over s.Ops().
 	preflightUndo func(changes []*database.OperationChange) (*undo.UndoConflictReport, error)
 
-	// revert wraps audiobooks.NewRevertService(s.Ops()).RevertOperation(id).
-	// Same opaque-store rationale as preflightUndo. The result carries the
-	// restored / failed / not-restorable counts the response reports.
-	revert func(id string) (*audiobooks.RevertResult, error)
+	// revert wraps audiobooks.NewRevertService(s.Ops()).WithActor(actor).
+	// RevertOperation(id). Same opaque-store rationale as preflightUndo. actor
+	// is the signed-in user the request is for (zero when there is none), which
+	// the revert's decision records name. The result carries the restored /
+	// failed / not-restorable counts the response reports.
+	revert func(id string, actor audiobooks.RevertActor) (*audiobooks.RevertResult, error)
 
 	// repairsAccess decides who may read a Repairs operation's result, change
 	// journal and undo report. Unset (nil) refuses every repairs op: see
@@ -154,7 +157,7 @@ func New(
 	collectStale func(timeout time.Duration) ([]database.Operation, error),
 	repairPhantomLive func() (int, error),
 	preflightUndo func(changes []*database.OperationChange) (*undo.UndoConflictReport, error),
-	revert func(id string) (*audiobooks.RevertResult, error),
+	revert func(id string, actor audiobooks.RevertActor) (*audiobooks.RevertResult, error),
 ) *Handler {
 	return &Handler{
 		store:             store,
@@ -683,7 +686,7 @@ func (h *Handler) RevertOperation(c *gin.Context) {
 	if !h.mayUndoChanges(c, r, changes) {
 		return
 	}
-	result, err := h.revert(id)
+	result, err := h.revert(id, requestRevertActor(c))
 	// The report's merge warnings name users and what they were listening to;
 	// only a caller who may manage users reads them (the operation has already
 	// run: this is what the response says about it).
@@ -714,4 +717,19 @@ func (h *Handler) RevertOperation(c *gin.Context) {
 		return
 	}
 	httputil.RespondWithOK(c, revertResponse{Message: result.Summary(), Partial: result.Partial(), RevertResult: result})
+}
+
+// requestRevertActor is the signed-in user of the request, from the verified
+// session or token the auth middleware attached (never a forwarded header), for
+// the decision records a revert writes. A request with no user, such as one
+// served with auth off, is the zero actor, whose records read as automatic.
+func requestRevertActor(c *gin.Context) audiobooks.RevertActor {
+	if c == nil || c.Request == nil {
+		return audiobooks.RevertActor{}
+	}
+	u, ok := auth.UserFromContext(c.Request.Context())
+	if !ok {
+		return audiobooks.RevertActor{}
+	}
+	return audiobooks.RevertActor{UserID: u.ID, Name: u.Username}
 }

@@ -1,13 +1,16 @@
 // file: internal/plugins/maintenance/retired_versions_decision_records_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e7d92b1-5a38-4c06-b2f9-8d1a63c0e745
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -172,4 +175,208 @@ func TestRetiredApply_TailFinishWritesTheAppliedRecordACutOffRetireMissed(t *tes
 	require.Equal(t, "op-cut", hist[0].Snapshot.Current["op_id"])
 	require.Equal(t, retiredVersionID("op-cut", shell), hist[0].Snapshot.Current["version_id"])
 	require.Equal(t, rf.ids["primary"], hist[0].Snapshot.Current["target_id"])
+}
+
+// storeApplyOp stores the row of a finished repairs.apply op: the plan it
+// applied (in its params) and the user it was enqueued for ("": none).
+func (rf *retiredFixture) storeApplyOp(id, planOpID, actorUserID string) {
+	rf.t.Helper()
+	params, err := json.Marshal(repairs.ApplyParams{FixerID: rf.f.ID(), PlanOpID: planOpID})
+	require.NoError(rf.t, err)
+	now := time.Now()
+	row := database.OperationV2Row{ID: id, DefID: repairs.ApplyOpID, Plugin: "maintenance", Status: "completed",
+		Params: string(params), QueuedAt: now, CompletedAt: &now}
+	if actorUserID != "" {
+		row.ActorUserID = &actorUserID
+	}
+	require.NoError(rf.t, rf.st.InsertOperationV2(row))
+}
+
+// An apply enqueued by a user records that user and the plan op it applied, so
+// the `applied` record reads as the user's decision.
+func TestRetiredApply_AppliedRecordNamesTheUserAndThePlanOp(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	shell := rf.ids["would-retire"]
+	require.Equal(t, 1, rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-by-user", "plan-batman", "user-alfred").Applied)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1)
+	require.Equal(t, decisions.DecisionApplied, hist[0].Decision)
+	require.Equal(t, decisions.SourceHuman, hist[0].Source)
+	require.Equal(t, "user-alfred", hist[0].ActorUserID)
+	require.Equal(t, "plan-batman", hist[0].PlanOpID)
+	require.Equal(t, shell, hist[0].PlanRowID)
+}
+
+// An apply no user enqueued (a scheduled or system one) still names its plan op
+// and is recorded as automatic: no actor is invented for it.
+func TestRetiredApply_SystemApplyIsRecordedAsAutomatic(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	shell := rf.ids["would-retire"]
+	require.Equal(t, 1, rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-by-system", "plan-joker", "").Applied)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1)
+	require.Equal(t, decisions.SourceAuto, hist[0].Source)
+	require.Empty(t, hist[0].ActorUserID)
+	require.Equal(t, "plan-joker", hist[0].PlanOpID)
+}
+
+// The Writer's provenance is the run's, and only the run's: it is set for the
+// rows RunApply applies and gone after, so a Writer reused outside a run
+// records nothing about the last one.
+func TestRetiredApply_ProvenanceIsScopedToTheRun(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	w := repairs.NewWriter(rf.st, rf.st, rf.f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, "op-scoped").WithFieldStates(rf.st)
+	require.Equal(t, repairs.ApplyProvenance{}, w.Provenance())
+	_, err := repairs.RunApply(context.Background(), rf.f, res, "plan-penguin", []string{rf.ids["would-retire"]}, false,
+		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: "op-scoped", StandDown: &countingStandDown{}, ActorUserID: "user-selina", ActorName: "selina"},
+		&fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, repairs.ApplyProvenance{}, w.Provenance(), "cleared once the run ended")
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1)
+	require.Equal(t, "selina", hist[0].ActorName)
+}
+
+// A fresh plan finishes the tail of a retire an earlier op (op-cut) cut off,
+// and writes the record that op missed. The record is the retire op's, so it
+// names the retire op's user and plan, read from its row, and not the user who
+// ran the op that finished it.
+func TestRetiredApply_TailFinishNamesTheRetireOpsUserNotTheFinishers(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	orig := rf.f.retireWriterFor
+	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(w)
+		return cutAfterRetireRows{inner}, err
+	}
+	shell := rf.ids["would-retire"]
+	rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-cut", "plan-cut", "user-alfred")
+	require.Empty(t, rf.retiredHistory("would-retire"), "the cut-off came before the record")
+	rf.storeApplyOp("op-cut", "plan-cut", "user-alfred")
+
+	rf.f.retireWriterFor = orig
+	fresh := rf.planAll()
+	require.Equal(t, retCatTailPending, rf.retiredPlanRow(fresh, "would-retire").Class)
+	out := rf.applyRowsAs(rf.f, fresh, []string{shell}, false, "op-fresh", "plan-fresh", "user-selina")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1)
+	require.Equal(t, "op-cut", hist[0].Snapshot.Current["op_id"])
+	require.Equal(t, decisions.SourceHuman, hist[0].Source)
+	require.Equal(t, "user-alfred", hist[0].ActorUserID)
+	require.Equal(t, "plan-cut", hist[0].PlanOpID)
+}
+
+// When the retire op's row is gone (a discarded op) its record is automatic
+// rather than blamed on the op that finished the tail, and the tail still runs.
+func TestRetiredApply_TailFinishWithNoRetireOpRowIsAutomatic(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	orig := rf.f.retireWriterFor
+	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(w)
+		return cutAfterRetireRows{inner}, err
+	}
+	shell := rf.ids["would-retire"]
+	rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-cut", "plan-cut", "user-alfred")
+	rf.f.retireWriterFor = orig
+	fresh := rf.planAll()
+	out := rf.applyRowsAs(rf.f, fresh, []string{shell}, false, "op-fresh", "plan-fresh", "user-selina")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1)
+	require.Equal(t, "op-cut", hist[0].Snapshot.Current["op_id"])
+	require.Equal(t, decisions.SourceAuto, hist[0].Source)
+	require.Empty(t, hist[0].ActorUserID)
+	require.Empty(t, hist[0].PlanOpID)
+}
+
+// A revert run for a user records that user on the `undone` record, with their
+// name; the `applied` record it undoes keeps the apply's user.
+func TestRetiredApply_RevertByAUserNamesThemOnTheUndoneRecord(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	shell := rf.ids["would-retire"]
+	require.Equal(t, 1, rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-rv", "plan-1", "user-alfred").Applied)
+
+	rev, err := audiobooks.NewRevertService(rf.st).
+		WithActor(audiobooks.RevertActor{UserID: "user-selina", Name: "selina"}).RevertOperation("op-rv")
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "%+v", rev)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 2)
+	undone, applied := hist[0], hist[1]
+	require.Equal(t, decisions.DecisionUndone, undone.Decision)
+	require.Equal(t, decisions.SourceHuman, undone.Source)
+	require.Equal(t, "user-selina", undone.ActorUserID)
+	require.Equal(t, "selina", undone.ActorName)
+	require.Equal(t, "user-alfred", applied.ActorUserID, "the applied record keeps who applied")
+}
+
+// A revert nobody asked for (a system path, no WithActor) is recorded as
+// automatic, as before.
+func TestRetiredApply_RevertWithNoUserIsRecordedAsAutomatic(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	shell := rf.ids["would-retire"]
+	require.Equal(t, 1, rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-rv-sys", "plan-1", "user-alfred").Applied)
+
+	_, err := audiobooks.NewRevertService(rf.st).RevertOperation("op-rv-sys")
+	require.NoError(t, err)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 2)
+	require.Equal(t, decisions.DecisionUndone, hist[0].Decision)
+	require.Equal(t, decisions.SourceAuto, hist[0].Source)
+	require.Empty(t, hist[0].ActorUserID)
+}
+
+// A cut-off retire finished by a re-run of the same op (a resume) writes the
+// record from the running op's own provenance, with no op-row read: the running
+// op is the retire op.
+func TestRetiredApply_TailFinishByTheSameOpUsesItsOwnProvenance(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.enableApply()
+	rf.seedApplyLibrary()
+	res := rf.planAll()
+	orig := rf.f.retireWriterFor
+	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(w)
+		return cutAfterRetireRows{inner}, err
+	}
+	shell := rf.ids["would-retire"]
+	rf.applyRowsAs(rf.f, res, []string{shell}, false, "op-cut", "plan-cut", "user-alfred")
+	require.Empty(t, rf.retiredHistory("would-retire"))
+
+	rf.f.retireWriterFor = orig
+	fresh := rf.planAll()
+	out := rf.applyRowsAs(rf.f, fresh, []string{shell}, false, "op-cut", "plan-cut", "user-alfred")
+	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+
+	hist := rf.retiredHistory("would-retire")
+	require.Len(t, hist, 1)
+	require.Equal(t, "user-alfred", hist[0].ActorUserID)
+	require.Equal(t, "plan-cut", hist[0].PlanOpID)
 }

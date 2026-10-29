@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -42,9 +42,16 @@ func (rf *retiredFixture) planAll() *repairs.PlanResult {
 // applyRows runs the engine's apply of ids over res under opID.
 func (rf *retiredFixture) applyRows(f repairs.Fixer, res *repairs.PlanResult, ids []string, dry bool, opID string) *repairs.ApplyResult {
 	rf.t.Helper()
+	return rf.applyRowsAs(f, res, ids, dry, opID, "plan-1", "")
+}
+
+// applyRowsAs is applyRows for the plan op planOpID and the user actorUserID the
+// apply op was enqueued for ("": enqueued by no user, a system apply).
+func (rf *retiredFixture) applyRowsAs(f repairs.Fixer, res *repairs.PlanResult, ids []string, dry bool, opID, planOpID, actorUserID string) *repairs.ApplyResult {
+	rf.t.Helper()
 	w := repairs.NewWriter(rf.st, rf.st, f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, opID).WithFieldStates(rf.st)
-	out, err := repairs.RunApply(context.Background(), f, res, "plan-1", ids, dry,
-		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: &countingStandDown{}}, &fakeReporter{})
+	out, err := repairs.RunApply(context.Background(), f, res, planOpID, ids, dry,
+		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: &countingStandDown{}, ActorUserID: actorUserID}, &fakeReporter{})
 	require.NoError(rf.t, err)
 	return out
 }

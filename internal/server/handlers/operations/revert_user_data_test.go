@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/revert_user_data_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b9f7d20-c4a1-4e58-9d62-8a1e5f0b7c36
-// last-edited: 2026-10-25
+// last-edited: 2026-10-29
 
 package operations_test
 
@@ -55,7 +55,7 @@ func TestRevertOperation_MergeWarningsThatNameAUserNeedUsersManage(t *testing.T)
 		allowRevertReads(store)
 		h := operations.New(store, nil, nil, nil, nil, nil, nil,
 			func([]*database.OperationChange) (*undo.UndoConflictReport, error) { return nil, nil },
-			func(string) (*audiobooks.RevertResult, error) { return result(), nil },
+			func(string, audiobooks.RevertActor) (*audiobooks.RevertResult, error) { return result(), nil },
 		).WithRepairsOpAccess(opaccess.NewRepairs(noFixers{}, opRowsByID{}, holds))
 		w := postRevert(h)
 		require.Equal(t, http.StatusOK, w.Code, "%s: %s", name, w.Body.String())

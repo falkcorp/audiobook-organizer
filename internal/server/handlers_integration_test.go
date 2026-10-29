@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.14.3
+// version: 1.14.4
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-25
+// last-edited: 2026-10-29
 
 package server
 
@@ -48,7 +48,7 @@ func newOperationsHandler(s *Server) *operations.Handler {
 		func(changes []*database.OperationChange) (*undo.UndoConflictReport, error) {
 			return undo.PreflightUndoConflictsFromChanges(s.storeForWiring(), changes)
 		},
-		func(id string) (*audiobookspkg.RevertResult, error) {
+		func(id string, _ audiobookspkg.RevertActor) (*audiobookspkg.RevertResult, error) {
 			return audiobookspkg.NewRevertService(s.storeForWiring()).RevertOperation(id)
 		},
 	)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -227,6 +227,12 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		Resumed: params.Resume,
 		Owner:   owner,
 	}
+	if actor, aerr := applyOpActor(opReader, opID); aerr != nil {
+		// The decision records of this run read as automatic; the rows apply.
+		reporter.Logger().Warn("repairs.apply: actor not read, decision records will be automatic", "err", aerr)
+	} else {
+		deps.ActorUserID = actor
+	}
 	if !dryRun {
 		// Every book_file step is journaled under this op's id, so POST
 		// /operations/<id>/revert undoes the apply.
@@ -276,6 +282,25 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	_ = reporter.UpdateProgress(len(res.Rows), len(res.Rows), fmt.Sprintf("%s%s rows=%d %v not_in_plan=%d history_rows=%d history_failed=%d",
 		prefix, f.ID(), len(res.Rows), res.ByOutcome, len(res.NotInPlan), res.HistoryRows, res.HistoryFailed))
 	return nil
+}
+
+// applyOpActor is the user the apply op opID was enqueued for: the actor
+// recorded on its row (servermiddleware.ActorOptions), "" when no user enqueued
+// it. The fixers' decision records name it. A retry or resume of the op keeps
+// the row's actor, so it is the user who enqueued the op, not necessarily the
+// one who last clicked Retry.
+func applyOpActor(reader repairs.OpReader, opID string) (string, error) {
+	if opID == "" {
+		return "", nil
+	}
+	row, err := reader.GetOperationV2(opID)
+	if err != nil {
+		return "", fmt.Errorf("read apply op %s: %w", opID, err)
+	}
+	if row == nil || row.ActorUserID == nil {
+		return "", nil
+	}
+	return *row.ActorUserID, nil
 }
 
 // ownerRedeemer is the running apply as repairs.ResolveOwnerApproval checks

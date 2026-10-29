@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.24.5
+// version: 1.25.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-27
+// last-edited: 2026-10-29
 
 package repairs
 
@@ -469,6 +469,11 @@ type ApplyDeps struct {
 	// Owner is the run's owner approval (ResolveOwnerApproval): the owner
 	// rows it may apply, or why it may not. nil when none were requested.
 	Owner *OwnerApproval
+	// ActorUserID and ActorName are the user the apply op was enqueued for
+	// (the op row's ActorUserID), "" when no user enqueued it. RunApply hands
+	// them, with the plan op id, to the Writer (Writer.Provenance) so a fixer's
+	// decision records say who ran the apply. They grant nothing.
+	ActorUserID, ActorName string
 }
 
 // checkpointEvery / checkpointInterval throttle ApplyDeps.Checkpoint: a row
@@ -648,6 +653,8 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	if deps.Writer != nil {
 		deps.Writer.setFence(opswriter.FenceFromContext(ctx).Check)
 		defer deps.Writer.setFence(nil)
+		deps.Writer.setProvenance(ApplyProvenance{PlanOpID: planOpID, ActorUserID: deps.ActorUserID, ActorName: deps.ActorName})
+		defer deps.Writer.setProvenance(ApplyProvenance{})
 	}
 	var lost atomic.Bool
 	if held && deps.Writer != nil {

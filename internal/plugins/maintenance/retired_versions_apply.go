@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -807,7 +807,7 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		// tail is still pending: a retire with nothing left to finish
 		// (already_retired) never comes here, and its missing record stays
 		// missing (todo.d/2026-10-28-retired-versions-decision-record-gaps.md).
-		f.recordAppliedForVersions(run, ld.shell.ID, ld.holder, ld.versionIDs)
+		f.recordAppliedForVersions(w, run, ld.shell.ID, ld.holder, ld.versionIDs)
 		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0, ld.planned)
 	}
 	if locked.RetryLater {
@@ -920,7 +920,7 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	steps++
 	// The retire has committed: write its decision record. It is a label, so
 	// the tail below runs whether or not it lands.
-	f.recordApplied(w.OpID(), shell, holder, v.ID)
+	f.recordApplied(w.Provenance(), w.OpID(), shell, holder, v.ID)
 	return f.finishRetire(ctx, rw, run, shell, holder, steps, planned)
 }
 
@@ -937,11 +937,16 @@ var retiredApplyLog = logger.New("maintenance")
 // `applied` is a label that vetoes nothing, so a failure to write it never
 // fails the row or stops its tail: the rows are retired and journaled, which is
 // what a revert reads. The failure is logged with the ids so the record can be
-// found missing. The record carries no plan op id and no actor: the fixer is
-// handed neither (the engine keeps them), so its source is auto.
-func (f *retiredVersionsFixer) recordApplied(opID, shell, holder, versionID string) {
+// found missing.
+//
+// prov is the plan op and actor of the run that made the retire (the Writer's
+// Provenance for this run's own retire, retireOpProvenance for the retire of an
+// earlier op): the record says which plan it came from and who ran it. A retire
+// with no actor, one a system enqueued, is recorded as automatic.
+func (f *retiredVersionsFixer) recordApplied(prov repairs.ApplyProvenance, opID, shell, holder, versionID string) {
 	_, err := recordRetiredVersionApplied(f.p.deps.OpsStore(), decisions.RetiredVersionsEvent{
 		ShellID: shell, TargetID: holder, VersionID: versionID, OpID: opID, PlanRowID: shell,
+		PlanOpID: prov.PlanOpID, ActorUserID: prov.ActorUserID, ActorName: prov.ActorName,
 		ReasonText: "the shell's files were retired under its holder",
 	})
 	if err != nil {
@@ -953,7 +958,10 @@ func (f *retiredVersionsFixer) recordApplied(opID, shell, holder, versionID stri
 
 // recordAppliedForVersions writes the `applied` record of each of the shell's
 // retired versions in versionIDs that holds rows, from the version's own id and
-// the op that retired it (recordApplied). The finish-the-tail path calls it: a
+// the op that retired it (recordApplied), with that op's own plan and actor:
+// w's when this run is the retiring op, else read from the retiring op's row
+// (retireOpProvenance), as the running op is not who ran that retire. The
+// finish-the-tail path calls it: a
 // retire that was cut off after its commit point never reached recordApplied in
 // the run that made it. A version with no retire op id predates the records and
 // cannot be told from any other, so it gets none. As the record is a label, a
@@ -962,7 +970,7 @@ func (f *retiredVersionsFixer) recordApplied(opID, shell, holder, versionID stri
 // The record names the holder as it is now, which can differ from the holder of
 // the original op if the version was rehomed since. Dedup is by (version, op)
 // and unaffected; only the recorded provenance of the target differs.
-func (f *retiredVersionsFixer) recordAppliedForVersions(run *retiredRun, shell, holder string, versionIDs []string) {
+func (f *retiredVersionsFixer) recordAppliedForVersions(w *repairs.Writer, run *retiredRun, shell, holder string, versionIDs []string) {
 	if len(versionIDs) == 0 {
 		return
 	}
@@ -974,9 +982,43 @@ func (f *retiredVersionsFixer) recordAppliedForVersions(run *retiredRun, shell, 
 	}
 	for i := range vs {
 		if v := &vs[i]; v.RetireOpID != "" && slices.Contains(versionIDs, v.ID) {
-			f.recordApplied(v.RetireOpID, shell, holder, v.ID)
+			prov := w.Provenance()
+			if v.RetireOpID != w.OpID() {
+				prov = f.retireOpProvenance(v.RetireOpID)
+			}
+			f.recordApplied(prov, v.RetireOpID, shell, holder, v.ID)
 		}
 	}
+}
+
+// retireOpProvenance is the plan op and actor of the repairs.apply op opID, read
+// from its row: the plan op id from its params, the actor from the row. It is
+// the zero provenance (an automatic record) when the row cannot be read, as a
+// discarded op's cannot, or names none. A label's provenance never fails the
+// tail, so a read failure is logged and the record is written without it.
+func (f *retiredVersionsFixer) retireOpProvenance(opID string) repairs.ApplyProvenance {
+	reader, ok := f.p.deps.OperationQueueStore().(repairs.OpReader)
+	if !ok {
+		return repairs.ApplyProvenance{}
+	}
+	row, err := reader.GetOperationV2(opID)
+	if err != nil {
+		retiredApplyLog.Error("retired-versions: provenance of retire op %s not read, its applied record will be automatic: %v",
+			logger.SanitizeLogValue(opID), err)
+		return repairs.ApplyProvenance{}
+	}
+	if row == nil {
+		return repairs.ApplyProvenance{}
+	}
+	var prov repairs.ApplyProvenance
+	var params repairs.ApplyParams
+	if json.Unmarshal([]byte(row.Params), &params) == nil {
+		prov.PlanOpID = params.PlanOpID
+	}
+	if row.ActorUserID != nil {
+		prov.ActorUserID = *row.ActorUserID
+	}
+	return prov
 }
 
 // finishRetire is steps 4 to 6: the shell's external ids, its merged-into link
