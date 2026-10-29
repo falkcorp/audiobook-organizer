@@ -51,9 +51,29 @@ func TestTranscriptionBoost_RuntimeGate(t *testing.T) {
 		{"candidate without a runtime is unknown", tenHours, 0, false, TranscriptionRuntimeUnknown, "the candidate's runtime is unknown"},
 		{"neither side known", localRuntime{}, 0, false, TranscriptionRuntimeUnknown, "and the candidate's runtime is unknown"},
 		{
-			"partial runtime whose size estimate is far shorter is a fragment",
+			"partial runtime whose size UPPER bound is under half the candidate is a fragment",
 			localRuntime{FilesKnown: 1, FilesCounted: 2, MeasuredSec: hour, Partial: partialBound{EstimateSec: 2 * hour, UpperSec: 3 * hour}},
-			10 * hour, false, TranscriptionRuntimeFragment, "about 2h00m of a 10h00m book (estimated from the file sizes)",
+			10 * hour, false, TranscriptionRuntimeFragment, "no more than 3h00m of a 10h00m book (at most, from the file sizes)",
+		},
+		{
+			"a bitrate estimate alone never proves anything",
+			localRuntime{FilesKnown: 1, FilesCounted: 2, MeasuredSec: hour, Partial: partialBound{EstimateSec: 2 * hour}},
+			10 * hour, false, TranscriptionRuntimeUnknown, "only 1 of 2 files measured",
+		},
+		{
+			"upper bound between half and 90% of the candidate is a mismatch, not a fragment",
+			localRuntime{FilesKnown: 1, FilesCounted: 2, MeasuredSec: hour, Partial: partialBound{UpperSec: 7 * hour}},
+			10 * hour, false, TranscriptionRuntimeMismatch, "can hold at most 7h00m (from their sizes)",
+		},
+		{
+			"upper bound that reaches the candidate proves nothing",
+			localRuntime{FilesKnown: 1, FilesCounted: 2, MeasuredSec: hour, Partial: partialBound{UpperSec: 12 * hour}},
+			10 * hour, false, TranscriptionRuntimeUnknown, "only 1 of 2 files measured",
+		},
+		{
+			"measured files alone running over the candidate by more than 10% is a mismatch",
+			localRuntime{FilesKnown: 1, FilesCounted: 2, MeasuredSec: 12 * hour},
+			10 * hour, false, TranscriptionRuntimeMismatch, "measured files alone run at least 12h00m",
 		},
 		{
 			"a lower bound alone never proves a fragment",
@@ -207,4 +227,67 @@ func TestSearch_TranscriptionMatchedAnswerGetsRuntimeLookup(t *testing.T) {
 	require.NotNil(t, got)
 	assert.True(t, got.TranscriptionBoosted, "the looked-up runtime is within 10%, so the boost applies")
 	assert.Nil(t, got.TranscriptionRuntimeCheck)
+}
+
+// Auto-fetch applies on its own: when the audio intro is the only thing that
+// identifies a candidate (the book's own title is junk) the candidate's
+// runtime must fit the book's files, or nothing is written and the book stays
+// for review. A book whose own title agrees does not rest on the intro, so a
+// runtime that does not fit does not stop it.
+func TestFetchMetadataForBook_TranscriptionOnlyMatchNeedsRuntime(t *testing.T) {
+	const (
+		heard = "Year One"
+		tenH  = 10 * hour
+	)
+	tests := []struct {
+		name      string
+		bookTitle string
+		candSec   int
+		wantApply bool
+	}{
+		{name: "intro-only match, runtime fits", bookTitle: "CD 01- 001", candSec: tenH, wantApply: true},
+		{name: "intro-only match, fragment of a longer candidate", bookTitle: "CD 01- 001", candSec: 100000},
+		{name: "intro-only match, candidate runtime unknown", bookTitle: "CD 01- 001", candSec: 0},
+		{name: "own title agrees, runtime does not fit", bookTitle: heard, candSec: 100000, wantApply: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _, book := fileWorkHarness(t, "", false, false, nil)
+			book.Title = tt.bookTitle
+			book.TranscribedTitle = new(heard)
+			svc.db.(*database.MockStore).GetBookFilesFunc = func(id string) ([]database.BookFile, error) {
+				return []database.BookFile{{ID: "f1", BookID: id, FilePath: "/lib/a/a.m4b", FileSize: 288_000_000, Duration: tenH}}, nil
+			}
+			svc.overrideSources = []metadata.MetadataSource{fakeSource{
+				name:    "Audible",
+				results: []metadata.BookMetadata{{Title: heard, Author: "Bruce Wayne", Narrator: "Alfred Pennyworth", DurationSec: tt.candSec}},
+			}}
+			resp, err := svc.FetchMetadataForBook(context.Background(), "b1")
+			if tt.wantApply {
+				require.NoError(t, err)
+				require.NotNil(t, resp)
+				assert.Equal(t, heard, resp.Book.Title)
+				return
+			}
+			require.Error(t, err, "a transcription-only match whose runtime does not fit must not apply")
+			assert.Equal(t, tt.bookTitle, book.Title, "nothing written")
+		})
+	}
+}
+
+// A candidate the audio intro agreed with but whose runtime did not confirm
+// (it carries a TranscriptionRuntimeCheck, not the boosted flag) is exempt
+// from the cover filter like a boosted one: review must see it, flagged.
+func TestFilterCoverlessCandidates_KeepsRuntimeFlagged(t *testing.T) {
+	in := []MetadataCandidate{
+		{Title: "Year One", Score: 3.0, CoverURL: "c"},
+		{Title: "Year Two", Score: 1.0},
+		{Title: "Year Three", Score: 0.5, TranscriptionRuntimeCheck: &TranscriptionRuntimeCheck{Verdict: TranscriptionRuntimeFragment}},
+	}
+	out := filterCoverlessCandidates(in)
+	var got []string
+	for _, c := range out {
+		got = append(got, c.Title)
+	}
+	assert.Equal(t, []string{"Year One", "Year Three"}, got, "the flagged coverless candidate stays, the plain one goes")
 }

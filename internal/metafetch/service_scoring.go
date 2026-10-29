@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-10-29
 
@@ -639,12 +639,12 @@ func transcriptionRuntimeGate(rt localRuntime, candSec int) (bool, *Transcriptio
 		chk.CandSec = 0
 	}
 	if rt.Sec <= 0 {
-		// Local total unknown. A size-based estimate or upper bound can still
-		// prove the files are a fragment of a known-length candidate.
+		// Local total unknown. A bound the file data PROVES can still settle
+		// it; a bitrate estimate cannot (database.BookRuntime says it can be
+		// several times too low), so it never classifies anything.
 		if candSec > 0 {
-			if rt.estimatesFragmentOf(candSec) {
-				chk.Verdict = TranscriptionRuntimeFragment
-				chk.Detail = fragmentDetail(rt.estimateOrUpper(), candSec, "estimated from the file sizes")
+			if v, detail := rt.provenAgainst(candSec); v != "" {
+				chk.Verdict, chk.Detail = v, detail
 				return false, chk
 			}
 		}
@@ -678,29 +678,40 @@ func transcriptionRuntimeGate(rt localRuntime, candSec int) (bool, *Transcriptio
 
 // fragmentDetail: "these files are about 1h00m of a 10h00m book".
 func fragmentDetail(localSec, candSec int, how string) string {
-	d := fmt.Sprintf("the files look like a fragment: about %s of a %s book", formatRuntime(localSec), formatRuntime(candSec))
+	qual := "about"
+	if how != "" {
+		qual = "no more than"
+	}
+	d := fmt.Sprintf("the files look like a fragment: %s %s of a %s book", qual, formatRuntime(localSec), formatRuntime(candSec))
 	if how != "" {
 		d += " (" + how + ")"
 	}
 	return d
 }
 
-// estimateOrUpper is the best size-based figure for a partial runtime's total:
-// the estimate, else the upper bound.
-func (r localRuntime) estimateOrUpper() int {
-	if r.Partial.EstimateSec > 0 {
-		return r.Partial.EstimateSec
+// provenAgainst classifies a PARTIAL local runtime against a candidate using
+// only bounds the files prove: the size-derived UPPER bound under
+// transcriptionFragmentRatio of the candidate is a fragment; under 90% of it,
+// a runtime mismatch (the total is then more than 10% short of the candidate);
+// and a measured LOWER bound more than 10% above the candidate (as a share of
+// the lower bound, the smallest the gate's ratio could be) is a mismatch too.
+// "" means nothing is proven and the runtime stays unknown.
+func (r localRuntime) provenAgainst(candSec int) (verdict, detail string) {
+	if up := r.Partial.UpperSec; up > 0 {
+		switch {
+		case float64(up) < transcriptionFragmentRatio*float64(candSec):
+			return TranscriptionRuntimeFragment, fragmentDetail(up, candSec, "at most, from the file sizes")
+		case float64(up) < 0.9*float64(candSec):
+			return TranscriptionRuntimeMismatch, fmt.Sprintf(
+				"the files can hold at most %s (from their sizes), the candidate's is %s",
+				formatRuntime(up), formatRuntime(candSec))
+		}
 	}
-	return r.Partial.UpperSec
-}
-
-// estimatesFragmentOf reports whether a PARTIAL runtime's size-based estimate
-// puts the whole book under transcriptionFragmentRatio of candSec. A measured
-// lower bound alone never qualifies: it can prove the book is at least that
-// long, not that it is short.
-func (r localRuntime) estimatesFragmentOf(candSec int) bool {
-	v := r.estimateOrUpper()
-	return v > 0 && candSec > 0 && float64(v) < transcriptionFragmentRatio*float64(candSec)
+	if lb := r.MeasuredSec; lb > candSec && float64(lb-candSec)/float64(lb) > transcriptionRuntimeTolerance {
+		return TranscriptionRuntimeMismatch, fmt.Sprintf(
+			"the measured files alone run at least %s, the candidate's is %s", formatRuntime(lb), formatRuntime(candSec))
+	}
+	return "", ""
 }
 
 // unknownWhy says why a local runtime is not a complete total: how many files
@@ -726,10 +737,23 @@ func (r localRuntime) unknownWhy() string {
 	return " (" + strings.Join(parts, "; ") + ")"
 }
 
-// TranscriptionRuntimeAgrees is the transcription runtime gate for callers
-// outside this package (the calibration harness), so they cannot drift from
-// production: localSec is the book's COMPLETE total runtime (0 = unknown,
-// including a partial runtime).
+// TranscriptionRuntimeVerdict is the transcription runtime gate evaluated LIVE
+// over the book's full runtime view (a partial runtime's bounds included), for
+// callers outside this package -- the apply gate, the auto-match op, the
+// calibration harness -- so none can drift from the scoring path. nil means
+// the candidate's runtime confirms the match; otherwise the classified check.
+// It never reads TranscriptionRuntimeCheck off a candidate: that stamp is for
+// display and filtering and can be stale (cached rows, a runtime measured
+// since the search).
+func TranscriptionRuntimeVerdict(rt database.BookRuntime, candSec int) *TranscriptionRuntimeCheck {
+	if ok, chk := transcriptionRuntimeGate(localRuntimeOf(rt), candSec); !ok {
+		return chk
+	}
+	return nil
+}
+
+// TranscriptionRuntimeAgrees is the same gate over a bare complete total, for
+// callers that hold only seconds.
 func TranscriptionRuntimeAgrees(localSec, candSec int) bool {
 	ok, _ := transcriptionRuntimeGate(localRuntime{Sec: localSec}, candSec)
 	return ok
@@ -822,6 +846,27 @@ func transcriptionMatchBoost(score float64, r metadata.BookMetadata, th transcri
 func transcribedTitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle string) bool {
 	return legacyTranscribedTitleAgrees(candidateTitle, transcribedTitle) &&
 		util.TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle)
+}
+
+// transcriptionOnlyIdentification reports why auto-fetch must not apply meta
+// to book: the audio intro is what identifies the candidate (it agrees with the
+// transcribed title and the book's own title does not) and the candidate's
+// runtime does not fit the book's files. A transcription agreement alone no
+// longer confirms a book -- a fragment of a long book carries the same intro --
+// so the score boost is withheld (transcriptionBoost) and the apply is too.
+// nil when the book's own title agrees (the match does not rest on the intro)
+// or the runtime gate passes. It reads the files now, never a stamp.
+func (mfs *Service) transcriptionOnlyIdentification(book *database.Book, meta metadata.BookMetadata, th transcriptionHints) *TranscriptionRuntimeCheck {
+	if th.title == "" || !transcribedTitleAgrees(meta.Title, meta.SeriesPosition, th.title) {
+		return nil
+	}
+	if strings.TrimSpace(book.Title) != "" && transcribedTitleAgrees(meta.Title, meta.SeriesPosition, book.Title) {
+		return nil
+	}
+	if ok, chk := transcriptionRuntimeGate(mfs.bookRuntime(book), meta.DurationSec); !ok {
+		return chk
+	}
+	return nil
 }
 
 // legacyTranscribedTitleAgrees is transcribedTitleAgrees as it stood on

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -115,7 +115,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		return nil
 	}
 
-	var scanned, eligible, applied, manualOnly int
+	var scanned, eligible, applied, manualOnly, runtimeUnverified int
 
 	// Fail-safe cap (internal/applycap). This op walks the WHOLE library and
 	// decides per book, so its target set is unknowable up front — a running
@@ -234,6 +234,18 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			return nil
 		}
 
+		// Gate 5: the live runtime gate. The title match above is a
+		// transcription agreement, which alone does not confirm a book (a
+		// fragment of a long book carries the same intro). A candidate whose
+		// runtime does not fit the book's files is counted and left for the
+		// review lane, in the dry run as in the real run.
+		if top.RuntimeUnverified {
+			runtimeUnverified++
+			log.Info("auto-match-transcribed: skipped, candidate runtime does not fit the book's files",
+				"book_id", id, "candidate", candTitle)
+			return nil
+		}
+
 		// All gates passed — this book is eligible.
 		eligible++
 
@@ -270,6 +282,14 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 				"book_id", id, "detail", logger.SanitizeLogValue(applyErr.Error()))
 			return nil
 		}
+		if errors.Is(applyErr, ErrTranscriptionRuntimeUnverified) {
+			// The files changed since the search half read them: a skip.
+			eligible--
+			runtimeUnverified++
+			log.Info("auto-match-transcribed: skipped, candidate runtime does not fit the book's files",
+				"book_id", id, "detail", logger.SanitizeLogValue(applyErr.Error()))
+			return nil
+		}
 		if applyErr != nil {
 			log.Warn("auto-match-transcribed: apply failed",
 				"book_id", id, "candidate", candTitle, "err", applyErr)
@@ -303,13 +323,13 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 	var summary string
 	if dryRun {
 		summary = fmt.Sprintf(
-			"auto-match-transcribed complete (dry-run): scanned %d, eligible %d, would-apply %d, owner-manual skipped %d",
-			scanned, eligible, eligible, manualOnly,
+			"auto-match-transcribed complete (dry-run): scanned %d, eligible %d, would-apply %d, owner-manual skipped %d, runtime unverified %d",
+			scanned, eligible, eligible, manualOnly, runtimeUnverified,
 		)
 	} else {
 		summary = fmt.Sprintf(
-			"auto-match-transcribed complete: scanned %d, eligible %d, applied %d, owner-manual skipped %d",
-			scanned, eligible, applied, manualOnly,
+			"auto-match-transcribed complete: scanned %d, eligible %d, applied %d, owner-manual skipped %d, runtime unverified %d",
+			scanned, eligible, applied, manualOnly, runtimeUnverified,
 		)
 	}
 	log.Info(summary)

@@ -1,7 +1,7 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 
 package metabatch
 
@@ -28,15 +28,36 @@ type UsableCandidateVerdict struct {
 // candidateRefusalOwnerRejected is CandidateRefusal's owner-rejected reason.
 const candidateRefusalOwnerRejected = "owner-rejected"
 
+// RuntimeLoader supplies the book's canonical runtime on demand. The apply
+// gate reads it only for a candidate the transcription confirms (the one case
+// where the runtime decides the score leg), so a loader that touches the
+// store is not called for every candidate of every row.
+type RuntimeLoader func() database.BookRuntime
+
+// RuntimeLoaderFor loads book's runtime from files once, on first use. A read
+// error leaves the runtime unknown (database.LoadBookRuntime), which refuses
+// a transcription-confirmed candidate: the safe direction.
+func RuntimeLoaderFor(files database.BookFilesGetter, book *database.Book) RuntimeLoader {
+	var (
+		once sync.Once
+		rt   database.BookRuntime
+	)
+	return func() database.BookRuntime {
+		once.Do(func() { rt, _ = database.LoadBookRuntime(files, book) })
+		return rt
+	}
+}
+
 // CandidateRefusal is why one candidate is not usable for book ("" =
 // usable): owner-rejected (rejected: LoadRejectedCandidateKeys),
 // asin_conflict (applygate.CheckASIN), identity_stale because entry is marked
 // stale (the book was retitled) or the book's ASIN was replaced after entry
 // was fetched (metafetch.CandidateIdentityStale; entry
 // nil skips it), or the apply gate's score leg (applygate.ScoreGate: the
-// floor, or a transcribed title the candidate does not match) -- the same
-// rule the bulk apply gate applies.
-func CandidateRefusal(rejected metafetch.RejectedSet, book *database.Book, entry *database.MetadataCandidateCache, c *metafetch.MetadataCandidate) string {
+// floor, a transcribed title the candidate does not match, or a transcription
+// match its runtime does not confirm) -- the same rule the bulk apply gate
+// applies. runtime is read only for a transcription-confirmed candidate.
+func CandidateRefusal(rejected metafetch.RejectedSet, book *database.Book, entry *database.MetadataCandidateCache, c *metafetch.MetadataCandidate, runtime RuntimeLoader) string {
 	switch {
 	case rejected.HasCandidate(c):
 		return candidateRefusalOwnerRejected
@@ -49,7 +70,11 @@ func CandidateRefusal(rejected metafetch.RejectedSet, book *database.Book, entry
 		}
 		return applygate.ReasonIdentityStale + " (retitled)"
 	}
-	if ok, _, _, reason := applygate.ScoreGate(book, c); !ok {
+	var rt database.BookRuntime
+	if runtime != nil && applygate.TranscriptionConfirms(book, c) {
+		rt = runtime()
+	}
+	if ok, _, _, reason := applygate.ScoreGate(book, rt, c); !ok {
 		return reason
 	}
 	return ""
@@ -70,12 +95,20 @@ func CandidateRefusal(rejected metafetch.RejectedSet, book *database.Book, entry
 // identically, and Google quota would be spent on books it cannot help. A
 // changed author re-opens the row anyway (CachedBatchVerdict re-asks it).
 //
-// kv is read for the owner's rejections; nil reads none.
-func NoUsableCandidate(kv RejectedCandidateReader, book *database.Book, entry *database.MetadataCandidateCache) UsableCandidateVerdict {
+// A candidate refused only as transcription_runtime_unverified COUNTS as
+// usable here: the fallback providers (Google Books, Open Library) never carry
+// a runtime, so a fallback cannot cure it and would only spend quota. The
+// candidate stays refused for every apply and for MergeRankerFor; the owner
+// reviews it.
+//
+// kv is read for the owner's rejections; nil reads none. files supplies the
+// book's runtime for the transcription runtime check; nil reads it as unknown.
+func NoUsableCandidate(kv RejectedCandidateReader, files database.BookFilesGetter, book *database.Book, entry *database.MetadataCandidateCache) UsableCandidateVerdict {
 	if entry == nil || len(entry.Candidates) == 0 {
 		return UsableCandidateVerdict{Why: "no candidates"}
 	}
 	rejected := rejectedKeys(kv, book.ID)
+	runtime := RuntimeLoaderFor(files, book)
 	counts := map[string]int{}
 	var order []string
 	undecoded := 0
@@ -85,8 +118,8 @@ func NoUsableCandidate(kv RejectedCandidateReader, book *database.Book, entry *d
 			undecoded++
 			continue
 		}
-		why := CandidateRefusal(rejected, book, entry, &c)
-		if why == "" {
+		why := CandidateRefusal(rejected, book, entry, &c, runtime)
+		if why == "" || why == applygate.ReasonTranscriptionRuntimeUnverified {
 			return UsableCandidateVerdict{Usable: true}
 		}
 		if counts[why] == 0 {
@@ -137,13 +170,13 @@ const (
 // read are the ones current when the row is written (a reject made during
 // the search is honoured), and a rejection's re-rank of the same row takes
 // the same lock.
-func MergeRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch.MetadataCandidate) int {
+func MergeRanker(kv RejectedCandidateReader, files database.BookFilesGetter, book *database.Book) func(metafetch.MetadataCandidate) int {
 	var (
 		once sync.Once
 		rank func(metafetch.MetadataCandidate) int
 	)
 	return func(c metafetch.MetadataCandidate) int {
-		once.Do(func() { rank = MergeRankerFor(book, rejectedKeys(kv, book.ID)) })
+		once.Do(func() { rank = MergeRankerFor(book, rejectedKeys(kv, book.ID), RuntimeLoaderFor(files, book)) })
 		return rank(c)
 	}
 }
@@ -151,9 +184,9 @@ func MergeRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch
 // MergeRankerFor is MergeRanker over rejections the caller already read
 // (metafetch.LoadRejectedCandidates), for a caller that must not rank on a
 // failed read as if nothing were rejected (the cached-row re-rank).
-func MergeRankerFor(book *database.Book, rejected metafetch.RejectedSet) func(metafetch.MetadataCandidate) int {
+func MergeRankerFor(book *database.Book, rejected metafetch.RejectedSet, runtime RuntimeLoader) func(metafetch.MetadataCandidate) int {
 	return func(c metafetch.MetadataCandidate) int {
-		switch why := CandidateRefusal(rejected, book, nil, &c); {
+		switch why := CandidateRefusal(rejected, book, nil, &c, runtime); {
 		case why == candidateRefusalOwnerRejected:
 			return MergeRankOwnerRejected
 		case why != "":

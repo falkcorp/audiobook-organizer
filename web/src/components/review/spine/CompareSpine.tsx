@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.15.1
+// version: 1.16.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
 // last-edited: 2026-10-29
 //

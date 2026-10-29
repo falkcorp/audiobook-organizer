@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
@@ -300,7 +300,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				}
 				return nil
 			}
-			if metabatch.NoUsableCandidate(store, b, entry).Usable {
+			if metabatch.NoUsableCandidate(store, store, b, entry).Usable {
 				return nil
 			}
 			gate := fallbackGates(store, b, q.Title)

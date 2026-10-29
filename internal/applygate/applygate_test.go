@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.6
+// version: 1.5.7
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-10-29
 
@@ -134,9 +134,11 @@ func TestEvaluate(t *testing.T) {
 
 	// Audio confirmation relaxes the floor to 0.85 ...
 	heard := &database.Book{Title: "Big Cats 1", TranscribedTitle: new("Big Cats 1")}
+	// (the confirmation needs the candidate's runtime to fit the book's files:
+	// 10 h of measured files here, the candidate's 10 h in `good`)
 	relaxed := good
 	relaxed.Score = 0.86
-	if v := Evaluate(heard, snap(heard), database.ComputeBookRuntime(heard, nil), &relaxed, nil); !v.Allowed || !v.AudioConfirmed {
+	if v := Evaluate(heard, snap(heard), completeFilesRuntime(36000), &relaxed, nil); !v.Allowed || !v.AudioConfirmed {
 		t.Fatalf("audio-confirmed 0.86 refused: %+v", v)
 	}
 	// ... and a transcribed title the candidate does not match refuses outright.
@@ -196,7 +198,7 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			book := &database.Book{TranscribedTitle: new(tc.heardTitle), TranscribedAuthor: new(tc.heardAuthor)}
-			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor}
+			c := &metafetch.MetadataCandidate{Title: tc.candTitle, Author: tc.candAuthor, DurationSec: 36000}
 			if got := TranscriptionConfirms(book, c); got != tc.unreviewed {
 				t.Errorf("TranscriptionConfirms = %v, want %v", got, tc.unreviewed)
 			}
@@ -206,7 +208,9 @@ func TestTranscriptionConfirms_RealReviewCases(t *testing.T) {
 			// The floor follows the UNREVIEWED rule only: a pair the matcher
 			// alone agrees on must keep MinScore, never earn 0.85.
 			c.Score = 0.86
-			v := Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil)
+			// Measured files that fit the candidate's runtime: the confirmation
+			// is the matcher's alone to give or refuse in this table.
+			v := Evaluate(book, snap(book), completeFilesRuntime(36000), c, nil)
 			if v.TranscriptionAgreesOnReview != tc.reviewed {
 				t.Errorf("verdict annotation = %v, want %v", v.TranscriptionAgreesOnReview, tc.reviewed)
 			}
@@ -440,33 +444,60 @@ func TestTranscriptionConfirms_ReviewerFalsePositivesRefuse(t *testing.T) {
 	}
 }
 
-// Owner decision 2026-10-29: a transcription match whose runtime did not
+// Owner decision 2026-10-29: a transcription match whose runtime does not
 // confirm it (a fragment, a mismatch, or no comparable runtime) is never
-// grounds for an unattended apply, however high the score.
+// grounds for an unattended apply, however high the score. The runtime check
+// is evaluated LIVE: these candidates carry no TranscriptionRuntimeCheck stamp
+// and a boosted score, like a cached row from before the check existed.
+// completeFilesRuntime is a runtime built from one fully measured file: the
+// complete total the transcription runtime gate compares a candidate with.
+func completeFilesRuntime(sec int) database.BookRuntime {
+	return database.BookRuntime{Seconds: sec, Source: database.RuntimeSourceFiles, FilesCounted: 1, FilesKnown: 1}
+}
+
 func TestScoreGate_TranscriptionRuntimeUnverifiedRefuses(t *testing.T) {
 	book := &database.Book{TranscribedTitle: new("Year One"), TranscribedAuthor: new("Alfred Pennyworth")}
-	mk := func(chk *metafetch.TranscriptionRuntimeCheck) *metafetch.MetadataCandidate {
-		return &metafetch.MetadataCandidate{Title: "Year One", Author: "Alfred Pennyworth", Score: 3.0, TranscriptionRuntimeCheck: chk}
+	mk := func(candSec int) *metafetch.MetadataCandidate {
+		return &metafetch.MetadataCandidate{Title: "Year One", Author: "Alfred Pennyworth", Score: 3.0, DurationSec: candSec}
 	}
-	if ok, _, _, reason := ScoreGate(book, mk(nil)); !ok || reason != "" {
-		t.Fatalf("control: the same candidate with no runtime check must pass, got ok=%v reason=%q", ok, reason)
+	const hr = 3600
+	complete := completeFilesRuntime
+	partial := database.BookRuntime{Seconds: 7 * hr, Source: database.RuntimeSourceFiles, FilesCounted: 2, FilesKnown: 1}
+
+	if ok, floor, audio, reason := ScoreGate(book, complete(10*hr), mk(10*hr+30*60)); !ok || reason != "" || !audio || floor != MinScoreAudioConfirmed {
+		t.Fatalf("control: a candidate within 10%% must pass confirmed, got ok=%v reason=%q audio=%v floor=%v", ok, reason, audio, floor)
 	}
-	for _, verdict := range []string{
-		metafetch.TranscriptionRuntimeFragment, metafetch.TranscriptionRuntimeMismatch, metafetch.TranscriptionRuntimeUnknown,
+	for name, tc := range map[string]struct {
+		rt      database.BookRuntime
+		candSec int
+	}{
+		"fragment (1h of a 10h book)": {complete(hr), 10 * hr},
+		"runtime mismatch":            {complete(10 * hr), 12 * hr},
+		"partial local runtime":       {partial, 10 * hr},
+		"unknown local runtime":       {database.BookRuntime{}, 10 * hr},
+		"candidate without a runtime": {complete(10 * hr), 0},
 	} {
-		ok, floor, audio, reason := ScoreGate(book, mk(&metafetch.TranscriptionRuntimeCheck{Verdict: verdict, Detail: "d"}))
+		ok, floor, audio, reason := ScoreGate(book, tc.rt, mk(tc.candSec))
 		if ok || reason != ReasonTranscriptionRuntimeUnverified {
-			t.Errorf("%s: ok=%v reason=%q, want a %q refusal", verdict, ok, reason, ReasonTranscriptionRuntimeUnverified)
+			t.Errorf("%s: ok=%v reason=%q, want a %q refusal", name, ok, reason, ReasonTranscriptionRuntimeUnverified)
 		}
 		if audio || floor != MinScore {
-			t.Errorf("%s: audio=%v floor=%v; an unverified match must not count as audio confirmation", verdict, audio, floor)
+			t.Errorf("%s: audio=%v floor=%v; an unverified match must not count as audio confirmation", name, audio, floor)
 		}
 	}
 
-	// The refusal reaches the full verdict, and an owner review may override it.
-	v := Evaluate(book, Authors{}, database.BookRuntime{}, mk(&metafetch.TranscriptionRuntimeCheck{Verdict: metafetch.TranscriptionRuntimeFragment}), nil)
+	// A stale stamp does not decide: the live runtime agrees, so it passes.
+	stamped := mk(10 * hr)
+	stamped.TranscriptionRuntimeCheck = &metafetch.TranscriptionRuntimeCheck{Verdict: metafetch.TranscriptionRuntimeFragment}
+	if ok, _, _, reason := ScoreGate(book, complete(10*hr), stamped); !ok {
+		t.Errorf("stamp must not decide the gate; got reason %q", reason)
+	}
+
+	// The refusal reaches the full verdict on the bulk and upgrade path
+	// (EvaluateInBatch), and an owner review may override it.
+	v := EvaluateInBatch(book, Authors{}, complete(hr), mk(10*hr), nil, nil, nil)
 	if v.Allowed || v.Reason != ReasonTranscriptionRuntimeUnverified {
-		t.Fatalf("Evaluate: allowed=%v reason=%q", v.Allowed, v.Reason)
+		t.Fatalf("EvaluateInBatch: allowed=%v reason=%q", v.Allowed, v.Reason)
 	}
 	if !v.OwnerReviewOverridable() {
 		t.Error("an owner review must be able to override the refusal")

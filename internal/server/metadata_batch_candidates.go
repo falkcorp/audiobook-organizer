@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.29.0
+// version: 4.29.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -413,7 +413,7 @@ func (s *Server) fetchCandidateForBook(
 			// a fallback provider that still owes one is asked. A row like this
 			// was stuck before -- served from the cache forever, never selected.
 			if len(active) > 0 {
-				v := metabatch.NoUsableCandidate(store, book, cached)
+				v := metabatch.NoUsableCandidate(store, store, book, cached)
 				if !v.Usable && len(fallbackOwed(cached, active)) > 0 {
 					carryFrom = cached // the verdict vouched for it
 					return fallback(cached, v.Why, candidateCachedCandidates)
@@ -464,7 +464,7 @@ func (s *Server) fetchCandidateForBook(
 		chainOpts := metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force,
 			// A refetch that keeps the fallback providers' candidates
 			// ranks the union like the fallback's merge does.
-			MergeRank: metabatch.MergeRanker(store, book)}
+			MergeRank: metabatch.MergeRanker(store, store, book)}
 		chainOpts.CarryFrom(carryFrom)
 		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "", chainOpts)
 		if ferr != nil {
@@ -480,7 +480,7 @@ func (s *Server) fetchCandidateForBook(
 		if len(active) == 0 {
 			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 		}
-		v := metabatch.NoUsableCandidate(store, book, entry)
+		v := metabatch.NoUsableCandidate(store, store, book, entry)
 		if v.Usable {
 			clearDeferral(mfs, bookID, entry)
 		}
@@ -504,7 +504,7 @@ func (s *Server) fetchCandidateForBook(
 	if len(active) == 0 {
 		return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 	}
-	return fallback(entry, metabatch.NoUsableCandidate(store, book, entry).Why, "")
+	return fallback(entry, metabatch.NoUsableCandidate(store, store, book, entry).Why, "")
 }
 
 // singleBookSearch reports the review page's "Search again" on one book: a

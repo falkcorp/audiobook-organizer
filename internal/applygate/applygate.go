@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.16.2
+// version: 1.17.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-10-29
 
@@ -197,11 +197,20 @@ func derefStr(p *string) string {
 // ScoreGate applies legs 1 of the gate: the transcription hard gate and the
 // score floor. It is exported separately because auto-upgrade uses it to rank
 // several candidates before choosing one. ok=false carries the reason.
-func ScoreGate(book *database.Book, c *metafetch.MetadataCandidate) (ok bool, floor float64, audioConfirmed bool, reason string) {
+//
+// rt is the book's canonical runtime (database.LoadBookRuntime). The
+// transcription only counts as confirmation -- lowering the floor to
+// MinScoreAudioConfirmed, standing in for the title check, adding an
+// agreement -- when the candidate's runtime confirms it
+// (metafetch.TranscriptionRuntimeVerdict, evaluated LIVE here). Otherwise the
+// candidate is refused as ReasonTranscriptionRuntimeUnverified. The live
+// check, not the candidate's TranscriptionRuntimeCheck stamp, decides: a
+// cached candidate, or one searched before Whisper ran or before the runtime
+// was measured, carries an old boosted score and no stamp, and must not slip
+// through. rt is read only when the transcription confirms the candidate.
+func ScoreGate(book *database.Book, rt database.BookRuntime, c *metafetch.MetadataCandidate) (ok bool, floor float64, audioConfirmed bool, reason string) {
 	audioConfirmed = TranscriptionConfirms(book, c)
-	if audioConfirmed && c.TranscriptionRuntimeCheck != nil {
-		// The match is real but unverified by runtime: it must neither lower
-		// the floor nor stand in for the title check.
+	if audioConfirmed && metafetch.TranscriptionRuntimeVerdict(rt, c.DurationSec) != nil {
 		return false, MinScore, false, ReasonTranscriptionRuntimeUnverified
 	}
 	floor = MinScore
@@ -275,7 +284,7 @@ func EvaluateInBatch(book *database.Book, authors Authors, rt database.BookRunti
 // owner-review pin of any origin lifts either. nil skips the leg.
 func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookRuntime, c *metafetch.MetadataCandidate, identityErr error, claims *ClaimIndex, rejections *Rejections, ts TranscribedSearch, guard ManualOnlyGuard) Verdict {
 	v := Verdict{Score: c.Score}
-	scoreOK, floor, audio, scoreReason := ScoreGate(book, c)
+	scoreOK, floor, audio, scoreReason := ScoreGate(book, rt, c)
 	v.ScoreFloor, v.AudioConfirmed, v.ScoreReason = floor, audio, scoreReason
 	v.TranscriptionAgreesOnReview = ReviewedTranscriptionAgrees(book, c)
 	v.Sequence = CheckSequence(book, c)

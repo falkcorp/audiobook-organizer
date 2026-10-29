@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.7.1
+// version: 1.8.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
 // last-edited: 2026-10-29
 //
