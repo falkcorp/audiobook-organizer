@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f5390ae9-0910-4c20-811f-36ab977aec8e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -118,7 +118,7 @@ func (f *holdFixture) byID(id string) *database.Book {
 // importStored saves book as an earlier import (no folder-parse sources).
 func (f *holdFixture) importStored(book *Book) *database.Book {
 	f.t.Helper()
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		f.t.Fatal(err)
 	}
 	b, err := f.store.GetBookByFilePath(book.FilePath)
@@ -168,7 +168,7 @@ func TestSaveBookToDatabase_MovedBookHoldsAgainstOrganizerIDRow(t *testing.T) {
 	}
 	scan := reparsed(moved)
 	scan.BookOrganizerID = stored.ID
-	if err := saveBookToDatabase(context.Background(), scan); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), scan); err != nil {
 		t.Fatal(err)
 	}
 	if after := f.counts(); after != before {
@@ -196,7 +196,7 @@ func TestSaveBookToDatabase_RenamedBookHoldsAgainstHashMatch(t *testing.T) {
 	before := f.counts()
 
 	renamed := f.write("book/Reparsed Title.m4b", "renamed book bytes")
-	if err := saveBookToDatabase(context.Background(), reparsed(renamed)); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), reparsed(renamed)); err != nil {
 		t.Fatal(err)
 	}
 	after := f.counts()
@@ -249,7 +249,7 @@ func TestSaveBookToDatabase_MultiFileOrderChangeIsTheSameBook(t *testing.T) {
 	scan := reparsed(b)
 	scan.Format = ".mp3"
 	scan.SegmentFiles = []string{b, a, c}
-	if err := saveBookToDatabase(context.Background(), scan); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), scan); err != nil {
 		t.Fatal(err)
 	}
 	if after := f.counts(); after != before {

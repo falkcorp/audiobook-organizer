@@ -1,7 +1,7 @@
 // file: internal/scanner/ident_dirty_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5573453b-2e51-4af2-8502-ac8cec772b10
-// last-edited: 2026-10-16
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -47,7 +47,7 @@ func TestScannerMarksDirtyOnTitleChange(t *testing.T) {
 	}
 
 	book := &Book{FilePath: filePath, Title: "Title 000123", Author: "Author 07", Format: ".m4b", Duration: 120}
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := store.GetBookByFilePath(filePath)
@@ -63,7 +63,7 @@ func TestScannerMarksDirtyOnTitleChange(t *testing.T) {
 	}
 
 	// Unchanged rescan: no mark.
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatal(err)
 	}
 	if page := identDirty(t, store); len(page) != 0 {
@@ -71,7 +71,7 @@ func TestScannerMarksDirtyOnTitleChange(t *testing.T) {
 	}
 
 	book.Title = "Title 000124"
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatal(err)
 	}
 	page = identDirty(t, store)

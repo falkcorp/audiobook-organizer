@@ -1,7 +1,7 @@
 // file: internal/scanner/series_position_writeback_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b3e0d19-5a42-4c88-b6f0-2e91c7d4a86f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -46,7 +46,7 @@ func scanOneBook(t *testing.T, book *Book) (*database.Book, string) {
 	book.FilePath = fp
 	book.Format = ".m4b"
 
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("saveBookToDatabase: %v", err)
 	}
 

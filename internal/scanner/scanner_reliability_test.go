@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_reliability_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9f8e7d6c-5b4a-3921-8c7d-6e5f4a3b2c1d
-// last-edited: 2026-10-23
+// last-edited: 2026-10-29
 
 // Tests for the 2026-07-17 multi-discipline-review scanner findings:
 // R-4 (refcounted scan/works caches surviving concurrent runs) and
@@ -215,7 +215,7 @@ func TestRelScn_HashLookupStoreErrorSkipsImport(t *testing.T) {
 		FilePath: "/import/new-file.m4b",
 		FileHash: "deadbeef", // pre-computed: skips on-disk hashing
 	}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	if err == nil {
 		t.Fatal("H5 regression: store failure during dup detection did not skip the import")
 	}
@@ -269,7 +269,7 @@ func TestRelScn_HashLookupPartialErrorStillFindsDuplicate(t *testing.T) {
 		FilePath: "/import/duplicate-copy.m4b",
 		FileHash: "deadbeef",
 	}
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("duplicate found via a healthy index should not error, got: %v", err)
 	}
 	if created {

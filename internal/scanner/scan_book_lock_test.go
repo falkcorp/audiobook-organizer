@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -65,7 +65,7 @@ func (f scanLockFixture) file(t *testing.T, name, content string) string {
 func withSaveHook(t *testing.T, hook func(b *Book)) {
 	t.Helper()
 	orig := saveBook
-	saveBook = func(ctx context.Context, b *Book) error {
+	saveBook = func(ctx context.Context, b *Book) (*ownershipSkip, error) {
 		hook(b)
 		return orig(ctx, b)
 	}
@@ -317,7 +317,7 @@ func TestScanBookLock_AIPhaseSaveOverlaysMainPassButKeepsUserEdit(t *testing.T) 
 	b := &Book{FilePath: p, Title: "Main Pass Title", Author: "A. Author", Publisher: "Main Pub", Format: ".m4b"}
 	hold, outcome, _ := acquireScanBookLock(context.Background(), context.Background(), b, 1, true)
 	require.Equal(t, scanLockHeld, outcome)
-	require.NoError(t, saveBookToDatabase(scanlock.WithHold(context.Background(), hold), b))
+	requireSaved(t)(saveBookToDatabase(scanlock.WithHold(context.Background(), hold), b))
 	hold.Release()
 
 	// A user apply between the main pass and the AI phase.
@@ -468,7 +468,7 @@ func TestScanBookLock_HashBranchRestartsBeforeLinkingThePartner(t *testing.T) {
 	defer hold.Release()
 
 	b := &Book{FilePath: p, Title: "Scanned", Author: "A", Format: ".m4b", FileHash: "hash-x"}
-	serr := saveBookToDatabase(scanlock.WithHold(context.Background(), hold), b)
+	_, serr := saveBookToDatabase(scanlock.WithHold(context.Background(), hold), b)
 	w, ok := asWiden(serr)
 	require.True(t, ok, "want a widen restart, got %v", serr)
 	require.Contains(t, w.ids, raced.ID)

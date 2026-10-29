@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -30,19 +30,25 @@ import (
 // list; the scanner does not grow it.
 var errAppendFrozenITunes = errors.New("the book's files are in the iTunes-managed tree; nothing is appended there")
 
-// errFileOwnedByOtherBook is what saveBookToDatabase returns, wrapped in an
-// *ownershipSkipError, when the scanned book was NOT saved because its files
-// belong to another book. It is not a failure: callers test for it with
-// errors.Is and then skip everything that would otherwise run against the
-// saved row -- book_file creation, chapters, the scan-cache stamp and AI
-// nomination. Until 2026-09-28 the skip returned nil, and every one of those
-// steps then ran against whatever book the path lookups resolved to, which was
-// the OWNER: its NeedsRescan was cleared, its chapters were rewritten and an AI
-// parse was queued for it on every scan.
+// errFileOwnedByOtherBook is what saveBookToDatabase returns, beside an
+// *ownershipSkip, when the scanned book was NOT saved because its files belong
+// to another book. It is not a failure: callers test for it with errors.Is and
+// then skip everything that would otherwise run against the saved row --
+// book_file creation, chapters, the scan-cache stamp and AI nomination. Until
+// 2026-09-28 the skip returned nil, and every one of those steps then ran
+// against whatever book the path lookups resolved to, which was the OWNER: its
+// NeedsRescan was cleared, its chapters were rewritten and an AI parse was
+// queued for it on every scan.
+//
+// The error is only the signal. The per-book record (owners, reason, the files
+// to append) travels in the ownershipSkip returned beside it, never inside the
+// error: a file list unpacked out of a wrapped error with errors.As carried the
+// error's book-id text with it, and CodeQL (go/path-injection, alerts #2022 and
+// #1651) took the whole list as tainted by the time it reached hashing.
 var errFileOwnedByOtherBook = errors.New("scanned files already belong to another book")
 
-// ownershipSkipError carries the per-book record of an ownership skip.
-type ownershipSkipError struct {
+// ownershipSkip is the per-book record of an ownership skip.
+type ownershipSkip struct {
 	Path   string
 	Owners []string
 	Reason string
@@ -52,12 +58,6 @@ type ownershipSkipError struct {
 	AppendTo string
 	Unowned  []string
 }
-
-func (e *ownershipSkipError) Error() string {
-	return fmt.Sprintf("not importing %s: %s (owning book(s): %s)", e.Path, e.Reason, strings.Join(e.Owners, ","))
-}
-
-func (e *ownershipSkipError) Is(target error) bool { return target == errFileOwnedByOtherBook }
 
 // fileOwnershipVerdict is checkFileOwnership's answer.
 type fileOwnershipVerdict struct {
@@ -82,8 +82,10 @@ type fileOwnershipVerdict struct {
 	sameBook string
 }
 
-func (v fileOwnershipVerdict) asError(path string) error {
-	return &ownershipSkipError{Path: path, Owners: v.owners, Reason: v.reason, AppendTo: v.appendTo, Unowned: v.unowned}
+// asSkip is the record of the skip this verdict asks for; the caller returns it
+// beside errFileOwnedByOtherBook.
+func (v fileOwnershipVerdict) asSkip(path string) *ownershipSkip {
+	return &ownershipSkip{Path: path, Owners: v.owners, Reason: v.reason, AppendTo: v.appendTo, Unowned: v.unowned}
 }
 
 // scannedFilesOf returns the files a scanned Book would claim: its segment
@@ -559,11 +561,11 @@ func appendScannedFilesToOwner(ctx context.Context, ownerID string, files []stri
 type OwnershipSkips struct {
 	mu      sync.Mutex
 	total   int
-	samples []ownershipSkipError
+	samples []ownershipSkip
 }
 
 // Record counts e and lists it in scanLog while under the sample cap.
-func (c *OwnershipSkips) Record(scanLog logger.Logger, e *ownershipSkipError) {
+func (c *OwnershipSkips) Record(scanLog logger.Logger, e *ownershipSkip) {
 	if scanLog == nil {
 		scanLog = logger.New("scanner")
 	}
@@ -606,18 +608,18 @@ func (c *OwnershipSkips) ReportSummary(scanLog logger.Logger) {
 		slog.Int("books_listed", listed))
 }
 
-// handleOwnershipSkip is the one place a worker deals with a saveBook error
-// that is an ownership skip. It returns false for any other error (the caller
-// handles it as a failure). For a skip it performs the staged-arrival append
+// handleOwnershipSkip is the one place a worker deals with a saveBook result
+// that is an ownership skip: se is the record saveBook returned beside
+// errFileOwnedByOtherBook. It returns false when se is nil (the caller handles
+// err as a failure). For a skip it performs the staged-arrival append
 // when the verdict asked for one, records the skip, and returns true: the
 // caller must then run NOTHING else for this book.
 //
 // A failed append is a failure of this book, not a skip: it is counted for the
 // run summary and recorded in failures (the op's file-failure list), because
 // the new files stay unimported until a later scan manages it.
-func handleOwnershipSkip(ctx context.Context, err error, skips *OwnershipSkips, failures *FileFailures, knownHashes map[string]string, scanLog logger.Logger) bool {
-	var se *ownershipSkipError
-	if !errors.As(err, &se) {
+func handleOwnershipSkip(ctx context.Context, se *ownershipSkip, skips *OwnershipSkips, failures *FileFailures, knownHashes map[string]string, scanLog logger.Logger) bool {
+	if se == nil {
 		return false
 	}
 	if se.AppendTo != "" {

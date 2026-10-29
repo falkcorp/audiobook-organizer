@@ -1,12 +1,11 @@
 // file: internal/scanner/retired_rows_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2f6a9c31-8d47-4b05-a1e3-7c9d50b2f184
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -180,10 +179,9 @@ func TestSaveBookToDatabase_RetiredContentIsNotReimported(t *testing.T) {
 	require.Equal(t, f.holder.ID, e.retired.holder)
 	require.Nil(t, e.row(), "the holder must never be offered as the existing row")
 
-	serr := saveBookToDatabase(t.Context(), &Book{Title: "Zero Year", FilePath: copyPath, FileHash: hash})
+	se, serr := saveBookToDatabase(t.Context(), &Book{Title: "Zero Year", FilePath: copyPath, FileHash: hash})
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
-	var se *ownershipSkipError
-	require.True(t, errors.As(serr, &se))
+	require.NotNil(t, se)
 	require.Equal(t, []string{f.holder.ID}, se.Owners)
 	require.Contains(t, se.Reason, "retired version")
 
@@ -363,7 +361,7 @@ func TestRetiredShellOwnPath_RescanIsSkippedAndMintsNoSecondRow(t *testing.T) {
 	require.Equal(t, []string{f.holder.ID}, v.owners)
 	require.Contains(t, v.reason, "retired version of book "+f.holder.ID)
 
-	serr := saveBookToDatabase(t.Context(), book)
+	_, serr := saveBookToDatabase(t.Context(), book)
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
 
 	// The backstop behind the checks: even if a caller reaches the row-minting
@@ -409,7 +407,7 @@ func TestRetiredShellOrganizerID_TaggedCopyOfRetiredContentIsRetiredHit(t *testi
 	require.NotNil(t, e.retired, "but the content is a retired version's")
 	require.Equal(t, f.holder.ID, e.retired.holder)
 
-	serr := saveBookToDatabase(t.Context(), &Book{Title: "A Death in the Family", FilePath: moved, FileHash: hash, BookOrganizerID: shell.ID})
+	_, serr := saveBookToDatabase(t.Context(), &Book{Title: "A Death in the Family", FilePath: moved, FileHash: hash, BookOrganizerID: shell.ID})
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
 	got, err := f.store.GetBookByID(shell.ID)
 	require.NoError(t, err)
@@ -467,7 +465,7 @@ func TestRetiredShellOrganizerID_MultiFileTaggedCopyOfRetiredContentIsRetiredHit
 	require.Equal(t, 2, e.retired.matched)
 	require.Equal(t, 2, e.retired.total)
 
-	serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: dir, SegmentFiles: []string{m1, m2}, FileHash: h1, BookOrganizerID: shell.ID})
+	_, serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: dir, SegmentFiles: []string{m1, m2}, FileHash: h1, BookOrganizerID: shell.ID})
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
 	got, err := f.store.GetBookByID(shell.ID)
 	require.NoError(t, err)
@@ -515,7 +513,7 @@ func TestRetiredShellOrganizerID_MultiFileUnreadableSegmentFailsClosed(t *testin
 	require.Contains(t, lerr.Error(), "retired-version check undeterminable")
 	require.Contains(t, lerr.Error(), m2, "the unreadable segment is named")
 
-	serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: dir, SegmentFiles: []string{m1, m2}, FileHash: h1, BookOrganizerID: shell.ID})
+	_, serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: dir, SegmentFiles: []string{m1, m2}, FileHash: h1, BookOrganizerID: shell.ID})
 	require.Error(t, serr)
 	require.Contains(t, serr.Error(), "retired-version check undeterminable")
 	got, err := f.store.GetBookByID(shell.ID)
@@ -555,7 +553,7 @@ func TestRetiredShellOwnPath_MultiFileChangedBytesAreStillSkippedByPathClaim(t *
 	h1, err := ComputeFileHash(paths[0])
 	require.NoError(t, err)
 
-	serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: shell.FilePath, SegmentFiles: paths, FileHash: h1})
+	_, serr := saveBookToDatabase(t.Context(), &Book{Title: "Hush", FilePath: shell.FilePath, SegmentFiles: paths, FileHash: h1})
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
 	for _, p := range paths {
 		require.Empty(t, f.liveRowsAt(p))
@@ -587,7 +585,7 @@ func TestRetiredShellOwnPath_ChangedBytesAreStillSkippedByPathClaim(t *testing.T
 	newHash, err := ComputeFileHash(row.FilePath)
 	require.NoError(t, err)
 
-	serr := saveBookToDatabase(t.Context(), &Book{Title: "No Man's Land", FilePath: row.FilePath, FileHash: newHash})
+	_, serr := saveBookToDatabase(t.Context(), &Book{Title: "No Man's Land", FilePath: row.FilePath, FileHash: newHash})
 	require.ErrorIs(t, serr, errFileOwnedByOtherBook)
 	require.Empty(t, f.liveRowsAt(row.FilePath))
 }

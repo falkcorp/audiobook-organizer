@@ -1,7 +1,7 @@
 // file: internal/scanner/unknown_author_gate_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 3d9a5f71-2e84-4c06-b1f3-6a05e97c2db4
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -224,12 +224,12 @@ func TestScanNominatesABookWhoseOnlyAuthorIsThePlaceholder(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(_ context.Context, book *Book) error {
+	saveBook = func(_ context.Context, book *Book) (*ownershipSkip, error) {
 		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
-			return nil
+			return nil, nil
 		}
 		_, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
-		return err
+		return nil, err
 	}
 
 	// The book under test: a title, and an author that is ONLY the placeholder.

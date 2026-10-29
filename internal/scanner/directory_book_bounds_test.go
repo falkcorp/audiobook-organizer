@@ -1,7 +1,7 @@
 // file: internal/scanner/directory_book_bounds_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6b1d0f83-2c47-4a91-95ea-0d4b7e6c1a52
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -326,7 +326,7 @@ func TestSaveBookToDatabase_ConcurrentWritersMintOneRowPerPath(t *testing.T) {
 	for i := range writers {
 		wg.Go(func() {
 			book := &Book{FilePath: dir, Title: "Author Shelf"}
-			errs[i] = saveBookToDatabase(context.Background(), book)
+			_, errs[i] = saveBookToDatabase(context.Background(), book)
 		})
 	}
 	wg.Wait()
@@ -457,7 +457,7 @@ func TestSaveBookToDatabase_RacedMergeCarriesTheVersionLink(t *testing.T) {
 	SetStore(raced)
 	defer SetStore(nil)
 
-	require.NoError(t, saveBookToDatabase(context.Background(), &Book{
+	requireSaved(t)(saveBookToDatabase(context.Background(), &Book{
 		FilePath: newPath,
 		Title:    "Raced Copy",
 		FileHash: hash,

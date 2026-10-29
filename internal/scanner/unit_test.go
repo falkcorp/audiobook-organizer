@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.19.3
+// version: 1.19.4
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -457,7 +457,7 @@ func TestProcessBooksParallelWithProgressCallback(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	var progressCalls int
 	progressFn := func(processed, total int, path string) {
@@ -682,9 +682,9 @@ func TestProcessBooksParallelWithScanCache(t *testing.T) {
 	saveCalled := false
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		saveCalled = true
-		return nil
+		return nil, nil
 	}
 
 	err = ProcessBooksParallel(t.Context(), books, 1, nil, nil)
@@ -965,7 +965,7 @@ func TestProcessBooksParallelContextCancelled(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -993,7 +993,7 @@ func TestProcessBooksParallelWorkersMinimum(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -1017,7 +1017,7 @@ func TestProcessBooksParallelSaveError(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return fmt.Errorf("save failed") }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, fmt.Errorf("save failed") }
 
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "fail.m4b")
@@ -1037,7 +1037,7 @@ func TestProcessBooksParallelAIParsingEnabled(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -1070,7 +1070,7 @@ func TestProcessBooksParallelAIParsingWithBadKey(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -1103,7 +1103,7 @@ func TestProcessBooksParallelGenericFilename(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -1136,7 +1136,7 @@ func TestProcessBooksParallelSaveWithScanCacheUpdate(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	oldExts := config.AppConfig.SupportedExtensions
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
@@ -1183,7 +1183,7 @@ func TestSaveBookToDatabaseNilStore(t *testing.T) {
 	})
 
 	book := &Book{Title: "Test", Author: "Author", FilePath: "/tmp/test.m4b"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database store not initialized")
 }
@@ -1218,7 +1218,7 @@ func TestSaveBookToDatabaseNewBook(t *testing.T) {
 	require.NoError(t, os.WriteFile(fpath, []byte("audio data"), 0o644))
 
 	book := &Book{Title: "Test Book", Author: "Jane Author", FilePath: fpath, Format: ".m4b"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
 }
 
@@ -1269,7 +1269,7 @@ func TestSaveBookToDatabaseExistingBook(t *testing.T) {
 		RunAndReturn(func(_ string, v []byte) error { proposal = v; return nil })
 
 	book := &Book{Title: "Test Book", Author: "Jane Author", FilePath: fpath, Format: ".m4b", FileHash: "abc123"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
 
 	// An existing row keeps its title; the empty author is a gap and is filled.
@@ -1301,7 +1301,7 @@ func TestSaveBookToDatabaseAuthorResolveError(t *testing.T) {
 	store.EXPECT().GetAuthorByName("Bad Author").Return(nil, fmt.Errorf("db error"))
 
 	book := &Book{Title: "Test", Author: "Bad Author", FilePath: "/tmp/test.m4b"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.Error(t, err)
 }
 
@@ -1324,7 +1324,7 @@ func TestSaveBookToDatabaseBookLookupError(t *testing.T) {
 	require.NoError(t, os.WriteFile(fpath, []byte("data"), 0o644))
 
 	book := &Book{Title: "Test", FilePath: fpath, Format: ".m4b"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.Error(t, err)
 	// The ownership check (checkFileOwnership) reads the path first, so the
 	// store error surfaces there and nothing is created.
@@ -1350,7 +1350,7 @@ func TestSaveBookToDatabaseBlockedHash(t *testing.T) {
 	require.NoError(t, os.WriteFile(fpath, []byte("data"), 0o644))
 
 	book := &Book{Title: "Blocked Book", FilePath: fpath, Format: ".m4b"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err) // blocked = silently skip
 }
 
@@ -1531,7 +1531,7 @@ func TestSaveBookToDatabaseRelinkByOrgID(t *testing.T) {
 		history = append(history, r)
 		return nil
 	})
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
 
 	require.Len(t, history, 1)
@@ -1577,7 +1577,7 @@ func TestSaveBookToDatabaseHashDedupAlreadyLinked(t *testing.T) {
 	require.NoError(t, os.WriteFile(fpath, []byte("data"), 0o644))
 
 	book := &Book{Title: "Dup Book", FilePath: fpath, Format: ".m4b"}
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err) // silently skips already-linked
 }
 
@@ -1648,9 +1648,9 @@ func TestProcessBooksParallelNormalFile(t *testing.T) {
 	saveCalled := 0
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		saveCalled++
-		return nil
+		return nil, nil
 	}
 
 	tmp := t.TempDir()
@@ -1677,9 +1677,9 @@ func TestProcessBooksParallelDirectoryBook(t *testing.T) {
 	saveCalled := 0
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		saveCalled++
-		return nil
+		return nil, nil
 	}
 
 	tmp := t.TempDir()
@@ -1707,8 +1707,8 @@ func TestProcessBooksParallelMultipleErrors(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
-		return fmt.Errorf("save error for %s", book.FilePath)
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
+		return nil, fmt.Errorf("save error for %s", book.FilePath)
 	}
 
 	tmp := t.TempDir()
@@ -1737,9 +1737,9 @@ func TestProcessBooksParallelWithSegmentFiles(t *testing.T) {
 	saveCalled := 0
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		saveCalled++
-		return nil
+		return nil, nil
 	}
 
 	tmp := t.TempDir()

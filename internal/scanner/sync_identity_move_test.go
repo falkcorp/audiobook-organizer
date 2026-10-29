@@ -1,7 +1,7 @@
 // file: internal/scanner/sync_identity_move_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5867d69f-d4f1-4d1e-9850-300c607a271b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -73,7 +73,7 @@ func TestSaveBookToDatabase_UntaggedMove_CarriesSyncIdentity(t *testing.T) {
 
 	newPath := filepath.Join(t.TempDir(), "moved.mp3")
 	require.NoError(t, os.WriteFile(newPath, []byte("audio"), 0o644))
-	require.NoError(t, saveBookToDatabase(context.Background(), &Book{
+	requireSaved(t)(saveBookToDatabase(context.Background(), &Book{
 		FilePath: newPath, Title: "Moved Book", Format: ".mp3", FileHash: hash,
 	}))
 
@@ -128,7 +128,7 @@ func TestSaveBookToDatabase_SecondCopy_KeepsSyncIdentity(t *testing.T) {
 
 	secondPath := filepath.Join(dir, "second.mp3")
 	require.NoError(t, os.WriteFile(secondPath, []byte("audio"), 0o644))
-	require.NoError(t, saveBookToDatabase(context.Background(), &Book{
+	requireSaved(t)(saveBookToDatabase(context.Background(), &Book{
 		FilePath: secondPath, Title: "Two Copies", Format: ".mp3", FileHash: hash,
 	}))
 

@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_recovery_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d81f0a6-2c57-4b93-9e6a-71cf05d8b2ae
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -164,7 +164,7 @@ func TestProcessBooksParallelSecondScanKeepsTheBookServiceable(t *testing.T) {
 	var createdID string
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		// Mimic the real saver's re-link. Looking the path up EXACTLY is not
 		// enough: after scan 1 the row lives at the parent directory, so an
 		// exact-path saver creates a second row for the same book on every
@@ -173,18 +173,18 @@ func TestProcessBooksParallelSecondScanKeepsTheBookServiceable(t *testing.T) {
 		// FilePath behaviour under test and keeps the test focused on that.
 		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
 			createdID = existing.ID
-			return nil
+			return nil, nil
 		}
 		if existing, err := store.GetBookByFilePath(filepath.Dir(book.FilePath)); err == nil && existing != nil {
 			createdID = existing.ID
-			return nil
+			return nil, nil
 		}
 		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		createdID = created.ID
-		return nil
+		return nil, nil
 	}
 
 	mkBooks := func() []Book {
@@ -268,13 +268,13 @@ func TestProcessBooksParallelPersistsChaptersForNormalizedMultiFileBook(t *testi
 	var createdID string
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		createdID = created.ID
-		return nil
+		return nil, nil
 	}
 
 	books := []Book{{
@@ -346,7 +346,7 @@ func TestProcessBooksParallelKeepsPathWhenNothingMoved(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, b *Book) error { return nil }
+	saveBook = func(ctx context.Context, b *Book) (*ownershipSkip, error) { return nil, nil }
 
 	books := []Book{{
 		FilePath:     segs[0],

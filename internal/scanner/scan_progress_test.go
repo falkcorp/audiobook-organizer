@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_progress_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5f2a9c14-8e63-4b07-a5d9-1c4e7b0f6a38
-// last-edited: 2026-09-12
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -244,7 +244,7 @@ func TestScanFolder_ProgressStaysWithinDenominatorOnResume(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
 
 	prevSave := saveBook
-	saveBook = func(context.Context, *Book) error { return nil }
+	saveBook = func(context.Context, *Book) (*ownershipSkip, error) { return nil, nil }
 	t.Cleanup(func() { saveBook = prevSave })
 
 	const resumeOffset = 5 // pretend a prior run finished the first 5 books
@@ -329,7 +329,7 @@ func TestScanFolder_SubStepsNeverReplaceTheScanCounters(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
 
 	prevSave := saveBook
-	saveBook = func(context.Context, *Book) error { return nil }
+	saveBook = func(context.Context, *Book) (*ownershipSkip, error) { return nil, nil }
 	t.Cleanup(func() { saveBook = prevSave })
 
 	spy := &progressSpy{Logger: logger.New("test")}
@@ -462,7 +462,7 @@ func TestScanFolder_SubStepsKeepCountersThroughTheRealReporterLogger(t *testing.
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
 
 	prevSave := saveBook
-	saveBook = func(context.Context, *Book) error { return nil }
+	saveBook = func(context.Context, *Book) (*ownershipSkip, error) { return nil, nil }
 	t.Cleanup(func() { saveBook = prevSave })
 
 	rep := &recordingReporter{}

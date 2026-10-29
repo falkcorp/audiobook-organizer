@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_identity_hold_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 98f7a755-16bc-4938-92bb-a032c55d1b10
-// last-edited: 2026-10-06
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -81,7 +81,7 @@ func authorNameOf(t *testing.T, st *database.PebbleStore, b *database.Book) stri
 func TestScanIdentityHold_RescanKeepsIdentityAndCandidates(t *testing.T) {
 	st, write := identityHoldFixture(t)
 	path := write("Brent Weeks/Shadow's Edge/fragment.mp3")
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "183 of 301", Author: "Brent Weeks", Format: ".mp3", Duration: 100}))
 	before, err := st.GetBookByFilePath(path)
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestScanIdentityHold_RescanKeepsIdentityAndCandidates(t *testing.T) {
 
 	// The rescan: the tag/file-name chain now reads another title, and a
 	// two-person credit.
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "of 301", Author: "Colin Baker & Maggie Stables", Format: ".mp3", Duration: 120}))
 
 	after, err := st.GetBookByID(before.ID)
@@ -131,7 +131,7 @@ func TestScanIdentityHold_RescanKeepsIdentityAndCandidates(t *testing.T) {
 	require.NotContains(t, fields, database.HistoryFieldAuthor)
 
 	// The file agrees with the row again: the proposal is cleared.
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "183 of 301", Author: "Brent Weeks", Format: ".mp3", Duration: 120}))
 	require.Nil(t, readScanProposal(t, st, before.ID), "a converged proposal was left behind")
 }
@@ -140,7 +140,7 @@ func TestScanIdentityHold_RescanKeepsIdentityAndCandidates(t *testing.T) {
 func TestScanIdentityHold_NewImportTakesTagValues(t *testing.T) {
 	st, write := identityHoldFixture(t)
 	path := write("Tasha Suri/The Jasmine Throne/book.m4b")
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "The Jasmine Throne", Author: "Tasha Suri", Series: "Burning Kingdoms", Position: 1,
 			Format: ".m4b", Duration: 100}))
 	b, err := st.GetBookByFilePath(path)
@@ -160,11 +160,11 @@ func TestScanIdentityHold_AIResaveOfNewImportTakesAITitle(t *testing.T) {
 	st, write := identityHoldFixture(t)
 	path := write("Unknown/74.m4b")
 	b := &Book{FilePath: path, Title: "74", Author: "Tasha Suri", Format: ".m4b", Duration: 100}
-	require.NoError(t, saveBookToDatabase(context.Background(), b))
+	requireSaved(t)(saveBookToDatabase(context.Background(), b))
 	require.NotEmpty(t, b.createdRowID)
 
 	b.Title = "The Jasmine Throne"
-	require.NoError(t, saveBookToDatabase(context.Background(), b))
+	requireSaved(t)(saveBookToDatabase(context.Background(), b))
 	got, err := st.GetBookByID(b.createdRowID)
 	require.NoError(t, err)
 	require.Equal(t, "The Jasmine Throne", got.Title)
@@ -179,7 +179,7 @@ func TestScanIdentityHold_FillsEmptyIdentityWithHistory(t *testing.T) {
 	row, err := st.CreateBook(&database.Book{Title: "Zero History", FilePath: path, Format: "m4b"})
 	require.NoError(t, err)
 
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "10 Zero History", Author: "William Gibson", Series: "Blue Ant", Position: 3,
 			Format: ".m4b", Duration: 100}))
 	got, err := st.GetBookByID(row.ID)
@@ -245,19 +245,19 @@ func TestExtractInfoFromPath_CountedPartKeepsItsNumber(t *testing.T) {
 func TestScanIdentityHold_ResaveKeepsFirstSaveProposal(t *testing.T) {
 	st, write := identityHoldFixture(t)
 	path := write("Tasha Suri/74/74.mp3")
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "74", Author: "Tasha Suri", Format: ".mp3", Duration: 100}))
 	row, err := st.GetBookByFilePath(path)
 	require.NoError(t, err)
 	require.NotNil(t, row)
 
 	rescan := &Book{FilePath: path, Title: "The Jasmine Throne", Author: "Tasha Suri", Format: ".mp3", Duration: 100}
-	require.NoError(t, saveBookToDatabase(context.Background(), rescan))
+	requireSaved(t)(saveBookToDatabase(context.Background(), rescan))
 	require.NotNil(t, readScanProposal(t, st, row.ID), "the first save recorded no proposal")
 	require.Equal(t, "74", rescan.Title, "the hold put the row's title on the Book")
 
 	// The AI-phase re-save of the same Book.
-	require.NoError(t, saveBookToDatabase(context.Background(), rescan))
+	requireSaved(t)(saveBookToDatabase(context.Background(), rescan))
 
 	p := readScanProposal(t, st, row.ID)
 	require.NotNil(t, p, "the re-save deleted the first save's proposal")
@@ -274,7 +274,7 @@ func TestScanIdentityHold_ResaveKeepsFirstSaveProposal(t *testing.T) {
 func TestScanIdentityHold_PositionFromOtherSeriesIsNotAGapFill(t *testing.T) {
 	st, write := identityHoldFixture(t)
 	path := write("Author A/Book/book.mp3")
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "Book", Author: "Author A", Series: "Series X", Format: ".mp3", Duration: 100}))
 	row, err := st.GetBookByFilePath(path)
 	require.NoError(t, err)
@@ -282,7 +282,7 @@ func TestScanIdentityHold_PositionFromOtherSeriesIsNotAGapFill(t *testing.T) {
 	require.NotNil(t, row.SeriesID)
 	require.True(t, row.SeriesSequence == nil || *row.SeriesSequence == 0, "fixture row must have no position")
 
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "Book", Author: "Author A", Series: "Series Y", Position: 3, Format: ".mp3", Duration: 100}))
 	after, err := st.GetBookByID(row.ID)
 	require.NoError(t, err)
@@ -295,7 +295,7 @@ func TestScanIdentityHold_PositionFromOtherSeriesIsNotAGapFill(t *testing.T) {
 	require.Equal(t, "3", p.Fields[database.ScanProposalSeriesPosition].To)
 
 	// The row's own series with a position: a gap, filled.
-	require.NoError(t, saveBookToDatabase(context.Background(),
+	requireSaved(t)(saveBookToDatabase(context.Background(),
 		&Book{FilePath: path, Title: "Book", Author: "Author A", Series: "Series X", Position: 3, Format: ".mp3", Duration: 100}))
 	after, err = st.GetBookByID(row.ID)
 	require.NoError(t, err)

@@ -1,7 +1,7 @@
 // file: internal/scanner/path_containment_boundary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e6f1a3c8-5d24-4b07-9a6e-3c8b2f7d10a5
-// last-edited: 2026-09-12
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -60,7 +60,7 @@ func isPrimary(b *database.Book) bool { return b.IsPrimaryVersion != nil && *b.I
 func TestSaveBook_SiblingOfRootGetsNoOrganizedHash(t *testing.T) {
 	env := setupBoundaryScanner(t)
 	path := filepath.Join(env.base, "lib2", "a.m4b")
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: path, Title: "A", Author: "Auth", Format: ".m4b", FileHash: "hash-sibling-organized"}); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: path, Title: "A", Author: "Auth", Format: ".m4b", FileHash: "hash-sibling-organized"}); err != nil {
 		t.Fatal(err)
 	}
 	if b := mustBookAt(t, env.store, path); b.OrganizedFileHash != nil && *b.OrganizedFileHash != "" {
@@ -69,7 +69,7 @@ func TestSaveBook_SiblingOfRootGetsNoOrganizedHash(t *testing.T) {
 
 	// Control: inside the root the organized hash is stamped.
 	in := filepath.Join(env.root, "b.m4b")
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: in, Title: "B", Author: "Auth", Format: ".m4b", FileHash: "hash-inside-organized"}); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: in, Title: "B", Author: "Auth", Format: ".m4b", FileHash: "hash-inside-organized"}); err != nil {
 		t.Fatal(err)
 	}
 	if b := mustBookAt(t, env.store, in); b.OrganizedFileHash == nil || *b.OrganizedFileHash != "hash-inside-organized" {
@@ -90,7 +90,7 @@ func TestSaveBook_HashDuplicateInSiblingIsLinkedNotPromoted(t *testing.T) {
 		t.Fatal(err)
 	}
 	newPath := filepath.Join(env.base, "lib2", "a.m4b")
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: newPath, Title: "A", Author: "Auth", Format: ".m4b", FileHash: hash}); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: newPath, Title: "A", Author: "Auth", Format: ".m4b", FileHash: hash}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,7 +119,7 @@ func TestSaveBook_HashDuplicateExistingInSiblingIsPromoted(t *testing.T) {
 		t.Fatal(err)
 	}
 	newPath := filepath.Join(env.root, "a.m4b")
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: newPath, Title: "A", Author: "Auth", Format: ".m4b", FileHash: hash}); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: newPath, Title: "A", Author: "Auth", Format: ".m4b", FileHash: hash}); err != nil {
 		t.Fatal(err)
 	}
 	old, _ := env.store.GetBookByID(existing.ID)
@@ -166,7 +166,7 @@ func seedSegmentBook(t *testing.T, env boundaryEnv, dir string, contents ...stri
 func saveSegmentBook(t *testing.T, dir, wholeHash string, contents ...string) {
 	t.Helper()
 	segs := writeBoundarySegments(t, dir, contents...)
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: dir, Title: "New " + filepath.Base(dir), Author: "Auth", Format: ".mp3", FileHash: wholeHash, SegmentFiles: segs}); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: dir, Title: "New " + filepath.Base(dir), Author: "Auth", Format: ".mp3", FileHash: wholeHash, SegmentFiles: segs}); err != nil {
 		t.Fatal(err)
 	}
 }
