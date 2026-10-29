@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.12.0
+// version: 1.12.1
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 //
 // The Review > Metadata lane's server-side query (view=page), the only way the
 // lane loads its queue since 02-PR19 retired the full-index mode.
@@ -27,6 +27,8 @@ import {
   newBatchId,
   PRUNE_BUILDING_MAX_WAIT_MS,
   PRUNE_BUSY_MAX_RETRIES,
+  reviewLevelFilters,
+  reviewQueryFor,
   useMetadataLane,
   type ChipFilter,
   type MetadataLane,
@@ -114,6 +116,7 @@ async function applyCase(lane: { current: MetadataLane }, query: Record<string, 
       matchLanguage: on('match_language'),
       onlyWithTranscription: on('has_transcription'),
       onlyTranscriptionMatched: on('transcription_matched'),
+      onlyTranscriptionRuntimeFlagged: on('transcription_runtime_flagged'),
       hideMultiBook: on('hide_multi_book'),
     })
   );
@@ -1998,5 +2001,30 @@ describe('the lane requests', () => {
     for (const call of vi.mocked(api.getReviewPage).mock.calls) {
       expect(call[0].q).toBeUndefined();
     }
+  });
+});
+
+describe('reviewQueryFor: transcription runtime check', () => {
+  const filters = {
+    sourceFilter: null,
+    titleFilter: '',
+    hideApplied: false,
+    hideRejected: false,
+    hideNoMatch: false,
+    matchLanguage: false,
+    onlyTranscriptionRuntimeFlagged: false,
+    ...reviewLevelFilters('off'),
+  };
+  const input = (onlyTranscriptionRuntimeFlagged: boolean) => ({
+    filters: { ...filters, onlyTranscriptionRuntimeFlagged },
+    chip: null,
+    title: '',
+    skipped: [],
+    ungrouped: [],
+  });
+
+  it('sends transcription_runtime_flagged only when the switch is on', () => {
+    expect(reviewQueryFor(input(true)).transcription_runtime_flagged).toBe(true);
+    expect(reviewQueryFor(input(false)).transcription_runtime_flagged).toBeUndefined();
   });
 });

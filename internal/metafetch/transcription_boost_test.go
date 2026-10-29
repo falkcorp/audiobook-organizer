@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_boost_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c1f9a52-8d47-4e60-b9a2-6f0e5d213c74
-// last-edited: 2026-09-13
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -67,9 +67,11 @@ func TestTranscriptionBoost_AuthorRequiresTitle(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, boosted := transcriptionBoost(base, tc.cand, tc.hints)
-			if boosted != tc.wantBoost {
-				t.Errorf("boosted = %v, want %v", boosted, tc.wantBoost)
+			cand := tc.cand
+			cand.DurationSec = 36000 // runtime agrees with the book's 10h, so the runtime gate passes
+			got, out := transcriptionBoost(base, cand, tc.hints, localRuntime{Sec: 36000})
+			if out.Boosted != tc.wantBoost {
+				t.Errorf("boosted = %v, want %v", out.Boosted, tc.wantBoost)
 			}
 			if !floatNear(got, tc.wantScore) {
 				t.Errorf("score = %v, want %v", got, tc.wantScore)

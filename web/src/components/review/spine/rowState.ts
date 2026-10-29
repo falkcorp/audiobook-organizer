@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-10-19
+// last-edited: 2026-10-29
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -15,6 +15,7 @@
 // function of its arguments, which is what makes it liftable at all.
 
 import type { SxProps, Theme } from '@mui/material/styles';
+import type { TranscriptionRuntimeCheck } from '../../../services/api';
 
 /**
  * Per-row outcome, matching `rowStates` in MetadataReviewDialog (:221).
@@ -149,6 +150,22 @@ export function runtimeDiffers(deltaSec: number | undefined | null): boolean {
  * 2% difference the gate calls agreement.
  */
 export const RUNTIME_BLOCK_RATIO = 0.1;
+
+/**
+ * The chip text for a candidate the audio intro matched but whose runtime did
+ * not confirm (MetadataCandidate.transcription_runtime_check). The full reason
+ * rides in the tooltip; the label names the verdict.
+ */
+export function transcriptionRuntimeChipLabel(check: TranscriptionRuntimeCheck): string {
+  switch (check.verdict) {
+    case 'fragment':
+      return '⚠ file fragment: transcription matches, but the files are only part of the book';
+    case 'runtime_mismatch':
+      return '⚠ transcription matches, runtime does not';
+    default:
+      return '⚠ transcription matches, runtime unverified';
+  }
+}
 
 /** The runtime inputs `runtimeDiffersFromBook` reads off a review row. */
 export interface RuntimeRow {

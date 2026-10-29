@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b3e6a1c8-9d24-4f57-8a06-1c2d3e4f5a61
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -359,5 +359,43 @@ func TestEvaluateBook_PartialRuntimeUpperBoundDemotesTooLongCandidate(t *testing
 	}
 	if ev.currentRank != 1 {
 		t.Fatalf("no bound: applied candidate rank = %d, want 1 (tie)", ev.currentRank)
+	}
+}
+
+// The calibration harness applies the same transcription runtime gate as
+// production (owner decision 2026-10-29): the boost needs the candidate's
+// runtime within 10% of the book's COMPLETE runtime.
+func TestRankScore_TranscriptionBoostNeedsRuntimeMatch(t *testing.T) {
+	const hr = 3600
+	k := defaultSweepKnobs()
+	words := metafetch.SignificantWords("Year One")
+	book := &database.Book{ID: "b1", Title: "Year One"}
+	hints := transcriptionHints{title: "Year One"}
+	complete := database.BookRuntime{Seconds: 10 * hr, Source: database.RuntimeSourceFiles, FilesCounted: 1, FilesKnown: 1}
+	partial := database.BookRuntime{Seconds: 7 * hr, Source: database.RuntimeSourceFiles, FilesCounted: 2, FilesKnown: 1}
+	cand := func(sec int) candFields {
+		return candFields{Title: "Year One", Author: "Alfred Pennyworth", Narrator: "Lucius Fox", DurationSec: sec}
+	}
+
+	ratio := func(rt database.BookRuntime, candSec int) float64 {
+		with := rankScore(cand(candSec), book, rt, words, hints, k)
+		without := rankScore(cand(candSec), book, rt, words, transcriptionHints{}, k)
+		if without == 0 {
+			t.Fatalf("control score is 0 (candidate fell below the F1 floor)")
+		}
+		return with / without
+	}
+	if got := ratio(complete, 10*hr+30*60); got < 1.99 || got > 2.01 {
+		t.Errorf("10h vs 10h30m: boost ratio = %v, want 2.0", got)
+	}
+	for name, got := range map[string]float64{
+		"10h vs 12h":            ratio(complete, 12*hr),
+		"candidate runtime 0":   ratio(complete, 0),
+		"partial local runtime": ratio(partial, 10*hr),
+		"unknown local runtime": ratio(database.BookRuntime{}, 10*hr),
+	} {
+		if got != 1.0 {
+			t.Errorf("%s: boost ratio = %v, want 1.0 (boost withheld)", name, got)
+		}
 	}
 }

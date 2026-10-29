@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.15.0
+// version: 1.15.1
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -82,6 +82,7 @@ import {
   noCandidateLabel,
   runtimeDiffers,
   runtimeExceedsUpperBound,
+  transcriptionRuntimeChipLabel,
   type RowState,
 } from './rowState';
 import { BookInfoPanel } from './BookInfoPanel';
@@ -541,6 +542,17 @@ const CompactRow = memo(function CompactRow({
                 size="small"
                 sx={{ fontWeight: 500 }}
               />
+            )}
+            {r.candidate?.transcription_runtime_check && (
+              <Tooltip title={r.candidate.transcription_runtime_check.detail}>
+                <Chip
+                  data-testid="transcription-runtime-chip"
+                  label={transcriptionRuntimeChipLabel(r.candidate.transcription_runtime_check)}
+                  color="warning"
+                  size="small"
+                  sx={{ fontWeight: 500 }}
+                />
+              </Tooltip>
             )}
             {runtimeExceedsUpperBound(r) && (
               <Chip

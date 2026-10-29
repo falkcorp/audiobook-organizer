@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.14.2
+// version: 1.14.3
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package handlers
 
@@ -153,6 +153,10 @@ type ReviewQuery struct {
 	HideRuntime, MatchLanguage                          bool
 	HasTranscription, TranscriptionMatched              bool
 	HideMultiBook                                       bool
+	// TranscriptionRuntimeFlagged keeps only rows whose shown candidate the
+	// audio intro matched but whose runtime did not confirm
+	// (MetadataCandidate.TranscriptionRuntimeCheck: fragment, mismatch, unknown).
+	TranscriptionRuntimeFlagged bool
 	// Ungrouped is the books the owner pulled out of a group (the lane's
 	// client-only ungroupedIds); they never count toward a multi-book group.
 	Ungrouped []string
@@ -259,6 +263,7 @@ func parseReviewQueryBucket(get func(string) string, allowAny bool) (*ReviewQuer
 	boolParam("match_language", &q.MatchLanguage)
 	boolParam("has_transcription", &q.HasTranscription)
 	boolParam("transcription_matched", &q.TranscriptionMatched)
+	boolParam("transcription_runtime_flagged", &q.TranscriptionRuntimeFlagged)
 	boolParam("hide_multi_book", &q.HideMultiBook)
 	boolParam("pins", &q.Pins)
 	if err != nil {
@@ -361,10 +366,10 @@ func (q *ReviewQuery) normalize() string {
 		fmt.Fprintf(&b, "bucket=%s", q.Bucket)
 		return b.String()
 	}
-	fmt.Fprintf(&b, "src=%q|minc=%s|ha=%t|hr=%t|hs=%t|hn=%t|rt=%t|lang=%t|tr=%t|trm=%t|mb=%t",
+	fmt.Fprintf(&b, "src=%q|minc=%s|ha=%t|hr=%t|hs=%t|hn=%t|rt=%t|lang=%t|tr=%t|trm=%t|trf=%t|mb=%t",
 		q.Source, strconv.FormatFloat(q.MinConfidence, 'g', -1, 64),
 		q.HideApplied, q.HideRejected, q.HideSkipped, q.HideNoMatch, q.HideRuntime,
-		q.MatchLanguage, q.HasTranscription, q.TranscriptionMatched, q.HideMultiBook)
+		q.MatchLanguage, q.HasTranscription, q.TranscriptionMatched, q.TranscriptionRuntimeFlagged, q.HideMultiBook)
 	if q.HideMultiBook {
 		fmt.Fprintf(&b, "|ug=%s", strings.Join(q.Ungrouped, ","))
 	}
@@ -1058,6 +1063,9 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, budget *queryg
 			continue
 		}
 		if q.TranscriptionMatched && !cand.TranscriptionBoosted {
+			continue
+		}
+		if q.TranscriptionRuntimeFlagged && cand.TranscriptionRuntimeCheck == nil {
 			continue
 		}
 		out.refs = append(out.refs, reviewRef(i))

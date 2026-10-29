@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_review.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 
 package applygate
 
@@ -18,7 +18,8 @@ import "strings"
 // review, so the certainty legs report but do not refuse.
 //
 // Overridden (they are judgements about how sure the match is):
-//   - score: score_below_floor and transcription_mismatch;
+//   - score: score_below_floor, transcription_mismatch and
+//     transcription_runtime_unverified;
 //   - sequence: all four sequence reasons;
 //   - evidence: every hard contradiction except partial_book and
 //     asin_conflict, and the MinAgreements count (insufficient_evidence).

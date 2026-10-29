@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -572,13 +572,198 @@ func containsCI(a, b string) bool {
 	return strings.Contains(al, bl) || strings.Contains(bl, al)
 }
 
+// transcriptionRuntimeTolerance is how far a candidate's runtime may sit from
+// the local book's complete runtime (|cand - local| / local) before the
+// transcription boost is withheld. Owner decision, 2026-10-29: an audio-intro
+// title/author/narrator agreement is only strong evidence of the right
+// EDITION when the lengths agree; a 2.0x title boost on a candidate with no
+// runtime (or a wildly different one) once scored 3.09 with no runtime row.
+// The bound is inclusive (exactly 10% passes).
+const transcriptionRuntimeTolerance = 0.10
+
+// transcriptionFragmentRatio: a local runtime below this share of the
+// candidate's is treated as a file FRAGMENT (part of a longer book), not just
+// an edition mismatch. Owner decision, 2026-10-29: when the transcription
+// matches but the lengths do not, a runtime well under the candidate's means
+// the files are one piece of the book and the rest is needed.
+const transcriptionFragmentRatio = 0.50
+
+// Verdicts of TranscriptionRuntimeCheck.
+const (
+	// TranscriptionRuntimeFragment: the local files are significantly shorter
+	// than the candidate (under transcriptionFragmentRatio of it).
+	TranscriptionRuntimeFragment = "fragment"
+	// TranscriptionRuntimeMismatch: off by more than the tolerance otherwise
+	// (longer, or only moderately shorter).
+	TranscriptionRuntimeMismatch = "runtime_mismatch"
+	// TranscriptionRuntimeUnknown: the runtimes cannot be compared.
+	TranscriptionRuntimeUnknown = "runtime_unknown"
+)
+
+// TranscriptionRuntimeCheck is why the audio-intro (transcription) match could
+// not be trusted as "this is the book": set on a MetadataCandidate only when
+// the transcription matched but the runtime did not confirm it. Absent means
+// no transcription match, or one the runtime confirmed. The review row shows it
+// as a chip, the review list filters on it, and the apply gate refuses to act
+// on the transcription match while it is set.
+type TranscriptionRuntimeCheck struct {
+	// Verdict is one of the TranscriptionRuntime* constants.
+	Verdict string `json:"verdict"`
+	// Detail is a one-line human explanation.
+	Detail string `json:"detail"`
+	// LocalSec is the book's complete runtime, or 0 when unknown (partial
+	// included); CandSec the candidate's, or 0 when unknown.
+	LocalSec int `json:"local_sec,omitempty"`
+	CandSec  int `json:"cand_sec,omitempty"`
+}
+
+// transcriptionOutcome says what the transcription hints did to a candidate.
+type transcriptionOutcome struct {
+	// Matched: the hints agree with the candidate (a boost was earned).
+	Matched bool
+	// Boosted: the multiplier was actually applied (Matched and the runtime
+	// gate passed). TranscriptionBoosted on MetadataCandidate is this.
+	Boosted bool
+	// Check is set when Matched && !Boosted: why the runtime gate refused.
+	Check *TranscriptionRuntimeCheck
+}
+
+// transcriptionRuntimeGate decides whether the transcription boost may apply.
+// It passes only when the local runtime is a COMPLETE total (rt.Sec > 0; a
+// partial runtime is a lower bound, never a total) and the candidate has a
+// runtime within transcriptionRuntimeTolerance of it. Otherwise it returns the
+// classified check; its Detail follows "the boost needs the runtime within N%: ".
+func transcriptionRuntimeGate(rt localRuntime, candSec int) (bool, *TranscriptionRuntimeCheck) {
+	chk := &TranscriptionRuntimeCheck{CandSec: candSec}
+	if candSec < 0 {
+		chk.CandSec = 0
+	}
+	if rt.Sec <= 0 {
+		// Local total unknown. A size-based estimate or upper bound can still
+		// prove the files are a fragment of a known-length candidate.
+		if candSec > 0 {
+			if rt.estimatesFragmentOf(candSec) {
+				chk.Verdict = TranscriptionRuntimeFragment
+				chk.Detail = fragmentDetail(rt.estimateOrUpper(), candSec, "estimated from the file sizes")
+				return false, chk
+			}
+		}
+		chk.Verdict = TranscriptionRuntimeUnknown
+		chk.Detail = "the book's total runtime is unknown" + rt.unknownWhy()
+		if candSec <= 0 {
+			chk.Detail += " and the candidate's runtime is unknown"
+		}
+		return false, chk
+	}
+	chk.LocalSec = rt.Sec
+	if candSec <= 0 {
+		chk.Verdict = TranscriptionRuntimeUnknown
+		chk.Detail = "the candidate's runtime is unknown (the book's is " + formatRuntime(rt.Sec) + ")"
+		return false, chk
+	}
+	ratio := durationDeltaRatio(rt.Sec, candSec)
+	if ratio <= transcriptionRuntimeTolerance {
+		return true, nil
+	}
+	chk.Detail = fmt.Sprintf("the runtimes differ by %.0f%% (the book's %s, the candidate's %s)",
+		ratio*100, formatRuntime(rt.Sec), formatRuntime(candSec))
+	if float64(rt.Sec) < transcriptionFragmentRatio*float64(candSec) {
+		chk.Verdict = TranscriptionRuntimeFragment
+		chk.Detail = fragmentDetail(rt.Sec, candSec, "")
+	} else {
+		chk.Verdict = TranscriptionRuntimeMismatch
+	}
+	return false, chk
+}
+
+// fragmentDetail: "these files are about 1h00m of a 10h00m book".
+func fragmentDetail(localSec, candSec int, how string) string {
+	d := fmt.Sprintf("the files look like a fragment: about %s of a %s book", formatRuntime(localSec), formatRuntime(candSec))
+	if how != "" {
+		d += " (" + how + ")"
+	}
+	return d
+}
+
+// estimateOrUpper is the best size-based figure for a partial runtime's total:
+// the estimate, else the upper bound.
+func (r localRuntime) estimateOrUpper() int {
+	if r.Partial.EstimateSec > 0 {
+		return r.Partial.EstimateSec
+	}
+	return r.Partial.UpperSec
+}
+
+// estimatesFragmentOf reports whether a PARTIAL runtime's size-based estimate
+// puts the whole book under transcriptionFragmentRatio of candSec. A measured
+// lower bound alone never qualifies: it can prove the book is at least that
+// long, not that it is short.
+func (r localRuntime) estimatesFragmentOf(candSec int) bool {
+	v := r.estimateOrUpper()
+	return v > 0 && candSec > 0 && float64(v) < transcriptionFragmentRatio*float64(candSec)
+}
+
+// unknownWhy says why a local runtime is not a complete total: how many files
+// were measured, what is known of the sizes.
+func (r localRuntime) unknownWhy() string {
+	var parts []string
+	if r.FilesCounted > 0 && r.FilesKnown < r.FilesCounted {
+		p := fmt.Sprintf("only %d of %d files measured", r.FilesKnown, r.FilesCounted)
+		if r.MeasuredSec > 0 {
+			p += ", at least " + formatRuntime(r.MeasuredSec)
+		}
+		parts = append(parts, p)
+	}
+	switch {
+	case r.FilesCounted > 0 && r.TotalBytes == 0:
+		parts = append(parts, "file sizes 0 KB")
+	case r.FilesCounted > 0 && !r.SizesComplete:
+		parts = append(parts, "some file sizes unknown")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, "; ") + ")"
+}
+
+// TranscriptionRuntimeAgrees is the transcription runtime gate for callers
+// outside this package (the calibration harness), so they cannot drift from
+// production: localSec is the book's COMPLETE total runtime (0 = unknown,
+// including a partial runtime).
+func TranscriptionRuntimeAgrees(localSec, candSec int) bool {
+	ok, _ := transcriptionRuntimeGate(localRuntime{Sec: localSec}, candSec)
+	return ok
+}
+
+// transcriptionWithheldDetail is the breakdown text for a withheld boost.
+func transcriptionWithheldDetail(chk *TranscriptionRuntimeCheck) string {
+	return fmt.Sprintf("The audio intro agrees, but the boost needs the runtime within %.0f%%: %s",
+		transcriptionRuntimeTolerance*100, chk.Detail)
+}
+
 // transcriptionBoost multiplies score when a candidate matches the audio-derived
-// fields. Multipliers stack on top of the curated-field boosts; scores are
-// intentionally NOT clamped — bonuses add on top (see scoring memo). An exact
-// (normalized) transcribed-title match is the strongest signal because the title
-// is read aloud verbatim in the intro.
-// Returns (adjusted score, true) when any boost was applied; (score, false) otherwise.
-func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints) (float64, bool) {
+// fields AND its runtime is within transcriptionRuntimeTolerance of the book's
+// complete local runtime (see transcriptionRuntimeGate). The gate lives here so
+// no caller can skip it. Multipliers stack on top of the curated-field boosts;
+// scores are intentionally NOT clamped.
+func transcriptionBoost(score float64, r metadata.BookMetadata, th transcriptionHints, rt localRuntime) (float64, transcriptionOutcome) {
+	boosted, matched := transcriptionMatchBoost(score, r, th)
+	if !matched {
+		return score, transcriptionOutcome{}
+	}
+	if ok, chk := transcriptionRuntimeGate(rt, r.DurationSec); !ok {
+		return score, transcriptionOutcome{Matched: true, Check: chk}
+	}
+	return boosted, transcriptionOutcome{Matched: true, Boosted: true}
+}
+
+// transcriptionMatchBoost is the UNGATED hint comparison: it multiplies score
+// when a candidate matches the audio-derived fields. An exact (normalized)
+// transcribed-title match is the strongest signal because the title is read
+// aloud verbatim in the intro.
+// Returns (adjusted score, true) when any boost was earned; (score, false) otherwise.
+// Only transcriptionBoost may call it.
+func transcriptionMatchBoost(score float64, r metadata.BookMetadata, th transcriptionHints) (float64, bool) {
 	k := scoringKnobs()
 	// The transcribed TITLE is the anchor — it is read aloud verbatim in the
 	// intro. The author/narrator boosts only apply when the title ALSO agrees;
@@ -729,7 +914,7 @@ func pickBestMatchFromScored(
 		// audio-derived title/author/narrator, that is strong evidence of a
 		// correct match. No-op when no transcription hints were supplied.
 		if !th.empty() {
-			score, _ = transcriptionBoost(score, r, th)
+			score, _ = transcriptionBoost(score, r, th, bookRuntime)
 		}
 
 		// Duration-based scoring: compare candidate runtime against the book's

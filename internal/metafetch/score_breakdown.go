@@ -1,7 +1,7 @@
 // file: internal/metafetch/score_breakdown.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6c81e35a-2b47-4d19-90fa-7e5c3d81b026
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -213,6 +213,19 @@ func (sr *scoreRecorder) mulAbsence(id, label string, factor float64, detail str
 	})
 }
 
+// mulRecorded is mul that records an identity (x1.00) step too. Use it only
+// where the reviewer needs to SEE that a signal was considered and did nothing
+// (a withheld transcription boost and the runtime step beside it); plain mul
+// keeps omitting identity factors as noise.
+func (sr *scoreRecorder) mulRecorded(id, label string, factor float64, detail string) {
+	sr.score *= factor
+	sr.rank *= factor
+	sr.steps = append(sr.steps, ScoreStep{
+		ID: id, Label: label, Op: ScoreOpMultiply,
+		Operand: factor, Running: sr.score, Detail: detail,
+	})
+}
+
 // add applies an additive term, recording it only when non-zero.
 func (sr *scoreRecorder) add(id, label string, term float64, detail string, capped bool) {
 	sr.score += term
@@ -328,6 +341,10 @@ func durationStepDetail(rt localRuntime, candSec int) string {
 			"). Their combined size suggests about " + formatRuntime(b.EstimateSec) +
 			" (no more than " + formatRuntime(b.UpperSec) + " at any plausible bitrate), " +
 			"so the candidate's " + formatRuntime(candSec) + " is far longer than the files can hold."
+	}
+	if rt.Sec <= 0 && rt.FilesCounted > 0 && rt.FilesKnown < rt.FilesCounted {
+		return "Only " + strconv.Itoa(rt.FilesKnown) + " of " + strconv.Itoa(rt.FilesCounted) +
+			" local files have a measured runtime, so the book's total is unknown and duration was not used."
 	}
 	if rt.Sec <= 0 || candSec <= 0 {
 		return "One side has no known runtime, so duration was not used."

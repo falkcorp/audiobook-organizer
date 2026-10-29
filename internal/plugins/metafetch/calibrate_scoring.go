@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/calibrate_scoring.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4e1c8b2a-6d90-4f37-9b1a-2c3d4e5f6a70
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 // Package metafetch — op metafetch.calibrate-scoring (INIT-3-T1).
 //
@@ -452,8 +452,14 @@ func normalizeTitleTokens(s string) string {
 
 // transcriptionBoost mirrors service_scoring.go's transcriptionBoost: the
 // transcribed title is the anchor; author/narrator boosts apply only when the
-// title also agrees (or no transcribed title is present).
-func transcriptionBoost(score float64, f candFields, th transcriptionHints, k sweepKnobs) float64 {
+// title also agrees (or no transcribed title is present). Like production it
+// applies only when the candidate's runtime is within the owner-decided 10% of
+// the book's COMPLETE runtime (metafetch.TranscriptionRuntimeAgrees; bookDurSec
+// is 0 when unknown or partial).
+func transcriptionBoost(score float64, f candFields, th transcriptionHints, k sweepKnobs, bookDurSec int) float64 {
+	if !metafetch.TranscriptionRuntimeAgrees(bookDurSec, f.DurationSec) {
+		return score
+	}
 	titleHintPresent := th.title != ""
 	titleMatched := false
 	if titleHintPresent && f.Title != "" {
@@ -512,7 +518,7 @@ func rankScore(f candFields, book *database.Book, rt database.BookRuntime, searc
 	}
 
 	// Transcription boosts against the book's audio-derived hints.
-	score = transcriptionBoost(score, f, hints, k)
+	score = transcriptionBoost(score, f, hints, k, bookDur)
 
 	// Series-name boost: applied when the candidate's series agrees with the
 	// book's series name (best-effort; book.Series is a joined relation that
