@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -163,8 +163,8 @@ const (
 	retCatCombineLinkPending = "combine_undo_link_pending"
 	// retCatSwapUnfinished is the transient hold on a row whose shell has a
 	// version stuck in swapping_in/swapping_out (a crashed swap; see
-	// versions.RunVersionSwap and TODO-SWAP-STUCK-RECOVERY). Its files are in
-	// two places until the swap is resumed, so retiring them now would retire
+	// versions.RunVersionSwap; versions.ResumeVersionSwap repairs it). Its files are
+	// in two places until the swap is resumed, so retiring them now would retire
 	// rows the swap still owes moves for. The row is held (retry_later, nothing
 	// written) under the fingerprint it would have without the hold, so the same
 	// plan applies once the swap is finished.

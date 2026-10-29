@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.155.0
+// version: 1.156.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package database
 
@@ -457,6 +457,7 @@ type MockStore struct {
 	GetBookVersionByTorrentHashFunc func(hash string) (*BookVersion, error)
 	ListTrashedBookVersionsFunc     func() ([]BookVersion, error)
 	ListPurgedBookVersionsFunc      func() ([]BookVersion, error)
+	ListSwappingBookVersionsFunc    func() ([]BookVersion, error)
 
 	// User playlists (spec 3.4)
 	CreateUserPlaylistFunc         func(pl *UserPlaylist) (*UserPlaylist, error)
@@ -2303,6 +2304,13 @@ func (m *MockStore) ListTrashedBookVersions() ([]BookVersion, error) {
 func (m *MockStore) ListPurgedBookVersions() ([]BookVersion, error) {
 	if m.ListPurgedBookVersionsFunc != nil {
 		return m.ListPurgedBookVersionsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListSwappingBookVersions() ([]BookVersion, error) {
+	if m.ListSwappingBookVersionsFunc != nil {
+		return m.ListSwappingBookVersionsFunc()
 	}
 	return nil, nil
 }

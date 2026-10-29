@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8f2c6d1a-4b7e-4c93-a5d0-1e9b3f7a2c58
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -59,7 +59,7 @@ func TestMarkTrashed_RefusesASwappingVersion(t *testing.T) {
 		if !errors.Is(err, ErrVersionSwapping) {
 			t.Fatalf("MarkTrashed(%s) = %v, want ErrVersionSwapping", st, err)
 		}
-		if !strings.Contains(err.Error(), st) || !strings.Contains(err.Error(), "needs repair") {
+		if !strings.Contains(err.Error(), st) || !strings.Contains(err.Error(), "ResumeVersionSwap") {
 			t.Errorf("MarkTrashed(%s) error does not say what to do: %v", st, err)
 		}
 		if v.Status != st || v.TrashedAt != nil {

@@ -1,7 +1,7 @@
 // file: internal/versions/swap_layout_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: ceae3827-5dd4-4742-9093-b4d214299d8a
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -633,7 +633,7 @@ func TestRunVersionSwap_UndoBlockedByAStrangerIsIncomplete(t *testing.T) {
 }
 
 // A version that is already swapping_* is refused before anything is written:
-// resuming a swap is not implemented and its files may be in two places.
+// RunVersionSwap does not resume it (ResumeVersionSwap does) and its files may be in two places.
 func TestRunVersionSwap_RefusesAVersionAlreadySwapping(t *testing.T) {
 	for _, st := range []string{database.BookVersionStatusSwappingOut, database.BookVersionStatusSwappingIn} {
 		for _, side := range []string{"from", "to"} {

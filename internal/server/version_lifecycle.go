@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 //
 // Version lifecycle HTTP handlers. Core logic lives in internal/versions.
 
@@ -87,14 +87,24 @@ const codeVersionSwapFailed = "VERSION_SWAP_FAILED"
 // codeVersionSwapIncomplete is the error code of the 500 that says the swap
 // moved files and could not finish (or undo): the book's versions are stuck in
 // swapping_out/swapping_in and need repair. The version was not trashed.
-// Repeating the DELETE does not repair the book: it is refused (codeVersionSwapping)
-// while the version is still in swapping_*, and only trashes a leaving version
-// that had already reached alt, leaving the entering one swapping_in.
+// Repeating the DELETE does not repair the book: it is refused
+// (codeVersionSwapping) while any version of the book is in swapping_*.
+// POST /audiobooks/:id/versions/resume-swap repairs it.
 const codeVersionSwapIncomplete = "VERSION_SWAP_INCOMPLETE"
 
-// codeVersionSwapping is the error code of the 409 for a trash of a version that
-// is in swapping_out/swapping_in (versions.ErrVersionSwapping).
+// codeVersionSwapping is the error code of the 409 for a trash of a version of a
+// book that has a version in swapping_out/swapping_in (versions.ErrVersionSwapping
+// for the version itself).
 const codeVersionSwapping = "VERSION_SWAPPING"
+
+// codeSwapResumeRefused is the error code of the 409 for a resume that found the
+// book in a state it cannot repair without guessing (versions.ErrSwapResumeRefused);
+// nothing was changed and the message says what was found.
+const codeSwapResumeRefused = "SWAP_RESUME_REFUSED"
+
+// codeNoSwapToResume is the error code of the 409 for a resume of a book none of
+// whose versions is in swapping_out/swapping_in (versions.ErrNoSwapToResume).
+const codeNoSwapToResume = "NO_SWAP_TO_RESUME"
 
 // handleTrashVersion moves a version to trash.
 // DELETE /api/v1/audiobooks/:id/versions/:vid
@@ -162,6 +172,27 @@ func (s *Server) trashVersionLocked(c *gin.Context, bookID, versionID string) (a
 	if ver.BookID != bookID {
 		httputil.RespondWithBadRequest(c, "version/book mismatch")
 		return nil
+	}
+
+	// A book with a version in swapping_out/swapping_in has a swap that did not
+	// finish, and no trash of any of its versions is made until it is resumed:
+	// the leaving version of such a swap can already be alt (the final write of
+	// the entering version to active failed), where a retried DELETE would trash
+	// it while the book still plays files of a version that is not active, and the
+	// nightly cleanup would count its 14 days from a book that needs repair.
+	// MarkTrashed refuses a swapping_* version itself; this covers the others.
+	siblings, err := s.Ops().GetBookVersionsByBookID(bookID)
+	if err != nil {
+		httputil.InternalError(c, "trash version", err)
+		return nil
+	}
+	for _, sib := range siblings {
+		if sib.Status == database.BookVersionStatusSwappingOut || sib.Status == database.BookVersionStatusSwappingIn {
+			httputil.RespondWithError(c, http.StatusConflict,
+				"The version was not trashed: a swap of this book did not finish (version "+sib.ID+" is "+sib.Status+"), so the book has no settled active version. "+
+					"Resume the swap first (Version Management, Unfinished swaps), then delete the version.", codeVersionSwapping)
+			return nil
+		}
 	}
 
 	// Only the active version needs a swap first. Every other status goes
@@ -277,8 +308,8 @@ func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion)
 			httputil.RespondWithError(c, http.StatusInternalServerError,
 				"the version was not trashed. Switching the book to version "+target.ID+" moved files and then could not finish: "+
 					"the book's versions are stuck mid-swap (swapping_out / swapping_in) and its files may be in new places. "+
-					"This needs repair. Deleting the version again does not repair it: it is refused while the version is still in swapping_out / swapping_in "+
-					"(if this version had already reached alt, deleting it again can trash it, but the entering version stays swapping_in). ("+err.Error()+")",
+					"This needs repair: resume the swap from Version Management (Unfinished swaps), which finishes it or puts the files back. "+
+					"Deleting a version of this book is refused until then. ("+err.Error()+")",
 				codeVersionSwapIncomplete)
 			return "", nil, false
 		}
@@ -570,6 +601,86 @@ func (s *Server) handleHardDeleteVersion(c *gin.Context) {
 	}{Deleted: ver.ID})
 }
 
+// handleListSwapIncompleteBooks lists the books whose version swap did not
+// finish (a version in swapping_out/swapping_in), each with its path, its
+// versions' file rows and what a resume would do or why it would refuse.
+// GET /api/v1/audiobooks/swap-incomplete
+func (s *Server) handleListSwapIncompleteBooks(c *gin.Context) {
+	books, err := versions.ListSwapIncompleteBooks(s.storeForWiring())
+	if err != nil {
+		httputil.InternalError(c, "list unfinished swaps", err)
+		return
+	}
+	httputil.RespondWithOK(c, struct {
+		Books []versions.SwapIncompleteBook `json:"books"`
+		Count int                           `json:"count"`
+	}{Books: books, Count: len(books)})
+}
+
+// handleResumeVersionSwap finishes or undoes a version swap that did not finish.
+// POST /api/v1/audiobooks/:id/versions/resume-swap
+//
+// versions.ResumeVersionSwap reads the version rows, the file rows and the disk
+// and either completes the swap or moves the files back, whichever the disk
+// allows; it changes nothing and answers 409 when the state is not one it can
+// repair without guessing (SWAP_RESUME_REFUSED, with the reason) or the book has
+// no unfinished swap (NO_SWAP_TO_RESUME). It holds the merge lock, like the swap
+// it repairs; Deluge is told after the lock is released.
+func (s *Server) handleResumeVersionSwap(c *gin.Context) {
+	bookID := c.Param("id")
+	store := s.storeForWiring()
+	book, err := store.GetBookByID(bookID)
+	if err != nil {
+		httputil.InternalError(c, "resume version swap", err)
+		return
+	}
+	if book == nil {
+		httputil.RespondWithNotFound(c, "book", bookID)
+		return
+	}
+
+	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
+	if err != nil {
+		if errors.Is(err, merge.ErrMergeBusy) {
+			httputil.RespondWithConflict(c, "a merge or combine is running; the swap was not resumed, try again in a moment: "+err.Error())
+			return
+		}
+		httputil.InternalError(c, "resume version swap", err)
+		return
+	}
+	res, err := versions.ResumeVersionSwap(c.Request.Context(), store, bookID)
+	unlock()
+
+	if err != nil {
+		switch {
+		case errors.Is(err, versions.ErrNoSwapToResume):
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), codeNoSwapToResume)
+		case errors.Is(err, versions.ErrSwapResumeRefused):
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), codeSwapResumeRefused)
+		case errors.Is(err, versions.ErrSwapIncomplete):
+			versionLifecycleLog.Error("resuming the swap of book %s did not finish: %v", bookID, err)
+			httputil.RespondWithError(c, http.StatusInternalServerError,
+				"resuming the swap started and could not finish; the book is still listed as unfinished and resuming it again reads the disk anew ("+err.Error()+")",
+				codeVersionSwapIncomplete)
+		default:
+			httputil.InternalError(c, "resume version swap", err)
+		}
+		return
+	}
+	if res.From != nil && res.To != nil {
+		NotifyDelugeAfterVersionSwap(store, res.From, res.To, res.BookPath)
+	}
+	httputil.RespondWithOK(c, struct {
+		Action            string `json:"action"`
+		BookID            string `json:"book_id"`
+		LeavingVersionID  string `json:"leaving_version_id,omitempty"`
+		EnteringVersionID string `json:"entering_version_id,omitempty"`
+		ActiveVersionID   string `json:"active_version_id,omitempty"`
+		BookPath          string `json:"book_path"`
+		FilesMoved        int    `json:"files_moved"`
+	}{res.Action, res.BookID, res.LeavingVersionID, res.EnteringVersionID, res.ActiveVersionID, res.BookPath, res.Moved})
+}
+
 // CleanupTrashedVersions delegates to versions.CleanupTrashedVersions.
 func CleanupTrashedVersions(store trashedVersionCleaner, guard versions.PurgeGuard) (versions.CleanupResult, error) {
 	return versions.CleanupTrashedVersions(store, guard)
@@ -600,4 +711,10 @@ func (s *Server) registerVersionLifecycleRoutes(protected *gin.RouterGroup) {
 	// so the library read permission, like the per-book version list.
 	protected.GET("/audiobooks/trashed-versions", s.perm(auth.PermLibraryView), s.handleListTrashedVersions)
 	protected.GET("/audiobooks/purged-versions", s.perm(auth.PermLibraryView), s.handleListPurgedVersions)
+	// Version swaps that did not finish (a version in swapping_out/swapping_in):
+	// the list is the trash page's third tab, and resume-swap is its button. Resume
+	// moves files back and forth but deletes nothing, so it takes the organize
+	// permission, like restore, not the delete one.
+	protected.GET("/audiobooks/swap-incomplete", s.perm(auth.PermLibraryView), s.handleListSwapIncompleteBooks)
+	protected.POST("/audiobooks/:id/versions/resume-swap", s.perm(auth.PermLibraryOrganize), s.handleResumeVersionSwap)
 }

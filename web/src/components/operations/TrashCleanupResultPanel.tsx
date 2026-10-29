@@ -1,7 +1,7 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 142d4823-4f1c-4c19-95fe-7a3c0f9f05b4
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
@@ -208,6 +208,23 @@ export default function TrashCleanupResultPanel({ opId }: { opId: string }) {
           {plural(result.served_kept, 'it is', 'they are')} tried again next run. Restore the
           version, or change what the book plays, to let the cleanup finish.
         </SetLine>
+      )}
+      {result.swap_incomplete > 0 && (
+        <>
+          <SetLine opId={opId} set="swap_incomplete" count={result.swap_incomplete} result={result}>
+            {plural(result.swap_incomplete, 'is', 'are')} in a version swap that did not finish: the
+            book has no active version until the swap is resumed. The cleanup only lists{' '}
+            {plural(result.swap_incomplete, 'it', 'them')} and moved nothing; resume each book from
+            Version Management, Unfinished swaps.{' '}
+            {plural(result.swap_incomplete, 'It is', 'They are')} listed again every run until then.
+          </SetLine>
+          <PathList
+            paths={result.swap_incomplete_file_paths}
+            opId={opId}
+            set="swap_incomplete"
+            label={(n) => `${n.toLocaleString()} ${plural(n, 'book path', 'book paths')} to repair`}
+          />
+        </>
       )}
       {result.stopped_for_merge && (
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>

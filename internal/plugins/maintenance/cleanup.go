@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.30.2
+// version: 1.31.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -551,6 +551,18 @@ type TrashCleanupResult struct {
 	NothingServedVersionIDs []string `json:"nothing_served_version_ids,omitempty"`
 	NothingServedBookIDs    []string `json:"nothing_served_book_ids,omitempty"`
 	NothingServedFilePaths  []string `json:"nothing_served_file_paths,omitempty"`
+	// SwapIncomplete counts the versions a version swap left in
+	// swapping_out/swapping_in (the cleanup only reports them; nothing is moved).
+	// The book of each has no active version until the swap is resumed from the
+	// Version Management page, so the count is not a failure of the run, and the
+	// books are listed again every run until they are repaired.
+	// SwapIncompleteFilePaths are the books' own paths; SwapIncompleteBooks has
+	// each book with its path, its versions' files and what a resume would do.
+	SwapIncomplete           int                           `json:"swap_incomplete"`
+	SwapIncompleteVersionIDs []string                      `json:"swap_incomplete_version_ids,omitempty"`
+	SwapIncompleteBookIDs    []string                      `json:"swap_incomplete_book_ids,omitempty"`
+	SwapIncompleteFilePaths  []string                      `json:"swap_incomplete_file_paths,omitempty"`
+	SwapIncompleteBooks      []versions.SwapIncompleteBook `json:"swap_incomplete_books,omitempty"`
 	// StoppedForMerge is true when a merge or combine held the merge lock for
 	// the whole wait, so the run stopped there and left the remaining versions
 	// for the next night. It is not a failure and does not turn the op red.
@@ -614,6 +626,17 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		// The book's own path; a book with none is listed by its id alone.
 		payload.NothingServedFilePaths = appendOnce(payload.NothingServedFilePaths, k.BookPath)
 	}
+	for _, b := range res.SwapIncomplete {
+		payload.SwapIncompleteBookIDs = appendOnce(payload.SwapIncompleteBookIDs, b.BookID)
+		payload.SwapIncompleteFilePaths = appendOnce(payload.SwapIncompleteFilePaths, b.BookPath)
+		for _, v := range b.Versions {
+			if v.Status == database.BookVersionStatusSwappingIn || v.Status == database.BookVersionStatusSwappingOut {
+				payload.SwapIncompleteVersionIDs = append(payload.SwapIncompleteVersionIDs, v.ID)
+			}
+		}
+	}
+	payload.SwapIncomplete = len(payload.SwapIncompleteVersionIDs)
+	payload.SwapIncompleteBooks = res.SwapIncomplete
 	// A result the page cannot read back would leave a run that purged versions
 	// looking like a run that did nothing; a failed write is reported on the op.
 	setErr := opsregistry.ReporterSetResult(reporter, payload)
@@ -639,6 +662,10 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left in the trash because the book serves nothing that exists on disk; nothing was deleted, and they are listed again every run until the book's path is fixed or the version restored (versions %s, books %s, book paths %s)",
 			len(res.NothingServed), strings.Join(payload.NothingServedVersionIDs, ", "), strings.Join(payload.NothingServedBookIDs, ", "), strings.Join(payload.NothingServedFilePaths, ", ")))
 	}
+	if len(res.SwapIncomplete) > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d book(s) have a version swap that did not finish and no active version; nothing was moved, and they are listed again every run until the swap is resumed from the Version Management page (books %s, book paths %s)",
+			len(res.SwapIncomplete), strings.Join(payload.SwapIncompleteBookIDs, ", "), strings.Join(payload.SwapIncompleteFilePaths, ", ")))
+	}
 	// The summary line is built before the error is looked at: a run that failed
 	// some purges has still purged, kept, deferred and stopped for the lock, and
 	// the log of the night it failed is the one the owner reads.
@@ -655,6 +682,9 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	if n := len(res.NothingServed); n > 0 {
 		msg += fmt.Sprintf("; %d left in the trash, their book serves nothing that exists on disk (versions %s)", n, strings.Join(payload.NothingServedVersionIDs, ", "))
 	}
+	if n := len(res.SwapIncomplete); n > 0 {
+		msg += fmt.Sprintf("; %d book(s) have a version swap that did not finish (books %s)", n, strings.Join(payload.SwapIncompleteBookIDs, ", "))
+	}
 	if n := len(res.NeedsAttention); n > 0 {
 		msg += fmt.Sprintf("; %d need attention (versions %s)", n, strings.Join(payload.NeedsAttentionVersionIDs, ", "))
 	}
@@ -666,6 +696,11 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		// because the merge lock was never free is something to go and look at.
 		warn := fmt.Sprintf("Trash cleanup: stopped for the merge lock %d nights in a row, so the trash is not being purged; check what holds the merge lock around this time (a long combine, or merges queuing on it)", res.MergeStopStreak)
 		_ = reporter.Log(slog.LevelWarn, warn)
+	}
+	if res.SwapIncompleteErr != nil {
+		// The unfinished swaps could not be listed: the night is reported as
+		// failed, not as one with none to report.
+		err = errors.Join(err, fmt.Errorf("trash cleanup: list the books whose version swap did not finish: %w", res.SwapIncompleteErr))
 	}
 	if err != nil {
 		// Some due purges failed (or the trash could not be listed): say so in

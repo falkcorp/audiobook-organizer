@@ -1,7 +1,7 @@
 // file: web/src/utils/trashCleanupResult.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 /** The def id of the nightly trash cleanup operation. */
 export const TRASH_CLEANUP_DEF_ID = 'maintenance.trash-cleanup';
@@ -47,6 +47,11 @@ export interface TrashCleanupResult {
   served_kept_version_ids: string[];
   served_kept_book_ids: string[];
   served_kept_file_paths: string[];
+  /** versions a swap left in swapping_out / swapping_in: their book has no active version until the swap is resumed (Version Management, Unfinished swaps). The run only lists them and moves nothing; not counted in failed. The file paths are the books' own paths */
+  swap_incomplete: number;
+  swap_incomplete_version_ids: string[];
+  swap_incomplete_book_ids: string[];
+  swap_incomplete_file_paths: string[];
   /** a merge or combine held the merge lock for the whole wait, so the run stopped and left the rest for the next night */
   stopped_for_merge: boolean;
   /** how many nights in a row, this one included, the run stopped for the merge lock */
@@ -57,11 +62,7 @@ export interface TrashCleanupResult {
 
 /** The groups of versions the result points at. */
 export type TrashCleanupSet =
-  | 'kept'
-  | 'needs_attention'
-  | 'cannot_tell'
-  | 'nothing_served'
-  | 'served_kept';
+  'kept' | 'needs_attention' | 'cannot_tell' | 'nothing_served' | 'served_kept' | 'swap_incomplete';
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const strings = (v: unknown): string[] =>
@@ -96,6 +97,10 @@ export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null
     served_kept_version_ids: strings(r.served_kept_version_ids),
     served_kept_book_ids: strings(r.served_kept_book_ids),
     served_kept_file_paths: strings(r.served_kept_file_paths),
+    swap_incomplete: num(r.swap_incomplete),
+    swap_incomplete_version_ids: strings(r.swap_incomplete_version_ids),
+    swap_incomplete_book_ids: strings(r.swap_incomplete_book_ids),
+    swap_incomplete_file_paths: strings(r.swap_incomplete_file_paths),
     stopped_for_merge: r.stopped_for_merge === true,
     stopped_for_merge_nights: num(r.stopped_for_merge_nights),
     stopped_for_merge_repeatedly: r.stopped_for_merge_repeatedly === true,
@@ -115,6 +120,8 @@ export function cleanupVersionIds(r: TrashCleanupResult, set: TrashCleanupSet): 
       return r.nothing_served_version_ids;
     case 'served_kept':
       return r.served_kept_version_ids;
+    case 'swap_incomplete':
+      return r.swap_incomplete_version_ids;
   }
 }
 
@@ -126,6 +133,7 @@ export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): str
     cannot_tell: r.cannot_tell_book_ids,
     nothing_served: r.nothing_served_book_ids,
     served_kept: r.served_kept_book_ids,
+    swap_incomplete: r.swap_incomplete_book_ids,
   }[set];
   return [...new Set(ids)];
 }
@@ -137,15 +145,17 @@ export function cleanupBookIds(r: TrashCleanupResult, set: TrashCleanupSet): str
  * versions the run named. Kept versions have finished purging (Purged tab);
  * versions that need attention, those the cleanup could not judge, those whose
  * book serves nothing on disk and those a book still plays are still listed in
- * the Trash tab.
+ * the Trash tab; the versions of an unfinished swap are in no trash at all, and
+ * their books are listed in the Unfinished swaps tab.
  */
 export function cleanupVersionsLink(opId: string, set: TrashCleanupSet): string {
   return `/versions?op=${encodeURIComponent(opId)}&set=${set}`;
 }
 
 /** Which Version Management tab lists the versions of a group. */
-export function cleanupSetTab(set: TrashCleanupSet): 'trash' | 'purged' {
-  return set === 'kept' ? 'purged' : 'trash';
+export function cleanupSetTab(set: TrashCleanupSet): 'trash' | 'purged' | 'swaps' {
+  if (set === 'kept') return 'purged';
+  return set === 'swap_incomplete' ? 'swaps' : 'trash';
 }
 
 /** Reads the set query value back; null for anything but the known sets. */
@@ -154,7 +164,8 @@ export function parseCleanupSet(v: string | null): TrashCleanupSet | null {
     v === 'needs_attention' ||
     v === 'cannot_tell' ||
     v === 'nothing_served' ||
-    v === 'served_kept'
+    v === 'served_kept' ||
+    v === 'swap_incomplete'
     ? v
     : null;
 }
