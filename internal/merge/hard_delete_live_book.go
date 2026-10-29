@@ -1,5 +1,5 @@
 // file: internal/merge/hard_delete_live_book.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e7b1c92-6a30-4d85-b1f7-0c93d8a25e61
 // last-edited: 2026-10-29
 
@@ -7,12 +7,19 @@ package merge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
+
+// ErrStoreCannotCarryState: the store has no UserProgressMerger, so whether a
+// book has listening state to carry, and carrying it, cannot be done and the
+// delete is refused. HardDeleteLiveBookLocked's error for it already names the
+// book ("hard delete <id>: ..."); a caller returns it as it is.
+var ErrStoreCannotCarryState = errors.New("the store cannot check or carry users' listening state, so the delete is refused")
 
 // HardDeleteLiveBookLocked is the one hard delete of a book that is NOT in the
 // trash, for every caller that asks for it: the single-book delete
@@ -75,7 +82,7 @@ func HardDeleteLiveBookLocked(store versionprimary.EnsureStore, book *database.B
 	}
 	merger, ok := database.AsCapability[UserProgressMerger](store)
 	if !ok {
-		return "", fmt.Errorf("hard delete %s: the store cannot check or carry users' listening state, so the delete is refused", book.ID)
+		return "", fmt.Errorf("hard delete %s: %w", book.ID, ErrStoreCannotCarryState)
 	}
 	carriedTo, err = HardDeleteKeepingUserStateLocked(merger, store, book, refuse, del)
 	if err != nil {
