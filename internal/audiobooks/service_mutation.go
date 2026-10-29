@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package audiobooks
 
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -1494,40 +1495,25 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		return res, nil
 	}
 
-	// Refuse a book that still owns book_file rows BEFORE any side effect
-	// (the carry of its users' listening state, the hash block). DeleteBook
-	// never deletes those rows, so a hard delete would orphan every one of
-	// them; it refuses too (database.ErrBookOwnsFiles), but only after the
-	// carry had already moved the state. The check is
-	// database.CheckBookOwnsNoFiles, the question DeleteBook asks (retired
-	// rows included), and it fails closed. It runs again as the precheck
-	// under the merge lock the carry and the delete run in (below): a file a
-	// merge moved onto the book after this read is caught before the carry
-	// moves any listening state, not after it.
-	//
-	// A retire shell owns no live row, so that check passes it; its deletion
-	// would drop the record of where its retired versions came from, so the
-	// same closure refuses it (database.RefuseRetiredShell). The retire repair
-	// takes the merge lock too, so the run under the lock catches a shell
-	// retired since this read.
-	refuseIfBlocked := func() error {
-		if err := database.CheckBookOwnsNoFiles(svc.store, id, "hard delete"); err != nil {
-			return err
-		}
-		return database.RefuseRetiredShell(svc.store, id, "hard delete")
+	// Refuse a book that still owns book_file rows (retired ones included: the
+	// question DeleteBook asks, and it fails closed) or is a retire shell BEFORE
+	// the merge lock is taken, so a refused book never waits for it. The same
+	// two checks run again under the lock, right before the carry moves any
+	// listening state, inside merge.HardDeleteLiveBookLocked: a file a merge
+	// moved onto the book after this read is caught there, not after the state
+	// has already moved to another copy.
+	if err := database.CheckBookOwnsNoFiles(svc.store, id, "hard delete"); err != nil {
+		return nil, err
 	}
-	if err := refuseIfBlocked(); err != nil {
+	if err := database.RefuseRetiredShell(svc.store, id, "hard delete"); err != nil {
 		return nil, err
 	}
 
-	// A live book users have listening state on is deleted only after that
-	// state is carried to another version Audiobookshelf lists, or refused
-	// (merge.HardDeleteKeepingUserStateLocked). The hash block runs inside the
-	// delete, so a refusal leaves none behind.
-	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
-	if !ok {
-		return nil, fmt.Errorf("hard delete %s: the store cannot check or carry users' listening state, so the delete is refused", id)
-	}
+	// The live book is then deleted only after its users' listening state is
+	// carried to another version Audiobookshelf lists, or refused; and a
+	// deleted primary hands its group's flag on. The batch hard delete runs the
+	// same function (merge.HardDeleteLiveBookLocked), so the two cannot drift.
+	// The hash block runs inside the delete, so a refusal leaves none behind.
 	blocked := false
 	var blockWarning string
 	del := func() error {
@@ -1539,19 +1525,13 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 		return svc.store.DeleteBook(id)
 	}
-	carriedTo, err := merge.HardDeleteKeepingUserStateLocked(merger, svc.store, book, refuseIfBlocked, del)
+	carriedTo, err := merge.HardDeleteLiveBookLocked(svc.store, book, config.AppConfig.RootDir, del)
 	if err != nil {
 		if err.Error() == "book not found" {
 			return nil, fmt.Errorf("audiobook not found")
 		}
 		if errors.Is(err, merge.ErrBookHasListeningState) {
 			return nil, fmt.Errorf("hard delete %s: %w. Soft-delete it first (its version group's primary flag then passes on), then purge it from the trash: the purge moves the progress to the copy Audiobookshelf lists, or offers Discard progress and purge", id, ErrBookHasProgress)
-		}
-		if cause := merge.PrecheckCause(err); cause != nil {
-			// Refused under the merge lock with nothing moved and no hash
-			// blocked: the precheck's own words, the same as the up-front
-			// check, not wrapped in the merge package's text.
-			return nil, cause
 		}
 		if errors.Is(err, merge.ErrStateMovedBookKept) {
 			// The state WAS moved (to carriedTo) and the delete then failed,
@@ -1560,11 +1540,13 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 			// the handler tells it from "nothing was deleted".
 			return nil, err
 		}
+		if errors.Is(err, database.ErrBookOwnsFiles) || errors.Is(err, database.ErrBookIsRetiredShell) {
+			// Refused with nothing moved, no hash blocked: the check's own
+			// words, as the handler maps them (OWNS_FILES, RETIRED_SHELL).
+			return nil, err
+		}
 		return nil, fmt.Errorf("hard delete %s: %w", id, err)
 	}
-	// A hard-deleted primary hands its group's flag on too; book is the row
-	// read before the delete, so it still names the group.
-	svc.handOffPrimary(book)
 
 	svc.InvalidateListCache()
 	res := map[string]any{

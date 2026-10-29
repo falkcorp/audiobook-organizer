@@ -1,7 +1,7 @@
 // file: internal/database/book_delete_owns_files.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 8ffda8a0-e303-4a65-9f2f-71ab98e1b796
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package database
 
@@ -73,9 +73,37 @@ func (p *PebbleStore) refuseDeleteIfBookOwnsFiles(bookID string) error {
 		return fmt.Errorf("delete book %s: cannot verify it owns no book_file rows: %w", bookID, err)
 	}
 	if n > 0 {
-		return fmt.Errorf("delete book %s: %w (%d row(s)); move them to the owning book first", bookID, ErrBookOwnsFiles, n)
+		// Worded by the same function as the caller-side prediction
+		// (CheckBookOwnsNoFiles): this used to say "move them to the owning book
+		// first" whatever the rows were, and a retired row cannot be moved (every
+		// move refuses it with ErrBookFileRetired). The split is made only on
+		// this refusal path, by decoding the rows' retired flag; a row that does
+		// not decode is counted as live, which is the safe side (it is never
+		// reported as holding only retired versions).
+		retired := p.countRetiredBookFileRows(bookID)
+		if retired > n {
+			retired = n
+		}
+		return ownedFilesRefusal("delete book", bookID, n-retired, retired)
 	}
 	return nil
+}
+
+// countRetiredBookFileRows counts the retired rows among book_file:<bookID>:.
+// Used only to word a refusal, so a read or decode failure answers 0.
+func (p *PebbleStore) countRetiredBookFileRows(bookID string) int {
+	prefix := []byte("book_file:" + bookID + ":")
+	retired := 0
+	_ = forEachKeyInRange(p.db, prefix, prefixEnd(prefix), func(_, value []byte) error {
+		var f struct {
+			Retired bool `json:"retired"`
+		}
+		if json.Unmarshal(value, &f) == nil && f.Retired {
+			retired++
+		}
+		return nil
+	})
+	return retired
 }
 
 // ── Serializing the check against book_file writers ─────────────────────────

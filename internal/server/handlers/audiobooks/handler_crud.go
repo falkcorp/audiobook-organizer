@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.19.3
+// version: 1.19.4
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -11,6 +11,7 @@
 package audiobookshandler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -343,7 +344,19 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 		return
 	}
 
-	h.publishEvent(c.Request.Context(), plugin.NewEvent(plugin.EventBookDeleted, id, map[string]any{
+	h.afterBookDeleted(c.Request.Context(), id, softDelete, blockHash)
+
+	httputil.RespondWithOK(c, result)
+}
+
+// afterBookDeleted is what the API does once a book has been deleted: tell the
+// plugin bus (the webhook plugin forwards book.deleted) and drop the author and
+// series list caches, whose counts the book was part of. The single-book delete
+// and the bulk hard delete (BatchOperations) both end here; until 2026-10-29
+// the bulk one did neither, so a webhook consumer never heard of a book removed
+// in bulk and the author and series pages kept counting it.
+func (h *Handler) afterBookDeleted(ctx context.Context, id string, softDelete, blockHash bool) {
+	h.publishEvent(ctx, plugin.NewEvent(plugin.EventBookDeleted, id, map[string]any{
 		"soft_delete": softDelete,
 		"block_hash":  blockHash,
 	}))
@@ -351,8 +364,6 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 	// Invalidate caches since book-author and book-series relationships may have changed
 	h.authorsCache.InvalidateAll()
 	h.seriesCache.InvalidateAll()
-
-	httputil.RespondWithOK(c, result)
 }
 
 // BatchUpdateAudiobooks handles POST /audiobooks/batch.
@@ -416,6 +427,20 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 	}
 
 	resp := h.batchService.ExecuteOperations(&req)
+
+	// A hard delete that went through ends like the single-book one. The
+	// service answers every operation with exactly one result, in order, so the
+	// result at an operation's index is that operation's (an id listed twice has
+	// one success and one failure, and an update of the same id is not a
+	// delete). Soft deletes are left as they were: the batch has never
+	// announced them.
+	if resp != nil && len(resp.Results) == len(req.Operations) {
+		for i, op := range req.Operations {
+			if op.Action == "delete" && op.HardDelete && resp.Results[i].Success {
+				h.afterBookDeleted(c.Request.Context(), op.ID, false, false)
+			}
+		}
+	}
 
 	httputil.RespondWithOK(c, resp)
 }

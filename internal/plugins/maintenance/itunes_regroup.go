@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -146,6 +146,14 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	if rstore.BookTagReader == nil {
 		return fmt.Errorf("itunes.regroup: no book-tag reader for the owner-manual check")
 	}
+	// The same kind of precondition for the delete pass: without the retired-row
+	// reader the owned-files check could not be made on any book, and the nil
+	// embed would panic where the check calls it.
+	retiredReader, ok := database.AsCapability[database.RetiredBookFileReader](store)
+	if !ok {
+		return fmt.Errorf("itunes.regroup: the store cannot list book_file rows including retired ones, so no delete could be checked")
+	}
+	rstore.RetiredBookFileReader = retiredReader
 
 	_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: snapshotting DB for %d target groups…", len(groups)))
 	snap, err := p.buildRegroupSnapshot(ctx, rstore, rootDir, reporter)
@@ -350,10 +358,15 @@ var errRegroupTargetNotListed = errors.New("the book is listed by ABS and its st
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
 // owner-manual check makes (BookTagReader, its own accessor because OpsStore
-// is at the interfacebloat cap). The two method sets do not overlap.
+// is at the interfacebloat cap) plus the retired-row reader that
+// database.CheckBookOwnsNoFiles needs for the delete pass (the question
+// DeleteBook asks, retired rows included). Embedding OpsStore hides every
+// capability of the store behind it, so the reader is composed in statically,
+// like the tag reader. The method sets do not overlap.
 type regroupRunStore struct {
 	OpsStore
 	BookTagReader
+	database.RetiredBookFileReader
 }
 
 // itunesRegroupSnapshotReader is what buildRegroupSnapshot reads: the shared
@@ -845,20 +858,30 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		if ctx.Err() != nil {
 			return report, ctx.Err()
 		}
-		files, ferr := store.GetBookFiles(id)
+		// "Owns no book_file rows" is the question DeleteBook asks, retired rows
+		// included (database.CheckBookOwnsNoFiles). GetBookFiles skips retired
+		// rows, so a book that held only retired versions read as empty here, had
+		// its users' listening state carried to the target, and was then refused
+		// by DeleteBook with the state already moved.
+		ownsErr := database.CheckBookOwnsNoFiles(store, id, "regroup delete")
 		exts, eerr := store.GetExternalIDsForBook(id)
 		// Fail CLOSED: if either read errored we cannot prove the book is empty,
-		// so both slices may be a misleading nil (len 0). Skip the delete rather
-		// than risk removing a book that still owns files or iTunes PID ext-ids —
-		// the exact canary this guard exists to prevent.
-		if ferr != nil || eerr != nil {
+		// so the answer may be a misleading nil. Skip the delete rather than risk
+		// removing a book that still owns files or iTunes PID ext-ids — the exact
+		// canary this guard exists to prevent.
+		if eerr != nil || (ownsErr != nil && !errors.Is(ownsErr, database.ErrBookOwnsFiles)) {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not verify empty (files err=%v, ext-ids err=%v)", id, ferr, eerr))
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not verify empty (files err=%v, ext-ids err=%v)", id, ownsErr, eerr))
 			continue
 		}
-		if len(files) != 0 || len(exts) != 0 {
+		if ownsErr != nil {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d files, %d ext-ids remain", id, len(files), len(exts)))
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %v", id, ownsErr))
+			continue
+		}
+		if len(exts) != 0 {
+			deleteSkipped++
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d ext-ids remain", id, len(exts)))
 			continue
 		}
 		// A book a user has listening state on: the delete is a hard
@@ -927,7 +950,16 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 				skipNotListed("")
 				continue
 			}
+			// The owned-files check is made again under the merge lock, before
+			// the carry moves anything: a retire (which takes the lock) can key
+			// a row under the book after the check above, and DeleteBook would
+			// then refuse it with the state already on the target.
+			var ownsRefused error
 			precheck := func() error {
+				if err := database.CheckBookOwnsNoFiles(store, id, "regroup delete"); err != nil {
+					ownsRefused = err
+					return err
+				}
 				dl, err := listed(id)
 				if err != nil {
 					return err
@@ -945,6 +977,11 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 				return nil
 			}
 			err := merge.CarryStateThenHardDelete(stateStore, target, id, precheck, del)
+			if ownsRefused != nil && errors.Is(err, merge.ErrCarryPrecheckRefused) {
+				deleteSkipped++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: re-checked under the merge lock and nothing was carried; kept with its state: %v", id, ownsRefused))
+				continue
+			}
 			if errors.Is(err, errRegroupTargetNotListed) {
 				skipNotListed(" (re-checked under the merge lock)")
 				continue
