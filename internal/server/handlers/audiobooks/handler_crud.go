@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.19.4
+// version: 1.19.5
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-29
 
@@ -435,10 +435,18 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 	// delete). Soft deletes are left as they were: the batch has never
 	// announced them.
 	if resp != nil && len(resp.Results) == len(req.Operations) {
+		deleted := false
 		for i, op := range req.Operations {
 			if op.Action == "delete" && op.HardDelete && resp.Results[i].Success {
 				h.afterBookDeleted(c.Request.Context(), op.ID, false, false)
+				deleted = true
 			}
+		}
+		// The single-book delete clears the list cache inside the service; the
+		// bulk one does not go through it, so it is cleared here, once for the
+		// whole request (a no-op unless config.CacheInvalidateOnBookUpdate is on).
+		if deleted && h.audiobookService != nil {
+			h.audiobookService.InvalidateListCache()
 		}
 	}
 

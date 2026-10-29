@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.27.2
+// version: 1.27.3
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-29
 
@@ -206,6 +206,17 @@ type VersionGroupCleanupResult struct {
 	// names that path: the file is that row's audio, not the duplicate's.
 	// Included in DuplicatesRemoved.
 	FilesKeptReferenced int `json:"files_kept_referenced"`
+	// FileDeleteErrors counts duplicates whose book row was removed but whose
+	// library file could not be: the file is left on disk with no book (a
+	// scan finds it again). Included in DuplicatesRemoved.
+	FileDeleteErrors int `json:"file_delete_errors"`
+	// StateCarriedBookKept counts duplicates whose users' listening state WAS
+	// carried to the kept copy and whose book row was then refused by the
+	// store (a book_file row from a writer that does not take the merge lock,
+	// landing after every check). The state now lives on the kept copy and the
+	// duplicate stays, with its file. Also counted in WriteErrors; never in
+	// StateCarried or DuplicatesRemoved.
+	StateCarriedBookKept int `json:"state_carried_book_kept"`
 	// PathCheckErrors counts duplicates left in place, file and row, because
 	// whether a book_file row names the duplicate's path could not be answered
 	// (fail closed): the store has no path lookup, or the lookup is not
@@ -1173,14 +1184,18 @@ func bookFileNamingPath(store any, path string) (string, error) {
 // duplicate's users' state is not carried onto it.
 var errKeepNotListed = errors.New("kept copy is not a book ABS lists")
 
-// removeDuplicate removes one duplicate -- its file in the library, then its
-// book row -- under the merge lock, right after a last check made under that
+// removeDuplicate removes one duplicate -- its book row, then its file in the
+// library -- under the merge lock, right after a last check made under that
 // same lock: with keepID non-empty, keepID must still be a book ABS lists
 // (keepListed, re-read under the lock: a merge between the caller's check
 // and the carry could have changed it) and its users' state is carried there
 // first (merge.CarryStateThenHardDelete); without, it must still hold no
-// state (merge.HardDeleteWithoutUserState). Any refusal keeps the duplicate
-// and its file. It reports whether the duplicate was removed.
+// state (merge.HardDeleteWithoutUserState). The duplicate must also still own
+// no book_file rows, retired ones included (ownsNoRows). Any refusal keeps the
+// duplicate and its file; a refusal of the book row after the carry (the store
+// is the last word) keeps both and is reported as such
+// (StateCarriedBookKept). The file is removed only after the row is gone. It
+// reports whether the duplicate was removed.
 //
 // A primary hand-off that does not take the merge lock can still change the
 // kept row after this re-check; the window is the carry itself.
@@ -1264,6 +1279,7 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 		case hasFile:
 			if err := os.Remove(dup.FilePath); err != nil {
 				slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
+				result.FileDeleteErrors++
 			} else {
 				result.FilesDeleted++
 			}
@@ -1295,9 +1311,19 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 	case err == nil:
 		result.DuplicatesRemoved++
 		return true
+	case errors.Is(err, database.ErrBookOwnsFiles) && keepID != "" && !errors.Is(err, merge.ErrCarryPrecheckRefused):
+		// The precheck passed and the state was carried to keepID; only then
+		// did DeleteBook refuse, for rows that landed from a writer that does
+		// not take the merge lock. The duplicate and its file stay, the state
+		// is on the kept copy.
+		pkgLog.Warn("version-group cleanup kept duplicate %s of group %s and its file AFTER carrying its users' listening state to %s: the store then refused the delete because it gained book_file rows: %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), err)
+		result.StateCarriedBookKept++
+		result.WriteErrors++
 	case errors.Is(err, database.ErrBookOwnsFiles):
-		// Rows landed since the caller's count (see ownsNoRows): nothing was
-		// carried and the file was not touched.
+		// Rows landed since the caller's count (see ownsNoRows), and the
+		// refusal came before anything moved: nothing was carried and the file
+		// was not touched.
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s and its file: it gained book_file rows since the check: %v",
 			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)
 		result.SkippedOwnsFiles++
