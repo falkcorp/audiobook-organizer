@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.7
+// version: 1.5.8
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
 // last-edited: 2026-10-29
 
@@ -8,6 +8,7 @@ package applygate
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -501,5 +502,27 @@ func TestScoreGate_TranscriptionRuntimeUnverifiedRefuses(t *testing.T) {
 	}
 	if !v.OwnerReviewOverridable() {
 		t.Error("an owner review must be able to override the refusal")
+	}
+	// ...but only one that saw the row: the hashless select-all marker cannot
+	// lift it, because the owner never saw the chip that warned about it.
+	if v.UnseenOwnerReviewOverridable() {
+		t.Error("the unseen owner-review marker must not lift transcription_runtime_unverified")
+	}
+
+	// The refusal's detail names the verdict and why, not just that the
+	// title did not match.
+	for name, tc := range map[string]struct {
+		rt      database.BookRuntime
+		candSec int
+		want    string
+	}{
+		"fragment":         {complete(hr), 10 * hr, metafetch.TranscriptionRuntimeFragment + ": the files look like a fragment"},
+		"runtime mismatch": {complete(10 * hr), 12 * hr, metafetch.TranscriptionRuntimeMismatch + ": the runtimes differ"},
+		"unknown":          {database.BookRuntime{}, 10 * hr, metafetch.TranscriptionRuntimeUnknown + ": the book's total runtime is unknown"},
+	} {
+		dv := EvaluateInBatch(book, Authors{}, tc.rt, mk(tc.candSec), nil, nil, nil)
+		if dv.Reason != ReasonTranscriptionRuntimeUnverified || !strings.Contains(dv.Detail, tc.want) {
+			t.Errorf("%s: reason=%q detail=%q, want it to contain %q", name, dv.Reason, dv.Detail, tc.want)
+		}
 	}
 }

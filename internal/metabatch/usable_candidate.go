@@ -1,5 +1,5 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
 // last-edited: 2026-10-29
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -28,22 +29,34 @@ type UsableCandidateVerdict struct {
 // candidateRefusalOwnerRejected is CandidateRefusal's owner-rejected reason.
 const candidateRefusalOwnerRejected = "owner-rejected"
 
+var runtimeLoadLog = logger.New("metadata-candidate-refusal")
+
 // RuntimeLoader supplies the book's canonical runtime on demand. The apply
 // gate reads it only for a candidate the transcription confirms (the one case
 // where the runtime decides the score leg), so a loader that touches the
 // store is not called for every candidate of every row.
 type RuntimeLoader func() database.BookRuntime
 
+// A nil RuntimeLoader means "the runtime is unknown", NOT "skip the check":
+// CandidateRefusal then refuses a transcription-confirmed candidate.
+//
 // RuntimeLoaderFor loads book's runtime from files once, on first use. A read
-// error leaves the runtime unknown (database.LoadBookRuntime), which refuses
-// a transcription-confirmed candidate: the safe direction.
+// error is logged at warn level with the book id and leaves the runtime
+// unknown (database.LoadBookRuntime), which refuses a transcription-confirmed
+// candidate: the safe direction.
 func RuntimeLoaderFor(files database.BookFilesGetter, book *database.Book) RuntimeLoader {
 	var (
 		once sync.Once
 		rt   database.BookRuntime
 	)
 	return func() database.BookRuntime {
-		once.Do(func() { rt, _ = database.LoadBookRuntime(files, book) })
+		once.Do(func() {
+			var err error
+			if rt, err = database.LoadBookRuntime(files, book); err != nil {
+				runtimeLoadLog.Warn("book files unreadable, runtime treated as unknown: book_id=%s err=%v",
+					logger.SanitizeLogValue(book.ID), err)
+			}
+		})
 		return rt
 	}
 }

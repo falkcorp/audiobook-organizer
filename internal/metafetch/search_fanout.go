@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-29
 
@@ -559,17 +559,22 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 
 // enrichRuntimeByASIN fills the runtime (and an empty narrator/series) of up
 // to maxASINEnrich pooled answers that carry an ASIN but no runtime, from
-// Audnexus. Only when the book's own runtime is known: otherwise a runtime
-// cannot change the ranking, and the lookup would make the book wait on
-// Audnexus for nothing. A partial runtime with a size-derived upper bound
+// Audnexus. Pass 1 (any answer) only when the book's own runtime is known:
+// otherwise a runtime cannot change the ranking, and the lookup would make the
+// book wait on Audnexus for nothing. The single lookup for a TRANSCRIPTION-
+// matched answer is made even then: the enriched DurationSec is cached on the
+// candidate and the transcription runtime gate is evaluated live at apply, so
+// a book whose files are measured later can pass without a re-search. A partial runtime with a size-derived upper bound
 // counts as known here: a candidate beyond it is penalised. Audible's own
 // answers always carry a runtime, so in practice this is the only way Audnexus
 // is asked about an ASIN another source found.
 func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookRuntime localRuntime, th transcriptionHints) {
 	ctx := p.ctx
 	// An uninformative local runtime (no total, no size bound) cannot change
-	// any verdict, however the candidate's runtime turns out, so no lookup.
-	if !bookRuntime.informative() {
+	// the ranking, so only the transcription-matched answer is looked up (see
+	// above); with no transcription hints there is nothing to look up.
+	informative := bookRuntime.informative()
+	if !informative && th.empty() {
 		return
 	}
 	enabled := false
@@ -588,6 +593,9 @@ func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, 
 	for pass := 0; pass < 2; pass++ {
 		if pass == 0 && th.empty() {
 			continue
+		}
+		if pass == 1 && !informative {
+			break
 		}
 		for _, st := range states {
 			for i := range st.results {

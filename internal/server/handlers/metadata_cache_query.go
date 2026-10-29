@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-29
 
@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -154,8 +155,9 @@ type ReviewQuery struct {
 	HasTranscription, TranscriptionMatched              bool
 	HideMultiBook                                       bool
 	// TranscriptionRuntimeFlagged keeps only rows whose shown candidate the
-	// audio intro matched but whose runtime did not confirm
-	// (MetadataCandidate.TranscriptionRuntimeCheck: fragment, mismatch, unknown).
+	// audio intro matched but whose runtime does not confirm, judged live from
+	// the book's files (reviewLiveRuntimeCheck: fragment, mismatch, unknown),
+	// not from the stamp the search left on the cached candidate.
 	TranscriptionRuntimeFlagged bool
 	// Ungrouped is the books the owner pulled out of a group (the lane's
 	// client-only ungroupedIds); they never count toward a multi-book group.
@@ -759,6 +761,39 @@ func reviewRuntimeInputs(f metabatch.BookFileFacts) (complete, lowerBound, upper
 	return 0, 0, 0
 }
 
+// reviewLiveRuntimeCheck is the transcription runtime verdict for a row as the
+// apply gate would give it now. confirms is the gate's own precondition
+// (applygate.TranscriptionConfirms: the book's transcribed title matches the
+// candidate); without it the runtime check does not apply and chk is nil.
+// With it, chk is metafetch.TranscriptionRuntimeVerdict over the book's file
+// runtime and the candidate's runtime: nil when the runtime confirms the
+// match, else fragment / runtime_mismatch / runtime_unknown. A failed file
+// read is an unknown runtime, as at the gate (database.LoadBookRuntime).
+//
+// This replaces reading the candidate's stamped TranscriptionRuntimeCheck,
+// which is absent on rows cached before the check existed and stale once a
+// runtime has been measured.
+func reviewLiveRuntimeCheck(book *database.Book, c *metafetch.MetadataCandidate, f metabatch.BookFileFacts) (confirms bool, chk *metafetch.TranscriptionRuntimeCheck) {
+	if !applygate.TranscriptionConfirms(book, c) {
+		return false, nil
+	}
+	rt := f.Runtime
+	if f.Err != nil {
+		rt = database.BookRuntime{Source: database.RuntimeSourceNone}
+	}
+	return true, metafetch.TranscriptionRuntimeVerdict(rt, c.DurationSec)
+}
+
+// reviewTranscriptionMatched is the "Transcription matched" filter for one
+// row: the search stamped it boosted and the live gate does not refuse it, or
+// the live gate confirms it outright.
+func reviewTranscriptionMatched(c *metafetch.MetadataCandidate, confirms bool, chk *metafetch.TranscriptionRuntimeCheck) bool {
+	if confirms {
+		return chk == nil
+	}
+	return c.TranscriptionBoosted
+}
+
 // reviewRuntimeHidden is the runtime switch's rule: the warning chip's rule OR
 // the runtime differing from the book's files. An unknown runtime on either
 // side is not evidence of a mismatch, so it is never hidden. This is the only
@@ -1062,11 +1097,16 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, budget *queryg
 		if q.HasTranscription && (book.TranscribedTitle == nil || *book.TranscribedTitle == "") {
 			continue
 		}
-		if q.TranscriptionMatched && !cand.TranscriptionBoosted {
-			continue
-		}
-		if q.TranscriptionRuntimeFlagged && cand.TranscriptionRuntimeCheck == nil {
-			continue
+		if q.TranscriptionMatched || q.TranscriptionRuntimeFlagged {
+			// Both read the live verdict, not the search-time stamp, so the
+			// filters agree with the chip and with the apply gate.
+			confirms, chk := r.liveRuntimeCheck()
+			if q.TranscriptionMatched && !reviewTranscriptionMatched(cand, confirms, chk) {
+				continue
+			}
+			if q.TranscriptionRuntimeFlagged && !(confirms && chk != nil) {
+				continue
+			}
 		}
 		out.refs = append(out.refs, reviewRef(i))
 	}

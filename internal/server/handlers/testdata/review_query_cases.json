@@ -119,14 +119,14 @@
         "id": "b05",
         "title": "Title 000005",
         "language": "en",
-        "duration_seconds": 36000,
+        "duration_seconds": 0,
         "runtime_lower_bound_seconds": 0,
-        "transcribed_title": ""
+        "transcribed_title": "Hush"
       },
       "candidate": {
         "source": "Audible",
         "score": 0.9,
-        "title": "Work 05",
+        "title": "Hush",
         "author": "Author 05",
         "asin": "B000000005",
         "isbn": "",
@@ -135,10 +135,9 @@
         "duration_delta_sec": 700,
         "transcription_boosted": false,
         "transcription_runtime_check": {
-          "verdict": "fragment",
-          "detail": "the files look like a fragment: about 3h00m of a 10h00m book",
-          "local_sec": 10800,
-          "cand_sec": 36000
+          "verdict": "runtime_unknown",
+          "detail": "the book's total runtime is unknown",
+          "cand_sec": 36500
         }
       }
     },
@@ -946,12 +945,13 @@
         "has_transcription": "true"
       },
       "want_ids": [
+        "b05",
         "b09"
       ],
-      "why": "only b09 has transcribed_title",
+      "why": "b05 and b09 have a transcribed_title",
       "want_runtime_hidden": 0,
       "server_only": false,
-      "want_total": 1
+      "want_total": 2
     },
     {
       "name": "transcription matched",
@@ -974,7 +974,7 @@
       "want_ids": [
         "b05"
       ],
-      "why": "only b05 candidate carries a transcription_runtime_check (the intro agreed but the runtime did not confirm it)",
+      "why": "only b05 is flagged: its transcribed title matches the candidate but the book's runtime is not measured, so the live gate cannot confirm it (the stamp on the candidate is the same verdict, for the lane's client chain)",
       "want_runtime_hidden": 0,
       "server_only": false,
       "want_total": 1
