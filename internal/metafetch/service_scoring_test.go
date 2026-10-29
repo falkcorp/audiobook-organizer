@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_scoring_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7e3f6a1c-9b4d-4e2a-8c1f-6d5b3a2e9f70
-// last-edited: 2026-07-11
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -377,22 +377,23 @@ func TestScoringConfigDefaultsMatchLegacyLiterals(t *testing.T) {
 
 	t.Run("transcriptionBoost", func(t *testing.T) {
 		const base = 1.0
-		cand := metadata.BookMetadata{Title: "The Way of Kings", Author: "Brandon Sanderson", Narrator: "Michael Kramer"}
+		cand := metadata.BookMetadata{Title: "The Way of Kings", Author: "Brandon Sanderson", Narrator: "Michael Kramer", DurationSec: 36000}
+		rt := localRuntime{Sec: 36000}
 
-		gotExact, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "The Way of Kings"})
-		require.True(t, boosted)
+		gotExact, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "The Way of Kings"}, rt)
+		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*2.0, gotExact, 1e-9, "legacy exact-title boost was score *= 2.0")
 
-		gotSubstr, boosted := transcriptionBoost(base, metadata.BookMetadata{Title: "The Way of Kings (Stormlight 1)"}, transcriptionHints{title: "The Way of Kings"})
-		require.True(t, boosted)
+		gotSubstr, boosted := transcriptionBoost(base, metadata.BookMetadata{Title: "The Way of Kings (Stormlight 1)", DurationSec: 36000}, transcriptionHints{title: "The Way of Kings"}, rt)
+		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*1.4, gotSubstr, 1e-9, "legacy substring-title boost was score *= 1.4")
 
-		gotAuthor, boosted := transcriptionBoost(base, cand, transcriptionHints{author: "Brandon Sanderson"})
-		require.True(t, boosted)
+		gotAuthor, boosted := transcriptionBoost(base, cand, transcriptionHints{author: "Brandon Sanderson"}, rt)
+		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*1.6, gotAuthor, 1e-9, "legacy author boost was score *= 1.6")
 
-		gotNarrator, boosted := transcriptionBoost(base, cand, transcriptionHints{narrator: "Michael Kramer"})
-		require.True(t, boosted)
+		gotNarrator, boosted := transcriptionBoost(base, cand, transcriptionHints{narrator: "Michael Kramer"}, rt)
+		require.True(t, boosted.Boosted)
 		assert.InDelta(t, base*1.4, gotNarrator, 1e-9, "legacy narrator boost was score *= 1.4")
 	})
 
@@ -443,8 +444,8 @@ func TestScoringConfigZeroMultiplicativeKnobFallsBackToLegacy(t *testing.T) {
 		TranscriptionTitleExactBoost: 0, // explicit zero, indistinguishable from unset for a plain float64
 	})
 
-	got, boosted := transcriptionBoost(1.0, metadata.BookMetadata{Title: "The Way of Kings"}, transcriptionHints{title: "The Way of Kings"})
-	require.True(t, boosted)
+	got, boosted := transcriptionBoost(1.0, metadata.BookMetadata{Title: "The Way of Kings", DurationSec: 36000}, transcriptionHints{title: "The Way of Kings"}, localRuntime{Sec: 36000})
+	require.True(t, boosted.Boosted)
 	assert.InDelta(t, 2.0, got, 1e-9, "a zero/missing multiplicative knob must fall back to the legacy literal, never multiply by zero")
 }
 

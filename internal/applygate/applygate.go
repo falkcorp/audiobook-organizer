@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-10-13
+// last-edited: 2026-10-29
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -69,13 +69,20 @@ const (
 	// ReasonIdentityStale: the cached identity no longer holds -- the query
 	// drifted, the book's ASIN was replaced, or the candidate row is marked
 	// stale (metafetch.CandidateIdentityStale).
-	ReasonIdentityStale              = "identity_stale"
-	ReasonTranscriptionMismatch      = "transcription_mismatch"
-	ReasonScoreBelowFloor            = "score_below_floor"
-	ReasonSequenceMismatch           = "sequence_mismatch"
-	ReasonSequenceMissingOnCandidate = "sequence_missing_on_candidate"
-	ReasonBookSequenceConflict       = "book_sequence_conflict"
-	ReasonCandidateSequenceConflict  = "candidate_sequence_conflict"
+	ReasonIdentityStale         = "identity_stale"
+	ReasonTranscriptionMismatch = "transcription_mismatch"
+	// ReasonTranscriptionRuntimeUnverified: the audio intro matches the
+	// candidate but its runtime did not confirm it (a fragment, a mismatch,
+	// or no comparable runtime: MetadataCandidate.TranscriptionRuntimeCheck).
+	// Owner decision 2026-10-29: a transcription match is only "this is the
+	// book" once the candidate's runtime agrees, so it is never grounds for
+	// an unattended apply.
+	ReasonTranscriptionRuntimeUnverified = "transcription_runtime_unverified"
+	ReasonScoreBelowFloor                = "score_below_floor"
+	ReasonSequenceMismatch               = "sequence_mismatch"
+	ReasonSequenceMissingOnCandidate     = "sequence_missing_on_candidate"
+	ReasonBookSequenceConflict           = "book_sequence_conflict"
+	ReasonCandidateSequenceConflict      = "candidate_sequence_conflict"
 	// ReasonReviewOnlySource refuses a candidate from a review-only source
 	// (ReviewOnlySource: Open Library, Google Books). An owner review pin
 	// of the shown candidate lifts it -- that is the owner applying it by
@@ -192,6 +199,11 @@ func derefStr(p *string) string {
 // several candidates before choosing one. ok=false carries the reason.
 func ScoreGate(book *database.Book, c *metafetch.MetadataCandidate) (ok bool, floor float64, audioConfirmed bool, reason string) {
 	audioConfirmed = TranscriptionConfirms(book, c)
+	if audioConfirmed && c.TranscriptionRuntimeCheck != nil {
+		// The match is real but unverified by runtime: it must neither lower
+		// the floor nor stand in for the title check.
+		return false, MinScore, false, ReasonTranscriptionRuntimeUnverified
+	}
 	floor = MinScore
 	if audioConfirmed {
 		floor = MinScoreAudioConfirmed

@@ -1,7 +1,7 @@
 // file: internal/metafetch/googlebooks_subtitle_scoring_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e8a1d34-9c62-4b7f-8e20-3a6f1c9d4b78
-// last-edited: 2026-09-13
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -47,8 +47,10 @@ func TestGoogleBooksSubtitle_ScoredTitleNamesTheBook(t *testing.T) {
 	// The audio intro names the full title; the candidate must match it exactly
 	// (the exact-title boost), not merely by the franchise substring.
 	const base = 1.0
-	got, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "Star Wars: A New Dawn"})
-	if !boosted {
+	cand.DurationSec = 36000 // runtime agrees with the book's, so the runtime gate passes
+	rt := localRuntime{Sec: 36000}
+	got, out := transcriptionBoost(base, cand, transcriptionHints{title: "Star Wars: A New Dawn"}, rt)
+	if !out.Boosted {
 		t.Fatalf("expected a title match against the transcribed full title")
 	}
 	if want := base * scoringKnobs().TranscriptionTitleExactBoost; !floatNear(got, want) {
@@ -57,7 +59,7 @@ func TestGoogleBooksSubtitle_ScoredTitleNamesTheBook(t *testing.T) {
 
 	// A transcript naming a DIFFERENT book in the same franchise must not match
 	// the title at all.
-	if _, boosted := transcriptionBoost(base, cand, transcriptionHints{title: "Star Wars: Thrawn"}); boosted {
+	if _, out := transcriptionBoost(base, cand, transcriptionHints{title: "Star Wars: Thrawn"}, rt); out.Boosted {
 		t.Errorf("a different Star Wars title must not boost this candidate")
 	}
 

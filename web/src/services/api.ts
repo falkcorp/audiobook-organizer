@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.204.2
+// version: 2.204.3
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3952,6 +3952,14 @@ export interface MetadataScoreBreakdown {
   rank_score?: number;
 }
 
+/** MetadataCandidate.transcription_runtime_check: why a transcription match was not trusted. */
+export interface TranscriptionRuntimeCheck {
+  verdict: 'fragment' | 'runtime_mismatch' | 'runtime_unknown';
+  detail: string;
+  local_sec?: number;
+  cand_sec?: number;
+}
+
 export interface MetadataCandidate {
   title: string;
   author: string;
@@ -3993,6 +4001,12 @@ export interface MetadataCandidate {
    *  Whisper-transcribed intro, causing a score multiplier to be applied.
    *  Use as a filter to find books where audio data confirmed the match. */
   transcription_boosted?: boolean;
+  /** Set when the audio intro matched this candidate but its runtime did not
+   *  confirm it, so the transcription boost was withheld. The row shows it as a
+   *  chip. verdict: 'fragment' (the files are a small part of the candidate's
+   *  runtime), 'runtime_mismatch' (off by more than 10%) or 'runtime_unknown'
+   *  (a side has no comparable runtime). */
+  transcription_runtime_check?: TranscriptionRuntimeCheck;
   /** Read from the local author catalog (harvested Audible listings) rather
    *  than asked of the provider live. Source stays the provider's name. */
   from_catalog?: boolean;
@@ -5077,6 +5091,7 @@ export interface ReviewQueryParams {
   match_language?: boolean;
   has_transcription?: boolean;
   transcription_matched?: boolean;
+  transcription_runtime_flagged?: boolean;
   hide_multi_book?: boolean;
   /** Books pulled out of a multi-book group (only read with hide_multi_book). */
   ungrouped?: string[];
@@ -5210,6 +5225,7 @@ function reviewQueryString(
   flag('match_language', params.match_language);
   flag('has_transcription', params.has_transcription);
   flag('transcription_matched', params.transcription_matched);
+  flag('transcription_runtime_flagged', params.transcription_runtime_flagged);
   flag('hide_multi_book', params.hide_multi_book);
   if (params.ungrouped?.length) out.set('ungrouped', params.ungrouped.join(','));
   if (params.skipped?.length) out.set('skipped', params.skipped.join(','));

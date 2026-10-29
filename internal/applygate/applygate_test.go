@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package applygate
 
@@ -437,5 +437,38 @@ func TestTranscriptionConfirms_ReviewerFalsePositivesRefuse(t *testing.T) {
 				t.Errorf("TranscriptionConfirms confirmed %q/%q against heard %q/%q", tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor)
 			}
 		})
+	}
+}
+
+// Owner decision 2026-10-29: a transcription match whose runtime did not
+// confirm it (a fragment, a mismatch, or no comparable runtime) is never
+// grounds for an unattended apply, however high the score.
+func TestScoreGate_TranscriptionRuntimeUnverifiedRefuses(t *testing.T) {
+	book := &database.Book{TranscribedTitle: new("Year One"), TranscribedAuthor: new("Alfred Pennyworth")}
+	mk := func(chk *metafetch.TranscriptionRuntimeCheck) *metafetch.MetadataCandidate {
+		return &metafetch.MetadataCandidate{Title: "Year One", Author: "Alfred Pennyworth", Score: 3.0, TranscriptionRuntimeCheck: chk}
+	}
+	if ok, _, _, reason := ScoreGate(book, mk(nil)); !ok || reason != "" {
+		t.Fatalf("control: the same candidate with no runtime check must pass, got ok=%v reason=%q", ok, reason)
+	}
+	for _, verdict := range []string{
+		metafetch.TranscriptionRuntimeFragment, metafetch.TranscriptionRuntimeMismatch, metafetch.TranscriptionRuntimeUnknown,
+	} {
+		ok, floor, audio, reason := ScoreGate(book, mk(&metafetch.TranscriptionRuntimeCheck{Verdict: verdict, Detail: "d"}))
+		if ok || reason != ReasonTranscriptionRuntimeUnverified {
+			t.Errorf("%s: ok=%v reason=%q, want a %q refusal", verdict, ok, reason, ReasonTranscriptionRuntimeUnverified)
+		}
+		if audio || floor != MinScore {
+			t.Errorf("%s: audio=%v floor=%v; an unverified match must not count as audio confirmation", verdict, audio, floor)
+		}
+	}
+
+	// The refusal reaches the full verdict, and an owner review may override it.
+	v := Evaluate(book, Authors{}, database.BookRuntime{}, mk(&metafetch.TranscriptionRuntimeCheck{Verdict: metafetch.TranscriptionRuntimeFragment}), nil)
+	if v.Allowed || v.Reason != ReasonTranscriptionRuntimeUnverified {
+		t.Fatalf("Evaluate: allowed=%v reason=%q", v.Allowed, v.Reason)
+	}
+	if !v.OwnerReviewOverridable() {
+		t.Error("an owner review must be able to override the refusal")
 	}
 }

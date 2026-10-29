@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.5.0
+// version: 1.5.1
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
-// last-edited: 2026-10-19
+// last-edited: 2026-10-29
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -16,6 +16,7 @@ import {
   runtimeDiffersFromBook,
   runtimeExceedsUpperBound,
   scoreColor,
+  transcriptionRuntimeChipLabel,
   type RowState,
 } from './rowState';
 
@@ -128,6 +129,16 @@ describe('scoreColor', () => {
     expect(scoreColor(0.8499)).toBe('warning');
     expect(scoreColor(0.6)).toBe('warning');
     expect(scoreColor(0.5999)).toBe('default');
+  });
+});
+
+describe('transcriptionRuntimeChipLabel', () => {
+  it('names each verdict differently', () => {
+    const labels = (['fragment', 'runtime_mismatch', 'runtime_unknown'] as const).map((verdict) =>
+      transcriptionRuntimeChipLabel({ verdict, detail: 'd' })
+    );
+    expect(new Set(labels).size).toBe(3);
+    expect(labels[0]).toMatch(/fragment/);
   });
 });
 

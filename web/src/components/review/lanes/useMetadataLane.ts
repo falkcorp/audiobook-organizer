@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.52.0
+// version: 1.52.1
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-19
+// last-edited: 2026-10-29
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -680,6 +680,8 @@ export interface MetadataFilters {
   onlyWithTranscription: boolean;
   /** NOT the same as `onlyWithTranscription`: this one means the score was boosted by it. */
   onlyTranscriptionMatched: boolean;
+  /** The audio intro matched but the runtime did not confirm it (fragment, mismatch, unknown). */
+  onlyTranscriptionRuntimeFlagged: boolean;
 }
 
 function initialFilters(level: ReviewLevel): MetadataFilters {
@@ -690,6 +692,7 @@ function initialFilters(level: ReviewLevel): MetadataFilters {
     hideRejected: true,
     hideNoMatch: true,
     matchLanguage: loadLanguageFilter(),
+    onlyTranscriptionRuntimeFlagged: false,
     // hideSkipped, hideMultiBook, confidenceThreshold, hideRuntimeDifferences
     // and the two transcription filters all come from the level.
     ...reviewLevelFilters(level),
@@ -748,6 +751,7 @@ export function reviewQueryFor(input: ReviewQueryInput): api.ReviewQueryParams {
   if (filters.matchLanguage) out.match_language = true;
   if (filters.onlyWithTranscription) out.has_transcription = true;
   if (filters.onlyTranscriptionMatched) out.transcription_matched = true;
+  if (filters.onlyTranscriptionRuntimeFlagged) out.transcription_runtime_flagged = true;
   if (filters.hideMultiBook) {
     out.hide_multi_book = true;
     if (input.ungrouped.length > 0) out.ungrouped = [...input.ungrouped].sort();

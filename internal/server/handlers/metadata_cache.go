@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.46.1
+// version: 1.46.2
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -560,7 +560,8 @@ func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]data
 // is a 400), source, min_confidence (0-1000, matched rows only), hide_applied,
 // hide_rejected, hide_skipped with skipped= (the client-only skipped ids),
 // hide_no_match, hide_runtime, match_language, has_transcription,
-// transcription_matched, hide_multi_book with ungrouped= (ids pulled out of a
+// transcription_matched, transcription_runtime_flagged (audio matched but
+// the runtime did not confirm it), hide_multi_book with ungrouped= (ids pulled out of a
 // group), chip (a chip view; pauses every filter but q), bucket, sort (title
 // or confidence), limit (default 50, at most 500) and offset. The response is
 // the page of index-shaped rows, total_count (the whole filtered list), the

@@ -1,7 +1,7 @@
 // file: internal/metafetch/transcription_match_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d3f1a6c-2b85-4e07-bc41-7a8e0f2d5c39
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -20,8 +20,8 @@ import (
 func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 	t.Run("transcribed_title_match_wins_over_higher_base", func(t *testing.T) {
 		results := []metadata.BookMetadata{
-			{Title: "The Wrong Book", Author: "A", Narrator: "N"},
-			{Title: "The Way of Kings", Author: "A", Narrator: "N"},
+			{Title: "The Wrong Book", Author: "A", Narrator: "N", DurationSec: 36000},
+			{Title: "The Way of Kings", Author: "A", Narrator: "N", DurationSec: 36000},
 		}
 		// The wrong book has the higher base score; the transcription pulls the
 		// right one ahead via the ×2.0 exact-title multiplier.
@@ -29,21 +29,21 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 		words := SignificantWords("The Way of Kings")
 		th := transcriptionHints{title: "The Way of Kings"}
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, th)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, th)
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "The Way of Kings", matched[0].Title)
 	})
 
 	t.Run("transcribed_author_match_boosts", func(t *testing.T) {
 		results := []metadata.BookMetadata{
-			{Title: "Mistborn", Author: "Wrong Author", Narrator: "N"},
-			{Title: "Mistborn", Author: "Brandon Sanderson", Narrator: "N"},
+			{Title: "Mistborn", Author: "Wrong Author", Narrator: "N", DurationSec: 36000},
+			{Title: "Mistborn", Author: "Brandon Sanderson", Narrator: "N", DurationSec: 36000},
 		}
 		scores := []float64{0.8, 0.7}
 		words := SignificantWords("Mistborn")
 		th := transcriptionHints{author: "Brandon Sanderson"}
 
-		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{}, th)
+		matched := pickBestMatchFromScored(results, scores, "f1", words, "", "", localRuntime{Sec: 36000}, th)
 		require.NotEmpty(t, matched)
 		assert.Equal(t, "Brandon Sanderson", matched[0].Author)
 	})
@@ -69,11 +69,13 @@ func TestPickBestMatch_TranscriptionBoost(t *testing.T) {
 
 func TestSearchMetadataForBook_TranscriptionTitleHintBoostsManualResults(t *testing.T) {
 	transcribedTitle := "Wrong Correct Shared"
+	tenHours := 36000
 	mock := &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
 			return &database.Book{
 				ID:               id,
 				Title:            "Wrong Shared",
+				Duration:         &tenHours, // 10h: the candidates' runtime agrees, so the transcription boost applies
 				TranscribedTitle: &transcribedTitle,
 			}, nil
 		},
@@ -83,8 +85,8 @@ func TestSearchMetadataForBook_TranscriptionTitleHintBoostsManualResults(t *test
 		&mockMetadataSource{
 			name: "test-source",
 			results: []metadata.BookMetadata{
-				{Title: "Wrong Shared", Author: "A"},
-				{Title: "Wrong Correct Shared", Author: "A"},
+				{Title: "Wrong Shared", Author: "A", DurationSec: 36000},
+				{Title: "Wrong Correct Shared", Author: "A", DurationSec: 36000},
 			},
 		},
 	})

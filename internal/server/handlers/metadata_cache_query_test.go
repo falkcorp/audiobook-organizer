@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package handlers
 
@@ -548,6 +548,34 @@ func TestReviewQuery_ChipPausesOtherFilters(t *testing.T) {
 	// The title still narrows a chip.
 	narrowed := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"chip": "total", "q": "chapter"})))
 	require.Equal(t, []string{"b07", "b08"}, narrowed)
+}
+
+// TestReviewQuery_TranscriptionRuntimeFlagged: the filter keeps only rows whose
+// candidate the audio intro matched but the runtime did not confirm (any
+// verdict), and a withheld match is not a "transcription matched" row.
+func TestReviewQuery_TranscriptionRuntimeFlagged(t *testing.T) {
+	row := func(id, verdict string) queryCaseRow {
+		r := oneTitleRow("Year One " + id)
+		r.Book.ID = id
+		if verdict != "" {
+			r.Candidate.TranscriptionRuntimeCheck = &metafetch.TranscriptionRuntimeCheck{Verdict: verdict, Detail: "d"}
+		}
+		return r
+	}
+	boosted := row("t04", "")
+	boosted.Candidate.TranscriptionBoosted = true
+	rows := []queryCaseRow{
+		row("t01", metafetch.TranscriptionRuntimeFragment),
+		row("t02", metafetch.TranscriptionRuntimeMismatch),
+		row("t03", metafetch.TranscriptionRuntimeUnknown),
+		boosted,
+		row("t05", ""),
+	}
+	base := baseFromSnapshot(t, snapshotFromCases(t, rows))
+	flagged := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"transcription_runtime_flagged": "true"})))
+	require.ElementsMatch(t, []string{"t01", "t02", "t03"}, flagged)
+	matched := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"transcription_matched": "true"})))
+	require.Equal(t, []string{"t04"}, matched, "a withheld match is not a boosted one")
 }
 
 // --- the ported rules, from the TypeScript cases -----------------------------

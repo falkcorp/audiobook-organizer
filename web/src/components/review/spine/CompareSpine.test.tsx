@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.8.0
+// version: 1.8.1
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -258,6 +258,30 @@ describe('what the reviewer must be able to see', () => {
     });
     renderSpine({ rows: [mismatched], viewMode: 'compact', ctx });
     expect(screen.getByText(/runtime differs by 1h 0m/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['fragment', /file fragment/],
+    ['runtime_mismatch', /transcription matches, runtime does not/],
+    ['runtime_unknown', /runtime unverified/],
+  ] as const)('shows a chip for a withheld transcription match (%s)', (verdict, label) => {
+    // The audio intro matched but the runtime did not confirm it: the row must
+    // say so, not look like an ordinary candidate.
+    const { ctx } = makeCtx();
+    const flagged = row('b1', {
+      candidate: {
+        ...candidate,
+        transcription_runtime_check: { verdict, detail: 'about 1h00m of a 10h00m book' },
+      } as MetadataCandidate,
+    });
+    renderSpine({ rows: [flagged], viewMode: 'compact', ctx });
+    expect(screen.getByTestId('transcription-runtime-chip')).toHaveTextContent(label);
+  });
+
+  it('shows no transcription runtime chip without a check', () => {
+    const { ctx } = makeCtx();
+    renderSpine({ rows: [row('b1')], viewMode: 'compact', ctx });
+    expect(screen.queryByTestId('transcription-runtime-chip')).not.toBeInTheDocument();
   });
 
   it('warns when a candidate is longer than a partial runtime\'s files can hold', () => {

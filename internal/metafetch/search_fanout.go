@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -565,9 +565,13 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 // counts as known here: a candidate beyond it is penalised. Audible's own
 // answers always carry a runtime, so in practice this is the only way Audnexus
 // is asked about an ASIN another source found.
-func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookRuntime localRuntime) {
+func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookRuntime localRuntime, th transcriptionHints) {
 	ctx := p.ctx
-	if !bookRuntime.informative() {
+	// The transcription-matched answer is looked up even when the book's own
+	// runtime is unknown: its runtime is what the transcription runtime gate
+	// compares (transcriptionRuntimeGate), and without one the boost is
+	// withheld for lack of a number a lookup could have supplied.
+	if !bookRuntime.informative() && th.empty() {
 		return
 	}
 	enabled := false
@@ -580,27 +584,40 @@ func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, 
 		return
 	}
 	done := map[string]bool{}
-	for _, st := range states {
-		for i := range st.results {
-			r := &st.results[i]
-			asin := strings.ToUpper(strings.TrimSpace(r.ASIN))
-			if asin == "" || r.DurationSec > 0 || !looksLikeASIN(asin) || done[asin] {
-				continue
-			}
-			if len(done) >= maxASINEnrich || ctx.Err() != nil {
-				return
-			}
-			done[asin] = true
-			got, err := mfs.cachedLookupASIN(p, metadata.SourceIDAudnexus, asin)
-			if err != nil || got == nil {
-				continue
-			}
-			r.DurationSec = got.DurationSec
-			if r.Narrator == "" {
-				r.Narrator = got.Narrator
-			}
-			if r.Series == "" {
-				r.Series, r.SeriesPosition = got.Series, got.SeriesPosition
+	// Pass 0 spends the (single) lookup on an answer the transcription
+	// matched; pass 1 is the original rule, for any answer, when the book's
+	// own runtime can rank it.
+	for pass := 0; pass < 2; pass++ {
+		if pass == 0 && th.empty() || pass == 1 && !bookRuntime.informative() {
+			continue
+		}
+		for _, st := range states {
+			for i := range st.results {
+				r := &st.results[i]
+				asin := strings.ToUpper(strings.TrimSpace(r.ASIN))
+				if asin == "" || r.DurationSec > 0 || !looksLikeASIN(asin) || done[asin] {
+					continue
+				}
+				if pass == 0 {
+					if _, matched := transcriptionMatchBoost(1, *r, th); !matched {
+						continue
+					}
+				}
+				if len(done) >= maxASINEnrich || ctx.Err() != nil {
+					return
+				}
+				done[asin] = true
+				got, err := mfs.cachedLookupASIN(p, metadata.SourceIDAudnexus, asin)
+				if err != nil || got == nil {
+					continue
+				}
+				r.DurationSec = got.DurationSec
+				if r.Narrator == "" {
+					r.Narrator = got.Narrator
+				}
+				if r.Series == "" {
+					r.Series, r.SeriesPosition = got.Series, got.SeriesPosition
+				}
 			}
 		}
 	}

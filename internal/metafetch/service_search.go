@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.44.1
+// version: 1.44.2
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-15
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -1259,7 +1259,7 @@ func (mfs *Service) searchMetadataForBook(
 	needOwnASIN := asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup) &&
 		asinLookupAllowed(opts, sources)
 	if !needOwnASIN {
-		mfs.enrichRuntimeByASIN(fp, states, bookRuntime)
+		mfs.enrichRuntimeByASIN(fp, states, bookRuntime, th)
 	}
 
 	type sourceFetch struct {
@@ -1425,21 +1425,39 @@ func (mfs *Service) searchMetadataForBook(
 				}
 			}
 
-			var transcriptionBoosted bool
+			var transcriptionBoosted, transcriptionWithheld bool
+			var runtimeCheck *TranscriptionRuntimeCheck
 			if !th.empty() {
-				var boosted float64
-				boosted, transcriptionBoosted = transcriptionBoost(rec.score, r, th)
-				rec.mulResult("transcription", "Transcription match", boosted,
-					"The result agrees with the title/author/narrator heard in the book's own audio intro.")
+				boosted, out := transcriptionBoost(rec.score, r, th, bookRuntime)
+				transcriptionBoosted = out.Boosted
+				switch {
+				case out.Boosted:
+					rec.mulResult("transcription", "Transcription match", boosted,
+						"The result agrees with the title/author/narrator heard in the book's own audio intro.")
+				case out.Matched:
+					// Withheld by the runtime gate: show the x1.00 step and
+					// why, instead of leaving the panel silent.
+					transcriptionWithheld = true
+					runtimeCheck = out.Check
+					rec.mulRecorded("transcription", "Transcription match", 1,
+						transcriptionWithheldDetail(out.Check))
+				}
 			}
 
 			// Duration-based scoring: compare candidate runtime vs. local file duration.
-			rec.mul("duration", "Runtime comparison",
-				bookRuntime.multiplier(r.DurationSec),
-				durationStepDetail(bookRuntime, r.DurationSec))
+			// When the transcription boost was withheld the runtime step is
+			// recorded even at x1.00: it is the other half of the reason.
+			durMul, durDetail := bookRuntime.multiplier(r.DurationSec), durationStepDetail(bookRuntime, r.DurationSec)
+			if transcriptionWithheld {
+				rec.mulRecorded("duration", "Runtime comparison", durMul, durDetail)
+			} else {
+				rec.mul("duration", "Runtime comparison", durMul, durDetail)
+			}
 			score = rec.score
 
-			candidates = append(candidates, newSearchCandidate(r, srcName, score, rec.breakdown(), bookRuntime, transcriptionBoosted))
+			cand := newSearchCandidate(r, srcName, score, rec.breakdown(), bookRuntime, transcriptionBoosted)
+			cand.TranscriptionRuntimeCheck = runtimeCheck
+			candidates = append(candidates, cand)
 		}
 	}
 

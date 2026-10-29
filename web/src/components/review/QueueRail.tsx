@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.20.0
+// version: 1.20.1
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-10-19
+// last-edited: 2026-10-29
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -128,6 +128,14 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
     key: 'onlyTranscriptionMatched',
     label: 'Transcription matched',
     help: 'Only books whose score was boosted by the transcription — not the same as “has transcription”.',
+  },
+  {
+    key: 'onlyTranscriptionRuntimeFlagged',
+    label: 'Transcription needs runtime check',
+    help:
+      'Only books whose audio intro matched a candidate but whose runtime did not confirm it: ' +
+      'a file fragment, a runtime mismatch, or a runtime that could not be compared. ' +
+      'The match is not trusted for applying until the runtime agrees.',
   },
 ];
 

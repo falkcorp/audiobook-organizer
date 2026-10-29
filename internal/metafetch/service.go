@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.58.1
+// version: 5.58.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-18
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -382,6 +382,12 @@ type MetadataCandidate struct {
 	// "matched on transcription" filter so users can focus on books where
 	// audio-derived metadata was the deciding factor.
 	TranscriptionBoosted bool `json:"transcription_boosted,omitempty"`
+	// TranscriptionRuntimeCheck is set when the audio intro matched this
+	// candidate but its runtime did not confirm it (fragment, mismatch, or
+	// not comparable); the boost is withheld then and TranscriptionBoosted is
+	// false. The review row shows it as a chip, and the apply gate will not
+	// take the candidate on the strength of the transcription match.
+	TranscriptionRuntimeCheck *TranscriptionRuntimeCheck `json:"transcription_runtime_check,omitempty"`
 	// AudibleRatingOverall is the Audible overall star rating (1–5 scale).
 	// Zero means the source did not provide a rating.
 	AudibleRatingOverall float64 `json:"audible_rating_overall,omitempty"`

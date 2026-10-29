@@ -1,7 +1,7 @@
 // file: internal/metafetch/book_runtime.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: ebab5e13-aa16-4d7d-84e0-773a72bc717e
-// last-edited: 2026-10-16
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -51,6 +51,17 @@ type partialBound struct {
 type localRuntime struct {
 	Sec     int
 	Partial partialBound
+	// FilesKnown / FilesCounted say how much of the book Sec covers, set even
+	// when no size-based bound exists (Partial is then the zero value). Used
+	// to explain WHY a runtime is unknown.
+	FilesKnown, FilesCounted int
+	// MeasuredSec is the summed duration of the measured files: a LOWER bound
+	// on the total when partial (never a total). TotalBytes / SizesComplete
+	// are the files' summed size and whether every row carried one; they let
+	// an "unknown" runtime say whether sizes were the missing piece.
+	MeasuredSec   int
+	TotalBytes    int64
+	SizesComplete bool
 }
 
 // bookRuntime is bookRuntimeSec plus the partial bound; see localRuntime.
@@ -73,7 +84,10 @@ func (mfs *Service) bookRuntime(book *database.Book) localRuntime {
 // localRuntimeOf converts the canonical runtime to its scoring view.
 func localRuntimeOf(rt database.BookRuntime) localRuntime {
 	sec, _ := rt.KnownSeconds()
-	out := localRuntime{Sec: sec}
+	out := localRuntime{
+		Sec: sec, FilesKnown: rt.FilesKnown, FilesCounted: rt.FilesCounted,
+		MeasuredSec: rt.Seconds, TotalBytes: rt.TotalBytes, SizesComplete: rt.SizesComplete,
+	}
 	if upper, ok := rt.EstimatedUpperSeconds(); ok {
 		est, _ := rt.EstimatedSeconds()
 		out.Partial = partialBound{
