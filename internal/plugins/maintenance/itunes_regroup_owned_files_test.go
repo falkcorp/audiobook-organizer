@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_owned_files_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3a58e17-4f20-4b96-8d71-e0b92a6f5c34
 // last-edited: 2026-10-29
 
@@ -147,12 +147,15 @@ func TestITunesRegroupApply_DeleteRechecksOwnedRowsUnderTheLockBeforeTheCarry(t 
 
 // The production run store wraps the server's store in a struct that embeds the
 // narrow OpsStore interface, which hides every capability outside it. The
-// owned-files check needs the retired-row reader, so the run store carries it:
-// without that the check fails closed on every book and the apply deletes
-// nothing.
+// owned-files check needs the retired-row reader, so the constructor
+// runITunesRegroup builds the run store with composes it in: without that the
+// check fails closed on every book and the apply deletes nothing.
 func TestRegroupRunStore_ExposesTheRetiredRowReader(t *testing.T) {
 	s := regroupStore(t)
-	rs := regroupRunStore{OpsStore: s, RetiredBookFileReader: s}
+	rs, err := newRegroupRunStore(s, s)
+	if err != nil {
+		t.Fatalf("newRegroupRunStore: %v", err)
+	}
 	if _, ok := database.AsCapability[database.RetiredBookFileReader](rs); !ok {
 		t.Fatal("the regroup run store is not a retired-row reader")
 	}
@@ -163,6 +166,18 @@ func TestRegroupRunStore_ExposesTheRetiredRowReader(t *testing.T) {
 	retireRowInto(t, s, id)
 	if err := database.CheckBookOwnsNoFiles(rs, id, "regroup delete"); !errors.Is(err, database.ErrBookOwnsFiles) {
 		t.Fatalf("a holder of a retired row = %v through the run store, want ErrBookOwnsFiles", err)
+	}
+}
+
+// Neither reader may be missing: a nil tag reader or a store that cannot list
+// retired rows is refused when the run store is built.
+func TestNewRegroupRunStore_RefusesAMissingReader(t *testing.T) {
+	s := regroupStore(t)
+	if _, err := newRegroupRunStore(s, nil); err == nil {
+		t.Error("a nil tag reader was accepted")
+	}
+	if _, err := newRegroupRunStore(storeHidingRetiredRows{s}, s); err == nil {
+		t.Error("a store that cannot list retired rows was accepted")
 	}
 }
 
