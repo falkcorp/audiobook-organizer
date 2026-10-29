@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d3a96b50-1e87-4f2c-8a64-b05c7e19f3d2
 // last-edited: 2026-10-28
 
@@ -18,7 +18,9 @@ import (
 
 // retiredVetoReaderStore is what the owner-veto reader needs of the store: the
 // book read the resolvers make and the combine/sibling journal prefix scan the
-// merge survivor's follows come from. database.Store carries both.
+// merge survivor's follows come from. The decisions KV and the retired-version
+// index are asserted from the same value (database.AsCapability), so the
+// reader never depends on the whole database.Store.
 type retiredVetoReaderStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	ScanPrefix(prefix string) ([]database.KVPair, error)
@@ -68,7 +70,7 @@ var _ OwnerVetoReader = (*ownerVetoReader)(nil)
 // still resolved afresh by every reader. The result is nil (the fixer then
 // refuses to plan) when the store cannot serve the decisions KV or the
 // retired-version index, which a non-Pebble backend cannot.
-func NewOwnerVetoReader(store database.Store, rows *decisions.RowCache) OwnerVetoReader {
+func NewOwnerVetoReader(store retiredVetoReaderStore, rows *decisions.RowCache) OwnerVetoReader {
 	if store == nil {
 		return nil
 	}
