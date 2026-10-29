@@ -1,5 +1,5 @@
 // file: internal/scanner/retired_shell_emptied_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: bfb3aa29-e923-44bd-9e2a-7c709aa20de4
 // last-edited: 2026-10-29
 
@@ -7,9 +7,11 @@ package scanner
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -114,4 +116,68 @@ func TestProcessBooksParallel_HoldsTheRetiredHashScopeForTheRun(t *testing.T) {
 	require.NoError(t, ProcessBooksParallel(context.Background(), nil, 2, nil, nil))
 	require.EqualValues(t, 1, counting.opened.Load())
 	require.EqualValues(t, 1, counting.closed.Load(), "the scope is closed when the run ends")
+}
+
+// End to end through checkFileOwnership, on a folder book. While a retired
+// version holds the book's only row the book is a shell, the path shortcut is
+// not taken, and the folder is judged by who claims its files: a second file in
+// it that only a retired row claims skips the scan. Once the revert has emptied
+// the version (it keeps Status=retired) the book is an ordinary one again and
+// takes the shortcut, which leaves a file another book claims to that book.
+// Before the fix the emptied version still made it a shell, so the scan stayed
+// skipped.
+func TestCheckFileOwnership_EmptiedShellTakesTheOrdinaryBookShortcut(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	dir := filepath.Join(f.root, "emptied-dir")
+	ownPath := f.write("emptied-dir/01.mp3", "emptied-own-bytes")
+	otherPath := f.write("emptied-dir/02.mp3", "emptied-other-bytes")
+	ownHash, err := ComputeFileHash(ownPath)
+	require.NoError(t, err)
+
+	// The folder's own book, whose one row sits retired under the holder.
+	shell, err := f.store.CreateBook(&database.Book{Title: "Arkham Asylum", FilePath: dir})
+	require.NoError(t, err)
+	v, err := f.store.CreateBookVersion(&database.BookVersion{
+		BookID: f.holder.ID, Status: database.BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
+		RetiredFromBookID: shell.ID, RetireOpID: "op-emptied", RetiredAt: new(time.Now()),
+	})
+	require.NoError(t, err)
+	row := &database.BookFile{BookID: shell.ID, FilePath: ownPath, FileHash: ownHash, Format: "mp3", TrackNumber: 1}
+	require.NoError(t, f.store.CreateBookFile(row))
+	require.NoError(t, f.store.RetireBookFiles(
+		[]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: shell.ID}}, f.holder.ID, v.ID))
+	// A second file in the folder that another book's retired version holds.
+	f.retiredRow(otherPath, "h-other")
+	scanned := func() *Book { return &Book{Title: "Arkham Asylum", FilePath: dir} }
+
+	verdict, err := checkFileOwnership(scanned())
+	require.NoError(t, err)
+	require.True(t, verdict.skip, "a shell is judged by its files' claimants, and both files are retired-only")
+	require.Contains(t, verdict.reason, "retired version of book "+f.holder.ID)
+
+	require.NoError(t, f.store.UnretireBookFiles(
+		[]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: f.holder.ID}}, shell.ID, v.ID, nil))
+	emptied, err := f.store.GetBookVersion(v.ID)
+	require.NoError(t, err)
+	require.NotNil(t, emptied)
+	require.Equal(t, database.BookVersionStatusRetired, emptied.Status, "the revert's deletion check still needs the status")
+
+	verdict, err = checkFileOwnership(scanned())
+	require.NoError(t, err)
+	require.False(t, verdict.skip, "the shell owns its file again and takes the shortcut; reason: %s", verdict.reason)
+}
+
+// A library scan opens the retired-hash scope once, in PerformScan, and closes
+// it when the run ends: the chunks' own scopes nest inside it, so the cache is
+// not dropped and rebuilt between 500-book chunks.
+func TestPerformScan_HoldsTheRetiredHashScopeForTheRun(t *testing.T) {
+	f := newRetiredScanFixture(t)
+	counting := &scopeCountingStore{scannerStore: f.store}
+	useScannerStore(t, counting)
+	folder := filepath.Join(f.root, "scan-folder")
+	require.NoError(t, os.MkdirAll(folder, 0o755))
+
+	require.NoError(t, NewScanService(f.store).PerformScan(context.Background(), &ScanRequest{FolderPath: &folder}, nil))
+	require.GreaterOrEqual(t, counting.opened.Load(), int32(1), "PerformScan opens a scope")
+	require.Equal(t, counting.opened.Load(), counting.closed.Load(), "and every scope it opened is closed")
 }

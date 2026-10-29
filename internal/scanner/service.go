@@ -1,7 +1,7 @@
 // file: internal/scanner/service.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-28
+// last-edited: 2026-10-29
 package scanner
 
 import (
@@ -198,6 +198,16 @@ func (ss *ScanService) performScanInternal(ctx context.Context, opID string, req
 	if log == nil {
 		log = logger.New("scan")
 	}
+
+	// While memdb is not serving, every file's retired-content check reads the
+	// retired rows. Hold ONE cache of them for the whole library scan, not one
+	// per chunk: ProcessBooksParallel opens a scope of its own for each chunk
+	// (the entry for ProcessBooks and the folder auto-scan, which do not come
+	// through here), and the store counts overlapping scopes, so that inner one
+	// reuses this cache instead of dropping and rebuilding it per chunk. A
+	// generation counter keeps it correct against retires made while the scan
+	// runs (database.BeginRetiredHashScope).
+	defer database.BeginRetiredHashScope(getStore())()
 
 	// Collect per-file failures across every folder and chunk of this run and
 	// report them however the run ends: a cancelled scan's failures are as

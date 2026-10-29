@@ -293,7 +293,7 @@ func (hashUnavailableStore) BookFilesWithHash(string) ([]database.BookFile, erro
 	return nil, database.ErrBookFilesWithHashUnavailable
 }
 
-func (hashUnavailableStore) RetiredBookFilesWithHash(string) ([]database.BookFile, bool, error) {
+func (hashUnavailableStore) RetiredBookFilesWithHash(string) ([]database.RetiredRowRef, bool, error) {
 	return nil, false, database.ErrBookFilesWithHashUnavailable
 }
 

@@ -1,11 +1,12 @@
 // file: internal/database/retired_hash_scope.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2798c1b6-7d41-4410-b491-a44b3dfd2093
 // last-edited: 2026-10-29
 
 package database
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -43,7 +44,7 @@ type retiredHashCache struct {
 	open     int
 	built    bool
 	builtGen uint64
-	byHash   map[string][]BookFile
+	byHash   map[string][]RetiredRowRef
 
 	// builds counts index builds, for tests.
 	builds atomic.Int64
@@ -52,6 +53,23 @@ type retiredHashCache struct {
 // noteRetiredRowsChanged invalidates the cache. Call it after the write that
 // changed the retired rows has committed.
 func (c *retiredHashCache) noteRetiredRowsChanged() { c.gen.Add(1) }
+
+// retiredHashRelevantChange reports whether rewriting old as updated changes
+// what the retired-hash index holds: only a row that is, or becomes, retired is
+// in it, and only its hashes, its holder (BookID), its version and the retired
+// flag itself are read from it. Every other rewrite of a retired row (a
+// duration or tag backfill, a last-checked stamp) leaves the index true, so it
+// does not cost the running scan a rebuild.
+func retiredHashRelevantChange(old, updated *BookFile) bool {
+	if !old.Retired && !updated.Retired {
+		return false
+	}
+	return old.Retired != updated.Retired ||
+		old.FileHash != updated.FileHash ||
+		old.OriginalFileHash != updated.OriginalFileHash ||
+		old.VersionID != updated.VersionID ||
+		old.BookID != updated.BookID
+}
 
 // BeginRetiredHashScope opens a scan-lifetime scope in which
 // RetiredBookFilesWithHash serves the retired side of its answer from one read
@@ -97,43 +115,46 @@ func BeginRetiredHashScope(s any) (end func()) {
 	return func() {}
 }
 
+// retiredHashAfterBuildHook, when set, runs after an index build has read the
+// retired rows and before it is stored under its generation. A seam for the test
+// that lands a write in exactly that window; nil in production.
+var retiredHashAfterBuildHook atomic.Pointer[func()]
+
 // retiredRowsWithHashCached answers the retired side of a hash lookup from the
 // scope's index, building it first when it is missing or stale. ok is false
-// when no scope is open and the caller must read the rows itself. The rows are
-// the memdb projection (stripBookFileForMemdb: no raw fingerprint, no
-// transcript), cloned per call so a caller cannot change the cache; the only
-// reader, the scanner, needs a row's book, version and hashes. An error is
-// returned and never cached.
-func (p *PebbleStore) retiredRowsWithHashCached(hash string) (rows []BookFile, ok bool, err error) {
+// when no scope is open and the caller must read the rows itself. The index
+// holds RetiredRowRef values only (not rows), so it stays small however many
+// retired rows exist, and each call returns its own copy of the slice. An error
+// is returned and never cached.
+func (p *PebbleStore) retiredRowsWithHashCached(hash string) (rows []RetiredRowRef, ok bool, err error) {
 	c := &p.retiredHash
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.open == 0 {
-		c.mu.Unlock()
 		return nil, false, nil
 	}
 	if gen := c.gen.Load(); !c.built || c.builtGen != gen {
-		// gen is read BEFORE the rows are. The build holds c.mu, so concurrent
+		// gen is read BEFORE the rows are, and the index is tagged with that
+		// value: a write that commits during the build moves gen past the tag,
+		// so the next lookup rebuilds. The build holds c.mu, so concurrent
 		// lookups wait for it instead of each enumerating the retired rows.
-		idx := map[string][]BookFile{}
-		if err := p.forEachRetiredRow(func(r BookFile) error {
-			stripped := stripBookFileForMemdb(&r)
-			idx[r.FileHash] = append(idx[r.FileHash], *stripped)
-			if r.OriginalFileHash != r.FileHash {
-				idx[r.OriginalFileHash] = append(idx[r.OriginalFileHash], *stripped)
+		idx := map[string][]RetiredRowRef{}
+		if err := p.forEachRetiredRow(func(r retiredHashRow) error {
+			if r.fileHash != "" {
+				idx[r.fileHash] = append(idx[r.fileHash], r.ref)
+			}
+			if r.originalHash != "" && r.originalHash != r.fileHash {
+				idx[r.originalHash] = append(idx[r.originalHash], r.ref)
 			}
 			return nil
 		}); err != nil {
-			c.mu.Unlock()
 			return nil, true, err
 		}
-		delete(idx, "") // a row with no hash matches no lookup
+		if hook := retiredHashAfterBuildHook.Load(); hook != nil {
+			(*hook)()
+		}
 		c.byHash, c.built, c.builtGen = idx, true, gen
 		c.builds.Add(1)
 	}
-	held := c.byHash[hash]
-	c.mu.Unlock()
-	for i := range held {
-		rows = append(rows, cloneBookFile(&held[i]))
-	}
-	return rows, true, nil
+	return slices.Clone(c.byHash[hash]), true, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
 // last-edited: 2026-10-29
 
@@ -369,10 +369,16 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 // the retire is reverted, and the retire apply adopts an empty retired version
 // of its own op (retiredRun.emptyRetiredVersion). Such a version is a record of
 // a retire that no longer stands, not a claim on any file, so it must not make
-// the book a shell. The cost is one idx:bv:from: seek for almost every book (it
-// has no versions), and one read of the holder's retired rows for a book that
-// has some; the same read the restore and purge guards (RefuseRetiredShell)
-// make, so the scanner and those guards agree on what a shell is.
+// the book a shell. The count is the one the restore and purge guards
+// (RefuseRetiredShell) make, so the scanner and those guards agree on what a
+// shell is. A PebbleStore answers it from one snapshot
+// (CountRetiredRowsHeldFor): an idx:bv:from: prefix seek that ends the call for
+// almost every book (it has no retired versions), and for a real shell one
+// scan of each holder's rows that decodes only the retired flag and version id
+// of each, not the row (a row carries up to 230 KB of raw AcoustID
+// fingerprint). Nothing is cached across calls: a retire apply running beside
+// the scan can change the answer, and a stale "not a shell" would let the
+// scanner touch a book the guards refuse.
 func isRetiredShell(store any, bookID string) (bool, error) {
 	held, err := database.RetiredRowsHeldFor(store, bookID)
 	if err != nil {
