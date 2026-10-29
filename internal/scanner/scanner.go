@@ -1361,6 +1361,15 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 
 	scanLog.Info("Processing audiobook metadata (using %d workers)...", workers)
 
+	// While memdb is not serving, every file's retired-content check re-reads
+	// every retired row. Hold one cache of them for the run; the store drops it
+	// when the last overlapping scan closes, and bumps its generation on any
+	// retire, un-retire, rehome or retired-row hash write, so a worker never
+	// reads a stale answer (database.BeginRetiredHashScope). This is the one
+	// entry every scan path reaches the lookup through: ProcessBooks, the
+	// library scan's chunks and the folder auto-scan.
+	defer database.BeginRetiredHashScope(getStore())()
+
 	// Per-file failures are counted and surfaced into the op log, not just
 	// printed: see scan_failures.go. A run started by PerformScan carries its
 	// collector on ctx so the count spans every folder and chunk; a direct

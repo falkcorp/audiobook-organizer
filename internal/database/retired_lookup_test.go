@@ -1,7 +1,7 @@
 // file: internal/database/retired_lookup_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 84b42cd5-8a89-4667-bfe1-8cb62dd1527c
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package database
 
@@ -42,7 +42,7 @@ func TestIncludingRetiredHelpers_FailClosedForUnknownStore(t *testing.T) {
 	require.ErrorIs(t, err, ErrRetiredReaderUnavailable)
 	_, err = BookFileByPathIncludingRetired(s, "/p")
 	require.ErrorIs(t, err, ErrRetiredReaderUnavailable)
-	_, err = RetiredVersionsFromBook(s, "shell")
+	_, err = RetiredRowsHeldFor(s, "shell")
 	require.ErrorIs(t, err, ErrRetiredReaderUnavailable)
 	_, err = BookFilesHoldingHash(liveOnlyStore{}, "h")
 	require.NoError(t, err, "a store that implements BookFilesWithHash answers for itself")
@@ -66,9 +66,9 @@ func TestIncludingRetiredHelpers_MockStoreIsTheReader(t *testing.T) {
 			files, err := BookFilesIncludingRetired(s, "b")
 			require.NoError(t, err)
 			require.Equal(t, "live", files[0].ID)
-			vs, err := RetiredVersionsFromBook(s, "shell")
+			held, err := RetiredRowsHeldFor(s, "shell")
 			require.NoError(t, err)
-			require.Empty(t, vs)
+			require.Zero(t, held)
 		})
 	}
 	_, err := BookFilesIncludingRetired(struct{ Store }{Store: m}, "b")

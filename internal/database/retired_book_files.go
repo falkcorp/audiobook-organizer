@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
@@ -758,6 +758,9 @@ func (p *PebbleStore) retireBookFilesAttempt(rows *bookFileRowCache, moves []Boo
 // a retire; the shell's is recomputed under RecomputeBookAggregates'
 // partial-data rule).
 func (p *PebbleStore) afterRetireWrite(rows []*BookFile, affected []string, reason string) {
+	// First, before the slow refresh below: the write has committed, so a
+	// per-scan hash cache built before it is stale from here (retired_hash_scope.go).
+	p.retiredHash.noteRetiredRowsChanged()
 	p.InvalidateLibraryStats()
 	p.MarkQuickQueryDirty("no_fingerprints", reason)
 	for _, f := range rows {
