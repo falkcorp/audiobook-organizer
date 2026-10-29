@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.14 -->
+<!-- version: 10.78.15 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -13,6 +13,193 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-RETIRED-APPLY-PRECONDITIONS** before `retire_versions_apply_enabled`
+      is turned on in production: (1) move the fixer's journaling onto PR 5's `repairs.Writer.RetireVersion`
+      and `RehomeRetiredVersion` (the rows it writes already use the undo
+      package's change types and formats, so an Apply is revertible today; the
+      swap is behind the `retireWriter` interface in
+      `internal/plugins/maintenance/retired_versions_apply.go`); (2) the combine-undo link
+      of plan section 6.5 (`combine_undo_aware` rows are held as retry_later
+      until the fixer passes `RetireSpec.CombineJournalID` to
+      `Writer.RetireVersion`, which links the retire so UndoCombine reverses it
+      first);
+      (3) the `dedup:automerge:` journals are not read (the plugin deps cannot
+      reach the embedding store; the 14-day minimum age is the only guard); (4)
+      a trashed book that holds only retired rows for other shells and owns no
+      live row is classed `no_book_files` by the PR 1 classifier and is not
+      re-homed by this fixer; (5) the combine-journal index is a per-run
+      snapshot, so a combine journaled mid-run is not seen (combine undo now
+      refuses a retired shell, which covers it); (6) the store-level
+      `RevertBookToVersion` shell check runs under the book write stripe but
+      retire takes only owner stripes and the merge lock; the metadata revert
+      handler and `UnmergeAuto` now take the merge lock around that call, so a
+      revert through them cannot race a retire, but any other caller of
+      `RevertBookToVersion` that does not hold the merge lock still can; (7) a generic whole-row `UpdateBook` from a
+      stale read can still overwrite the merged-into link; (8) the batch hard delete (`internal/batch/service.go` `hardDelete`) has no
+      owned-files pre-check at all, live or retired, so a book that owns rows
+      has its listening state carried to another version
+      (`merge.HardDeleteKeepingUserState`) before `DeleteBook` refuses with
+      `ErrBookOwnsFiles`; this predates the retire work, and adding the check
+      changes the batch's behaviour for live rows too, so it is left for its own
+      change (`DiscardProgressAndPurge`, the `DeleteAudiobook` live branch and
+      the purge pre-check now count retired rows); (9) decorator
+      stores that do not implement `Unwrap() database.Store` cannot be read for
+      retired rows and now fail closed; (10) PR 5's revert of a
+      `book_version_create` row must refuse to delete a version that still holds
+      rows (reverting the create after the rows' own retire rows are reverted is
+      the only order that leaves it empty; a create reverted while rows remain,
+      e.g. after a partial revert or a row journaled by another op, would
+      delete the version out from under them).
+
+- [ ] **TODO-RETIRED-APPLY-PR8-HOOK** wire the decisions ledger into the retire
+      Apply once PR 8 (#4143) and PR 7 are stacked: after a row's
+      `RetireRows` commits in `retire()`
+      (`internal/plugins/maintenance/retired_versions_apply.go`, see the
+      `TODO(PR 8, #4143)` comment), call
+      `recordRetiredVersionApplied(f.p.deps.OpsStore(), ev)` with a
+      `decisions.RetiredVersionsEvent` keyed by
+      `decisions.RetiredVersionsSubjectKey(shell)`.
+
+- [ ] **TODO-RETIRED-RESTORE-JOURNAL** `POST /audiobooks/:id/retired-versions/:vid/restore`
+      (`RestoreRetiredVersion`, PR 9) answers 501 Not Implemented and changes
+      nothing, and the panel shows its Restore button disabled with "Restore will
+      be available once restores are journaled". The direct restore it replaced
+      (`UnretireBookFiles` with no prior-`VersionID` map, then `DeleteBookVersion`)
+      is not shipped: it cleared every row's `VersionID` (the torrent/ingest link),
+      deleted the version row that carries `RetireOpID`, wrote no journal or
+      activity entry and had no undo. Build the real restore with
+      `RevertOperationForBooks` for the retire op (PLAN.md section 6.4), which also
+      recreates a purged shell instead of refusing, then: replace the 501 body;
+      make `restoreBlockedReason` in `RetiredVersionsPanel.tsx` return null for a
+      version that can be restored, wire the button (confirm, POST, then refetch
+      and call `onRestored` on success AND on a non-4xx failure, since the rows may
+      have moved), and add the `restoreRetiredVersion` client function back; wrap
+      the not-found error `UnretireBookFiles` raises for a row a concurrent restore
+      already moved (`retired_book_files.go`, "file not found ... under <holder>")
+      in a sentinel mapped to 409, not 500; answer 404 (not 400) for a version of
+      another book; and write a Pebble-backed test that the restore writes its
+      journal rows and returns each row's prior `VersionID`. Until then nothing
+      calls the restore, so none of this is reachable.
+
+- [ ] **TODO-RETIRED-UNDO-DEFERRED** the undo change (PR 5) built the journal
+      and the revert for a retire but left things to later changes.
+      (1) `undo.PurgedShellRecreator` has no store implementation: until the
+      purge change (PR 6) journals a `book_purge_snapshot` and implements
+      `HasPurgeSnapshot` and `RecreatePurgedBook` (and marks the purge's own
+      change row reverted), a retire whose shell was purged refuses with
+      `book_missing`, which is the safe answer. The recreate branch is covered
+      with a fake only. PR 6 also owes the PLAN 6.2 snapshot completeness
+      test (every `Book` field and every key family hanging off a book is
+      either in the snapshot or listed as derived). (2) The fixer Apply (PR 7)
+      must call `repairs.Writer.RetireVersion` and `RehomeRetiredVersion`,
+      journal the shell's external-id moves and merged-into pointer with the
+      existing `Step`/`Journal` (as `retire_into.go` does), hold
+      `merge.LockMergeRMW`, and pass `CombineJournalID` when the retire is
+      part of a combine so `UndoCombine` can reverse it. Until PR 7 lands
+      nothing writes a `merge:combine-retire:` link, so the combine undo
+      path for retires is exercised by tests only. (3) The undo UI does not
+      yet offer `RevertOperationForBooks` per shell; the endpoint wiring
+      belongs with the UI change (PR 9).
+      (4) A whole-operation preflight (`undo.PreflightUndoConflicts`) of a
+      retire op judges the retire rows of a version against the holder the
+      rehome rows of that SAME operation put it back on
+      (`RevertPlan.RehomeHolder`); a retire op whose version was rehomed by a
+      LATER operation still reports its rows "changed since", as the revert of
+      the earlier op refuses them: reverse the later operation first.
+      (5) The combine undo still refuses a retire that also rehomed a
+      version the shell's own retire created; only the rehome of a version the
+      shell held before is reversed with it. (6) PR 7 must put the shell in the
+      trash before calling `RetireVersion` (it now refuses a live shell).
+      (7) The retire journal rows are exempt from journal pruning, but the
+      retire op's own `external_id_reassign` and `book_merged_into` rows are
+      not. `PruneOperationChanges` has no production caller today, so nothing
+      is lost yet; whichever change wires a prune must exempt those two types
+      for an op that also has retire rows, or an old retire op is read as
+      partly reversed.
+      (8) Left from the second re-review of PR 5, none reachable until PR 7
+      writes a retire. (a) "Owed beats pending" in `mergeSettleOwedGroup`: when
+      a group is owed by a failed settle, a dead scoped run's already-restored
+      rows are not evidence, so the later-pick check can drop the settle and
+      leave two primaries with only an Info log. This matches the in-record
+      rule `markSettlePending` already has and keeps a user's pick; it is an
+      owner decision whether to change it. (b) `applyUndo` reverses the
+      `merge:combine-retire:<cj>:<shell>:<op>` link keys in key order, which
+      is chronological only for ULID op ids; it fails closed, so add a comment
+      or sort by the ops' `CreatedAt`. (c) The "given back by a revert outside
+      the undo" subtest in `combine_retire_undo_test.go` passes on the older
+      code too (its fake carries no reverted ids); it documents the case and
+      cannot catch a regression.
+
+- [ ] **TODO-PURGE-KEPT-FILES-ORPHANED** A file kept on an `inactive_purged` version
+      because a trashed book, or a lingering row of a purged version, still names it
+      (`database.BookVersion.PurgeKept`, reported as `KeptFiles` by the nightly trash
+      cleanup) is never revisited. Once the trashed book is hard-deleted or the
+      lingering row is gone, nothing looks at the file again and it stays on disk with
+      no owner. Fix: a sweep (or a step of the nightly cleanup) that re-asks the owner
+      checks for each path in `PurgeKept` of purged versions and removes the ones no
+      row or book names any more, then drops them from `PurgeKept`.
+
+- [ ] **Retired-versions decision records: three remaining gaps** (from the review follow-up of #4240)
+  - **Backfill for retires that predate the records.** No `applied` record exists for a shell retired before part 8 shipped. Finishing a retire's tail now writes one as a side effect, but a version with no tail pending (the `already_retired` class) never gets one. Decide whether to backfill `applied` from each retired version's `RetireOpID`, or to leave the ledger starting at part 8.
+  - **A failed `applied` write is not repaired.** If `recordApplied` fails and no tail is pending, nothing rewrites the record. The same backfill would cover it.
+  - **`undone` after a cut-off inside the retire batch.** A cut-off between a retire row's journal entry and the `RetireRows` batch leaves a non-voided `book_file_retire` row for a batch that never committed. A revert then reads it as already restored and writes `undone`. Telling the two apart needs the journal to mark the batch commit, not a store-state check.
+
+- [ ] **TODO-RETIRED-REJECT-ROUTE** the Repairs reject route does not yet write a
+      `repairs:retired-versions` reject (entity = the shell,
+      `decisions.RetiredVersionsSubjectKey`), and that op kind has no
+      reject-reason taxonomy of its own (it gets the common and `repairs:`
+      ones). Two things the route must know. (1) Reopen is not unreject: the
+      retired-versions fixer asks `SubjectRejected` with material hash "" (a
+      sticky ask), so ANY live reject of the shell blocks it, including one that
+      was reopened. A reject route for op kind `repairs:retired-versions` must
+      offer unreject to release a shell, not only reopen. (2) A revert puts the
+      rows back under the shell and leaves nothing behind (it deletes the retired
+      version), so the shell is plannable again; the `undone` record is a label
+      and never a veto. Any future writer of a `decision:` key outside
+      `decisions.Store.Record` would leave the `RowCache` stale;
+      `TestDecisionKeysHaveOneWriter` fails if one appears.
+
+- [ ] **TODO-SWAP-ADOPT-FILES** Let `versions.RunVersionSwap` take a version whose files are
+      not in its `.versions/{id}/` slot, and support folder (multi-file) books. The swap now
+      refuses (409 `NO_SWAP_TARGET`) unless the entering version's files are already in its
+      slot and the book's path is a single file in the folder the slots belong to, and nothing
+      in production puts alt files in their slot, so trashing the active version of most books
+      is refused until the swap can adopt files from elsewhere (a download folder, another
+      folder of the book) safely: copy or move them into the slot first under the same
+      checks (never the same file as the active version's, never a symlink, same filesystem or
+      a verified copy), then swap. The same task covers a book whose `file_path` is a folder
+      (inplace multi-file): the swap must move the whole folder's files, not assume the
+      parent of `file_path` is the book's folder. Resuming a swap that did not finish
+      (`ErrSwapIncomplete`) is done: `versions.ResumeVersionSwap`, POST
+      `/audiobooks/:id/versions/resume-swap` and the Version Management "Unfinished swaps"
+      tab. A swap that adopts files or handles folder books must keep that resume able to
+      classify every file row (book folder or its own slot).
+
+- [ ] **TODO-DELUGE-SWAP-NOTIFY-SLOT-DIR** Fix the leaving version's Deluge follow after a version
+      swap pointing the torrent one folder too high. `deluge.NotifyDelugeAfterVersionSwap`
+      (`internal/deluge/integration.go`) passes the leaving version's slot FOLDER
+      (`.versions/{id}`) to `NotifyDelugeMoveStorage`, which takes the path of a FILE and
+      sends `filepath.Dir(newPath)` to Deluge ("Deluge expects the parent directory"), so
+      the torrent is moved to `.versions`, not to `.versions/{id}` where its files are. The
+      entering version is right (its `bookFilePath` is a file). Needed: pass a path inside
+      the slot (the version's first file there) or give `NotifyDelugeMoveStorage` a
+      folder-taking sibling, and test the directory Deluge is sent for both versions of a
+      swap. Found reviewing TODO-SWAP-STUCK-RECOVERY (the resume handler's Deluge call goes
+      through the same function); not changed there.
+
+- [ ] **TODO-INGEST-ACTIVE-WHILE-SWAP-STUCK** Stop ingest from creating a second active version
+      for a book whose version swap did not finish. A book with a version in `swapping_out` /
+      `swapping_in` has no active version, so `versions.CreateIngestVersion` (`internal/versions/ingest.go`, the
+      `GetActiveVersionForBook` check that picks `active` over `alt` for a new version) makes
+      the new download the book's active version, and the later
+      `versions.ResumeVersionSwap` then refuses (409 `SWAP_RESUME_REFUSED`: another version is
+      active) and leaves the book needing a hand repair. Needed: the ingest path that decides
+      "this book has no active version" must treat a `swapping_*` version as an unfinished swap
+      (use `ListSwappingBookVersions`, or check the book's versions) and add the download as
+      an `alt` version, or hold it, until the swap is resumed. Add a test that ingests into a
+      book left stuck by a `RunVersionSwap` that returned `ErrSwapIncomplete`. Found while
+      doing TODO-SWAP-STUCK-RECOVERY; the resume itself only refuses, it does not pick a winner.
 
 - [ ] **TODO-REPAIRS-DIGEST-AGGREGATES** A compacted daily digest's `counts`, `original_count` and `tag_counts` still include rows of Repairs operations the caller may not read (only `Details.items` is redacted by `redactDigest`). Either store per-operation aggregates in the digest so they can be recomputed per caller, or stop serving the aggregates to callers who hold fewer than every fixer permission.
 - [ ] **TODO-REPAIRS-CANCEL-NO-FIXER-RUNS** `CancelRun` refuses (before `mayCancel`) an admin who did not start a legacy Repairs run that names no fixer, because such a run is hidden from everyone. New starts are rejected with 400 now; decide whether an admin may cancel or purge the legacy rows.
