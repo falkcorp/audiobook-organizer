@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0a0e6a4a-3f6e-4f0c-9b4f-6d7a1e2c8b35
 // last-edited: 2026-10-29
 
@@ -118,17 +118,14 @@ type keptJudgement struct {
 // A removal is allowed only while the version's own book is known to serve a
 // file that exists, as a trashed version's purge requires: with none, the served
 // guard has nothing to compare against and "nothing is served" would be a guess.
-func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVersion) []keptJudgement {
+func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVersion) ([]keptJudgement, *servedGuard) {
 	out := make([]keptJudgement, len(ver.PurgeKept))
-	failAll := func(err error) []keptJudgement {
+	sg, err := rebuildServedGuard(store, ver)
+	if err != nil {
 		for i, n := range ver.PurgeKept {
 			out[i] = keptJudgement{note: n, action: keptError, why: err.Error()}
 		}
-		return out
-	}
-	sg, err := rebuildServedGuard(store, ver)
-	if err != nil {
-		return failAll(err)
+		return out, nil
 	}
 	removable := false
 	for i, n := range ver.PurgeKept {
@@ -158,7 +155,7 @@ func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVers
 			}
 		}
 	}
-	return out
+	return out, sg
 }
 
 // SweepKeptFiles revisits the files purged versions kept (see the comment
@@ -270,7 +267,7 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 	// First look, no lock: most versions have nothing to do (their other owner is
 	// still there) and must not queue behind a merge for it.
 	look := *snap
-	judged := judgeKept(store, guard.NewDecider(), &look)
+	judged, _ := judgeKept(store, guard.NewDecider(), &look)
 	if !slices.ContainsFunc(judged, func(j keptJudgement) bool { return j.action == keptRemove || j.action == keptGone }) {
 		tally(&res, snap, judged)
 		return res
@@ -315,7 +312,7 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 		return KeptSweepResult{}
 	}
 	decider := guard.NewDecider()
-	judged = judgeKept(store, decider, fresh)
+	judged, sg := judgeKept(store, decider, fresh)
 
 	// Files that may be unlinked are unlinked one at a time, and the note of each
 	// is dropped (and the version written) right after, never before.
@@ -327,7 +324,34 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 			errs = append(errs, database.PurgeFileNote{Path: j.note.Path, Reason: stopped})
 			continue
 		}
-		switch j.action {
+		act := j.action
+		if act == keptRemove {
+			// The owners and the decision again, for this path, right before its
+			// unlink, as the purge does (purgeVersionLocked): a writer that does not
+			// take the merge lock (the library scan) can have started naming it since
+			// the pass above, and that pass is older by every removal and record
+			// written before this one.
+			verdict, why, cerr := classifyPurgePath(store, decider, sg, fresh, j.note.Path, nil)
+			switch {
+			case cerr != nil:
+				errs = append(errs, database.PurgeFileNote{Path: j.note.Path, Reason: cerr.Error()})
+				continue
+			case verdict == verdictUndecided:
+				errs = append(errs, database.PurgeFileNote{Path: j.note.Path, Reason: why})
+				continue
+			case verdict == verdictServed || verdict == verdictKept:
+				if verdict == verdictServed {
+					why = KeptReason
+				}
+				still = append(still, database.PurgeFileNote{Path: j.note.Path, Reason: why})
+				lifecycleLog.Warn("kept-file sweep: version %s: keeping %s: %s (decided since the sweep began)", fresh.ID, j.note.Path, why)
+				continue
+			case verdict == verdictGone:
+				// Gone since the pass above, and its folder vouches for that.
+				act = keptGone
+			}
+		}
+		switch act {
 		case keptKeep:
 			still = append(still, database.PurgeFileNote{Path: j.note.Path, Reason: j.why})
 			continue
