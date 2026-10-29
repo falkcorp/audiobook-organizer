@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.129.0
+// version: 2.129.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
@@ -825,7 +825,9 @@ type BookVersion struct {
 	// book names stays where it is. Set by versions.PurgeVersion on the write
 	// that marks the version inactive_purged, so a purge that kept files is
 	// not reported as one that removed them all. Empty when it removed
-	// everything.
+	// everything. The nightly trash cleanup revisits these notes
+	// (versions.SweepKeptFiles): a file nothing names any more is removed and its
+	// note dropped; a file that is still owned keeps its note.
 	PurgeKept []PurgeFileNote `json:"purge_kept,omitempty"`
 	// PurgeFailed, PurgeFailedAt: the files a purge could not remove for a
 	// reason that retrying will not change (permission, read-only filesystem),

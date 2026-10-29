@@ -732,7 +732,9 @@ type CleanupRunners interface {
 	// files (Kept), the purges that gave up for good (NeedsAttention) and the
 	// ones that could not tell whether their files are gone (CannotTell) and the
 	// ones whose book serves nothing that exists on disk (NothingServed): none
-	// is a failure, and all must be reported.
+	// is a failure, and all must be reported. It also revisits the files earlier
+	// purges kept (KeptSweep: removed, still owned, kept on error); only a sweep
+	// that could not list the purged versions (KeptSweepErr) fails the night.
 	CleanupTrashedVersions() (versions.CleanupResult, error)
 	// PruneOldLogs prunes legacy operation log rows and system log rows older
 	// than retentionDays, in bounded chunks; it never touches undo history

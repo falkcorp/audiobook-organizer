@@ -1,5 +1,5 @@
 // file: internal/versions/unit_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
 // last-edited: 2026-10-29
 
@@ -215,6 +215,8 @@ func TestCleanupTrashedVersions_EmptyList(t *testing.T) {
 	mockStore.EXPECT().ListTrashedBookVersions().Return([]database.BookVersion{}, nil)
 	// The run also lists the swaps that did not finish (read-only).
 	mockStore.EXPECT().ListSwappingBookVersions().Return([]database.BookVersion{}, nil)
+	// ... and the purged versions whose files an earlier purge kept (the sweep).
+	mockStore.EXPECT().ListPurgedBookVersions().Return([]database.BookVersion{}, nil)
 
 	purged, failed, err := cleanupNow(mockStore)
 	assert.Equal(t, 0, purged)

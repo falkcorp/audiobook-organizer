@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.15 -->
+<!-- version: 10.78.16 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -131,7 +131,7 @@ into one of the curated sections below, is a normal direct edit.
       code too (its fake carries no reverted ids); it documents the case and
       cannot catch a regression.
 
-- [ ] **TODO-PURGE-KEPT-FILES-ORPHANED** A file kept on an `inactive_purged` version
+- [x] **TODO-PURGE-KEPT-FILES-ORPHANED** A file kept on an `inactive_purged` version
       because a trashed book, or a lingering row of a purged version, still names it
       (`database.BookVersion.PurgeKept`, reported as `KeptFiles` by the nightly trash
       cleanup) is never revisited. Once the trashed book is hard-deleted or the
@@ -139,6 +139,11 @@ into one of the curated sections below, is a normal direct edit.
       no owner. Fix: a sweep (or a step of the nightly cleanup) that re-asks the owner
       checks for each path in `PurgeKept` of purged versions and removes the ones no
       row or book names any more, then drops them from `PurgeKept`.
+      Done 2026-10-29: `versions.SweepKeptFiles`, a step of the nightly trash cleanup
+      (`internal/versions/kept_sweep.go`), asks the purge's own per-path decision
+      (`classifyPurgePath`) again for each note, so the two cannot disagree. Removes what
+      nothing owns, drops notes of files already gone, keeps everything else, and
+      reports removed / still owned / kept on error in the op result.
 
 - [ ] **Retired-versions decision records: three remaining gaps** (from the review follow-up of #4240)
   - **Backfill for retires that predate the records.** No `applied` record exists for a shell retired before part 8 shipped. Finishing a retire's tail now writes one as a side effect, but a version with no tail pending (the `already_retired` class) never gets one. Decide whether to backfill `applied` from each retired version's `RetireOpID`, or to leave the ledger starting at part 8.

@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-29
 //
@@ -589,24 +589,13 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 		return fmt.Errorf("purge version %s: %w (it is %s now)", ver.ID, ErrVersionNotInTrash, fresh.Status)
 	}
 	*ver = *fresh
-	book, err := store.GetBookByID(ver.BookID)
+	book, bookDir, noSlot, err := versionBookDir(store, ver)
 	if err != nil {
-		return fmt.Errorf("purge version %s: read book %s: %w", ver.ID, ver.BookID, err)
+		return fmt.Errorf("purge version %s: %w", ver.ID, err)
 	}
-	bookDir := ""
-	if book != nil {
-		bookDir = dirOfPath(book.FilePath)
-	} else {
-		tomb, err := bookTombstoneOf(store, ver.BookID)
-		if err != nil {
-			return fmt.Errorf("purge version %s: its book %s no longer exists and its tombstone cannot be read: %w", ver.ID, ver.BookID, err)
-		}
-		if tomb != nil {
-			bookDir = dirOfPath(tomb.FilePath)
-		} else {
-			lifecycleLog.Warn("purge version %s: its book %s no longer exists and has no tombstone, so the version's slot cannot be located; marking the version purged",
-				ver.ID, ver.BookID)
-		}
+	if noSlot {
+		lifecycleLog.Warn("purge version %s: its book %s no longer exists and has no tombstone, so the version's slot cannot be located; marking the version purged",
+			ver.ID, ver.BookID)
 	}
 
 	// Everything this purge would delete: the files under the version's slot,
@@ -1071,6 +1060,31 @@ func dirOfPath(path string) string {
 	return ""
 }
 
+// versionBookDir finds the folder a version's slot lives under: the version's
+// book's own folder, or, for a book that no longer exists, the folder of its
+// tombstone. book is nil when the book is gone. noSlot is true when the book is
+// gone and has no tombstone either: there is then nothing to find, bookDir is
+// empty, and the caller decides what that means. A book (or tombstone) that
+// cannot be READ is an error, never "no folder". Shared by the purge and the
+// kept-file sweep so the two find the same slot.
+func versionBookDir(store versionPurger, ver *database.BookVersion) (book *database.Book, bookDir string, noSlot bool, err error) {
+	book, err = store.GetBookByID(ver.BookID)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("read book %s: %w", ver.BookID, err)
+	}
+	if book != nil {
+		return book, dirOfPath(book.FilePath), false, nil
+	}
+	tomb, err := bookTombstoneOf(store, ver.BookID)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("its book %s no longer exists and its tombstone cannot be read: %w", ver.BookID, err)
+	}
+	if tomb == nil {
+		return nil, "", true, nil
+	}
+	return nil, dirOfPath(tomb.FilePath), false, nil
+}
+
 // bookTombstoneReader is the lookup of a hard-deleted book's last snapshot,
 // found with database.AsCapability. A store without it cannot locate the slot
 // of a version whose book is gone.
@@ -1321,6 +1335,16 @@ type CleanupResult struct {
 	// has the paths and reasons). Each is also counted in Purged: the version
 	// is purged, but not every file is gone, and a report must say so.
 	KeptFiles []KeptVersion
+	// KeptSweep is what the kept-file sweep did (SweepKeptFiles): files that
+	// earlier purges kept because another row or book named them, revisited
+	// once that owner was gone. Versions purged by this very run are not
+	// revisited (the purge has just asked).
+	KeptSweep KeptSweepResult
+	// KeptSweepErr is why the sweep could not list the purged versions, when it
+	// could not. Like SwapIncompleteErr it is not in the error
+	// CleanupTrashedVersions returns, which is about the purges; the caller
+	// reports it as a failure of the night.
+	KeptSweepErr error
 	// NeedsAttention are the versions in database.BookVersionStatusPurgeFailed:
 	// a purge that gave up on a file it cannot remove. The run does not retry
 	// them and does not count them as Failed (that would fail the operation
@@ -1451,8 +1475,10 @@ func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time, guard 
 		failures = append(failures, e)
 		failedIDs = append(failedIDs, id)
 	}
+	purgedNow := map[string]struct{}{}
 	purgedOK := func(v *database.BookVersion) {
 		res.Purged++
+		purgedNow[v.ID] = struct{}{}
 		if len(v.PurgeKept) > 0 {
 			res.KeptFiles = append(res.KeptFiles, KeptVersion{VersionID: v.ID, BookID: v.BookID, Files: v.PurgeKept})
 			lifecycleLog.Warn("trash cleanup: version %s (book %s) purged with %d file(s) kept because another row or book names them: %s",
@@ -1565,7 +1591,19 @@ trashLoop:
 		lifecycleLog.Warn("trash cleanup: %d version(s) are purge_failed (a file cannot be removed) and need the owner: %s; not retried",
 			n, keptVersionIDs(res.NeedsAttention))
 	}
-	// Read-only, after the purges, so a failure here never holds one up.
+	// After the purges, so a failure here never holds one up. Not when the run
+	// stopped for the merge lock: the sweep would wait on it as well.
+	if !res.StoppedForMerge {
+		res.KeptSweep, res.KeptSweepErr = SweepKeptFiles(store, guard, purgedNow)
+		if res.KeptSweepErr != nil {
+			lifecycleLog.Warn("trash cleanup: %v", res.KeptSweepErr)
+		}
+		if k := res.KeptSweep; k.Removed+k.Gone+k.StillKept+k.KeptOnError > 0 {
+			lifecycleLog.Info("trash cleanup: kept-file sweep of %d purged version(s): removed %d, note dropped for %d already gone, %d still owned, %d kept on error",
+				k.Versions, k.Removed, k.Gone, k.StillKept, k.KeptOnError)
+		}
+	}
+	// Read-only, so a failure here never holds anything up.
 	if res.SwapIncomplete, res.SwapIncompleteErr = ListSwapIncompleteBooks(store); res.SwapIncompleteErr != nil {
 		lifecycleLog.Warn("trash cleanup: could not list the books whose version swap did not finish: %v", res.SwapIncompleteErr)
 	} else if n := len(res.SwapIncomplete); n > 0 {
