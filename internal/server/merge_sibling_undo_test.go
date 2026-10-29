@@ -1,13 +1,14 @@
 // file: internal/server/merge_sibling_undo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 43e2fa1b-c761-4fd6-a2f1-e668c89b5335
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package server
 
 import (
 	"context"
 	"encoding/json"
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"testing"
 	"time"
 
@@ -61,7 +62,7 @@ func requireSiblingUndo(t *testing.T, f *vptest.Fixture, opID, k, ls string) {
 	require.Equal(t, undo.ChangeTypeMergeSiblingJournal, rows[0].ChangeType)
 	require.Equal(t, js[0].ID, rows[0].NewValue)
 
-	res, err := (&Server{store: f.S}).revertOperation(opID)
+	res, err := (&Server{store: f.S}).revertOperation(opID, audiobookspkg.RevertActor{})
 	require.NoError(t, err)
 	require.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeMergeSiblingJournal])
 	require.Equal(t, "G", f.GroupOf(t, ls))

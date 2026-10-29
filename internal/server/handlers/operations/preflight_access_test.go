@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/preflight_access_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9aeb6546-3b73-4a06-860d-1971f3a0c029
-// last-edited: 2026-10-25
+// last-edited: 2026-10-29
 
 package operations_test
 
@@ -73,7 +73,7 @@ func TestUndoPreflightHandler_OpStoreErrorIs500(t *testing.T) {
 				built = true
 				return &undo.UndoConflictReport{}, nil
 			},
-			func(string) (*audiobooks.RevertResult, error) { return nil, nil },
+			func(string, audiobooks.RevertActor) (*audiobooks.RevertResult, error) { return nil, nil },
 		).WithRepairsOpAccess(opaccess.NewRepairs(noFixers{}, ops, holds))
 		w := run(http.MethodGet, "/operations/:id/undo/preflight", "/operations/op-1/undo/preflight", nil, func(r *gin.Engine) {
 			r.GET("/operations/:id/undo/preflight", h.UndoPreflightHandler)

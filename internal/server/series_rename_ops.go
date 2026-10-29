@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-18
+// last-edited: 2026-10-29
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -165,8 +165,10 @@ func (s *Server) invalidateBookDuplicateCaches() {
 // dedup caches, as the merge itself does (entities.author-merge), so the
 // restored author is listed again at once.
 // A partial revert still invalidates, since its restored rows did land.
-func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error) {
-	res, err := audiobookspkg.NewRevertService(s.storeForWiring()).RevertOperation(id)
+// actor is the user who asked for the revert; the decision records it writes
+// name them.
+func (s *Server) revertOperation(id string, actor audiobookspkg.RevertActor) (*audiobookspkg.RevertResult, error) {
+	res, err := audiobookspkg.NewRevertService(s.storeForWiring()).WithActor(actor).RevertOperation(id)
 	if res != nil && res.RestoredTypes[undo.ChangeTypeSeriesRename] > 0 {
 		s.invalidateSeriesCaches()
 	}

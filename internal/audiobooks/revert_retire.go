@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package audiobooks
 
@@ -197,8 +197,11 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange, pl
 // to write it is logged and never fails or rolls back a revert whose rows are
 // already back. It names the reverted retire op (c.OperationID) as the op: the
 // undo has no operation of its own, and the pair (version, retire op) is what
-// makes a repeat of this revert the same record. It carries no actor, so its
-// source is auto: the revert is not told who asked for it.
+// makes a repeat of this revert the same record. It names the user the revert
+// ran for (RevertService.WithActor), so it reads as that user's decision; a
+// revert run for no user (a system path) has no actor and is recorded as auto.
+// It carries no plan op id: the undo has no operation of its own, and the plan
+// is the applied record's to name.
 func (rs *RevertService) recordRetireUndone(c *database.OperationChange) {
 	made, err := undo.DecodeBookVersionCreate(c)
 	if err != nil {
@@ -215,6 +218,7 @@ func (rs *RevertService) recordRetireUndone(c *database.OperationChange) {
 	if _, err := decisions.RecordRetiredUndone(decisions.New(kv), decisions.RetiredVersionsEvent{
 		ShellID: made.RetiredFromBookID, TargetID: made.BookID, VersionID: made.ID,
 		OpID: c.OperationID, PlanRowID: made.RetiredFromBookID,
+		ActorUserID: rs.actor.UserID, ActorName: rs.actor.Name,
 		ReasonText: "the retire was reverted",
 	}); err != nil {
 		revertLog.Warn("revert: retired-versions undone record not written for shell=%s version=%s operation=%s: %v",

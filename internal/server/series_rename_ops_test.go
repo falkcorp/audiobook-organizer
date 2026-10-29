@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 9e4b675d-617b-4d69-ac2c-756c396eeb37
-// last-edited: 2026-10-25
+// last-edited: 2026-10-29
 
 package server
 
@@ -365,7 +365,7 @@ func TestSeriesRenameOp_UndoRefreshesSeriesList(t *testing.T) {
 
 	require.Contains(t, list(), "New Name") // primes the "all" cache entry
 
-	_, err = srv.revertOperation("op-list")
+	_, err = srv.revertOperation("op-list", audiobookspkg.RevertActor{})
 	require.NoError(t, err)
 	body := list()
 	require.Contains(t, body, "Old Name")
@@ -399,13 +399,13 @@ func TestRevertOperation_MergeCombineJournalDropsBookDuplicateCaches(t *testing.
 	cached := func(key string) bool { _, ok := srv.dedupCache.Get(key); return ok }
 
 	prime()
-	res, err := srv.revertOperation("op-merge")
+	res, err := srv.revertOperation("op-merge", audiobookspkg.RevertActor{})
 	require.NoError(t, err)
 	require.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeMergeCombineJournal])
 	require.False(t, cached("book-dedup-scan"), "the scan cache survived an undone merge")
 
 	prime()
-	_, _ = srv.revertOperation("op-other")
+	_, _ = srv.revertOperation("op-other", audiobookspkg.RevertActor{})
 	require.True(t, cached("book-dedup-scan"), "a revert that undid no merge must not drop the cache")
 }
 

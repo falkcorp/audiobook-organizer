@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_surface_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0f69b17c-331b-4c43-9317-c7276540fe70
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package repairs
 
@@ -38,6 +38,7 @@ var (
 	_ func(*Writer, string, func(*database.Book) error) ([]string, error)                                                = (*Writer).Modify
 	_ func(*Writer, []string, string, string) error                                                                      = (*Writer).MoveBookFiles
 	_ func(*Writer) string                                                                                               = (*Writer).OpID
+	_ func(*Writer) ApplyProvenance                                                                                      = (*Writer).Provenance
 	_ func(*Writer, string) error                                                                                        = (*Writer).Recompute
 	_ func(*Writer, string, UndoEntry) error                                                                             = (*Writer).RecordChange
 	_ func(*Writer, string, string, database.BookFileLocation, database.BookFileLocation) error                          = (*Writer).RepointBookFile
@@ -67,7 +68,7 @@ var (
 func TestWriterMethodSetPinned(t *testing.T) {
 	want := []string{"AddBookTag", "Beat", "ClearBookFileITunesPath", "ClearBookITunesPath", "HistoryFailed",
 		"HistoryRows", "Journal", "JournalStep", "JournalSteps", "JournalsInBatches", "Journaled", "JournaledValue", "LockFields",
-		"LockWaiting", "Modify", "ModifyCredits", "MoveBookFiles", "OpID", "Recompute", "RecordChange",
+		"LockWaiting", "Modify", "ModifyCredits", "MoveBookFiles", "OpID", "Provenance", "Recompute", "RecordChange",
 		"RehomeRetiredVersion", "RepointBookFile", "RetireVersion", "SetPrimaryAuthor", "SetTrackNumber", "SetUserState", "SetUserStateChecked", "Step", "SupersedeChanges", "Touch", "WithCredits",
 		"WithFieldStates", "WithJournal", "WithLiveness", "WithTags", "WithUserState", "Writes"}
 	typ := reflect.TypeFor[*Writer]()

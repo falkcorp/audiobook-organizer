@@ -1,7 +1,7 @@
 // file: internal/server/author_merge_undo_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d1a47c63-8e29-4f50-b6a3-90e5c2f1d784
-// last-edited: 2026-10-25
+// last-edited: 2026-10-29
 
 package server
 
@@ -175,7 +175,7 @@ func TestAIScanApplyOp_UndoRestoresTheMergedAuthor(t *testing.T) {
 	require.Zero(t, report.NotRestorable)
 
 	// The server's revert is the one that also marks the result pending again.
-	res, err := f.s.revertOperation("op-undo-ai")
+	res, err := f.s.revertOperation("op-undo-ai", audiobooks.RevertActor{})
 	require.NoError(t, err)
 	require.Equal(t, 4, res.Restored)
 	require.Equal(t, 4, res.Total)
@@ -209,7 +209,7 @@ func TestAIScanApplyOp_APartlyUndoneApplyKeepsItsResultApplied(t *testing.T) {
 	require.NoError(t, w.st.SetBookAuthors(w.coBook, append(append([]database.BookAuthor{}, cur...),
 		database.BookAuthor{BookID: w.coBook, AuthorID: extra.ID, Role: "author", Position: len(cur)})))
 
-	res, err := f.s.revertOperation("op-undo-ai-partial")
+	res, err := f.s.revertOperation("op-undo-ai-partial", audiobooks.RevertActor{})
 	require.Error(t, err)
 	require.Equal(t, 1, res.Failed)
 	require.True(t, f.applied(id), "part of the merge is still in the library")

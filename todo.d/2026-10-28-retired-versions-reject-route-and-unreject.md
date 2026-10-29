@@ -12,10 +12,3 @@
       and never a veto. Any future writer of a `decision:` key outside
       `decisions.Store.Record` would leave the `RowCache` stale;
       `TestDecisionKeysHaveOneWriter` fails if one appears.
-- [ ] **TODO-RETIRED-DECISION-RECORD-PROVENANCE** the `applied` and `undone`
-      retired-versions records carry no plan op id and no actor, so their source
-      is `auto`: `Fixer.Apply` is handed neither (the engine keeps the plan op id
-      in `ApplyDeps`/params, the actor on the apply op's row) and
-      `RevertService` has neither. Thread them through (the apply op's row
-      carries `ActorUserID`; `repairs.ApplyDeps` has the plan op id) so the
-      records say who ran the apply or the revert.

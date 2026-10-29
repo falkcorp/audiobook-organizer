@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.97.11
+// version: 1.98.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package audiobooks
 
@@ -200,6 +200,29 @@ type RevertService struct {
 	// take it themselves must not (lockMerge). Set only on the copy the combine
 	// undo's retire reversal runs (retireUndoer).
 	mergeLockHeld bool
+	// actor is who asked for the revert (WithActor). The zero value is a revert
+	// no user asked for, which the decision records it writes read as automatic.
+	actor RevertActor
+}
+
+// RevertActor is the user whose request a revert runs for. Its decision records
+// (the retired-versions `undone` record) name the user, so they read as a human
+// decision. The zero value is no user.
+type RevertActor struct {
+	// UserID is the authenticated user's id, "" for none.
+	UserID string
+	// Name is their display name (the username), "" when unknown.
+	Name string
+}
+
+// WithActor returns a copy of the service that runs its reverts for actor,
+// including the combine undo's retire reversal, which works on a copy of it.
+// The receiver is left as it was, so a shared service is never made to carry
+// one request's user.
+func (rs *RevertService) WithActor(actor RevertActor) *RevertService {
+	c := *rs
+	c.actor = actor
+	return &c
 }
 
 // NewRevertService creates a new RevertService.
