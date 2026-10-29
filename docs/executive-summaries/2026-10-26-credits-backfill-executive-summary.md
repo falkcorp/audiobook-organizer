@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-26-credits-backfill-executive-summary.md -->
-<!-- version: 1.2.4 -->
+<!-- version: 1.3.0 -->
 <!-- guid: dba78e10-ba92-4a13-9a4d-25ba3871235a -->
-<!-- last-edited: 2026-10-28 -->
+<!-- last-edited: 2026-10-29 -->
 
 # A repair job that makes every book's author and narrator lists agree with the book
 
@@ -71,6 +71,27 @@
   always there, so a longer credit is never linked to a record no write of the job ever
   vouched for. Undo reports those notes (and the removal notes) as records only: they
   cannot be reversed, and the books it wrote are still undone.
+- **A stopped run accounts for every book.** When a run is canceled, or loses the
+  scan pause, the books it never reached are now listed as "canceled, not written".
+  Before, they were in no list at all, so the run's counts did not add up, and a
+  run stopped while it was still planning left every book unlisted.
+- **Records left behind by a run that crashed and was never restarted.** Before, a
+  later run only knew about the narrator records its own earlier attempt made. A
+  record made by a different run that crashed looked like one that had always been
+  there, so a longer credit could link to it. A run now also reads the notes of
+  every earlier run of this job that did not finish. A record one of them made that
+  nothing uses is removed, and the removal is noted. A record only counts as made
+  by that run if it was created inside that run's own time span, with 30 seconds
+  of slack. So a narrator that something else added later, such as the narrator
+  sync for an imported book, is never removed because it shares a name.
+- **Fails safe when its evidence cannot be read.** If those notes cannot be read,
+  the run refuses to start and writes nothing. When the problem is a damaged note,
+  the message names the run it came from and the fix: discard that run. It also
+  says what discarding costs. The run's own record of what it wrote is kept, so it
+  can still be undone.
+- **Three cases it still does not cover.** A run that was discarded is not read. A
+  run that finished and was then undone is not read either. The preview does not
+  predict which leftover records a run will remove.
 - **Review lists are kept.** Every run, a limited one too, stores the full list of book
   ids behind each count so each count can be clicked through. For a full library that
   is roughly 5 to 12 MB per run, and nothing removes it by age: it stays until the

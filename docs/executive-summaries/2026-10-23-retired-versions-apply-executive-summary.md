@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-23-retired-versions-apply-executive-summary.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b7e34a18-52c9-4f60-9d1b-8a63c0e5f247 -->
-<!-- last-edited: 2026-10-28 -->
+<!-- last-edited: 2026-10-29 -->
 
 # The trashed-duplicates clean-up can now actually run, behind an off switch
 
@@ -72,6 +72,32 @@ rather than a generic server error.
 - **Counters.** Every run reports how many books were applied, skipped, or found
   changed since the plan.
 
+## The owner's "no" is kept, and every clean-up is on record
+
+- **A "no" follows the book.** When the owner has said no to cleaning up a trashed
+  book, or has said two books are not the same work or not the same copy, the
+  clean-up holds that book. Before, the check looked the "no" up by the book's id
+  alone, so a "no" about a book that had since been merged, cleaned up or purged
+  was not found and the book could be cleaned up anyway. The check now follows
+  the book to wherever its files went. Each book is checked against the books as
+  they are at that moment, so cleaning up one book does not hide a "no" about the
+  next. If the list of "no" answers cannot be read, the whole run is refused
+  rather than run without it.
+- **Who did what.** Each cleaned-up book now gets an "applied" record, and an undo
+  gets an "undone" record. Each names the plan it came from and the person who
+  clicked Apply or Undo, or says it was automatic. A run cut off before it wrote
+  the record writes it when the next run finishes the book, and credits the
+  person who started the original run. An undo writes "undone" only for a book
+  that was actually cleaned up.
+- **Kept fast.** Writing these records no longer makes the next book re-read the
+  whole list of decisions while every other merge waits.
+- **Restored books are ordinary again.** A trashed book whose older versions were
+  handed back to it is no longer treated as a cleaned-up shell by the library
+  scan. During a scan, the check for files that already exist as an older version
+  is now looked up once per scan instead of once per file. The scan drops that
+  cached answer whenever a book is cleaned up, restored or rehashed, so it never
+  imports a duplicate of a file that already lives in an older version.
+
 ## What is not finished, and must be before the switch is turned on in production
 
 - **Undo of a clean-up operation.** The undo work (the fifth of nine changes
@@ -88,6 +114,14 @@ rather than a generic server error.
   combines that can still be undone once when it starts, so a combine made while
   a run is in progress is not seen by that run. Undoing a combine now refuses a
   cleaned-up book, which covers the gap.
+- **No "no" button for this clean-up yet.** The Review screen cannot yet record a
+  "no" for a single trashed book in this clean-up. A "no" recorded another way is
+  honoured, but the button, and a way to take the "no" back, still need building.
+- **Three gaps in the records.** A book cleaned up before the records existed has
+  no "applied" record. If writing an "applied" record fails, nothing writes it
+  again. A run cut off at one exact point can leave an undo writing "undone" for
+  a step that never landed. While the switch stays off, no clean-up runs in
+  production, so none of these can happen yet.
 - **Speed.** A single lock means one book at a time is written. The plan
   estimated 45 to 130 minutes for the whole trash. That is an estimate, not a
   measurement.
