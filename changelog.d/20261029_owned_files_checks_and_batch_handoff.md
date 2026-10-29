@@ -24,3 +24,10 @@ for each hard delete that went through.
 `DeleteBook`'s own refusal now words a book that holds only retired rows the
 same way as the check that predicts it ("cannot be moved") instead of telling
 the user to move rows that cannot be moved.
+
+Follow-ups from review: when the clean-up carries a reader's progress to the kept
+copy and the store then still refuses the delete, the result now says so
+(`state_carried_book_kept`, plus a write error) instead of reporting that
+nothing was carried; a file that cannot be removed after its book row is gone is
+counted (`file_delete_errors`); and the bulk hard delete clears the audiobook
+list cache.

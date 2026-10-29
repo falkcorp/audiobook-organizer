@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_batch_delete_events_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 35f9b812-6b97-4f1b-a43a-63f30d01e7df
 // last-edited: 2026-10-29
 
@@ -24,6 +24,7 @@ import (
 func TestBatchOperations_PublishesBookDeletedForEachSuccessfulHardDelete(t *testing.T) {
 	h, d := newHandler(t)
 	h.SetPermissionCheck(func(*gin.Context, auth.Permission) bool { return true })
+	d.svc.EXPECT().InvalidateListCache().Return().Once()
 	d.batchSvc.EXPECT().ExecuteOperations(mock.Anything).Return(&batch.BatchResponse{
 		Results: []batch.BatchResult{
 			{ID: "bane", Success: true},
@@ -67,6 +68,27 @@ func TestBatchOperations_MisalignedResultsPublishNothing(t *testing.T) {
 	c, w := newCtx("POST", "/audiobooks/batch-operations", opsBody(
 		map[string]any{"id": "bane", "action": "delete", "hard_delete": true},
 		map[string]any{"id": "two-face", "action": "delete", "hard_delete": true},
+	), nil)
+
+	h.BatchOperations(c)
+
+	require.Equal(t, 200, w.Code, w.Body.String())
+	require.Empty(t, d.rec.publishedEvents)
+}
+
+// The list cache is cleared once for a bulk request that hard deleted
+// something, and not at all for one that deleted nothing (mockery fails the
+// test on a call it was not told to expect).
+func TestBatchOperations_ClearsTheListCacheOnlyAfterAHardDelete(t *testing.T) {
+	h, d := newHandler(t)
+	h.SetPermissionCheck(func(*gin.Context, auth.Permission) bool { return true })
+	d.batchSvc.EXPECT().ExecuteOperations(mock.Anything).Return(&batch.BatchResponse{
+		Results: []batch.BatchResult{{ID: "bane", Error: "refused"}, {ID: "two-face", Success: true}},
+		Total:   2,
+	})
+	c, w := newCtx("POST", "/audiobooks/batch-operations", opsBody(
+		map[string]any{"id": "bane", "action": "delete", "hard_delete": true},
+		map[string]any{"id": "two-face", "action": "delete"},
 	), nil)
 
 	h.BatchOperations(c)

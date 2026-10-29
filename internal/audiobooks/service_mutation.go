@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.31.2
+// version: 1.31.3
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-29
 
@@ -1436,11 +1436,26 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// A book in the trash is purged with files per the setting, and the library
 	// root is checked BEFORE the lock (a check samples files and stats them, and
 	// the lock is global); the purge under the lock reuses that answer.
+	//
+	// A book that is not in the trash is refused BEFORE the lock if it still
+	// owns book_file rows (retired ones included: the question DeleteBook asks,
+	// and it fails closed) or is a retire shell, so a refused book never waits
+	// for the lock. The same two checks run again under the lock, right before
+	// the carry moves any listening state, inside merge.HardDeleteLiveBookLocked:
+	// a file a merge moved onto the book after this read is caught there, not
+	// after the state has already moved to another copy.
 	var mode purgeFileMode
 	if database.IsInTrash(book) {
 		var rootErr error
 		if mode, rootErr = svc.preLockRoot(); rootErr != nil {
 			return nil, fmt.Errorf("purge %s refused, nothing deleted: %w", id, rootErr)
+		}
+	} else {
+		if err := database.CheckBookOwnsNoFiles(svc.store, id, "hard delete"); err != nil {
+			return nil, err
+		}
+		if err := database.RefuseRetiredShell(svc.store, id, "hard delete"); err != nil {
+			return nil, err
 		}
 	}
 	unlock, err := merge.TryLockMergeRMWWithin(merge.InteractiveMergeLockWait)
@@ -1495,20 +1510,6 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		return res, nil
 	}
 
-	// Refuse a book that still owns book_file rows (retired ones included: the
-	// question DeleteBook asks, and it fails closed) or is a retire shell BEFORE
-	// the merge lock is taken, so a refused book never waits for it. The same
-	// two checks run again under the lock, right before the carry moves any
-	// listening state, inside merge.HardDeleteLiveBookLocked: a file a merge
-	// moved onto the book after this read is caught there, not after the state
-	// has already moved to another copy.
-	if err := database.CheckBookOwnsNoFiles(svc.store, id, "hard delete"); err != nil {
-		return nil, err
-	}
-	if err := database.RefuseRetiredShell(svc.store, id, "hard delete"); err != nil {
-		return nil, err
-	}
-
 	// The live book is then deleted only after its users' listening state is
 	// carried to another version Audiobookshelf lists, or refused; and a
 	// deleted primary hands its group's flag on. The batch hard delete runs the
@@ -1543,6 +1544,10 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		if errors.Is(err, database.ErrBookOwnsFiles) || errors.Is(err, database.ErrBookIsRetiredShell) {
 			// Refused with nothing moved, no hash blocked: the check's own
 			// words, as the handler maps them (OWNS_FILES, RETIRED_SHELL).
+			return nil, err
+		}
+		if errors.Is(err, merge.ErrStoreCannotCarryState) {
+			// Already worded "hard delete <id>: ...".
 			return nil, err
 		}
 		return nil, fmt.Errorf("hard delete %s: %w", id, err)

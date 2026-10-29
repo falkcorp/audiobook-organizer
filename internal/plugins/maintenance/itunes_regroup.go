@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-29
 
@@ -133,27 +133,10 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	}
 	groups := itunesservice.GroupLibraryForHeal(lib)
 
-	// The owner-manual check reads each book's tags, which OpsStore does not
-	// carry; they come from their own accessor, composed in statically.
-	//
-	// This refusal is a wiring precondition of the run, not a nil-reader
-	// fallback of the owner-manual check (applygate.BookManualOnly refuses a
-	// nil reader itself). regroupRunStore EMBEDS the tag reader, so with a
-	// nil one the struct is still a non-nil interface value: BookManualOnly
-	// could not see the hole, and the snapshot's bulk GetBookTagsByBookIDs
-	// and the recheck's GetBookTagsDetailed would panic on the nil embed.
-	rstore := regroupRunStore{OpsStore: store, BookTagReader: p.deps.BookTagReader()}
-	if rstore.BookTagReader == nil {
-		return fmt.Errorf("itunes.regroup: no book-tag reader for the owner-manual check")
+	rstore, err := newRegroupRunStore(store, p.deps.BookTagReader())
+	if err != nil {
+		return err
 	}
-	// The same kind of precondition for the delete pass: without the retired-row
-	// reader the owned-files check could not be made on any book, and the nil
-	// embed would panic where the check calls it.
-	retiredReader, ok := database.AsCapability[database.RetiredBookFileReader](store)
-	if !ok {
-		return fmt.Errorf("itunes.regroup: the store cannot list book_file rows including retired ones, so no delete could be checked")
-	}
-	rstore.RetiredBookFileReader = retiredReader
 
 	_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: snapshotting DB for %d target groups…", len(groups)))
 	snap, err := p.buildRegroupSnapshot(ctx, rstore, rootDir, reporter)
@@ -355,6 +338,28 @@ type regroupApplyReport struct {
 // errRegroupTargetNotListed: the regroup's delete would move a listed book's
 // users' state onto a target ABS does not list.
 var errRegroupTargetNotListed = errors.New("the book is listed by ABS and its state target is not")
+
+// newRegroupRunStore composes the run's store. Both readers are wiring
+// preconditions of the run, refused here and not left to a nil-reader fallback
+// downstream: regroupRunStore EMBEDS them, so a nil one still makes a non-nil
+// interface value and the first call on it would panic.
+//
+//   - The owner-manual check reads each book's tags, which OpsStore does not
+//     carry (applygate.BookManualOnly refuses a nil reader itself, but cannot
+//     see the hole through the embed; the snapshot's bulk GetBookTagsByBookIDs
+//     and the recheck's GetBookTagsDetailed would panic on it).
+//   - The delete pass asks database.CheckBookOwnsNoFiles, which needs the
+//     retired-row reader; without it no delete could be checked.
+func newRegroupRunStore(store OpsStore, tags BookTagReader) (regroupRunStore, error) {
+	if tags == nil {
+		return regroupRunStore{}, fmt.Errorf("itunes.regroup: no book-tag reader for the owner-manual check")
+	}
+	retired, ok := database.AsCapability[database.RetiredBookFileReader](store)
+	if !ok {
+		return regroupRunStore{}, fmt.Errorf("itunes.regroup: the store cannot list book_file rows including retired ones, so no delete could be checked")
+	}
+	return regroupRunStore{OpsStore: store, BookTagReader: tags, RetiredBookFileReader: retired}, nil
+}
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
 // owner-manual check makes (BookTagReader, its own accessor because OpsStore
