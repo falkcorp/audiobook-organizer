@@ -1,7 +1,7 @@
 # file: .github/workflows/ratchet-lower.yml
-# version: 1.2.0
+# version: 1.2.1
 # guid: 2f6a9c13-8d47-4e0b-a5c2-91b7d3e4f068
-# last-edited: 2026-10-23
+# last-edited: 2026-10-29
 
 # Weekly: measure every file-backed ratchet baseline listed in ci/gates.txt and,
 # when a measured count is now LOWER, open a PR that lowers the file (07-G4,
@@ -48,7 +48,7 @@ jobs:
           cache: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
