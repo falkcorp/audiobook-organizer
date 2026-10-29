@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_decisions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b3c85e17-9d42-4a60-8f1e-27d6a0c49b58
 // last-edited: 2026-10-28
 
@@ -165,4 +165,49 @@ func TestRevertRetire_VersionWithNoRetiredRowsGetsNoUndoneRecord(t *testing.T) {
 			require.Empty(t, fx.history(t), "no retire was in force, so nothing was undone")
 		})
 	}
+}
+
+// refusingRetire is the store a retire's batch is refused at, after the
+// precheck passed: the journal rows exist and are voided, the version exists,
+// and no row moved.
+type refusingRetire struct{ *database.PebbleStore }
+
+func (refusingRetire) RetireBookFiles([]database.BookFileMove, string, string) error {
+	return database.ErrBookFileOwnerMissing
+}
+
+// A retire refused at the store journals its book_file_retire rows and then
+// voids them, leaving an empty version. The voided rows name the version but
+// describe a write that never happened, so the revert removes the version and
+// writes no `undone`. Without the voided-row exclusion in
+// RevertPlan.NoteRetiredInto the voided rows would count as a retire.
+func TestRevertRetire_VoidedRetireRowsDoNotMakeAnUndoneRecord(t *testing.T) {
+	fx := newRetireRevertFx(t)
+	w := repairs.NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(refusingRetire{fx.st}, fx.st, "op-voided")
+	err := w.RetireVersion(repairs.RetireSpec{
+		Shell: fx.shell.ID, Holder: fx.holder.ID, VersionID: "ver-voided", FileIDs: fx.ids(),
+		Format: "mp3", Source: "retired_book",
+	})
+	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+
+	changes, err := fx.st.GetOperationChanges("op-voided")
+	require.NoError(t, err)
+	voided := 0
+	for _, c := range changes {
+		if c.ChangeType == undo.ChangeTypeBookFileRetire {
+			require.True(t, c.Voided, "the refused retire's journal rows are voided")
+			voided++
+		}
+	}
+	require.Equal(t, len(fx.rows), voided, "a voided retire row per file")
+	v, err := fx.st.GetBookVersion("ver-voided")
+	require.NoError(t, err)
+	require.NotNil(t, v, "the version was created before the batch was refused")
+
+	_, err = NewRevertService(fx.st).RevertOperation("op-voided")
+	require.NoError(t, err)
+	gone, err := fx.st.GetBookVersion("ver-voided")
+	require.NoError(t, err)
+	require.Nil(t, gone, "the empty version is removed")
+	require.Empty(t, fx.history(t), "no retire took effect, so nothing was undone")
 }

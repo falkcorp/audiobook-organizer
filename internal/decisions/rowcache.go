@@ -1,5 +1,5 @@
 // file: internal/decisions/rowcache.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c27f4e90-3b58-4a1d-8e06-d4a91b73f625
 // last-edited: 2026-10-28
 
@@ -43,13 +43,16 @@ func logGeneration(scope string) uint64 { return logCounter(scope).Load() }
 func bumpLogGeneration(scope string) { logCounter(scope).Add(1) }
 
 // writesVetoRows reports whether the batch writes or deletes any row a
-// RowCache holds: an active row, a pair edge or a membership row. Those are
-// exactly the prefixes scanRows reads, so a new scanned prefix must be added
-// here (TestRowCache_OnlyVetoRowWritesInvalidate holds the two together).
+// RowCache holds: a key under one of vetoRowPrefixes, the same list scanRows
+// reads. Every batch that writes a veto row also writes the active key, so no
+// test of behaviour alone could tell the two lists apart; sharing the list is
+// what keeps them in step.
 func writesVetoRows(writes []database.RawWrite) bool {
 	for _, w := range writes {
-		if strings.HasPrefix(w.Key, prefixActive) || strings.HasPrefix(w.Key, prefixEdge) || strings.HasPrefix(w.Key, prefixMember) {
-			return true
+		for _, prefix := range vetoRowPrefixes {
+			if strings.HasPrefix(w.Key, prefix) {
+				return true
+			}
 		}
 	}
 	return false

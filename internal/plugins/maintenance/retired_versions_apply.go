@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-28
 
@@ -803,7 +803,10 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		// write failed) left these versions with no `applied` record, and the
 		// tail is the only thing that will ever visit them again. recordApplied
 		// is idempotent (RecordUnlessSeen), so a version that already has its
-		// record gets none.
+		// record gets none. This recovers a failed record write only while a
+		// tail is still pending: a retire with nothing left to finish
+		// (already_retired) never comes here, and its missing record stays
+		// missing (todo.d/2026-10-28-retired-versions-decision-record-gaps.md).
 		f.recordAppliedForVersions(run, ld.shell.ID, ld.holder, ld.versionIDs)
 		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0, ld.planned)
 	}
@@ -955,6 +958,10 @@ func (f *retiredVersionsFixer) recordApplied(opID, shell, holder, versionID stri
 // the run that made it. A version with no retire op id predates the records and
 // cannot be told from any other, so it gets none. As the record is a label, a
 // failure to read the versions is logged and never stops the tail.
+//
+// The record names the holder as it is now, which can differ from the holder of
+// the original op if the version was rehomed since. Dedup is by (version, op)
+// and unaffected; only the recorded provenance of the target differs.
 func (f *retiredVersionsFixer) recordAppliedForVersions(run *retiredRun, shell, holder string, versionIDs []string) {
 	if len(versionIDs) == 0 {
 		return
