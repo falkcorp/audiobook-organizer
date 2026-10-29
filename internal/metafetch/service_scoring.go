@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_scoring.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: d2226468-bed1-4989-93f3-b0bc3a344424
 // last-edited: 2026-10-29
 
@@ -700,7 +700,7 @@ func (r localRuntime) provenAgainst(candSec int) (verdict, detail string) {
 	if up := r.Partial.UpperSec; up > 0 {
 		switch {
 		case float64(up) < transcriptionFragmentRatio*float64(candSec):
-			return TranscriptionRuntimeFragment, fragmentDetail(up, candSec, "at most, from the file sizes")
+			return TranscriptionRuntimeFragment, fragmentDetail(up, candSec, "from the file sizes")
 		case float64(up) < 0.9*float64(candSec):
 			return TranscriptionRuntimeMismatch, fmt.Sprintf(
 				"the files can hold at most %s (from their sizes), the candidate's is %s",
@@ -849,24 +849,29 @@ func transcribedTitleAgrees(candidateTitle, candidateSeriesPosition, transcribed
 }
 
 // transcriptionOnlyIdentification reports why auto-fetch must not apply meta
-// to book: the audio intro is what identifies the candidate (it agrees with the
-// transcribed title and the book's own title does not) and the candidate's
-// runtime does not fit the book's files. A transcription agreement alone no
-// longer confirms a book -- a fragment of a long book carries the same intro --
-// so the score boost is withheld (transcriptionBoost) and the apply is too.
-// nil when the book's own title agrees (the match does not rest on the intro)
-// or the runtime gate passes. It reads the files now, never a stamp.
+// to book: the audio intro agrees with the candidate and its runtime does not
+// fit the book's files. A transcription agreement alone no longer confirms a
+// book -- a fragment of a long book carries the same intro -- so the score
+// boost is withheld (transcriptionBoost) and the apply is too.
+//
+// Owner rule: the book's OWN title agreeing excuses only an unknown runtime
+// (nothing proven either way). A proven fragment or runtime mismatch is never
+// auto-applied, whatever the titles say; the book goes to review. nil when the
+// intro does not agree, the runtime fits, or the runtime is merely unknown and
+// the book's own title agrees. It reads the files now, never a stamp.
 func (mfs *Service) transcriptionOnlyIdentification(book *database.Book, meta metadata.BookMetadata, th transcriptionHints) *TranscriptionRuntimeCheck {
 	if th.title == "" || !transcribedTitleAgrees(meta.Title, meta.SeriesPosition, th.title) {
 		return nil
 	}
-	if strings.TrimSpace(book.Title) != "" && transcribedTitleAgrees(meta.Title, meta.SeriesPosition, book.Title) {
+	ok, chk := transcriptionRuntimeGate(mfs.bookRuntime(book), meta.DurationSec)
+	if ok {
 		return nil
 	}
-	if ok, chk := transcriptionRuntimeGate(mfs.bookRuntime(book), meta.DurationSec); !ok {
-		return chk
+	if chk.Verdict == TranscriptionRuntimeUnknown &&
+		strings.TrimSpace(book.Title) != "" && transcribedTitleAgrees(meta.Title, meta.SeriesPosition, book.Title) {
+		return nil
 	}
-	return nil
+	return chk
 }
 
 // legacyTranscribedTitleAgrees is transcribedTitleAgrees as it stood on

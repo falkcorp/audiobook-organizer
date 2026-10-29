@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_review.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
 // last-edited: 2026-10-29
 
@@ -77,8 +77,13 @@ func (v Verdict) OwnerReviewOverridable() bool {
 // reached the cache after the lane loaded. planCachedApply already refuses to
 // let the marker lift a no_match mark for the same reason. A hash-bearing pin
 // that matches the shown candidate still lifts review_only_source.
+//
+// transcription_runtime_unverified is excluded for the same reason: the owner
+// who reads a flagged row sees the runtime warning and may apply it, but the
+// marker proves nobody saw the row, so the warning was never read.
 func (v Verdict) UnseenOwnerReviewOverridable() bool {
-	return v.Reason != ReasonReviewOnlySource && v.OwnerReviewOverridable()
+	return v.Reason != ReasonReviewOnlySource && v.Reason != ReasonTranscriptionRuntimeUnverified &&
+		v.OwnerReviewOverridable()
 }
 
 // ownerReviewHardReasons are the evidence refusals an owner review does NOT

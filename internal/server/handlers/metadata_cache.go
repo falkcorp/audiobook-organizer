@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.46.2
+// version: 1.46.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-29
 
@@ -922,6 +922,12 @@ type reviewableRow struct {
 	stale bool
 }
 
+// liveRuntimeCheck is reviewLiveRuntimeCheck over the row's own book, shown
+// candidate and file facts.
+func (r *reviewableRow) liveRuntimeCheck() (confirms bool, chk *metafetch.TranscriptionRuntimeCheck) {
+	return reviewLiveRuntimeCheck(r.row.book, r.row.cand, r.row.files)
+}
+
 // pageResult is the row as view=page serves it: result with the candidate's
 // description, score_breakdown and category_tags cleared -- the large fields
 // nothing but the visible row reads (the breakdown only by the evidence panel;
@@ -943,6 +949,16 @@ func (r *reviewableRow) pageResult(book *database.Book, freshCutoff time.Time) m
 // result is the row as the API serves it, the full candidate included.
 func (r *reviewableRow) result(book *database.Book, freshCutoff time.Time) metabatch.CandidateResult {
 	cand := *r.row.cand
+	// The transcription runtime check is recomputed live, so a cached row
+	// that predates the check, or one whose book has been measured since,
+	// shows what the apply gate would say now (see reviewLiveRuntimeCheck).
+	// A stamp on a row the gate would not check (no matching transcription)
+	// is dropped: the chip must not warn about a refusal that cannot happen.
+	confirms, chk := r.liveRuntimeCheck()
+	cand.TranscriptionRuntimeCheck = chk
+	if confirms && chk != nil {
+		cand.TranscriptionBoosted = false
+	}
 	// Age travels with the row. MetadataCacheTTL's contract is that stale
 	// entries stay readable and the UI flags them -- but this endpoint sent
 	// no age at all, so the review surface could not honour it. On the live

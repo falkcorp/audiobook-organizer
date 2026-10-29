@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-10-29
 
@@ -333,9 +333,17 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 		v.Detail = c.Source + " candidates are review-only: applied by hand from the review page, never unattended"
 	case !scoreOK:
 		v.Reason = scoreReason
-		if scoreReason == ReasonScoreBelowFloor {
+		switch scoreReason {
+		case ReasonScoreBelowFloor:
 			v.Detail = "score " + ftoa(c.Score) + " < floor " + ftoa(floor)
-		} else {
+		case ReasonTranscriptionRuntimeUnverified:
+			// The same live check ScoreGate refused on, so the detail names
+			// its verdict (fragment / runtime_mismatch / runtime_unknown).
+			v.Detail = "the audio intro matches but its runtime is not confirmed"
+			if chk := metafetch.TranscriptionRuntimeVerdict(rt, c.DurationSec); chk != nil {
+				v.Detail = chk.Verdict + ": " + chk.Detail
+			}
+		default:
 			v.Detail = "book has a transcribed title the candidate does not match"
 		}
 	case !v.Sequence.Pass:

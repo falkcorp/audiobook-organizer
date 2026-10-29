@@ -1,5 +1,5 @@
 // file: internal/metafetch/transcription_runtime_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0c1e7e-39f4-4d0e-9a53-6c1d2f8a4b17
 // last-edited: 2026-10-29
 
@@ -53,7 +53,7 @@ func TestTranscriptionBoost_RuntimeGate(t *testing.T) {
 		{
 			"partial runtime whose size UPPER bound is under half the candidate is a fragment",
 			localRuntime{FilesKnown: 1, FilesCounted: 2, MeasuredSec: hour, Partial: partialBound{EstimateSec: 2 * hour, UpperSec: 3 * hour}},
-			10 * hour, false, TranscriptionRuntimeFragment, "no more than 3h00m of a 10h00m book (at most, from the file sizes)",
+			10 * hour, false, TranscriptionRuntimeFragment, "no more than 3h00m of a 10h00m book (from the file sizes)",
 		},
 		{
 			"a bitrate estimate alone never proves anything",
@@ -229,11 +229,46 @@ func TestSearch_TranscriptionMatchedAnswerGetsRuntimeLookup(t *testing.T) {
 	assert.Nil(t, got.TranscriptionRuntimeCheck)
 }
 
+// Even a book with no runtime information at all (no files measured, no
+// sizes) gets the single lookup for its transcription-matched answer: the
+// runtime is cached on the candidate and the gate is evaluated live at apply,
+// so a book measured later can pass without a re-search. The candidate is
+// flagged unknown meanwhile, and no other answer is looked up.
+func TestSearch_TranscriptionMatchedAnswerLookedUpWithoutLocalRuntime(t *testing.T) {
+	heard := "Year One"
+	audible := &fakeProvider{id: metadata.SourceIDAudible, name: "Audible", answer: func(string, string) []metadata.BookMetadata {
+		return []metadata.BookMetadata{
+			{Title: "Hush", Author: "Alfred Pennyworth", Narrator: "Lucius Fox", ASIN: "B0HUSH0001", CoverURL: "c"},
+			{Title: "Year One", Author: "Alfred Pennyworth", Narrator: "Lucius Fox", ASIN: "B0YEARONE1", CoverURL: "c"},
+		}
+	}}
+	audnexus := &fakeProvider{id: metadata.SourceIDAudnexus, name: "Audnexus (Audible)"}
+	svc := fanoutHarnessFiles(t, &database.Book{ID: "b1", Title: "Year One", TranscribedTitle: &heard}, nil, audible, audnexus)
+	var mu sync.Mutex
+	var asked []string
+	svc.asinLookupOverride = func(_ context.Context, _, asin string) (*metadata.BookMetadata, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked = append(asked, asin)
+		return &metadata.BookMetadata{Title: "Year One", ASIN: asin, DurationSec: 10 * hour}, nil
+	}
+	resp, err := svc.SearchMetadataForBookWithOptions("b1", "", "Alfred Pennyworth", "", "", SearchOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"B0YEARONE1"}, asked, "the one lookup, for the transcription-matched answer only")
+	for _, c := range resp.Results {
+		if c.Title == "Year One" {
+			assert.Equal(t, 10*hour, c.DurationSec, "the looked-up runtime is on the candidate")
+			require.NotNil(t, c.TranscriptionRuntimeCheck)
+			assert.Equal(t, TranscriptionRuntimeUnknown, c.TranscriptionRuntimeCheck.Verdict)
+		}
+	}
+}
+
 // Auto-fetch applies on its own: when the audio intro is the only thing that
 // identifies a candidate (the book's own title is junk) the candidate's
 // runtime must fit the book's files, or nothing is written and the book stays
-// for review. A book whose own title agrees does not rest on the intro, so a
-// runtime that does not fit does not stop it.
+// for review. A book whose own title agrees is excused only an UNKNOWN runtime
+// (owner rule); a proven fragment or mismatch is never auto-applied.
 func TestFetchMetadataForBook_TranscriptionOnlyMatchNeedsRuntime(t *testing.T) {
 	const (
 		heard = "Year One"
@@ -248,7 +283,9 @@ func TestFetchMetadataForBook_TranscriptionOnlyMatchNeedsRuntime(t *testing.T) {
 		{name: "intro-only match, runtime fits", bookTitle: "CD 01- 001", candSec: tenH, wantApply: true},
 		{name: "intro-only match, fragment of a longer candidate", bookTitle: "CD 01- 001", candSec: 100000},
 		{name: "intro-only match, candidate runtime unknown", bookTitle: "CD 01- 001", candSec: 0},
-		{name: "own title agrees, runtime does not fit", bookTitle: heard, candSec: 100000, wantApply: true},
+		{name: "own title agrees, runtime unknown (candidate has none)", bookTitle: heard, candSec: 0, wantApply: true},
+		{name: "own title agrees, proven fragment is still not applied", bookTitle: heard, candSec: 100000},
+		{name: "own title agrees, proven runtime mismatch is still not applied", bookTitle: heard, candSec: 12 * hour},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

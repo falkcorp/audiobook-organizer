@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.3
+// version: 1.17.4
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-29
 
@@ -551,31 +551,36 @@ func TestReviewQuery_ChipPausesOtherFilters(t *testing.T) {
 }
 
 // TestReviewQuery_TranscriptionRuntimeFlagged: the filter keeps only rows whose
-// candidate the audio intro matched but the runtime did not confirm (any
-// verdict), and a withheld match is not a "transcription matched" row.
+// candidate the audio intro matched but the book's runtime does not confirm
+// (any verdict, judged live), and a withheld match is not a "transcription
+// matched" row. A stamp on a row the gate would not check (the book's
+// transcription does not match the candidate) flags nothing.
 func TestReviewQuery_TranscriptionRuntimeFlagged(t *testing.T) {
-	row := func(id, verdict string) queryCaseRow {
-		r := oneTitleRow("Year One " + id)
-		r.Book.ID = id
-		if verdict != "" {
-			r.Candidate.TranscriptionRuntimeCheck = &metafetch.TranscriptionRuntimeCheck{Verdict: verdict, Detail: "d"}
-		}
-		return r
-	}
-	boosted := row("t04", "")
-	boosted.Candidate.TranscriptionBoosted = true
+	boosted := liveRuntimeRow("t04", 36000, true, nil)
+	// Stamped by a search, but the transcription does not match the candidate:
+	// the apply gate never runs the runtime check on it.
+	stampOnly := liveRuntimeRow("t06", 10800, false, &metafetch.TranscriptionRuntimeCheck{Verdict: metafetch.TranscriptionRuntimeFragment, Detail: "d"})
+	stampOnly.Book.TranscribedTitle = "Knightfall"
 	rows := []queryCaseRow{
-		row("t01", metafetch.TranscriptionRuntimeFragment),
-		row("t02", metafetch.TranscriptionRuntimeMismatch),
-		row("t03", metafetch.TranscriptionRuntimeUnknown),
+		liveRuntimeRow("t01", 10800, false, nil), // fragment
+		liveRuntimeRow("t02", 20000, false, nil), // runtime_mismatch
+		liveRuntimeRow("t03", 0, false, nil),     // runtime_unknown
 		boosted,
-		row("t05", ""),
+		liveRuntimeRow("t05", 36000, false, nil), // confirmed, never stamped
+		stampOnly,
 	}
 	base := baseFromSnapshot(t, snapshotFromCases(t, rows))
 	flagged := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"transcription_runtime_flagged": "true"})))
 	require.ElementsMatch(t, []string{"t01", "t02", "t03"}, flagged)
 	matched := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"transcription_matched": "true"})))
-	require.Equal(t, []string{"t04"}, matched, "a withheld match is not a boosted one")
+	require.ElementsMatch(t, []string{"t04", "t05"}, matched, "a withheld match is not a matched one; a live confirmation is")
+	for i := range base.rows.reviewable {
+		r := &base.rows.reviewable[i]
+		if r.row.sum.BookID == "t06" {
+			require.Nil(t, r.pageResult(r.row.book, time.Time{}).Candidate.TranscriptionRuntimeCheck,
+				"a stamp the gate would not act on is not shown")
+		}
+	}
 }
 
 // --- the ported rules, from the TypeScript cases -----------------------------
@@ -1782,4 +1787,80 @@ func TestChunkDigest_LengthPrefixedAndOrderIndependent(t *testing.T) {
 	require.NotEqual(t, d([]string{"a"}, "", true, nil), d([]string{"a"}, "replace", true, nil))
 	require.NotEqual(t, d([]string{"a"}, "", true, nil), d([]string{"a"}, "", false, nil))
 	require.NotEqual(t, d([]string{"a"}, "", true, nil), d([]string{"a"}, "", true, map[string]metafetch.CandidatePin{"a": {Origin: "review_bulk"}}))
+}
+
+// liveRuntimeRow is one reviewable fixture row for the live transcription
+// runtime verdict: the book's transcribed title matches the candidate's, the
+// book's measured runtime is bookSec (0 = unmeasured), and the candidate is the
+// 10-hour edition.
+func liveRuntimeRow(id string, bookSec int, boosted bool, stamp *metafetch.TranscriptionRuntimeCheck) queryCaseRow {
+	var fr queryCaseRow
+	fr.Bucket, fr.Status = reviewBucketReviewable, reviewStatusMatched
+	fr.Book.ID, fr.Book.Title = id, "Title "+id
+	fr.Book.DurationSeconds = bookSec
+	fr.Book.TranscribedTitle = "Year One"
+	fr.Candidate = &metafetch.MetadataCandidate{
+		Source: "Audible", Score: 0.9, Title: "Year One", Author: "Bruce Wayne", ASIN: "B0" + id,
+		DurationSec: 36000, TranscriptionBoosted: boosted, TranscriptionRuntimeCheck: stamp,
+	}
+	return fr
+}
+
+// TestReviewQuery_TranscriptionFiltersUseLiveRuntimeVerdict: the review's
+// chip, its "transcription runtime flagged" filter and its "transcription
+// matched" filter judge a row by the book's files NOW, as the apply gate does,
+// not by the stamp the search left on the cached candidate.
+func TestReviewQuery_TranscriptionFiltersUseLiveRuntimeVerdict(t *testing.T) {
+	rows := []queryCaseRow{
+		// An old cached row: no stamp at all, files are a 3h fragment.
+		liveRuntimeRow("old-fragment", 10800, false, nil),
+		// Stamped boosted by an older search, but the files are a fragment.
+		liveRuntimeRow("stale-boost", 10800, true, nil),
+		// Stamped as flagged, but the runtime has been measured since and agrees.
+		liveRuntimeRow("healed", 36100, false, &metafetch.TranscriptionRuntimeCheck{Verdict: metafetch.TranscriptionRuntimeFragment, Detail: "stale stamp", LocalSec: 10800, CandSec: 36000}),
+		// No runtime measured: unverified, not matched.
+		liveRuntimeRow("unmeasured", 0, true, nil),
+	}
+	snap := snapshotFromCases(t, rows)
+	base := baseFromSnapshot(t, snap)
+
+	flagged := mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"transcription_runtime_flagged": "true"}))
+	require.Equal(t, []string{"old-fragment", "stale-boost", "unmeasured"}, listIDs(flagged))
+
+	matched := mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"transcription_matched": "true"}))
+	require.Equal(t, []string{"healed"}, listIDs(matched))
+
+	// The row response carries the live check, so the chip shows it for an
+	// old cached row, and a healed row's stale stamp is gone.
+	byID := map[string]metabatch.CandidateResult{}
+	for i := range base.rows.reviewable {
+		r := &base.rows.reviewable[i]
+		byID[r.row.sum.BookID] = r.pageResult(r.row.book, time.Time{})
+	}
+	old := byID["old-fragment"].Candidate
+	require.NotNil(t, old.TranscriptionRuntimeCheck)
+	require.Equal(t, metafetch.TranscriptionRuntimeFragment, old.TranscriptionRuntimeCheck.Verdict)
+	require.False(t, old.TranscriptionBoosted)
+	require.False(t, byID["stale-boost"].Candidate.TranscriptionBoosted)
+	require.Equal(t, metafetch.TranscriptionRuntimeUnknown, byID["unmeasured"].Candidate.TranscriptionRuntimeCheck.Verdict)
+	healed := byID["healed"].Candidate
+	require.Nil(t, healed.TranscriptionRuntimeCheck)
+	require.False(t, healed.TranscriptionBoosted, "an unstamped healed row is not boosted by the response; the matched filter confirms it live")
+
+	// The shared fixture's flagged row (b05) carries the exact verdict the
+	// live gate computes for it.
+	f := loadQueryCases(t)
+	fixBase := baseFromSnapshot(t, snapshotFromCases(t, f.Rows))
+	for i := range fixBase.rows.reviewable {
+		r := &fixBase.rows.reviewable[i]
+		if r.row.sum.BookID != "b05" {
+			continue
+		}
+		confirms, chk := r.liveRuntimeCheck()
+		require.True(t, confirms)
+		require.NotNil(t, chk)
+		stamp := r.row.cand.TranscriptionRuntimeCheck
+		require.Equal(t, stamp.Verdict, chk.Verdict)
+		require.Equal(t, stamp.Detail, chk.Detail)
+	}
 }
