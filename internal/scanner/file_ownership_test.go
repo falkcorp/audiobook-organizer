@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6c2a43e1-d6ec-4eae-8570-41c987062ce6
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -315,7 +315,7 @@ func TestSaveBookToDatabase_ChapterOfOwnedBookIsNotImported(t *testing.T) {
 		Format:          ".mp3",
 		BookOrganizerID: f.parent.ID,
 	}
-	if err := saveBookToDatabase(context.Background(), chapter); !errors.Is(err, errFileOwnedByOtherBook) {
+	if _, err := saveBookToDatabase(context.Background(), chapter); !errors.Is(err, errFileOwnedByOtherBook) {
 		t.Fatalf("saveBookToDatabase = %v, want errFileOwnedByOtherBook", err)
 	}
 	if got, _ := f.store.GetBookByFilePath(f.chapters[1]); got != nil {
@@ -334,7 +334,7 @@ func TestSaveBookToDatabase_ChapterOfOwnedBookIsNotImported(t *testing.T) {
 
 	// And an unowned file in the same folder still imports.
 	loose := &Book{FilePath: f.loose[0], Title: "New", Author: "Someone", Format: ".mp3"}
-	if err := saveBookToDatabase(context.Background(), loose); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), loose); err != nil {
 		t.Fatalf("save unowned: %v", err)
 	}
 	if got, _ := f.store.GetBookByFilePath(f.loose[0]); got == nil {
@@ -369,7 +369,7 @@ func TestSaveBookToDatabase_RegroupedFragmentFolderIsNotOverlaid(t *testing.T) {
 	if err != nil || !v.skip || len(v.owners) != len(frags) {
 		t.Fatalf("verdict = %+v, err %v; want a skip naming %d owners", v, err, len(frags))
 	}
-	if err := saveBookToDatabase(context.Background(), group); !errors.Is(err, errFileOwnedByOtherBook) {
+	if _, err := saveBookToDatabase(context.Background(), group); !errors.Is(err, errFileOwnedByOtherBook) {
 		t.Fatalf("saveBookToDatabase = %v, want errFileOwnedByOtherBook", err)
 	}
 	got, err := f.store.GetBookByID(frags[0].ID)

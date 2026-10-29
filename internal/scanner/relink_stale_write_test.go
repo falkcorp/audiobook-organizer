@@ -1,7 +1,7 @@
 // file: internal/scanner/relink_stale_write_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c3e7a51-4b8f-4d26-a0e9-6f2d1b5c8a37
-// last-edited: 2026-09-14
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -58,7 +58,7 @@ func TestSaveBookToDatabase_RelinkKeepsFieldsWrittenAfterTheRead(t *testing.T) {
 	fpath := filepath.Join(t.TempDir(), "moved.m4b")
 	require.NoError(t, os.WriteFile(fpath, []byte("data"), 0o644))
 
-	require.NoError(t, saveBookToDatabase(context.Background(), &Book{
+	requireSaved(t)(saveBookToDatabase(context.Background(), &Book{
 		Title: "Moved Book", FilePath: fpath, Format: ".m4b", BookOrganizerID: existing.ID,
 	}))
 

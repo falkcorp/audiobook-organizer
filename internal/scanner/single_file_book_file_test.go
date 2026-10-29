@@ -1,7 +1,7 @@
 // file: internal/scanner/single_file_book_file_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 4d81b0f2-6ce7-4a39-91b5-2f0a7c63d5e8
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -259,15 +259,15 @@ func TestProcessBooksParallelGivesASingleFileBookItsFileRow(t *testing.T) {
 	ids := map[string]string{}
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(_ context.Context, book *Book) error {
+	saveBook = func(_ context.Context, book *Book) (*ownershipSkip, error) {
 		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		mu.Lock()
 		ids[book.FilePath] = created.ID
 		mu.Unlock()
-		return nil
+		return nil, nil
 	}
 
 	books := []Book{

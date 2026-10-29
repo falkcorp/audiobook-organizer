@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_enqueue_scan_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 003dfb63-62eb-4147-8fbe-d3580d984034
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -68,15 +68,15 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	// This is also the production shape. A genuinely single-file book gets its row
 	// from ensureSingleFileBookFile (or, for rows predating that, the scan-cache
 	// backfill); createBookFilesForBook is never called for one.
-	saveBook = func(_ context.Context, book *Book) error {
+	saveBook = func(_ context.Context, book *Book) (*ownershipSkip, error) {
 		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
-			return nil
+			return nil, nil
 		}
 		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return store.CreateBookFile(&database.BookFile{
+		return nil, store.CreateBookFile(&database.BookFile{
 			BookID: created.ID, FilePath: created.FilePath, TrackNumber: 1,
 		})
 	}
@@ -196,15 +196,15 @@ func TestProcessBooksParallelReportsFailedInlineAIPhase(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(_ context.Context, book *Book) error {
+	saveBook = func(_ context.Context, book *Book) (*ownershipSkip, error) {
 		if existing, err := store.GetBookByFilePath(book.FilePath); err == nil && existing != nil {
-			return nil
+			return nil, nil
 		}
 		created, err := store.CreateBook(&database.Book{FilePath: book.FilePath, Title: book.Title})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return store.CreateBookFile(&database.BookFile{
+		return nil, store.CreateBookFile(&database.BookFile{
 			BookID: created.ID, FilePath: created.FilePath, TrackNumber: 1,
 		})
 	}

@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership_review2_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d8b2f6a-1c3e-4a97-b5d0-7e2c9f1a3b68
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -111,7 +111,7 @@ func TestHandleOwnershipSkip_ITunesOwnerIsNotGrown(t *testing.T) {
 
 	skips := &OwnershipSkips{}
 	failures := &FileFailures{}
-	se := &ownershipSkipError{Path: dir, Owners: []string{b.ID}, AppendTo: b.ID, Unowned: []string{arrived}}
+	se := &ownershipSkip{Path: dir, Owners: []string{b.ID}, AppendTo: b.ID, Unowned: []string{arrived}}
 	require.True(t, handleOwnershipSkip(context.Background(), se, skips, failures, nil, logger.New("test")))
 
 	rows, err := store.GetBookFiles(b.ID)
@@ -136,7 +136,7 @@ func TestHandleOwnershipSkip_FailedAppendIsCountedAndListed(t *testing.T) {
 	useScannerStore(t, upsertFailStore{f.store})
 	ctx, rc := withScanRunCounters(context.Background())
 	failures := &FileFailures{}
-	se := &ownershipSkipError{Path: f.chapters[0], Owners: []string{f.parent.ID}, AppendTo: f.parent.ID, Unowned: f.loose}
+	se := &ownershipSkip{Path: f.chapters[0], Owners: []string{f.parent.ID}, AppendTo: f.parent.ID, Unowned: f.loose}
 
 	require.True(t, handleOwnershipSkip(ctx, se, &OwnershipSkips{}, failures, nil, logger.New("test")))
 	require.Equal(t, int64(1), rc.appendFailed.Load())

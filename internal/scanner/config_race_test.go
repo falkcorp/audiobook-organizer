@@ -1,7 +1,7 @@
 // file: internal/scanner/config_race_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a8b7c6d-5e4f-3a2b-1c0d-9e8f7a6b5c4d
-// last-edited: 2026-08-19
+// last-edited: 2026-10-29
 
 // Regression tests for the config.AppConfig data race introduced when
 // saveBookToDatabase read config.AppConfig.RootDir inside goroutines that
@@ -74,11 +74,11 @@ func TestConfigRace_SaveBookHonorsCancellation(t *testing.T) {
 	var saveCalled atomic.Int64
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, b *Book) error {
+	saveBook = func(ctx context.Context, b *Book) (*ownershipSkip, error) {
 		// If the fix is working, ctx should be done here OR saveBook
 		// should be called with a still-valid ctx.  Either way, record the call.
 		saveCalled.Add(1)
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 
 	// Cancel immediately — workers should check ctx before calling saveBook.
@@ -125,8 +125,8 @@ func TestConfigRace_WorkersDontReadConfigAfterCancel(t *testing.T) {
 	// but we still exercise the ctx-check path.
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, b *Book) error {
-		return ctx.Err()
+	saveBook = func(ctx context.Context, b *Book) (*ownershipSkip, error) {
+		return nil, ctx.Err()
 	}
 
 	// Cancel before processing even starts.

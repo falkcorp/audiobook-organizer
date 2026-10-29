@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 5c1a2b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -76,7 +76,7 @@ func TestProcessBooksParallelInvokesProgress(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	progressFn := func(processed int, total int, bookPath string) {
 		progressCalls = append(progressCalls, processed)
@@ -319,7 +319,7 @@ func TestProcessBooksParallelCancellation(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -394,7 +394,7 @@ func TestProcessBooksParallelNegativeWorkers(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	// Should handle negative workers gracefully (defaults to 1)
 	err := ProcessBooksParallel(context.Background(), books, -1, nil, nil)
@@ -477,7 +477,7 @@ func TestProcessBooks(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	err := ProcessBooks(books, nil)
 	if err != nil {
@@ -521,10 +521,10 @@ func TestSuspiciousFileSkipped(t *testing.T) {
 	var savedBook *Book
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, b *Book) error {
+	saveBook = func(ctx context.Context, b *Book) (*ownershipSkip, error) {
 		saved := *b
 		savedBook = &saved
-		return nil
+		return nil, nil
 	}
 
 	err := ProcessBooksParallel(context.Background(), books, 1, nil, nil)
@@ -560,9 +560,9 @@ func TestSuspiciousFileSkipDisabledWhenNegativeOne(t *testing.T) {
 	var savedState string
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, b *Book) error {
+	saveBook = func(ctx context.Context, b *Book) (*ownershipSkip, error) {
 		savedState = b.LibraryState
-		return nil
+		return nil, nil
 	}
 
 	err := ProcessBooksParallel(context.Background(), books, 1, nil, nil)

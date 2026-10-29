@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_lost_update_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4d8a1c72-6e05-4b93-8f21-0a7c3e9b5d14
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -94,7 +94,7 @@ func TestSaveBookToDatabase_RescanDoesNotRevertConcurrentWrite(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 
-	if err := saveBookToDatabase(context.Background(), &Book{
+	if _, err := saveBookToDatabase(context.Background(), &Book{
 		FilePath: filePath,
 		Title:    "Original Title",
 		Format:   ".m4b",
@@ -106,7 +106,7 @@ func TestSaveBookToDatabase_RescanDoesNotRevertConcurrentWrite(t *testing.T) {
 
 	// The rescan. race.onRead fires inside it, enriching the row after the
 	// scanner has read it and before the scanner writes.
-	if err := saveBookToDatabase(context.Background(), &Book{
+	if _, err := saveBookToDatabase(context.Background(), &Book{
 		FilePath: filePath,
 		Title:    "Rescanned Title",
 		Format:   ".m4b",
@@ -188,7 +188,7 @@ func seedHashDupRace(t *testing.T, onRead func(base *database.PebbleStore, bookI
 		}
 	}
 
-	if err := saveBookToDatabase(context.Background(), &Book{
+	if _, err := saveBookToDatabase(context.Background(), &Book{
 		FilePath: firstPath,
 		Title:    "Shared Title",
 		Format:   ".m4b",
@@ -209,7 +209,7 @@ func seedHashDupRace(t *testing.T, onRead func(base *database.PebbleStore, bookI
 // hash-duplicate version-linking branch.
 func importSecondCopy(t *testing.T, path string) {
 	t.Helper()
-	if err := saveBookToDatabase(context.Background(), &Book{
+	if _, err := saveBookToDatabase(context.Background(), &Book{
 		FilePath: path,
 		Title:    "Shared Title",
 		Format:   ".m4b",

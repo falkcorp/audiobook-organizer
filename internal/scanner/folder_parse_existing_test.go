@@ -1,7 +1,7 @@
 // file: internal/scanner/folder_parse_existing_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: dc6ba60e-80dc-4e3a-97c9-2b0fcadcf86c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -64,7 +64,7 @@ func TestSaveBookToDatabase_FolderParseNeverRewritesExistingRows(t *testing.T) {
 
 	// An existing row, imported earlier.
 	path := write("existing.m4b")
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: path, Title: "Stored Title", Author: "Mara Quill",
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: path, Title: "Stored Title", Author: "Mara Quill",
 		Series: "Stored Series", Position: 2, Narrator: "Stored Narrator", Format: ".m4b", Duration: 100}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestSaveBookToDatabase_FolderParseNeverRewritesExistingRows(t *testing.T) {
 	rescan := &Book{FilePath: path, Title: "Reparsed Title", Author: "Dorian Vex", Series: "Reparsed Series", Position: 5,
 		Narrator: "Reparsed Narrator", Format: ".m4b", Duration: 100,
 		folderParse: folderParsed{Title: "Reparsed Title", Author: "Dorian Vex", Series: "Reparsed Series", Narrator: "Reparsed Narrator"}}
-	if err := saveBookToDatabase(context.Background(), rescan); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), rescan); err != nil {
 		t.Fatal(err)
 	}
 	b, author, series := read(path)
@@ -118,7 +118,7 @@ func TestSaveBookToDatabase_FolderParseNeverRewritesExistingRows(t *testing.T) {
 	// A title-only folder value still holds the position read off it.
 	posOnly := &Book{FilePath: path, Title: "Reparsed Title 9", Author: "Mara Quill", Position: 9, Format: ".m4b", Duration: 100,
 		folderParse: folderParsed{Title: "Reparsed Title 9"}}
-	if err := saveBookToDatabase(context.Background(), posOnly); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), posOnly); err != nil {
 		t.Fatal(err)
 	}
 	if b, _, _ = read(path); b.Title != "Stored Title" || b.SeriesSequence == nil || *b.SeriesSequence != 2 {
@@ -129,7 +129,7 @@ func TestSaveBookToDatabase_FolderParseNeverRewritesExistingRows(t *testing.T) {
 	// 2026-10-06 (scan_identity_hold.go): an existing row's identity changes
 	// only through a reviewed fixer. The tag's title is a proposal.
 	tagged := &Book{FilePath: path, Title: "Tagged Title", Author: "Mara Quill", Format: ".m4b", Duration: 100}
-	if err := saveBookToDatabase(context.Background(), tagged); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), tagged); err != nil {
 		t.Fatal(err)
 	}
 	if b, _, _ = read(path); b.Title != "Stored Title" {
@@ -141,7 +141,7 @@ func TestSaveBookToDatabase_FolderParseNeverRewritesExistingRows(t *testing.T) {
 
 	// A new import takes the folder parse.
 	fresh := write("fresh.m4b")
-	if err := saveBookToDatabase(context.Background(), &Book{FilePath: fresh, Title: "Reparsed Title", Author: "Dorian Vex",
+	if _, err := saveBookToDatabase(context.Background(), &Book{FilePath: fresh, Title: "Reparsed Title", Author: "Dorian Vex",
 		Series: "Reparsed Series", Position: 5, Format: ".m4b", Duration: 100,
 		folderParse: folderParsed{Title: "Reparsed Title", Author: "Dorian Vex", Series: "Reparsed Series"}}); err != nil {
 		t.Fatal(err)

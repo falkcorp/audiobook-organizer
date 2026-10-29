@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_preserve_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b2f4c6a8-1d3e-4f50-9a7b-2c6e8d0f1a34
-// last-edited: 2026-10-06
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -57,7 +57,7 @@ func TestSaveBookToDatabase_RescanPreservesEnrichedFields(t *testing.T) {
 		Duration: 100,
 		Narrator: "Original Narrator",
 	}
-	if err := saveBookToDatabase(context.Background(), orig); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), orig); err != nil {
 		t.Fatalf("initial saveBookToDatabase failed: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestSaveBookToDatabase_RescanPreservesEnrichedFields(t *testing.T) {
 		Duration: 100,
 		Narrator: "Rescanned Narrator",
 	}
-	if err := saveBookToDatabase(context.Background(), rescan); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), rescan); err != nil {
 		t.Fatalf("rescan saveBookToDatabase failed: %v", err)
 	}
 

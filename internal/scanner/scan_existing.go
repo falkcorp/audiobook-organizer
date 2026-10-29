@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 //
 // Resolves, once, the stored row a scanned book already is.
 
@@ -72,12 +72,12 @@ type retiredContentHit struct {
 	total     int
 }
 
-// asError is the skip the save returns: the same errFileOwnedByOtherBook the
-// ownership check raises, so every caller already skips the book's rows,
+// asSkip is the skip the save returns beside errFileOwnedByOtherBook: the same
+// signal the ownership check raises, so every caller already skips the book's rows,
 // chapters, scan-cache stamp and AI nomination, and the run's ownership-skip
 // log carries the holder and the reason.
-func (h *retiredContentHit) asError(path string) error {
-	return &ownershipSkipError{Path: path, Owners: []string{h.holder},
+func (h *retiredContentHit) asSkip(path string) *ownershipSkip {
+	return &ownershipSkip{Path: path, Owners: []string{h.holder},
 		Reason: fmt.Sprintf("content of a retired version of book %s (version %s): %d of %d file(s) match",
 			h.holder, h.versionID, h.matched, h.total)}
 }

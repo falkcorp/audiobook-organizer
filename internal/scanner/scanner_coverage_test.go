@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner_coverage_test.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 // NOTE(fable5 T022): Removed tests that used database.DB, database.Initialize,
 // or database.Close (legacy SQLite path removed). TestSaveBookToDatabaseWithoutStore
@@ -437,8 +437,8 @@ func TestProcessBooksParallelWithSaveError(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 
 	// Mock saveBook to return an error
-	saveBook = func(ctx context.Context, book *Book) error {
-		return errors.New("mock save error")
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
+		return nil, errors.New("mock save error")
 	}
 
 	// Should complete but report warnings
@@ -458,7 +458,7 @@ func TestProcessBooksParallelNoProgressCallback(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	// Test with nil progress callback
 	err := ProcessBooksParallel(context.Background(), books, 2, nil, nil)
@@ -483,7 +483,7 @@ func TestSaveBookToDatabaseCodePaths(t *testing.T) {
 			Author:   "Test",
 		}
 
-		err := saveBookToDatabase(context.Background(), book)
+		_, err := saveBookToDatabase(context.Background(), book)
 		if err == nil {
 			t.Error("expected error when no database available")
 		}
@@ -504,7 +504,7 @@ func TestSaveBookToDatabaseNoDatabase(t *testing.T) {
 		Author:   "Test",
 	}
 
-	err := saveBookToDatabase(context.Background(), book)
+	_, err := saveBookToDatabase(context.Background(), book)
 	if err == nil {
 		t.Error("expected error when no database is available")
 	}
@@ -526,7 +526,7 @@ func TestProcessBooksParallelWithAIParsing(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	// Should handle missing API key gracefully
 	err := ProcessBooksParallel(context.Background(), books, 1, nil, nil)
@@ -547,9 +547,9 @@ func TestProcessBooksParallelContextTimeout(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 
 	// Make save slow to allow timeout to trigger
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		time.Sleep(100 * time.Millisecond)
-		return nil
+		return nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
@@ -668,7 +668,7 @@ func TestProcessBooksDefault(t *testing.T) {
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error { return nil }
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
 	err := ProcessBooks(books, nil)
 	if err != nil {

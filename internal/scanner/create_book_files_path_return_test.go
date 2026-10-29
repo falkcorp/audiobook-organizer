@@ -1,7 +1,7 @@
 // file: internal/scanner/create_book_files_path_return_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7f2b41c8-93ad-4e05-b6d1-8c0e5a72f394
-// last-edited: 2026-10-11
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -185,16 +185,16 @@ func TestProcessBooksParallelWritesScanCacheForNormalizedMultiFileBook(t *testin
 	var createdID string
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
-	saveBook = func(ctx context.Context, book *Book) error {
+	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) {
 		created, err := store.CreateBook(&database.Book{
 			FilePath: book.FilePath,
 			Title:    book.Title,
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		createdID = created.ID
-		return nil
+		return nil, nil
 	}
 
 	books := []Book{{

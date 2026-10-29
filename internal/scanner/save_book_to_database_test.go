@@ -1,7 +1,7 @@
 // file: internal/scanner/save_book_to_database_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 0f1e2d3c-4b5a-6978-8899-aabbccddeeff
-// last-edited: 2026-06-10
+// last-edited: 2026-10-29
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -75,12 +75,12 @@ func TestSaveBookToDatabase_GlobalStoreCreateAndUpdate(t *testing.T) {
 		Publisher: "Test Publisher",
 	}
 
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("saveBookToDatabase create failed: %v", err)
 	}
 
 	book.Title = "Updated Title"
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("saveBookToDatabase update failed: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestSaveBookToDatabase_BlocklistSkips(t *testing.T) {
 		Format:   ".m4b",
 	}
 
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("saveBookToDatabase blocklist failed: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestSaveBookToDatabase_DedupOnImportHook(t *testing.T) {
 	}
 
 	// First save: new book → hook MUST fire exactly once.
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("saveBookToDatabase create failed: %v", err)
 	}
 	if len(th.calls) != 1 {
@@ -220,7 +220,7 @@ func TestSaveBookToDatabase_DedupOnImportHook(t *testing.T) {
 	// again. Updating an existing book isn't a new import event and
 	// shouldn't re-trigger dedup processing.
 	book.Title = "Hook Test Updated"
-	if err := saveBookToDatabase(context.Background(), book); err != nil {
+	if _, err := saveBookToDatabase(context.Background(), book); err != nil {
 		t.Fatalf("saveBookToDatabase update failed: %v", err)
 	}
 	if len(th.calls) != 1 {

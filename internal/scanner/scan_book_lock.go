@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -520,7 +520,7 @@ func acquireScanBookLock(ctx, waitCtx context.Context, b *Book, round int, fresh
 // nothing) and saves under it, restarting once if the save discovers a row it
 // does not hold. saved is false when the book's files vanished; err is
 // non-nil for a real save failure or the bounded wait expiring.
-func saveBookUnderScanLock(ctx context.Context, book *Book, save func(context.Context, *Book) error) (saved bool, err error) {
+func saveBookUnderScanLock(ctx context.Context, book *Book, save func(context.Context, *Book) (*ownershipSkip, error)) (saved bool, err error) {
 	for range 2 {
 		wctx, cancel := context.WithTimeout(ctx, scanLockWait)
 		hold, outcome, readErr := acquireScanBookLock(ctx, wctx, book, 1, false)
@@ -538,7 +538,9 @@ func saveBookUnderScanLock(ctx context.Context, book *Book, save func(context.Co
 			scanLockGaveUpCount.Add(1)
 			return false, fmt.Errorf("scan lock: %s was held by an apply longer than %s; the next scan picks it up", book.FilePath, scanLockWait)
 		}
-		serr := save(scanlock.WithHold(ctx, hold), book)
+		// The skip record is for the scan workers; this caller only needs the
+		// errFileOwnedByOtherBook signal.
+		_, serr := save(scanlock.WithHold(ctx, hold), book)
 		hold.Release()
 		if w, ok := asWiden(serr); ok {
 			book.scanLockExtra = append(book.scanLockExtra, w.ids...)

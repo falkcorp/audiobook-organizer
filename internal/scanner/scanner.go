@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.0
+// version: 1.135.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package scanner
 
@@ -52,7 +52,7 @@ import (
 // the DB write path and saveBookToDatabase can snapshot config at entry to
 // avoid racing with test-teardown config restores (CI race: scanner.go:1700).
 // Tests may replace this variable with a no-op; the signature must match.
-var saveBook func(ctx context.Context, book *Book) error = saveBookToDatabase
+var saveBook func(ctx context.Context, book *Book) (*ownershipSkip, error) = saveBookToDatabase
 
 // defaultLog is a package-level logger for functions that cannot accept a logger parameter.
 var defaultLog = logger.New("scanner")
@@ -1617,11 +1617,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if fi, statErr := os.Stat(filePath); statErr == nil && !fi.IsDir() && fi.Size() < threshold {
 				extractInfoFromPath(&books[idx])
 				books[idx].LibraryState = "suspicious"
-				if saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
+				if skip, saveErr := saveBook(ctx, &books[idx]); saveErr != nil {
 					if widened(saveErr) {
 						return
 					}
-					if handleOwnershipSkip(ctx, saveErr, skips, failures, books[idx].SegmentHashes, scanLog) {
+					if handleOwnershipSkip(ctx, skip, skips, failures, books[idx].SegmentHashes, scanLog) {
 						return // another book's file: nothing of this book to stamp
 					}
 					scanLog.Warn("failed to save suspicious book %s: %v", filePath, saveErr)
@@ -1675,11 +1675,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			}
 			seriesFromTitle(&books[idx])
 			// Save the book and create segments
-			if err := saveBook(ctx, &books[idx]); err != nil {
+			if skip, err := saveBook(ctx, &books[idx]); err != nil {
 				if widened(err) {
 					return
 				}
-				if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
+				if handleOwnershipSkip(ctx, skip, skips, failures, books[idx].SegmentHashes, scanLog) {
 					return // not this book's files: no rows, chapters or stamp
 				}
 				failures.Record(scanLog, FileFailure{Path: books[idx].FilePath, Stage: FileFailureStageSave, Reason: err.Error()})
@@ -1859,7 +1859,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		}
 
 		// Save to database (database operations are thread-safe)
-		if err := saveBook(ctx, &books[idx]); err != nil {
+		if skip, err := saveBook(ctx, &books[idx]); err != nil {
 			if _, isWiden := asWiden(err); isWiden && nominatedForAI {
 				// The restart re-decides the nomination.
 				aiCandidatesMu.Lock()
@@ -1869,7 +1869,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if widened(err) {
 				return
 			}
-			if handleOwnershipSkip(ctx, err, skips, failures, books[idx].SegmentHashes, scanLog) {
+			if handleOwnershipSkip(ctx, skip, skips, failures, books[idx].SegmentHashes, scanLog) {
 				// Not this book's files. Nothing below may run: every step
 				// resolves the book BY PATH and would land on the owner --
 				// clearing its NeedsRescan, rewriting its chapters -- and a
@@ -3403,9 +3403,9 @@ func groupFilesIntoBooks(ctx context.Context, files []string, onFileScanned ...f
 // in particular, we snapshot config.AppConfig.RootDir at entry so goroutine
 // workers never read the global config after it has been restored by test
 // teardown (the CI race detected at scanner.go:1700).
-func saveBookToDatabase(ctx context.Context, book *Book) error {
+func saveBookToDatabase(ctx context.Context, book *Book) (*ownershipSkip, error) {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 	// Snapshot the fields we need from the global config so that even if
 	// config.AppConfig is written by another goroutine (e.g. the next test's
@@ -3420,17 +3420,17 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// whose files already belong to another book's book_file rows is a
 		// fragment of that book, not a new one. See checkFileOwnership.
 		//
-		// A skip is returned as an error matching errFileOwnedByOtherBook, not
-		// nil: nil told every caller the book was saved, and they then created
+		// A skip is returned as errFileOwnedByOtherBook beside its
+		// *ownershipSkip record, not as nil: nil told every caller the book was saved, and they then created
 		// book_file rows, chapters and a scan-cache stamp against whatever book
 		// the path lookups found -- the owner.
 		verdict, ownErr := checkFileOwnership(book)
 		if ownErr != nil {
 			scanRunCountersFrom(ctx).ownershipLookupErr.Add(1)
-			return fmt.Errorf("skipping import of %s: file ownership undeterminable: %w", book.FilePath, ownErr)
+			return nil, fmt.Errorf("skipping import of %s: file ownership undeterminable: %w", book.FilePath, ownErr)
 		}
 		if verdict.skip {
-			return verdict.asError(book.FilePath)
+			return verdict.asSkip(book.FilePath), errFileOwnedByOtherBook
 		}
 
 		// Compute file hash variants for deduplication/state mapping.
@@ -3454,7 +3454,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				defaultLog.Warn("failed to check hash blocklist: %v", err)
 			} else if blocked {
 				defaultLog.Info("Skipping file %s: hash %s is blocked", book.FilePath, hash)
-				return nil // Skip this file
+				return nil, nil // Skip this file
 			}
 
 			fileHash = stringPtrValue(hash)
@@ -3474,12 +3474,12 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// querying again. See scanExisting.
 		found, err := lookupScanExisting(book, verdict, fileHash)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if found.retired != nil {
 			// Known retired content: the library already holds these bytes as
 			// a version another book keeps out of its live files.
-			return found.retired.asError(book.FilePath)
+			return found.retired.asSkip(book.FilePath), errFileOwnedByOtherBook
 		}
 
 		// An EXISTING row keeps its title, author, series and position
@@ -3503,7 +3503,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		} else {
 			ids, err := resolveAuthorIDs(book.Author)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			authorIDs = ids
 			if len(authorIDs) > 0 {
@@ -3517,7 +3517,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		} else {
 			sid, pos, err := resolveSeriesID(book.Series, book.Author, authorID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			seriesID, seriesPos = sid, pos
 		}
@@ -3621,7 +3621,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					book.BookOrganizerID, orgErr, book.FilePath)
 			} else if existingByOrgID != nil {
 				if err := requireHeld(ctx, existingByOrgID.ID); err != nil {
-					return err
+					return nil, err
 				}
 				oldPath := existingByOrgID.FilePath
 				relinked := false
@@ -3639,14 +3639,14 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					return nil
 				})
 				if merr != nil {
-					return fmt.Errorf("re-link book %s to %s: %w", existingByOrgID.ID, book.FilePath, merr)
+					return nil, fmt.Errorf("re-link book %s to %s: %w", existingByOrgID.ID, book.FilePath, merr)
 				}
 				if res != nil {
 					if relinked {
 						defaultLog.Info("re-linked book %s (moved from %s to %s)",
 							existingByOrgID.ID, oldPath, book.FilePath)
 					}
-					return nil
+					return nil, nil
 				}
 				defaultLog.Warn("organizer-ID relink: book %s deleted before the write; saving %s by path instead",
 					existingByOrgID.ID, book.FilePath)
@@ -3688,7 +3688,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// a failing store with no match skips the import (H5).
 		if existing == nil && fileHash != nil && *fileHash != "" {
 			if err := found.lookupHashes(book, fileHash); err != nil {
-				return err
+				return nil, err
 			}
 			existing = found.byHash
 
@@ -3705,7 +3705,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					defaultLog.Debug("Promoting organized path for %s", existing.Title)
 				} else if alreadyLinked {
 					defaultLog.Debug("Already version-linked (group %s), skipping: %s", *existing.VersionGroupID, existing.FilePath)
-					return nil
+					return nil, nil
 				} else {
 					// Link both records via version_group_id. Primary = the one in RootDir.
 					h := sha256.Sum256([]byte(existing.ID + "|" + book.FilePath))
@@ -3723,10 +3723,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// another writer committed in the meantime. Only the two
 					// version columns are ours to set.
 					if err := requireHeld(ctx, existing.ID); err != nil {
-						return err
+						return nil, err
 					}
 					if err := requirePathRowHeld(ctx, book.FilePath); err != nil {
-						return err
+						return nil, err
 					}
 					linkedGroup, ok := linkVersionGroup(existing.ID, groupID, existingPrimary)
 					if !ok {
@@ -3785,7 +3785,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					if alreadyLinked {
 						defaultLog.Debug("Multi-file dedup: already version-linked (group %s), skipping: %s",
 							*matchedBook.VersionGroupID, book.FilePath)
-						return nil
+						return nil, nil
 					}
 					h2 := sha256.Sum256([]byte(matchedBook.ID + "|" + book.FilePath))
 					groupID := fmt.Sprintf("vg-%x", h2[:8])
@@ -3797,10 +3797,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// the same rule when it does not land: no group on the new
 					// row either, rather than an orphan group of one.
 					if err := requireHeld(ctx, matchedBook.ID); err != nil {
-						return err
+						return nil, err
 					}
 					if err := requirePathRowHeld(ctx, book.FilePath); err != nil {
-						return err
+						return nil, err
 					}
 					linkedGroup, ok := linkVersionGroup(matchedBook.ID, groupID, matchedPrimary)
 					if !ok {
@@ -3853,7 +3853,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			raced, racedErr := getStore().GetBookByFilePath(book.FilePath)
 			if racedErr != nil {
 				unlockPath()
-				return fmt.Errorf("book lookup failed: %w", racedErr)
+				return nil, fmt.Errorf("book lookup failed: %w", racedErr)
 			}
 			if raced != nil {
 				// Another writer created this path while we were working.
@@ -3862,7 +3862,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				// scanner's fields onto the row that exists.
 				unlockPath()
 				if err := requireHeld(ctx, raced.ID); err != nil {
-					return err
+					return nil, err
 				}
 				defaultLog.Info("book row for %s was created concurrently; merging into %s instead of creating a second row",
 					book.FilePath, raced.ID)
@@ -3969,7 +3969,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 						hooks.OnImportDedup(dbBook.ID)
 					}
 				}
-				return err
+				return nil, err
 			}
 		}
 
@@ -4001,7 +4001,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// so the callback does no IO while the stripe is held.
 		// The row is written from here: the worker must hold its scan lock.
 		if err := requireHeld(ctx, existing.ID); err != nil {
-			return err
+			return nil, err
 		}
 		locked, ok := lockedFieldsForBook(getStore(), existing.ID)
 		if !ok {
@@ -4046,14 +4046,14 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			return nil
 		})
 		if uerr != nil {
-			return uerr
+			return nil, uerr
 		}
 		if written == nil {
 			// The row was deleted between the lookup above and this write. Not
 			// an error for the scan: the next scan re-imports the file.
 			defaultLog.Warn("book %s (%s) disappeared before the rescan merge could be written; skipping",
 				existing.ID, existing.FilePath)
-			return nil
+			return nil, nil
 		}
 		if kept > 0 {
 			scanLockKeptFields.Add(int64(kept))
@@ -4083,10 +4083,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// Check for metadata hash duplicates after update, against the row that
 		// was actually written rather than a local copy of it.
 		detectMetadataHashDuplicate(written, defaultLog)
-		return nil
+		return nil, nil
 	}
 
-	return fmt.Errorf("database store not initialized")
+	return nil, fmt.Errorf("database store not initialized")
 }
 
 // markNewPrimaryIdentDirty marks a book the scan just created for the
