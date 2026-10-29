@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"runtime"
 	"slices"
 	"sort"
@@ -161,11 +162,15 @@ import (
 //     created that no written book credits are deleted again
 //     (deleteUnusedCreated), so a later run cannot link a split credit to one.
 //     Every create is preceded by a narrator_create_intent journal row, and an
-//     apply begins by finding the unlinked records its own earlier attempts
-//     created (seedLeftovers: named by their rows or intents, not older than
-//     the operation's first row): such a record is treated as new, not as one
-//     that was always there, so a crash or a lost stand-down cannot turn it into
-//     a link target for a split credit.
+//     apply begins by finding the unlinked records earlier attempts created,
+//     its own and those of every other credits-backfill operation that did not
+//     complete (seedLeftovers: named by their rows or intents, not older than
+//     that operation's first row): such a record is treated as new, not as one
+//     that was always there, so a crash or a lost stand-down, resumed or not,
+//     cannot turn it into a link target for a split credit.
+//     A run that stops (a cancel, or a lapsed stand-down) files the books of the
+//     cohort it never wrote under canceled_not_written (fileCanceledNotWritten),
+//     or, when it stopped before the cohort was picked, every planned book.
 //
 // Shared state is the class accumulator (mutex), the plan map (mutex) and
 // atomics; Label runs inside the workers and reads atomics only. Narrator
@@ -312,6 +317,7 @@ const (
 	cbSearchIdentityChanges      = "search_identity_changes"
 	cbITunesDatabaseOnly         = "itunes_database_only"
 	cbLimitReached               = "limit_reached"
+	cbCanceledNotWritten         = "canceled_not_written"
 	cbJournalUnverified          = "journal_unverified"
 	// cbNarratorWaitingOnCreator: a split book whose new narrator records are
 	// created by other books of the library, none of which is in this run's
@@ -512,6 +518,13 @@ var creditsBackfillClasses = []cbClassDef{
 			"lists exactly the books an apply with limit N writes. A book that waits on a record another book creates " +
 			"(narrator_waiting_on_creator) takes the room the other books leave, in sorted order, once the books that " +
 			"create the records have their places."},
+	{cbCanceledNotWritten, cbKindInformational,
+		"The apply stopped before this book was written: it was canceled, or the scan stand-down lapsed (the error " +
+			"says which). The book has something to write and was in the run's cohort (or, when the stop came before " +
+			"the cohort was picked, was planned with something to write), but its write never started, so it is " +
+			"unchanged. Books that were written, refused, held or failed are in their own classes, and books that " +
+			"were never scanned are the difference between books_listed and books_scanned. A re-run (or the resume) " +
+			"writes the book. A book is filed here or in a write, held or error class, never in two."},
 	{cbNarratorWaitingOnCreator, cbKindInformational,
 		"A split credit whose new narrator names are created by other books of the library (each credits the name " +
 			"whole, so it creates the record without the opt-in), and none of those books is in this run's cohort " +
@@ -1023,6 +1036,12 @@ type cbRun struct {
 
 	// written counts this attempt's writes.
 	written atomic.Int64
+	// attempted are the books whose apply() ran (it ran to a return, and every
+	// return files the book under a write, held, review or error class). A
+	// cohort book missing from it was never reached by a canceled or
+	// stand-down-lost apply (fileCanceledNotWritten). Guarded by attemptedMu.
+	attemptedMu sync.Mutex
+	attempted   map[string]bool
 	// plansMu guards plans: the books phase 1 planned with something to
 	// write, by id. Phase 2 (cohort) and phase 3 (apply) read it after phase 1
 	// has finished.
@@ -1168,6 +1187,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		acc:      newCBAccumulator(),
 		plans:    map[string]*cbPlanned{},
 
+		attempted:   map[string]bool{},
 		foldIdx:     map[string][]database.Narrator{},
 		createdFold: map[string]database.Narrator{},
 		landed:      map[string]database.Narrator{},
@@ -1250,7 +1270,9 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	run.filePending(workers)
 	eligible := run.planIDs()
 	var selected []string
+	cohortPicked := false
 	if runErr == nil || !params.Apply {
+		cohortPicked = true
 		selected, eligible = run.selectCohort(eligible)
 		level := slog.LevelInfo
 		if run.settled.boundHit {
@@ -1310,6 +1332,12 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// hold's cancel seen by a worker that had not yet beaten the lease).
 	if hold != nil && hold.Lost() {
 		runErr = registry.ErrScanStandDownLost
+	}
+
+	// A canceled or stand-down-lost apply leaves the books it never reached in
+	// no class: file them, so the counts add up.
+	if params.Apply && runErr != nil {
+		run.fileCanceledNotWritten(selected, cohortPicked)
 	}
 
 	// Still under the stand-down: a record this run created and no written book
@@ -1426,40 +1454,85 @@ func (r *cbRun) indexNarrators() {
 	}
 }
 
-// seedLeftovers finds the narrator records an EARLIER attempt of this operation
-// created and nothing links, so that a resumed apply treats them as what they
-// are: not records that were always there.
+// seedLeftovers finds the narrator records an EARLIER attempt created and
+// nothing links, so that an apply treats them as what they are: not records that
+// were always there. The earlier attempt is one of this operation (a resume) or
+// one of ANOTHER credits-backfill operation that did not finish.
 //
 // preexisting and startedAt are per attempt. An attempt that crashed (or lost
 // the scan stand-down) after CreateNarrator but before its creating write
-// landed leaves a record this operation made; the next attempt's index
-// contains it, so without this step it would count as preexisting: a split book
-// would link to it although no creating write ever credited it, and the cleanup
-// would keep it as "existed before the run".
+// landed leaves a record that attempt made; the next apply's index contains it,
+// so without this step it would count as preexisting: a split book would link
+// to it although no creating write ever credited it, and the cleanup would keep
+// it as "existed before the run". A crashed operation that is never resumed
+// leaves the same record for every LATER operation (each limit cohort runs
+// under its own operation id), so the journals read are this operation's and
+// those of the other credits-backfill operations whose status is not completed
+// (otherCreditsBackfillOps).
 //
-// The candidates are named by this operation's own journal, voided rows
+// The candidates of each journal are named by its own rows, voided rows
 // included (a refused write voids its row, and the record it created stays):
 //   - the CreatedNarrators of its credits_backfill rows, by id; and
 //   - its narrator_create_intent rows (written before every create), by exact
 //     name, for the crash that happened before any credits_backfill row named
 //     the record.
 //
-// A candidate is kept only when it was not older than the operation (its
-// CreatedAt is not before the operation's FIRST journal row; an intent row
-// bounds the record it names by its own time) and nothing links it now
-// (database.NarratorLinkCount, fail closed: a count that cannot be read stops
-// the run). A record that is linked, or older than the operation, stays an
-// ordinary preexisting record.
+// A candidate is kept only when it was not older than the operation that
+// journaled it (its CreatedAt is not before THAT operation's FIRST journal row;
+// an intent row bounds the record it names by its own time) and nothing links it
+// now (database.NarratorLinkCount, fail closed: a count that cannot be read
+// stops the run). A record that is linked, or older than its operation, stays an
+// ordinary preexisting record. An operation that completed is not read: its own
+// cleanup deleted or credited every record it created.
 //
 // A leftover is taken out of the lookup indexes, so the plan treats its name as
 // new: some book creates it again (CreateNarrator returns the same record) and
 // split books link to it only once that write has landed. It joins the cleanup
 // set (acc.createdRecs): credited by a creator it is kept; not credited by
-// anyone, deleteUnusedCreated removes it with a narrator_delete row.
+// anyone, deleteUnusedCreated removes it with a narrator_delete row in THIS
+// operation's journal (an operation that is not resumed is where its own
+// leftover would otherwise stay for good).
 func (r *cbRun) seedLeftovers() error {
-	rows, err := r.env.store.GetOperationChanges(r.env.opID)
+	cand := map[int]database.Narrator{}
+	if err := r.leftoverCandidates(r.env.opID, "this operation", cand); err != nil {
+		return err
+	}
+	others, err := r.otherCreditsBackfillOps()
 	if err != nil {
-		return fmt.Errorf("read this operation's journal for leftover records: %w", err)
+		return err
+	}
+	for _, opID := range others {
+		if err := r.leftoverCandidates(opID, "operation "+opID, cand); err != nil {
+			return err
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(cand)) {
+		links, lerr := database.NarratorLinkCount(r.env.store, id)
+		if lerr != nil {
+			return fmt.Errorf("count the books linking narrator %d (a record an earlier attempt may have created): %w", id, lerr)
+		}
+		if links > 0 {
+			continue
+		}
+		rec := cand[id]
+		r.leftover[id] = true
+		delete(r.preexisting, id)
+		r.acc.seedLeftover(rec)
+	}
+	if len(r.leftover) > 0 {
+		r.indexNarrators()
+	}
+	return nil
+}
+
+// leftoverCandidates adds to cand the narrator records the journal of operation
+// opID names as created by it and that are not older than that operation's
+// first journal row (see seedLeftovers). Nothing is added for an operation with
+// no rows. whose names the operation in an error.
+func (r *cbRun) leftoverCandidates(opID, whose string, cand map[int]database.Narrator) error {
+	rows, err := r.env.store.GetOperationChanges(opID)
+	if err != nil {
+		return fmt.Errorf("read %s's journal for leftover records: %w", whose, err)
 	}
 	var first time.Time
 	rowTime := func(c *database.OperationChange) (time.Time, bool) {
@@ -1480,8 +1553,6 @@ func (r *cbRun) seedLeftovers() error {
 	if first.IsZero() {
 		return nil
 	}
-
-	cand := map[int]database.Narrator{}
 	consider := func(rec database.Narrator, notBefore time.Time) {
 		if rec.ID <= 0 || rec.CreatedAt.IsZero() || rec.CreatedAt.Before(notBefore) {
 			return
@@ -1513,23 +1584,42 @@ func (r *cbRun) seedLeftovers() error {
 			}
 		}
 	}
-	for _, id := range slices.Sorted(maps.Keys(cand)) {
-		links, lerr := database.NarratorLinkCount(r.env.store, id)
-		if lerr != nil {
-			return fmt.Errorf("count the books linking narrator %d (a record an earlier attempt of this operation may have created): %w", id, lerr)
-		}
-		if links > 0 {
-			continue
-		}
-		rec := cand[id]
-		r.leftover[id] = true
-		delete(r.preexisting, id)
-		r.acc.seedLeftover(rec)
-	}
-	if len(r.leftover) > 0 {
-		r.indexNarrators()
-	}
 	return nil
+}
+
+// otherCreditsBackfillOps is the ids of the OTHER credits-backfill operations
+// whose last attempt did not complete: every operation of this definition but
+// this one whose status is not "completed" (failed, canceled, interrupted,
+// running or never finished). The dispatcher runs two of them one at a time
+// (both declare a books write under one concurrency key), so a row that still
+// reads "running" is a run a crash or a restart cut off, not one that is
+// writing now. A completed operation is not listed: it either credited the
+// records it created or deleted them again.
+//
+// The listing is the whole operation history (ListOperationsV2Since with no
+// lower bound and no cap, which decodes every operation row once per apply, a few
+// seconds on a production-sized history): a cap would drop the oldest
+// operations silently, which is the unsafe direction. A store that cannot list
+// operations stops the apply (fail closed). A discarded operation (registry.Discard)
+// is gone from this listing although its journal rows stay; its records are not
+// found here.
+func (r *cbRun) otherCreditsBackfillOps() ([]string, error) {
+	lister, ok := database.AsCapability[database.OperationsV2SinceLister](r.env.store)
+	if !ok {
+		return nil, fmt.Errorf("cannot find the records other credits-backfill operations left: store is %T, which cannot list operations (OperationsV2SinceLister)", r.env.store)
+	}
+	rows, err := lister.ListOperationsV2Since(time.Time{}, math.MaxInt)
+	if err != nil {
+		return nil, fmt.Errorf("list operations for the records other credits-backfill operations left: %w", err)
+	}
+	var ids []string
+	for _, row := range rows {
+		if row.DefID == creditsBackfillOpID && row.ID != r.env.opID && row.Status != "completed" {
+			ids = append(ids, row.ID)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // recordNamed is the record holding exactly this name (the store's name index
@@ -2037,6 +2127,32 @@ func (r *cbRun) filePending(workers int) {
 		})
 	}
 	_ = g.Wait()
+}
+
+// fileCanceledNotWritten files the books an apply that stopped (a cancel, or a
+// lost scan stand-down) never reached, under canceled_not_written. apply() marks
+// every book it ran, and every return of apply() files the book under a class of
+// its own, so a book that is in scope, has something to write and was not
+// attempted is in no class at all without this.
+//
+// Which books: the cohort, when the stop came after it was picked (phase 3: the
+// books the creating pass or the linking pass did not reach); every planned book
+// of the scope when it came before (phase 1 or the replan: no cohort, so no
+// limit_reached or waiting class either). Books never scanned are not filed:
+// they are the difference between books_listed and books_scanned. Called after
+// the pools have returned, so nothing writes r.plans or r.attempted.
+func (r *cbRun) fileCanceledNotWritten(cohort []string, cohortPicked bool) {
+	candidates := cohort
+	if !cohortPicked {
+		candidates = r.inScopeIDs(r.planIDs())
+	}
+	r.attemptedMu.Lock()
+	defer r.attemptedMu.Unlock()
+	for _, id := range candidates {
+		if !r.attempted[id] {
+			r.acc.add(id, cbCanceledNotWritten)
+		}
+	}
 }
 
 // planIDs is the ids with something to write, sorted. Phase 1 has finished,
@@ -2748,6 +2864,9 @@ func (r *cbRun) voidJournal(row *database.OperationChange) error {
 // its journal row.
 func (r *cbRun) apply(pb *cbPlanned) {
 	id, plan, before := pb.id, pb.plan, pb.before
+	r.attemptedMu.Lock()
+	r.attempted[id] = true
+	r.attemptedMu.Unlock()
 	// A lock a person set after the plan holds the side: checked here, before
 	// anything is created or journaled, and again inside the write's callback
 	// right before the commit (a lock can land in between). The callback runs
