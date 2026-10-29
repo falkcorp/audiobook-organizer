@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_swap_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6b1d8e3f-7a24-4c95-8e0b-d2f4a9c1b753
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package server
 
@@ -61,7 +61,7 @@ func newSwapTrashFixture(t *testing.T) *swapTrashFixture {
 		t.Fatal(err)
 	}
 	if err := store.CreateBookFile(&database.BookFile{
-		BookID: book.ID, VersionID: active.ID, FilePath: rootAud, Format: "m4b",
+		BookID: book.ID, VersionID: active.ID, FilePath: rootAud, Format: "m4b", FileSize: int64(len("active")),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +85,14 @@ func (f *swapTrashFixture) add(status string, ago time.Duration, name string) (*
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			f.t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte("alt-"+v.ID), 0o644); err != nil {
+		content := "alt-" + v.ID
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			f.t.Fatal(err)
 		}
+		// The size lets a resume vouch for the file once a swap has moved it
+		// away from the path this row names.
 		if err := f.store.CreateBookFile(&database.BookFile{
-			BookID: f.book.ID, VersionID: v.ID, FilePath: path, Format: "mp3",
+			BookID: f.book.ID, VersionID: v.ID, FilePath: path, Format: "mp3", FileSize: int64(len(content)),
 		}); err != nil {
 			f.t.Fatal(err)
 		}
