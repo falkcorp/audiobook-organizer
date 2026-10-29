@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -71,6 +71,10 @@ type TrashedVersionCleaner interface {
 	// the purges that gave up (status purge_failed), which it counts as
 	// needing attention and does not retry.
 	ListTrashedBookVersions() ([]database.BookVersion, error)
+	// ListSwappingBookVersions lists the versions a swap left in swapping_*;
+	// the cleanup reports their books (SwapIncompleteLister) and touches
+	// nothing.
+	ListSwappingBookVersions() ([]database.BookVersion, error)
 	// GetBookVersion (from versionPurger) also re-reads each listed row before
 	// it is stamped or purged, narrowing the window in which a mid-run restore
 	// is undone.
@@ -120,10 +124,38 @@ type swapStore interface {
 	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
-// unusedStore is `any` because the two functions that take it are stubs which
-// never touch the store: scanFileHashMatch does `_ = store` and returns nil
-// pending a file_hash->version_id index, and ResumeVersionSwaps carries a TODO
-// for ListBookVersionsByStatus. Both declared database.Store -- 398 methods to
-// use none of them. When either is implemented, give it the interface it then
-// actually needs rather than restoring the union.
+// swapPlanStore is what the resume of an unfinished swap reads: the book, its
+// versions and file rows, and every row that names a path (so a file another
+// book's row names is not taken for the swap's).
+type swapPlanStore interface {
+	bookFileLister
+	GetBookByID(id string) (*database.Book, error)
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+	// BookFilesAtPath lists EVERY row at a path, retired rows included; it
+	// returns database.ErrBookFilesAtPathUnavailable when it cannot be complete.
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+}
+
+// SwapResumeStore is what ResumeVersionSwap needs: the reads of swapPlanStore
+// and the writes RunVersionSwap makes (statuses, file rows, the book's path and
+// its audit record). Exported: internal/server forwards its store into it.
+type SwapResumeStore interface {
+	swapPlanStore
+	swapStore
+}
+
+// SwapIncompleteLister is what ListSwapIncompleteBooks needs: the versions a
+// swap left in swapping_* and the reads that describe their books. The trash
+// cleanup's TrashedVersionCleaner and internal/server forward their stores into
+// it. Exported for that.
+type SwapIncompleteLister interface {
+	swapPlanStore
+	ListSwappingBookVersions() ([]database.BookVersion, error)
+}
+
+// unusedStore is `any` because the one function that takes it is a stub that
+// never touches the store: scanFileHashMatch does `_ = store` and returns nil
+// pending a file_hash->version_id index. It declared database.Store -- 398
+// methods -- to use none of them. When it is implemented, give it the
+// interface it then actually needs rather than restoring the union.
 type unusedStore = any

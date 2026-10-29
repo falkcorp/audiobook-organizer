@@ -1,7 +1,7 @@
 // file: web/src/pages/TrashedVersions.test.tsx
-// version: 1.4.2
+// version: 1.5.0
 // guid: d74a1824-3f19-49fe-9a4f-fdbbea124f4b
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
@@ -376,6 +376,206 @@ describe('TrashedVersions', () => {
       });
       expect(await screen.findByText(/mp3/i)).toBeInTheDocument();
       expect(screen.getByText(/Showing every version instead/)).toBeInTheDocument();
+    });
+  });
+  // The third tab: books whose version swap did not finish, with a Resume button.
+  describe('Unfinished swaps tab', () => {
+    const stuckBook = (id: string, extra: Record<string, unknown> = {}) => ({
+      book_id: id,
+      title: 'The Long Halloween',
+      book_path: '/lib/Gotham/The Long Halloween',
+      versions: [
+        {
+          id: `${id}-out`,
+          status: 'swapping_out',
+          files: [{ id: 'f1', path: '/lib/Gotham/The Long Halloween/part1.m4b' }],
+        },
+        {
+          id: `${id}-in`,
+          status: 'swapping_in',
+          files: [{ id: 'f2', path: '/lib/Gotham/The Long Halloween/.versions/x/part1.mp3' }],
+        },
+      ],
+      resume: 'finish',
+      ...extra,
+    });
+    const swapsResponse = (books: unknown[]) =>
+      new Response(JSON.stringify({ data: { books, count: books.length } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const json = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    it('lists each book with its path, versions and files, and a Resume button', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) =>
+          String(url).includes('/audiobooks/swap-incomplete')
+            ? swapsResponse([stuckBook('book-lh')])
+            : listResponse([])
+        )
+      );
+      renderWithProviders(<TrashedVersions />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Unfinished swaps' }));
+
+      const row = await screen.findByTestId('unfinished-swap-book-lh');
+      expect(row).toHaveTextContent('The Long Halloween');
+      expect(row).toHaveTextContent('/lib/Gotham/The Long Halloween');
+      expect(row).toHaveTextContent('swapping_out');
+      expect(row).toHaveTextContent('swapping_in');
+      expect(row).toHaveTextContent('part1.m4b');
+      expect(screen.getByRole('button', { name: 'Resume (finish swap)' })).toBeInTheDocument();
+    });
+
+    it('resumes a book after a confirm, shows what happened and reloads the list', async () => {
+      let resumed = false;
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes('/audiobooks/book-lh/versions/resume-swap')) {
+          expect(init?.method).toBe('POST');
+          resumed = true;
+          return json(200, {
+            data: { action: 'finish', book_id: 'book-lh', book_path: '/lib', files_moved: 0 },
+          });
+        }
+        if (String(url).includes('/audiobooks/swap-incomplete')) {
+          return swapsResponse(resumed ? [] : [stuckBook('book-lh')]);
+        }
+        return listResponse([]);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const confirmMock = vi.fn(() => true);
+      vi.stubGlobal('confirm', confirmMock);
+      renderWithProviders(<TrashedVersions />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Unfinished swaps' }));
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Resume (finish swap)' }));
+
+      expect(confirmMock).toHaveBeenCalledTimes(1);
+      expect(String(confirmMock.mock.calls[0])).toContain('No file is moved');
+      expect(
+        await screen.findByText(/The Long Halloween: The swap was finished/)
+      ).toBeInTheDocument();
+      expect(await screen.findByText('No unfinished swaps.')).toBeInTheDocument();
+    });
+
+    it('sends nothing when the confirm is declined', async () => {
+      const fetchMock = vi.fn(async (url: string) =>
+        String(url).includes('/audiobooks/swap-incomplete')
+          ? swapsResponse([stuckBook('book-lh')])
+          : listResponse([])
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      vi.stubGlobal('confirm', () => false);
+      renderWithProviders(<TrashedVersions />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Unfinished swaps' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Resume (finish swap)' }));
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('resume-swap'))).toBe(false);
+    });
+
+    it('says what an undo does and shows why a refused resume failed', async () => {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).includes('resume-swap')) {
+          return json(409, {
+            error: 'version ver-other is active as well',
+            code: 'SWAP_RESUME_REFUSED',
+            status: 409,
+          });
+        }
+        if (String(url).includes('/audiobooks/swap-incomplete')) {
+          return swapsResponse([stuckBook('book-lh', { resume: 'undo' })]);
+        }
+        return listResponse([]);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const confirmMock = vi.fn(() => true);
+      vi.stubGlobal('confirm', confirmMock);
+      renderWithProviders(<TrashedVersions />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Unfinished swaps' }));
+
+      await userEvent.click(
+        await screen.findByRole('button', { name: 'Resume (move files back)' })
+      );
+
+      expect(String(confirmMock.mock.calls[0])).toContain('puts the files back');
+      expect(
+        await screen.findByText(/Resume failed: version ver-other is active as well/)
+      ).toBeInTheDocument();
+      // The book is still listed: nothing was resumed.
+      expect(screen.getByTestId('unfinished-swap-book-lh')).toBeInTheDocument();
+    });
+
+    it('offers no Resume for a book the server would refuse, and says why', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) =>
+          String(url).includes('/audiobooks/swap-incomplete')
+            ? swapsResponse([
+                stuckBook('book-lh', {
+                  resume: undefined,
+                  resume_refusal: 'a file is at the book folder and in its slot',
+                }),
+              ])
+            : listResponse([])
+        )
+      );
+      renderWithProviders(<TrashedVersions />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Unfinished swaps' }));
+
+      expect(await screen.findByTestId('resume-refusal')).toHaveTextContent(
+        'a file is at the book folder and in its slot'
+      );
+      expect(screen.queryByRole('button', { name: /Resume/ })).not.toBeInTheDocument();
+    });
+
+    it('opens from a cleanup run, lists only its books and says the run never resumes', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          if (String(url).includes('/operations/op-night/result')) {
+            return json(200, {
+              data: {
+                result_data: {
+                  swap_incomplete: 2,
+                  swap_incomplete_version_ids: ['book-lh-out', 'book-lh-in', 'gone-ver'],
+                },
+              },
+            });
+          }
+          if (String(url).includes('/audiobooks/swap-incomplete')) {
+            return swapsResponse([stuckBook('book-lh'), stuckBook('book-other')]);
+          }
+          return listResponse([]);
+        })
+      );
+      renderWithProviders(<TrashedVersions />, {
+        initialEntries: ['/versions?op=op-night&set=swap_incomplete'],
+      });
+
+      expect(await screen.findByTestId('unfinished-swap-book-lh')).toBeInTheDocument();
+      expect(screen.queryByTestId('unfinished-swap-book-other')).not.toBeInTheDocument();
+      expect(screen.getByText(/does not resume a swap/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/1 version of that cleanup run is not in an unfinished swap any more/)
+      ).toBeInTheDocument();
+    });
+
+    it('shows the load error instead of an empty list', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) =>
+          String(url).includes('/audiobooks/swap-incomplete')
+            ? json(500, { error: 'boom' })
+            : listResponse([])
+        )
+      );
+      renderWithProviders(<TrashedVersions />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Unfinished swaps' }));
+      expect(await screen.findByText('Failed to load the unfinished swaps')).toBeInTheDocument();
+      expect(screen.queryByText('No unfinished swaps.')).not.toBeInTheDocument();
     });
   });
 });

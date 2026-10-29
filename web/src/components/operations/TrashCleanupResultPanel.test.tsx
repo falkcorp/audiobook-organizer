@@ -1,7 +1,7 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6255d3b3-6c19-482d-a750-5e14a4ad74e5
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
@@ -133,6 +133,44 @@ describe('TrashCleanupResultPanel', () => {
     expect(line).toHaveTextContent('kept in the trash');
     expect(line).toHaveTextContent('the book still plays its file');
     expect(line).toHaveTextContent('Nothing was deleted');
+  });
+
+  it('lists the books of an unfinished swap with their paths and says nothing was moved', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: {
+        purged: 0,
+        swap_incomplete: 2,
+        swap_incomplete_version_ids: ['v-out', 'v-in'],
+        swap_incomplete_book_ids: ['book-long-halloween'],
+        swap_incomplete_file_paths: ['/lib/Gotham/The Long Halloween'],
+      },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-6" />);
+
+    const line = await screen.findByTestId('trash-cleanup-swap_incomplete');
+    expect(screen.getByRole('link', { name: '2 versions' })).toHaveAttribute(
+      'href',
+      '/versions?op=op-night-6&set=swap_incomplete'
+    );
+    expect(line).toHaveTextContent('swap that did not finish');
+    expect(line).toHaveTextContent('no active version');
+    expect(line).toHaveTextContent('moved nothing');
+    expect(line).toHaveTextContent('Unfinished swaps');
+    // It is no trash group.
+    expect(line).not.toHaveTextContent('left in the trash');
+
+    const button = screen.getByRole('button', { name: '1 book path to repair' });
+    expect(screen.queryByText('/lib/Gotham/The Long Halloween')).not.toBeInTheDocument();
+    await userEvent.setup().click(button);
+    expect(await screen.findByText('/lib/Gotham/The Long Halloween')).toBeInTheDocument();
+  });
+
+  it('shows no unfinished-swap line when none is stuck', async () => {
+    mockedResult.mockResolvedValue({ result_data: { purged: 1 } });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-7" />);
+
+    await screen.findByTestId('trash-cleanup-result');
+    expect(screen.queryByTestId('trash-cleanup-swap_incomplete')).not.toBeInTheDocument();
   });
 
   it('links the needs-attention count to its versions and explains it', async () => {

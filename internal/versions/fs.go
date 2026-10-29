@@ -1,7 +1,7 @@
 // file: internal/versions/fs.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c2a1f8d-4b3e-4f70-a9c5-2e8d0f1b9a47
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 //
 // Filesystem primitives for the `.versions/{id}/` layout (spec 3.1).
 //
@@ -14,10 +14,9 @@
 // A source that is missing is an error, never "already moved": taking a file at
 // the destination to be the missing source adopts whatever is there (another
 // book's file with the same name), and the swap that rests on it then
-// trashes and purges the real audio. Resuming a half-done swap is not
-// implemented (ResumeVersionSwaps is a stub); when it is, it has to prove a
-// file was moved by the swap (the transitional statuses and the same inode),
-// not infer it from names.
+// trashes and purges the real audio. ResumeVersionSwap (swap_resume.go) resumes
+// a half-done swap and does not infer a move from names either: it finds each
+// file at exactly one of the two places it can be, or refuses.
 
 package versions
 

@@ -23655,6 +23655,61 @@ func (_c *MockStore_ListSoftDeletedBooks_Call) RunAndReturn(run func(limit int, 
 	return _c
 }
 
+// ListSwappingBookVersions provides a mock function for the type MockStore
+func (_mock *MockStore) ListSwappingBookVersions() ([]database.BookVersion, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListSwappingBookVersions")
+	}
+
+	var r0 []database.BookVersion
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookVersion, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.BookVersion); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookVersion)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListSwappingBookVersions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSwappingBookVersions'
+type MockStore_ListSwappingBookVersions_Call struct {
+	*mock.Call
+}
+
+// ListSwappingBookVersions is a helper method to define mock.On call
+func (_e *MockStore_Expecter) ListSwappingBookVersions() *MockStore_ListSwappingBookVersions_Call {
+	return &MockStore_ListSwappingBookVersions_Call{Call: _e.mock.On("ListSwappingBookVersions")}
+}
+
+func (_c *MockStore_ListSwappingBookVersions_Call) Run(run func()) *MockStore_ListSwappingBookVersions_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_ListSwappingBookVersions_Call) Return(bookVersions []database.BookVersion, err error) *MockStore_ListSwappingBookVersions_Call {
+	_c.Call.Return(bookVersions, err)
+	return _c
+}
+
+func (_c *MockStore_ListSwappingBookVersions_Call) RunAndReturn(run func() ([]database.BookVersion, error)) *MockStore_ListSwappingBookVersions_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListTrashedBookVersions provides a mock function for the type MockStore
 func (_mock *MockStore) ListTrashedBookVersions() ([]database.BookVersion, error) {
 	ret := _mock.Called()

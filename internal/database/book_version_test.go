@@ -1,7 +1,7 @@
 // file: internal/database/book_version_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 7a3d9e1c-5b4f-4a60-b8c5-2e7f0c1b9a48
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package database
 
@@ -175,6 +175,41 @@ func TestBookVersion_ListTrashedAndPurged(t *testing.T) {
 	// Includes both inactive_purged and blocked_for_redownload per spec.
 	if len(purged) != 2 {
 		t.Errorf("purged = %d, want 2 (inactive_purged + blocked_for_redownload)", len(purged))
+	}
+}
+
+// ListSwappingBookVersions lists exactly the versions a swap left in
+// swapping_out / swapping_in, and no trash, active, alt or purge-state version.
+func TestBookVersion_ListSwapping(t *testing.T) {
+	store, err := NewPebbleStoreInMemory("db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	want := map[string]bool{}
+	for _, st := range []string{
+		BookVersionStatusSwappingOut, BookVersionStatusSwappingIn, BookVersionStatusActive,
+		BookVersionStatusAlt, BookVersionStatusTrash, BookVersionStatusInactivePurged,
+	} {
+		v, err := store.CreateBookVersion(&BookVersion{BookID: "b-" + st, Status: st, Format: "m4b", Source: "imported"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[v.ID] = st == BookVersionStatusSwappingOut || st == BookVersionStatusSwappingIn
+	}
+
+	got, err := store.ListSwappingBookVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListSwappingBookVersions = %d versions, want 2 (swapping_out + swapping_in)", len(got))
+	}
+	for _, v := range got {
+		if !want[v.ID] {
+			t.Errorf("listed %s in status %s, which is not a swap in flight", v.ID, v.Status)
+		}
 	}
 }
 

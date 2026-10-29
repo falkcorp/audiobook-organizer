@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
@@ -131,7 +131,7 @@ func refusePurging(v *database.BookVersion, action string) error {
 // ErrSwapIncomplete, or the process died). Its files may be in two places and the
 // book's file_path and rows may name either, so the version is not the caller's
 // to trash: 14 days later the cleanup would delete files the book plays. The
-// server answers it with a 409. There is no resume yet; a person repairs it.
+// server answers it with a 409; ResumeVersionSwap repairs the book.
 var ErrVersionSwapping = errors.New("the version is part of a swap that did not finish")
 
 // refuseSwapping refuses a lifecycle step on a version whose swap has started
@@ -142,7 +142,7 @@ func refuseSwapping(v *database.BookVersion, action string) error {
 	}
 	if v.Status == database.BookVersionStatusSwappingOut || v.Status == database.BookVersionStatusSwappingIn {
 		return fmt.Errorf("%s version %s: %w (it is %s: a swap of this book stopped half way and its files may be in two places; "+
-			"it needs repair, and trashing it could lead to the files the book plays being deleted)", action, v.ID, ErrVersionSwapping, v.Status)
+			"it needs ResumeVersionSwap, and trashing it could lead to the files the book plays being deleted)", action, v.ID, ErrVersionSwapping, v.Status)
 	}
 	return nil
 }
@@ -1342,6 +1342,17 @@ type CleanupResult struct {
 	// the version is never claimed; it stays listed here until the book's path
 	// is fixed or the version restored.
 	NothingServed []KeptVersion
+	// SwapIncomplete are the books with a version left in swapping_out/swapping_in
+	// by a version swap that did not finish (ListSwapIncompleteBooks): each has no
+	// active version until ResumeVersionSwap repairs it. The run only reports
+	// them; it moves nothing. Not a failure and not counted in Failed, and listed
+	// again every run until repaired.
+	SwapIncomplete []SwapIncompleteBook
+	// SwapIncompleteErr is why SwapIncomplete could not be read, when it could
+	// not. It is not in the error CleanupTrashedVersions returns, which is about
+	// the purges (and the merge-lock streak is judged by it); the caller reports
+	// it as a failure of the night.
+	SwapIncompleteErr error
 	// StoppedForMerge is set when a merge or combine held the merge lock for the
 	// whole of BackgroundMergeLockWait, so the run stopped there: the versions
 	// from that one on were not attempted and are picked up by the next run.
@@ -1554,6 +1565,13 @@ trashLoop:
 		lifecycleLog.Warn("trash cleanup: %d version(s) are purge_failed (a file cannot be removed) and need the owner: %s; not retried",
 			n, keptVersionIDs(res.NeedsAttention))
 	}
+	// Read-only, after the purges, so a failure here never holds one up.
+	if res.SwapIncomplete, res.SwapIncompleteErr = ListSwapIncompleteBooks(store); res.SwapIncompleteErr != nil {
+		lifecycleLog.Warn("trash cleanup: could not list the books whose version swap did not finish: %v", res.SwapIncompleteErr)
+	} else if n := len(res.SwapIncomplete); n > 0 {
+		lifecycleLog.Warn("trash cleanup: %d book(s) have a version swap that did not finish and no active version (resume the swap from the Version Management page): %s",
+			n, swapIncompleteBookIDs(res.SwapIncomplete))
+	}
 	if res.Failed > 0 {
 		lifecycleLog.Warn("trash cleanup: purged %d, failed %d of %d trashed version(s) (%s); the failed ones stay in the trash and are retried next run",
 			res.Purged, res.Failed, len(trashed), strings.Join(failedIDs, ", "))
@@ -1561,6 +1579,14 @@ trashLoop:
 			res.Failed, len(trashed), res.Purged, strings.Join(failedIDs, ", "), errors.Join(failures...))
 	}
 	return res, nil
+}
+
+func swapIncompleteBookIDs(books []SwapIncompleteBook) string {
+	ids := make([]string, len(books))
+	for i, b := range books {
+		ids[i] = b.BookID
+	}
+	return strings.Join(ids, ", ")
 }
 
 // noteServed files a purge that left a version in the trash because a live book

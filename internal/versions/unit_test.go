@@ -1,7 +1,7 @@
 // file: internal/versions/unit_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -213,6 +213,8 @@ func TestCheckFingerprint_ActiveNotBlocked(t *testing.T) {
 func TestCleanupTrashedVersions_EmptyList(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	mockStore.EXPECT().ListTrashedBookVersions().Return([]database.BookVersion{}, nil)
+	// The run also lists the swaps that did not finish (read-only).
+	mockStore.EXPECT().ListSwappingBookVersions().Return([]database.BookVersion{}, nil)
 
 	purged, failed, err := cleanupNow(mockStore)
 	assert.Equal(t, 0, purged)

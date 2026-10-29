@@ -378,7 +378,6 @@ internal/versionprimary.TierName
 internal/versions.EnsureVersionsDir
 internal/versions.MoveFromVersionsDir
 internal/versions.MoveToVersionsDir
-internal/versions.ResumeVersionSwaps
 internal/versions.RunVersionSwap
 internal/versions.filePaths
 internal/versions.filesForVersion

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_swap_hold_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e27b94c1-3d58-4a60-b9f2-1c8d05a7e346
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -24,7 +24,7 @@ func (rf *retiredFixture) stickSwap(name, status string) *database.BookVersion {
 }
 
 // S1 of the review of #4236: neither the fixer nor RetireBookFiles looked for a
-// version stuck in swapping_in/swapping_out (TODO-SWAP-STUCK-RECOVERY). A shell
+// version stuck in swapping_in/swapping_out (versions.ResumeVersionSwap repairs it). A shell
 // whose swap did not finish is planned held (retry_later), under the fingerprint
 // it would have without the hold, so the same plan applies once the swap is
 // finished; nothing is written meanwhile.
