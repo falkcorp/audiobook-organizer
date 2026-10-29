@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -130,6 +130,9 @@ type MetadataBookStore interface {
 	// GetBookAuthors reads the author join before a bulk apply, so undo can
 	// restore it together with the author column.
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	// The book's file rows, for the runtime the transcription runtime check
+	// compares (metabatch.MergeRanker).
+	database.BookFilesGetter
 }
 
 // MetadataStore is the database subset the metadata handlers require, kept as a

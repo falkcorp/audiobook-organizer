@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-12
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -422,6 +422,16 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			if th.title != "" && !transcribedTitleAgrees(meta.Title, meta.SeriesPosition, th.title) {
 				slog.Debug("auto-fetch: candidate title disagrees with transcribed title; skipping auto-apply",
 					"name", src.Name(), "candidate_title", meta.Title, "transcribed_title", th.title)
+				continue
+			}
+
+			// The audio intro alone identified this candidate (the book's own
+			// title does not agree), and its runtime does not fit the book's
+			// files: a fragment of a long book carries the same intro. Not
+			// applied; the cached candidate stays for review, flagged.
+			if chk := mfs.transcriptionOnlyIdentification(book, meta, th); chk != nil {
+				autoFetchLog.Debug("auto-fetch: %s candidate %q agrees only by the audio intro and its runtime does not fit the book's files (%s); not applied",
+					src.Name(), logger.SanitizeLogValue(meta.Title), chk.Verdict)
 				continue
 			}
 

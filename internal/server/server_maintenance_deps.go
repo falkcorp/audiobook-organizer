@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.75.4
+// version: 1.75.5
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -856,7 +856,28 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 	} else if why != "" {
 		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
-	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, ManualOnly: best.ManualOnly, Score: best.Score}, true, nil
+	// The live runtime gate. The op's own title leg IS a transcription
+	// agreement, so the candidate must also fit the book's runtime. The
+	// candidate is still returned (found) with RuntimeUnverified set, so the
+	// op counts the book in its dry run instead of silently dropping it;
+	// ApplyTranscriptionCandidate re-checks and refuses it.
+	runtimeUnverified := transcriptionRuntimeUnverified(s.store, book, &best) != nil
+	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, ManualOnly: best.ManualOnly, Score: best.Score, RuntimeUnverified: runtimeUnverified}, true, nil
+}
+
+// transcriptionRuntimeUnverified is the live runtime gate of the transcription
+// auto-match: nil when the candidate's runtime fits the book's files, the
+// verdict otherwise (fragment, mismatch, unknown). It reads the book's files
+// now; it never trusts the stamp a cached row carries, which may predate the
+// last file change. An unreadable file list yields an unknown runtime, which
+// refuses (the safe direction).
+func transcriptionRuntimeUnverified(files database.BookFilesGetter, book *database.Book, cand *metafetch.MetadataCandidate) *metafetch.TranscriptionRuntimeCheck {
+	rt, err := database.LoadBookRuntime(files, book)
+	if err != nil {
+		transcriptionApplyLog.Warn("transcription runtime gate: book files unreadable, runtime treated as unknown: book_id=%s err=%v",
+			logger.SanitizeLogValue(book.ID), err)
+	}
+	return metafetch.TranscriptionRuntimeVerdict(rt, cand.DurationSec)
 }
 
 // transcriptionApplyLog is the process log of ApplyTranscriptionCandidate's
@@ -1069,6 +1090,13 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	if len(fields) == 0 {
 		return fmt.Errorf("book %s: %w", bookID, maintenanceplugin.ErrTranscriptionNothingToFill)
 	}
+	// LIVE RUNTIME GATE: this op's match is a transcription agreement, which
+	// alone no longer confirms a book (a CD-sized fragment of a long book
+	// carries the same intro). Re-checked against the files as they are now.
+	if chk := transcriptionRuntimeUnverified(s.store, book, &cand); chk != nil {
+		return fmt.Errorf("%w: book %s: %s: %s", maintenanceplugin.ErrTranscriptionRuntimeUnverified, bookID, chk.Verdict, chk.Detail)
+	}
+
 	_, err = s.metadataFetchService.ApplyMetadataCandidateWithOptions(bookID, cand, fields,
 		metafetch.ApplyOptions{FillOnly: true, RefuseEmptyWrite: true})
 	if errors.Is(err, metafetch.ErrNothingToApply) {

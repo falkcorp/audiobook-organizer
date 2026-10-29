@@ -1,7 +1,7 @@
 // file: internal/server/transcription_identity_parity_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0c9b742a-6fd1-4ae1-bd10-454a241b3df7
-// last-edited: 2026-09-28
+// last-edited: 2026-10-29
 //
 // maintenance.auto-match-transcribed's apply (ApplyTranscriptionCandidate)
 // must judge a cached row's identity exactly as the bulk-apply planner
@@ -42,6 +42,15 @@ func newParityFixture(t *testing.T, results []metadata.BookMetadata) *parityFixt
 	return &parityFixture{t: t, store: store, mfs: mfs, s: &Server{store: store, metadataFetchService: mfs}}
 }
 
+// addTenHourFile gives the book one measured 10 h file, the runtime the
+// fixture's candidates carry, so the apply's live runtime gate passes and
+// these tests exercise the identity check.
+func (f *parityFixture) addTenHourFile(bookID string) {
+	f.t.Helper()
+	bf := fixtureTenHourFile(bookID)
+	require.NoError(f.t, f.store.CreateBookFile(&bf))
+}
+
 // verdicts returns whether the planner and ApplyTranscriptionCandidate each
 // read the book's cache row as identity_stale, and the apply's error.
 func (f *parityFixture) verdicts(id, gatedTitle, gatedAuthor string) (plannerStale, applyStale bool, applyErr error) {
@@ -57,11 +66,12 @@ func (f *parityFixture) verdicts(id, gatedTitle, gatedAuthor string) (plannerSta
 // fingerprint proves the author), stripped of its fingerprint, and after the
 // author changed -- both readers must agree on every one.
 func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Valis(t *testing.T) {
-	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick", Series: "Valis Trilogy"}})
+	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick", Series: "Valis Trilogy", DurationSec: fixtureTenHourSec}})
 	pkd, err := f.store.CreateAuthor("Philip K. Dick")
 	require.NoError(t, err)
 	b, err := f.store.CreateBook(&database.Book{Title: "Valis", FilePath: "/lib/Unknown Author/Valis/Valis.m4b", AuthorID: &pkd.ID})
 	require.NoError(t, err)
+	f.addTenHourFile(b.ID)
 	_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, "Valis", "", "", "", metafetch.SearchOptions{})
 	require.NoError(t, err)
 
@@ -103,13 +113,14 @@ func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_Valis(t *testing.
 // transcription; the apply must too, and fills the title. The old check
 // (Book.Author snapshot, stored title) refused it.
 func TestApplyTranscriptionCandidate_IdentityParityWithPlanner_TranscribedQuery(t *testing.T) {
-	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick"}})
+	f := newParityFixture(t, []metadata.BookMetadata{{Title: "Valis", Author: "Philip K. Dick", DurationSec: fixtureTenHourSec}})
 	pkd, err := f.store.CreateAuthor("Philip K. Dick")
 	require.NoError(t, err)
 	heard := "Valis"
 	b, err := f.store.CreateBook(&database.Book{Title: "", FilePath: "/lib/Unknown Author/Unknown Title/book.m4b",
 		AuthorID: &pkd.ID, TranscribedTitle: &heard})
 	require.NoError(t, err)
+	f.addTenHourFile(b.ID)
 	_, err = f.mfs.FetchAndCacheLimited(context.Background(), nil, b.ID, heard, "Philip K. Dick", "", "", metafetch.SearchOptions{})
 	require.NoError(t, err)
 

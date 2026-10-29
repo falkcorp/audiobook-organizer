@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.44.2
+// version: 1.44.3
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-29
 
@@ -1706,7 +1706,8 @@ func asinLookupAllowed(opts SearchOptions, sources []metadata.MetadataSource) bo
 
 // filterCoverlessCandidates drops candidates with no CoverURL, except:
 //   - the direct ASIN-lookup candidate (Source == "Audnexus (Audible)"),
-//   - any TranscriptionBoosted candidate,
+//   - any TranscriptionBoosted candidate, and any whose transcription match
+//     the runtime did not confirm (TranscriptionRuntimeCheck): review must see it,
 //   - the single highest-scored candidate in the input slice.
 //
 // If every candidate lacks a cover, the input is returned unchanged.
@@ -1743,7 +1744,7 @@ func filterCoverlessCandidates(candidates []MetadataCandidate) []MetadataCandida
 			withCover = append(withCover, c)
 		case c.Source == "Audnexus (Audible)":
 			withCover = append(withCover, c)
-		case c.TranscriptionBoosted:
+		case c.TranscriptionBoosted, c.TranscriptionRuntimeCheck != nil:
 			withCover = append(withCover, c)
 		case i == bestIdx:
 			withCover = append(withCover, c)

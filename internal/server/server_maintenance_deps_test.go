@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -23,6 +23,16 @@ import (
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 )
 
+// fixtureTenHourSec is the runtime of the one file fixtureTenHourFile returns.
+const fixtureTenHourSec = 36000
+
+// fixtureTenHourFile is a measured 10 h book file (36000 s at 64 kbit/s is
+// 288 MB, so the size and duration agree and are read as seconds).
+func fixtureTenHourFile(bookID string) database.BookFile {
+	return database.BookFile{ID: bookID + "-f1", BookID: bookID, FilePath: "/library/Fixture/book.m4b",
+		FileSize: 288_000_000, Duration: fixtureTenHourSec}
+}
+
 // newTOCTOUCacheStore builds a MockStore whose GetMetadataCacheFunc returns
 // firstEntry on its first invocation and secondEntry on every subsequent
 // invocation, simulating a cache refresh between the gate read (via
@@ -39,6 +49,12 @@ func newTOCTOUCacheStore(t *testing.T, book *database.Book, firstEntry, secondEn
 		},
 		GetBookTagsFunc: func(bookID string) ([]string, error) {
 			return nil, nil
+		},
+		// One measured 10 h file: the runtime mustCandidateCache gives its
+		// candidates, so the live runtime gate of the transcription apply
+		// passes unless a test makes it fail.
+		GetBookFilesFunc: func(bookID string) ([]database.BookFile, error) {
+			return []database.BookFile{fixtureTenHourFile(bookID)}, nil
 		},
 		GetMetadataCacheFunc: func(bookID string) (*database.MetadataCandidateCache, error) {
 			calls++
@@ -57,7 +73,21 @@ func newTOCTOUCacheStore(t *testing.T, book *database.Book, firstEntry, secondEn
 
 // mustCandidateCache marshals a single candidate into a
 // database.MetadataCandidateCache the way the real cache layer stores it.
+//
+// A candidate with no runtime of its own gets fixtureTenHourSec, the runtime of
+// the file newTOCTOUCacheStore gives the book: the transcription apply's live
+// runtime gate refuses a candidate it cannot compare, and these tests are
+// about the other guards.
 func mustCandidateCache(t *testing.T, bookID string, cand metafetch.MetadataCandidate) *database.MetadataCandidateCache {
+	t.Helper()
+	if cand.DurationSec == 0 {
+		cand.DurationSec = fixtureTenHourSec
+	}
+	return marshalCandidateCache(t, bookID, cand)
+}
+
+// marshalCandidateCache stores cand exactly as given.
+func marshalCandidateCache(t *testing.T, bookID string, cand metafetch.MetadataCandidate) *database.MetadataCandidateCache {
 	t.Helper()
 	raw, err := json.Marshal(cand)
 	if err != nil {

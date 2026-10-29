@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7e9b2a-5c8d-4e1f-a0b3-6d9c2e5f8a1b
-// last-edited: 2026-10-12
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -126,7 +126,10 @@ type autoMatchDeps struct {
 	// candManualOnly is the local catalog stage's manual-only tag on that
 	// candidate.
 	candManualOnly bool
-	applyFn        func(ctx context.Context, bookID, candTitle, candAuthor string) error
+	// candRuntimeUnverified is the live runtime gate's verdict on that
+	// candidate (TranscriptionCandidate.RuntimeUnverified).
+	candRuntimeUnverified bool
+	applyFn               func(ctx context.Context, bookID, candTitle, candAuthor string) error
 	// call counters
 	searchCalled int
 	applyCalled  int
@@ -136,7 +139,7 @@ func (d *autoMatchDeps) SearchTranscriptionCandidate(ctx context.Context, bookID
 	d.searchCalled++
 	if d.searchFn != nil {
 		title, author, score, found, err := d.searchFn(ctx, bookID, transTitle, transAuthor)
-		return TranscriptionCandidate{Title: title, Author: author, Series: d.candSeries, ManualOnly: d.candManualOnly, Score: score}, found, err
+		return TranscriptionCandidate{Title: title, Author: author, Series: d.candSeries, ManualOnly: d.candManualOnly, Score: score, RuntimeUnverified: d.candRuntimeUnverified}, found, err
 	}
 	return TranscriptionCandidate{}, false, nil
 }
@@ -398,4 +401,61 @@ func TestAutoMatchTranscribed_SeriesMarkersSkippedInDryRun(t *testing.T) {
 			t.Errorf("searched %d books, want 0", deps.searchCalled)
 		}
 	})
+}
+
+// A candidate whose runtime does not fit the book's files (the live gate, set
+// by the server's search half) is counted and never applied: a dry run
+// reports it as runtime unverified, not as eligible, and a real run does not
+// call the apply at all.
+func TestAutoMatchTranscribed_RuntimeUnverifiedIsCountedNotApplied(t *testing.T) {
+	trans := "The Court of Owls"
+	for _, dry := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry_run=%v", dry), func(t *testing.T) {
+			books := []database.Book{{ID: "b1", Title: "", TranscribedTitle: new(trans)}}
+			deps := &autoMatchDeps{
+				candRuntimeUnverified: true,
+				searchFn: func(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
+					return trans, "Bruce Wayne", 3.09, true, nil
+				},
+			}
+			p := newAutoMatchPlugin(books, deps)
+			rep := &progressReporter{}
+			if err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(dry, 0), rep); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if deps.applyCalled != 0 {
+				t.Fatalf("apply called %d times, want 0", deps.applyCalled)
+			}
+			if s := rep.lastMsg; !strings.Contains(s, "eligible 0") || !strings.Contains(s, "runtime unverified 1") {
+				t.Errorf("summary %q does not report the runtime refusal", s)
+			}
+		})
+	}
+}
+
+// The server's apply re-checks the files and may refuse what the search half
+// passed (the files changed in between): a skip, not a failure, counted as
+// runtime unverified and not as eligible.
+func TestAutoMatchTranscribed_ServerRuntimeRefusalIsASkip(t *testing.T) {
+	trans := "The Court of Owls"
+	books := []database.Book{{ID: "b1", Title: "", TranscribedTitle: new(trans)}}
+	deps := &autoMatchDeps{
+		searchFn: func(_ context.Context, _, _, _ string) (string, string, float64, bool, error) {
+			return trans, "Bruce Wayne", 3.09, true, nil
+		},
+		applyFn: func(_ context.Context, id, _, _ string) error {
+			return fmt.Errorf("book %s: %w: fragment", id, ErrTranscriptionRuntimeUnverified)
+		},
+	}
+	p := newAutoMatchPlugin(books, deps)
+	rep := &progressReporter{}
+	if err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(false, 0), rep); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps.applyCalled != 1 {
+		t.Fatalf("apply called %d times, want 1", deps.applyCalled)
+	}
+	if s := rep.lastMsg; !strings.Contains(s, "eligible 0, applied 0") || !strings.Contains(s, "runtime unverified 1") {
+		t.Errorf("summary %q does not report the skip", s)
+	}
 }

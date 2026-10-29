@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.102.3
+// version: 1.102.4
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -848,6 +848,11 @@ type TranscriptionCandidate struct {
 	ManualOnly bool
 	// Score may exceed 1.0 (uncapped scale with transcription boosts applied).
 	Score float64
+	// RuntimeUnverified is true when the candidate's runtime does not fit the
+	// book's files (a fragment, a mismatch, or no runtime to compare), by the
+	// live gate metafetch.TranscriptionRuntimeVerdict. The op counts the book
+	// and leaves it for review; ApplyTranscriptionCandidate refuses it too.
+	RuntimeUnverified bool
 }
 
 // TranscriptionRunners covers transcription candidate search and apply.
@@ -1239,6 +1244,14 @@ var _ = time.Duration(0)
 // 2026-09-14), so there is nothing it may write: nothing is written, the book
 // is skipped, not failed, and stays unreviewed for the ordinary review lane.
 var ErrTranscriptionNothingToFill = errors.New("nothing to fill: title and author filled, or no writable value for the empty one")
+
+// ErrTranscriptionRuntimeUnverified is what ApplyTranscriptionCandidate returns
+// when the matched candidate's runtime does not fit the book's files (the live
+// gate metafetch.TranscriptionRuntimeVerdict): a transcription agreement alone
+// does not confirm a book, since a fragment of a long book carries the same
+// intro. Nothing is written and the book is skipped, not failed; it stays in
+// review with its flag.
+var ErrTranscriptionRuntimeUnverified = errors.New("candidate runtime does not fit the book's files")
 
 // ErrTranscriptionOwnerManualOnly is what ApplyTranscriptionCandidate returns
 // for a book the owner applies by hand (Doctor Who / Big Finish / Torchwood,

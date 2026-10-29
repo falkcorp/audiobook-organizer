@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.52.1
+// version: 1.53.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-29
 //

@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.1.4
+// version: 2.1.5
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
-// last-edited: 2026-10-19
+// last-edited: 2026-10-29
 //
 // The batch candidate fetch's provider fallback: Open Library, then Google
 // Books, asked only for books the rest of the chain left without a usable
@@ -374,7 +374,7 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 		// the search's own hash would not find and would replace. Only a
 		// vouched row: in.entry may be one the verdict refused.
 		fbOpts := metafetch.SearchOptions{OnlySources: []string{fb.name}, BypassFetchCache: in.force, MergeWithCached: true,
-			MergeRank: metabatch.MergeRanker(in.store, in.book)}
+			MergeRank: metabatch.MergeRanker(in.store, in.store, in.book)}
 		fbOpts.CarryFrom(in.carryFrom)
 		entry, resp, err := mfs.FetchAndCacheWithResponse(ctx, in.limiter, in.book.ID, in.query, in.author, "", "", fbOpts)
 		if err != nil {
@@ -413,7 +413,7 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 		}
 		steps = append(steps, step)
 		record(fb, attemptOutcome, true)
-		v := metabatch.NoUsableCandidate(in.store, in.book, entry)
+		v := metabatch.NoUsableCandidate(in.store, in.store, in.book, entry)
 		if v.Usable {
 			clearDeferral(mfs, in.book.ID, entry)
 			return finish(candidateResultFromEntry(in.store, in.bookInfo, in.book.ID, in.query, entry))

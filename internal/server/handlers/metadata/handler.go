@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.6
+// version: 1.45.7
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -622,7 +622,7 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		// where the review lane and every bulk apply read.
 		opts := metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true, BypassFetchCache: refresh}
 		if book, berr := h.store.GetBookByID(id); berr == nil && book != nil {
-			opts.MergeRank = metabatch.MergeRanker(h.store, book)
+			opts.MergeRank = metabatch.MergeRanker(h.store, h.store, book)
 		}
 		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series, opts)
 		if err != nil {

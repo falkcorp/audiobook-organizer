@@ -133,7 +133,13 @@
         "language": "eng",
         "duration_sec": 36500,
         "duration_delta_sec": 700,
-        "transcription_boosted": false
+        "transcription_boosted": false,
+        "transcription_runtime_check": {
+          "verdict": "fragment",
+          "detail": "the files look like a fragment: about 3h00m of a 10h00m book",
+          "local_sec": 10800,
+          "cand_sec": 36000
+        }
       }
     },
     {
@@ -956,6 +962,19 @@
         "b09"
       ],
       "why": "only b09 candidate transcription_boosted",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "transcription runtime flagged",
+      "query": {
+        "transcription_runtime_flagged": "true"
+      },
+      "want_ids": [
+        "b05"
+      ],
+      "why": "only b05 candidate carries a transcription_runtime_check (the intro agreed but the runtime did not confirm it)",
       "want_runtime_hidden": 0,
       "server_only": false,
       "want_total": 1

@@ -1,7 +1,7 @@
 // file: internal/server/owner_rejected_rerank.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f8c8e21e-cb61-4f38-900e-80bbda768cca
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 
 package server
 
@@ -35,6 +35,9 @@ var ownerRejectedLog = logger.New("server.owner-rejected")
 type rerankStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	metabatch.RejectedCandidateReader
+	// The book's file rows: the runtime the apply gate's transcription runtime
+	// check ranks against.
+	database.BookFilesGetter
 }
 
 // cachedRowReranker is the metafetch.Service method that re-orders a row.
@@ -106,7 +109,7 @@ func rerankCachedRows(ctx context.Context, store rerankStore, svc cachedRowReran
 				if err != nil {
 					return nil, err
 				}
-				return metabatch.MergeRankerFor(book, rejected), nil
+				return metabatch.MergeRankerFor(book, rejected, metabatch.RuntimeLoaderFor(store, book)), nil
 			})
 			if missing {
 				atomic.AddInt64(&counts.BookMissing, 1)

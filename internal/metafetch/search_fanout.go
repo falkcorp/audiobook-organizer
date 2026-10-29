@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-10-29
 
@@ -567,11 +567,9 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 // is asked about an ASIN another source found.
 func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookRuntime localRuntime, th transcriptionHints) {
 	ctx := p.ctx
-	// The transcription-matched answer is looked up even when the book's own
-	// runtime is unknown: its runtime is what the transcription runtime gate
-	// compares (transcriptionRuntimeGate), and without one the boost is
-	// withheld for lack of a number a lookup could have supplied.
-	if !bookRuntime.informative() && th.empty() {
+	// An uninformative local runtime (no total, no size bound) cannot change
+	// any verdict, however the candidate's runtime turns out, so no lookup.
+	if !bookRuntime.informative() {
 		return
 	}
 	enabled := false
@@ -584,11 +582,11 @@ func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, 
 		return
 	}
 	done := map[string]bool{}
-	// Pass 0 spends the (single) lookup on an answer the transcription
-	// matched; pass 1 is the original rule, for any answer, when the book's
-	// own runtime can rank it.
+	// Pass 0 only REPRIORITISES: the single lookup goes to an answer the
+	// transcription matched (its runtime decides the transcription boost);
+	// pass 1 is the original rule, for any answer.
 	for pass := 0; pass < 2; pass++ {
-		if pass == 0 && th.empty() || pass == 1 && !bookRuntime.informative() {
+		if pass == 0 && th.empty() {
 			continue
 		}
 		for _, st := range states {

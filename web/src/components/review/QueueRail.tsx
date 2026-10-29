@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.20.1
+// version: 1.21.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-10-29
 //
@@ -135,7 +135,8 @@ const SWITCHES: Array<{ key: keyof MetadataFilters; label: string; help?: string
     help:
       'Only books whose audio intro matched a candidate but whose runtime did not confirm it: ' +
       'a file fragment, a runtime mismatch, or a runtime that could not be compared. ' +
-      'The match is not trusted for applying until the runtime agrees.',
+      'Only the candidate shown for each book (its top one) is checked, not the others ' +
+      'behind it. The match is not trusted for applying until the runtime agrees.',
   },
 ];
 

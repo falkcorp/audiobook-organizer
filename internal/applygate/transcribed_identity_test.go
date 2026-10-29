@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package applygate
 
@@ -102,7 +102,10 @@ func TestEvaluateTranscribed(t *testing.T) {
 				f.duration, f.cand.DurationSec = nil, 0
 				f.authors, f.cand.Author = nil, ""
 			},
-			identityErr: stale, ts: explained, wantReason: ReasonInsufficientEvidence, wantEvid: true, wantAgree: 1},
+			// With no runtime on either side the transcription cannot confirm
+			// the book (ReasonTranscriptionRuntimeUnverified); the evidence still
+			// counts the title as the one fact it is.
+			identityErr: stale, ts: explained, wantReason: ReasonTranscriptionRuntimeUnverified, wantEvid: true, wantAgree: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

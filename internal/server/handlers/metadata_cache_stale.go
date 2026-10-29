@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 
 package handlers
 
@@ -223,7 +223,7 @@ func (l *cacheRowLoader) readEntry(r *loadedCacheRow, files chunkFiles) (*metafe
 func (l *cacheRowLoader) fill(r *loadedCacheRow, entry *metafetch.MetadataCandidateCache, files chunkFiles) {
 	r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
 	r.fallbackDeferred = entry.FallbackDeferred() && r.book != nil &&
-		!metabatch.NoUsableCandidate(l.store, r.book, entry).Usable
+		!metabatch.NoUsableCandidate(l.store, files, r.book, entry).Usable
 	if entry != nil && len(entry.Candidates) > 0 {
 		r.candidateCount = len(entry.Candidates)
 		// json.RawMessage decoding copies each element, so holding the first
