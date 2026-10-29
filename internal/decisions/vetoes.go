@@ -1,5 +1,5 @@
 // file: internal/decisions/vetoes.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6a2e90c7-35d1-4b48-9f6e-d17b83a40c52
 // last-edited: 2026-10-28
 
@@ -273,17 +273,17 @@ func (s *Store) readRows(ctx context.Context) (*loadedRows, error) {
 	return rows, nil
 }
 
-// scanRows reads the three veto families from ONE snapshot and closes it
-// before returning.
-func (s *Store) scanRows(ctx context.Context) (*loadedRows, error) {
-	snap, err := s.kv.NewRawSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("decisions: open snapshot: %w", err)
-	}
-	defer func() { _ = snap.Close() }()
+// vetoRowPrefixes are the key families a RowCache holds: scanRows reads exactly
+// these, and writesVetoRows (so the generation the cache is keyed on) watches
+// exactly these. One list serves both, so a family added here is scanned AND
+// invalidates the cache, and cannot be one without the other. loadedRows.add
+// must have a case for each.
+var vetoRowPrefixes = []string{prefixActive, prefixEdge, prefixMember}
 
-	rows := &loadedRows{subjects: map[string]rejected{}}
-	if err := scanAll(ctx, snap, prefixActive, func(p database.KVPair) error {
+// add folds one stored row of the family prefix into the loaded rows.
+func (rows *loadedRows) add(prefix string, p database.KVPair) error {
+	switch prefix {
+	case prefixActive:
 		opKind, subject, ok := parseActiveKey(p.Key)
 		if !ok {
 			return fmt.Errorf("%w: unparseable active key %q", ErrCorrupt, p.Key)
@@ -293,29 +293,38 @@ func (s *Store) scanRows(ctx context.Context) (*loadedRows, error) {
 			return fmt.Errorf("%w: decode active row %s: %w", ErrCorrupt, p.Key, err)
 		}
 		rows.subjects[subjectLockKey(opKind, subject)] = rejected{hashes: row.RejectedHashes}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	if err := scanAll(ctx, snap, prefixEdge, func(p database.KVPair) error {
+	case prefixEdge:
 		typ, lo, hi, fam, ok := parseEdgeKey(p.Key)
 		if !ok {
 			return fmt.Errorf("%w: unparseable edge key %q", ErrCorrupt, p.Key)
 		}
 		rows.edges = append(rows.edges, rawEdge{typ, lo, hi, fam})
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	if err := scanAll(ctx, snap, prefixMember, func(p database.KVPair) error {
+	case prefixMember:
 		typ, id, fam, rid, ok := parseMemberKey(p.Key)
 		if !ok {
 			return fmt.Errorf("%w: unparseable membership key %q", ErrCorrupt, p.Key)
 		}
 		rows.members = append(rows.members, rawMember{typ, id, fam, rid})
-		return nil
-	}); err != nil {
-		return nil, err
+	default:
+		return fmt.Errorf("%w: veto row family %q has no reader", ErrCorrupt, prefix)
+	}
+	return nil
+}
+
+// scanRows reads the veto families (vetoRowPrefixes) from ONE snapshot and
+// closes it before returning.
+func (s *Store) scanRows(ctx context.Context) (*loadedRows, error) {
+	snap, err := s.kv.NewRawSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("decisions: open snapshot: %w", err)
+	}
+	defer func() { _ = snap.Close() }()
+
+	rows := &loadedRows{subjects: map[string]rejected{}}
+	for _, prefix := range vetoRowPrefixes {
+		if err := scanAll(ctx, snap, prefix, func(p database.KVPair) error { return rows.add(prefix, p) }); err != nil {
+			return nil, err
+		}
 	}
 	return rows, nil
 }

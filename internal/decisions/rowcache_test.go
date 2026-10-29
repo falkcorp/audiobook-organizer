@@ -1,5 +1,5 @@
 // file: internal/decisions/rowcache_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 40be71d2-95a3-4c08-b6e1-7f2d83a9c514
 // last-edited: 2026-10-28
 
@@ -131,14 +131,22 @@ func TestRowCache_OnlyVetoRowWritesInvalidate(t *testing.T) {
 	}
 }
 
-// The rows a RowCache holds are exactly the prefixes scanRows reads and
-// writesVetoRows recognises: a prefix added to one and not the other would
-// leave the cache stale or needlessly cold.
-func TestWritesVetoRows_NamesTheScannedPrefixes(t *testing.T) {
-	for _, prefix := range []string{prefixActive, prefixEdge, prefixMember} {
+// writesVetoRows watches vetoRowPrefixes, the list scanRows reads, and nothing
+// else: every veto family invalidates on its own (a batch with only that key),
+// every label family does not, and every listed family has a reader in
+// loadedRows.add.
+func TestWritesVetoRows_WatchesTheScannedPrefixes(t *testing.T) {
+	require.ElementsMatch(t, []string{prefixActive, prefixEdge, prefixMember}, vetoRowPrefixes)
+	for _, prefix := range vetoRowPrefixes {
 		require.True(t, writesVetoRows([]database.RawWrite{{Key: prefix + "x"}}), prefix)
 		require.True(t, writesVetoRows([]database.RawWrite{{Key: prefix + "x", Delete: true}}), prefix+" delete")
+		// A reader exists for the family: a malformed key is refused as corrupt,
+		// never as an unknown family.
+		err := (&loadedRows{subjects: map[string]rejected{}}).add(prefix, database.KVPair{Key: prefix + "malformed"})
+		require.ErrorIs(t, err, ErrCorrupt, prefix)
+		require.NotContains(t, err.Error(), "has no reader", prefix)
 	}
+	require.ErrorContains(t, (&loadedRows{}).add("decision:zz:", database.KVPair{}), "has no reader")
 	for _, prefix := range []string{prefixRecord, prefixVerdict, prefixEntity, prefixOp} {
 		require.False(t, writesVetoRows([]database.RawWrite{{Key: prefix + "x"}}), prefix)
 	}

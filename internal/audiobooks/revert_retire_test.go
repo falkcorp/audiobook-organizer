@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
 // last-edited: 2026-10-28
 
@@ -457,6 +457,10 @@ func TestRetireUndoer_PlanAndRevertAShell(t *testing.T) {
 	for _, id := range fx.ids() {
 		assert.Equal(t, fx.shell.ID, view(t, fx.st, fx.shell.ID, id).BookID)
 	}
+	hist := fx.history(t)
+	require.Len(t, hist, 1, "the combine undo's reversal records the retire as undone, once")
+	assert.Equal(t, decisions.DecisionUndone, hist[0].Decision)
+	assert.Equal(t, "ver-undoer", hist[0].Snapshot.Current["version_id"])
 	plan, err = planRetire(u, "op-undoer", fx.shell.ID)
 	require.NoError(t, err)
 	assert.False(t, plan.Live, "a reverted retire is a dead link")

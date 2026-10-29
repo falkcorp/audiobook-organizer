@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
 // last-edited: 2026-10-28
 
@@ -161,9 +161,11 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange, pl
 			if errors.Is(verdict, undo.ErrAlreadyRestored) && retired {
 				// A cut-off revert deleted the version and died before it wrote
 				// the record; the write is idempotent, so a repeat completes it.
-				// Only for a retire that took effect: a version deleted by hand,
-				// or one the operation never retired a row into, was no retire
-				// to undo.
+				// Only when the operation retired a row into the version (a
+				// non-voided book_file_retire row names it): that is all the
+				// gate tells apart. It does not detect a version deleted by
+				// hand; a retire that took effect and whose version was then
+				// deleted by hand still gets its record here.
 				rs.recordRetireUndone(c)
 			}
 			return verdict
