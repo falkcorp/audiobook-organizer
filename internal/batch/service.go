@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package batch
 
@@ -861,38 +861,17 @@ func (bs *BatchService) hardDeleteLocked(id string, purges *trashPurges) error {
 		}
 		return purges.purgeLocked(book)
 	}
-	// A retire shell owns no live row, so the owned-files check below passes
-	// it; deleting it would drop the record of where its retired versions came
-	// from. A trashed shell is refused by the purge above (purgeGate); this is
-	// the same refusal for a shell that is not in the trash.
-	if err := database.RefuseRetiredShell(bs.db, id, "hard delete"); err != nil {
-		return err
-	}
-	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
-	if !ok {
-		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
-	}
-	_, err = merge.HardDeleteKeepingUserStateLocked(merger, bs.db, book,
-		func() error {
-			if err := database.CheckBookOwnsNoFiles(bs.db, book.ID, "hard delete"); err != nil {
-				return err
-			}
-			// Under the merge lock the retire repair also takes: a shell
-			// retired since the check above is caught before the carry.
-			return database.RefuseRetiredShell(bs.db, book.ID, "hard delete")
-		},
+	// The refusals (a book that owns file rows, a retire shell), the carry, the
+	// delete and the hand-off of a deleted primary's flag are the single
+	// delete's too: one function, so the two cannot drift again
+	// (merge.HardDeleteLiveBookLocked).
+	_, err = merge.HardDeleteLiveBookLocked(bs.db, book, config.AppConfig.RootDir,
 		func() error { return bs.db.DeleteBook(book.ID) })
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, merge.ErrBookHasListeningState) {
 		return fmt.Errorf("%w; soft-delete it and purge it from the trash instead, where the progress can be moved or discarded on purpose", err)
-	}
-	if cause := merge.PrecheckCause(err); cause != nil {
-		// Refused under the merge lock with nothing moved (the files check, or
-		// the carry target no longer listed): report the precheck's own words,
-		// as the first check would, not the merge package's wrapper.
-		return cause
 	}
 	// Includes a late refusal after the carry (merge.ErrStateMovedBookKept: a
 	// file row landed from a writer that does not take the merge lock): its
