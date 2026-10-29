@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_trash_kept_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2c8f5a17-6d3b-4e90-b1a4-9e7d0c3f8b52
 // last-edited: 2026-10-29
 
@@ -45,7 +45,7 @@ func TestRunTrashCleanup_ReportsVersionsTheBookStillServes(t *testing.T) {
 	require.Equal(t, []string{
 		"Trash cleanup: kept version ver-hush of book hush in the trash: 1 path(s) kept, book still serves this file",
 		"Trash cleanup: kept version ver-year-one of book year-one in the trash: 3 path(s) kept, book still serves this file",
-		"Trash cleanup: purged 2 versions, kept 2 versions whose files the book still serves",
+		"Trash cleanup: purged 2 versions, kept 2 versions whose files the book still serves; kept-file sweep: removed 0 files, 0 notes dropped (already gone), 0 still owned, 0 kept on error",
 	}, rep.logs)
 }
 
@@ -76,7 +76,54 @@ func TestRunTrashCleanup_NothingKept(t *testing.T) {
 
 	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
 
-	require.Equal(t, []string{"Trash cleanup: purged 1 versions, kept 0 versions whose files the book still serves"}, rep.logs)
+	require.Equal(t, []string{"Trash cleanup: purged 1 versions, kept 0 versions whose files the book still serves; kept-file sweep: removed 0 files, 0 notes dropped (already gone), 0 still owned, 0 kept on error"}, rep.logs)
+}
+
+// The kept-file sweep is in the persisted result and the run's journal: what it
+// removed, what is still owned, and what it could not decide (one WARN naming
+// the versions and files, which a later run retries).
+func TestRunTrashCleanup_ReportsTheKeptFileSweep(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{
+		KeptSweep: versions.KeptSweepResult{
+			Versions: 3, Removed: 1, Gone: 1, StillKept: 2, KeptOnError: 1,
+			RemovedFiles: []versions.KeptVersion{{VersionID: "ver-year-one", BookID: "year-one", Files: servedFiles("/lib/Gotham/y1-01.m4b")}},
+			ErrorFiles:   []versions.KeptVersion{{VersionID: "ver-hush", BookID: "hush", Files: servedFiles("/lib/Gotham/hush.m4b")}},
+		},
+	}})
+	rep := &levelReporter{}
+
+	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
+
+	got, ok := rep.result.(TrashCleanupResult)
+	require.True(t, ok, "result = %#v", rep.result)
+	require.Equal(t, 1, got.KeptSweepRemoved)
+	require.Equal(t, 1, got.KeptSweepGone)
+	require.Equal(t, 2, got.KeptSweepStillKept)
+	require.Equal(t, 1, got.KeptSweepKeptOnError)
+	require.Equal(t, []string{"/lib/Gotham/y1-01.m4b"}, got.KeptSweepRemovedFilePaths)
+	require.Equal(t, []string{"ver-hush"}, got.KeptSweepKeptOnErrorVersions)
+	require.Equal(t, []string{"/lib/Gotham/hush.m4b"}, got.KeptSweepKeptOnErrorPaths)
+	var warns int
+	for i, l := range rep.levels {
+		if l == slog.LevelWarn && strings.Contains(rep.logs[i], "kept-file sweep left 1 file(s)") {
+			warns++
+			require.Contains(t, rep.logs[i], "ver-hush")
+			require.Contains(t, rep.logs[i], "/lib/Gotham/hush.m4b")
+		}
+	}
+	require.Equal(t, 1, warns, "logs = %v", rep.logs)
+	require.Contains(t, rep.logs[len(rep.logs)-1], "kept-file sweep: removed 1 files, 1 notes dropped (already gone), 2 still owned, 1 kept on error")
+}
+
+// A sweep that could not even list the purged versions fails the night.
+func TestRunTrashCleanup_KeptSweepListErrorFailsTheRun(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{KeptSweepErr: errors.New("list down")}})
+	rep := &levelReporter{}
+
+	err := p.runTrashCleanup(context.Background(), nil, rep)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "list down")
 }
 
 func stuckSwapBook() versions.SwapIncompleteBook {

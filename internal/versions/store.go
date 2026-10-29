@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-29
 
@@ -63,8 +63,19 @@ type versionPurger interface {
 	GetBookVersion(id string) (*database.BookVersion, error)
 }
 
-type TrashedVersionCleaner interface {
+// KeptSweepStore is what the kept-file sweep needs: everything the purge asks
+// (it re-asks the purge's own questions, SweepKeptFiles) plus the list of
+// purged versions. Exported: internal/server forwards its store into it.
+type KeptSweepStore interface {
 	versionPurger
+
+	// ListPurgedBookVersions lists inactive_purged versions (and
+	// blocked_for_redownload ones, which the sweep skips by status).
+	ListPurgedBookVersions() ([]database.BookVersion, error)
+}
+
+type TrashedVersionCleaner interface {
+	KeptSweepStore
 
 	// ListTrashedBookVersions lists the trash, the purges that were claimed and
 	// did not finish (status purging), so the cleanup retries those too, and
