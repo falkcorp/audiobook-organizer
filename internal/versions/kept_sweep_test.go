@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2c9e41-6b0a-4f58-a3d7-1e4b8c5f0926
 // last-edited: 2026-10-29
 
@@ -406,6 +406,33 @@ func TestSweepKeptFiles_FailedRecordStopsTheRest(t *testing.T) {
 	}
 	requireGone(t, a)
 	requireOnDisk(t, b)
+}
+
+// The owners are asked again for each path right before its unlink, as the
+// purge does: a row that starts naming the second file while the first is being
+// removed (a writer that does not take the merge lock, the library scan) keeps it.
+func TestSweepKeptFiles_RowAddedAfterTheDecisionKeepsTheFile(t *testing.T) {
+	f := newKeptFixture(t)
+	first := f.addKept(t, "kept once")
+	second := f.addKept(t, "kept once")
+	orig := removeFile
+	removeFile = func(p string) error {
+		err := orig(p)
+		if p == first {
+			f.rowOwner(t, second) // the scan imports the second file as a new book
+		}
+		return err
+	}
+	t.Cleanup(func() { removeFile = orig })
+
+	res := sweep(t, f.store, testGuard)
+
+	requireCounts(t, res, 1, 0, 1, 0)
+	requireGone(t, first)
+	requireOnDisk(t, second)
+	if got := f.kept(t); !slices.Equal(got, []string{second}) {
+		t.Fatalf("PurgeKept = %v, want only %s", got, second)
+	}
 }
 
 // Versions the caller has just purged are not asked again.
