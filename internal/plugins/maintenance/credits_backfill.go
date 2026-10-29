@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-10-29
 
@@ -519,12 +519,14 @@ var creditsBackfillClasses = []cbClassDef{
 			"(narrator_waiting_on_creator) takes the room the other books leave, in sorted order, once the books that " +
 			"create the records have their places."},
 	{cbCanceledNotWritten, cbKindInformational,
-		"The apply stopped before this book was written: it was canceled, or the scan stand-down lapsed (the error " +
-			"says which). The book has something to write and was in the run's cohort (or, when the stop came before " +
-			"the cohort was picked, was planned with something to write), but its write never started, so it is " +
-			"unchanged. Books that were written, refused, held or failed are in their own classes, and books that " +
-			"were never scanned are the difference between books_listed and books_scanned. A re-run (or the resume) " +
-			"writes the book. A book is filed here or in a write, held or error class, never in two."},
+		"Not reached before the apply stopped: it was canceled, or the scan stand-down lapsed (the error says " +
+			"which). The book has something to write and its write never started, so it is unchanged. It was either " +
+			"in the run's cohort and not yet written, or, when the stop came before the cohort was picked (during " +
+			"planning or the replan of split credits), simply planned with something to write: such a run has not " +
+			"decided which books a limit would have left out. Books that were written, refused, held or failed are in " +
+			"their own classes, and books that were never scanned are the difference between books_listed and " +
+			"books_scanned. A re-run (or the resume) writes the book. A book is filed here or in a write, held or " +
+			"error class, never in two."},
 	{cbNarratorWaitingOnCreator, cbKindInformational,
 		"A split credit whose new narrator names are created by other books of the library (each credits the name " +
 			"whole, so it creates the record without the opt-in), and none of those books is in this run's cohort " +
@@ -1062,6 +1064,13 @@ type cbRun struct {
 	// the operation's first journal row, not this attempt's startedAt, so the
 	// per-attempt startedAt above does not apply to them.
 	leftover map[int]bool
+	// leftoverSrc are the operations that named each candidate record
+	// (seedLeftovers), judged are the other operations whose journals were read,
+	// and leftoverUnsettled the leftovers the cleanup could not settle
+	// (deleteUnusedCreated); markLeftoversJudged reads all three.
+	leftoverSrc       map[int][]string
+	judged            []cbSourceOp
+	leftoverUnsettled map[int]bool
 	// settled is what settleLibrary decided (selectCohort sets it; the run logs
 	// its pass count).
 	settled cbLibrarySettle
@@ -1194,6 +1203,8 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		preexisting: make(map[int]bool, len(idx.narrators)),
 		startedAt:   started,
 		leftover:    map[int]bool{},
+
+		leftoverUnsettled: map[int]bool{},
 	}
 	for id := range idx.narrators {
 		run.preexisting[id] = true
@@ -1344,6 +1355,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// credits is deleted again, so a later run cannot link a split credit to it.
 	if params.Apply {
 		run.deleteUnusedCreated(hold == nil || !hold.Lost())
+		run.markLeftoversJudged(reporter)
 	}
 
 	earlier := 0
@@ -1468,7 +1480,7 @@ func (r *cbRun) indexNarrators() {
 // leaves the same record for every LATER operation (each limit cohort runs
 // under its own operation id), so the journals read are this operation's and
 // those of the other credits-backfill operations whose status is not completed
-// (otherCreditsBackfillOps).
+// and that no earlier apply has judged (otherCreditsBackfillOps).
 //
 // The candidates of each journal are named by its own rows, voided rows
 // included (a refused write voids its row, and the record it created stays):
@@ -1477,41 +1489,56 @@ func (r *cbRun) indexNarrators() {
 //     name, for the crash that happened before any credits_backfill row named
 //     the record.
 //
-// A candidate is kept only when it was not older than the operation that
-// journaled it (its CreatedAt is not before THAT operation's FIRST journal row;
-// an intent row bounds the record it names by its own time) and nothing links it
-// now (database.NarratorLinkCount, fail closed: a count that cannot be read
-// stops the run). A record that is linked, or older than its operation, stays an
-// ordinary preexisting record. An operation that completed is not read: its own
-// cleanup deleted or credited every record it created.
+// A candidate must lie inside the WINDOW of the operation that journaled it, or
+// it is an ordinary preexisting record whatever its name (leftoverWindow): not
+// older than the operation's first journal row, and not newer than the row that
+// names it (an intent row bounds the record it names to a few seconds after the
+// row, because CreateNarrator runs right after the intent is written) or than
+// the operation's end when its row says it ended. Without the upper bound a
+// failed operation's intent row would be read at every later apply and condemn
+// any record of that name made later by anything else (the narrator sync for an
+// imported book, say). It must also be unlinked now (database.NarratorLinkCount,
+// fail closed: a count that cannot be read stops the run).
+//
+// Every read that decides this fails closed: a journal that cannot be read, a
+// row whose id is not a ULID (so has no time), a credits_backfill row that does
+// not decode, and a name lookup that errors all stop the run with an error that
+// names the operation and the row. (A journal row is the only evidence there is,
+// so a row that cannot be read is not evidence of nothing.)
 //
 // A leftover is taken out of the lookup indexes, so the plan treats its name as
 // new: some book creates it again (CreateNarrator returns the same record) and
 // split books link to it only once that write has landed. It joins the cleanup
 // set (acc.createdRecs): credited by a creator it is kept; not credited by
 // anyone, deleteUnusedCreated removes it with a narrator_delete row in THIS
-// operation's journal (an operation that is not resumed is where its own
-// leftover would otherwise stay for good).
+// operation's journal naming the operation that left it (an operation that is
+// not resumed is where its own leftover would otherwise stay for good). Once the
+// cleanup has settled every candidate of another operation, that operation is
+// marked judged (markLeftoversJudged) and its journal is not read again.
 func (r *cbRun) seedLeftovers() error {
 	cand := map[int]database.Narrator{}
-	if err := r.leftoverCandidates(r.env.opID, "this operation", cand); err != nil {
+	r.leftoverSrc = map[int][]string{}
+	own := cbSourceOp{id: r.env.opID}
+	if err := r.leftoverCandidates(own, "this operation", cand); err != nil {
 		return err
 	}
 	others, err := r.otherCreditsBackfillOps()
 	if err != nil {
 		return err
 	}
-	for _, opID := range others {
-		if err := r.leftoverCandidates(opID, "operation "+opID, cand); err != nil {
+	for _, src := range others {
+		if err := r.leftoverCandidates(src, "operation "+src.id, cand); err != nil {
 			return err
 		}
 	}
+	r.judged = others
 	for _, id := range slices.Sorted(maps.Keys(cand)) {
 		links, lerr := database.NarratorLinkCount(r.env.store, id)
 		if lerr != nil {
 			return fmt.Errorf("count the books linking narrator %d (a record an earlier attempt may have created): %w", id, lerr)
 		}
 		if links > 0 {
+			delete(r.leftoverSrc, id)
 			continue
 		}
 		rec := cand[id]
@@ -1525,41 +1552,77 @@ func (r *cbRun) seedLeftovers() error {
 	return nil
 }
 
+// cbLeftoverSlack is how long after the row that names it a record may have been
+// created and still be taken for that operation's: CreateNarrator runs right
+// after the intent row is written (under one mutex), so the gap is a store
+// write, not minutes. Generous enough for a stalled synced write.
+const cbLeftoverSlack = 30 * time.Second
+
+// cbSourceOp is an earlier operation whose journal names records it may have
+// left behind.
+type cbSourceOp struct {
+	id string
+	// endedAt is when the operation's row says it ended (CompletedAt); nil
+	// while unknown (this operation, or one cut off before it was stamped).
+	// Nothing the operation did is later than this.
+	endedAt *time.Time
+	// fingerprint says which state of the operation's row a judgement was made
+	// against (cbSourceFingerprint); "" for this operation.
+	fingerprint string
+}
+
+// leftoverWindow is the interval a record named by a row timed at rowAt must have
+// been created in to be taken for this operation's: from notBefore (the
+// operation's first row, or the intent row itself) to the row plus the slack,
+// further capped by the end of the operation when its row says when that was.
+func (s cbSourceOp) leftoverWindow(notBefore, rowAt time.Time) (from, to time.Time) {
+	to = rowAt.Add(cbLeftoverSlack)
+	if s.endedAt != nil {
+		if end := s.endedAt.Add(cbLeftoverSlack); end.Before(to) {
+			to = end
+		}
+	}
+	return notBefore, to
+}
+
 // leftoverCandidates adds to cand the narrator records the journal of operation
-// opID names as created by it and that are not older than that operation's
-// first journal row (see seedLeftovers). Nothing is added for an operation with
-// no rows. whose names the operation in an error.
-func (r *cbRun) leftoverCandidates(opID, whose string, cand map[int]database.Narrator) error {
-	rows, err := r.env.store.GetOperationChanges(opID)
+// src names as created by it, inside src's window (see seedLeftovers), and
+// remembers which operation named each in r.leftoverSrc. Nothing is added for an
+// operation with no rows. whose is how an error names the operation.
+func (r *cbRun) leftoverCandidates(src cbSourceOp, whose string, cand map[int]database.Narrator) error {
+	rows, err := r.env.store.GetOperationChanges(src.id)
 	if err != nil {
 		return fmt.Errorf("read %s's journal for leftover records: %w", whose, err)
 	}
+	times := make([]time.Time, len(rows))
 	var first time.Time
-	rowTime := func(c *database.OperationChange) (time.Time, bool) {
-		id, perr := ulid.Parse(c.ID)
-		if perr != nil {
-			return time.Time{}, false
-		}
-		return ulid.Time(id.Time()), true
-	}
-	for _, c := range rows {
+	for i, c := range rows {
 		if c == nil {
 			continue
 		}
-		if t, ok := rowTime(c); ok && (first.IsZero() || t.Before(first)) {
-			first = t
+		id, perr := ulid.Parse(c.ID)
+		if perr != nil {
+			return fmt.Errorf("%s's journal row %q has no time (its id is not a ULID), so the records it may have left cannot be judged: %w", whose, c.ID, perr)
+		}
+		times[i] = ulid.Time(id.Time())
+		if first.IsZero() || times[i].Before(first) {
+			first = times[i]
 		}
 	}
 	if first.IsZero() {
 		return nil
 	}
-	consider := func(rec database.Narrator, notBefore time.Time) {
-		if rec.ID <= 0 || rec.CreatedAt.IsZero() || rec.CreatedAt.Before(notBefore) {
+	consider := func(rec database.Narrator, notBefore, rowAt time.Time) {
+		from, to := src.leftoverWindow(notBefore, rowAt)
+		if rec.ID <= 0 || rec.CreatedAt.IsZero() || rec.CreatedAt.Before(from) || rec.CreatedAt.After(to) {
 			return
 		}
 		cand[rec.ID] = rec
+		if !slices.Contains(r.leftoverSrc[rec.ID], src.id) {
+			r.leftoverSrc[rec.ID] = append(r.leftoverSrc[rec.ID], src.id)
+		}
 	}
-	for _, c := range rows {
+	for i, c := range rows {
 		if c == nil {
 			continue
 		}
@@ -1567,43 +1630,73 @@ func (r *cbRun) leftoverCandidates(opID, whose string, cand map[int]database.Nar
 		case undo.ChangeTypeCreditsBackfill:
 			_, w, derr := undo.DecodeCreditsBackfill(c)
 			if derr != nil {
-				continue
+				return fmt.Errorf("%s's journal row %s does not decode, so the records it may have created cannot be judged: %w", whose, c.ID, derr)
 			}
 			for _, n := range w.CreatedNarrators {
 				if rec, ok := r.idx.narrators[n.ID]; ok {
-					consider(rec, first)
+					consider(rec, first, times[i])
 				}
 			}
 		case undo.ChangeTypeNarratorCreateIntent:
-			at, ok := rowTime(c)
-			if !ok || strings.TrimSpace(c.NewValue) == "" {
+			if strings.TrimSpace(c.NewValue) == "" {
 				continue
 			}
-			if rec, ok := r.recordNamed(c.NewValue); ok {
-				consider(rec, at)
+			rec, ok, nerr := r.recordNamed(c.NewValue)
+			if nerr != nil {
+				return fmt.Errorf("look up narrator %q named by %s's journal row %s: %w", c.NewValue, whose, c.ID, nerr)
+			}
+			if ok {
+				consider(rec, times[i], times[i])
 			}
 		}
 	}
 	return nil
 }
 
-// otherCreditsBackfillOps is the ids of the OTHER credits-backfill operations
-// whose last attempt did not complete: every operation of this definition but
-// this one whose status is not "completed" (failed, canceled, interrupted,
-// running or never finished). The dispatcher runs two of them one at a time
-// (both declare a books write under one concurrency key), so a row that still
-// reads "running" is a run a crash or a restart cut off, not one that is
-// writing now. A completed operation is not listed: it either credited the
-// records it created or deleted them again.
+// cbSwept is the id of the one row, in a source operation's row set
+// (database.OpRowStore), that says an apply has judged its leftovers.
+const cbSwept = "credits-backfill-leftovers-judged"
+
+// cbSourceFingerprint is the state of an operation's row a judgement of its
+// leftovers is good for. An operation that is resumed or retried afterwards
+// changes it (a resume clears CompletedAt and counts, a retry counts, progress
+// moves LastProgressAt), so what it creates next is judged again.
+func cbSourceFingerprint(row database.OperationV2Row) string {
+	stamp := func(t *time.Time) int64 {
+		if t == nil {
+			return 0
+		}
+		return t.UnixNano()
+	}
+	return fmt.Sprintf("%s|resume=%d|retry=%d|retryat=%d|started=%d|completed=%d|progress=%d",
+		row.Status, row.ResumeCount, row.ManualRetryCount, row.ResumeCountAtManualRetry,
+		stamp(row.StartedAt), stamp(row.CompletedAt), stamp(row.LastProgressAt))
+}
+
+// otherCreditsBackfillOps is the OTHER credits-backfill operations whose last
+// attempt did not complete and whose leftovers no apply has judged yet: every
+// operation of this definition but this one whose status is not "completed"
+// (failed, canceled, interrupted, running, queued or waiting). The dispatcher
+// runs two of them one at a time (both declare a books write under one
+// concurrency key), so a row that still reads "running" is a run a crash or a
+// restart cut off, not one that is writing now. A completed operation is not
+// listed: it either credited the records it created or deleted them again.
+//
+// An operation an earlier apply judged is skipped while its row is as it was then
+// (cbSourceFingerprint): the set of failed and canceled operations only grows,
+// and re-reading every journal of every one of them at every apply is a cost
+// that grows with it, and keeps re-opening the question for a record that was
+// credited and has since lost its book.
 //
 // The listing is the whole operation history (ListOperationsV2Since with no
-// lower bound and no cap, which decodes every operation row once per apply, a few
-// seconds on a production-sized history): a cap would drop the oldest
-// operations silently, which is the unsafe direction. A store that cannot list
-// operations stops the apply (fail closed). A discarded operation (registry.Discard)
-// is gone from this listing although its journal rows stay; its records are not
-// found here.
-func (r *cbRun) otherCreditsBackfillOps() ([]string, error) {
+// lower bound and no cap, which decodes every operation row once per apply): a
+// cap would drop the oldest operations silently, which is the unsafe direction.
+// A store that cannot list operations stops the apply (fail closed), and so
+// does a marker that cannot be read. A discarded operation (registry.Discard)
+// is gone from this listing although its journal rows stay, and so is a
+// completed operation that was reverted afterwards (its status reads completed);
+// the records only such a journal names are not found here.
+func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 	lister, ok := database.AsCapability[database.OperationsV2SinceLister](r.env.store)
 	if !ok {
 		return nil, fmt.Errorf("cannot find the records other credits-backfill operations left: store is %T, which cannot list operations (OperationsV2SinceLister)", r.env.store)
@@ -1612,28 +1705,77 @@ func (r *cbRun) otherCreditsBackfillOps() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list operations for the records other credits-backfill operations left: %w", err)
 	}
-	var ids []string
+	markers, _ := database.AsCapability[database.OpRowStore](r.env.store)
+	var out []cbSourceOp
 	for _, row := range rows {
-		if row.DefID == creditsBackfillOpID && row.ID != r.env.opID && row.Status != "completed" {
-			ids = append(ids, row.ID)
+		if row.DefID != creditsBackfillOpID || row.ID == r.env.opID || row.Status == "completed" {
+			continue
+		}
+		src := cbSourceOp{id: row.ID, endedAt: row.CompletedAt, fingerprint: cbSourceFingerprint(row)}
+		if markers != nil {
+			got, gerr := markers.GetOpRows(row.ID, []string{cbSwept})
+			if gerr != nil {
+				return nil, fmt.Errorf("read the judged marker of operation %s: %w", row.ID, gerr)
+			}
+			if len(got) == 1 && got[0] != nil && string(got[0]) == src.fingerprint {
+				continue
+			}
+		}
+		out = append(out, src)
+	}
+	slices.SortFunc(out, func(a, b cbSourceOp) int { return strings.Compare(a.id, b.id) })
+	return out, nil
+}
+
+// markLeftoversJudged marks each other operation seedLeftovers read as judged,
+// once every record it named has been settled: credited by a write, found linked,
+// or deleted. An operation one of whose records the cleanup could not settle (the
+// stand-down lapsed, a link count or a delete failed) stays unmarked, and the
+// next apply reads it again. A marker that cannot be written is only logged: the
+// next apply reads the journal again, which is the safe direction.
+func (r *cbRun) markLeftoversJudged(rep sdk.Reporter) {
+	markers, ok := database.AsCapability[database.OpRowStore](r.env.store)
+	if !ok {
+		return
+	}
+	for _, src := range r.judged {
+		settled := true
+		for id, srcs := range r.leftoverSrc {
+			if r.leftoverUnsettled[id] && slices.Contains(srcs, src.id) {
+				settled = false
+				break
+			}
+		}
+		if !settled {
+			continue
+		}
+		err := markers.ReplaceOpRowsPrefix(src.id, cbSwept, 1, func(int) (database.OpRow, error) {
+			return database.OpRow{ID: cbSwept, Data: []byte(src.fingerprint)}, nil
+		})
+		if err != nil {
+			_ = rep.Log(slog.LevelWarn, "credits-backfill: could not mark operation's leftovers judged",
+				slog.String("operation", src.id), slog.String("error", err.Error()))
 		}
 	}
-	slices.Sort(ids)
-	return ids, nil
 }
 
 // recordNamed is the record holding exactly this name (the store's name index
-// when it has one, else the frozen index), as an intent row names it.
-func (r *cbRun) recordNamed(name string) (database.Narrator, bool) {
+// when it has one, else the frozen index), as an intent row names it. A name that
+// no record holds is (zero, false, nil); a lookup that fails is an error, not
+// "no record".
+func (r *cbRun) recordNamed(name string) (database.Narrator, bool, error) {
 	if r.byName != nil {
 		n, err := r.byName.GetNarratorByName(name)
-		if err != nil || n == nil {
-			return database.Narrator{}, false
+		if err != nil {
+			return database.Narrator{}, false, err
 		}
-		return *n, true
+		if n == nil {
+			return database.Narrator{}, false, nil
+		}
+		return *n, true, nil
 	}
 	rec, ok := r.narrIdx[util.NormalizeAuthor(strings.TrimSpace(name))]
-	return rec, ok
+	return rec, ok, nil
 }
 
 // verifyPriorAttempts reads this operation's journal before a resumed apply
@@ -3087,9 +3229,15 @@ func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 	var deleted, kept []string
 	for _, rec := range unused {
 		keep := func(why string) { kept = append(kept, fmt.Sprintf("%s (id %d, %s)", rec.Name, rec.ID, why)) }
+		// unsettled keeps the record's earlier operation from being marked judged
+		// (markLeftoversJudged): the cleanup could not decide what became of it.
+		unsettled := func(why string) {
+			keep(why)
+			r.leftoverUnsettled[rec.ID] = true
+		}
 		switch {
 		case !standDownHeld:
-			keep("scan stand-down lost")
+			unsettled("scan stand-down lost")
 			continue
 		case !r.leftover[rec.ID] && (r.preexisting[rec.ID] || (!rec.CreatedAt.IsZero() && rec.CreatedAt.Before(r.startedAt))):
 			// (A leftover of an earlier attempt was judged against the
@@ -3099,12 +3247,19 @@ func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 		}
 		links, err := database.NarratorLinkCount(r.env.store, rec.ID)
 		if err != nil {
-			keep("links could not be counted")
+			unsettled("links could not be counted")
 			continue
 		}
 		if links > 0 {
 			keep(fmt.Sprintf("linked by %d book(s)", links))
 			continue
+		}
+		// A leftover of another operation says whose it was, so the delete can be
+		// traced to the journal that named it.
+		why := "credits_backfill_unused"
+		if from := slices.DeleteFunc(slices.Clone(r.leftoverSrc[rec.ID]), func(id string) bool { return id == r.env.opID }); len(from) > 0 {
+			slices.Sort(from)
+			why += " source_op=" + strings.Join(from, ",")
 		}
 		if err := r.env.store.CreateOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
@@ -3112,13 +3267,13 @@ func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 			ChangeType:  "narrator_delete",
 			FieldName:   "narrator",
 			OldValue:    fmt.Sprintf("%d:%s", rec.ID, rec.Name),
-			NewValue:    "credits_backfill_unused",
+			NewValue:    why,
 		}); err != nil {
-			keep("journal row could not be written")
+			unsettled("journal row could not be written")
 			continue
 		}
 		if err := r.env.store.DeleteNarrator(rec.ID); err != nil {
-			keep("delete failed")
+			unsettled("delete failed")
 			continue
 		}
 		deleted = append(deleted, rec.Name)

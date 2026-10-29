@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_converge_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d1f0c52-3a9e-4b6c-8e04-5f2a9c6b1d73
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package maintenance
 
@@ -325,7 +325,9 @@ const cbLeftoverOp = "01LEFTOVEROP"
 func cbSeedRow(t *testing.T, f *cbFixture, at time.Time, c database.OperationChange) {
 	t.Helper()
 	c.ID = ulid.MustNew(ulid.Timestamp(at), ulid.DefaultEntropy()).String()
-	c.OperationID = cbLeftoverOp
+	if c.OperationID == "" {
+		c.OperationID = cbLeftoverOp
+	}
 	if err := f.s.CreateOperationChange(&c); err != nil {
 		t.Fatalf("seed journal row: %v", err)
 	}
@@ -354,6 +356,14 @@ func cbLeftoverFixture(t *testing.T, soloNamesHer bool) (*cbFixture, *database.N
 	return f, rec
 }
 
+// cbSeedFirstRow journals a row that names no record, so that the operation's
+// first row is earlier than the credits_backfill row that names one (in a real
+// operation the intent row is first).
+func cbSeedFirstRow(t *testing.T, f *cbFixture, opID string, at time.Time) {
+	t.Helper()
+	cbSeedRow(t, f, at, database.OperationChange{OperationID: opID, ChangeType: "test_first_row", FieldName: "narrator"})
+}
+
 func cbSeedIntent(t *testing.T, f *cbFixture, at time.Time) {
 	t.Helper()
 	cbSeedRow(t, f, at, database.OperationChange{ChangeType: undo.ChangeTypeNarratorCreateIntent, FieldName: "narrator", NewValue: "Renee Montoya"})
@@ -361,7 +371,7 @@ func cbSeedIntent(t *testing.T, f *cbFixture, at time.Time) {
 
 // cbSeedCreatedRow is the credits_backfill row of a creator whose write was
 // refused: voided, naming the record it had created.
-func cbSeedCreatedRow(t *testing.T, f *cbFixture, at time.Time, rec *database.Narrator, voided bool) {
+func cbSeedCreatedRow(t *testing.T, f *cbFixture, opID string, at time.Time, rec *database.Narrator, voided bool) {
 	t.Helper()
 	old, err := json.Marshal(f.state("z-solo"))
 	if err != nil {
@@ -376,7 +386,8 @@ func cbSeedCreatedRow(t *testing.T, f *cbFixture, at time.Time, rec *database.Na
 		t.Fatal(err)
 	}
 	cbSeedRow(t, f, at, database.OperationChange{
-		BookID: "z-solo", ChangeType: undo.ChangeTypeCreditsBackfill, FieldName: "book_credits",
+		OperationID: opID,
+		BookID:      "z-solo", ChangeType: undo.ChangeTypeCreditsBackfill, FieldName: "book_credits",
 		OldValue: string(old), NewValue: string(neu), Voided: voided,
 	})
 }
@@ -423,14 +434,15 @@ func cbWantLeftoverDeleted(t *testing.T, f *cbFixture, res *creditsBackfillResul
 }
 
 func TestCreditsBackfill_LeftoverNamedByAnIntentRowIsNotALinkTarget(t *testing.T) {
-	f, _ := cbLeftoverFixture(t, false)
-	cbSeedIntent(t, f, time.Now().Add(-time.Hour))
+	f, rec := cbLeftoverFixture(t, false)
+	cbSeedIntent(t, f, rec.CreatedAt.Add(-time.Second))
 	cbWantLeftoverDeleted(t, f, cbLeftoverRun(t, f))
 }
 
 func TestCreditsBackfill_LeftoverNamedByAVoidedRowIsNotALinkTarget(t *testing.T) {
 	f, rec := cbLeftoverFixture(t, false)
-	cbSeedCreatedRow(t, f, time.Now().Add(-time.Hour), rec, true)
+	cbSeedFirstRow(t, f, cbLeftoverOp, rec.CreatedAt.Add(-time.Hour))
+	cbSeedCreatedRow(t, f, "", rec.CreatedAt.Add(time.Second), rec, true)
 	cbWantLeftoverDeleted(t, f, cbLeftoverRun(t, f))
 }
 
@@ -439,7 +451,7 @@ func TestCreditsBackfill_LeftoverNamedByAVoidedRowIsNotALinkTarget(t *testing.T)
 // counted once, and named by the creator's journal row.
 func TestCreditsBackfill_LeftoverACreatorCreditsIsKept(t *testing.T) {
 	f, rec := cbLeftoverFixture(t, true)
-	cbSeedIntent(t, f, time.Now().Add(-time.Hour))
+	cbSeedIntent(t, f, rec.CreatedAt.Add(-time.Second))
 	res := cbLeftoverRun(t, f)
 	if res.NarratorsCreated != 1 || res.NarratorsCreatedUnused != 0 || res.UnusedNarratorsDeleted != 0 || len(res.UnusedNarratorsKept) != 0 {
 		t.Errorf("created=%d unused=%d deleted=%d kept=%v, want 1/0/0/none", res.NarratorsCreated, res.NarratorsCreatedUnused, res.UnusedNarratorsDeleted, res.UnusedNarratorsKept)
@@ -483,7 +495,7 @@ func TestCreditsBackfill_RecordOlderThanTheOperationIsNotALeftover(t *testing.T)
 	}{
 		{"intent", func(t *testing.T, f *cbFixture, _ *database.Narrator) { cbSeedIntent(t, f, time.Now().Add(time.Hour)) }},
 		{"created_narrators", func(t *testing.T, f *cbFixture, rec *database.Narrator) {
-			cbSeedCreatedRow(t, f, time.Now().Add(time.Hour), rec, true)
+			cbSeedCreatedRow(t, f, "", time.Now().Add(time.Hour), rec, true)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -506,7 +518,7 @@ func TestCreditsBackfill_RecordOlderThanTheOperationIsNotALeftover(t *testing.T)
 // A record some book links is credited, not a leftover, whoever made it.
 func TestCreditsBackfill_LinkedRecordNamedByTheJournalIsNotALeftover(t *testing.T) {
 	f, rec := cbLeftoverFixture(t, false)
-	cbSeedIntent(t, f, time.Now().Add(-time.Hour))
+	cbSeedIntent(t, f, rec.CreatedAt.Add(-time.Second))
 	alfred := f.author("Alfred Pennyworth")
 	// f.book deletes the records the fixture did not register; this one is.
 	f.narrators[rec.ID] = true
