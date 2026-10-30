@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.102.4
+// version: 1.102.5
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-29
 
@@ -734,7 +734,11 @@ type CleanupRunners interface {
 	// ones whose book serves nothing that exists on disk (NothingServed): none
 	// is a failure, and all must be reported. It also revisits the files earlier
 	// purges kept (KeptSweep: removed, still owned, kept on error); only a sweep
-	// that could not list the purged versions (KeptSweepErr) fails the night.
+	// that could not list the purged versions (KeptSweepErr) fails the night. The
+	// sweep is report-only until config kept_sweep_apply_enabled is on (the
+	// implementation reads it once per run): it then lists what it would remove and
+	// changes nothing. A note it cannot settle for several nights escalates the
+	// version to purge_failed (KeptSweep.Escalated).
 	CleanupTrashedVersions() (versions.CleanupResult, error)
 	// PruneOldLogs prunes legacy operation log rows and system log rows older
 	// than retentionDays, in bounded chunks; it never touches undo history

@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_stuck_purge_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e8b1d27-6c93-4f05-a7d2-9b3e5f0c8a61
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -72,7 +72,7 @@ func TestPurgeVersion_NothingRemovableAndCannotTellLeavesTheTrashedVersionInTheT
 func TestCleanup_VersionThatCannotBeToldApartFromAnUnmountedDatasetIsListedNotFailed(t *testing.T) {
 	f := newSharedPathFixture(t)
 
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), undecidableOwn(f))
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), undecidableOwn(f), true)
 
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
@@ -137,7 +137,7 @@ func TestPurgeVersion_PurgingVersionThatNeverSettlesEscalatesToPurgeFailedAndCan
 		t.Errorf("PurgeUndecidedNights = %d after escalating, want it reset", got.PurgeUndecidedNights)
 	}
 	// purge_failed is deletable, and is listed by the cleanup rather than retried.
-	res, cerr := cleanupTrashedVersionsAt(f.store, time.Now(), guard)
+	res, cerr := cleanupTrashedVersionsAt(f.store, time.Now(), guard, true)
 	if cerr != nil || len(res.NeedsAttention) != 1 {
 		t.Errorf("cleanup: err=%v NeedsAttention=%v, want the version listed and no failure", cerr, res.NeedsAttention)
 	}
@@ -375,7 +375,7 @@ func TestCleanup_AServedVersionIsListedUnderKeptAndNothingElse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 
 	if err != nil || res.Purged != 0 || res.Failed != 0 || len(res.CannotTell) != 0 || len(res.KeptFiles) != 0 {
 		t.Fatalf("res=%+v err=%v, want only Kept filled", res, err)

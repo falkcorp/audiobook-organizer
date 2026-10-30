@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.75.4
+// version: 1.75.5
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -313,7 +313,9 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 }
 
 func (s *Server) CleanupTrashedVersions() (versions.CleanupResult, error) {
-	return CleanupTrashedVersions(s.storeForWiring(), s.versionPurgeGuard())
+	// The kept-file sweep's switch is read here, once, and passed down: a flip
+	// mid-run cannot make the night half report-only and half applied.
+	return CleanupTrashedVersions(s.storeForWiring(), s.versionPurgeGuard(), config.KeptSweepApplyEnabled())
 }
 
 // ---- optional component accessors ----

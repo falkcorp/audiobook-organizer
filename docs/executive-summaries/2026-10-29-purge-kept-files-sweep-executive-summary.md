@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-29-purge-kept-files-sweep-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2b6d9f3e-8a41-4c70-9d5e-0f7a3c1b8e64 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -40,13 +40,31 @@ that cannot be answered, such as a failed read, an unmounted library or a busy
 merge, leaves the file in place and tries again the next night. The iTunes library
 is never touched.
 
+Because this clean-up deletes files, it starts in a "show me first" mode (a setting
+named kept_sweep_apply_enabled, off until the owner turns it on). While it is off,
+the nightly clean-up makes every decision but removes nothing and changes no list;
+it only reports, in the night's result, which files it would remove and why each
+had been skipped in the first place. The owner reads that list, and turns the
+setting on when it looks right.
+
+If the clean-up cannot make up its mind about a skipped file for three nights in a
+row (a failed read, a disk that will not answer, a removal that keeps failing), it
+no longer reports the same warning for ever. It hands the version to the owner on
+the trashed-versions page, with the files and the reasons, where the owner can
+retry it or delete the record. Nights where the library was simply not mounted, or
+another job held things up, do not count towards that.
+
 The night's report now says how many files were removed, how many notes were
 dropped because the file was already gone, how many files are still needed, and how
 many were left because a check could not be answered.
 
 ## Verification
 
-Tests cover a file whose owner is gone (removed), a file still owned (kept), a
+Tests cover the show-me-first mode (nothing removed, nothing crossed off, the list
+names each file with its version, book and original reason), the three-nights
+hand-over (and that a good night, or one that made progress, starts the count over,
+and that the show-me-first mode never hands over a file it merely would have
+removed), a file whose owner is gone (removed), a file still owned (kept), a
 failed read (kept), an iTunes file (kept), a file a live book plays (kept), a
 library that is not ready (kept), a failed removal (kept) and a second run (does
 nothing), and run a pool of workers over many purged versions under the race
