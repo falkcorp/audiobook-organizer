@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.5
+// version: 1.17.6
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-30
 
@@ -1865,32 +1865,66 @@ func TestReviewQuery_TranscriptionFiltersUseLiveRuntimeVerdict(t *testing.T) {
 	}
 }
 
-// TestReviewQuery_MinConfidenceMonotonicWithHideMultiBook pins the owner
-// report of 2026-10-29: with hide_multi_book on, lowering the minimum score
-// must never remove a row. Two books share one candidate; the one scoring
-// 1.95 passes a 190 minimum alone, the one scoring 1.60 joins at 150. Groups
-// counted after the score filter listed the first book at 190 and hid it at
-// 150, so 150 listed fewer rows than 190 for it. A group is the books that share a
-// candidate among the rows every OTHER filter keeps.
-func TestReviewQuery_MinConfidenceMonotonicWithHideMultiBook(t *testing.T) {
-	mk := func(id string, score float64, asin, title string) queryCaseRow {
+// TestReviewQuery_ThresholdsMonotonicWithHideMultiBook pins the owner report of
+// 2026-10-29 (nothing at minimum score 150, 40 rows at 200): with
+// hide_multi_book on, loosening a threshold (minimum score, hide_runtime,
+// has_transcription, transcription_matched) must never remove a row. Groups
+// used to be counted after those filters, so loosening one let a second book
+// join a group and hid the first. Each pair below shares a candidate and the
+// threshold under test separates the two books.
+func TestReviewQuery_ThresholdsMonotonicWithHideMultiBook(t *testing.T) {
+	mk := func(id string, score float64, asin string, edit func(*queryCaseRow)) queryCaseRow {
 		fr := queryCaseRow{Bucket: reviewBucketReviewable, Status: reviewStatusMatched}
-		fr.Book.ID, fr.Book.Title = id, title
-		fr.Candidate = &metafetch.MetadataCandidate{Source: "Audible", Score: score, Title: title, Author: "Bruce Wayne", ASIN: asin}
+		fr.Book.ID, fr.Book.Title = id, "Title "+id
+		fr.Candidate = &metafetch.MetadataCandidate{Source: "Audible", Score: score, Title: "Work " + asin, Author: "Bruce Wayne", ASIN: asin}
+		if edit != nil {
+			edit(&fr)
+		}
 		return fr
 	}
+	transcribed := func(fr *queryCaseRow) {
+		fr.Book.TranscribedTitle = "Work"
+		fr.Candidate.TranscriptionBoosted = true
+	}
 	rows := []queryCaseRow{
-		mk("joker-a", 1.95, "B0JOKER001", "The Killing Joke"),
-		mk("joker-b", 1.60, "B0JOKER001", "The Killing Joke"),
-		mk("solo-hush", 1.70, "B0HUSH0001", "Hush"),
+		// score pair: only joker-a reaches 190.
+		mk("joker-a", 1.95, "B0JOKER001", nil),
+		mk("joker-b", 1.60, "B0JOKER001", nil),
+		// runtime pair: riddler-b's runtime differs by far more than the warn limit.
+		mk("riddler-a", 1.95, "B0RIDDLE01", nil),
+		mk("riddler-b", 1.95, "B0RIDDLE01", func(fr *queryCaseRow) { fr.Candidate.DurationDeltaSec = 100000 }),
+		// transcription pair: only scarecrow-a has a transcription that matches.
+		mk("scarecrow-a", 1.95, "B0SCARE001", transcribed),
+		mk("scarecrow-b", 1.95, "B0SCARE001", nil),
+		// singles that every filter above can separate, so the lists are not empty.
+		mk("hush", 1.95, "B0HUSH0001", transcribed),
+		mk("penguin", 1.60, "B0PENGU001", nil),
 	}
 	base := baseFromSnapshot(t, snapshotFromCases(t, rows))
-	at := func(min string) []string {
-		return listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"min_confidence": min, "hide_multi_book": "true"})))
+	list := func(extra map[string]string) []string {
+		params := map[string]string{"hide_multi_book": "true"}
+		for k, v := range extra {
+			params[k] = v
+		}
+		return listIDs(mustEvaluate(t, base, mustReviewQuery(t, params)))
 	}
-	hi, mid, lo := at("190"), at("150"), at("0")
-	require.Empty(t, hi, "joker-a shares a candidate with joker-b, which is only under the minimum: still a group")
-	require.Subset(t, mid, hi, "a lower minimum must list a superset of a higher one")
-	require.Equal(t, []string{"solo-hush"}, mid, "joker-a and joker-b share a candidate; both stay hidden")
-	require.Subset(t, lo, mid)
+	steps := []struct {
+		name         string
+		tight, loose map[string]string
+	}{
+		{"min_confidence 190 -> 150", map[string]string{"min_confidence": "190"}, map[string]string{"min_confidence": "150"}},
+		{"min_confidence 150 -> 0", map[string]string{"min_confidence": "150"}, nil},
+		{"hide_runtime on -> off", map[string]string{"hide_runtime": "true"}, nil},
+		{"has_transcription on -> off", map[string]string{"has_transcription": "true"}, nil},
+		{"transcription_matched on -> off", map[string]string{"transcription_matched": "true"}, nil},
+	}
+	for _, st := range steps {
+		t.Run(st.name, func(t *testing.T) {
+			tight, loose := list(st.tight), list(st.loose)
+			require.Subset(t, loose, tight, "a looser filter must list a superset")
+		})
+	}
+	// The hidden groups stay hidden at every setting, and the singles show.
+	require.Equal(t, []string{"hush"}, list(map[string]string{"min_confidence": "190"}))
+	require.ElementsMatch(t, []string{"hush", "penguin"}, list(nil))
 }

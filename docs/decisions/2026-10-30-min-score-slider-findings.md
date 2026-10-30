@@ -1,5 +1,5 @@
 <!-- file: docs/decisions/2026-10-30-min-score-slider-findings.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d3c1a52-0e84-4b6f-9a17-c5e2b8f40d63 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -38,20 +38,37 @@ minimum returns a superset held for the score filter alone.
 
 ## Fix
 
-Groups are now counted over the set every OTHER filter keeps (the same
-evaluation with the minimum forced to 0), then applied to the rows that pass
-the minimum. A book just under the minimum still counts as a group member, so
-the grouped books stay hidden at every slider value and a lower minimum lists a
-superset. `runtimeHidden` is still counted only on the real pass.
+Multi-book groups are counted in the same single pass that filters, over the
+SCOPE set: the rows that source, row state, no-match and the Title keep,
+before any threshold. The thresholds are the minimum score, `hide_runtime`,
+the language switch and the transcription filters. The group hide is then
+applied to the rows that pass every filter. A book a threshold removes still
+counts as a group member, so grouped books stay hidden at every setting and
+loosening any threshold lists a superset. `runtimeHidden` and the other
+counters are still counted on the real filtered pass.
 
-Test: `TestReviewQuery_MinConfidenceMonotonicWithHideMultiBook` in
-`internal/server/handlers/metadata_cache_query_test.go`.
+The same defect shape was in `hide_runtime`, the language switch and the two
+transcription filters (all ran before grouping); the first commit fixed only
+the minimum score, this one fixes all of them.
+
+Tests: `TestReviewQuery_ThresholdsMonotonicWithHideMultiBook` in
+`internal/server/handlers/metadata_cache_query_test.go` loosens each of
+min_confidence, hide_runtime, has_transcription and transcription_matched and
+requires a superset. Against the original code four of its five steps fail.
 
 ## Decision log
 
-- Chosen: count groups before the score filter. Rejected: dropping the
-  multi-book hide when a minimum is set (changes what the switch means);
-  moving the hide to the client (the server owns paging and totals).
+- Chosen: count groups over the scope set (everything but the thresholds),
+  once, in the filter pass. Rejected: a second `filterRows(min=0)` call for the
+  score only (fixes one filter, leaves runtime and transcription); counting
+  over every row with no filter at all (breaks the pinned shared case
+  "multi-book is computed over the filtered set", where a group partner the
+  Title filtered out must not group); dropping the multi-book hide when a
+  minimum is set (changes what the switch means); moving the hide to the
+  client (the server owns paging and totals).
+- The Title, source and row-state filters narrow the scope on purpose, so
+  they can still change which books group. Only the thresholds are fixed to
+  be monotonic.
 - No Vitest test was added: the frontend sends the value correctly, so a client
   test would pass without any change. The Go test fails without the fix.
 - Not confirmed against prod: the API key in `.claude/.api-token` has expired
