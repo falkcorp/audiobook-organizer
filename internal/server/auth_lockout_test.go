@@ -1,7 +1,7 @@
 // file: internal/server/auth_lockout_test.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 8c4e5f3a-9b5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-06
+// last-edited: 2026-10-29
 
 package server_test
 
@@ -69,6 +69,10 @@ func newTestUser(t *testing.T) *database.User {
 	}
 }
 
+// noFailureDelay stands in for the throttle's soft per-account delay (a real
+// time.Sleep) in tests that fail one account repeatedly.
+func noFailureDelay(time.Duration) {}
+
 func loginRequest(t *testing.T, h *handlers.AuthHandler, password string) int {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -88,12 +92,15 @@ func loginRequest(t *testing.T, h *handlers.AuthHandler, password string) int {
 
 // HIGH-3: there is no longer a hard per-account lockout (which a third party
 // could weaponize against a known user). Instead a per-IP throttle trips after
-// the source IP exhausts its failure budget. Uses an unknown user so the soft
-// per-account delay never fires (sleep-free, deterministic), and all attempts
-// here share the same source IP.
+// the source IP exhausts its failure budget. All attempts here share the same
+// source IP. The soft per-account delay is keyed on the submitted name whether or
+// not the user exists, so it fires from the 6th failure on (200 ms more each, ~11
+// s over the budget); noFailureDelay keeps it from sleeping, since the throttle
+// and not the delay is what is under test.
 func TestThrottle_TriggersAfterMaxIPFailures(t *testing.T) {
 	store := &stubAuthStore{user: nil}
 	h := handlers.NewAuthHandler(store, true)
+	h.SetFailureDelay(noFailureDelay)
 
 	const maxFailedPerIP = 15
 
@@ -116,6 +123,7 @@ func TestThrottle_TriggersAfterMaxIPFailures(t *testing.T) {
 func TestLockout_ClearedOnSuccess(t *testing.T) {
 	store := &stubAuthStore{user: newTestUser(t)}
 	h := handlers.NewAuthHandler(store, true)
+	h.SetFailureDelay(noFailureDelay)
 
 	const maxFailedLogins = 10
 

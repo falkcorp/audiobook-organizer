@@ -1,7 +1,7 @@
 // file: internal/server/login_throttle_key_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5a1f9c7e-62b8-4d03-9e4a-b7c2d8e1f063
-// last-edited: 2026-10-21
+// last-edited: 2026-10-29
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -102,6 +103,10 @@ func newWebLoginHandler(t *testing.T, withKey bool) *handlers.AuthHandler {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	h := handlers.NewAuthHandler(store, true)
+	// Every handler here fails one account (nobody) past the soft threshold, and
+	// its progressive delay (200 ms a failure past the 5th, ~11 s over the 15 of
+	// a budget) is real time.Sleep: the delay is not under test, the buckets are.
+	h.SetFailureDelay(func(time.Duration) {})
 	if withKey {
 		h.SetThrottleKeyFunc(loginThrottleKey)
 	}
@@ -177,6 +182,7 @@ func TestWebLoginThrottle_IPv6VisitorRotationWithinASlash64IsOneBucket(t *testin
 // router built by NewServer.
 func TestWebLoginThrottle_RealRouterKeysVisitorsBehindAConnector(t *testing.T) {
 	fx := setupCredGuardServerWith(t, func(c *config.Config) { c.TunnelConnectorAddrs = throttleTestConnector })
+	fx.srv.loginThrottle().SetSleep(func(time.Duration) {}) // the failure delay is not under test
 	post := func(visitor string) int {
 		body, _ := json.Marshal(map[string]string{"username": "nobody", "password": "wrong"})
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
@@ -203,6 +209,7 @@ func TestABSLoginThrottle_RealRouterKeysVisitorsBehindAConnector(t *testing.T) {
 		c.ABSAPIEnabled = true
 		c.ABSJWTSecret = "synthetic-throttle-test-secret-0123456789abcdef"
 	})
+	fx.srv.loginThrottle().SetSleep(func(time.Duration) {}) // the failure delay is not under test
 	post := func(visitor string) int {
 		body, _ := json.Marshal(map[string]string{"username": "nobody", "password": "wrong"})
 		req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))

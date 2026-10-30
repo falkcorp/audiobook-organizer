@@ -1,7 +1,7 @@
 # file: .woodpecker/test-fixtures-1.yaml
-# version: 2.0.1
+# version: 2.0.2
 # guid: cf4b2a0b-48ac-4607-b815-6816d2cbc041
-# last-edited: 2026-10-27
+# last-edited: 2026-10-29
 #
 # Shard 1 of 3 of the tests that -short skips, run WITHOUT -short and with
 # -race: the mirror of ci.yml's fixture-tests job (matrix shard 1/3). The
@@ -28,9 +28,11 @@
 # deleted). On llm1 those three shards summed to about 3400-3500s, over that
 # budget, and the last shard (internal/server) timed out. As separate
 # workflows each shard has its own 60 min pipeline timeout and the full 25m
-# per-package go test -timeout, which still fires before Woodpecker kills the
-# job. Each workflow can land on a different heavy agent, and no test is
-# skipped (the shards together cover every package).
+# go test -timeout (per process: a package too heavy for one process is split
+# by test name into several, see scripts/ci/fixture_test_packages.py), which
+# still fires before Woodpecker kills the job. Each workflow can land on a
+# different heavy agent, and no test is skipped (the shards together cover
+# every package).
 
 labels:
   # Any agent labelled heavy=true: U1 or llm1 (see docs/ci/woodpecker.md).
@@ -81,7 +83,7 @@ steps:
       # No -short, no CI-COVERAGE line: these packages' short runs are already
       # counted by the other three test workflows, so a coverage line here
       # would count them twice.
-      # One shard of three. The full 25m per-package go test -timeout applies
+      # One shard of three. The full 25m go test -timeout applies to each process
       # (FIXTURE_TIMEOUT); it fires, with its goroutine dump, before the 60 min
       # pipeline timeout kills the job.
       - make --no-print-directory test-fixtures FIXTURE_SHARD=1/3 FIXTURE_TIMEOUT=25m

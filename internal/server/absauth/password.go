@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-10-23
+// last-edited: 2026-10-29
 
 package absauth
 
@@ -45,6 +45,38 @@ const (
 	argonVersion        = argon2.Version
 )
 
+// hashTime and hashMemory are the cost HashPassword writes (and so the cost of
+// the dummy hash a login for an unknown name verifies against). They are the
+// production parameters above; only SetHashCostForTest, called from a test
+// binary's TestMain, lowers them. Verification never reads them: it uses the
+// parameters stored in the hash it is given.
+var (
+	hashTime   = argonTime
+	hashMemory = argonMemory
+)
+
+// SetHashCostForTest lowers the argon2id cost HashPassword writes for the rest
+// of the process.
+//
+// Under -race one production-cost derivation (64 MiB, t=3) takes 1-2 s, and a
+// failed login for an unknown name pays one on the dummy hash. A test that
+// drives a login throttle to its budget makes 16-32 such logins; in
+// internal/server that was 7 tests of ~26 s each and a package that overran its
+// 25 minute timeout (pipeline 1823, 2026-10-29). Those tests assert on the
+// status codes and the throttle's accounting, never on the cost, and the
+// parameters stored in each hash are still honoured by verification, so a
+// hash written at the lowered cost verifies and fails exactly as before.
+//
+// Call it once from TestMain, before any test starts and before anything
+// builds the dummy hash: the variables are read without synchronization. The
+// tests of the cost itself (absauth's own, which pin m=65536 and count the
+// derivations) live in a package whose binary never calls this. Production
+// code must not call it; TestSetHashCostForTestIsNotCalledByProductionCode
+// enforces that. argon2 panics on a time of 0, so pass at least 1.
+func SetHashCostForTest(time, memoryKiB uint32) {
+	hashTime, hashMemory = time, memoryKiB
+}
+
 // argonSem caps how many argon2id computations run at once, process-wide. Each one
 // allocates the m= cost of the hash it derives (argonMemory, 64 MiB, for every hash
 // this server writes; verifyArgon2id refuses anything above argonMaxMemory), so
@@ -87,9 +119,9 @@ func HashPassword(plain string) (algo string, hash string, err error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", "", fmt.Errorf("absauth: read password salt: %w", err)
 	}
-	key := argonIDKey([]byte(plain), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	key := argonIDKey([]byte(plain), salt, hashTime, hashMemory, argonThreads, argonKeyLen)
 	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argonVersion, argonMemory, argonTime, argonThreads,
+		argonVersion, hashMemory, hashTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	)
