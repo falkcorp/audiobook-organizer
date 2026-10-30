@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.2
+// version: 1.135.3
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -2075,6 +2075,9 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		scanLog.Warn("scan summary: %d book(s) got NO book_file rows because they claimed more than %d files from one flat directory "+
 			"(their files are not imported; see the per-book warnings above)", d, maxDirectoryBookFiles)
 	}
+	if d := runCounts.stateHeldForTrash.Load(); d > 0 {
+		scanLog.Info("scan summary: %d trashed book(s) kept their library state although the scan derived a different one (a scan never relabels a book in the trash)", d)
+	}
 	if d := runCounts.stagedAppended.Load(); d > 0 {
 		scanLog.Info("scan summary: %d newly arrived file(s) appended to already-imported books", d)
 	}
@@ -4047,6 +4050,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) (*ownershipSkip, error)
 		// a change to either marks the book for the identification driver.
 		var beforeTitle string
 		var beforeAuthor *int
+		heldForTrash := false
 		written, uerr := modifyBookRecorded(existing.ID, scanHistorySource, func(cur *database.Book) error {
 			locks := mergeLocks
 			heldKeys = nil
@@ -4054,6 +4058,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) (*ownershipSkip, error)
 				locks, heldKeys = identityMergeLocks(mergeLocks, cur, guard)
 			}
 			beforeTitle, beforeAuthor = cur.Title, cur.AuthorID
+			// Assigned, not incremented: ModifyBook may run this more than
+			// once, and the run counter below is bumped once per book.
+			heldForTrash = libraryStateHeldForTrash(cur, dbBook)
 			kept = mergeScannedKeepingForeignEdits(cur, dbBook, locks, snap)
 			return nil
 		})
@@ -4066,6 +4073,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) (*ownershipSkip, error)
 			defaultLog.Warn("book %s (%s) disappeared before the rescan merge could be written; skipping",
 				existing.ID, existing.FilePath)
 			return nil, nil
+		}
+		if heldForTrash {
+			scanRunCountersFrom(ctx).stateHeldForTrash.Add(1)
 		}
 		if kept > 0 {
 			scanLockKeptFields.Add(int64(kept))
@@ -4704,10 +4714,11 @@ func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[s
 	// So: a state the scan genuinely derived still wins, but the bare default
 	// never overwrites a state already on the row. A row with no state yet still
 	// gets one.
-	if scanned.LibraryState != nil &&
-		!(dst.LibraryState != nil && *scanned.LibraryState == libraryStateImported) {
-		dst.LibraryState = scanned.LibraryState
-	}
+	//
+	// And never on a row in the trash (scannerMayChangeLibraryState): a scan
+	// that derived "suspicious" for a tiny file must not relabel a book that
+	// was trashed by its "deleted" label alone, which would silently untrash it.
+	applyScannerLibraryState(dst, scanned)
 	if scanned.Quantity != nil {
 		dst.Quantity = scanned.Quantity
 	}
