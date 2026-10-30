@@ -1,7 +1,7 @@
 // file: web/src/components/layout/OperationsIndicator.tsx
-// version: 4.14.0
+// version: 4.14.1
 // guid: 3b4c5d6e-7f8a-9b0c-1d2e-3f4a5b6c7d8e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -38,7 +38,11 @@ import { formatProgressCounts, operationDisplayName } from './operationsFormat';
 import { isTerminal } from '../../utils/operationPolling';
 import { cancelOperation } from '../../services/api';
 import { getUndoPreflight, revertOperation as revertOp } from '../../services/versionApi';
-import { describeRevertResult, describeUndoPreflight, isUndoRefused } from '../../utils/revertResult';
+import {
+  describeRevertResult,
+  describeUndoPreflight,
+  isUndoRefused,
+} from '../../utils/revertResult';
 
 function formatETA(op: ActiveOperation): string | null {
   if (!op.startedAt || op.progress <= 0 || op.total <= 0) return null;
@@ -78,6 +82,12 @@ function parseMessageDetails(message: string) {
     olRecords: olMatch ? `${olMatch[2]}k` : null,
   };
 }
+
+/** The Completed section lists at most this many rows, newest first. A busy day
+ *  leaves hundreds in the window and rendering them all made the popover a wall
+ *  of rows; the rest are one click away on the Activity page. Running and
+ *  pending rows are never capped. */
+const COMPLETED_VISIBLE_CAP = 15;
 
 type CollapseKey = 'running' | 'pending' | 'completed';
 
@@ -239,6 +249,8 @@ export function OperationsIndicator() {
   const queued = inProgress.filter((op) => op.status === 'queued');
   const running = inProgress.filter((op) => op.status !== 'queued');
   const terminal = rows.filter((op) => isTerminal(op.status));
+  const terminalShown = terminal.slice(0, COMPLETED_VISIBLE_CAP);
+  const terminalCapped = terminal.length > COMPLETED_VISIBLE_CAP;
 
   // The section HEADINGS count operations, from the ungrouped set, for the same
   // reason the badge does: a group row stands for many runs, so counting rows
@@ -633,7 +645,7 @@ export function OperationsIndicator() {
                 onToggle={() => toggleSection('completed')}
               />
               <Collapse in={collapse.completed} unmountOnExit>
-                {terminal.map((op: ActiveOperation) => {
+                {terminalShown.map((op: ActiveOperation) => {
                   const statusLabel = op.status === 'completed' ? 'success' : op.status;
                   const statusColor =
                     op.status === 'completed'
@@ -753,6 +765,21 @@ export function OperationsIndicator() {
                     </Box>
                   );
                 })}
+                {terminalCapped && (
+                  <Box sx={{ px: 2, py: 0.75 }}>
+                    <Button
+                      size="small"
+                      data-testid="operations-show-all-completed"
+                      onClick={() => {
+                        setAnchorEl(null);
+                        navigate('/activity');
+                      }}
+                      sx={{ textTransform: 'none', fontSize: '0.75rem' }}
+                    >
+                      Show all {terminalCount} in Activity
+                    </Button>
+                  </Box>
+                )}
               </Collapse>
             </>
           )}
