@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.49.2
+# version: 2.49.3
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-27
+# last-edited: 2026-10-29
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -332,9 +332,12 @@ test-short-shard:
 ## real PebbleStore among them -- gated nothing; only the post-merge nightly
 ## ran them. The package list is discovered at run time by
 ## scripts/ci/fixture_test_packages.py, so a new short-skipped test is covered
-## without editing this target.
+## without editing this target. The script also RUNS the tests (--run): a
+## package too heavy for one shard (internal/server, internal/plugins/maintenance)
+## is split by test name into several `go test -run` processes that land in
+## different shards; see its docstring.
 ##
-## FIXTURE_TIMEOUT is go test's per-package -timeout (default 25m; each of the three
+## FIXTURE_TIMEOUT is go test's per-process -timeout (default 25m; each of the three
 ## Woodpecker test-fixtures-N workflows passes it explicitly).
 ## FIXTURE_SHARD=i/n runs shard i of n (ci.yml's fixture-tests matrix). The
 ## script fails on an empty list or an empty shard: `go test` with no package
@@ -345,10 +348,8 @@ test-short-shard:
 FIXTURE_SHARD ?=
 FIXTURE_TIMEOUT ?= 25m
 test-fixtures:
-	@PKGS="$$(python3 scripts/ci/fixture_test_packages.py $(if $(FIXTURE_SHARD),--shard $(FIXTURE_SHARD)))" || exit 1; \
-	echo "🧪 Running short-skipped fixture tests without -short$(if $(FIXTURE_SHARD), (shard $(FIXTURE_SHARD))):"; \
-	echo "$$PKGS" | sed 's/^/   /'; \
-	go test $$PKGS -race -count=1 -timeout $(FIXTURE_TIMEOUT)
+	@echo "🧪 Running short-skipped fixture tests without -short$(if $(FIXTURE_SHARD), (shard $(FIXTURE_SHARD)))..."
+	@python3 scripts/ci/fixture_test_packages.py $(if $(FIXTURE_SHARD),--shard $(FIXTURE_SHARD)) --run -- -race -count=1 -timeout $(FIXTURE_TIMEOUT)
 	@echo "✅ Fixture tests passed"
 
 ## vet: Run go vet across every package. Catches hand-written mock

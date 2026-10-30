@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.32.0
+# version: 3.32.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-23
+# last-edited: 2026-10-29
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -822,9 +822,11 @@ jobs:
   # `make test-fixtures` discovers the packages at run time
   # (scripts/ci/fixture_test_packages.py), so a new short-skipped test is
   # covered without editing this job. Three shards, balanced by measured
-  # per-package time; internal/plugins/maintenance (215 s here since #3781
-  # parallelized its fragment-fixer tests; 383 s before) sets the floor for
-  # its shard.
+  # per-package time. A package too heavy for one process (internal/server and
+  # internal/plugins/maintenance took about 1300 s each in Woodpecker, against
+  # the 25m = 1500 s go test timeout) is split by test name into several
+  # `go test -run` processes that land in different shards, so no single
+  # process comes near the timeout; see scripts/ci/fixture_test_packages.py.
   #
   # Gate: this job's result feeds the "Continuous Integration" workflow
   # conclusion, which is what auto-revert.yml watches on main (see the note on
