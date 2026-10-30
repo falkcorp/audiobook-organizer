@@ -1,7 +1,7 @@
 // file: internal/transcribe/journal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 971eb805-72d8-4757-83dd-d7e9da270afb
-// last-edited: 2026-09-19
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -25,6 +25,8 @@ type mapJournal struct {
 	mu      sync.Mutex
 	entries map[string]json.RawMessage
 	models  []string
+	// invalidated is every key Invalidate was asked to remove.
+	invalidated []string
 }
 
 func newMapJournal() *mapJournal { return &mapJournal{entries: map[string]json.RawMessage{}} }
@@ -45,6 +47,16 @@ func (m *mapJournal) Complete(k, _, model string, result any) error {
 	defer m.mu.Unlock()
 	m.entries[k] = b
 	m.models = append(m.models, model)
+	return nil
+}
+
+func (m *mapJournal) Invalidate(keys []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.invalidated = append(m.invalidated, keys...)
+	for _, k := range keys {
+		delete(m.entries, k)
+	}
 	return nil
 }
 

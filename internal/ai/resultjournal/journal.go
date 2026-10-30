@@ -1,7 +1,7 @@
 // file: internal/ai/resultjournal/journal.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 10003ffd-5d00-48b1-865a-37ac9f9ae826
-// last-edited: 2026-09-19
+// last-edited: 2026-10-30
 
 // Package resultjournal is a durable, content-keyed cache of finished AI
 // results (whisper transcripts first; LLM results later). It exists so a
@@ -183,6 +183,24 @@ func (j *Journal) Complete(contentKey, endpoint, model string, result any) error
 	}
 	if err := j.store.SetRaw(j.storeKey(contentKey), val); err != nil {
 		return fmt.Errorf("resultjournal: set %s: %w", contentKey, err)
+	}
+	return nil
+}
+
+// Invalidate deletes the entries for contentKeys in one synced batch. A key
+// with no entry is not an error. It exists for a caller that journalled a result
+// and then learned it must not be served (the machine that produced it turned out
+// not to be the one the caller meant), so it removes exactly those keys.
+func (j *Journal) Invalidate(contentKeys []string) error {
+	if len(contentKeys) == 0 {
+		return nil
+	}
+	keys := make([]string, len(contentKeys))
+	for i, k := range contentKeys {
+		keys[i] = j.storeKey(k)
+	}
+	if err := j.store.DeleteRawBatch(keys); err != nil {
+		return fmt.Errorf("resultjournal: invalidate %d entries from %s: %w", len(keys), keys[0], err)
 	}
 	return nil
 }

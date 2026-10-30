@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-30
 
@@ -1905,7 +1905,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 				dispatchLog.Warn("a whisper port changed hands during a request, so none of the request's results are kept and the port is dropped from this dispatch: url=%s was=%s now=%s after=%s jobs=%d withheld=%d",
 					logger.SanitizeLogValue(ep.URL), logger.SanitizeLogValue(swap.Was), logger.SanitizeLogValue(swap.Now),
 					swap.After.Round(time.Second), len(swap.Jobs), len(r.res))
-				rf := newRefusal(probeByURL[ep.URL], "answered as a different worker than the one the dispatch froze for it during a request (its port changed hands), so it is sent no more work in this dispatch")
+				reason := "answered as a different worker than the one the dispatch froze for it during a request (its port changed hands), so it is sent no more work in this dispatch"
+				if swap.Unverified {
+					reason = "its /health could not be read after it answered a request, so the answer cannot be told from another machine's (its port may have changed hands), and it is sent no more work in this dispatch"
+				}
+				rf := newRefusal(probeByURL[ep.URL], reason)
 				rf.ChangedHands = true
 				refused = append(refused, rf)
 				// Queued, not dropped now: dropPorts counts the machines again, which
@@ -2303,6 +2307,10 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 	}
 	total := len(jobs)
 	pending := jobs
+	// pin is the one machine a worker that gained its machine id may be for the
+	// whole dispatch (workerPin): the one it learned, or else the first strong
+	// identity a poll sees.
+	pin := newWorkerPin(g.learned)
 	// small holds the faulted jobs waiting to be sent again in requests too
 	// small to fault on timeouts.
 	var small [][]string
@@ -2313,7 +2321,7 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			progress = func(d, _ int) { onProgress(min(base+d, total), total) }
 		}
 		// Watched for a swap of the machine behind the port, like a pool's.
-		res, err := send(withFrozenWorker(ctx, frozenWorker{key: key, capable: capable, lone: true}), g, pending, progress)
+		res, err := send(withFrozenWorker(ctx, frozenWorker{key: key, capable: capable, lone: true, pin: pin}), g, pending, progress)
 		if swap, swapped := errors.AsType[*WorkerSwappedError](err); swapped {
 			// Another machine answered at the port during the request. Nothing the
 			// request returned can be told from the old machine's answer (earlier
