@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_cancel_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c48f1a9-2d76-4b03-8e91-6a3fd027b8ce
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 // Package handlers_test — the activity handlers' behaviour when the client
 // disconnects mid-scan.
@@ -118,7 +118,7 @@ func TestListActivitySources_CancelledScanDoesNotReturn200(t *testing.T) {
 
 	wantFilter := database.ActivityFilter{}
 	svc.EXPECT().
-		GetDistinctSources(cancelledCtx(), wantFilter).
+		GetDistinctSources(cancelledCtx(), sameFilterButPredicate(wantFilter)).
 		Return(nil, context.Canceled).
 		Once()
 

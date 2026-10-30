@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.37.0
+// version: 1.37.1
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -1234,11 +1234,21 @@ func pactSourcesCacheKey(f ActivityFilter) string {
 // on every page load and contributed 3.21 GB to the OOM heap profile, so an
 // abandoned request must be able to stop it. On a cache hit it returns without
 // touching the store at all.
+//
+// ExcludeEntry is honoured (matchesFilter applies it), so the counts match what
+// the filtered list shows. A function cannot be part of the cache key, so a
+// filter carrying one bypasses the cache both ways: it is neither served from
+// it (that would show a restricted caller an unrestricted caller's counts) nor
+// stored in it (the reverse). The scan stays bounded by activityQueryScanBudget
+// and decodes no Details, so the uncached cost is the bounded one.
 func (s *PebbleActivityStore) GetDistinctSources(ctx context.Context, f ActivityFilter) (_ []SourceCount, err error) {
 	defer recoverPebbleClosed("pebble_activity_store.GetDistinctSources", &err)
 	key := pactSourcesCacheKey(f)
-	if cached, ok := s.lookupSourcesCache(key); ok {
-		return cached, nil
+	cacheable := f.ExcludeEntry == nil
+	if cacheable {
+		if cached, ok := s.lookupSourcesCache(key); ok {
+			return cached, nil
+		}
 	}
 
 	nonDigest, digestTiers := pactSelectTiers(f)
@@ -1273,7 +1283,9 @@ func (s *PebbleActivityStore) GetDistinctSources(ctx context.Context, f Activity
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 
-	s.storeSourcesCache(key, out)
+	if cacheable {
+		s.storeSourcesCache(key, out)
+	}
 	return out, nil
 }
 

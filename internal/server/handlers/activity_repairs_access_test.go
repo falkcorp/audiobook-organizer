@@ -1,13 +1,14 @@
 // file: internal/server/handlers/activity_repairs_access_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c7d2f9a1-3b84-4e60-91a5-0d6e8f2b4c37
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -56,8 +57,21 @@ func (f *fakeActivityLog) Query(_ context.Context, flt database.ActivityFilter) 
 	return out, len(out), nil
 }
 
-func (f *fakeActivityLog) GetDistinctSources(context.Context, database.ActivityFilter) ([]database.SourceCount, error) {
-	return nil, nil
+// GetDistinctSources counts the entries per source that survive ExcludeEntry,
+// as the store does.
+func (f *fakeActivityLog) GetDistinctSources(_ context.Context, flt database.ActivityFilter) ([]database.SourceCount, error) {
+	counts := map[string]int{}
+	for _, e := range f.entries {
+		if flt.ExcludeEntry != nil && flt.ExcludeEntry(e) {
+			continue
+		}
+		counts[e.Source]++
+	}
+	var out []database.SourceCount
+	for src, n := range counts {
+		out = append(out, database.SourceCount{Source: src, Count: n})
+	}
+	return out, nil
 }
 
 type v2Rows map[string]*database.OperationV2Row
@@ -128,6 +142,7 @@ func activityRouterFor(build func(log *fakeActivityLog) *ActivityHandler) *gin.E
 		c.Next()
 	})
 	r.GET("/activity", h.ListActivity)
+	r.GET("/activity/sources", h.ListActivitySources)
 	r.GET("/operations/:id/activity", h.ListOperationActivity)
 	r.POST("/operations/activity/merged", h.ListMergedOperationActivity)
 	return r
@@ -247,5 +262,39 @@ func TestActivityRepairsAccess_UnreadableRecordFallsBackToTheEntryAndLogsOnce(t 
 	}
 	if w := activityGet(r, http.MethodGet, "/operations/"+corruptOp+"/activity", adminPerms, ""); w.Code != http.StatusInternalServerError {
 		t.Fatalf("by-id read of the unreadable operation = %d, want a 500 (fails closed)", w.Code)
+	}
+}
+
+// GET /activity/sources counts what GET /activity would list for the same
+// caller: a viewer's counts leave out the Repairs entries they may not read, an
+// admin's include them.
+func TestActivityRepairsAccess_SourcesCountsMatchWhatTheCallerMayRead(t *testing.T) {
+	r := activityRouter(v2Rows{}, v3Runs{})
+	sum := func(perms string) int {
+		w := activityGet(r, http.MethodGet, "/activity/sources", perms, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: /activity/sources = %d %s", perms, w.Code, w.Body.String())
+		}
+		var resp struct {
+			Data struct {
+				Sources []database.SourceCount `json:"sources"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: decode %s: %v", perms, w.Body.String(), err)
+		}
+		n := 0
+		for _, sc := range resp.Data.Sources {
+			n += sc.Count
+		}
+		return n
+	}
+	// Unknown operations, so the entry's own type and def: tag decide: every
+	// repairs-looking entry is hidden from everyone (fail closed), the three
+	// plain ones stay. A count that ignored the predicate would say 8.
+	for _, perms := range []string{viewerPerms, adminPerms} {
+		if got := sum(perms); got != 3 {
+			t.Fatalf("%s: /activity/sources counts %d entries, want the 3 /activity lists", perms, got)
+		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -767,6 +767,9 @@ func (h *ActivityHandler) ListActivitySources(c *gin.Context) {
 			filter.Until = &t
 		}
 	}
+	// Counts are of what the list would show this caller: Repairs operations they
+	// may not read, and other users' data, are not counted.
+	filter.ExcludeEntry = h.visibility(c).excludes
 	sources, err := h.svc.GetDistinctSources(c.Request.Context(), filter)
 	if err != nil {
 		if abortIfClientGone(c, err, "ListActivitySources") {
