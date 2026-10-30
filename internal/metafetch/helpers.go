@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.2
+// version: 1.24.6
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -26,10 +27,66 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
-// protectedListLoaded reports whether the protected-path list the service
-// checks (the Deluge save paths) has loaded; true when none is wired.
-func (mfs *Service) protectedListLoaded() bool {
-	return mfs == nil || tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
+// importRootsRead is one read of the import-path list, taken on first use and
+// then fixed: the roots, or the error that read failed with. A caller that makes
+// several decisions about one book (resolveLibraryCopy) takes it once and passes
+// it down, so every decision sees the same list. Two reads can disagree (the
+// first failing, the second not), and a copy made on the strength of the second
+// would copy a book the first read had only ever called protected for want of a
+// list. It is lazy so a decision that never reaches a protected-path question
+// (a book already under root_dir) reads nothing, as before.
+type importRootsRead struct {
+	mfs   *Service
+	once  sync.Once
+	roots []string
+	err   error
+}
+
+// readImportRoots returns an import-path read that has not happened yet.
+func (mfs *Service) readImportRoots() *importRootsRead {
+	return &importRootsRead{mfs: mfs}
+}
+
+// get performs the read on the first call and returns the same result after.
+func (r *importRootsRead) get() ([]string, error) {
+	r.once.Do(func() { r.roots, r.err = r.mfs.importPathRoots() })
+	return r.roots, r.err
+}
+
+// protectedListLoadedIn reports whether the protected-path lists the service
+// checks (the Deluge save paths and the import-path list r) are usable; true
+// when none is wired. An import-path list that cannot be read counts as not
+// loaded, the same condition isProtectedPathIn fails closed on, so a caller that
+// creates a library copy because "every book outside root_dir looks protected"
+// refuses instead.
+func (mfs *Service) protectedListLoadedIn(r *importRootsRead) bool {
+	if mfs == nil {
+		return true
+	}
+	if _, err := r.get(); err != nil {
+		return false
+	}
+	return tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
+}
+
+// importPathRoots reads the import paths from the store: the one read
+// isProtectedPath and the importRootsRead behind protectedListLoadedIn share. A failed read is logged (at
+// most once a minute) and returned; nil roots and a nil error when no store is
+// wired.
+func (mfs *Service) importPathRoots() ([]string, error) {
+	if mfs == nil || mfs.db == nil {
+		return nil, nil
+	}
+	importPaths, err := mfs.db.GetAllImportPaths()
+	if err != nil {
+		logImportPathReadFailure(err)
+		return nil, err
+	}
+	roots := make([]string, 0, len(importPaths))
+	for _, ip := range importPaths {
+		roots = append(roots, ip.Path)
+	}
+	return roots, nil
 }
 
 // The stripChapterFromTitle patterns, compiled once. They were compiled on
@@ -605,10 +662,39 @@ func keepDiagnosis(cur, next error) error {
 // could not be resolved (pathutil.UnderProtectedPath fails closed).
 var protectedPathLog = logger.New("metafetch.protected-path")
 
+// importPathReadFailureRelog is how often an unreadable import-path list is
+// reported: every path checked while the read fails is refused, so one line per
+// check would flood the log during a whole-library run.
+const importPathReadFailureRelog = time.Minute
+
+var (
+	importPathReadFailureMu   sync.Mutex
+	importPathReadFailureLast time.Time
+)
+
+// logImportPathReadFailure reports a failed import-path read at most once per
+// importPathReadFailureRelog.
+func logImportPathReadFailure(err error) {
+	importPathReadFailureMu.Lock()
+	defer importPathReadFailureMu.Unlock()
+	if !importPathReadFailureLast.IsZero() && time.Since(importPathReadFailureLast) < importPathReadFailureRelog {
+		return
+	}
+	importPathReadFailureLast = time.Now()
+	protectedPathLog.Warn("treating paths as protected: cannot read the import-path list: error=%s",
+		logger.SanitizeLogValue(err.Error()))
+}
+
 // isProtectedPath returns true if the file path is within import or iTunes paths.
 // Method on *Service so it uses mfs.db rather than database.GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 4).
 func (mfs *Service) isProtectedPath(filePath string) bool {
+	return mfs.isProtectedPathIn(mfs.readImportRoots(), filePath)
+}
+
+// isProtectedPathIn is isProtectedPath decided from the import-path read r
+// instead of a fresh one; a failed read protects every path.
+func (mfs *Service) isProtectedPathIn(r *importRootsRead, filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
 
 	// Deluge save paths and the static protected prefixes: the same cache
@@ -629,15 +715,14 @@ func (mfs *Service) isProtectedPath(filePath string) bool {
 	// (pathutil.UnderProtectedPath): the import paths, the folders of the iTunes
 	// library files, any "iTunes Media" folder and the .failed/ quarantine
 	// folder. A path that cannot be resolved counts as protected.
-	var roots []string
-	if mfs != nil && mfs.db != nil {
-		importPaths, err := mfs.db.GetAllImportPaths()
-		if err == nil {
-			for _, ip := range importPaths {
-				roots = append(roots, ip.Path)
-			}
-		}
+	// Fail closed: without the import paths nothing can be shown to be
+	// outside an import folder, and callers write or move on "not protected".
+	// True means "leave the file alone" to all of them.
+	rootsRead, rerr := r.get()
+	if rerr != nil {
+		return true
 	}
+	roots := append([]string(nil), rootsRead...)
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
 		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryReadPath))
 	}

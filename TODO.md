@@ -25,7 +25,7 @@ into one of the curated sections below, is a normal direct edit.
       for being anywhere else are in `kept_sweep_outside_slot_files` (and the journal) and are
       the owner's to decide by hand, whatever the switch says.
 
-- [ ] **TODO-ISPROTECTED-IMPORT-ERR-OPEN** `Server.isProtectedPath`
+- [x] **TODO-ISPROTECTED-IMPORT-ERR-OPEN** `Server.isProtectedPath`
       (`internal/server/server_middleware.go`, the import-path block) drops the
       import paths when the cached read of the list fails (`err == nil` guards the
       loop and nothing else happens on an error), so the static check runs without
