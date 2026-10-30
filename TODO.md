@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -533,7 +534,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Purge round-10 notes (PR 4165, n-5/n-6/n-7)** (n-5) Every trash listing reads the whole pending-removal journal through `PendingFileRemovals`; with a long journal that is a full scan per listing, so cache the count or keep a counter record. (n-6) A single-book purge clears an unresolvable-path record at once, where a pass gives it three attempts; decide whether the single-book paths should count attempts too. (n-7) The boot replay can lose a race to a library scan that attaches a journaled path to a new book, in which case the replay keeps the file and clears the record (correct, but the scan has then imported a file the owner had purged): consider holding the boot replay until the first scan has finished.
 
-- [ ] **SWEEP-TOMBSTONES-UNGUARDED-REMOVE** `internal/sweep/sweeper.go:61-66` `SweepTombstones` calls `os.Remove(tomb.FilePath)` with no library-root, protected-path or still-referenced check. A tombstone whose path a live book (or a trashed one) still names, or that lies outside the library root, loses that file. Found in review of PR 4140, which therefore does not keep tombstones longer to cover a crashed purge (it journals the pending removals instead). Run the same checks the purge runs (`planPurgeFile` and an all-rows `BookIDsAtPath` lookup) before the remove.
+- [x] **SWEEP-TOMBSTONES-UNGUARDED-REMOVE** `internal/sweep/sweeper.go:61-66` `SweepTombstones` calls `os.Remove(tomb.FilePath)` with no library-root, protected-path or still-referenced check. A tombstone whose path a live book (or a trashed one) still names, or that lies outside the library root, loses that file. Found in review of PR 4140, which therefore does not keep tombstones longer to cover a crashed purge (it journals the pending removals instead). Run the same checks the purge runs (`planPurgeFile` and an all-rows `BookIDsAtPath` lookup) before the remove. Done 2026-10-30: the sweep now asks `AudiobookService.TombstoneSweepGuard` (the purge's `planPurgePathIn` and all-rows `BookIDsAtPath` checks plus a size/mtime/inode stamp written only by a purge that committed to removing the file); refusals keep the tombstone and are counted in the result. See `docs/decisions/2026-10-30-tombstone-sweep-guard.md`.
 
 - [ ] **TODO-ABS-503-CHECK** Check once, by hand, how AudioBooth (and Plappa, if used) handle
       the `503` that `GET /api/collections/:id` answers for a per-viewer collection whose

@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.157.0
+// version: 1.157.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-30
 
@@ -546,6 +546,12 @@ type MockStore struct {
 	GetBookTombstoneFunc    func(id string) (*Book, error)
 	DeleteBookTombstoneFunc func(id string) error
 	ListBookTombstonesFunc  func(limit int) ([]Book, error)
+	// CreateStampedBookTombstoneFunc and GetBookTombstoneStampFunc back the
+	// StampedTombstoneWriter / TombstoneStampReader capabilities
+	// (tombstone_file_stamp.go). Unconfigured, a write is CreateBookTombstone
+	// (keeping no stamp) and a read answers "no stamp".
+	CreateStampedBookTombstoneFunc func(book *Book, stamp TombstoneFileStamp) error
+	GetBookTombstoneStampFunc      func(id string) (*TombstoneFileStamp, error)
 
 	// Version Management
 	GetBooksByVersionGroupFunc       func(groupID string) ([]Book, error)
@@ -1715,6 +1721,25 @@ func (m *MockStore) CreateBookTombstone(book *Book) error {
 		return m.CreateBookTombstoneFunc(book)
 	}
 	return nil
+}
+
+// CreateStampedBookTombstone implements StampedTombstoneWriter.
+func (m *MockStore) CreateStampedBookTombstone(book *Book, stamp TombstoneFileStamp) error {
+	if m.CreateStampedBookTombstoneFunc != nil {
+		return m.CreateStampedBookTombstoneFunc(book, stamp)
+	}
+	// Unconfigured, it is the plain tombstone write (and so honours
+	// CreateBookTombstoneFunc): a test that injects a tombstone failure must see
+	// it whether or not the purge stamped.
+	return m.CreateBookTombstone(book)
+}
+
+// GetBookTombstoneStamp implements TombstoneStampReader.
+func (m *MockStore) GetBookTombstoneStamp(id string) (*TombstoneFileStamp, error) {
+	if m.GetBookTombstoneStampFunc != nil {
+		return m.GetBookTombstoneStampFunc(id)
+	}
+	return nil, nil
 }
 
 func (m *MockStore) GetBookTombstone(id string) (*Book, error) {
