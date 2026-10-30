@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerswap.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f3815e00-3772-41f5-b825-2a63377081fc
 // last-edited: 2026-10-30
 
@@ -48,18 +48,9 @@ type WorkerSwappedError struct {
 	After time.Duration
 	// Jobs are the ids of the request that was ended.
 	Jobs []string
-	// Unverified marks a response withheld because the /health probe that
-	// follows every successful response could not be read (Now is then empty):
-	// it cannot be told from the frozen machine's, so it is treated like a swap
-	// (see verifyAfterResponse).
-	Unverified bool
 }
 
 func (e *WorkerSwappedError) Error() string {
-	if e.Unverified {
-		return fmt.Sprintf("worker not verified: the machine behind %s could not be confirmed after a request of %d job(s) was answered, so the answer is withheld",
-			e.URL, len(e.Jobs))
-	}
 	return fmt.Sprintf("worker swapped: %s answers /health as another machine than the one a request of %d job(s) was sent to, %s into the request",
 		e.URL, len(e.Jobs), e.After.Round(time.Second))
 }
@@ -73,6 +64,85 @@ func (e *WorkerSwappedError) Is(target error) bool {
 
 // IsWorkerSwapped reports whether err is (or wraps) a mid-request swap.
 func IsWorkerSwapped(err error) bool { return errors.Is(err, ErrWorkerSwapped) }
+
+// ErrAnswerUnverified marks one response withheld because the /health probe that
+// follows every response on a frozen-identity request could not be read, even
+// after livenessMisses attempts, and nothing else vouched for the worker (see
+// verifyAfterResponse). It is NOT a swap: an unreadable probe is the absence of
+// evidence, not evidence of another machine. A worker that blocks /health while
+// it is busy decoding looks exactly like this, so the error condemns nothing
+// but the one response: the chunks that already passed a verified probe stand
+// (and stay in the journal), the port is neither dropped nor marked as having
+// changed hands, no strike is written, and nothing is benched.
+var ErrAnswerUnverified = errors.New("whisper worker's answer could not be attributed to its machine")
+
+// WorkerUnverifiedError is the typed form of ErrAnswerUnverified. Its text must
+// not contain any of transportWordings, for the reason WorkerSwappedError's must
+// not.
+type WorkerUnverifiedError struct {
+	URL string
+	// Was is the identity the dispatch froze for the port.
+	Was string
+	// After is how long the withheld request ran.
+	After time.Duration
+	// Jobs are the ids of the withheld request: the one chunk whose answer was
+	// not kept. Earlier chunks of the same send are not in it.
+	Jobs []string
+	// Probes is how many /health attempts were made and unreadable.
+	Probes int
+	// Followers maps a job in Jobs to the ids that were not sent because their
+	// audio is byte-identical to its (the journal's content dedup): they are
+	// re-sent with it or deferred with it, never alone.
+	Followers map[string][]string
+}
+
+func (e *WorkerUnverifiedError) Error() string {
+	return fmt.Sprintf("worker not verified: the machine behind %s could not be confirmed after a request of %d job(s) was answered (%d /health attempts), so that answer is withheld",
+		e.URL, len(e.Jobs), e.Probes)
+}
+
+func (e *WorkerUnverifiedError) Is(target error) bool { return target == ErrAnswerUnverified }
+
+// IsWorkerUnverified reports whether err is (or wraps) a withheld,
+// unverifiable response.
+func IsWorkerUnverified(err error) bool { return errors.Is(err, ErrAnswerUnverified) }
+
+// identityEvidence is when a readable /health last confirmed the frozen
+// identity during one send (the poll's probes and the post-response probes both
+// record it). It lets a response whose own post-response probe is unreadable be
+// kept when the worker was seen to be the frozen machine a moment before, and
+// withheld when it was not. Shared by the poller goroutine and the sender, hence
+// the lock.
+type identityEvidence struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (e *identityEvidence) record(at time.Time) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if at.After(e.at) {
+		e.at = at
+	}
+}
+
+// vouchesFor reports whether the identity was confirmed within the evidence
+// window of t: livenessInterval, the longest the poll leaves a port unwatched,
+// plus healthProbeTimeout, the longest the probe that confirmed it could take.
+func (e *identityEvidence) vouchesFor(t time.Time) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.at.IsZero() {
+		return false
+	}
+	return t.Sub(e.at) <= livenessInterval+healthProbeTimeout
+}
 
 // errLivenessIdentityChanged is the supervisor's cause for a swap, like
 // errLivenessUnreachable and errLivenessWedged; the cause actually set is an
@@ -98,6 +168,9 @@ type frozenWorker struct {
 	// pin is the lone endpoint's record of the machine a worker that gained its
 	// id has shown (see workerPin). Nil for a pool port.
 	pin *workerPin
+	// seen is when a probe last confirmed the identity during the send (see
+	// identityEvidence); withFrozenWorker creates it.
+	seen *identityEvidence
 }
 
 // workerPin is the one machine a lone endpoint's weakly-frozen worker may be.
@@ -135,6 +208,9 @@ type frozenWorkerCtxKey struct{}
 // it travels with the context to superviseRequest; a request without it is not
 // checked.
 func withFrozenWorker(ctx context.Context, fw frozenWorker) context.Context {
+	if fw.seen == nil {
+		fw.seen = &identityEvidence{}
+	}
 	return context.WithValue(ctx, frozenWorkerCtxKey{}, fw)
 }
 
@@ -177,3 +253,14 @@ func (fw frozenWorker) swappedTo(url string, h remoteHealth) (now string, swappe
 
 // comparable reports whether the frozen identity names a machine at all.
 func (fw frozenWorker) comparable() bool { return fw.key != "" && !unknownKey(fw.key) }
+
+// confirms reports whether h, a readable probe that swappedTo found no swap in,
+// is positive evidence that the worker is the frozen machine. A strong frozen
+// identity is confirmed only by a probe that reports a machine_id of its own: a
+// "u:" worker that merely missed its id wait resolves to the machine last seen
+// at the URL (resolveMachine), which is the very link a swap breaks and so
+// proves nothing. A weak frozen identity has nothing stronger to be confirmed
+// by, so a readable probe that is not a swap counts.
+func (fw frozenWorker) confirms(h remoteHealth) bool {
+	return !isStrongKey(fw.key) || cleanMachineID(h.MachineID) != ""
+}
