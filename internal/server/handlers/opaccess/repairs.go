@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-30
 
@@ -344,6 +344,17 @@ func (r *Reader) MayReadRun(rec *database.RunRecord) bool {
 		return true
 	}
 	return r.MayReadFixer(rec.DefID, RunFixerID(rec))
+}
+
+// MayReadEveryRepairsOp reports whether the caller may read every Repairs
+// operation, whatever its fixer: wired, and holding every permission (what
+// fixerPermitted asks for a fixer it does not know). It is the caller to serve an
+// aggregate over rows nobody can tell the operation of, such as a daily digest
+// compacted before it kept per-operation counts. An operation that states no
+// fixer is refused to everyone (MayReadFixer), so this is not a promise that
+// nothing is hidden, only that no fixer's permissions are what hides it.
+func (r *Reader) MayReadEveryRepairsOp() bool {
+	return r != nil && r.wired() && r.fixerPermitted("")
 }
 
 // MayReadFixer is the verdict for an operation of definition defID that belongs

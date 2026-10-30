@@ -1,5 +1,5 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
 // last-edited: 2026-10-30
 
@@ -15,6 +15,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -598,7 +599,7 @@ func TestWireHandlers_ActivityRepairsAccessIsInstalled(t *testing.T) {
 // built here by the real CompactByDay over rows written the way the reporter and
 // the slog bridge write them, not hand-shaped, and a caller's tier=digest read
 // carries the items of the ops they may read and none of the others. The digest
-// row itself stays for every caller, and so does the total.
+// row itself stays for every caller; its totals are the caller's share.
 // Not parallel: it swaps the process-wide config.
 func TestActivity_CompactedDigestLeavesOutWhatTheCallerMayNotRead(t *testing.T) {
 	f := newRepairsOpAccessFixture(t)
@@ -623,10 +624,12 @@ func TestActivity_CompactedDigestLeavesOutWhatTheCallerMayNotRead(t *testing.T) 
 	type digestPage struct {
 		Entries []struct {
 			Type    string `json:"type"`
+			Summary string `json:"summary"`
 			Details struct {
-				OriginalCount int            `json:"original_count"`
-				Counts        map[string]int `json:"counts"`
-				Items         []struct {
+				OriginalCount      int            `json:"original_count"`
+				AggregatesWithheld bool           `json:"aggregates_withheld"`
+				Counts             map[string]int `json:"counts"`
+				Items              []struct {
 					OperationID string `json:"operation_id"`
 					Summary     string `json:"summary"`
 				} `json:"items"`
@@ -648,7 +651,24 @@ func TestActivity_CompactedDigestLeavesOutWhatTheCallerMayNotRead(t *testing.T) 
 		require.Equal(t, adminPage.Total, page.Total, "%s: the digest row went missing or the total moved", who)
 		require.Len(t, page.Entries, 1, who)
 		require.Equal(t, "daily_digest", page.Entries[0].Type, who)
-		require.Equal(t, 2*(len(f.allRepairsOps)+1), page.Entries[0].Details.OriginalCount, "%s: the digest does not describe the day (two rows per op)", who)
+		// Two rows per op, and only the ops the caller may read are counted: the
+		// totals are subtracted per caller (activity_digest_aggregates.go).
+		readableOps := 0
+		for _, id := range append(slices.Clone(f.allRepairsOps), f.plainScan) {
+			if slices.Contains(f.readable(who), id) {
+				readableOps++
+			}
+		}
+		require.Equal(t, 2*readableOps, page.Entries[0].Details.OriginalCount, "%s: the digest counts rows of ops the caller may not read (two rows per op)", who)
+		countSum := 0
+		for _, n := range page.Entries[0].Details.Counts {
+			countSum += n
+		}
+		require.Equal(t, page.Entries[0].Details.OriginalCount, countSum, "%s: the per-type counts disagree with original_count", who)
+		require.Contains(t, page.Entries[0].Summary, fmt.Sprintf("(%d entries)", 2*readableOps), "%s: the summary names a different total", who)
+		require.False(t, page.Entries[0].Details.AggregatesWithheld, "%s: a freshly compacted digest never withholds", who)
+		require.NotContains(t, body, "op_aggregates", who)
+		require.NotContains(t, body, "no_op_aggregate", who)
 
 		var itemOps []string
 		for _, it := range page.Entries[0].Details.Items {

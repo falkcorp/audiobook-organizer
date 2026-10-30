@@ -368,6 +368,34 @@ describe('ActivityLog daily digests', () => {
     const lastFeed = mockedFetchActivity.mock.calls.at(-1)?.[0];
     expect((lastFeed?.exclude_tiers ?? '').split(',')).toContain('digest');
   });
+
+  it('says the counts are hidden for a digest whose totals the server withheld', async () => {
+    mockedFetchActivity.mockResolvedValue({ entries: [entry()], total: 1 });
+    mockedFetchDigests.mockResolvedValue({
+      entries: [
+        digest('2026-09-13'),
+        entry({
+          id: 'digest-2026-09-12',
+          timestamp: '2026-09-12T00:00:00Z',
+          tier: 'digest',
+          type: 'daily_digest',
+          summary: 'Digest for 2026-09-12',
+          details: { date: '2026-09-12', aggregates_withheld: true, items: [] },
+        }),
+      ],
+      total: 2,
+    });
+
+    renderPage();
+
+    const section = await screen.findByTestId('activity-digests');
+    // Only the withheld digest carries the label, and it prints no zero counts.
+    const labels = await within(section).findAllByTestId('digest-counts-hidden');
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toHaveTextContent('counts hidden');
+    expect(within(section).getAllByText(/3 book added/)).toHaveLength(1);
+    expect(within(section).queryByText(/0 /)).not.toBeInTheDocument();
+  });
 });
 
 /**

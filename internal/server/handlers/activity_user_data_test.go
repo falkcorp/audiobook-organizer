@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity_user_data_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e8a4c71-9d35-4b60-a1f4-6c0b7d9e2a58
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -189,7 +189,10 @@ func TestActivity_UserDataLeavesTheCountAndRedactsDigests(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	body := w.Body.String()
 	assert.Contains(t, body, `"total":2`, "only the plain scheduler line and the digest row remain: %s", body)
-	assert.Contains(t, body, "DIGEST-ROW")
+	// The row stays; its stored summary, which would state the day's total, does
+	// not: this digest has no per-operation shares and no date (activity_digest_aggregates.go).
+	assert.Contains(t, body, `"type":"daily_digest"`)
+	assert.NotContains(t, body, "DIGEST-ROW")
 	assert.Contains(t, body, "PLAIN-SCHEDULER-LINE", "the digest's ordinary item stays")
 	assert.NotContains(t, body, "01INVENTEDUSER0000000000A")
 	assert.NotContains(t, body, "USERDATA-ABS-LINE")
