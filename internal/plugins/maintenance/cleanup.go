@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.33.1
+// version: 1.34.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-29
 
@@ -560,11 +560,19 @@ type TrashCleanupResult struct {
 	// purge_failed this run because a note stayed unsettled for
 	// versions.PurgeUndecidedEscalateAfter nights in a row (they then show on the
 	// trashed-versions page and in NeedsAttention from the next night).
+	//
+	// The sweep removes a file ONLY inside its version's own .versions/{id}/
+	// folder. KeptSweepOutsideSlot counts (within KeptSweepStillKept) the noted
+	// files that lie anywhere else: they are never removed, in either mode,
+	// whether or not the version's book still exists, and are listed in
+	// KeptSweepOutsideSlotFiles every run so the owner can decide them by hand.
 	KeptSweepReportOnly          bool            `json:"kept_sweep_report_only"`
 	KeptSweepWouldRemove         int             `json:"kept_sweep_would_remove"`
 	KeptSweepWouldDrop           int             `json:"kept_sweep_would_drop"`
 	KeptSweepWouldRemoveFiles    []KeptSweepFile `json:"kept_sweep_would_remove_files,omitempty"`
 	KeptSweepWouldDropFiles      []KeptSweepFile `json:"kept_sweep_would_drop_files,omitempty"`
+	KeptSweepOutsideSlot         int             `json:"kept_sweep_outside_slot"`
+	KeptSweepOutsideSlotFiles    []KeptSweepFile `json:"kept_sweep_outside_slot_files,omitempty"`
 	KeptSweepEscalated           int             `json:"kept_sweep_escalated"`
 	KeptSweepEscalatedVersions   []string        `json:"kept_sweep_escalated_version_ids,omitempty"`
 	KeptSweepEscalatedFiles      []KeptSweepFile `json:"kept_sweep_escalated_files,omitempty"`
@@ -674,6 +682,8 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	payload.KeptSweepWouldRemove, payload.KeptSweepWouldDrop = res.KeptSweep.WouldRemove, res.KeptSweep.WouldDrop
 	payload.KeptSweepWouldRemoveFiles = keptSweepFiles(res.KeptSweep.WouldRemoveFiles)
 	payload.KeptSweepWouldDropFiles = keptSweepFiles(res.KeptSweep.WouldDropFiles)
+	payload.KeptSweepOutsideSlot = res.KeptSweep.OutsideSlot
+	payload.KeptSweepOutsideSlotFiles = keptSweepFiles(res.KeptSweep.OutsideSlotFiles)
 	payload.KeptSweepEscalated = len(res.KeptSweep.Escalated)
 	for _, k := range res.KeptSweep.Escalated {
 		payload.KeptSweepEscalatedVersions = append(payload.KeptSweepEscalatedVersions, k.VersionID)
@@ -738,6 +748,15 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep WOULD drop the note of %s, already gone (version %s, book %s; it was kept: %s)", f.Path, f.VersionID, f.BookID, f.Reason))
 		}
 	}
+	if res.KeptSweep.OutsideSlot > 0 {
+		// One line per file, every run: these are the files nothing will ever remove
+		// for the owner, so the journal is where they are read.
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: the kept-file sweep removes files only inside a version's own .versions folder; %d noted file(s) lie outside theirs and are kept, never removed",
+			res.KeptSweep.OutsideSlot))
+		for _, f := range payload.KeptSweepOutsideSlotFiles {
+			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep KEEPS %s (version %s, book %s): outside the version's own .versions folder", f.Path, f.VersionID, f.BookID))
+		}
+	}
 	if n := len(res.KeptSweep.Escalated); n > 0 {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed, so the sweep stops warning about those files (it still sweeps the other kept files of the version); Purge now retries one, or hard delete drops it (versions %s, files %s)",
 			n, versions.PurgeUndecidedEscalateAfter, strings.Join(payload.KeptSweepEscalatedVersions, ", "), strings.Join(escalatedPaths(payload.KeptSweepEscalatedFiles), ", ")))
@@ -787,6 +806,9 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	} else {
 		msg += fmt.Sprintf("; kept-file sweep: removed %d files, %d notes dropped (already gone), %d still owned, %d kept on error",
 			res.KeptSweep.Removed, res.KeptSweep.Gone, res.KeptSweep.StillKept, res.KeptSweep.KeptOnError)
+	}
+	if n := res.KeptSweep.OutsideSlot; n > 0 {
+		msg += fmt.Sprintf("; %d of the still-owned files lie outside their version's own folder and are never removed", n)
 	}
 	if n := len(res.KeptSweep.Escalated); n > 0 {
 		msg += fmt.Sprintf("; %d kept-file version(s) now purge_failed after %d nights (versions %s)", n, versions.PurgeUndecidedEscalateAfter, strings.Join(payload.KeptSweepEscalatedVersions, ", "))

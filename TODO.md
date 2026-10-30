@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.18 -->
+<!-- version: 10.78.19 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -144,6 +144,10 @@ into one of the curated sections below, is a normal direct edit.
       (`classifyPurgePath`) again for each note, so the two cannot disagree. Removes what
       nothing owns, drops notes of files already gone, keeps everything else, and
       reports removed / still owned / kept on error in the op result.
+      Deletes ONLY inside the version's own `.versions/{id}/` folder: a noted file anywhere
+      else is never removed (sweep or purge retry), is reported every run
+      (`kept_sweep_outside_slot_files`) and left to the owner. A `purging` version whose
+      book serves nothing on disk escalates to `purge_failed` after 3 attempts (no deletion).
       Owner decisions 2026-10-29: it ships REPORT-ONLY (`kept_sweep_apply_enabled`, env
       `KEPT_SWEEP_APPLY_ENABLED`, off by default: it lists what it would remove and unlinks
       nothing, drops no note), and a note it cannot settle for 3 nights in a row escalates

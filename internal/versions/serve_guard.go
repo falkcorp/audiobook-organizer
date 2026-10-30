@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -53,9 +53,10 @@ type servedGuard struct {
 	// skipOwn is set when the own book is itself trashed: it serves nothing.
 	skipOwn bool
 
-	// bookExists is false only when the own book row is gone (hard-deleted, no
-	// tombstone). A trashed book still exists: it can be restored and wants its
-	// audio back, though it serves nothing now (skipOwn).
+	// bookExists is false only when the own book row is gone (row gone:
+	// hard-deleted). A trashed book's row still exists, though it serves nothing
+	// now (skipOwn). It does not decide what a purge or the kept-file sweep may
+	// remove: that is only ever inside the version's own slot (inVersionSlot).
 	bookExists bool
 
 	exact  map[string]struct{} // canonical served file paths of the own book

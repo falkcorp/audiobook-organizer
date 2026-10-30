@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7d2c9e41-6b0a-4f58-a3d7-1e4b8c5f0926
 // last-edited: 2026-10-29
 
@@ -126,19 +126,24 @@ func (f *keptFixture) bookOwner(t *testing.T, p string) string {
 	return b.ID
 }
 
-// testNight numbers the nights the test clock has been moved through.
-var testNight int
+// testNight numbers the nights the test clock has been moved through, and
+// testClockBase is where the first one starts: today, so a version trashed a
+// while ago is old enough to purge on any night the clock reaches.
+var (
+	testNight     int
+	testClockBase = time.Now()
+	testClock     = testClockBase
+)
 
 // nextNight moves the sweep's clock to the next calendar day: the sweep counts
 // one night a day (BookVersion.PurgeUndecidedNightOn), and the helpers below are
 // one nightly run each. A test that wants two runs on the same day uses
-// sweepSameNight.
+// sweepSameNight. The clock is passed to the sweep (KeptSweepOptions.Now) and to
+// the cleanup (cleanupTrashedVersionsAt), as the server wiring does.
 func nextNight(t *testing.T) {
 	t.Helper()
 	testNight++
-	now := time.Date(2026, 6, 1, 3, 0, 0, 0, time.UTC).AddDate(0, 0, testNight)
-	keptSweepNow = func() time.Time { return now }
-	t.Cleanup(func() { keptSweepNow = time.Now })
+	testClock = testClockBase.AddDate(0, 0, testNight)
 }
 
 // sweep is one nightly run with the switch on, on a new day.
@@ -159,7 +164,7 @@ func sweepReport(t *testing.T, store KeptSweepStore, guard PurgeGuard) KeptSweep
 // sweepSameNight runs the sweep again on the day the clock is at.
 func sweepSameNight(t *testing.T, store KeptSweepStore, guard PurgeGuard, apply bool) KeptSweepResult {
 	t.Helper()
-	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{Apply: apply})
+	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{Apply: apply, Now: testClock})
 	if err != nil {
 		t.Fatalf("SweepKeptFiles (apply=%v): %v", apply, err)
 	}

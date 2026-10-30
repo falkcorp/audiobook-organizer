@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_trash_kept_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c8f5a17-6d3b-4e90-b1a4-9e7d0c3f8b52
 // last-edited: 2026-10-29
 
@@ -269,4 +269,34 @@ func TestRunTrashCleanup_UnlistableUnfinishedSwapsFailTheOp(t *testing.T) {
 	require.Len(t, rep.logs, 1)
 	require.Contains(t, rep.logs[0], "could not be listed")
 	require.NotContains(t, rep.logs[0], "0 failed")
+}
+
+// The sweep removes a file only inside its version's own .versions folder. The
+// noted files outside it are kept in either mode, and reported: the count and the
+// files (version, book, path, reason) in the persisted result, one journal line
+// per file, and a phrase in the summary line.
+func TestRunTrashCleanup_ReportsTheFilesTheSweepKeepsOutsideTheSlot(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{
+		KeptSweep: versions.KeptSweepResult{
+			Versions: 1, StillKept: 2, OutsideSlot: 1,
+			OutsideSlotFiles: []versions.KeptVersion{{VersionID: "ver-year-one", BookID: "year-one",
+				Files: []database.PurgeFileNote{{Path: "/lib/Gotham/y1-01.m4b", Reason: versions.OutsideSlotNeverAutoRemovedReason}}}},
+		},
+	}})
+	rep := &levelReporter{}
+
+	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
+
+	got, ok := rep.result.(TrashCleanupResult)
+	require.True(t, ok, "result = %#v", rep.result)
+	require.Equal(t, 1, got.KeptSweepOutsideSlot)
+	require.Equal(t, []KeptSweepFile{{VersionID: "ver-year-one", BookID: "year-one", Path: "/lib/Gotham/y1-01.m4b", Reason: versions.OutsideSlotNeverAutoRemovedReason}}, got.KeptSweepOutsideSlotFiles)
+	var lines int
+	for _, l := range rep.logs {
+		if strings.Contains(l, "kept-file sweep KEEPS /lib/Gotham/y1-01.m4b") && strings.Contains(l, "ver-year-one") {
+			lines++
+		}
+	}
+	require.Equal(t, 1, lines, "logs = %v", rep.logs)
+	require.Contains(t, rep.logs[len(rep.logs)-1], "1 of the still-owned files lie outside their version's own folder and are never removed")
 }

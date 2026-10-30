@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-29-purge-kept-files-sweep-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 2b6d9f3e-8a41-4c70-9d5e-0f7a3c1b8e64 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -59,14 +59,19 @@ whose own file is missing (that needs the book fixed, not a hand-over). A night
 is a calendar day, however many times the clean-up runs that day. The skipped
 files that were not the problem stay on the list and are still checked every night.
 
-Two further protections came out of review. A skipped file that lies outside the
-purged version's own folder is never removed while the version's book still
-exists, even in the trash: it may be that book's audio, and the book can be
-restored. And when the owner presses Purge now on a version that was handed over,
-the purge asks about every file named on its lists, instead of only the files in
-its folder, and refuses to delete anything while its book plays no file that
-exists, so a retry can no longer erase a note, or remove a file, that the nightly
-clean-up had left alone.
+Three further protections came out of review. The clean-up deletes files only
+inside the purged version's own hidden folder. A skipped file anywhere else is never
+removed, whether or not the version's book still exists: the notes cannot prove that
+nothing wants it (the book may have been trashed or deleted since, or a re-import may
+have reused the name), so the clean-up lists those files every night, with the
+reason, and leaves them for the owner to decide. When the owner presses Purge now on
+a version that was handed over, the purge asks about every file named on its lists,
+instead of only the files in its folder, and refuses to delete anything while its
+book plays no file that exists, so a retry can no longer erase a note, or remove a
+file, that the nightly clean-up had left alone. And a purge that has started but whose
+book plays no file that exists can no longer be stuck for ever: after three refused
+attempts it is handed over to the owner like the others, and nothing is deleted to
+get there.
 
 The night's report now says how many files were removed, how many notes were
 dropped because the file was already gone, how many files are still needed, and how
@@ -83,4 +88,8 @@ failed read (kept), an iTunes file (kept), a file a live book plays (kept), a
 library that is not ready (kept), a failed removal (kept) and a second run (does
 nothing), and run a pool of workers over many purged versions under the race
 detector. Each key check was confirmed to fail when the code under test was broken
-on purpose.
+on purpose. Further tests cover a skipped file outside the folder when its book is
+trashed, deleted, has the parent folder as its path, or when a re-import reused the
+name (kept in every case, and listed), a skipped file inside the folder when its book
+is gone (still removed), and a purge that has started whose book plays nothing (handed
+over after three attempts, files untouched, then deletable).

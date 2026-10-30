@@ -5,3 +5,6 @@
       (env `KEPT_SWEEP_APPLY_ENABLED`) to true. Until then it removes nothing; `PurgeKept`
       only exists since 2026-10-28, so the first list covers purges since then. Decide
       afterwards whether the switch should be removed and the sweep always applying.
+      The sweep removes only inside a version's own `.versions/{id}/` folder: files it keeps
+      for being anywhere else are in `kept_sweep_outside_slot_files` (and the journal) and are
+      the owner's to decide by hand, whatever the switch says.

@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_modes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3e8a5c17-92d4-4b06-8f1a-6c0d7b2e9a54
 // last-edited: 2026-10-29
 
@@ -211,7 +211,7 @@ func TestSweepKeptFiles_EscalatesAfterThreeNightsOfARealError(t *testing.T) {
 		t.Errorf("after night 4: status=%s purge_failed=%v nights=%d, want it unchanged", again.Status, again.PurgeFailed, again.PurgeUndecidedNights)
 	}
 	nextNight(t)
-	clean, err := cleanupTrashedVersionsAt(s, time.Now(), testGuard, true)
+	clean, err := cleanupTrashedVersionsAt(s, testClock, testGuard, true)
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestCleanup_ReportsAVersionTheSweepEscalated(t *testing.T) {
 	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
 		var err error
 		nextNight(t)
-		if res, err = cleanupTrashedVersionsAt(s, time.Now(), testGuard, true); err != nil {
+		if res, err = cleanupTrashedVersionsAt(s, testClock, testGuard, true); err != nil {
 			t.Fatalf("cleanup: %v", err)
 		}
 	}
