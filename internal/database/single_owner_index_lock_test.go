@@ -1,7 +1,7 @@
 // file: internal/database/single_owner_index_lock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b4e07d19-6a3c-4825-9f71-3d8c05e2a916
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
@@ -209,6 +209,9 @@ var singleOwnerIndexStagers = map[string]string{
 	// (mutex inside): every book_file delete path (DeleteBookFile, DeleteBookFilesForBook,
 	// DeleteBookFilesByIDs) reaches it through commitBookFileDeletes.
 	"commitBookFileDeletes": "commitDeleteWithWindowCascade -> commitBookFileBatch",
+	// -> commitBookFileBatchVerified (mutex inside), judging each key again in
+	// the verify hook under it (maintenance.bookfile-acoustid-index-repair)
+	"DeleteOrphanBookFileAcoustIDEntries": "commitBookFileBatchVerified",
 	// -> commitBookFileSweepChunk, which commits each chunk through
 	// commitBookFileBatch (mutex inside)
 	"ClearAllAcoustIDFingerprints": "commitBookFileSweepChunk -> commitBookFileBatch",

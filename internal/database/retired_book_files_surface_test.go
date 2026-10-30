@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files_surface_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3b7d5a19-c0e2-4f84-9a61-d8e24b70f315
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
@@ -113,7 +113,12 @@ func TestFilteredIdentityLookups_IgnoreARetiredHolder(t *testing.T) {
 func TestGetBookFileByAcoustID_IgnoresARetiredHolder(t *testing.T) {
 	fx := newRetiredFixture(t)
 	const fp = "acoustid-seg-retired"
-	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/ac/x.mp3", AcoustIDSeg0: fp})
+	// A legacy row: the segment is stored and indexed, as before T020. A create
+	// no longer indexes a segment its row does not store, so the row and its key
+	// are planted the way an old binary left them.
+	x := fx.create(t, fx.shell.ID, BookFile{FilePath: "/lib/ret/ac/x.mp3"})
+	x.AcoustIDSeg0 = fp
+	plantLegacyAcoustIDRow(t, fx.ps, x)
 	got, err := fx.ps.GetBookFileByAcoustID(fp)
 	require.NoError(t, err)
 	require.NotNil(t, got, "premise: the live row answers before the retire")

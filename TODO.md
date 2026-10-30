@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.25 -->
+<!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
@@ -305,7 +306,7 @@ into one of the curated sections below, is a normal direct edit.
       row, each match round taking and releasing the file stripe. Bounded, but undocumented.
       Fix: a comment at the match loop naming the multiplication, or one shared budget passed
       down to `updateBookFile` (changes its signature and every caller).
-- [ ] **TODO-BF-ACOUSTID-SEG-KEYS-NOT-PERSISTED** `UpdateBookFile` writes `book_file_acoustid:<seg>`
+- [x] **TODO-BF-ACOUSTID-SEG-KEYS-NOT-PERSISTED** `UpdateBookFile` writes `book_file_acoustid:<seg>`
       index keys for `AcoustIDSeg*` values that `marshalBookFileDropSegs` does not persist in the
       row. A later `SweepBookFileSegDrop` then sees no segment needle in the stored row and skips
       it, so those index keys outlive any row that names them. Pre-dates PR #4180 (which replaced #4177). Fix: stop
