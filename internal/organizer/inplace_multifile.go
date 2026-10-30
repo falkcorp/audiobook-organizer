@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3f0f7d52-6a2e-4b8e-9d3c-1b7e5a0c9e41
-// last-edited: 2026-10-20
+// last-edited: 2026-10-29
 
 package organizer
 
@@ -131,6 +131,11 @@ func (orgSvc *Service) reOrganizeMultiFileInPlace(book *database.Book, present [
 		if pathutil.UnderFrozenITunesTree(r.FilePath) {
 			return "", nil, &DestinationConflictError{Category: OutcomeFrozenITunes, Source: r.FilePath, Target: targetDir,
 				Reason: "a file of the book is in the iTunes-managed tree (" + pathutil.FrozenITunesSegment + "); it is never moved"}
+		}
+		// The same file spelled through a symlink into the iTunes tree or another
+		// protected folder: moveExclusive would take the real file out of there.
+		if err := refuseProtectedInPlaceSource(r.FilePath, targetDir); err != nil {
+			return "", nil, err
 		}
 		// A dedup merge (MoveBookFilesToBook) can leave a library book owning a
 		// row in the download or import folder. Moving it would pull the file
