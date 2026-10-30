@@ -1184,7 +1184,14 @@ func (p *PebbleStore) writeBookFileSecondaryIndexesFor(batch *GatedBatch, f *Boo
 	if err := batch.Set([]byte("book_file_id:"+f.ID), []byte("book_file:"+f.BookID+":"+f.ID), nil); err != nil {
 		return err
 	}
-	for _, k := range singleOwnerKeysOf(f) {
+	// The keys to write are those of the row as it is STORED (bookFileStoredForm),
+	// not of the caller's struct: the row drops AcoustIDSeg0..6, and a
+	// book_file_acoustid: key for a dropped segment would outlive the row's
+	// fingerprint. (singleOwnerKeysOf itself keeps the segments of a row read from
+	// Pebble: a legacy row still holds them, and the retire writers must move the
+	// keys that exist.)
+	stored := bookFileStoredForm(f)
+	for _, k := range singleOwnerKeysOf(&stored) {
 		cur, found, err := p.hashIndexValue(batch, k.key)
 		if err != nil {
 			return err

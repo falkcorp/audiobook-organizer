@@ -6414,16 +6414,21 @@ func bookFilePathCRC(filePath string) string {
 	return fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(filePath)))
 }
 
-// marshalBookFileDropSegs serialises f to JSON with AcoustIDSeg0..6 removed.
-// It operates on a shallow copy so the caller's struct (used afterwards by
-// writeBookFileSecondaryIndexes and UpsertBookFileToMemDB) is never mutated.
+// bookFileStoredForm returns a copy of f as a book_file: row stores it:
+// AcoustIDSeg0..6 are cleared. It is the ONE definition of what the row
+// persists of those fields, shared by the writer of the row
+// (marshalBookFileDropSegs) and the writers of the row's secondary indexes
+// (writeBookFileSecondaryIndexes, writeBookFileSecondaryIndexesFor), so the
+// two cannot disagree. They disagreed before 2026-10-30: the index writers read
+// the caller's struct, so every create and update wrote a book_file_acoustid:
+// key for a segment the row never held. SweepBookFileSegDrop finds legacy rows
+// by the segment in the stored bytes, so it never saw those keys' rows, and
+// deleteBookFileSecondaryIndexes (which reads the stored row) never removed
+// them: the keys outlived the row's fingerprint, or the row itself.
 //
-// T020: segment fields are deprecated — they waste 200–400 MB of Pebble space
-// and are no longer needed after LSH replaced the last consumer. New rows are
-// written without them; a background sweep (dedup.bookfile-seg-drop) rewrites
-// old rows on-demand. The struct fields remain for decode of legacy rows.
-func marshalBookFileDropSegs(f *BookFile) ([]byte, error) {
-	c := *f // shallow copy — all fields copied, slice headers duplicated
+// The copy is shallow: slice headers are duplicated, not their arrays.
+func bookFileStoredForm(f *BookFile) BookFile {
+	c := *f
 	c.AcoustIDSeg0 = ""
 	c.AcoustIDSeg1 = ""
 	c.AcoustIDSeg2 = ""
@@ -6431,11 +6436,26 @@ func marshalBookFileDropSegs(f *BookFile) ([]byte, error) {
 	c.AcoustIDSeg4 = ""
 	c.AcoustIDSeg5 = ""
 	c.AcoustIDSeg6 = ""
+	return c
+}
+
+// marshalBookFileDropSegs serialises f to JSON in its stored form
+// (bookFileStoredForm: AcoustIDSeg0..6 removed). It operates on a copy so the
+// caller's struct (used afterwards by UpsertBookFileToMemDB) is never mutated.
+//
+// T020: segment fields are deprecated — they waste 200–400 MB of Pebble space
+// and are no longer needed after LSH replaced the last consumer. New rows are
+// written without them; a background sweep (dedup.bookfile-seg-drop) rewrites
+// old rows on-demand. The struct fields remain for decode of legacy rows.
+func marshalBookFileDropSegs(f *BookFile) ([]byte, error) {
+	c := bookFileStoredForm(f)
 	return json.Marshal(&c)
 }
 
 // writeBookFileSecondaryIndexes adds the PID and path secondary index entries
 // to the batch. Either index is only written when the relevant field is non-empty.
+// The caller must persist f's row through marshalBookFileDropSegs (see
+// bookFileStoredForm).
 func writeBookFileSecondaryIndexes(batch *GatedBatch, f *BookFile) error {
 	ref := []byte(fmt.Sprintf("%s:%s", f.BookID, f.ID))
 
@@ -6473,9 +6493,16 @@ func writeBookFileSecondaryIndexes(batch *GatedBatch, f *BookFile) error {
 		}
 	}
 
-	// Write secondary index for each non-empty fingerprint segment.
-	for _, seg := range [7]string{f.AcoustIDSeg0, f.AcoustIDSeg1, f.AcoustIDSeg2, f.AcoustIDSeg3,
-		f.AcoustIDSeg4, f.AcoustIDSeg5, f.AcoustIDSeg6} {
+	// Write secondary index for each non-empty fingerprint segment THE ROW
+	// STORES. That is the segments of its stored form, not of the caller's
+	// struct: a key for a segment the row does not hold is one nothing can
+	// later delete (deleteBookFileSecondaryIndexes and SweepBookFileSegDrop both
+	// read the stored row). Every caller persists f through
+	// marshalBookFileDropSegs, which clears all seven, so today this writes no
+	// key; it goes through bookFileStoredForm so it stays true if that changes.
+	stored := bookFileStoredForm(f)
+	for _, seg := range [7]string{stored.AcoustIDSeg0, stored.AcoustIDSeg1, stored.AcoustIDSeg2, stored.AcoustIDSeg3,
+		stored.AcoustIDSeg4, stored.AcoustIDSeg5, stored.AcoustIDSeg6} {
 		if seg != "" {
 			acoustKey := []byte(fmt.Sprintf("book_file_acoustid:%s", seg))
 			if err := batch.Set(acoustKey, ref, nil); err != nil {

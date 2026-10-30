@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.92.0
+// version: 1.92.1
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -242,6 +242,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.opChangeBookIndexRebuildDef(),
 		// book:hash:/originalhash:/organizedhash: indexes: check + repair.
 		p.bookHashIndexRepairDef(),
+		// book_file_acoustid: index: delete the keys no row holds a segment for.
+		p.bookFileAcoustIDIndexRepairDef(),
 		// combine-journal rows the purge's undo hold cannot decode: read-only list.
 		p.combineJournalCheckDef(),
 		p.identIndexRebuildDef(),

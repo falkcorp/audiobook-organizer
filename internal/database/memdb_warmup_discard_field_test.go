@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_discard_field_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c4e08b52-71a9-4d36-9f2b-6a30df518e7c
-// last-edited: 2026-09-02
+// last-edited: 2026-10-30
 
 package database
 
@@ -135,9 +135,9 @@ func TestDiscardByField_ChargesEachGroupToItsOwnKey(t *testing.T) {
 // changes how the production number must be read.
 //
 // AcoustIDSeg0..6 CANNOT be seeded through CreateBookFile: the write path
-// deliberately omits them from the stored row and keeps them only in the
-// book_file_acoustid: secondary index — pinned by
-// TestCreateBookFile_StoredValueLacksSegs. A row written by the current code
+// deliberately omits them from the stored row, and indexes none of them in
+// book_file_acoustid: — pinned by TestCreateBookFile_StoredValueLacksSegs and
+// TestBookFileWrites_DroppedSegsLeaveNoAcoustIDKeys. A row written by the current code
 // therefore contributes exactly zero to this group.
 //
 // So a nonzero acoustid_seg0_6 in a production discarded_field_mb is NOT a
