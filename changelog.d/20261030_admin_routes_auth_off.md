@@ -1,0 +1,4 @@
+### Fixed
+
+- Admin-role routes now follow one rule when `EnableAuth=false` instead of all answering 401. Read-only admin introspection (`GET /cache/stats/keys` and the admin debug API's four `GET` routes) opens through `Server.adminRole()`, now in `wire_admin_role.go`. Everything that deletes or rewrites data (`/system/reset`, `/system/factory-reset`, the debug `PATCH` and undo routes, the retired wipe, cache-flush and digest stubs) and the guest service token routes keep `RequireAdmin` and still answer 401, so an unauthenticated caller cannot wipe the store. `RequireAdmin` itself is unchanged. `admindebug.Register` now takes the read gate and returns its routes.
+- Added a guard test: every admin-gated route is recorded when it is wired and must be on a reviewed allowlist, and `RequireAdmin()` may not be wired outside the recording helpers.

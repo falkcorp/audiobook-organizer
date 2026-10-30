@@ -1,7 +1,7 @@
 // file: internal/server/wire_master_list_routes.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0c5b9e17-6a42-4d83-b1f7-9e8d2a4c6b35
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 
 package server
 
@@ -9,8 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // wireMasterListRoutes registers the master-list routes (design:
@@ -48,24 +46,4 @@ func (s *Server) wireMasterListRoutes(protected *gin.RouterGroup) {
 	// DELETE /:id and GET /elsewhere trees apart by method.
 	adminOnly.GET("/master-lists/elsewhere", s.perm(auth.PermUsersManage), s.listMasterListElsewhere)
 	adminOnly.DELETE("/master-lists/:id", s.perm(auth.PermUsersManage), s.deleteMasterList)
-}
-
-// adminRole is servermiddleware.RequireAdmin as wired for routes that must also
-// work with authentication disabled. With EnableAuth=false no request carries a
-// user, so RequireAdmin answers every one with 401; s.perm already passes
-// everything in that mode, and adminRole does the same (read once, at wiring,
-// like s.perm). With authentication on it IS RequireAdmin.
-//
-// It is deliberately not a change to RequireAdmin itself. RequireAdmin also
-// guards the retired library wipe stub, the cache introspection route, the
-// admin debug API and the destructive store-reset routes under /system (which
-// chose the admin role over a permission precisely so a custom role cannot reach
-// them); with auth disabled those answer 401 today, and making them reachable
-// without a login is a separate decision for their owner, not a side effect of
-// this PR.
-func (s *Server) adminRole() gin.HandlerFunc {
-	if !config.AppConfig.EnableAuth {
-		return func(c *gin.Context) { c.Next() }
-	}
-	return servermiddleware.RequireAdmin()
 }

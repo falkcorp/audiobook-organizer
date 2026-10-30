@@ -2014,16 +2014,13 @@ func (s *Server) setupRoutes() {
 			// future job that forgets to implement PermissionAware.
 			protected.POST("/maintenance/jobs/:job_id", s.perm(auth.PermSettingsManage), s.runMaintenanceJob)
 
-			// Admin-only (retired wipe stub)
-			adminOnly := protected.Group("")
-			adminOnly.Use(servermiddleware.RequireAdmin())
-			{
-				// The library wipe is retired. It stays registered as a 410 stub,
-				// behind RequireAdmin, so a stale client gets "gone" rather than a
-				// 404 and a non-admin still gets 403. The stub is removed one
-				// release later (01-P81 series, final follow-up).
-				adminOnly.POST("/maintenance/wipe", gone(""))
-			}
+			// Admin-only (retired wipe stub). The library wipe is retired. It stays
+			// registered as a 410 stub, behind RequireAdmin, so a stale client gets
+			// "gone" rather than a 404 and a non-admin still gets 403. The stub is
+			// removed one release later (01-P81 series, final follow-up). It is a
+			// wipe verb: with authentication off it keeps answering 401, like the
+			// live wipes (wire_admin_role.go).
+			s.adminRoute(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/maintenance/wipe", gone(""))
 
 			// Policy, system, config, dashboard, and backup routes migrated to the
 			// handlers/system sub-package (wireHandlers).
