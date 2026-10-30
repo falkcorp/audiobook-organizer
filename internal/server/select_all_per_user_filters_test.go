@@ -1,5 +1,5 @@
 // file: internal/server/select_all_per_user_filters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f7282f66-4b94-48cf-9012-922b3d4cc25d
 // last-edited: 2026-10-30
 
@@ -7,7 +7,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -179,4 +183,156 @@ func TestOpActorReadsTheRowAndReplaysItOnASuccessor(t *testing.T) {
 	unknown, err := srv.opActor("")
 	require.NoError(t, err)
 	assert.Empty(t, unknown.userID)
+}
+
+// recordingReporter is an sdReporter that keeps what the op said, so a test can tell
+// which fetch path ran: the whole-library path opens with a "loading books" progress
+// line, a run over a resolved-to-nothing selection says so and stops.
+type recordingReporter struct {
+	sdReporter
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (r *recordingReporter) UpdateProgress(_, _ int, msg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.msgs = append(r.msgs, msg)
+	return nil
+}
+
+func (r *recordingReporter) Log(_ slog.Level, msg string, _ ...slog.Attr) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.msgs = append(r.msgs, msg)
+	return nil
+}
+
+func (r *recordingReporter) said(substr string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, m := range r.msgs {
+		if strings.Contains(m, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// A selection that names a filter and resolves to zero books asked for something
+// narrower than the library; it must fetch nothing. The op used to test
+// len(bookIDs) > 0 and otherwise run the whole-library fetch, so "my finished books"
+// for a user who had finished none fetched every book. Only a selection that names
+// neither a filter nor books is the whole library.
+func TestBulkFetchOp_ASelectionThatResolvesToNothingFetchesNothing(t *testing.T) {
+	srv, _, _, _, cleanup := setupUserTagsAuthzTestServer(t)
+	defer cleanup()
+	store, ok := database.GetGlobalStore().(*database.PebbleStore)
+	require.True(t, ok, "expected a PebbleStore")
+	store.WaitForWarmup()
+	viewer, err := store.GetUserByUsername("viewer")
+	require.NoError(t, err)
+
+	// The viewer has finished nothing, so read_status:finished matches no book.
+	now := time.Now().UTC()
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: "op-select-none", DefID: "library.bulk-metadata-fetch", Plugin: "library", Status: "running",
+		Params: `{}`, ActorUserID: &viewer.ID, QueuedAt: now,
+	}))
+	srv.scanStandDownGateOverride = &sdGate{}
+	reg := capOpReg(t)
+	require.NoError(t, srv.RegisterBulkMetadataFetchOp(reg))
+	def, ok := reg.Def("library.bulk-metadata-fetch")
+	require.True(t, ok)
+
+	run := func(t *testing.T, params any) (rep *recordingReporter, runErr error) {
+		t.Helper()
+		body, merr := json.Marshal(params)
+		require.NoError(t, merr)
+		rep = &recordingReporter{sdReporter: sdReporter{id: "op-select-none"}}
+		func() {
+			// The whole-library path goes on to use services this harness does not
+			// wire; reaching it is what is being observed, not how it ends.
+			defer func() {
+				if r := recover(); r != nil {
+					runErr = nil
+				}
+			}()
+			runErr = def.Run(context.Background(), body, rep)
+		}()
+		return rep, runErr
+	}
+
+	t.Run("a per-user filter that matches none of this user's books", func(t *testing.T) {
+		rep, err := run(t, map[string]any{"selection": operations.SelectionSpec{Filter: &operations.FilterSpec{
+			FieldFilters: []operations.FieldFilter{{Field: "read_status", Value: "finished"}}}}})
+		require.NoError(t, err, "a selection that resolved to nothing is a finished run, not a failure")
+		assert.True(t, rep.said("resolved to no books"), "msgs: %v", rep.msgs)
+		assert.False(t, rep.said("loading books"), "the whole-library fetch must not start; msgs: %v", rep.msgs)
+	})
+
+	t.Run("a book-global filter that matches nothing", func(t *testing.T) {
+		rep, err := run(t, map[string]any{"selection": operations.SelectionSpec{Filter: &operations.FilterSpec{
+			FieldFilters: []operations.FieldFilter{{Field: "title", Value: "No Such Gotham Title"}}}}})
+		require.NoError(t, err)
+		assert.True(t, rep.said("resolved to no books"), "msgs: %v", rep.msgs)
+		assert.False(t, rep.said("loading books"), "msgs: %v", rep.msgs)
+	})
+
+	t.Run("an empty selection is still the whole library", func(t *testing.T) {
+		rep, _ := run(t, map[string]any{})
+		assert.True(t, rep.said("loading books"), "the whole-library fetch must start; msgs: %v", rep.msgs)
+		assert.False(t, rep.said("resolved to no books"), "msgs: %v", rep.msgs)
+	})
+}
+
+func TestBulkFetchSelectionIsWholeLibrary(t *testing.T) {
+	assert.True(t, bulkFetchSelectionIsWholeLibrary(operations.SelectionSpec{}))
+	assert.False(t, bulkFetchSelectionIsWholeLibrary(operations.SelectionSpec{BookIDs: []string{"b1"}}))
+	assert.False(t, bulkFetchSelectionIsWholeLibrary(operations.SelectionSpec{Filter: &operations.FilterSpec{}}),
+		"even an empty filter is a filter: it was given")
+}
+
+// The op judges a per-user selection by the rows of the user who enqueued it, so a
+// byte-identical request from another user must not be folded into the first user's
+// active run (it would be judged by their rows). The def opts into DedupeSameActorOnly;
+// the same user asking twice still joins their own run.
+func TestBulkFetchOp_IdenticalPerUserSelectionsFromTwoUsersGetTheirOwnRuns(t *testing.T) {
+	srv, _, _, _, cleanup := setupUserTagsAuthzTestServer(t)
+	defer cleanup()
+	store, ok := database.GetGlobalStore().(*database.PebbleStore)
+	require.True(t, ok, "expected a PebbleStore")
+	admin, err := store.GetUserByUsername("admin")
+	require.NoError(t, err)
+	viewer, err := store.GetUserByUsername("viewer")
+	require.NoError(t, err)
+
+	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
+	require.NoError(t, srv.RegisterBulkMetadataFetchOp(reg))
+	def, ok := reg.Def("library.bulk-metadata-fetch")
+	require.True(t, ok)
+	require.True(t, def.DedupeSameActorOnly)
+
+	params := map[string]any{"selection": operations.SelectionSpec{Filter: &operations.FilterSpec{
+		FieldFilters: []operations.FieldFilter{{Field: "read_status", Value: "unstarted"}}}}}
+	as := func(userID string) []opsregistry.EnqueueOption {
+		return []opsregistry.EnqueueOption{opsregistry.WithActor(userID), opsregistry.WithActorPermissions([]string{"library.edit_metadata"})}
+	}
+	enqueue := func(userID string) string {
+		t.Helper()
+		id, eerr := reg.EnqueueOp(context.Background(), "library.bulk-metadata-fetch", params, as(userID)...)
+		require.NoError(t, eerr)
+		return id
+	}
+
+	first := enqueue(admin.ID)
+	second := enqueue(viewer.ID)
+	assert.NotEqual(t, first, second, "the second user's selection was folded into the first user's run")
+	for id, want := range map[string]string{first: admin.ID, second: viewer.ID} {
+		row, gerr := store.GetOperationV2(id)
+		require.NoError(t, gerr)
+		require.NotNil(t, row.ActorUserID)
+		assert.Equal(t, want, *row.ActorUserID)
+	}
+	assert.Equal(t, first, enqueue(admin.ID), "the same user asking again still joins their own run")
 }
