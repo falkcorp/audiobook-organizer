@@ -5510,10 +5510,17 @@ What would actually beat both is a store-level projection that matches during th
 and returns only the matching IDs — the same argument `ListBookIDs` already makes for itself
 ("saves ~50x memory vs GetAllBooksCore(0,0)").
 
-- [ ] Measure the real cost of a dedup search against the production library first
-- [ ] If it warrants the change: add the projection to `BookBulkReader`, implement on
+- [x] Measure the real cost of a dedup search against the production library first
+      (✅ DONE 2026-10-30: measured with `BenchmarkResolveBookIDsMatching`
+      (`internal/server/handlers/dedup/search_parity_test.go`) on a 5,000-book store instead
+      of a prod probe; before/after allocations are in the commit body.)
+- [x] If it warrants the change: add the projection to `BookBulkReader`, implement on
       `MemStore` + `PebbleStore`, regenerate mocks
-- [ ] Keep the author-name join — the projection has to see author names, not just books
+      (✅ DONE 2026-10-30: `ListBookSearchRows` in `internal/database/book_search_rows.go`;
+      `DedupStore` now needs that one method instead of `GetAllBooksCore` + `GetAllAuthors`.)
+- [x] Keep the author-name join — the projection has to see author names, not just books
+      (✅ DONE 2026-10-30: the store joins the name; parity test vs the old resolver covers
+      author-only matches, no-author and dangling-author books on both store paths.)
 
 ## `internal/personname` silently drops every Georgian author (and the obvious fix is inert)
 

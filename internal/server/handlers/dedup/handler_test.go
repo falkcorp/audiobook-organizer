@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-10-12
+// last-edited: 2026-10-30
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -1236,8 +1236,7 @@ func TestExportDedupCandidates_MatchesListFilters(t *testing.T) {
 		}
 		return b, nil
 	}).Maybe()
-	d.store.EXPECT().GetAllAuthors().Return(nil, nil).Maybe()
-	d.store.EXPECT().GetAllBooksCore(0, 0).Return([]database.BookCore{
+	d.store.EXPECT().ListBookSearchRows().Return([]database.BookSearchRow{
 		{ID: "e-1", Title: "Needle Tale"}, {ID: "e-2", Title: "Other"},
 		{ID: "e-3", Title: "Other"}, {ID: "e-4", Title: "Other"},
 		{ID: "e-5", Title: "Other"}, {ID: "e-6", Title: "Other"}, {ID: "e-7", Title: "Other"},

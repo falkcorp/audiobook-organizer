@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/interfaces.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: e84f746d-28e9-4c8a-9520-66191e582881
-// last-edited: 2026-10-12
+// last-edited: 2026-10-30
 
 // Narrow dependency interfaces for the dedup-domain HTTP handlers (candidate /
 // cluster / series listing, link / reject / remove, bulk link, stats,
@@ -50,14 +50,13 @@ type DedupStore interface {
 	// read of the page's book_file rows plus a per-book external-id read.
 	iTunesFlagStore
 
-	// Bulk readers, used only by resolveBookIDsMatching to turn a search
+	// Bulk reader, used only by resolveBookIDsMatching to turn a search
 	// needle into the set of book IDs the Dupes panel's text search must
-	// match on. Kept to these two rather than widening to database.Store:
-	// the candidate rows carry no book text, so search has no other route to
-	// title/author/path. See search.go for why this shape and not a
-	// per-candidate lookup.
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error) // BookBulkReader
-	GetAllAuthors() ([]database.Author, error)                      // AuthorStore
+	// match on. The candidate rows carry no book text, so search has no other
+	// route to title/author/path. It is one store-side projection (id, title,
+	// path, joined author name) rather than GetAllBooksCore + GetAllAuthors:
+	// see search.go for why this shape and not a per-candidate lookup.
+	ListBookSearchRows() ([]database.BookSearchRow, error) // BookBulkReader
 }
 
 // SeriesBooksStore is the one read behind the candidate list's series_id

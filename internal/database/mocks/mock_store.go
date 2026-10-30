@@ -22504,6 +22504,61 @@ func (_c *MockStore_ListBookIDs_Call) RunAndReturn(run func() ([]string, error))
 	return _c
 }
 
+// ListBookSearchRows provides a mock function for the type MockStore
+func (_mock *MockStore) ListBookSearchRows() ([]database.BookSearchRow, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListBookSearchRows")
+	}
+
+	var r0 []database.BookSearchRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookSearchRow, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.BookSearchRow); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookSearchRow)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListBookSearchRows_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListBookSearchRows'
+type MockStore_ListBookSearchRows_Call struct {
+	*mock.Call
+}
+
+// ListBookSearchRows is a helper method to define mock.On call
+func (_e *MockStore_Expecter) ListBookSearchRows() *MockStore_ListBookSearchRows_Call {
+	return &MockStore_ListBookSearchRows_Call{Call: _e.mock.On("ListBookSearchRows")}
+}
+
+func (_c *MockStore_ListBookSearchRows_Call) Run(run func()) *MockStore_ListBookSearchRows_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_ListBookSearchRows_Call) Return(bookSearchRows []database.BookSearchRow, err error) *MockStore_ListBookSearchRows_Call {
+	_c.Call.Return(bookSearchRows, err)
+	return _c
+}
+
+func (_c *MockStore_ListBookSearchRows_Call) RunAndReturn(run func() ([]database.BookSearchRow, error)) *MockStore_ListBookSearchRows_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListBookSegments provides a mock function for the type MockStore
 func (_mock *MockStore) ListBookSegments(bookNumericID int) ([]database.BookSegment, error) {
 	ret := _mock.Called(bookNumericID)
