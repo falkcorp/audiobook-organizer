@@ -126,6 +126,7 @@ maintenance.authority-build	preview
 maintenance.auto-match-transcribed	preview
 maintenance.book-atpath-index-backfill	no-mode
 maintenance.book-hash-index-repair	preview
+maintenance.bookfile-acoustid-index-repair	preview
 maintenance.booksig-recovery-audit	preview
 maintenance.booksig-sidecar-migrate	preview
 maintenance.build-folder-book-files	preview

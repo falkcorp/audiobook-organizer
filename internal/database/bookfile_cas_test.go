@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_cas_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package database
 
@@ -843,9 +843,20 @@ func TestCAS_SweepBookFileSegDrop_FollowsAMovedRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// MoveBookFilesToBook writes the moved row in its stored form (no segments),
+	// which would leave the sweep nothing to chase. The row the sweep has to
+	// follow is a LEGACY one re-keyed under another book, so the mover is staged
+	// by hand: the legacy bytes under the new key, the book_file_id index
+	// repointed, the old key gone.
 	injectBeforeCommit(t, 1, func(int) {
-		if err := s.MoveBookFilesToBook([]string{row.ID}, book.ID, dst.ID); err != nil {
-			t.Errorf("injected MoveBookFilesToBook: %v", err)
+		moved := *row
+		moved.BookID = dst.ID
+		writeLegacyBookFileRow(t, s, &moved)
+		if err := s.db.Delete(bookFileKey(book.ID, row.ID), nil); err != nil {
+			t.Errorf("injected delete of the old key: %v", err)
+		}
+		if err := s.db.Set([]byte("book_file_id:"+row.ID), bookFileKey(dst.ID, row.ID), nil); err != nil {
+			t.Errorf("injected book_file_id repoint: %v", err)
 		}
 	})
 
