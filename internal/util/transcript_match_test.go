@@ -1,7 +1,7 @@
 // file: internal/util/transcript_match_test.go
-// version: 2.2.2
+// version: 2.2.3
 // guid: 0b6d3e92-4f18-4a7c-8e51-c2a7f9d0b364
-// last-edited: 2026-09-14
+// last-edited: 2026-10-30
 
 package util
 
@@ -19,7 +19,7 @@ import (
 // "(Book #4 in the Sorcerer's Ring)" and trailers are stripped from the
 // transcribed side only; "This Gilded Abyss" does not, because the heard
 // "book one" has no series position to agree with. No unreviewed path
-// confirms any of them except Sojourn: they AND MainTranscriptionConfirms,
+// confirms any of them except Sojourn: they AND MainTranscriptionMatch,
 // which is origin/main's rule plus the owner's 2026-09-14 initials fold.
 // mainConfirms is that rule's answer. Sojourn was refused only because the
 // heard "R.A." was spaced differently from the provider's "R. A."; the owner
@@ -52,9 +52,9 @@ func TestTranscriptMatch_RealReviewCases(t *testing.T) {
 				t.Errorf("confirms = %v, want %v (title %v, author %v)", got, tc.confirms,
 					TitleAgrees(tc.candTitle, "", tc.heardTitle), AuthorAgrees(tc.candAuthor, tc.heardAuthor))
 			}
-			// Unreviewed paths AND MainTranscriptionConfirms.
-			if m := MainTranscriptionConfirms(tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor); m != tc.mainConfirms {
-				t.Errorf("MainTranscriptionConfirms = %v, want %v", m, tc.mainConfirms)
+			// Unreviewed paths AND MainTranscriptionMatch.
+			if m := MainTranscriptionMatch(tc.candTitle, tc.candAuthor, tc.heardTitle, tc.heardAuthor).Confirms(); m != tc.mainConfirms {
+				t.Errorf("MainTranscriptionMatch = %v, want %v", m, tc.mainConfirms)
 			}
 		})
 	}
@@ -174,11 +174,11 @@ func TestTitleAgrees_HeardVolume(t *testing.T) {
 	}
 }
 
-// MainTranscriptionConfirms must be origin/main's applygate rule with only
+// MainTranscriptionMatch must be origin/main's applygate rule with only
 // the initials fold added: it confirms everything the old rule confirmed, and
 // every extra pair it confirms is an old-rule match once initials are written
 // the same way on both sides.
-func TestMainTranscriptionConfirms_IsOldRulePlusInitialsFold(t *testing.T) {
+func TestMainTranscriptionMatch_IsOldRulePlusInitialsFold(t *testing.T) {
 	titles := []string{"Mistborn", "mistborn", "Mistborn: The Hero of Ages", "Dune", "Dune, book two of the Dune Chronicles", "Sojourn", ""}
 	authors := []string{"", "Ki", "Brandon Sanderson", "Sanderson", "R.A. Salvator", "R. A. Salvatore", "RA Salvatore",
 		"J.R. Salvatore", "R.A. Smith", "Debra Salvatore", "Frank Herbert", "George R. R. Martin", "George RR Martin"}
@@ -199,14 +199,14 @@ func TestMainTranscriptionConfirms_IsOldRulePlusInitialsFold(t *testing.T) {
 			for _, ca := range authors {
 				for _, ha := range authors {
 					old := ht != "" && oldTranscriptionRule(ct, ca, ht, ha)
-					got := MainTranscriptionConfirms(ct, ca, ht, ha)
+					got := MainTranscriptionMatch(ct, ca, ht, ha).Confirms()
 					if old && !got {
-						t.Errorf("MainTranscriptionConfirms(%q,%q,%q,%q) refused a pair the old rule confirmed", ct, ca, ht, ha)
+						t.Errorf("MainTranscriptionMatch(%q,%q,%q,%q).Confirms() refused a pair the old rule confirmed", ct, ca, ht, ha)
 					}
 					if got && !old {
 						extra++
 						if !oldTranscriptionRule(ct, twin(ca), ht, twin(ha)) {
-							t.Errorf("MainTranscriptionConfirms(%q,%q,%q,%q) confirmed a pair that differs by more than initials", ct, ca, ht, ha)
+							t.Errorf("MainTranscriptionMatch(%q,%q,%q,%q).Confirms() confirmed a pair that differs by more than initials", ct, ca, ht, ha)
 						}
 					}
 				}
@@ -253,7 +253,7 @@ func TestFoldInitials(t *testing.T) {
 
 // Owner decision 2026-09-14: initials spacing and punctuation are equal, but
 // different initials or a different surname still refuse.
-func TestMainTranscriptionConfirms_InitialsFold(t *testing.T) {
+func TestMainTranscriptionMatch_InitialsFold(t *testing.T) {
 	cases := []struct {
 		cand, heard string
 		want        bool
@@ -308,8 +308,8 @@ func TestMainTranscriptionConfirms_InitialsFold(t *testing.T) {
 		{"R. A. Smith", "A Smith", false},
 	}
 	for _, tc := range cases {
-		if got := MainTranscriptionConfirms("Sojourn", tc.cand, "Sojourn", tc.heard); got != tc.want {
-			t.Errorf("MainTranscriptionConfirms(Sojourn, %q, Sojourn, %q) = %v, want %v", tc.cand, tc.heard, got, tc.want)
+		if got := MainTranscriptionMatch("Sojourn", tc.cand, "Sojourn", tc.heard).Confirms(); got != tc.want {
+			t.Errorf("MainTranscriptionMatch(Sojourn, %q, Sojourn, %q).Confirms() = %v, want %v", tc.cand, tc.heard, got, tc.want)
 		}
 	}
 }
@@ -362,5 +362,31 @@ func TestWithinOneEdit(t *testing.T) {
 		if got := withinOneEdit([]rune(tc.a), []rune(tc.b)); got != tc.want {
 			t.Errorf("withinOneEdit(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// MainTranscriptionMatch must report which leg decided and the normalized
+// values compared, so a refusal can name them.
+func TestMainTranscriptionMatch_ReportsLegAndValues(t *testing.T) {
+	for _, tc := range []struct {
+		name                                 string
+		ct, ca, ht, ha                       string
+		titleOK, authorChecked, authorOK, ok bool
+	}{
+		{"title differs", "Year One", "Bruce Wayne", "Batman Begins", "Bruce Wayne", false, false, false, false},
+		{"author differs", "Batman Begins", "Dick Grayson", "Batman Begins", "Bruce Wayne", true, true, false, false},
+		{"author matches", "Batman Begins", "Bruce Wayne", "Batman Begins", "Bruce Wayne", true, true, true, true},
+		{"short author not compared", "Batman Begins", "Dick Grayson", "Batman Begins", "Bob", true, false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := MainTranscriptionMatch(tc.ct, tc.ca, tc.ht, tc.ha)
+			if m.TitleOK != tc.titleOK || m.AuthorChecked != tc.authorChecked || m.AuthorOK != tc.authorOK || m.Confirms() != tc.ok {
+				t.Fatalf("got %+v, want titleOK=%v authorChecked=%v authorOK=%v confirms=%v", m, tc.titleOK, tc.authorChecked, tc.authorOK, tc.ok)
+			}
+			if m.CandidateTitle != NormalizeTitle(tc.ct) || m.TranscribedTitle != NormalizeTitle(tc.ht) ||
+				m.CandidateAuthor != NormalizeAuthor(tc.ca) || m.TranscribedAuthor != NormalizeAuthor(tc.ha) {
+				t.Errorf("compared values not recorded: %+v", m)
+			}
+		})
 	}
 }

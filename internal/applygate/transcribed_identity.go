@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
-// last-edited: 2026-09-29
+// last-edited: 2026-10-30
 
 package applygate
 
@@ -56,7 +56,7 @@ type TranscribedSearch struct {
 // TranscribedSearchConfirms reports whether candidate c matches the
 // transcription it was found by, title AND author. It is the whole rule the
 // unattended score leg uses (TranscriptionConfirms), applied to ts instead of
-// the book's own transcribed fields: origin/main's util.MainTranscriptionConfirms
+// the book's own transcribed fields: origin/main's util.MainTranscriptionMatch
 // (normalized title equality; a heard author longer than 3 characters must
 // appear in the candidate's author) AND the shared title matcher
 // (util.TitleAgrees with the candidate's series position), so it is never
@@ -68,7 +68,7 @@ func TranscribedSearchConfirms(ts TranscribedSearch, c *metafetch.MetadataCandid
 	if c == nil || q == "" || strings.TrimSpace(c.Title) == "" {
 		return false
 	}
-	if !util.MainTranscriptionConfirms(c.Title, c.Author, q, strings.TrimSpace(ts.Author)) {
+	if !util.MainTranscriptionMatch(c.Title, c.Author, q, strings.TrimSpace(ts.Author)).Confirms() {
 		return false
 	}
 	return util.TitleAgrees(c.Title, c.SeriesPosition, q)

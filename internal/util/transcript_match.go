@@ -1,7 +1,7 @@
 // file: internal/util/transcript_match.go
-// version: 2.2.3
+// version: 2.3.0
 // guid: 5c1e8f27-9a43-4d6b-b0e2-7f3a91c4d856
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package util
 
@@ -325,7 +325,7 @@ func numbersConflict(a, b []string) bool {
 // does not agree, because nothing says the heard volume is this record.
 //
 // This is the matcher an OWNER-REVIEWED row apply may annotate with. Paths
-// that apply with nobody reviewing must also pass MainTranscriptionConfirms
+// that apply with nobody reviewing must also pass MainTranscriptionMatch
 // (see applygate.TranscriptionConfirms), so they are never looser than the
 // rule on origin/main before 2026-09-13.
 func TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle string) bool {
@@ -347,7 +347,29 @@ func TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle strin
 	return pos != "" && pos == canonicalSeriesNumber(heardNumber)
 }
 
-// MainTranscriptionConfirms is applygate.TranscriptionConfirms as it stood on
+// TranscriptionMatch is the structured outcome of MainTranscriptionMatch: the
+// verdict plus which leg decided it and the normalized values compared, so a
+// refusal can name WHY ("exact title" vs "author substring") and both sides.
+type TranscriptionMatch struct {
+	// TitleOK is the exact-title leg: the normalized candidate and
+	// transcribed titles are equal (and the transcribed title is non-empty).
+	TitleOK bool
+	// AuthorChecked is false when the author leg did not run: the title leg
+	// failed first, or the transcribed author is three characters or fewer
+	// and so is not compared.
+	AuthorChecked bool
+	// AuthorOK is the substring-author leg. It is true when AuthorChecked is
+	// false and TitleOK is true (nothing to compare).
+	AuthorOK bool
+	// Normalized values actually compared by each leg.
+	CandidateTitle, TranscribedTitle   string
+	CandidateAuthor, TranscribedAuthor string
+}
+
+// Confirms reports whether both legs passed.
+func (m TranscriptionMatch) Confirms() bool { return m.TitleOK && m.AuthorOK }
+
+// MainTranscriptionMatch is applygate.TranscriptionConfirms as it stood on
 // origin/main before 2026-09-13 (normalized title equality, then, when the
 // transcribed author is longer than three characters, the normalized
 // transcribed author as a substring of the normalized candidate author) with
@@ -359,18 +381,30 @@ func TitleAgrees(candidateTitle, candidateSeriesPosition, transcribedTitle strin
 // surname tolerance is unchanged and folded initials never match mid-word.
 //
 // It is the UPPER BOUND for every unreviewed use: metadata.upgrade, an
-// unpinned batch apply and the certainty gate itself AND it with the shared
-// matcher, so they refuse every pair this refuses, by construction.
-func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle, transcribedAuthor string) bool {
-	if transcribedTitle == "" || NormalizeTitle(candidateTitle) != NormalizeTitle(transcribedTitle) {
-		return false
+// unpinned batch apply and the certainty gate itself AND its Confirms with
+// the shared matcher, so they refuse every pair this refuses, by
+// construction. The result also records which leg failed and the compared
+// values, for refusal details.
+func MainTranscriptionMatch(candidateTitle, candidateAuthor, transcribedTitle, transcribedAuthor string) TranscriptionMatch {
+	m := TranscriptionMatch{
+		CandidateTitle:    NormalizeTitle(candidateTitle),
+		TranscribedTitle:  NormalizeTitle(transcribedTitle),
+		CandidateAuthor:   NormalizeAuthor(candidateAuthor),
+		TranscribedAuthor: NormalizeAuthor(transcribedAuthor),
 	}
+	if transcribedTitle == "" || m.CandidateTitle != m.TranscribedTitle {
+		return m
+	}
+	m.TitleOK = true
 	if len(transcribedAuthor) <= 3 {
-		return true
+		m.AuthorOK = true
+		return m
 	}
+	m.AuthorChecked = true
 	// Leg 1 is origin/main verbatim, so nothing it confirmed can refuse.
-	if strings.Contains(NormalizeAuthor(candidateAuthor), NormalizeAuthor(transcribedAuthor)) {
-		return true
+	if strings.Contains(m.CandidateAuthor, m.TranscribedAuthor) {
+		m.AuthorOK = true
+		return m
 	}
 	// Leg 2: the folded forms, anchored at a token boundary, so a folded run
 	// can never match from the middle of another token (a heard "a." inside
@@ -378,7 +412,8 @@ func MainTranscriptionConfirms(candidateTitle, candidateAuthor, transcribedTitle
 	// and is unchanged, so pairs it already confirmed (a heard "A. Smith"
 	// inside "R.A. Smith", for one) still confirm; the anchor only stops the
 	// fold from adding new mid-token matches.
-	return containsAtTokenStart(foldInitials(candidateAuthor), foldInitials(transcribedAuthor))
+	m.AuthorOK = containsAtTokenStart(foldInitials(candidateAuthor), foldInitials(transcribedAuthor))
+	return m
 }
 
 // containsAtTokenStart reports whether sub occurs in s starting at the

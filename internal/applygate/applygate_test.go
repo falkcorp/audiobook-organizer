@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.8
+// version: 1.5.9
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package applygate
 
@@ -155,7 +155,7 @@ func TestEvaluate(t *testing.T) {
 // util.TestTranscriptMatch_OldRuleRefusedAllSeven).
 //
 // unreviewed is TranscriptionConfirms (the gate, metadata.upgrade, an
-// unpinned batch apply): it ANDs util.MainTranscriptionConfirms (origin/main's
+// unpinned batch apply): it ANDs util.MainTranscriptionMatch (origin/main's
 // rule plus the owner's 2026-09-14 initials fold), so it refuses six of the
 // seven as main did; only Sojourn, refused on initials spacing alone, now
 // confirms. The six are applied by an owner clicking Apply on their rows.
@@ -307,7 +307,7 @@ func TestTranscriptionConfirms_InitialsFold(t *testing.T) {
 }
 
 // TestTranscriptionConfirms_RefusesEveryPairMainRefused: the unreviewed rule
-// refuses every pair util.MainTranscriptionConfirms refuses -- the real review
+// refuses every pair util.MainTranscriptionMatch refuses -- the real review
 // shapes (a credit after the author, a spoken series trailer, a silent
 // letter, a heard volume) and the short-first-name-versus-initials pairs. The
 // fixture guard fails any pair main itself would confirm, since it would test
@@ -335,7 +335,7 @@ func TestTranscriptionConfirms_RefusesEveryPairMainRefused(t *testing.T) {
 		{"Big Cats", "R. A. Harrowgate", "2", "Big Cats", "R.A. Harrowdale"},
 	}
 	for _, p := range pairs {
-		if util.MainTranscriptionConfirms(p.candTitle, p.candAuthor, p.heardTitle, p.heardAuthor) {
+		if util.MainTranscriptionMatch(p.candTitle, p.candAuthor, p.heardTitle, p.heardAuthor).Confirms() {
 			t.Fatalf("fixture %q ~ %q: origin/main confirms it, so it tests nothing", p.candTitle, p.heardTitle)
 		}
 		book := &database.Book{TranscribedTitle: new(p.heardTitle), TranscribedAuthor: new(p.heardAuthor)}
@@ -388,7 +388,7 @@ func refusedPairsFor(t *testing.T, ct, ht string) int {
 	refused := 0
 	for _, ca := range mainRefusedCorpus.authors {
 		for _, ha := range mainRefusedCorpus.authors {
-			if util.MainTranscriptionConfirms(ct, ca, ht, ha) {
+			if util.MainTranscriptionMatch(ct, ca, ht, ha).Confirms() {
 				continue
 			}
 			for _, pos := range []string{"", "1", "2", "3"} {
@@ -524,5 +524,53 @@ func TestScoreGate_TranscriptionRuntimeUnverifiedRefuses(t *testing.T) {
 		if dv.Reason != ReasonTranscriptionRuntimeUnverified || !strings.Contains(dv.Detail, tc.want) {
 			t.Errorf("%s: reason=%q detail=%q, want it to contain %q", name, dv.Reason, dv.Detail, tc.want)
 		}
+	}
+}
+
+// transcription_mismatch used to be a fixed sentence naming neither side.
+// The Detail must say which leg failed and carry both sides' values, in the
+// style runtime_mismatch uses. The decision itself is unchanged.
+func TestTranscriptionMismatchDetail_NamesLegAndBothSides(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		heardAuthor        string
+		cand               metafetch.MetadataCandidate
+		wantLeg            string
+		wantContains       []string
+		wantDecisionUnchgd bool
+	}{
+		{
+			name:        "title leg",
+			heardAuthor: "Bruce Wayne",
+			cand:        metafetch.MetadataCandidate{Title: "Year One", Author: "Bruce Wayne", Score: 0.99},
+			wantLeg:     "exact-title leg failed",
+			wantContains: []string{`transcribed "Batman Begins" by "Bruce Wayne"`,
+				`candidate "Year One" by "Bruce Wayne"`, `"batman begins"`, `"year one"`},
+		},
+		{
+			name:        "author leg",
+			heardAuthor: "Bruce Wayne",
+			cand:        metafetch.MetadataCandidate{Title: "Batman Begins", Author: "Dick Grayson", Score: 0.99},
+			wantLeg:     "substring-author leg failed",
+			wantContains: []string{`transcribed "Batman Begins" by "Bruce Wayne"`,
+				`candidate "Batman Begins" by "Dick Grayson"`, `"bruce wayne"`, `"dick grayson"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			book := &database.Book{Title: "Batman Begins", TranscribedTitle: new("Batman Begins"), TranscribedAuthor: new(tc.heardAuthor)}
+			c := tc.cand
+			v := Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), &c, nil)
+			if v.Allowed || v.Reason != ReasonTranscriptionMismatch {
+				t.Fatalf("allowed=%v reason=%q, want a transcription_mismatch refusal", v.Allowed, v.Reason)
+			}
+			if !strings.Contains(v.Detail, tc.wantLeg) {
+				t.Errorf("Detail %q lacks the failing leg %q", v.Detail, tc.wantLeg)
+			}
+			for _, w := range tc.wantContains {
+				if !strings.Contains(v.Detail, w) {
+					t.Errorf("Detail %q lacks %q", v.Detail, w)
+				}
+			}
+		})
 	}
 }
