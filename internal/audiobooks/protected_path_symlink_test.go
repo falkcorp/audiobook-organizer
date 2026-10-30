@@ -1,5 +1,5 @@
 // file: internal/audiobooks/protected_path_symlink_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d6b9f41-8a27-4c53-b1e8-73f5a2c90d14
 // last-edited: 2026-10-29
 
@@ -168,8 +168,9 @@ func TestProtectedPathChecked_ResolutionErrorFailsClosed(t *testing.T) {
 
 // The purge does not read an unresolvable path as a protected one it is done
 // with (the book would go and the file stay with no record): it is a path that
-// cannot be decided, kept and retried. A link cycle is the permanent kind and
-// is marked so (errPathUnresolvable: not held in the trash, bounded retries).
+// cannot be decided, and the file is kept. A link cycle is the permanent kind and
+// is marked so (errPathUnresolvable): a pass purge does not hold the book in the
+// trash for it, it purges the book and leaves the file where it is.
 func TestPlanPurgePathIn_UnresolvableSymlinksKeepTheFile(t *testing.T) {
 	resetImportPathCacheForHelper(t)
 	setITunesPaths(t, "", "")
@@ -187,6 +188,10 @@ func TestPlanPurgePathIn_UnresolvableSymlinksKeepTheFile(t *testing.T) {
 	require.Error(t, v.keptErr)
 	assert.ErrorIs(t, v.keptErr, errPathLookupFailed)
 	assert.ErrorIs(t, v.keptErr, errPathUnresolvable)
+	// An unresolvable path does not hold the book in the trash: the purge goes on
+	// and keeps the file (reported as "book purged, file kept"). The bounded
+	// retries only apply to a journal record that already exists.
+	assert.Nil(t, fileUndecided(&database.Book{ID: "year-one"}, v), "the book is purged and the file kept, not held")
 }
 
 // An import-path list that cannot be read is still reported when nothing else

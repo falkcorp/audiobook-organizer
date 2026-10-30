@@ -1,5 +1,5 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.13.3
+// version: 1.13.4
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
 // last-edited: 2026-10-29
 //
@@ -367,8 +367,9 @@ var errProtectedPathUnresolved = errors.New("symlinks of the path cannot be reso
 // symlinks of the path or of a protected folder cannot be resolved. That is a
 // refusal to say "not protected", not a finding that the path is a protected
 // one: isProtectedPath (tags, previews) takes it as protected, and a caller that
-// deletes (planPurgePathIn) keeps the file and retries rather than reading it as
-// a protected path it is done with.
+// deletes (planPurgePathIn) keeps the file rather than reading it as a protected
+// path it is done with: held in the trash for a retry when the failure may pass,
+// purged with the file left in place when it is a link cycle.
 func protectedPathChecked(store importPathLister, filePath string) (protected bool, err error) {
 	var roots []string
 	if store != nil {
@@ -394,8 +395,10 @@ func protectedPathChecked(store importPathLister, filePath string) (protected bo
 	// file could be purged. A path that cannot be resolved is protected.
 	under, perr := pathutil.UnderProtectedPath(filePath, roots)
 	if perr != nil {
-		protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
-			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(perr.Error()))
+		if pathutil.ShouldLogProtectedPathError(perr) {
+			protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
+				logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(perr.Error()))
+		}
 		return true, fmt.Errorf("%w: %w", errProtectedPathUnresolved, perr)
 	}
 	if under {
