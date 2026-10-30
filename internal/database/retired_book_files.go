@@ -1022,9 +1022,10 @@ func (p *PebbleStore) RestoreRetiredVersionHolder(versionID, previousHolderID st
 
 // moveRetiredVersion is the locked, retried body both rehome entry points
 // share. checkDest, when set, is an early destination check, run with the
-// version stripe held at the start of every staging round, that gives a clearer refusal than the commit's own
-// owner check (which is the real guard: see RestoreRetiredVersionHolder); nil
-// means the caller has already decided the destination is acceptable.
+// version stripe held at the start of every staging round, that gives a
+// clearer refusal than the commit's own owner check (which is the real guard:
+// see RestoreRetiredVersionHolder); nil means the caller has already decided
+// the destination is acceptable.
 func (p *PebbleStore) moveRetiredVersion(versionID, newHolderID string, checkDest func() error) error {
 	// The version stripe excludes RetireBookFiles, UnretireBookFiles and
 	// UpdateBookVersion for this version, so neither its holder nor the set of
