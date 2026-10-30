@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/access.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2f6c1b9e-7a43-4d85-b0e1-93c5a8d47f20
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package opsv3
 
@@ -115,8 +115,42 @@ func (h *Handler) hiddenFor(c *gin.Context, rd RunReader) (*hiddenRuns, error) {
 		}
 		return false
 	}
+	// A record that cannot be decoded cannot be judged, so the run listing hides
+	// it (see hiddenIDs) and the census must give it up too, or a group's count
+	// would exceed the length of its href's list. It is logged, not a 500.
+	undecodable := map[string]string{} // run id -> definition whose index named it
+	var current string
+	onBad := func(id string, err error) {
+		undecodable[id] = current
+		accessLog.Warn("run %s of %s cannot be read and is left out of the counts: %v",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(current), err)
+	}
 	for _, def := range repairsDefs {
-		if _, err := rd.ListRunsV3(database.RunQuery{DefID: def, Limit: 1, Keep: census}); err != nil {
+		current = def
+		if _, err := rd.ListRunsV3(database.RunQuery{DefID: def, Limit: 1, Keep: census, OnUndecodable: onBad}); err != nil {
+			return nil, err
+		}
+	}
+	if len(undecodable) == 0 {
+		return out, nil
+	}
+	// The record is unreadable, so its state is known only from the state index
+	// that names it. Walk those indexes (only when a corrupt record exists) and
+	// attribute each corrupt run to the state that lists it.
+	for _, def := range undecodable {
+		out.byDef[def]++
+		out.total++
+	}
+	for _, s := range state.AllV3() {
+		_, err := rd.ListRunsV3(database.RunQuery{
+			State: s, Limit: 1, Keep: func(*database.RunRecord) bool { return false },
+			OnUndecodable: func(id string, _ error) {
+				if _, ok := undecodable[id]; ok {
+					out.byState[s]++
+				}
+			},
+		})
+		if err != nil {
 			return nil, err
 		}
 	}
