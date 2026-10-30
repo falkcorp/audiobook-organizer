@@ -1,7 +1,7 @@
 // file: internal/undo/membership_adversarial_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4a9d17c3-e605-4b82-8f31-c27d5b09e164
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package undo
 
@@ -578,14 +578,14 @@ func advSuites() []advSuite {
 // the owner asked for: nothing is ever silent (every untouched book ends in its
 // original place or the revert said something), and every history is either
 // exact, reported, or refused with a reason.
-func requireAdvSuite(t *testing.T, su advSuite, seed uint64, st advStats) {
+func requireAdvSuite(t *testing.T, su advSuite, seed uint64, n int, st advStats) {
 	t.Helper()
 	t.Logf("%-15s seed=%d total=%d exact=%d reported=%d refusedClean=%d refusedManual=%d silentFinal=%d silentInter=%d orphans=%d unreported=%d", su.name, seed,
 		st.total, st.exact, st.reported, st.refusedClean, st.refusedManual, st.silentFinal, st.silentInter, st.orphansInjected, st.orphansMissed)
 	for _, smp := range st.samples {
 		t.Logf("    %s", smp)
 	}
-	require.Equal(t, su.n, st.total)
+	require.Equal(t, n, st.total)
 	require.Zero(t, st.silentFinal, "silent wrong final lists")
 	require.Zero(t, st.silentInter, "silent wrong lists after an operation")
 	require.Zero(t, st.silentPresence, "a book lost or duplicated with no note")
@@ -604,12 +604,35 @@ func requireAdvSuite(t *testing.T, su advSuite, seed uint64, st advStats) {
 	require.Zero(t, st.reported)
 }
 
+// advShortDivisor is how much smaller each suite runs under -short: one seed
+// and a tenth of the histories. The full table is ~660 CPU-seconds under -race
+// (deep4 alone 88 s at GOMAXPROCS=2, measured 2026-10-30), and on a shared
+// Woodpecker agent it pushed the whole internal/undo package past its 25 m
+// timeout (pipelines 1837 and 1838). CI runs -short, so CI gets the ~25x
+// cheaper budget; an unflagged run (nightly, or `go test ./internal/undo`
+// by hand) still walks every seed at full depth.
+const advShortDivisor = 10
+
+// advBudget returns the seeds and history count a suite runs with under the
+// current -short setting.
+func advBudget(su advSuite) ([]uint64, int) {
+	if !testing.Short() {
+		return su.seeds, su.n
+	}
+	n := su.n / advShortDivisor
+	if n < 100 {
+		n = 100
+	}
+	return su.seeds[:1], n
+}
+
 func TestMembershipAdversarial_Suites(t *testing.T) {
 	for _, su := range advSuites() {
 		t.Run(su.name, func(t *testing.T) {
 			t.Parallel()
-			for _, seed := range su.seeds {
-				requireAdvSuite(t, su, seed, runAdv(t, seed, su.n, su.cfg))
+			seeds, n := advBudget(su)
+			for _, seed := range seeds {
+				requireAdvSuite(t, su, seed, n, runAdv(t, seed, n, su.cfg))
 			}
 		})
 	}
