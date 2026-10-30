@@ -16,6 +16,12 @@ import (
 	"syscall"
 )
 
+// ErrProtectedFolderUnresolved marks an UnderProtectedPath failure that is in a
+// protected folder (a configured iTunes or import folder), not in the path being
+// asked about. Every path would fail the same way until the configuration is
+// fixed, so a caller must not blame the path for it.
+var ErrProtectedFolderUnresolved = errors.New("a protected folder cannot be resolved")
+
 // maxSymlinkHops bounds link following, so a link cycle is an error.
 const maxSymlinkHops = 255
 
@@ -119,7 +125,8 @@ func resolveExistingPrefixDepth(p string, depth int) (string, error) {
 //
 // Fail closed: if the path or a root cannot be resolved for a reason other than
 // not-exist (a link cycle, a permission error), protected is true and err says
-// what failed. Callers log err; they must not read it as "could not tell".
+// what failed (errors.Is ErrProtectedFolderUnresolved when it was a folder, not
+// the path). Callers log err; they must not read it as "could not tell".
 // Relative paths and roots are made absolute against the working directory, as
 // the checks this replaces did, so an empty root means the working directory
 // rather than "no root"; callers skip a root that is not configured.
@@ -132,7 +139,7 @@ func UnderProtectedPath(p string, roots []string) (protected bool, err error) {
 	for _, r := range roots {
 		ra, rerr := filepath.Abs(r)
 		if rerr != nil {
-			return true, fmt.Errorf("make protected folder %q absolute: %w", r, rerr)
+			return true, fmt.Errorf("%w: make %q absolute: %w", ErrProtectedFolderUnresolved, r, rerr)
 		}
 		absRoots = append(absRoots, ra)
 	}
@@ -149,7 +156,7 @@ func UnderProtectedPath(p string, roots []string) (protected bool, err error) {
 	for _, r := range absRoots {
 		rr, err := ResolveExistingPrefix(r)
 		if err != nil {
-			return true, fmt.Errorf("resolve symlinks in protected folder %q: %w", r, err)
+			return true, fmt.Errorf("%w: resolve symlinks in %q: %w", ErrProtectedFolderUnresolved, r, err)
 		}
 		resolvedRoots = append(resolvedRoots, rr)
 	}
