@@ -1,7 +1,7 @@
 // file: internal/server/purge_preview_cancel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b815dc28-323d-4d1c-9334-dc7047bce5da
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
@@ -57,7 +57,9 @@ func (f *credGuardFixture) opStatus(t *testing.T, id string) string {
 // needs settings.manage). It refuses another user's preview, a real purge and
 // any other operation, and leaves their rows as they were.
 func TestCancelPurgePreviewRoute(t *testing.T) {
-	f := setupCredGuardServer(t)
+	// Idle registry: the rows below are stored as "queued" and must still read
+	// "queued" when asserted; a live dispatcher would run them.
+	f := setupCredGuardServerIdleRegistry(t)
 	ownerID, ownerTok := f.libraryDeleteSession(t, "preview-owner")
 	_, otherTok := f.libraryDeleteSession(t, "preview-other")
 	onlyOrganize := f.exactPermGoneSession(t, "preview-organize", auth.PermLibraryOrganize)
