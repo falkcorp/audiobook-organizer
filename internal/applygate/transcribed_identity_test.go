@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package applygate
 
@@ -250,7 +250,7 @@ func TestTranscribedSearchConfirms(t *testing.T) {
 		{"Planet Hulk", "Greg Pak", "Planet Hulk", "Greg Pak", true},
 		{"Planet Hulk", "Greg Pak", "Planet Hulk", "Someone Else", false},
 		// A heard author of 3 characters or fewer is too short to judge by
-		// (util.MainTranscriptionConfirms), as on main.
+		// (util.MainTranscriptionMatch), as on main.
 		{"Planet Hulk", "Pak", "Planet Hulk", "Someone Else", true},
 	}
 	for _, tc := range cases {

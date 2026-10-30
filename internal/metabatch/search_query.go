@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -86,7 +86,7 @@ type CandidateSearchQuery struct {
 	// Author is the author heard in the same transcription as Title (the
 	// book's or the first file's TranscribedAuthor), "" for any other
 	// source. The certainty gate requires a transcribed-title candidate to
-	// match it too (util.MainTranscriptionConfirms), so "X, by A" never
+	// match it too (util.MainTranscriptionMatch), so "X, by A" never
 	// vouches for a candidate "X" by B.
 	Author string
 	Usable bool

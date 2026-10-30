@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.17.1
+// version: 1.17.2
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -162,13 +162,71 @@ type Verdict struct {
 // matcher on its own only annotates an owner-reviewed row apply, which a human
 // has already looked at.
 func TranscriptionConfirms(book *database.Book, c *metafetch.MetadataCandidate) bool {
+	return CheckTranscription(book, c).Confirms
+}
+
+// TranscriptionCheck is TranscriptionConfirms with its working shown: the
+// verdict, the failing leg and both sides' values, so a refusal can say why.
+// The decision is Confirms and is exactly TranscriptionConfirms.
+type TranscriptionCheck struct {
+	// Confirms is the TranscriptionConfirms verdict.
+	Confirms bool
+	// Main is origin/main's rule (exact title leg, substring author leg).
+	Main util.TranscriptionMatch
+	// SharedTitleOK / SharedAuthorOK are the shared matcher's legs
+	// (util.TitleAgrees, util.AuthorAgrees). They are only evaluated when
+	// Main confirmed; SharedChecked says so.
+	SharedChecked                 bool
+	SharedTitleOK, SharedAuthorOK bool
+	// Raw values on each side, as stored (the Main fields are normalized).
+	TranscribedTitle, TranscribedAuthor string
+	CandidateTitle, CandidateAuthor     string
+}
+
+// CheckTranscription evaluates TranscriptionConfirms and keeps the evidence.
+// It decides nothing differently from the bool it backs.
+func CheckTranscription(book *database.Book, c *metafetch.MetadataCandidate) TranscriptionCheck {
+	var chk TranscriptionCheck
 	if book == nil || c == nil || book.TranscribedTitle == nil || *book.TranscribedTitle == "" {
-		return false
+		return chk
 	}
-	if !util.MainTranscriptionConfirms(c.Title, c.Author, *book.TranscribedTitle, derefStr(book.TranscribedAuthor)) {
-		return false
+	chk.TranscribedTitle, chk.TranscribedAuthor = *book.TranscribedTitle, derefStr(book.TranscribedAuthor)
+	chk.CandidateTitle, chk.CandidateAuthor = c.Title, c.Author
+	chk.Main = util.MainTranscriptionMatch(c.Title, c.Author, chk.TranscribedTitle, chk.TranscribedAuthor)
+	if !chk.Main.Confirms() {
+		return chk
 	}
-	return ReviewedTranscriptionAgrees(book, c)
+	chk.SharedChecked = true
+	chk.SharedTitleOK = util.TitleAgrees(c.Title, c.SeriesPosition, chk.TranscribedTitle)
+	chk.SharedAuthorOK = util.AuthorAgrees(c.Author, chk.TranscribedAuthor)
+	chk.Confirms = chk.SharedTitleOK && chk.SharedAuthorOK
+	return chk
+}
+
+// MismatchDetail is the transcription_mismatch refusal sentence: which leg
+// failed, then both sides' values, in the style of runtime_mismatch ("files
+// 905 min, candidate 452 min (50% off)").
+func (t TranscriptionCheck) MismatchDetail() string {
+	heard := strconv.Quote(t.TranscribedTitle)
+	if t.TranscribedAuthor != "" {
+		heard += " by " + strconv.Quote(t.TranscribedAuthor)
+	}
+	cand := strconv.Quote(t.CandidateTitle) + " by " + strconv.Quote(t.CandidateAuthor)
+	var leg string
+	switch {
+	case !t.Main.TitleOK:
+		leg = "exact-title leg failed (normalized " + strconv.Quote(t.Main.TranscribedTitle) +
+			" != " + strconv.Quote(t.Main.CandidateTitle) + ")"
+	case !t.Main.AuthorOK:
+		leg = "substring-author leg failed (normalized transcribed author " + strconv.Quote(t.Main.TranscribedAuthor) +
+			" not in candidate author " + strconv.Quote(t.Main.CandidateAuthor) + ")"
+	case !t.SharedTitleOK:
+		leg = "shared title matcher failed"
+	default:
+		leg = "shared author matcher failed"
+	}
+	return "book has a transcribed title the candidate does not match: " + leg +
+		"; transcribed " + heard + ", candidate " + cand
 }
 
 // ReviewedTranscriptionAgrees is the shared matcher alone (util.TitleAgrees
@@ -344,7 +402,7 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 				v.Detail = chk.Verdict + ": " + chk.Detail
 			}
 		default:
-			v.Detail = "book has a transcribed title the candidate does not match"
+			v.Detail = CheckTranscription(book, c).MismatchDetail()
 		}
 	case !v.Sequence.Pass:
 		v.Reason, v.Detail = v.Sequence.Reason, v.Sequence.Detail

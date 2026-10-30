@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.21 -->
+<!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -2587,7 +2587,7 @@ into one of the curated sections below, is a normal direct edit.
       costs a gate refusal on every batch.
       Full list: the `runtime_mismatch` refusals at ratio 2.00 in those op logs.
 
-- [ ] **`transcription_mismatch` refusals name neither side's values.**
+- [x] **`transcription_mismatch` refusals name neither side's values.**
       It is the single biggest refusal bucket (147 events / 81 books on
       2026-09-20, 41%), and its Detail is the fixed sentence "book has a
       transcribed title the candidate does not match" — no titles, no authors,
