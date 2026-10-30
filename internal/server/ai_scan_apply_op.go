@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 2d9f4b80-7a13-4c65-8e0b-5f31a6c92d74
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // ai_scan_apply_op registers ai.author-scan-apply: the op behind "Apply selected"
 // in the Authors & series lane's AI scans sub-view. Until 2026-10-13 that button
@@ -150,6 +150,11 @@ type scanApplyResult struct {
 	Applied      bool     `json:"applied"`
 	Skipped      string   `json:"skipped,omitempty"`
 	Errors       []string `json:"errors,omitempty"`
+
+	// aborted is set (and names why) when the scan stand-down lease was lost: the
+	// whole run stops, not just this result. Not part of the stored report; the
+	// reason is also in Errors.
+	aborted string
 }
 
 // scanApplyReport is the op's result payload.
@@ -164,7 +169,9 @@ type scanApplyReport struct {
 // caller marks a result applied only when Applied is true and the run is live.
 //
 // cancelled is true when the run was canceled part way; what was merged stays
-// merged.
+// merged. scan is the stand-down the caller holds under opID (nil for a preview):
+// it is renewed before every author's writes, and res.aborted is set when the
+// lease is gone, which the caller must treat as the end of the run.
 func applyScanResult(
 	ctx context.Context,
 	store scanApplyStore,
@@ -172,6 +179,7 @@ func applyScanResult(
 	r database.ScanResult,
 	flags aiscan.RawRoleFlags,
 	dryRun bool,
+	scan scanLeaseRenewer,
 	canceled func() bool,
 ) (res scanApplyResult, cancelled bool) {
 	res.ResultID = r.ID
@@ -188,9 +196,15 @@ func applyScanResult(
 		// A scan applies many groups from one click, so locks are always honoured.
 		HonorLocks: true,
 		DryRun:     dryRun,
+		Scan:       scan,
 	}, canceled, nil)
 	if cancelled {
 		return res, true
+	}
+	if out.Aborted != "" {
+		res.Errors = append(res.Errors, out.Aborted)
+		res.aborted = out.Aborted
+		return res, false
 	}
 	for _, id := range plan.MergeIDs {
 		if out.MergedIDs[id] {
@@ -209,6 +223,12 @@ func applyScanResult(
 	for _, id := range plan.NarratorIDs {
 		if canceled != nil && canceled() {
 			return res, true
+		}
+		// The reclassify rewrites book_authors too, so it is gated like a merge.
+		if scan != nil && !scan.RenewScanStandDown(opID) {
+			res.aborted = scanStandDownLostMessage(len(res.Merged)+len(res.Reclassified), len(plan.MergeIDs)+len(plan.NarratorIDs))
+			res.Errors = append(res.Errors, res.aborted)
+			return res, false
 		}
 		// GetAuthorByID follows the author tombstone. Nothing left of the author
 		// means a reclassify already happened; an answer under another id means it
@@ -354,6 +374,21 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 	if scan.Status != "complete" {
 		return fmt.Errorf("ai.author-scan-apply: scan %d is %s; only a finished scan's results can be applied", scan.ID, scan.Status)
 	}
+	// Stand the library scanner down for the whole apply, before the first write: a
+	// concurrent library.scan rewrites book_authors on the rows the merges repoint.
+	// ONE hold spans every result (the registry keys a hold by op id, so a hold per
+	// result would release the gate between them and re-park the scanner N times).
+	// Taken before the claim so a refusal leaves no claim behind. A preview writes
+	// nothing and does not park the production scanner for it.
+	var lease scanLeaseRenewer
+	if !dryRun {
+		release, herr := s.holdAuthorMergeStandDown(ctx, opID, "ai.author-scan-apply")
+		if herr != nil {
+			return fmt.Errorf("ai.author-scan-apply: %w", herr)
+		}
+		defer release()
+		lease = s.scanGate()
+	}
 	// Claim the scan before the first merge: a nightly run that supersedes it
 	// meanwhile is refused (database.AIScanStore.SupersedeIfUnapplied), where an
 	// unclaimed scan was hidden under a run that then merged its results and could
@@ -428,12 +463,21 @@ func (s *Server) runAIScanApply(ctx context.Context, p handlers.AIScanApplyOpPar
 			continue
 		}
 
-		res, cancelled := applyScanResult(ctx, store, opID, r, flags, dryRun, progress.IsCanceled)
+		res, cancelled := applyScanResult(ctx, store, opID, r, flags, dryRun, lease, progress.IsCanceled)
 		if cancelled {
 			_ = progress.Log("warn", "Operation cancelled by user", nil)
 			report.Results = append(report.Results, res)
 			s.saveScanApplyReport(ctx, reporter, report)
 			return fmt.Errorf("cancelled")
+		}
+		if res.aborted != "" {
+			// The lease is gone, so the remaining results are not attempted: the
+			// scanner may already be writing. What merged stays merged, the merged
+			// results were already marked, and this one is left unapplied.
+			_ = progress.Log("error", res.aborted, nil)
+			report.Results = append(report.Results, res)
+			s.saveScanApplyReport(ctx, reporter, report)
+			return fmt.Errorf("ai.author-scan-apply aborted after %d of %d result(s): %s", i, total, res.aborted)
 		}
 		if res.Applied && !dryRun {
 			// Mark ONLY a result whose merge fully succeeded. The note that lets an
