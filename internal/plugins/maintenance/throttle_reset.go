@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/throttle_reset.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ca0151f9-fe5c-4afa-82b6-03c85e42bb08
 // last-edited: 2026-10-30
 
@@ -62,9 +62,10 @@ type throttleResetResult struct {
 // Preview by default (owner rule 2026-09-25): lists the holds it would release
 // and changes nothing; dry_run=false releases them.
 //
-// It touches only the in-process throttle registry and its persisted rows --
-// no library data -- so it declares no capabilities. Admin-only like every op
-// start (the ops routes are admin-gated).
+// It touches only the throttle registry and its persisted store rows -- no
+// book data or files -- and declares the store read/write capabilities every
+// maintenance op must declare (TestMaintenancePlugin_AllOpsHaveCapabilities).
+// Admin-only like every op start (the ops routes are admin-gated).
 func (p *Plugin) throttleResetDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          throttleResetID,
@@ -81,8 +82,12 @@ func (p *Plugin) throttleResetDef() sdk.OperationDef {
 		DefaultPriority: sdk.PriorityHigh,
 		ConcurrencyKey:  throttleResetID,
 		Cancellable:     false,
-		Timeout:         time.Minute,
-		Run:             p.runThrottleReset,
+		// The registry persists holds in the store (provider throttle rows), so it
+		// reads and deletes store state, the same set clear-apply-rename-failures
+		// declares for its preference rows.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
+		Timeout:      time.Minute,
+		Run:          p.runThrottleReset,
 	}
 }
 
