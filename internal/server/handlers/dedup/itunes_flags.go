@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/itunes_flags.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7c1e5a94-3b82-4d6f-a0e9-52f8d4c1b673
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package deduphandler
 
@@ -19,12 +19,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
-// bookWithITunes is the include_books payload for one side of a pair: the
-// stored book exactly as before, plus is_itunes. The embedded pointer's fields
-// are promoted into the JSON object (database.Book has no MarshalJSON), so a
-// client that read book_a.title keeps reading it.
-type bookWithITunes struct {
+// candidateBook is the include_books payload for one side of a pair: the stored
+// book exactly as before, plus the resolved author_name / series_name and
+// is_itunes. The embedded pointer's fields are promoted into the JSON object
+// (database.Book has no MarshalJSON), so a client that read book_a.title keeps
+// reading it.
+//
+// author_name and series_name are the keys the audiobooks endpoints send
+// (enrichedBookResponse), resolved by the same database.ResolveBookNames; the
+// bare database.Book carries neither, which left the TypeScript Book's
+// author_name undefined on every Dupes card.
+type candidateBook struct {
 	*database.Book
+	AuthorName *string `json:"author_name,omitempty"`
+	SeriesName *string `json:"series_name,omitempty"`
 	// IsITunes is itunesguard.OwnershipWhy != "": a book iTunes persistent id,
 	// a row iTunes persistent id or path, a live itunes external id, a path
 	// inside an iTunes Media folder, or a path under books/itunes/**. It is

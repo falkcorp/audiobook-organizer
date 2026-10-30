@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.33.1
+// version: 1.34.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, link / reject /
@@ -452,8 +452,8 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// qualifying pair and slices a page out of it, and a filesystem-resolving
 	// guard per book of the unsliced set would be paid for rows nobody sees.
 	if includeBooks {
-		if err := attachITunesFlags(c.Request.Context(), h.store, items); err != nil {
-			httputil.InternalError(c, "failed to compute the iTunes flag of a candidate's book", err)
+		if err := attachBookViews(c.Request.Context(), h.store, items); err != nil {
+			httputil.InternalError(c, "failed to build a candidate's book view", err)
 			return
 		}
 	}
@@ -464,11 +464,53 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	})
 }
 
-// attachITunesFlags replaces each row's book_a / book_b (*database.Book as
-// stored) with a bookWithITunes carrying is_itunes, in place. A nil side (the
-// entity is not a book, or the lookup missed) stays nil so it still serialises
-// as null.
-func attachITunesFlags(ctx context.Context, store iTunesFlagStore, items []gin.H) error {
+// nameCache memoises author and series lookups for one response, so a page that
+// names the same author on many pairs reads it once. It satisfies
+// database.BookNameReader, which is how the candidate endpoints reuse the
+// resolution the audiobooks endpoints use rather than re-deriving it.
+type nameCache struct {
+	store   database.BookNameReader
+	authors map[int]*database.Author
+	series  map[int]*database.Series
+}
+
+func newNameCache(store database.BookNameReader) *nameCache {
+	return &nameCache{
+		store:   store,
+		authors: map[int]*database.Author{},
+		series:  map[int]*database.Series{},
+	}
+}
+
+func (n *nameCache) GetAuthorByID(id int) (*database.Author, error) {
+	if a, ok := n.authors[id]; ok {
+		return a, nil
+	}
+	a, err := n.store.GetAuthorByID(id)
+	if err != nil {
+		return nil, err // not cached: a transient error must not stick
+	}
+	n.authors[id] = a
+	return a, nil
+}
+
+func (n *nameCache) GetSeriesByID(id int) (*database.Series, error) {
+	if s, ok := n.series[id]; ok {
+		return s, nil
+	}
+	s, err := n.store.GetSeriesByID(id)
+	if err != nil {
+		return nil, err
+	}
+	n.series[id] = s
+	return s, nil
+}
+
+// attachBookViews replaces each row's book_a / book_b (*database.Book as
+// stored) with a candidateBook carrying author_name, series_name and is_itunes,
+// in place. A nil side (the entity is not a book, or the lookup missed) stays
+// nil so it still serialises as null.
+func attachBookViews(ctx context.Context, store DedupStore, items []gin.H) error {
 	var books []*database.Book
 	for _, row := range items {
 		for _, k := range [...]string{"book_a", "book_b"} {
@@ -481,10 +523,12 @@ func attachITunesFlags(ctx context.Context, store iTunesFlagStore, items []gin.H
 	if err != nil {
 		return err
 	}
+	names := newNameCache(store)
 	for _, row := range items {
 		for _, k := range [...]string{"book_a", "book_b"} {
 			if b, ok := row[k].(*database.Book); ok && b != nil {
-				w := bookWithITunes{Book: b}
+				w := candidateBook{Book: b}
+				w.AuthorName, w.SeriesName = nonEmptyNames(names, b)
 				if v, settled := flags[b.ID]; settled {
 					w.IsITunes = &v
 				}
@@ -493,6 +537,20 @@ func attachITunesFlags(ctx context.Context, store iTunesFlagStore, items []gin.H
 		}
 	}
 	return nil
+}
+
+// nonEmptyNames is database.ResolveBookNames with each empty name turned into
+// a nil pointer, so omitempty drops the key exactly as enrichedBookResponse
+// does.
+func nonEmptyNames(r database.BookNameReader, b *database.Book) (author, series *string) {
+	a, s := database.ResolveBookNames(r, b)
+	if a != "" {
+		author = &a
+	}
+	if s != "" {
+		series = &s
+	}
+	return author, series
 }
 
 // GetDedupCandidateBreakdown handles GET /api/v1/dedup/candidates/:id/breakdown.
@@ -506,8 +564,8 @@ func attachITunesFlags(ctx context.Context, store iTunesFlagStore, items []gin.H
 //
 //	{
 //	  "candidate": { ...DedupCandidate with score_breakdown... },
-//	  "book_a":    { id, title, author_id, series_id, files: [...] },
-//	  "book_b":    { id, title, author_id, series_id, files: [...] }
+//	  "book_a":    { id, title, author_id, author_name, series_id, series_name, files: [...] },
+//	  "book_b":    { id, title, author_id, author_name, series_id, series_name, files: [...] }
 //	}
 //
 // Returns 404 when the candidate ID is not found.
@@ -540,7 +598,11 @@ func (h *Handler) GetDedupCandidateBreakdown(c *gin.Context) {
 	store := h.store
 	type bookDetail struct {
 		*database.Book
-		Files []database.BookFile `json:"files"`
+		// AuthorName / SeriesName are the audiobooks endpoints' display names
+		// (database.ResolveBookNames); the drawer's author line reads them.
+		AuthorName *string             `json:"author_name,omitempty"`
+		SeriesName *string             `json:"series_name,omitempty"`
+		Files      []database.BookFile `json:"files"`
 		// Runtime is the canonical runtime (database.ComputeBookRuntime) the
 		// dedup duration signals compare, with its coverage, so the drawer
 		// shows "at least 40m (2 of 30 files)" instead of Book.Duration's
@@ -554,6 +616,7 @@ func (h *Handler) GetDedupCandidateBreakdown(c *gin.Context) {
 		}
 		files, ferr := store.GetBookFiles(bookID)
 		d := &bookDetail{Book: book, Files: files}
+		d.AuthorName, d.SeriesName = nonEmptyNames(store, book)
 		if ferr == nil {
 			rt := database.ComputeBookRuntime(book, files)
 			d.Runtime = &rt
