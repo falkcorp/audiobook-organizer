@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -5697,9 +5698,9 @@ Noticed while adding dedup search (PR for `feat/dedup-server-side-search`), whic
 deliberately did NOT touch it: `SearchBooks` is a shared `BookSearchReader` method with
 other callers, and changing its matching changes their results too.
 
-- [ ] Measure how many authors normalize to something other than their lower-cased name
-- [ ] Decide whether the query should be normalized, or the stored side lower-cased only
-- [ ] Check the other `SearchBooks` callers before changing the predicate
+- [x] Measure how many authors normalize to something other than their lower-cased name — unit-test table added (`TestSubstringSearchRank_AuthorQueryNormalizedLikeStoredSide`, `legacyHit` column); the prod count needs the DB and is a follow-up in `docs/decisions/2026-10-30-searchbooks-author-normalization.md`. Note `NormalizeAuthor` is only lower + whitespace collapse, not punctuation/reorder.
+- [x] Decide whether the query should be normalized, or the stored side lower-cased only — query normalized with `NormalizeAuthor`, as-typed match kept as fallback (decision doc)
+- [x] Check the other `SearchBooks` callers before changing the predicate — all share `SubstringSearchRank`; only widens (decision doc lists callers)
 
 Related: `SearchBooks` also does not match `file_path`, which is why dedup search needed its
 own resolver rather than reusing it.
