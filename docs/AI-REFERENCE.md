@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-30 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -209,7 +209,7 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 ### Authors
 | Method | Path | Handler |
 |--------|------|---------|
-| GET | `/authors` | `listAuthors` |
+| GET | `/authors` | `listAuthors` (optional `limit`, `offset`, `q`, `filter`, `sort`, `order`) |
 | GET | `/authors/with-counts` | `listAuthorsWithCounts` |
 | GET | `/authors/count` | `countAuthors` |
 | GET | `/authors/:id/books` | `getAuthorBooks` |
@@ -228,7 +228,7 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 ### Series
 | Method | Path | Handler |
 |--------|------|---------|
-| GET | `/series` | `listSeries` |
+| GET | `/series` | `listSeries` (optional `limit`, `offset`, `q`, `filter`, `sort`, `order`) |
 | GET | `/series/count` | `countSeries` |
 | GET | `/series/:id/books` | `getSeriesBooks` |
 | PATCH | `/series/:id` | `updateSeriesName` |

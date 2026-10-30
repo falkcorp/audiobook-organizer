@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -2924,7 +2925,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Four more workflows grant broad write permissions without a stated reason.** `nightly.yml` (actions, packages, id-token, attestations: write), `release-prod.yml` and `prerelease.yml` (packages, id-token, attestations: write; prerelease also actions: write) and `auto-revert.yml` (actions: write). #3274 cut `frontend-ci.yml` to `contents: read` after reading what the called reusable workflows actually request. Do the same review per workflow: keep a grant only where a job step needs it, and add a comment naming that step.
 
-- [ ] **WEB-01** Authors page fetches the entire authors table on every mount, no server pagination — `web/src/services/api.ts:1893`. Every visit to /authors (and every `loadAuthors()` re-run after merge/delete/undo) pulls ~17k+ author rows including nested alias arrays over the wire and holds them all in React state, just to show a paginated table. This is the same whole-library-fetch shape the standing lesson set (`feedback_meas Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-324-authors-page-fetches-the-entire-authors-table-on.md`.
+- [x] **WEB-01** Authors page fetches the entire authors table on every mount, no server pagination — `web/src/services/api.ts:1893`. Every visit to /authors (and every `loadAuthors()` re-run after merge/delete/undo) pulls ~17k+ author rows including nested alias arrays over the wire and holds them all in React state, just to show a paginated table. This is the same whole-library-fetch shape the standing lesson set (`feedback_meas Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-324-authors-page-fetches-the-entire-authors-table-on.md`.
 
 - [x] **Operations bell: cap the completed list** — ✅ 2026-10-30: the Completed section shows the newest 15 rows and a "Show all N in Activity" link to `/activity`; running/queued rows are never capped. the header bell renders every completed operation in its window, which is hundreds of rows after a busy day. Show a bounded number (e.g. the newest 10–20) with a "more…" link that goes to the Activity page, or a plain cap with the existing top button. Low priority (owner, 2026-09-10: "SUPER low priority, just kinda annoying").
 
@@ -2949,7 +2950,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [x] **SF-01b** (verified 2026-09-15: `reOrganizeInPlace` already stats the source before the same-path branch and errors when it is gone; no change needed) `ReOrganizeInPlace` stamps the same-path no-op case as organized without a stat — `internal/organizer/service.go` (~L799, grep `ReOrganizeInPlace`). Same shape as SF-01 (fixed for `OrganizeBook` in TASK-303 / PR #3180): when the row's `FilePath` already equals the computed target, the batch-organize worker records success without checking the file still exists, so a stale or edited row pointing at a deleted file is reported organized. Surfaced by the TASK-303 worker and left out of scope; needs the same `os.Stat` guard plus a regression test in `internal/organizer`.
 
-- [ ] **WEB-02** Series page fetches the entire series table on every mount, no server pagination — `web/src/services/api.ts:1827`. Same whole-table-per-visit cost as WEB-01, scaled by series count instead of author count. Frequency is the same (primary nav page, refetched after every rename/split/delete/merge). Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-327-series-page-fetches-the-entire-series-table-on-e.md`.
+- [x] **WEB-02** Series page fetches the entire series table on every mount, no server pagination — `web/src/services/api.ts:1827`. Same whole-table-per-visit cost as WEB-01, scaled by series count instead of author count. Frequency is the same (primary nav page, refetched after every rename/split/delete/merge). Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-327-series-page-fetches-the-entire-series-table-on-e.md`.
 
 - [x] **CI-04** The only Go-version consistency check truncates to major.minor, never checks .envrc/Dockerfiles, and only warns instead of failing — `.github/workflows/test-action-integration.yml:105`. A gate that can only warn is not a gate: if go.mod, ci.yml, .envrc or a Dockerfile drift on the patch version, the workflow named 'Check version consistency' reports the mismatch and then reports success. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-313-the-only-go-version-consistency-check-truncates.md`. ✅ **DONE 2026-09-12 (#3276):** full-version check across workflows, .envrc, Makefile, Dockerfiles (per-stage digests); fails instead of warning.
 

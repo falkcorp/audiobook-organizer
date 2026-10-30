@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -305,22 +305,42 @@ func (h *Handler) GetWorkStats(c *gin.Context) {
 
 // --- Authors ---
 
-// ListAuthors implements GET /authors, with optional limit/offset paging.
+// ListAuthors implements GET /authors with optional server-side search,
+// filter, sort and paging.
 //
-// The handler previously ignored both parameters and always returned every
-// author. On this library that is 9,203 authors — about 765 KB — sent on every
-// request regardless of what the caller asked for; `?limit=5` returned the same
-// 765 KB as `?limit=1000`.
+// Query parameters, all optional:
 //
-// Paging is applied AFTER the cache rather than pushed into the query on purpose:
-// building the list is the expensive part (it joins book and file counts per
-// author), so one cached build serves every page slice. Slicing a cached list is
-// free; re-querying per page would give up the cache for no gain.
+//	limit, offset  window over the matches (limit 0 or absent means "to the end")
+//	q              case-insensitive substring of the name or any alias name
+//	filter         with_books | zero_books | all (default all)
+//	sort, order    name | book_count | alias_count | id, asc | desc
 //
-// 🔑 Omitting `limit` still returns everything. Existing callers — including the
-// current UI — depend on the unpaged response, so paging is strictly opt-in;
-// defaulting to a page size here would silently truncate them.
+// The response keeps `count` as the number of authors MATCHING q/filter across
+// every page and adds `total` for the whole table, so a client paging through
+// knows how much is left and can still say "12 of 17,477".
+//
+// The handler previously ignored limit and offset and always returned every
+// author; the Authors page then paged, searched and sorted that ~17k-row
+// download in the browser, and re-downloaded it after every merge, delete and
+// undo (WEB-01). Filtering, sorting and slicing are applied AFTER the cache
+// rather than pushed into the query on purpose: building the list is the
+// expensive part (it joins book and file counts per author), so one cached build
+// serves every page slice and every sort order.
+//
+// 🔑 A request with none of these parameters still returns everything in the
+// cached order. The Library page's author filter dropdown reads the whole list
+// through the sibling GET /authors client (getAuthors), so narrowing is strictly
+// opt-in; defaulting to a page size here would silently truncate it.
 func (h *Handler) ListAuthors(c *gin.Context) {
+	q, ok := parseListQuery(c)
+	if !ok {
+		return
+	}
+	if err := q.ValidateAuthors(); err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
+		return
+	}
+
 	resp, ok := h.authorsCache.Get("all")
 	if !ok {
 		built, err := h.authorSeriesService.ListAuthorsWithCounts()
@@ -331,30 +351,11 @@ func (h *Handler) ListAuthors(c *gin.Context) {
 		h.authorsCache.Set("all", built)
 		resp = built
 	}
-	if resp == nil {
+	if resp == nil || !q.Narrows() {
 		httputil.RespondWithOK(c, resp)
 		return
 	}
-
-	limit, offset, paged := parseListWindow(c)
-	if !paged {
-		httputil.RespondWithOK(c, resp)
-		return
-	}
-
-	total := len(resp.Items)
-	start := min(offset, total)
-	end := total
-	if limit > 0 {
-		end = min(start+limit, total)
-	}
-	// Count stays the FULL total, not the page length — a client paging through
-	// needs to know how much is left, and reporting the slice size would make the
-	// last page look like the whole set.
-	httputil.RespondWithOK(c, &audiobooks.AuthorWithCountListResponse{
-		Items: resp.Items[start:end],
-		Count: total,
-	})
+	httputil.RespondWithOK(c, resp.Apply(q))
 }
 
 // GetAuthor implements GET /authors/:id.
@@ -399,20 +400,57 @@ func (h *Handler) GetAuthor(c *gin.Context) {
 
 // parseListWindow reads limit/offset. paged is false when neither is supplied,
 // so the caller can preserve the historical return-everything behaviour rather
-// than guessing a default page size. Negative or unparseable values are ignored
-// instead of erroring, matching how the rest of the list endpoints behave.
-func parseListWindow(c *gin.Context) (limit, offset int, paged bool) {
-	if v := c.Query("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			limit, paged = n, true
+// than guessing a default page size. An unparseable value is ignored, matching
+// how the rest of the list endpoints behave; a NEGATIVE value is a client bug
+// (a pager that underflowed) and is reported through badValue so the caller can
+// answer 400 rather than serve a page nobody asked for.
+func parseListWindow(c *gin.Context) (limit, offset int, paged bool, badValue string) {
+	read := func(name string) (n int, set bool) {
+		v := c.Query(name)
+		if v == "" {
+			return 0, false
 		}
-	}
-	if v := c.Query("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset, paged = n, true
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, false
 		}
+		if n < 0 {
+			badValue = name
+			return 0, false
+		}
+		return n, true
 	}
-	return limit, offset, paged
+	var l, o bool
+	limit, l = read("limit")
+	offset, o = read("offset")
+	return limit, offset, l || o, badValue
+}
+
+// parseListQuery reads the shared list parameters (window, q, filter, sort,
+// order). An unparseable window value is ignored but a negative one is a 400
+// (see parseListWindow), as is an `order` other than asc/desc, because silently serving the wrong direction is the
+// kind of mistake a table header cannot show. The filter and sort vocabularies
+// differ per endpoint and are checked by the caller. ok is false once a 400 has
+// been written.
+func parseListQuery(c *gin.Context) (q audiobooks.ListQuery, ok bool) {
+	var bad string
+	q.Limit, q.Offset, q.Paged, bad = parseListWindow(c)
+	if bad != "" {
+		httputil.RespondWithBadRequest(c, "invalid "+bad+" (must not be negative)")
+		return q, false
+	}
+	q.Search = strings.TrimSpace(c.Query("q"))
+	q.Filter = c.Query("filter")
+	q.Sort = c.Query("sort")
+	switch order := strings.ToLower(c.Query("order")); order {
+	case "", "asc":
+	case "desc":
+		q.Desc = true
+	default:
+		httputil.RespondWithBadRequest(c, "invalid order (want asc or desc)")
+		return q, false
+	}
+	return q, true
 }
 
 // CountAuthors implements GET /authors/count.
@@ -905,19 +943,42 @@ func (h *Handler) CountSeries(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"count": count})
 }
 
-// ListSeries implements GET /series.
+// ListSeries implements GET /series with the same optional parameters as
+// ListAuthors, over the series list (WEB-02):
+//
+//	limit, offset  window over the matches
+//	q              case-insensitive substring of the series or author name
+//	filter         with_books | empty | all (default all)
+//	sort, order    name | author_name | book_count | id, asc | desc
+//
+// `count` is the number of matches across every page, `total` the whole table.
+// A request with none of these parameters still returns every series in the
+// cached order; the Library page's series filter reads the list that way.
 func (h *Handler) ListSeries(c *gin.Context) {
-	if cached, ok := h.seriesCache.Get("all"); ok {
-		httputil.RespondWithOK(c, cached)
+	q, ok := parseListQuery(c)
+	if !ok {
 		return
 	}
-	resp, err := h.authorSeriesService.ListSeriesWithCounts()
-	if err != nil {
-		httputil.InternalError(c, "failed to list series", err)
+	if err := q.ValidateSeries(); err != nil {
+		httputil.RespondWithBadRequest(c, err.Error())
 		return
 	}
-	h.seriesCache.Set("all", resp)
-	httputil.RespondWithOK(c, resp)
+
+	resp, hit := h.seriesCache.Get("all")
+	if !hit {
+		built, err := h.authorSeriesService.ListSeriesWithCounts()
+		if err != nil {
+			httputil.InternalError(c, "failed to list series", err)
+			return
+		}
+		h.seriesCache.Set("all", built)
+		resp = built
+	}
+	if resp == nil || !q.Narrows() {
+		httputil.RespondWithOK(c, resp)
+		return
+	}
+	httputil.RespondWithOK(c, resp.Apply(q))
 }
 
 // GetSeriesBooks implements GET /series/:id/books.
