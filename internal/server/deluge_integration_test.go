@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration_test.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-30
 //
 // Integration tests for Deluge notification helpers and HTTP handlers.
 // Service logic moved to internal/deluge/integration.go; tests updated to
@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -214,4 +215,63 @@ func TestNotifyDelugeAfterVersionSwap(t *testing.T) {
 
 	// Should not panic even without Deluge configured.
 	deluge.NotifyDelugeAfterVersionSwap(store, fromVer, toVer, "/lib/books/b1/book.m4b")
+}
+
+// The resume handler tells Deluge through notifyDelugeAfterSwapResume, which
+// defaults to the swap notifier. This pins the directory a resumed swap hands
+// the Deluge client for the leaving version: its .versions/{id} slot, not
+// .versions.
+func TestResumeSwapDelugeFollow_LeavingVersionGetsItsSlotFolder(t *testing.T) {
+	pebblePath := filepath.Join(t.TempDir(), "pebble")
+	store, err := database.NewPebbleStoreInMemory(pebblePath)
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	_, _ = store.CreateBook(&database.Book{
+		ID: "b1", Title: "Year One", FilePath: "/lib/books/b1/book.m4b",
+	})
+
+	var mu sync.Mutex
+	dests := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			Params []any  `json:"params"`
+			ID     int64  `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "core.move_storage" && len(req.Params) == 2 {
+			ids, _ := req.Params[0].([]any)
+			dest, _ := req.Params[1].(string)
+			if len(ids) == 1 {
+				mu.Lock()
+				dests[ids[0].(string)] = dest
+				mu.Unlock()
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "result": true})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := deluge.New(srv.URL, "deluge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(deluge.SetGlobalClientForTest(client))
+	prev := config.AppConfig.DelugeMoveEnabled
+	config.AppConfig.DelugeMoveEnabled = true
+	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = prev })
+
+	from := &database.BookVersion{ID: "v-robin", BookID: "b1", TorrentHash: "aaaa"}
+	to := &database.BookVersion{ID: "v-batgirl", BookID: "b1", TorrentHash: "bbbb"}
+	notifyDelugeAfterSwapResume(store, from, to, "/lib/books/b1/book.m4b")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got, want := dests["aaaa"], "/lib/books/b1/.versions/v-robin"; got != want {
+		t.Errorf("leaving version sent to %q, want %q", got, want)
+	}
+	if got, want := dests["bbbb"], "/lib/books/b1"; got != want {
+		t.Errorf("entering version sent to %q, want %q", got, want)
+	}
 }
