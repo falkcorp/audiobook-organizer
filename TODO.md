@@ -5541,20 +5541,23 @@ Surfaced 2026-09-01 while verifying the Go 1.27 toolchain bump.
       surprise. A separate `IsPlaceholderDecorated` may be the better shape than
       changing `IsPlaceholder` itself.
 
-## `Book.author_name` is declared in TypeScript but the API never sends it
+## `Book.author_name` is declared in TypeScript but the dedup endpoints never sent it
 
-`web/src/services/api.ts` declares `author_name?: string` on the `Book` interface. The Go
-`database.Book` has no such JSON tag — it marshals a nested `author` object — and the dedup
-handler never sets the key. Because the field is optional, every read yields `undefined`
-with no type error, and callers using `?? ''` swallow it silently.
+`web/src/services/api.ts` declares `author_name?: string` on the `Book` interface. The
+declaration is correct: `enrichedBookResponse` (`internal/server/server.go`) sends
+`author_name` and `series_name` on the audiobooks / metadata endpoints. The gap was the
+endpoints that returned a bare `database.Book` (no such JSON tag): the dedup candidate
+list's `book_a` / `book_b` (`include_books`) and the candidate breakdown's. Because the
+field is optional, every Dupes card read `undefined` with no type error, and callers using
+`?? ''` swallowed it. That made the Dupes panel's client-side author search dead code.
 
-This made the Dupes panel's client-side author search dead code for as long as it existed.
-Found while moving that search server-side; the server now resolves author through the
-author table, so the panel works, but the type still promises a field that never arrives.
+Fixed by resolving the names through `database.ResolveBookNames`, the same function
+`enrichBookForResponse` now calls, on both dedup endpoints. The TS `Book` field and the PUT
+payload are unchanged.
 
-- [ ] Decide: populate `author_name` server-side, or drop it from the TS interface
-- [ ] Grep for other readers of `book.author_name` that are silently getting `undefined`
-- [ ] Prefer whichever option makes the absence a compile error rather than an empty string
+- [x] Decide: populate `author_name` server-side, or drop it from the TS interface (populated; the audiobooks endpoints already did, the dedup candidate list and breakdown now do)
+- [x] Grep for other readers of `book.author_name` that are silently getting `undefined` (the Dupes / cluster spines, FileInfoCompare and AudioSamplePair were; Regroup, Authors, Repairs and the metadata lane read `/audiobooks`, which was already enriched; `compare-acoustid` has no TS reader)
+- [x] Prefer whichever option makes the absence a compile error rather than an empty string (the shape is now one resolver for every endpoint that sends the key; a type that makes absence a compile error is still open and is the TanStack/typed-DTO question, not this fix)
 
 ## Dedup search resolves book IDs with a full `GetAllBooksCore` read
 
