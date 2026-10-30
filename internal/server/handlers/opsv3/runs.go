@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/runs.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 736a68db-9f7b-4593-a1b0-155e22d7ca66
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package opsv3
 
@@ -295,7 +295,9 @@ func resolveNoPreview(defID string, params json.RawMessage, mode string) (json.R
 // CancelRun implements POST /api/v3/ops/runs/:id/cancel. The caller must be
 // the user who started the run, or hold scan.trigger (the start floor) and
 // the definition's permission. v1's DELETE /operations/v2/:id is stricter
-// (settings.manage, no starter exception); the brief's rule is kept here.
+// (settings.manage, no starter exception); the brief's rule is kept here. A
+// legacy Repairs run that names no fixer, which nobody may read, can also be
+// cancelled by a holder of settings.manage (mayCancelUnattributed).
 func (h *Handler) CancelRun(c *gin.Context) {
 	rd, ok := h.runs(c)
 	if !ok {
@@ -314,6 +316,15 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		httputil.RespondWithNotFound(c, "run", c.Param("id"))
 		return
 	}
+	// A legacy Repairs run that names no fixer is readable by nobody, so the
+	// read check below could never pass for it and a stuck one could not be
+	// stopped from here. settings.manage, which already stops and discards any
+	// run through DELETE /operations/v2/:id and its /record, stops it here too.
+	// It is the cancel alone: the run stays unreadable to everyone else.
+	if h.mayCancelUnattributed(c, rec) {
+		h.cancelRun(c, rec)
+		return
+	}
 	// A Repairs run the caller may not read is refused before anything of it (its
 	// state in the 409s below) is said, except to the user who started it.
 	if !h.startedBy(c, rec) && !h.mayReadRun(c, rec) {
@@ -323,6 +334,11 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		httputil.RespondWithForbidden(c, "cancelling this run needs being the user who started it, or scan.trigger and the definition's permission")
 		return
 	}
+	h.cancelRun(c, rec)
+}
+
+// cancelRun stops rec, which the caller has been found to be allowed to cancel.
+func (h *Handler) cancelRun(c *gin.Context, rec *database.RunRecord) {
 	// The spec's only stop transition is running -> stopping
 	// (state-and-persistence.md section 1). A terminal run is done. An
 	// interrupted or awaiting_decision run is not executing, so there is
@@ -343,6 +359,12 @@ func (h *Handler) CancelRun(c *gin.Context) {
 		return
 	}
 	accepted(c, gin.H{"run_id": rec.ID})
+}
+
+// mayCancelUnattributed: a holder of settings.manage may cancel a legacy Repairs
+// run that names no fixer (opaccess.UnattributedRepairsRun).
+func (h *Handler) mayCancelUnattributed(c *gin.Context, rec *database.RunRecord) bool {
+	return opaccess.UnattributedRepairsRun(rec) && h.d.Authz.Holds(c, auth.PermSettingsManage)
 }
 
 // startedBy reports whether the caller is the user who started rec.

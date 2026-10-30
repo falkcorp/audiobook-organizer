@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opsv3/access_test.go
-// version: 1.1.1
+// version: 1.2.1
 // guid: 91c4e7a2-5d38-4b06-a2f1-6e0b8d3c7a95
 // last-edited: 2026-10-30
 
@@ -125,6 +125,63 @@ func TestRepairsRun_CancelNeedsToReadTheRunUnlessStartedByTheCaller(t *testing.T
 	mgr := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger + "," + auth.PermLibraryEditMetadata + "," + auth.PermUsersManage, user: "u-mgr", method: string(auth.MethodSession)}
 	if w := do(t, r, mgr, http.MethodPost, "/api/v3/ops/runs/run2/cancel", nil); w.Code != http.StatusAccepted {
 		t.Fatalf("cancel by a caller who may read it = %d %s, want 202", w.Code, w.Body.String())
+	}
+}
+
+// A legacy Repairs run that names no fixer is hidden from everyone (nobody holds
+// a fixer's permissions that could vouch for it), including from an admin who
+// did not start it. settings.manage may still cancel it, as the v1 cancel route
+// lets it; the run stays unreadable, and nobody else gains the cancel.
+func TestRepairsRun_SettingsManageMayCancelARunThatNamesNoFixer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  database.RunRecord
+	}{
+		{"params without fixer_id", database.RunRecord{ID: "legacy", DefID: repairs.ApplyOpID, State: state.V3Running, Params: []byte(`{}`), Actor: database.Actor{UserID: "u-starter", AuthMethod: "session"}}},
+		{"no params at all", database.RunRecord{ID: "legacy", DefID: repairs.PlanOpID, State: state.V3Running, Actor: database.Actor{UserID: "u-starter", AuthMethod: "session"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enq, _, mem, r := repairsHarness(true)
+			mem.runs["legacy"] = tc.run
+			// Holds every permission but the fixer-less run has no fixer to hold.
+			admin := caller{perms: strings.Join(auth.All(), ","), user: "u-admin", method: string(auth.MethodSession)}
+			// Holds what mayCancel asks for, not settings.manage.
+			scanner := caller{perms: auth.PermLibraryView + "," + auth.PermScanTrigger + "," + auth.PermLibraryEditMetadata, user: "u-scan", method: string(auth.MethodSession)}
+
+			if w := do(t, r, admin, http.MethodGet, "/api/v3/ops/runs/legacy", nil); w.Code != http.StatusForbidden {
+				t.Fatalf("the run became readable = %d %s, want the Repairs 403", w.Code, w.Body.String())
+			}
+			if w := do(t, r, scanner, http.MethodPost, "/api/v3/ops/runs/legacy/cancel", nil); w.Code != http.StatusForbidden {
+				t.Fatalf("cancel by a scan.trigger holder = %d %s, want 403", w.Code, w.Body.String())
+			}
+			if len(enq.cancelled) != 0 {
+				t.Fatalf("a caller without settings.manage cancelled the run: %v", enq.cancelled)
+			}
+			if w := do(t, r, admin, http.MethodPost, "/api/v3/ops/runs/legacy/cancel", nil); w.Code != http.StatusAccepted {
+				t.Fatalf("cancel by settings.manage = %d %s, want 202", w.Code, w.Body.String())
+			}
+			if len(enq.cancelled) != 1 || enq.cancelled[0] != "legacy" {
+				t.Fatalf("cancelled = %v, want [legacy]", enq.cancelled)
+			}
+			// Still unreadable afterwards.
+			if w := do(t, r, admin, http.MethodGet, "/api/v3/ops/runs/legacy", nil); w.Code != http.StatusForbidden {
+				t.Fatalf("the run is readable after the cancel = %d, want 403", w.Code)
+			}
+		})
+	}
+}
+
+// settings.manage alone does not open a Repairs run that does name a fixer whose
+// permissions the caller lacks: the exception is for the run nobody can vouch for.
+func TestRepairsRun_SettingsManageDoesNotCancelARunOfAFixerItMayNotUse(t *testing.T) {
+	enq, _, mem, r := repairsHarness(true)
+	mem.runs["run1"] = repairsRun("run1", "needs.users", state.V3Running, "u-starter")
+	manager := caller{perms: auth.PermLibraryView + "," + auth.PermSettingsManage + "," + auth.PermScanTrigger + "," + auth.PermLibraryEditMetadata, user: "u-mgr", method: string(auth.MethodSession)}
+	if w := do(t, r, manager, http.MethodPost, "/api/v3/ops/runs/run1/cancel", nil); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), refusesRepairsRun) {
+		t.Fatalf("cancel of a fixer's run by a caller who may not use the fixer = %d %s, want the Repairs 403", w.Code, w.Body.String())
+	}
+	if len(enq.cancelled) != 0 {
+		t.Fatalf("the run was cancelled: %v", enq.cancelled)
 	}
 }
 

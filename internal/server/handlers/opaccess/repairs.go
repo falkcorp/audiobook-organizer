@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
 // last-edited: 2026-10-30
 
@@ -145,6 +145,14 @@ func RunFixerID(rec *database.RunRecord) string {
 		result = &r
 	}
 	return fixerIDOf(string(rec.Params), result)
+}
+
+// UnattributedRepairsRun reports whether rec is a Repairs run that states no
+// fixer (neither params nor result carry fixer_id). Such a run is a legacy one:
+// starts that name no fixer are refused now, and MayReadFixer refuses to read
+// one to everyone, so nobody holds a fixer's permissions that could vouch for it.
+func UnattributedRepairsRun(rec *database.RunRecord) bool {
+	return rec != nil && IsRepairsOp(rec.DefID) && RunFixerID(rec) == ""
 }
 
 // Reader answers, for one request, whether the caller may read the data of

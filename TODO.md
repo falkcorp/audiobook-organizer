@@ -3,6 +3,7 @@
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
+<!-- version: 10.78.25 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -278,7 +279,7 @@ into one of the curated sections below, is a normal direct edit.
       doing TODO-SWAP-STUCK-RECOVERY; the resume itself only refuses, it does not pick a winner.
 
 - [x] **TODO-REPAIRS-DIGEST-AGGREGATES** A compacted daily digest's `counts`, `original_count` and `tag_counts` still include rows of Repairs operations the caller may not read (only `Details.items` is redacted by `redactDigest`). Done 2026-10-30: `CompactByDay` stores each operation's share (`op_aggregates`, `aggregates_version` 1) and `redactDigest` subtracts the hidden operations' shares per caller; an older digest's totals are withheld (`aggregates_withheld`) from a caller who could be hidden something. See `docs/decisions/2026-10-30-repairs-visibility-aggregates.md`.
-- [ ] **TODO-REPAIRS-CANCEL-NO-FIXER-RUNS** `CancelRun` refuses (before `mayCancel`) an admin who did not start a legacy Repairs run that names no fixer, because such a run is hidden from everyone. New starts are rejected with 400 now; decide whether an admin may cancel or purge the legacy rows.
+- [x] **TODO-REPAIRS-CANCEL-NO-FIXER-RUNS** `CancelRun` refuses (before `mayCancel`) an admin who did not start a legacy Repairs run that names no fixer, because such a run is hidden from everyone. Done 2026-10-30: a `settings.manage` holder may cancel such a run (`opaccess.UnattributedRepairsRun`); the run stays unreadable. Purge needed no change: `DELETE /operations/v2/:id/record` is already `settings.manage`.
 - [ ] **TODO-REPAIRS-EXISTENCE-ORACLES** 403 versus 404 on `runs/:id`, `operations/:id/activity` and the merged-activity route still tells a caller whether an id exists, and the counts census and the page read are not one snapshot, so a total can be off by one under a concurrent start. Decide whether to answer 404 for hidden runs.
 - [ ] **TODO-ACTIVITY-VISIBILITY-DECODE-COST** The activity visibility check decodes one `operations_v2` row per distinct operation id per request (`GetOperationV2`); a by-definition id set would be cheaper. The counts census and `hiddenFor` still decode every Repairs run per request (`hiddenIDs` in the v3 handlers does the same census over the Repairs definition indexes), although the run list itself no longer decodes a hidden run (`RunQuery.SkipID`).
 - [ ] **TODO-REPAIRS-OPERATIONS-PAUSE-SOURCES** `GET /operations/pause` (definition ids), `GET /operations/stale` and the other overview lists still list Repairs operations without the visibility check.
