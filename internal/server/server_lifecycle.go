@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.65.1
+// version: 4.65.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-30
 
@@ -1337,6 +1337,30 @@ func (s *Server) startBackfills() {
 		b.SuperviseIdentIndex(s.bgCtx)
 	})
 
+	// Narrator fold index (database/pebble_store_narrator_fold_index.go):
+	// narrator_fold:<fold>:<id> keys that let a narrator credit link to the
+	// record "Renée Montoya" when a rescan reads "Renee Montoya" back, instead
+	// of minting a second record. Reconciled on EVERY boot, writing only keys
+	// that are absent (a build that predates the index writes narrators with
+	// none), and trusted by readers only once this boot's pass has finished;
+	// until then the lookup scans the narrator records, which is correct and
+	// only slower. Narrators number in the thousands, so it does not wait for
+	// memdb warmup. Resolved through database.AsCapability for the same reason
+	// as the version-group backfill above. Never blocks startup.
+	s.bgWG.Go("narrator-fold-index", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		r, ok := database.AsCapability[narratorFoldIndexer](s.Ops())
+		if !ok {
+			lifecycleLog.Warn("narrator-fold-index: store does not implement ReconcileNarratorFoldIndex, the narrator fold index will NOT be reconciled and credit lookups keep scanning the records: store_type=%T", s.Ops())
+			return
+		}
+		if _, err := r.ReconcileNarratorFoldIndex(s.bgCtx); err != nil {
+			lifecycleLog.Warn("narrator-fold-index: reconcile failed, narrator credits keep scanning the records until a boot completes it: err=%s", logger.SanitizeLogValue(err.Error()))
+		}
+	})
+
 	// opv2 timeline index (pebble_store_ops_v2_timeline.go): opv2:open: and
 	// opv2:done: keys that let ListOperationsV2Since skip decoding every
 	// operation row. Same trust model as the opchange_by_book: index (bootOps): the index
@@ -2234,6 +2258,12 @@ func runAuthorBooksIndexBoot(ctx context.Context, b authorBooksIndexer) {
 	if _, err := b.ReconcileAuthorBooksIndex(ctx); err != nil {
 		lifecycleLog.Warn("author-books-index: reconcile failed, authors' book lists keep scanning until a boot completes it: err=%s", logger.SanitizeLogValue(err.Error()))
 	}
+}
+
+// narratorFoldIndexer is the narrator fold index's boot reconcile
+// (*PebbleStore method outside database.Store).
+type narratorFoldIndexer interface {
+	ReconcileNarratorFoldIndex(ctx context.Context) (database.NarratorFoldIndexReport, error)
 }
 
 // identIndexBuilder is the identification index's supervisor (boot build

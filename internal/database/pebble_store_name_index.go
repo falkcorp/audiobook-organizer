@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_name_index.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8c0380c7-4e20-40bb-b2a0-a5b6e840b5be
-// last-edited: 2026-10-11
+// last-edited: 2026-10-30
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cockroachdb/pebble/v2"
 
@@ -56,7 +57,9 @@ import (
 //	author   author:name:          CreateAuthor, UpdateAuthorName, DeleteAuthor
 //	alias    author_alias:name:    CreateAuthorAlias, DeleteAuthorAlias,
 //	                               DeleteAuthor (via deleteAuthorAliases)
-//	narrator narrator_name:        CreateNarrator, DeleteNarrator
+//	narrator narrator_name:        CreateNarrator, DeleteNarrator, and
+//	         narrator_fold:        the same two plus ReconcileNarratorFoldIndex's
+//	                               commits and resolveNarratorFolded's create
 //	series   series:name:          CreateSeries, UpdateSeriesName, DeleteSeries
 //
 // Without it, a delete that read "this key is mine" could commit after a
@@ -87,8 +90,13 @@ import (
 type nameIndexLocks struct {
 	author   sync.Mutex // author:name:<norm>
 	alias    sync.Mutex // author_alias:name:<norm>
-	narrator sync.Mutex // narrator_name:<norm>
+	narrator sync.Mutex // narrator_name:<norm> and narrator_fold:<fold>:<id>
 	series   sync.Mutex // series:name:<norm>:<author_id>
+
+	// narratorFoldTrusted is set once this process has reconciled the
+	// narrator_fold: index (pebble_store_narrator_fold_index.go); until then
+	// the fold lookup scans the narrator records. Reset clears it.
+	narratorFoldTrusted atomic.Bool
 }
 
 // nameIndexTestHookAfterOwnerCheck, when non-nil, runs in

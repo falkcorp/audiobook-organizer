@@ -1,7 +1,7 @@
 // file: internal/util/normalize_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b4e8f3a2-0c5d-4f9b-a7e1-3d6c8b2e4f0a
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package util_test
 
@@ -115,5 +115,34 @@ func TestCollapseSpaces(t *testing.T) {
 		if got := util.CollapseSpaces(c.in); got != c.want {
 			t.Errorf("CollapseSpaces(%q) = %q; want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestFoldKey(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+	}{
+		{"accent", "Renée Montoya", "Renee Montoya"},
+		{"hyphen", "Jean-Paul Valley", "Jean Paul Valley"},
+		{"case and spacing", "  RENEE   montoya ", "Renee Montoya"},
+		{"initials", "J.N. Chaney", "J. N. Chaney"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if util.FoldKey(tt.a) != util.FoldKey(tt.b) {
+				t.Errorf("FoldKey(%q) = %q, FoldKey(%q) = %q; want equal",
+					tt.a, util.FoldKey(tt.a), tt.b, util.FoldKey(tt.b))
+			}
+		})
+	}
+	if got := util.FoldKey("Renée Montoya"); got != "reneemontoya" {
+		t.Errorf("FoldKey = %q, want reneemontoya", got)
+	}
+	if got := util.FoldKey("Harvey Dent"); got == util.FoldKey("Harvey Bullock") {
+		t.Errorf("different people must not fold together, got %q", got)
+	}
+	if got := util.FoldKey(" . - "); got != "" {
+		t.Errorf("FoldKey of punctuation = %q, want empty", got)
 	}
 }

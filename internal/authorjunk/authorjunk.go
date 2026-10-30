@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -58,10 +58,9 @@ import (
 	"strings"
 	"unicode"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Class is the kind of non-person an author row is.
@@ -1019,17 +1018,11 @@ func anyOrgWord(words []string) bool {
 // "Michael-Scott Earle" and "Michael Scott Earle" are one key. The dedup
 // normalizer does not fold case; the store's lookup folds only case and
 // whitespace; either alone mints a near-duplicate row.
-func FoldKey(name string) string {
-	var b strings.Builder
-	for _, r := range norm.NFD.String(name) {
-		switch {
-		case unicode.Is(unicode.Mn, r):
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
-}
+//
+// The implementation is util.FoldKey, moved to the leaf package so the store
+// (internal/database) can key an index by it; this wrapper keeps the name
+// every caller here uses.
+func FoldKey(name string) string { return util.FoldKey(name) }
 
 // protectedCollectiveWords are the collective words that name a real credit
 // on an anthology or an anonymous work ("Various Authors", "Anonymous",
