@@ -1,5 +1,5 @@
 // file: internal/server/server_middleware.go
-// version: 1.12.4
+// version: 1.12.5
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
 // last-edited: 2026-10-30
 
@@ -121,11 +121,35 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 // could not be resolved (pathutil.UnderProtectedPath fails closed).
 var protectedPathLog = logger.New("server.protected-path")
 
+// importPathReadFailureRelog is how often an unreadable import-path list is
+// reported: every path checked while the read fails is refused, so one line per
+// check would flood the log during a whole-library organize.
+const importPathReadFailureRelog = time.Minute
+
+var (
+	importPathReadFailureMu   sync.Mutex
+	importPathReadFailureLast time.Time
+)
+
+// logImportPathReadFailure reports a failed import-path read at most once per
+// importPathReadFailureRelog.
+func logImportPathReadFailure(err error) {
+	importPathReadFailureMu.Lock()
+	defer importPathReadFailureMu.Unlock()
+	if !importPathReadFailureLast.IsZero() && time.Since(importPathReadFailureLast) < importPathReadFailureRelog {
+		return
+	}
+	importPathReadFailureLast = time.Now()
+	protectedPathLog.Warn("treating paths as protected: cannot read the import-path list: error=%s",
+		logger.SanitizeLogValue(err.Error()))
+}
+
 // isProtectedPath is now a method on *Server so it uses the server's
 // resolved store rather than the package-level GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 3a). Nil-safe — if s.Ops() is
 // nil, the import-path check is skipped (matches prior behaviour
-// when GetGlobalStore returned nil).
+// when GetGlobalStore returned nil). An import-path list that cannot be read
+// makes every path protected (fail closed).
 func (s *Server) isProtectedPath(filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
 
@@ -147,10 +171,18 @@ func (s *Server) isProtectedPath(filePath string) bool {
 	var roots []string
 	if store := s.Ops(); store != nil {
 		importPaths, err := cachedImportPaths(store)
-		if err == nil {
-			for _, ip := range importPaths {
-				roots = append(roots, ip.Path)
-			}
+		if err != nil {
+			// Fail closed: without the import paths this check cannot tell a
+			// file under one from a library file, and its callers (the
+			// organizer's rename-source guard, the write-back skips) move or
+			// rewrite on "not protected". Every caller treats true as "leave the
+			// file alone", so refusing is right for all of them until the list
+			// can be read again.
+			logImportPathReadFailure(err)
+			return true
+		}
+		for _, ip := range importPaths {
+			roots = append(roots, ip.Path)
 		}
 	}
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
