@@ -205,7 +205,7 @@ func TestGateProbeCache_UnhealthyAnswersAreNotCached(t *testing.T) {
 		"probe failed":  {nil, http.StatusInternalServerError},
 		"decoder fault": {pathHealth(map[string]any{"child_start_error": "model file missing"}), http.StatusOK},
 		"stuck worker":  {pathHealth(map[string]any{"busy_seconds": 900.0, "busy_limit_seconds": 60.0}), http.StatusOK},
-		"lost mount":    {pathHealth(map[string]any{"path_roots": []map[string]any{{"prefix": "/mnt/lib", "readable": false}}}), http.StatusOK},
+		"lost mount":    {pathHealth(map[string]any{"path_roots": []map[string]any{{"prefix": "/srv/library", "readable": false}}}), http.StatusOK},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
