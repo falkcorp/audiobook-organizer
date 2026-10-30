@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.174.1
+// version: 1.175.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package config
 
@@ -1244,6 +1244,18 @@ type Config struct {
 	// row). Env override RETIRE_VERSIONS_APPLY_ENABLED; read on every apply, so
 	// flipping it needs no restart.
 	RetireVersionsApplyEnabled bool `json:"retire_versions_apply_enabled" mapstructure:"retire_versions_apply_enabled"`
+	// KeptSweepApplyEnabled is the switch of the nightly kept-file sweep
+	// (versions.SweepKeptFiles, a step of maintenance.trash-cleanup): files a
+	// version purge left on disk because another row or book named them, revisited
+	// to remove the ones nothing names any more. Off (the default) keeps the sweep
+	// report-only: it makes every decision and lists the files it WOULD remove
+	// (and the notes it would drop) in the operation result and summary, but
+	// unlinks nothing and drops no note. On, it removes those files and drops
+	// their notes. Either way it escalates a note it cannot settle for
+	// versions.PurgeUndecidedEscalateAfter nights in a row to purge_failed. Env
+	// override KEPT_SWEEP_APPLY_ENABLED; read once per cleanup run, so flipping it
+	// needs no restart and a run never mixes the two modes.
+	KeptSweepApplyEnabled bool `json:"kept_sweep_apply_enabled" mapstructure:"kept_sweep_apply_enabled"`
 	// ABSItunesPositionBackfillUserID pins the one-time iTunes-position
 	// backfill job to a specific user ID instead of the default
 	// single-user/earliest-created-user resolution. An ID matching no user
@@ -1978,6 +1990,16 @@ func RetireVersionsApplyEnabled() bool {
 	return AppConfig.RetireVersionsApplyEnabled
 }
 
+// KeptSweepApplyEnabled reports kept_sweep_apply_enabled under the read lock.
+// The trash cleanup reads it once per run (server wiring) while PUT /config may
+// flip it, so the read is one field under RLock, not a whole-struct Snapshot
+// copy.
+func KeptSweepApplyEnabled() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.KeptSweepApplyEnabled
+}
+
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
 func Mutate(fn func(*Config)) {
@@ -2656,6 +2678,7 @@ func InitConfig() {
 	viper.SetDefault("abs_auth_probe_enabled", false)
 	viper.SetDefault("authority_evidence_enabled", false)
 	viper.SetDefault("retire_versions_apply_enabled", false)
+	viper.SetDefault("kept_sweep_apply_enabled", false)
 	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
 	viper.SetDefault("otel_exporter_otlp_endpoint", "")
 	viper.SetDefault("otel_metrics_otlp_endpoint", "")
@@ -2681,6 +2704,7 @@ func InitConfig() {
 	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
 	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
 	viper.BindEnv("retire_versions_apply_enabled", "RETIRE_VERSIONS_APPLY_ENABLED")               //nolint:errcheck
+	viper.BindEnv("kept_sweep_apply_enabled", "KEPT_SWEEP_APPLY_ENABLED")                         //nolint:errcheck
 	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
 	viper.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
 	viper.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
@@ -3233,6 +3257,7 @@ func InitConfig() {
 			ABSAuthProbeEnabled:                  viper.GetBool("abs_auth_probe_enabled"),
 			AuthorityEvidenceEnabled:             viper.GetBool("authority_evidence_enabled"),
 			RetireVersionsApplyEnabled:           viper.GetBool("retire_versions_apply_enabled"),
+			KeptSweepApplyEnabled:                viper.GetBool("kept_sweep_apply_enabled"),
 			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
 			OTelExporterOTLPEndpoint:             viper.GetString("otel_exporter_otlp_endpoint"),
 			OTelMetricsOTLPEndpoint:              viper.GetString("otel_metrics_otlp_endpoint"),
@@ -4103,6 +4128,7 @@ func ResetToDefaults() {
 			EnableRateLimit:                  true,
 			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
 			RetireVersionsApplyEnabled:       false, // OFF by default — the retired-versions fixer only previews until enabled
+			KeptSweepApplyEnabled:            false, // OFF by default — the kept-file sweep only reports what it would remove until enabled
 			FingerprintRemoteWorkersEnabled:  false, // OFF by default — worker routes 404 until enabled
 			FingerprintWindowReferenceTools:  "",    // unset — remote-only window backfill refuses to start
 			BulkApplyMaxItems:                5000,

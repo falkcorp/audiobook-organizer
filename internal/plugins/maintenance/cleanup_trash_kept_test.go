@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup_trash_kept_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 2c8f5a17-6d3b-4e90-b1a4-9e7d0c3f8b52
 // last-edited: 2026-10-29
 
@@ -113,6 +113,70 @@ func TestRunTrashCleanup_ReportsTheKeptFileSweep(t *testing.T) {
 	}
 	require.Equal(t, 1, warns, "logs = %v", rep.logs)
 	require.Contains(t, rep.logs[len(rep.logs)-1], "kept-file sweep: removed 1 files, 1 notes dropped (already gone), 2 still owned, 1 kept on error")
+}
+
+// A report-only sweep (the shipped default) says so everywhere: the flag, the
+// would-remove and would-drop counts and files (version, book, path, the reason
+// the file had been kept) in the result, one journal line per file, and a summary
+// line that does not read "removed 0 files" as if nothing needed removing.
+func TestRunTrashCleanup_ReportsAReportOnlyKeptFileSweep(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{
+		KeptSweep: versions.KeptSweepResult{
+			ReportOnly: true, Versions: 2, WouldRemove: 1, WouldDrop: 1, StillKept: 3,
+			WouldRemoveFiles: []versions.KeptVersion{{VersionID: "ver-year-one", BookID: "year-one",
+				Files: []database.PurgeFileNote{{Path: "/lib/Gotham/y1-01.m4b", Reason: "book_file b1 of book hush still names it"}}}},
+			WouldDropFiles: []versions.KeptVersion{{VersionID: "ver-hush", BookID: "hush",
+				Files: []database.PurgeFileNote{{Path: "/lib/Gotham/hush.m4b", Reason: "kept once"}}}},
+		},
+	}})
+	rep := &levelReporter{}
+
+	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
+
+	got, ok := rep.result.(TrashCleanupResult)
+	require.True(t, ok, "result = %#v", rep.result)
+	require.True(t, got.KeptSweepReportOnly)
+	require.Equal(t, 0, got.KeptSweepRemoved)
+	require.Equal(t, 1, got.KeptSweepWouldRemove)
+	require.Equal(t, 1, got.KeptSweepWouldDrop)
+	require.Equal(t, []KeptSweepFile{{VersionID: "ver-year-one", BookID: "year-one", Path: "/lib/Gotham/y1-01.m4b", Reason: "book_file b1 of book hush still names it"}}, got.KeptSweepWouldRemoveFiles)
+	require.Equal(t, []KeptSweepFile{{VersionID: "ver-hush", BookID: "hush", Path: "/lib/Gotham/hush.m4b", Reason: "kept once"}}, got.KeptSweepWouldDropFiles)
+	joined := strings.Join(rep.logs, "\n")
+	require.Contains(t, joined, "kept-file sweep WOULD remove /lib/Gotham/y1-01.m4b (version ver-year-one, book year-one; it was kept: book_file b1 of book hush still names it)")
+	require.Contains(t, joined, "kept-file sweep WOULD drop the note of /lib/Gotham/hush.m4b")
+	require.Contains(t, rep.logs[len(rep.logs)-1], "kept-file sweep (REPORT ONLY, kept_sweep_apply_enabled is off, nothing changed): would remove 1 files, would drop 1 notes (already gone), 3 still owned, 0 kept on error")
+	require.NotContains(t, rep.logs[len(rep.logs)-1], "removed 0 files")
+}
+
+// A version the sweep escalated to purge_failed is in the result, the journal
+// (one WARN) and the summary on the night it happens.
+func TestRunTrashCleanup_ReportsAnEscalatedKeptFileVersion(t *testing.T) {
+	p := New(trashCleanupDeps{res: versions.CleanupResult{
+		KeptSweep: versions.KeptSweepResult{
+			Versions: 1, KeptOnError: 1,
+			Escalated: []versions.KeptVersion{{VersionID: "ver-hush", BookID: "hush",
+				Files: []database.PurgeFileNote{{Path: "/lib/Gotham/hush.m4b", Reason: "owner lookup down"}}}},
+		},
+	}})
+	rep := &levelReporter{}
+
+	require.NoError(t, p.runTrashCleanup(context.Background(), nil, rep))
+
+	got, ok := rep.result.(TrashCleanupResult)
+	require.True(t, ok, "result = %#v", rep.result)
+	require.Equal(t, 1, got.KeptSweepEscalated)
+	require.Equal(t, []string{"ver-hush"}, got.KeptSweepEscalatedVersions)
+	require.Equal(t, []KeptSweepFile{{VersionID: "ver-hush", BookID: "hush", Path: "/lib/Gotham/hush.m4b", Reason: "owner lookup down"}}, got.KeptSweepEscalatedFiles)
+	var warns int
+	for i, l := range rep.levels {
+		if l == slog.LevelWarn && strings.Contains(rep.logs[i], "now purge_failed, so the sweep stops warning") {
+			warns++
+			require.Contains(t, rep.logs[i], "ver-hush")
+			require.Contains(t, rep.logs[i], "/lib/Gotham/hush.m4b")
+		}
+	}
+	require.Equal(t, 1, warns, "logs = %v", rep.logs)
+	require.Contains(t, rep.logs[len(rep.logs)-1], "1 kept-file version(s) now purge_failed after 3 nights (versions ver-hush)")
 }
 
 // A sweep that could not even list the purged versions fails the night.

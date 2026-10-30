@@ -1,7 +1,7 @@
 // file: internal/versions/purge_served_guard_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7d2c9e41-5b8a-4f36-a1d0-c4e83b6f9a25
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -144,7 +144,7 @@ func (f *servedFixture) afterWindow() CleanupResult {
 // read failed (the fail-closed cases) must be seen to have failed, not only to
 // have deleted nothing (see requireFailedClosed).
 func servedCleanup(store TrashedVersionCleaner, now time.Time) (CleanupResult, error) {
-	return cleanupTrashedVersionsAt(store, now, testGuard)
+	return cleanupTrashedVersionsAt(store, now, testGuard, true)
 }
 
 // requireFailedClosed asserts a run whose read failed: the version is counted

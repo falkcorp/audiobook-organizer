@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_retry_record_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 2b6f8d13-9a47-4e50-8c1d-5e0a7f3b9d64
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -612,7 +612,7 @@ func TestCleanup_MergeStopStreakCountsConsecutiveNightsAndResets(t *testing.T) {
 		}
 	}()
 	for night := 1; night <= MergeStopEscalateAfter+1; night++ {
-		res, err := CleanupTrashedVersions(f.store, testGuard)
+		res, err := CleanupTrashedVersions(f.store, testGuard, true)
 		if err != nil {
 			t.Fatalf("night %d: %v", night, err)
 		}
@@ -623,7 +623,7 @@ func TestCleanup_MergeStopStreakCountsConsecutiveNightsAndResets(t *testing.T) {
 
 	merge.UnlockMergeRMW()
 	locked = false
-	res, err := CleanupTrashedVersions(f.store, testGuard)
+	res, err := CleanupTrashedVersions(f.store, testGuard, true)
 	if err != nil || res.StoppedForMerge || res.MergeStopStreak != 0 {
 		t.Fatalf("a night that got the lock: err=%v StoppedForMerge=%v streak=%d, want a clean run with streak 0", err, res.StoppedForMerge, res.MergeStopStreak)
 	}
@@ -644,7 +644,7 @@ func TestCleanup_MergeStopStreakWithoutAKeyValueStoreIsThisNightAlone(t *testing
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 
-	res, err := CleanupTrashedVersions(onlyCleaner{f.store}, testGuard)
+	res, err := CleanupTrashedVersions(onlyCleaner{f.store}, testGuard, true)
 	if err != nil || !res.StoppedForMerge || res.MergeStopStreak != 1 {
 		t.Fatalf("err=%v StoppedForMerge=%v streak=%d, want a stopped night counted as 1", err, res.StoppedForMerge, res.MergeStopStreak)
 	}

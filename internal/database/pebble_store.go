@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.235.1
+// version: 1.235.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-29
 
@@ -5390,9 +5390,14 @@ func (p *PebbleStore) UpdateBookVersion(v *BookVersion) error {
 //     claim), purging (a retry) or purge_failed (the owner's retry of a purge
 //     that gave up): a version restored since the caller read it is
 //     ErrVersionPurgeClaimLost, and its files stay;
-//   - a write that sets purge_failed needs the stored status to be purging or
-//     purge_failed: only a purge that was claimed can fail, and anything else
-//     is ErrVersionPurgeClaimLost;
+//   - a write that sets purge_failed needs the stored status to be purging,
+//     purge_failed or inactive_purged: only a purge that was claimed can fail,
+//     and anything else is ErrVersionPurgeClaimLost. The inactive_purged case is
+//     the kept-file sweep (versions.SweepKeptFiles) giving up on a file note it
+//     could not settle for several nights: the version's purge finished, so it is
+//     not "claimed", but its file is still on disk and the owner has to be told.
+//     It is the one way a finished purge goes back to the purge states, and only
+//     purge_failed (never purging, never trash) is allowed from there;
 //   - a stored purging or purge_failed version may only stay in the purge
 //     states or become inactive_purged: anything else (a restore, a re-trash, a
 //     stale copy written back) is ErrVersionPurging, because some of its files
@@ -5414,7 +5419,8 @@ func refusePurgeTransition(prev, v *BookVersion) error {
 		return fmt.Errorf("book version %s has status %q: %w", v.ID, prev.Status, ErrVersionPurgeClaimLost)
 	}
 	if v.Status == BookVersionStatusPurgeFailed &&
-		prev.Status != BookVersionStatusPurging && prev.Status != BookVersionStatusPurgeFailed {
+		prev.Status != BookVersionStatusPurging && prev.Status != BookVersionStatusPurgeFailed &&
+		prev.Status != BookVersionStatusInactivePurged {
 		return fmt.Errorf("book version %s has status %q, so its purge cannot be recorded as failed: %w",
 			v.ID, prev.Status, ErrVersionPurgeClaimLost)
 	}

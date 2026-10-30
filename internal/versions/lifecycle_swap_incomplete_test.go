@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle_swap_incomplete_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2c3a5cd5-875d-4b04-9627-713ffb43e692
 // last-edited: 2026-10-29
 
@@ -30,7 +30,7 @@ func TestCleanupTrashedVersions_ReportsBooksWhoseSwapDidNotFinish(t *testing.T) 
 	f.swapWith(fs, alt)
 	disk := tree(t, f.bookDir)
 
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
@@ -59,7 +59,7 @@ func TestCleanupTrashedVersions_NoUnfinishedSwapReportsNone(t *testing.T) {
 	f := newSwapFixture(t)
 	f.add(database.BookVersionStatusAlt, time.Hour, "Hush.m4b")
 
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 
 	if err != nil || res.SwapIncompleteErr != nil || len(res.SwapIncomplete) != 0 {
 		t.Fatalf("res = %+v err = %v, want nothing to report", res, err)
@@ -71,7 +71,7 @@ func TestCleanupTrashedVersions_NoUnfinishedSwapReportsNone(t *testing.T) {
 func TestCleanupTrashedVersions_UnlistableSwapsAreAnError(t *testing.T) {
 	f := newSwapFixture(t)
 
-	res, err := cleanupTrashedVersionsAt(listFailsStore{f.store}, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(listFailsStore{f.store}, time.Now(), testGuard, true)
 
 	if err != nil {
 		t.Fatalf("cleanup err = %v: the purges did not fail", err)

@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-29
 //
@@ -1412,8 +1412,12 @@ type KeptVersion struct {
 // due purge fails (book_files flagged incomplete, a file that cannot be
 // removed) must not read as "purged 0" to the operation that called it: the
 // versions stay in the trash past their window and only the error says so.
-func CleanupTrashedVersions(store TrashedVersionCleaner, guard PurgeGuard) (CleanupResult, error) {
-	res, err := cleanupTrashedVersionsAt(store, time.Now(), guard)
+//
+// keptSweepApply is the kept-file sweep's switch (config kept_sweep_apply_enabled),
+// read once by the caller for the whole run: false reports what the sweep would
+// remove and unlinks nothing (see SweepKeptFiles).
+func CleanupTrashedVersions(store TrashedVersionCleaner, guard PurgeGuard, keptSweepApply bool) (CleanupResult, error) {
+	res, err := cleanupTrashedVersionsAt(store, time.Now(), guard, keptSweepApply)
 	// A run that could not even list the trash (err with nothing failed) says
 	// nothing about the lock, so the streak stays as it was. Every other run
 	// either stopped for the merge lock or got past it.
@@ -1462,7 +1466,7 @@ func CleanupTrashedVersions(store TrashedVersionCleaner, guard PurgeGuard) (Clea
 // version, and wraps every failure (errors.Is sees each), so one stuck version
 // cannot hide a new failure behind it. When the trash cannot be listed at all,
 // err is that failure and Failed is 0 (no version was attempted).
-func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time, guard PurgeGuard) (res CleanupResult, err error) {
+func cleanupTrashedVersionsAt(store TrashedVersionCleaner, now time.Time, guard PurgeGuard, keptSweepApply bool) (res CleanupResult, err error) {
 	trashed, err := store.ListTrashedBookVersions()
 	if err != nil {
 		lifecycleLog.Warn("trash cleanup: list trashed versions failed: %v", err)
@@ -1594,13 +1598,21 @@ trashLoop:
 	// After the purges, so a failure here never holds one up. Not when the run
 	// stopped for the merge lock: the sweep would wait on it as well.
 	if !res.StoppedForMerge {
-		res.KeptSweep, res.KeptSweepErr = SweepKeptFiles(store, guard, purgedNow)
+		res.KeptSweep, res.KeptSweepErr = SweepKeptFiles(store, guard, KeptSweepOptions{Apply: keptSweepApply, Skip: purgedNow})
 		if res.KeptSweepErr != nil {
 			lifecycleLog.Warn("trash cleanup: %v", res.KeptSweepErr)
 		}
-		if k := res.KeptSweep; k.Removed+k.Gone+k.StillKept+k.KeptOnError > 0 {
-			lifecycleLog.Info("trash cleanup: kept-file sweep of %d purged version(s): removed %d, note dropped for %d already gone, %d still owned, %d kept on error",
-				k.Versions, k.Removed, k.Gone, k.StillKept, k.KeptOnError)
+		if k := res.KeptSweep; k.Removed+k.Gone+k.WouldRemove+k.WouldDrop+k.StillKept+k.KeptOnError > 0 {
+			mode := "removed " + strconv.Itoa(k.Removed) + ", note dropped for " + strconv.Itoa(k.Gone) + " already gone"
+			if k.ReportOnly {
+				mode = "REPORT ONLY (nothing changed): would remove " + strconv.Itoa(k.WouldRemove) + ", would drop " + strconv.Itoa(k.WouldDrop) + " notes of files already gone"
+			}
+			lifecycleLog.Info("trash cleanup: kept-file sweep of %d purged version(s): %s, %d still owned, %d kept on error",
+				k.Versions, mode, k.StillKept, k.KeptOnError)
+		}
+		if n := len(res.KeptSweep.Escalated); n > 0 {
+			lifecycleLog.Warn("trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed: %s",
+				n, PurgeUndecidedEscalateAfter, keptVersionIDs(res.KeptSweep.Escalated))
 		}
 	}
 	// Read-only, so a failure here never holds anything up.

@@ -313,7 +313,9 @@ func (s *Server) CleanupOrphanedTempFiles(rootDir string, opID string) int {
 }
 
 func (s *Server) CleanupTrashedVersions() (versions.CleanupResult, error) {
-	return CleanupTrashedVersions(s.storeForWiring(), s.versionPurgeGuard())
+	// The kept-file sweep's switch is read here, once, and passed down: a flip
+	// mid-run cannot make the night half report-only and half applied.
+	return CleanupTrashedVersions(s.storeForWiring(), s.versionPurgeGuard(), config.KeptSweepApplyEnabled())
 }
 
 // ---- optional component accessors ----
