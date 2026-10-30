@@ -99,7 +99,7 @@ func pathHealth(extra map[string]any) map[string]any {
 		"status": "ok", "model": "M", "backend": "mlx", "device": "metal",
 		"batch_pipeline": true, "decode_fingerprint": "fp1", "extract_fingerprint": "ex1",
 		"path_pipeline": true,
-		"path_roots":    []map[string]any{{"prefix": "/mnt/lib", "readable": true}},
+		"path_roots":    []map[string]any{{"prefix": "/srv/library", "readable": true}},
 	}
 	for k, v := range extra {
 		h[k] = v
@@ -301,11 +301,11 @@ func TestTranscribeByPathBatch_FailsClosedWithoutPathCapability(t *testing.T) {
 
 func TestTranscribeByPathBatch_LostMountDefersWithoutSending(t *testing.T) {
 	w := newPathWorker(t, pathHealth(map[string]any{
-		"path_roots": []map[string]any{{"prefix": "/mnt/lib", "readable": false}},
+		"path_roots": []map[string]any{{"prefix": "/srv/library", "readable": false}},
 	}))
 	useEndpoints(t, 0, w.srv.URL)
 	_, err := TranscribeByPathBatch(context.Background(), pathJobs(t, 2), BatchOptions{})
-	requireTransport(t, err, "/mnt/lib", "mount lost")
+	requireTransport(t, err, "/srv/library", "mount lost")
 	if w.postCount() != 0 {
 		t.Errorf("worker with a lost mount received %d POSTs, want 0", w.postCount())
 	}
@@ -518,7 +518,7 @@ func TestPathPipelineAvailable(t *testing.T) {
 	})
 	t.Run("advertised but mount lost still counts as the capability", func(t *testing.T) {
 		w := newPathWorker(t, pathHealth(map[string]any{
-			"path_roots": []map[string]any{{"prefix": "/mnt/lib", "readable": false}},
+			"path_roots": []map[string]any{{"prefix": "/srv/library", "readable": false}},
 		}))
 		useEndpoints(t, 0, w.srv.URL)
 		if ok, _ := PathPipelineAvailable(context.Background()); !ok {
