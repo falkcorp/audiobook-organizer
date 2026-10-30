@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_cas.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6b991179-c549-4086-9050-022c32b0cfce
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
@@ -139,19 +139,58 @@ func rmwBookFile[T any](bookID *string, fileID string, attempt func() (T, error)
 // the lock rules on lockBookFile forbid under a file stripe, could be moved
 // after the unlock; it is not the reason.)
 func restageBookFileBatch(who string, attempt func(rows *bookFileRowCache) error) error {
+	return restageBookFileBatchGuarded(who, nil, attempt)
+}
+
+// restageBookFileBatchGuarded is restageBookFileBatch for a writer that must
+// hold a lock (and may have to re-check what the lock protects) around each
+// staging round but NOT around the wait between rounds.
+//
+// guard runs at the start of every round, after the backoff sleep, and returns
+// the release func for that round. A non-nil error from guard ends the whole
+// call at once and is returned as is: it is a refusal (a precondition that no
+// longer holds), not a refused commit, and is not retried. The release runs when
+// the round ends, whatever attempt returned, so the lock is never held across a
+// sleep: a writer that needs it is delayed by at most one staging round.
+//
+// Because the lock is dropped between rounds, whatever guard established under
+// it must be established again by the next guard call; the row cache is the one
+// thing carried over, and it is safe to carry because the commit compares every
+// row attempt read through it (see the cache's own comment). A nil guard is
+// restageBookFileBatch.
+func restageBookFileBatchGuarded(who string, guard func() (release func(), err error), attempt func(rows *bookFileRowCache) error) error {
 	rows := newBookFileRowCache()
 	var err error
 	for round := range maxBatchStageRounds {
 		if round > 0 {
 			bookFileRestageSleep(restageBackoff(round))
 		}
-		err = attempt(rows)
+		var refused error
+		err, refused = restageRound(guard, rows, attempt)
+		if refused != nil {
+			return refused
+		}
 		if !errors.Is(err, errBookFileRowVanished) || errors.Is(err, ErrBookFileOwnerMissing) {
 			return err
 		}
 		rows.dropStale(err)
 	}
 	return fmt.Errorf("%s: gave up after %d staging rounds: %w: %w", who, maxBatchStageRounds, ErrBookFileConflict, err)
+}
+
+// restageRound is one guarded staging round of restageBookFileBatchGuarded. It
+// returns attempt's error, or, when guard refused, that refusal as the second
+// value (and nothing else), so the caller can tell a refusal from a refused
+// commit even when the refusal wraps errBookFileRowVanished.
+func restageRound(guard func() (func(), error), rows *bookFileRowCache, attempt func(rows *bookFileRowCache) error) (attemptErr, guardErr error) {
+	if guard != nil {
+		release, err := guard()
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
+	return attempt(rows), nil
 }
 
 // bookFileRestageSleep waits between whole-batch staging rounds. A variable so

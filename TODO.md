@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -256,7 +256,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **TODO-REPAIRS-RENDER-SUMMARY-FRAGMENT** `RenderSummary` can still produce a preposition fragment ("for <id>") that the user-text pattern does not catch, because book ids share the shape; this was not addressed in the R4 change.
 - [ ] **TODO-V1SHAPE-OP-ACTOR-ID** The v1-shaped operation served by the reconcile and candidate-fetch routes carries the starting account's id as `user_id`, as the v2 `actor_user_id` and v3 `started_by` do for every op. If actor ids are to be withheld from a caller without `users.manage`, all three need the same rule at once.
 
-- [ ] **TODO-BF-CAS-RETIRE-BACKOFF-UNDER-LOCK** `retireBookFilesAttempt`, `unretireBookFilesAttempt`
+- [x] **TODO-BF-CAS-RETIRE-BACKOFF-UNDER-LOCK** `retireBookFilesAttempt`, `unretireBookFilesAttempt`
       and `rehomeRetiredVersionAttempt` (`internal/database/retired_book_files.go`) hold the
       version stripe (`lockBookVersion`) across `restageBookFileBatch`, whose backoff sleeps
       between whole-batch re-stage rounds (up to 9 sleeps of 5-100 ms, under 1 s in all) therefore
