@@ -1,7 +1,7 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 // Router-level coverage for the credential guard (2026-10-07): an API key
 // (here an all-scope admin key, the strongest there is) gets 403 from the
@@ -50,6 +50,24 @@ func setupCredGuardServer(t *testing.T) *credGuardFixture {
 // config before the server (and so its router) is built.
 func setupCredGuardServerWith(t *testing.T, cfg func(*config.Config)) *credGuardFixture {
 	t.Helper()
+	return setupCredGuardServerOpts(t, cfg, true)
+}
+
+// setupCredGuardServerIdleRegistry builds the server with its operation
+// registry constructed but NOT started. The started registry's dispatcher
+// polls queued rows every 100 ms and runs them, so a test that stores
+// "queued" rows and asserts on them racing a live dispatcher flakes under CI
+// load (TestCancelPurgePreviewRoute, Woodpecker pipeline 1832: a row read
+// "running" where "queued" was expected). Registry.Cancel on a queued row is
+// a store compare-and-set that needs no dispatcher, so route tests about
+// queued rows use this fixture.
+func setupCredGuardServerIdleRegistry(t *testing.T) *credGuardFixture {
+	t.Helper()
+	return setupCredGuardServerOpts(t, nil, false)
+}
+
+func setupCredGuardServerOpts(t *testing.T, cfg func(*config.Config), startRegistry bool) *credGuardFixture {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	origCfg := config.AppConfig
 	tempDir := t.TempDir()
@@ -97,11 +115,11 @@ func setupCredGuardServerWith(t *testing.T, cfg func(*config.Config)) *credGuard
 	require.NoError(t, err)
 
 	srv := newTestServer(t, store)
-	if srv.opRegistry != nil {
+	if srv.opRegistry != nil && startRegistry {
 		srv.opRegistry.Start(context.Background())
 	}
 	t.Cleanup(func() {
-		if srv.opRegistry != nil {
+		if srv.opRegistry != nil && startRegistry {
 			_ = srv.opRegistry.Shutdown(context.Background())
 		}
 		if srv.fileIOPool != nil {
