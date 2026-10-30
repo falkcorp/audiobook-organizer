@@ -825,7 +825,7 @@ into one of the curated sections below, is a normal direct edit.
       and cover each path with a test that a pre-existing web session stops
       authenticating, including one created mid-change.
 
-- [ ] **LIBRARY-READ-STATUS-ALTERNATION-EMPTY** The Library list's `filters=` JSON
+- [x] **LIBRARY-READ-STATUS-ALTERNATION-EMPTY** The Library list's `filters=` JSON
       route answers `200` with `count: 0` for a read_status value written as an
       alternation: `[{"field":"read_status","value":"(finished|in_progress)"}]`
       and `"finished|in_progress"` both return an empty list (probed 2026-10-18

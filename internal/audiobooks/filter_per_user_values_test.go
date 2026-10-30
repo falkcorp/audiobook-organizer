@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_per_user_values_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2d8f4a67-b1c3-4e90-85a6-7c0e3d9f1b52
 // last-edited: 2026-10-30
 
@@ -79,6 +79,9 @@ func TestListFilter_ReadStatusAlternationOrsInsideOneFilter(t *testing.T) {
 	assert.ElementsMatch(t, []string{"b1", "b2"}, run(FieldFilter{Field: "read_status", Value: "(finished|in_progress)"}))
 	assert.ElementsMatch(t, []string{"b3", "b4"}, run(FieldFilter{Field: "read_status", Value: "(finished|in_progress)", Negated: true}))
 	assert.ElementsMatch(t, []string{"b1", "b3"}, run(FieldFilter{Field: "read_status", Value: "(finished | abandoned)"}))
+	// The bare spelling (no parentheses) is the same alternation.
+	assert.ElementsMatch(t, []string{"b1", "b2"}, run(FieldFilter{Field: "read_status", Value: "finished|in_progress"}))
+	assert.ElementsMatch(t, []string{"b3", "b4"}, run(FieldFilter{Field: "read_status", Value: "finished|in_progress", Negated: true}))
 	assert.ElementsMatch(t, []string{"b2", "b3", "b4"}, run(FieldFilter{Field: "read_status", Value: "finished", Negated: true}))
 }
 

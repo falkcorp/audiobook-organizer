@@ -1,7 +1,7 @@
 // file: internal/search/field_term.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8787a505-24bd-4ccd-a676-dea643446c7e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
@@ -61,7 +61,7 @@ func NodeForTerm(field, value string, quoted bool) (Node, error) {
 // The alternation read_status:(a|b) is one filter that ORs inside itself, as the
 // translator builds it for a query string.
 func PerUserFilterForTerm(field, value string, quoted, negated bool, now time.Time) (PerUserFilter, error) {
-	n, err := NodeForTerm(field, value, quoted)
+	n, err := NodeForTerm(field, bareReadStatusAlternation(field, value, quoted), quoted)
 	if err != nil {
 		return PerUserFilter{}, err
 	}
@@ -77,6 +77,25 @@ func PerUserFilterForTerm(field, value string, quoted, negated bool, now time.Ti
 		}
 	}
 	return PerUserFilter{}, fmt.Errorf("%s: %q is not a term the per-user pass can evaluate", field, value)
+}
+
+// bareReadStatusAlternation spells read_status:finished|in_progress, the
+// alternation without its parentheses, as read_status:(finished|in_progress), so
+// the filters= route and a query string agree. Without it the parser reads the
+// whole string as one status and the list answers 400 (or, before the value
+// check, matched nothing). Only read_status takes the bare form: a quoted value
+// is literal, and progress_pct and last_played keep their own rules. Every
+// alternative is still checked against the status set by CheckPerUserValues, so
+// an unknown one is refused by name.
+func bareReadStatusAlternation(field, value string, quoted bool) string {
+	if quoted || !strings.EqualFold(field, "read_status") {
+		return value
+	}
+	v := strings.TrimSpace(value)
+	if strings.Contains(v, "|") && !strings.HasPrefix(v, "(") {
+		return "(" + v + ")"
+	}
+	return value
 }
 
 // CheckDateNode reports why a date term on a date field is refused, or nil. It

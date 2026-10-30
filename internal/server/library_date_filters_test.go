@@ -1,7 +1,7 @@
 // file: internal/server/library_date_filters_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a0ea869a-92d6-4bed-9440-69e27ae052a0
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -104,6 +104,10 @@ func TestLibraryListDateFilters(t *testing.T) {
 		{"-last_played:>-6m includes books never played by this caller", `[{"field":"last_played","value":">-6m","negated":true}]`, []string{seed.Title, second.Title, third.Title}},
 		{"last_played:* is ever played", `[{"field":"last_played","value":"*"}]`, []string{first.Title, second.Title}},
 		{"read_status:unstarted matches a book with no row for the caller", `[{"field":"read_status","value":"unstarted"}]`, []string{seed.Title, third.Title}},
+		{"read_status:(a|b) is the union of both statuses", `[{"field":"read_status","value":"(finished|in_progress)"}]`, []string{first.Title, second.Title}},
+		{"read_status:a|b without parentheses is the same union", `[{"field":"read_status","value":"finished|in_progress"}]`, []string{first.Title, second.Title}},
+		{"a single read_status still works", `[{"field":"read_status","value":"finished"}]`, []string{second.Title}},
+		{"a negated alternation keeps the rest", `[{"field":"read_status","value":"finished|in_progress","negated":true}]`, []string{seed.Title, third.Title}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, code, body := list(tc.filters)
@@ -120,6 +124,13 @@ func TestLibraryListDateFilters(t *testing.T) {
 			_, code, body := list(f)
 			require.Equal(t, http.StatusBadRequest, code, body)
 			require.Contains(t, body, "-30d")
+		}
+	})
+	t.Run("an unknown status in a read_status alternation is a 400 that names it", func(t *testing.T) {
+		for _, v := range []string{"(finished|bogus)", "finished|bogus"} {
+			_, code, body := list(`[{"field":"read_status","value":"` + v + `"}]`)
+			require.Equal(t, http.StatusBadRequest, code, body)
+			require.Contains(t, body, "bogus")
 		}
 	})
 	t.Run("a malformed date is a 400, not an empty list", func(t *testing.T) {
