@@ -285,6 +285,43 @@ export interface SeriesWithCount {
   author_name?: string;
 }
 
+/**
+ * One page of a server-paged entity list (GET /authors, GET /series).
+ * `count` is how many rows MATCH the request's filter and search across every
+ * page (what the pager needs); `total` is the whole table.
+ */
+export interface EntityPage<T> {
+  items: T[];
+  count: number;
+  total: number;
+}
+
+/** Query for one page of the Authors or Series table; the server does the rest. */
+export interface EntityPageParams {
+  /** Rows per page. */
+  limit: number;
+  /** Rows to skip (page * limit). */
+  offset: number;
+  /** Case-insensitive substring search; empty means none. */
+  search?: string;
+  /** Endpoint-specific filter (authors: with_books|zero_books|all, series: with_books|empty|all). */
+  filter?: string;
+  /** Server sort key (a ColumnDef key the server knows). */
+  sort?: string;
+  order?: 'asc' | 'desc';
+}
+
+function entityPageQuery(p: EntityPageParams): string {
+  const qs = new URLSearchParams({ limit: String(p.limit), offset: String(p.offset) });
+  if (p.search?.trim()) qs.set('q', p.search.trim());
+  if (p.filter) qs.set('filter', p.filter);
+  if (p.sort) {
+    qs.set('sort', p.sort);
+    qs.set('order', p.order ?? 'asc');
+  }
+  return qs.toString();
+}
+
 export interface Work {
   id: string;
   title: string;
@@ -2523,6 +2560,27 @@ export async function getSeries(): Promise<SeriesWithCount[]> {
   return data.items || data.series || [];
 }
 
+/**
+ * Fetches ONE page of series with counts and author names, searched, filtered,
+ * sorted and windowed by the server (WEB-02). getSeries above stays the
+ * whole-list read for the Library filter dropdown, which needs every name.
+ */
+export async function getSeriesPage(
+  params: EntityPageParams
+): Promise<EntityPage<SeriesWithCount>> {
+  const response = await apiFetch(`${API_BASE}/series?${entityPageQuery(params)}`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch series');
+  }
+  const data = (await response.json()).data;
+  const items: SeriesWithCount[] = data.items || data.series || [];
+  return {
+    items,
+    count: data.count ?? items.length,
+    total: data.total ?? data.count ?? items.length,
+  };
+}
+
 export async function countSeries(): Promise<number> {
   const response = await apiFetch(`${API_BASE}/series/count`);
   if (!response.ok) {
@@ -2634,14 +2692,26 @@ export async function deleteSeries(seriesId: number): Promise<void> {
   }
 }
 
-export async function getAuthorsWithCounts(): Promise<AuthorWithCount[]> {
-  const response = await apiFetch(`${API_BASE}/authors`);
+/**
+ * Fetches ONE page of authors with counts and aliases. Search, filter, sort and
+ * paging all happen on the server (WEB-01): the Authors page used to download
+ * the whole table (~17k rows with nested aliases) on every mount and after every
+ * merge, delete and undo.
+ */
+export async function getAuthorsPage(
+  params: EntityPageParams
+): Promise<EntityPage<AuthorWithCount>> {
+  const response = await apiFetch(`${API_BASE}/authors?${entityPageQuery(params)}`);
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to fetch authors');
   }
-  const body = await response.json();
-  const data = body.data;
-  return data.items || data.authors || [];
+  const data = (await response.json()).data;
+  const items: AuthorWithCount[] = data.items || data.authors || [];
+  return {
+    items,
+    count: data.count ?? items.length,
+    total: data.total ?? data.count ?? items.length,
+  };
 }
 
 export async function getAuthor(authorId: number): Promise<AuthorWithCount> {

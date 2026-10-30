@@ -1,9 +1,9 @@
 // file: web/src/pages/Series.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-09-12
+// last-edited: 2026-10-30
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -30,6 +30,7 @@ import {
   Select,
   MenuItem,
   Alert,
+  LinearProgress,
   Snackbar,
   Chip,
   CircularProgress,
@@ -60,8 +61,12 @@ import {
   ColumnPicker,
   type ColumnDef,
 } from '../components/common/ConfigurableTable';
+import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
 import * as api from '../services/api';
 import type { SeriesWithCount as SeriesType, Book } from '../services/api';
+
+/** How long the search box waits after the last keystroke before asking the server. */
+const SEARCH_DEBOUNCE_MS = 300;
 
 type SeriesFilter = 'with_books' | 'empty' | 'all';
 
@@ -90,7 +95,6 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     defaultWidth: 300,
     minWidth: 120,
     sortable: true,
-    sortValue: (s) => s.name.toLowerCase(),
     render: (s) => (
       <Typography
         variant="body2"
@@ -109,7 +113,6 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     defaultWidth: 200,
     minWidth: 100,
     sortable: true,
-    sortValue: (s) => (s.author_name ?? '').toLowerCase(),
     render: (s) => (
       <Typography
         variant="body2"
@@ -129,7 +132,6 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     minWidth: 80,
     align: 'right',
     sortable: true,
-    sortValue: (s) => s.book_count ?? 0,
     render: (s) => {
       const count = s.book_count ?? 0;
       const fileCount = s.file_count ?? 0;
@@ -145,7 +147,6 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     minWidth: 50,
     align: 'right',
     sortable: true,
-    sortValue: (s) => s.id,
     render: (s) => s.id,
   },
   {
@@ -154,8 +155,9 @@ const seriesColumns: ColumnDef<SeriesType>[] = [
     defaultVisible: false,
     defaultWidth: 140,
     minWidth: 100,
-    sortable: true,
-    sortValue: (s) => s.created_at ?? '',
+    // Not sortable: the series row carries no creation time (the server never
+    // sends created_at), so there is nothing for the server to sort by.
+    sortable: false,
     render: (s) => (s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'),
   },
 ];
@@ -366,14 +368,26 @@ function SeriesRow({
 // --- Main Component ---
 
 export function Series() {
+  // The CURRENT PAGE only. The table is paged, searched, filtered and sorted by
+  // the server (WEB-02); this component never holds the whole series table.
   const [seriesList, setSeriesList] = useState<SeriesType[]>([]);
+  // matchCount: series matching the search and filter across every page.
+  // totalSeries: the whole table.
+  const [matchCount, setMatchCount] = useState(0);
+  const [totalSeries, setTotalSeries] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<SeriesFilter>('with_books');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Selection survives page turns, so it stores the series rows themselves: the
+  // merge dialog names the selected series and a row on another page is no
+  // longer in `seriesList`. The header checkbox acts on the CURRENT PAGE only
+  // (there is no "all matching" mode: merging or deleting every series matching
+  // a search is not an action this page offers).
+  const [selected, setSelected] = useState<Map<number, SeriesType>>(new Map());
   const [expanded, setExpanded] = useState<Record<number, ExpandedRow>>({});
 
   // Dialog states
@@ -417,7 +431,6 @@ export function Series() {
     toggleColumn,
     isColumnVisible,
     startResize,
-    sortRows,
     resetColumns,
   } = useConfigurableTable<SeriesType>({
     storageKey: 'series',
@@ -432,45 +445,73 @@ export function Series() {
     );
   };
 
+  const debouncedSearch = useDebouncedSearch(search, SEARCH_DEBOUNCE_MS);
+
+  // A new settled search term starts again from page 0. Done during render
+  // rather than in the keystroke handler so the page does not reset (and fetch)
+  // once on the first keystroke and again when the debounce settles.
+  const [appliedSearch, setAppliedSearch] = useState('');
+  if (appliedSearch !== debouncedSearch) {
+    setAppliedSearch(debouncedSearch);
+    setPage(0);
+  }
+
+  // Only the newest request may write state: a slow response for an old page or
+  // search must not overwrite the page the user is now looking at.
+  const requestSeq = useRef(0);
+
+  // Fetches the page the table is showing. Every refresh after a rename, merge,
+  // split, delete or undo is this same call, so it refetches one page, never
+  // the table.
   const fetchSeries = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getSeries();
-      setSeriesList(data);
+      const result = await api.getSeriesPage({
+        limit: rowsPerPage,
+        offset: page * rowsPerPage,
+        search: appliedSearch,
+        filter,
+        sort: sortField,
+        order: sortDir,
+      });
+      if (seq !== requestSeq.current) return;
+      // The last page can vanish under us (the final row on it was just merged
+      // or deleted): step back to the new last page, which refetches.
+      if (result.items.length === 0 && result.count > 0 && page > 0) {
+        setPage(Math.ceil(result.count / rowsPerPage) - 1);
+        return;
+      }
+      setSeriesList(result.items);
+      setMatchCount(result.count);
+      setTotalSeries(result.total);
+      setLoadedOnce(true);
+      // Keep stored selection rows current (a rename changes the name the merge
+      // dialog shows) for the ones this page carries.
+      setSelected((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Map(prev);
+        for (const sr of result.items) if (next.has(sr.id)) next.set(sr.id, sr);
+        return next;
+      });
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load series');
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, []);
+  }, [page, rowsPerPage, appliedSearch, filter, sortField, sortDir]);
 
   useEffect(() => {
     fetchSeries();
   }, [fetchSeries]);
 
-  const filtered = useMemo(() => {
-    let result = seriesList;
-    if (filter === 'with_books') {
-      result = result.filter((s) => (s.book_count ?? 0) > 0);
-    } else if (filter === 'empty') {
-      result = result.filter((s) => (s.book_count ?? 0) === 0);
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          (s.author_name && s.author_name.toLowerCase().includes(q))
-      );
-    }
-    return sortRows(result);
-  }, [seriesList, search, filter, sortRows]);
-
-  const paged = useMemo(() => {
-    const start = page * rowsPerPage;
-    return filtered.slice(start, start + rowsPerPage);
-  }, [filtered, page, rowsPerPage]);
+  // Changing the sort starts again from page 0, like a new search or filter.
+  const handleSortColumn = (field: string) => {
+    handleSort(field);
+    setPage(0);
+  };
 
   const toggleExpand = async (seriesId: number) => {
     if (expanded[seriesId]) {
@@ -492,19 +533,32 @@ export function Series() {
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const next = new Map(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        const row = seriesList.find((sr) => sr.id === id);
+        if (row) next.set(id, row);
+      }
       return next;
     });
   };
 
+  const pageAllSelected = seriesList.length > 0 && seriesList.every((sr) => selected.has(sr.id));
+  const pageSomeSelected = seriesList.some((sr) => selected.has(sr.id));
+
+  // Header checkbox: this page's rows only. Rows selected on other pages are
+  // left alone either way.
   const toggleSelectAll = () => {
-    if (selected.size === paged.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(paged.map((s) => s.id)));
-    }
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (pageAllSelected) {
+        for (const sr of seriesList) next.delete(sr.id);
+      } else {
+        for (const sr of seriesList) next.set(sr.id, sr);
+      }
+      return next;
+    });
   };
 
   // Rename
@@ -577,7 +631,7 @@ export function Series() {
 
   const doMerge = async () => {
     if (mergeKeepId === null) return;
-    const mergeIds = [...selected].filter((id) => id !== mergeKeepId);
+    const mergeIds = [...selected.keys()].filter((id) => id !== mergeKeepId);
     const finalName =
       mergeUseCustomName && mergeCustomName.trim() ? mergeCustomName.trim() : undefined;
     const keepName = finalName ?? selectedSeries.find((s) => s.id === mergeKeepId)?.name ?? '?';
@@ -594,7 +648,7 @@ export function Series() {
       });
       setSnackbar({ open: true, message: 'Series merged', severity: 'success' });
       setMergeDialog(false);
-      setSelected(new Set());
+      setSelected(new Map());
       fetchSeries();
     } catch (err) {
       setSnackbar({
@@ -676,7 +730,7 @@ export function Series() {
   // Bulk Delete
   const doBulkDelete = async () => {
     try {
-      const result = await api.bulkDeleteSeries([...selected]);
+      const result = await api.bulkDeleteSeries([...selected.keys()]);
       const msg =
         result.skipped > 0
           ? `Deleted ${result.deleted}, skipped ${result.skipped} (have books)`
@@ -684,7 +738,7 @@ export function Series() {
       addHistory({ action: 'delete', description: msg, undoable: false });
       setSnackbar({ open: true, message: msg, severity: 'success' });
       setBulkDeleteDialog(false);
-      setSelected(new Set());
+      setSelected(new Map());
       fetchSeries();
     } catch (err) {
       setSnackbar({
@@ -695,12 +749,9 @@ export function Series() {
     }
   };
 
-  const selectedSeries = useMemo(
-    () => seriesList.filter((s) => selected.has(s.id)),
-    [seriesList, selected]
-  );
+  const selectedSeries = useMemo(() => [...selected.values()], [selected]);
 
-  if (loading && seriesList.length === 0) {
+  if (!loadedOnce && loading) {
     return (
       <Box sx={{ p: 3, display: 'flex', justifyContent: 'center' }}>
         <CircularProgress />
@@ -748,10 +799,7 @@ export function Series() {
           size="small"
           placeholder="Search series..."
           value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(0);
-          }}
+          onChange={(e) => setSearch(e.target.value)}
           sx={{ minWidth: 250 }}
         />
         <FormControl size="small" sx={{ minWidth: 160 }}>
@@ -793,18 +841,19 @@ export function Series() {
           mb: 1,
         }}
       >
-        {filtered.length} series{filter !== 'all' && ` (${seriesList.length} total)`}
+        {matchCount} series{filter !== 'all' && ` (${totalSeries} total)`}
       </Typography>
 
       {/* Table */}
+      {loading && <LinearProgress aria-label="Loading series" />}
       <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
         <Table size="small" sx={{ tableLayout: 'fixed', minWidth: 500 }}>
           <TableHead>
             <TableRow>
               <TableCell padding="checkbox" sx={{ width: 42 }}>
                 <Checkbox
-                  indeterminate={selected.size > 0 && selected.size < paged.length}
-                  checked={paged.length > 0 && selected.size === paged.length}
+                  indeterminate={pageSomeSelected && !pageAllSelected}
+                  checked={pageAllSelected}
                   onChange={toggleSelectAll}
                 />
               </TableCell>
@@ -819,7 +868,7 @@ export function Series() {
                   sortable={col.sortable}
                   sortActive={sortField === col.key}
                   sortDirection={sortField === col.key ? sortDir : 'asc'}
-                  onSort={() => handleSort(col.key)}
+                  onSort={() => handleSortColumn(col.key)}
                   onStartResize={startResize}
                 />
               ))}
@@ -829,7 +878,7 @@ export function Series() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {paged.map((s) => (
+            {seriesList.map((s) => (
               <SeriesRow
                 key={s.id}
                 series={s}
@@ -844,7 +893,7 @@ export function Series() {
                 onDelete={() => openDelete(s)}
               />
             ))}
-            {paged.length === 0 && (
+            {seriesList.length === 0 && !loading && (
               <TableRow>
                 <TableCell colSpan={totalCols} align="center" sx={{ py: 4 }}>
                   <Typography
@@ -852,7 +901,7 @@ export function Series() {
                       color: 'text.secondary',
                     }}
                   >
-                    {search ? 'No matching series' : 'No series found'}
+                    {appliedSearch ? 'No matching series' : 'No series found'}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -863,7 +912,7 @@ export function Series() {
 
       <TablePagination
         component="div"
-        count={filtered.length}
+        count={matchCount}
         page={page}
         onPageChange={(_, p) => setPage(p)}
         rowsPerPage={rowsPerPage}

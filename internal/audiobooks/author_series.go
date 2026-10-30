@@ -1,7 +1,7 @@
 // file: internal/audiobooks/author_series.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-08-18
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -60,9 +60,16 @@ type AuthorListResponse struct {
 	Count int               `json:"count"`
 }
 
+// AuthorWithCountListResponse is the GET /authors body.
+//
+// Count is how many authors MATCH the request's filter and search across every
+// page (it equals Total when nothing narrows the list). Total is the size of
+// the whole authors table, so a paged client can say "12 of 17,477" without a
+// second request. Items is only the requested page when limit/offset are sent.
 type AuthorWithCountListResponse struct {
 	Items []AuthorWithCount `json:"items"`
 	Count int               `json:"count"`
+	Total int               `json:"total"`
 }
 
 // SeriesWithCount extends Series with book count, file count, and author name.
@@ -78,9 +85,13 @@ type SeriesListResponse struct {
 	Count int               `json:"count"`
 }
 
+// SeriesWithCountsResponse is the GET /series body. Count and Total mean what
+// they mean on AuthorWithCountListResponse: Count matches the request's filter
+// and search across every page, Total is the whole table.
 type SeriesWithCountsResponse struct {
 	Items []SeriesWithCount `json:"items"`
 	Count int               `json:"count"`
+	Total int               `json:"total"`
 }
 
 func (as *AuthorSeriesService) ListAuthors() (*AuthorListResponse, error) {
@@ -145,6 +156,7 @@ func (as *AuthorSeriesService) ListAuthorsWithCounts() (*AuthorWithCountListResp
 	return &AuthorWithCountListResponse{
 		Items: items,
 		Count: len(items),
+		Total: len(items),
 	}, nil
 }
 
@@ -204,5 +216,6 @@ func (as *AuthorSeriesService) ListSeriesWithCounts() (*SeriesWithCountsResponse
 	return &SeriesWithCountsResponse{
 		Items: items,
 		Count: len(items),
+		Total: len(items),
 	}, nil
 }
