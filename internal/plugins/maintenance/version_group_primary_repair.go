@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -114,10 +115,13 @@ var (
 )
 
 type vgPrimaryRepairParams struct {
-	// DryRun: only an explicit false writes. Omitted or true previews.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// DryRun: only an explicit false writes. Omitted or true previews. dryRun
+	// (camelCase) is accepted as an alias; sending both with different values
+	// is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// Apply is the older spelling of dry_run:false, kept for callers that
-	// already send it. apply:true with dry_run:true is refused.
+	// already send it. apply:true with dry_run:true (or dryRun:true) is refused.
 	Apply bool `json:"apply"`
 	// GroupIDs limits the run to these version groups. Required for a write.
 	GroupIDs []string `json:"group_ids"`
@@ -132,10 +136,16 @@ type vgPrimaryRepairParams struct {
 
 // resolveWrite folds dry_run and apply into one answer.
 func (p vgPrimaryRepairParams) resolveWrite() (bool, error) {
-	if p.DryRun != nil && *p.DryRun && p.Apply {
+	dry, err := opmode.ResolveDryRun("maintenance.version-group-primary-repair", p.DryRun, p.DryRunCamel)
+	if err != nil {
+		return false, err
+	}
+	stated := p.DryRun != nil || p.DryRunCamel != nil
+	if stated && dry && p.Apply {
 		return false, fmt.Errorf("version-group-primary-repair: apply:true contradicts dry_run:true; send one")
 	}
-	return p.Apply || (p.DryRun != nil && !*p.DryRun), nil
+	// !dry implies the mode was stated: an omitted mode resolves to preview.
+	return p.Apply || !dry, nil
 }
 
 type vgRepairGroupReport struct {

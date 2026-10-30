@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/preview_startcheck_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e9e9892c-f591-4b80-a47d-006e1625177c
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -37,8 +37,8 @@ func TestPreviewStartChecks(t *testing.T) {
 		{"series live without mode", sp, `{}`, "live", "needs mode", nil},
 		{"series live report", sp, `{"mode":"report"}`, "live", "needs mode", nil},
 		{"series live empty mode", sp, `{"mode":""}`, "live", "needs mode", nil},
-		{"series live null", sp, `{"mode":"null"}`, "live", "", map[string]any{"mode": "null", "dry_run": false}},
-		{"series preview report", sp, `{}`, "preview", "", map[string]any{"dry_run": true}},
+		{"series live null", sp, `{"mode":"null"}`, "live", "", map[string]any{"mode": "null", "dry_run": false, "dryRun": false}},
+		{"series preview report", sp, `{}`, "preview", "", map[string]any{"dry_run": true, "dryRun": true}},
 		{"series mode not a string", sp, `{"mode":3}`, "live", "must be a string", nil},
 		// opchange-book-index-rebuild: ensure is the boot path and refuses dry_run.
 		{"opchange ensure preview", oc, `{"ensure":true}`, "preview", "boot mode", nil},

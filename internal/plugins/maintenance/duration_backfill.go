@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.10.5
+// version: 2.10.6
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -86,6 +86,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -569,19 +570,13 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	// Both spellings sent and disagreeing is an error, never a guess: picking
-	// one would silently write in a run the caller may have meant as a preview.
-	if params.DryRun != nil && params.DryRunSnake != nil && *params.DryRun != *params.DryRunSnake {
-		return fmt.Errorf("maintenance.duration-reextract: dryRun=%v and dry_run=%v disagree; send one",
-			*params.DryRun, *params.DryRunSnake)
-	}
 	// Absent means TRUE. This op WRITES book and segment durations, so the
-	// default has to be the previewing one.
-	dryRun := true
-	if params.DryRun != nil {
-		dryRun = *params.DryRun
-	} else if params.DryRunSnake != nil {
-		dryRun = *params.DryRunSnake
+	// default has to be the previewing one. Both spellings sent and
+	// disagreeing is an error, never a guess: picking one would silently write
+	// in a run the caller may have meant as a preview.
+	dryRun, err := opmode.ResolveDryRun("maintenance.duration-reextract", params.DryRunSnake, params.DryRun)
+	if err != nil {
+		return err
 	}
 	// Clamp worker count.
 	if params.Workers < 1 {

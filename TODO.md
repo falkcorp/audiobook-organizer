@@ -2543,7 +2543,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **OPS-PREVIEW-HTTP-ENDPOINTS** Owner decision needed: five HTTP endpoints outside the op registry write on an omitted `dry_run` (`POST /discovery/import` defaults LIVE and swallows bind errors; `POST /audiobooks/bulk-write-back` enqueues `library.bulk-write-back`; `POST /itunes/pid-repair`; `POST /itunes/rebuild` and `/rebuild-full` read `?dry_run` only — both removed 2026-10-07 with iTunes write-back, so three remain). The 2026-09-25 preview-by-default rule was stated for operations; flipping these changes what existing UI buttons do. List + evidence: `docs/audits/2026-09-25-op-preview-default-inventory.md` section 7. They are allowlisted in `internal/operations/opmode/guard_test.go`; remove each entry when its endpoint is converted. — ❓ owner decision 2026-10-03: make the 5 non-registry endpoints preview-by-default (breaking API change) or keep LIVE default?
 - [ ] **OPS-WITHOUT-PREVIEW-MODE** 112 registered ops have no mode flag at all and run their only mode on `{}`; many declare `library.write` (library.organize, library.scan, reconcile.apply, entities.author-merge, dedup.book-merge, the scheduler.* cleanups, ...). Decide which need a preview mode. Inventory section 5. — ❓ owner decision 2026-10-03: which library.write ops get a preview mode, and in what order?
-- [ ] **DURATION-BACKFILL-ONTO-OPMODE** Move `maintenance.duration-backfill`'s inline dry_run/dryRun resolution (`internal/plugins/maintenance/duration_backfill.go` ~:482-494) onto `opmode.ResolveDryRun` and add it to `TestOps_DryRunRoutesThroughOpmode`. Skipped on 2026-09-25 because another agent was editing the duration files on proposed-main.
+- [x] **DURATION-BACKFILL-ONTO-OPMODE** Move `maintenance.duration-backfill`'s inline dry_run/dryRun resolution (`internal/plugins/maintenance/duration_backfill.go` ~:482-494) onto `opmode.ResolveDryRun` and add it to `TestOps_DryRunRoutesThroughOpmode`. Skipped on 2026-09-25 because another agent was editing the duration files on proposed-main. Done 2026-10-30: the op is `maintenance.duration-reextract` (its runner is still named `runDurationBackfill`); `runDurationBackfill` now calls `opmode.ResolveDryRun`, and the op is in `TestOps_DryRunRoutesThroughOpmode` and in `TestDryRunSpellings_ConflictRefusedByEveryOp`.
 
 - [ ] **SEARCH-INFINITE-SCROLL** Later, not now (owner 2026-09-25): an infinite-scroll results model backed by a long-lived result cache, prewarmed in the background on startup. — ❓ owner decision 2026-10-03: un-park infinite-scroll search, or keep it parked?
 
@@ -2561,7 +2561,7 @@ into one of the curated sections below, is a normal direct edit.
       re-offered until the inputs that caused the refusal change.
       Evidence: per-book `book not applied` lines in the op logs (`GET /operations/v2/<id>/logs/download`, zstd).
 
-- [ ] **The dry-run flag spelling is split across the op registry.**
+- [x] **The dry-run flag spelling is split across the op registry.**
       Measured 2026-09-20: 11 params structs tag it `dryRun`, 18 tag it
       `dry_run`. `encoding/json` drops an unrecognised field silently, so an
       operator who reaches for the wrong one for a given op gets that op's
@@ -2572,6 +2572,15 @@ into one of the curated sections below, is a normal direct edit.
       previewed a run meant as an apply. Sweep the rest onto the same pattern,
       and check each one's default: a `bool` field with no explicit default
       means Go's zero value (false = APPLY) decides when the flag is dropped.
+      Done 2026-10-30: the sweep found the registry already past the 11/18 split
+      (73 of the 83 registered ops that declare a Preview with a dry-run key took both spellings); the last
+      10 ops that took only `dry_run` (dedup.series-dedup and nine
+      maintenance.* ops) now take both through `opmode.ResolveDryRun`, and none of
+      them had a plain `bool` left. Guards: `TestGuard_DryRunParamsAcceptBothSpellings`
+      (source scan, `internal/operations/opmode`) and
+      `TestOpsV3_DryRunFamilyDecodesBothSpellings` (registry-wide, `internal/server`);
+      the plain-`bool` guard `TestGuard_NoPlainBoolDryRunParams` was already there.
+      Table and decisions: `docs/decisions/2026-10-30-dry-run-flag-both-spellings.md`.
 
 - [ ] **10 books hold their entire file set twice (exactly 2.00x runtime).** — ❓ owner decision 2026-10-03: purge the duplicate present rows (never-delete rule; 09-25 exception covers missing rows only) or keep both sets?
       Found via `runtime_mismatch` gate refusals on 2026-09-20. Verified on

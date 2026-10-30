@@ -1,7 +1,7 @@
 // file: internal/dedup/op_params.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package dedup: op_params.go defines the JSON-unmarshal parameter structs for
 // each of the 8 async dedup OperationDef Run functions. They are kept here so
@@ -58,7 +58,10 @@ type SeriesDedupParams struct {
 	// until TODO.md L3966 it had no preview at all. Pass dry_run=false to
 	// apply. Pointer, not bool, so "absent" and "explicitly false" stay
 	// distinguishable — a plain bool would make the safe default unreachable.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused (opmode.ResolveDryRun).
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
 // SeriesPruneParams are the parameters for the "dedup.series-prune" operation.

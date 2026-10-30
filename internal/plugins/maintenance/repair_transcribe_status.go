@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -70,7 +71,10 @@ import (
 
 type repairStatusParams struct {
 	// DryRun reports what WOULD change without writing. Defaults to TRUE.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// LastBookID resumes past a prior run's checkpoint.
 	LastBookID string `json:"last_book_id,omitempty"`
 }
@@ -220,7 +224,10 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 			return fmt.Errorf("maintenance.repair-transcribe-status: decode params: %w", err)
 		}
 	}
-	dryRun := params.DryRun == nil || *params.DryRun
+	dryRun, err := opmode.ResolveDryRun("maintenance.repair-transcribe-status", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	log := reporter.Logger()
 
 	allIDs, err := store.ListBookIDs()

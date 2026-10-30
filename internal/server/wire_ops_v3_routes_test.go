@@ -1,7 +1,7 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
@@ -185,6 +185,55 @@ func TestOpsV3_PreviewDeclarationsMatchTheOpsParams(t *testing.T) {
 		require.Positive(t, declared[k], "no registered op declares %s; the check did not run", k)
 	}
 	require.Positive(t, oneOf, "no registered op declares LiveOneOf; the check did not run")
+}
+
+// TestOpsV3_DryRunFamilyDecodesBothSpellings is the registry-wide half of the
+// dry-run spelling rule (the source scan is TestGuard_DryRunParamsAcceptBothSpellings
+// in internal/operations/opmode). For every registered op that declares a
+// Preview and decodes a dry-run mode key:
+//
+//   - it decodes BOTH dry_run and dryRun. encoding/json drops a key the params
+//     type has no field for, so an op with one spelling previews (or applies,
+//     if its default is the unsafe one) on the other with no warning;
+//   - each is a *bool, not a plain bool: a plain bool cannot tell an omitted
+//     key from false, so omitted would read as APPLY (opmode.ResolveDryRun maps
+//     omitted to preview).
+//
+// The maintenance-job family (isMaintenanceJobOp) is exempt from the *bool
+// half only: its params types are the jobs' own DefaultParams shapes, the mode
+// is resolved by the dispatcher through opmode.ResolveDryRunDefault from both
+// spellings, and the plain bool is the echo of that resolved value
+// (allowPlainBool in the opmode guard says so per struct).
+func TestOpsV3_DryRunFamilyDecodesBothSpellings(t *testing.T) {
+	srv, _, _ := bootRegisteredOpIDs(t)
+	checked := 0
+	for _, od := range srv.opRegistry.ActiveDefs() {
+		p := od.Preview
+		if p.IsZero() || (!p.Decodes(opsregistry.ModeKeyDryRun) && !p.Decodes(opsregistry.ModeKeyDryRunCamel)) {
+			continue
+		}
+		checked++
+		require.True(t, p.Decodes(opsregistry.ModeKeyDryRun), "%s: Preview params decode dryRun but not dry_run; a caller sending dry_run is silently dropped", od.ID)
+		require.True(t, p.Decodes(opsregistry.ModeKeyDryRunCamel), "%s: Preview params decode dry_run but not dryRun; a caller sending dryRun is silently dropped", od.ID)
+		if isMaintenanceJobOp(od.ID) {
+			continue
+		}
+		typ := reflect.TypeOf(p.Params)
+		for typ.Kind() == reflect.Pointer {
+			typ = typ.Elem()
+		}
+		// VisibleFields includes fields promoted from an embedded struct.
+		for _, key := range []string{opsregistry.ModeKeyDryRun, opsregistry.ModeKeyDryRunCamel} {
+			for _, f := range reflect.VisibleFields(typ) {
+				if name, _, _ := strings.Cut(f.Tag.Get("json"), ","); name != key {
+					continue
+				}
+				require.Equal(t, reflect.Pointer, f.Type.Kind(), "%s: %s.%s (json %q) must be a *bool so an omitted key reads as preview, not as Go's zero value (APPLY)", od.ID, typ.Name(), f.Name, key)
+				require.Equal(t, reflect.Bool, f.Type.Elem().Kind(), "%s: %s.%s must be a *bool", od.ID, typ.Name(), f.Name)
+			}
+		}
+	}
+	require.Greater(t, checked, 50, "the check did not run over the registry")
 }
 
 // strictDecodes: the declared params type accepts every key v3 can write
