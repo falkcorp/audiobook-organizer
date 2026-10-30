@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.114.2
+// version: 2.114.3
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package server
 
@@ -235,7 +235,7 @@ type Server struct {
 	pipelineManager *aiscan.PipelineManager
 	// operationsHandler is the migrated operations-domain handler (instantiated
 	// in wireHandlers). getSystemLogs delegates its operation_id branch to
-	// operationsHandler.GetOperationLogs; routes are registered in the same
+	// operationsHandler.OperationLogsByID; routes are registered in the same
 	// wireHandlers call that populates this field, so it is never nil at request
 	// time.
 	operationsHandler *operationshandlers.Handler

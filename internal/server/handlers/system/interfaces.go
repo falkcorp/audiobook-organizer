@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, reset/factory-reset, config
@@ -147,8 +147,10 @@ type EventStreamer interface {
 // OperationLogsProvider lets getSystemLogs delegate the operation_id branch to
 // the already-migrated operations-domain handler without importing the
 // operations sub-package (avoiding coupling). The controller passes
-// *operations.Handler, which satisfies this interface via its GetOperationLogs
-// method.
+// *operations.Handler, which satisfies this interface via its
+// OperationLogsByID method. The operation id is an argument, not a gin route
+// param: GET /system/logs carries it as ?operation_id=, where c.Param("id") is
+// empty.
 type OperationLogsProvider interface {
-	GetOperationLogs(c *gin.Context)
+	OperationLogsByID(c *gin.Context, id string)
 }

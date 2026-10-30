@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.2
+// version: 2.64.3
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package server
 
@@ -294,7 +294,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.revertOperation,
 	).WithRepairsOpAccess(repairsOps)
 	// getSystemLogs (system handler) delegates its operation_id branch to
-	// operationsH.GetOperationLogs; stash it on the Server for that call.
+	// operationsH.OperationLogsByID; stash it on the Server for that call.
 	s.operationsHandler = operationsH
 
 	// Task-scheduler and maintenance-window handler (TODO.md scheduler-config
