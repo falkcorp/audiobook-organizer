@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_split_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0e7c2a-9d41-4f38-a6e2-3c8f1d7b2e90
-// last-edited: 2026-09-13
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -71,7 +71,7 @@ func distinctCandidates(n int) ([]Book, []int) {
 	return books, idx
 }
 
-func noopSave(context.Context, *Book) (string, error) { return "", nil }
+func noopSave(_ context.Context, b *Book) (string, error) { return b.FilePath, nil }
 
 func withNoSplitDelay(t *testing.T) {
 	t.Helper()

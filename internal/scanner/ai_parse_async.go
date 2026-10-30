@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-10-06
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -457,7 +457,7 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 	// writer committed while the author/series were resolved. Each field the AI
 	// filled is copied only if it is STILL empty on the fresh row -- a gap
 	// another writer filled meanwhile is theirs.
-	updated, uerr := modifyBookRecorded(row.ID, scanAIHistorySource, func(fresh *database.Book) error {
+	updated, uerr := modifyBookRecorded(row.ID, aiParseHistorySource(book.AIConfidence), func(fresh *database.Book) error {
 		wrote := false
 		if before.Title == "" && row.Title != "" && fresh.Title == "" {
 			fresh.Title, wrote = row.Title, true
