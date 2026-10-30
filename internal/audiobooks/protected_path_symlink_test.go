@@ -1,5 +1,5 @@
 // file: internal/audiobooks/protected_path_symlink_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0d6b9f41-8a27-4c53-b1e8-73f5a2c90d14
 // last-edited: 2026-10-30
 
@@ -397,4 +397,39 @@ type failingImportPathStore struct{ audiobookStore }
 
 func (failingImportPathStore) GetAllImportPaths() ([]database.ImportPath, error) {
 	return nil, errors.New("store is closed")
+}
+
+// The frozen books/itunes/ tree is protected whatever is configured: with no
+// iTunes library path and no import paths, as spelled and through a link.
+func TestProtectedPathChecked_FrozenITunesTreeNeedsNoConfiguration(t *testing.T) {
+	resetImportPathCacheForHelper(t)
+	setITunesPaths(t, "", "")
+	base := t.TempDir()
+	frozen := filepath.Join(base, "mnt", "bigdata", "books", "itunes", "iTunes Media", "Audiobooks", "Hush")
+	real := filepath.Join(frozen, "hush.m4b")
+	writeFile(t, real)
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "lib", "Gotham"), 0o755))
+	link := filepath.Join(base, "lib", "Gotham", "tunes")
+	require.NoError(t, os.Symlink(frozen, link))
+	free := filepath.Join(base, "lib", "Gotham", "iTunes", "free.m4b")
+	writeFile(t, free)
+
+	for what, p := range map[string]string{
+		"spelled":        real,
+		"not created":    filepath.Join(frozen, "new.m4b"),
+		"through a link": filepath.Join(link, "hush.m4b"),
+		"another case":   filepath.Join(base, "Books", "iTunes", "x.m4b"),
+	} {
+		for fn, check := range map[string]func(importPathLister, string) (bool, error){
+			"protectedPathChecked":      protectedPathChecked,
+			"protectedPathCheckedFresh": protectedPathCheckedFresh,
+		} {
+			got, err := check(nil, p)
+			require.NoError(t, err, what+" "+fn)
+			assert.True(t, got, what+" "+fn)
+		}
+	}
+	got, err := protectedPathChecked(nil, free)
+	require.NoError(t, err)
+	assert.False(t, got, "a folder merely named iTunes is not the frozen tree")
 }

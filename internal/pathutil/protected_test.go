@@ -1,5 +1,5 @@
 // file: internal/pathutil/protected_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5c0d7e92-3b84-4f1a-9a6e-2d18c4b7e063
 // last-edited: 2026-10-30
 
@@ -720,4 +720,32 @@ func TestProtectedHooks_AreReadUnderTheirLock(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// The frozen iTunes tree (books/itunes/**) is protected with no roots at all,
+// as spelled and when only the resolved spelling shows it.
+func TestUnderProtectedPath_FrozenITunesTreeNeedsNoRoots(t *testing.T) {
+	f := newProtectedFixture(t)
+	frozen := filepath.Join(f.base, "mnt", "bigdata", "books", "itunes", "iTunes Library", "Hush")
+	require.NoError(t, os.MkdirAll(frozen, 0o755))
+	// A link whose own path says nothing about iTunes, and a "books/itunes"
+	// look-alike that is not the tree.
+	viaLink := f.link(t, frozen, "tunes-link")
+	lookAlike := filepath.Join(f.base, "books", "itunes-backup", "x.m4b")
+
+	for what, p := range map[string]string{
+		"spelled":                     filepath.Join(frozen, "x.m4b"),
+		"spelled, nothing on disk":    filepath.Join(f.base, "elsewhere", "books", "itunes", "x.m4b"),
+		"only the resolved path says": filepath.Join(viaLink, "x.m4b"),
+	} {
+		got, err := UnderProtectedPath(p, nil)
+		require.NoError(t, err, what)
+		assert.True(t, got, what)
+		got, err = UnderProtectedPathUncached(p, nil)
+		require.NoError(t, err, what)
+		assert.True(t, got, what)
+	}
+	got, err := UnderProtectedPath(lookAlike, nil)
+	require.NoError(t, err)
+	assert.False(t, got, "books/itunes-backup is not the frozen tree")
 }

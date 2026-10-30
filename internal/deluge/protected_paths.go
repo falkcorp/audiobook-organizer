@@ -1,12 +1,13 @@
 // file: internal/deluge/protected_paths.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d5b8e2a1-3c9f-4076-b7d4-0e8a2c5f1b93
-// last-edited: 2026-09-14
+// last-edited: 2026-10-30
 
 // Package deluge provides integration with the Deluge BitTorrent client.
 package deluge
 
 import (
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -43,13 +44,37 @@ const (
 // rewrites or moves files must not proceed on a false Loaded: an empty Deluge
 // list then means "unknown", not "nothing is seeding".
 //
+// Symlinks. A path is tested as spelled AND with its symlinks resolved, against
+// each prefix as spelled AND resolved (the pairs are a union; a hit on any is a
+// hit). A file reached through a link into a seeding or static folder is the
+// same file, and so is any file under a folder that is itself configured
+// through a link. The resolved forms of the prefixes are computed once per
+// refresh (every protectedPathTTL, and on Invalidate), not per call; the
+// candidate path is resolved per call, only when the spelled check missed, and
+// is not cached: a cached "not protected" for a path whose link was re-pointed
+// is the one wrong answer that loses a seeding file. Resolution is
+// pathutil.ResolveExistingPrefix: a path or prefix that does not exist is
+// resolved through its nearest existing parent, and a dangling link is followed
+// to where it points, so a dangling link inside a protected folder stays
+// protected (the spelled check also catches it). A prefix whose links cannot be
+// resolved (a cycle, a permission error) keeps its spelled protection only and
+// is logged at each refresh; a candidate that cannot be resolved is protected
+// (fail closed), reported as ProtectedByStatic.
+//
+// The hands-off iTunes tree (books/itunes/**, pathutil.UnderFrozenITunesTree)
+// is protected whatever the configuration says, as ProtectedByStatic.
+//
 // Thread-safe. If Deluge is unreachable on refresh, the last-known set is kept.
 type ProtectedPathCache struct {
 	mu          sync.RWMutex
 	delugePaths []string
 	extraPaths  []string
-	client      *Client
-	lastRefresh time.Time
+	// delugeResolved and extraResolved are the symlink-resolved absolute forms
+	// of delugePaths and extraPaths, rebuilt with them (see resolveRoots).
+	delugeResolved []string
+	extraResolved  []string
+	client         *Client
+	lastRefresh    time.Time
 	// loaded is true once the Deluge list has been fetched successfully, or
 	// immediately when there is no client (no list to load).
 	loaded bool
@@ -85,20 +110,106 @@ func (c *ProtectedPathCache) ProtectedBy(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	c.maybeRefresh()
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, prefix := range c.extraPaths {
-		if pathutil.IsWithin(filePath, prefix) {
-			return ProtectedByStatic
-		}
+	// The frozen iTunes tree needs no list and no filesystem access.
+	if pathutil.UnderFrozenITunesTree(filePath) {
+		return ProtectedByStatic
 	}
-	for _, prefix := range c.delugePaths {
-		if prefix != "" && pathutil.IsWithin(filePath, prefix) {
-			return ProtectedByDeluge
-		}
+	c.maybeRefresh()
+	// The lists are replaced wholesale on refresh, never edited in place, so a
+	// snapshot of the slice headers is safe to use after the lock is released:
+	// the stat walk below must not hold up a refresh.
+	c.mu.RLock()
+	snap := prefixSnapshot{c.extraPaths, c.extraResolved, c.delugePaths, c.delugeResolved}
+	c.mu.RUnlock()
+
+	// As spelled, against the prefixes as spelled: no filesystem access, and a
+	// hit here is final, so what was protected before symlinks were considered
+	// still is, whatever resolution does.
+	if by := snap.match([]string{filePath}, false); by != "" {
+		return by
+	}
+
+	// Resolved. The spelled path is made absolute first (the prefixes' resolved
+	// forms are absolute), then resolved through its nearest existing parent.
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		protectedLog.Warn("treating path as protected: cannot make it absolute: path=%s error=%s",
+			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
+		return ProtectedByStatic
+	}
+	resolved, err := pathutil.ResolveExistingPrefix(abs)
+	if err != nil {
+		protectedLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
+			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
+		return ProtectedByStatic
+	}
+	if pathutil.UnderFrozenITunesTree(resolved) {
+		return ProtectedByStatic
+	}
+	// Every pairing of {abs, resolved} path with {spelled, resolved} prefixes
+	// that the spelled check above did not already make.
+	return snap.match([]string{abs, resolved}, true)
+}
+
+// prefixSnapshot is the four prefix lists as ProtectedBy read them: the static
+// and Deluge prefixes as spelled, and their symlink-resolved forms.
+type prefixSnapshot struct {
+	extra, extraResolved, deluge, delugeResolved []string
+}
+
+// match says which source, if any, has a prefix that some form of the path
+// lies under: static before Deluge, since a path under both is reported
+// static. The forms are always tested against the prefixes as spelled, and
+// against their symlink-resolved forms too when withResolved is set.
+func (s prefixSnapshot) match(forms []string, withResolved bool) string {
+	if underAny(forms, s.extra) || (withResolved && underAny(forms, s.extraResolved)) {
+		return ProtectedByStatic
+	}
+	if underAny(forms, s.deluge) || (withResolved && underAny(forms, s.delugeResolved)) {
+		return ProtectedByDeluge
 	}
 	return ""
+}
+
+// underAny reports whether any of forms lies under any of the non-empty roots.
+func underAny(forms, roots []string) bool {
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		for _, f := range forms {
+			if pathutil.IsWithin(f, r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolveRoots returns the absolute, symlink-resolved form of each non-empty
+// root, for the prefixes of one list. A root that cannot be made absolute or
+// resolved (a link cycle, a permission error, a stale mount) is logged and
+// left out: it keeps the protection of its spelled form, which is what every
+// prefix had before resolution, rather than closing every path in the library
+// on one bad entry.
+func resolveRoots(kind string, roots []string) []string {
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		abs, err := filepath.Abs(r)
+		if err == nil {
+			var res string
+			if res, err = pathutil.ResolveExistingPrefix(abs); err == nil {
+				out = append(out, res)
+				continue
+			}
+		}
+		protectedLog.Warn("protected %s path %s cannot be resolved through its symlinks; only its spelled form protects: %s",
+			kind, logger.SanitizeLogValue(r), logger.SanitizeLogValue(err.Error()))
+	}
+	return out
 }
 
 // Loaded reports whether the Deluge save_path list has been fetched at least
@@ -146,8 +257,14 @@ func (c *ProtectedPathCache) refresh() {
 	// the static paths are consulted directly by ProtectedBy. Without this
 	// guard, c.client.ListTorrents() → Login() dereferences the nil receiver
 	// and every tag write's IsProtected pre-flight panics.
+	// The static prefixes' resolved forms are rebuilt on every refresh attempt,
+	// whatever Deluge does, so a link re-pointed in front of one is seen within
+	// protectedPathTTL even while Deluge is down.
+	c.extraResolved = resolveRoots("static", c.extraPaths)
+
 	if c.client == nil {
 		c.delugePaths = nil
+		c.delugeResolved = nil
 		c.loaded = true
 		c.lastRefresh = time.Now()
 		return
@@ -179,6 +296,7 @@ func (c *ProtectedPathCache) setDelugePathsLocked(torrents map[string]TorrentSta
 		}
 	}
 	c.delugePaths = fresh
+	c.delugeResolved = resolveRoots("deluge save", fresh)
 	c.loaded = true
 	c.lastRefresh = time.Now()
 	protectedLog.Debug("ProtectedPathCache refreshed: %d Deluge save paths, %d static paths", len(c.delugePaths), len(c.extraPaths))

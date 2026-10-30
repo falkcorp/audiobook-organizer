@@ -1,5 +1,5 @@
 // file: internal/pathutil/protected.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: f82848e0-20ca-446c-b8c5-b0e2f209bd51
 // last-edited: 2026-10-30
 
@@ -304,15 +304,15 @@ func (pr *protectedRoots) resolved() ([]string, error) {
 
 // UnderProtectedPath tests whether a file path is in a place the application
 // must not delete from, move out of, or write into: under any of the folders in
-// roots (import paths, the folders of the iTunes library files), inside an
-// "iTunes Media" folder, or inside a ".failed/" quarantine folder. It is the
-// shared test for the purge, the organizer and the metadata write-back. It is
-// NOT the only protected-path check: deluge.ProtectedPathCache is a separate
-// check the callers consult alongside it, and it still compares paths as
-// spelled. It holds both the Deluge seeding-folder list and
-// config.ProtectedPaths (the statically configured protected prefixes), so a
-// static prefix configured through a symlink, or a file reached through a link
-// into a Deluge or static folder, is not seen by it.
+// roots (import paths, the folders of the iTunes library files), in the frozen
+// iTunes tree (books/itunes/**, UnderFrozenITunesTree), inside an "iTunes Media"
+// folder, or inside a ".failed/" quarantine folder. It is the shared test for
+// the purge, the organizer and the metadata write-back. It is NOT the only
+// protected-path check: deluge.ProtectedPathCache is a separate check the
+// callers consult alongside it. That cache holds both the Deluge seeding-folder
+// list and config.ProtectedPaths (the statically configured protected
+// prefixes), and applies the same spelled-and-resolved test to them, and the
+// same frozen iTunes rule, with its own copy of the resolved prefixes.
 //
 // The path is tested in the spelling it is given AND in its symlink-resolved
 // spelling, and each root likewise. A file reached through a link that points
@@ -385,10 +385,16 @@ func underProtectedPath(p string, set *protectedRoots) (protected bool, err erro
 }
 
 // protectedBySpelling reports whether one spelling of a path is under any of
-// roots or inside an iTunes Media / .failed folder. The substring rules are the
+// roots, in the frozen iTunes tree (books/itunes/**, UnderFrozenITunesTree:
+// configuration-independent, so it holds when no iTunes library path is set and
+// is applied to the resolved spelling too, which catches a link into the tree),
+// or inside an iTunes Media / .failed folder. The substring rules are the
 // long-standing ones: "iTunes Media" anywhere in the path, and a ".failed"
 // folder with something in it.
 func protectedBySpelling(p string, roots []string) bool {
+	if UnderFrozenITunesTree(p) {
+		return true
+	}
 	for _, r := range roots {
 		if IsWithin(p, r) {
 			return true
