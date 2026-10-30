@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: e48755db-c26d-42a2-a232-49daf9732335
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 // pebble_store_ops_v3 implements OpsV3Store for PebbleDB. Key schema (all
 // prefixed with "opv3:"; state-and-persistence.md section 2):
@@ -1245,6 +1245,13 @@ func (p *PebbleStore) runsFromIndex(prefix []byte, cursor string, limit int, kee
 	if cursor != "" && !strings.HasPrefix(cursor, string(prefix)) {
 		return page, fmt.Errorf("%w: %q does not belong to this listing", ErrBadCursorV3, cursor)
 	}
+	// A caller that handles undecodable records (OnUndecodable) must have Total
+	// agree with the page, which leaves them out, so every record is decoded and
+	// the key-count fast path is for callers without a handler only (there an
+	// undecodable record fails the listing wherever it is read).
+	if keep == nil && q.OnUndecodable != nil {
+		keep = func(*RunRecord) bool { return true }
+	}
 	type ref struct{ key, id string }
 	var refs []ref
 	if err := p.scanKeys(prefix, prefixEnd(prefix), func(k []byte) bool {
@@ -1272,8 +1279,8 @@ func (p *PebbleStore) runsFromIndex(prefix []byte, cursor string, limit int, kee
 		rec, err := p.loadRunV3(r.id)
 		if err != nil {
 			if q.OnUndecodable != nil && errors.Is(err, errOpsV3Undecodable) {
-				// With a keep filter the run was not counted yet, so Total
-				// stays exact; with none Total counted keys and includes it.
+				// The run is not counted yet (a handler forces a keep filter),
+				// so Total stays exact.
 				q.OnUndecodable(r.id, err)
 				continue
 			}

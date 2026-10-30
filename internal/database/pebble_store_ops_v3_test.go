@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package database
 
@@ -1392,5 +1392,35 @@ func TestListRunsSkipIDAndUndecodable(t *testing.T) {
 	}
 	if !slices.Equal(reported, []string{corrupt}) || page.Total != 7 || len(page.Runs) != 7 {
 		t.Errorf("reported %v, total %d, runs %d; want [%s], 7, 7", reported, page.Total, len(page.Runs), corrupt)
+	}
+}
+
+// TestListRunsTotalLeavesOutUndecodable: with OnUndecodable set and no Keep,
+// Total agrees with the page (one good record, one corrupt: page 1, Total 1,
+// the corrupt id reported once), on the def, state and unfiltered walks alike.
+func TestListRunsTotalLeavesOutUndecodable(t *testing.T) {
+	p := newTimelineStore(t)
+	good := insertV3(t, p, "test.show", "")
+	bad := insertV3(t, p, "test.show", "")
+	if err := p.db.Set(opv3RunKey(bad), []byte("{not json"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	for name, q := range map[string]RunQuery{
+		"def":        {DefID: "test.show", Limit: 50},
+		"state":      {State: state.V3Queued, Limit: 50},
+		"unfiltered": {Limit: 50},
+	} {
+		var reported []string
+		q.OnUndecodable = func(id string, err error) { reported = append(reported, id) }
+		page, err := p.ListRunsV3(q)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(page.Runs) != 1 || page.Runs[0].ID != good || page.Total != 1 {
+			t.Errorf("%s: page %d runs, Total %d; want 1 and 1", name, len(page.Runs), page.Total)
+		}
+		if !slices.Equal(reported, []string{bad}) {
+			t.Errorf("%s: reported %v, want [%s]", name, reported, bad)
+		}
 	}
 }
