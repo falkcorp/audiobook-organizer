@@ -1,7 +1,7 @@
 // file: internal/transcribe/liveness.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4c1d7e92-6a38-4b05-8f1e-9d2a5c7b3e61
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -56,6 +56,11 @@ var superviseAfterRequestHook func(cancel context.CancelCauseFunc)
 //   - busy_seconds past busy_limit_seconds plus stuckGrace: the worker answers
 //     /health but has lost control of its own decoder. The result is a
 //     *WorkerStuckError, the same as the request ceiling would have produced.
+//   - machine_id that is not the machine the dispatch froze for the port (ctx
+//     carries it: withFrozenWorker): the port was handed to another machine
+//     mid-request. The result is a *WorkerSwappedError, which blames no machine
+//     (see workerswap.go). The check comes before the stuck one: a decode that
+//     is past its deadline on the NEW machine says nothing about the old one.
 //
 // Only a worker that reports busy_seconds is polled (h.BusySeconds != nil). A
 // worker older than whisper_mlx_server.py 1.8.0 blocks its event loop for the
@@ -88,6 +93,11 @@ func superviseRequest(ctx context.Context, url string, h remoteHealth, timeout t
 	started := time.Now()
 	err := do(rctx)
 	if err == nil {
+		// A response that raced the poller's cancel is not trusted either: it
+		// may be the swapped-in machine's, and cannot be told from the old one's.
+		if ic, ok := context.Cause(rctx).(*identityChangedCause); ok {
+			return swappedError(url, ic, time.Since(started), jobs)
+		}
 		return nil
 	}
 	if superviseAfterRequestHook != nil {
@@ -122,12 +132,25 @@ func superviseRequest(ctx context.Context, url string, h remoteHealth, timeout t
 	case errLivenessWedged:
 		return &WorkerStuckError{URL: url, After: elapsed, Jobs: jobs}
 	}
+	if ic, ok := cause.(*identityChangedCause); ok {
+		return swappedError(url, ic, elapsed, jobs)
+	}
 	return stuckFromHTTP(ctx, err, url, timeout, jobs)
 }
 
+// swappedError is the error for a request ended by an identityChangedCause. It
+// deliberately does not wrap the request's own error: that is a *url.Error for
+// the cancelled call, which isTransportishError would read as an outage.
+func swappedError(url string, ic *identityChangedCause, after time.Duration, jobs []string) error {
+	return &WorkerSwappedError{URL: url, Was: ic.was, Now: ic.now, After: after, Jobs: jobs}
+}
+
 // pollWorkerLiveness probes url every livenessInterval until ctx ends,
-// cancelling ctx with the cause that matches what it saw.
+// cancelling ctx with the cause that matches what it saw. The identity the
+// dispatch froze for the port is read from ctx (withFrozenWorker); a request
+// sent without one is not checked for a swap.
 func pollWorkerLiveness(ctx context.Context, url string, cancel context.CancelCauseFunc) {
+	fw, frozen := frozenWorkerFrom(ctx)
 	t := time.NewTicker(livenessInterval)
 	defer t.Stop()
 	misses := 0
@@ -150,6 +173,12 @@ func pollWorkerLiveness(ctx context.Context, url string, cancel context.CancelCa
 			continue
 		}
 		misses = 0
+		if frozen {
+			if now, swapped := fw.swappedTo(url, h); swapped {
+				cancel(&identityChangedCause{was: fw.key, now: now})
+				return
+			}
+		}
 		if stuckRefusal(gatedEndpoint{Endpoint: Endpoint{URL: url}, Health: h, Probed: true}) != "" {
 			cancel(errLivenessWedged)
 			return

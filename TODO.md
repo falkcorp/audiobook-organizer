@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.22 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -428,7 +428,7 @@ into one of the curated sections below, is a normal direct edit.
       believed per-clip strikes — the gap the per-port canary ("SF2") was meant to close. Write a repro first
       (internal/transcribe dispatcher; land after #4201, which rewrites the canary path).
 
-- [ ] **TODO-WHISPER-MIDREQUEST-IDENTITY** Detect a whisper worker that is swapped
+- [x] **TODO-WHISPER-MIDREQUEST-IDENTITY** Detect a whisper worker that is swapped
       for another machine in the middle of a request — a pool probes a port again
       after every cooldown wait and uses it only if the worker that answers is
       the one the dispatch froze for it (D60/D62, PR #4201), but nothing checks
