@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.25.1
+// version: 1.25.2
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package scheduler
 
@@ -177,6 +177,7 @@ var taskV2DefIDs = map[string]string{
 	"temp_file_cleanup":           "maintenance.temp-file-cleanup",
 	"transcode_temp_cleanup":      "maintenance.transcode-temp-cleanup",
 	"trash_cleanup":               "maintenance.trash-cleanup",
+	"reports_prune":               "maintenance.reports-prune",
 	"metadata_upgrade":            "scheduler.metadata-upgrade",
 	"author_split_scan":           "maintenance.author-split-scan",
 	"db_optimize":                 "maintenance.db-optimize",
@@ -229,6 +230,7 @@ var legacyTaskNames = map[string]string{
 	"maintenance.prune-ai-journal":             "ai_journal_prune",
 	"maintenance.purge-deleted":                "purge_deleted",
 	"maintenance.purge-old-logs":               "purge_old_logs",
+	"maintenance.reports-prune":                "reports_prune",
 	"maintenance.resolve-production-authors":   "resolve_production_authors",
 	"maintenance.temp-file-cleanup":            "temp_file_cleanup",
 	"maintenance.tombstone-cleanup":            "tombstone_cleanup",
