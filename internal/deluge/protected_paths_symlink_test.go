@@ -164,7 +164,7 @@ func TestProtectedBy_FrozenITunesSegmentIsProtected(t *testing.T) {
 		frozen,
 		filepath.Join(frozenDir, "never-created.m4b"),
 		filepath.Join(viaLink, "iTunes Media", "Audiobooks", "a.m4b"), // only the resolved path says so
-		"/srv/library/Books/iTunes/x.m4b",                              // any case
+		"/srv/library/Books/iTunes/x.m4b",                             // any case
 		"/x/audiobooks/itunes/x.m4b",                                  // a "books" suffix on the parent
 	} {
 		if got := c.ProtectedBy(p); got != ProtectedByStatic {
