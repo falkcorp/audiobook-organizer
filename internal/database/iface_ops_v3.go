@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package database
 
@@ -363,7 +363,10 @@ type TransitionRequest struct {
 // OnUndecodable, when set, makes a run record the store cannot decode (a
 // corrupt record, or a corrupt progress row) skip that run instead of failing
 // the whole listing: it is called with the run id and the error, the run is
-// not counted or paged, and the listing goes on. A caller sets it to log. Unset,
+// not counted or paged, and the listing goes on. A caller sets it to log. Setting
+// it makes the listing decode every record under the prefix even with a nil Keep
+// (Total must leave the undecodable runs out, as the page does, and only a
+// decode finds them). Unset,
 // the first undecodable record fails the listing, which is what an exact census
 // needs.
 type RunQuery struct {
