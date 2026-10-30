@@ -1,13 +1,14 @@
 // file: internal/database/memdb_indexers.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000001
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
 import (
 	"encoding/binary"
 	"fmt"
+	"path/filepath"
 	"reflect"
 
 	"github.com/hashicorp/go-memdb"
@@ -283,6 +284,69 @@ func (titleSortIndex) PrefixFromArgs(args ...any) ([]byte, error) {
 	return b, nil
 }
 
+// titleDirIndex indexes a book by the pair (util.NormalizeTitle(Title),
+// filepath.Dir(FilePath)), the exact predicate PebbleStore.GetBooksByTitleInDir
+// has always applied, so the memdb answer is a point lookup instead of a walk.
+//
+// Every book gets a key -- there is deliberately no "skip" arm and AllowMissing
+// is not set on the schema entry. GetBooksByTitleInDir has never excluded an
+// empty-title row or an empty-FilePath row (filepath.Dir("") is "."), so an
+// indexer that skipped them would make the memdb answer differ from the Pebble
+// scan it replaces. The key always carries both NUL separators, so it is never
+// the empty byte string memdb rejects.
+//
+// Key layout: <normalized title> 0x00 <dir> 0x00. The trailing NUL is the
+// memdb convention that makes a lookup exact rather than a prefix match: a
+// non-unique index appends the primary key to each entry, and without a
+// terminator the dir "/lib/Batman" would also match "/lib/Batman Beyond".
+// A title or dir containing a literal NUL could in principle alias another
+// pair, so MemStore.GetBooksByTitleInDir re-checks both halves on every
+// candidate; the index narrows, the predicate decides.
+//
+// The dir half is NOT path-cleaned or case-folded on lookup: Pebble compares
+// filepath.Dir(FilePath) against the caller's dirPath byte for byte, and this
+// index must agree with it.
+type titleDirIndex struct{}
+
+func titleDirKey(book *Book) []byte {
+	return titleDirKeyFor(util.NormalizeTitle(book.Title), filepath.Dir(book.FilePath))
+}
+
+func titleDirKeyFor(normalizedTitle, dir string) []byte {
+	key := make([]byte, 0, len(normalizedTitle)+len(dir)+2)
+	key = append(key, normalizedTitle...)
+	key = append(key, 0)
+	key = append(key, dir...)
+	return append(key, 0)
+}
+
+func (titleDirIndex) FromObject(obj any) (bool, []byte, error) {
+	b, ok := obj.(*Book)
+	if !ok {
+		return false, nil, fmt.Errorf("titleDirIndex: expected *Book, got %T", obj)
+	}
+	return true, titleDirKey(b), nil
+}
+
+// FromArgs takes (title string, dirPath string). The title is normalized here
+// as well, so an index lookup and an indexed row can never disagree about
+// normalization even if a caller passes a raw title; NormalizeTitle is
+// idempotent, so passing an already-normalized one is harmless.
+func (titleDirIndex) FromArgs(args ...any) ([]byte, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("titleDirIndex: expected 2 args (title, dir), got %d", len(args))
+	}
+	title, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("titleDirIndex: title arg must be string, got %T", args[0])
+	}
+	dir, ok := args[1].(string)
+	if !ok {
+		return nil, fmt.Errorf("titleDirIndex: dir arg must be string, got %T", args[1])
+	}
+	return titleDirKeyFor(util.NormalizeTitle(title), dir), nil
+}
+
 // Compile-time assertions that custom indexers satisfy memdb interfaces.
 var (
 	_ memdb.SingleIndexer = (*nullableIntFieldIndex)(nil)
@@ -298,4 +362,6 @@ var (
 	_ memdb.SingleIndexer = titleSortIndex{}
 	_ memdb.Indexer       = titleSortIndex{}
 	_ memdb.PrefixIndexer = titleSortIndex{}
+	_ memdb.SingleIndexer = titleDirIndex{}
+	_ memdb.Indexer       = titleDirIndex{}
 )

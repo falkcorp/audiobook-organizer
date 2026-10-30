@@ -1,12 +1,13 @@
 // file: internal/database/memdb_reads.go
-// version: 1.37.0
+// version: 1.37.1
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -416,6 +417,57 @@ func (m *MemStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	}
 
 	return bucketFolderDuplicates(entries), nil
+}
+
+// GetBooksByTitleInDir is the MemStore twin of
+// PebbleStore.GetBooksByTitleInDir's memdb-delegation branch: every book whose
+// util.NormalizeTitle(Title) equals util.NormalizeTitle(normalizedTitle) and
+// whose filepath.Dir(FilePath) equals dirPath exactly. It is a point lookup on
+// memIdxTitleDir -- cost proportional to the number of matching siblings, not
+// to the library -- where the Pebble scan it replaces decoded every book row.
+//
+// The result set is the Pebble scan's, row for row: soft-deleted and
+// merged-away rows are NOT filtered (the scanner's versionLinkLive does that,
+// and needs to see them), and non-primary versions are included. Order is
+// book ID ascending, the same as the Pebble key walk.
+//
+// Rows are memdb's stripped projection (stripBookForMemdb): Description,
+// VersionNotes, BookSig* and the pre-resolved Author/Series are nil here and
+// populated on the Pebble fallback. The caller reads identity, format,
+// duration, size, path, version-group and deletion fields only; anything that
+// needs the heavy fields must re-fetch by ID.
+//
+// Every candidate is re-checked against the exact predicate after the index
+// lookup, so a key aliasing (a NUL byte in a title or path) can only ever cost
+// a skipped row, never return a wrong one.
+//
+// REFUSES with ErrMemdbIncomplete when memdb is known to be missing book rows.
+// A missed sibling here is a missed version link -- the new row is imported as
+// an unrelated duplicate -- so the caller (PebbleStore) falls through to the
+// authoritative scan rather than answering short.
+func (m *MemStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error) {
+	if err := m.requireTablesComplete("same-title-in-directory lookup", memTableBooks); err != nil {
+		return nil, err
+	}
+
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	want := util.NormalizeTitle(normalizedTitle)
+	iter, err := txn.Get(memTableBooks, memIdxTitleDir, want, dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("memdb books by title and dir: %w", err)
+	}
+
+	var results []Book
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if util.NormalizeTitle(b.Title) != want || filepath.Dir(b.FilePath) != dirPath {
+			continue
+		}
+		results = append(results, *b)
+	}
+	return results, nil
 }
 
 // GetDuplicateBooksByMetadataCore is the MemStore twin of

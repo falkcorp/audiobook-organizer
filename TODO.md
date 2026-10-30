@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.21 -->
+<!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -2644,7 +2644,7 @@ into one of the curated sections below, is a normal direct edit.
   Deferred 2026-09-20 (owner): two Macs cover the current windowed run. Revisit before
   whole-file fingerprints, which is a far bigger job.
 
-- [ ] **TODO-TITLEDIR** Index `GetBooksByTitleInDir` — it full-scans every book
+- [x] **TODO-TITLEDIR** Index `GetBooksByTitleInDir` — it full-scans every book
       row once per newly imported book, inside the scan's version-link lock.
       `internal/database/pebble_store.go:1556` iterates and JSON-decodes the
       entire book keyspace (`forEachBookRow`) to find same-title siblings in one
