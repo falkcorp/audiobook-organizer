@@ -1,5 +1,5 @@
 // file: internal/audiobooks/kept_sweep_guard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4e8b1a37-9c52-4d06-b7f3-2a6d0c9e5b18
 // last-edited: 2026-10-29
 
@@ -110,13 +110,10 @@ func TestSweepKeptFiles_RealGuardProtectsTheConfiguredITunesFolders(t *testing.T
 	}
 }
 
-// A kept path spelled through a symlink into the iTunes folder. KNOWN HOLE in the
-// guard the book purge and the version purge share: protectedPathChecked compares
-// absolute paths without resolving symlinks, so this spelling is not protected and
-// the file under the iTunes folder is removed. Tracked as
-// TODO-PROTECTED-PATH-SYMLINK; un-skip when it is fixed.
+// A kept path spelled through a symlink into the iTunes folder. The guard the book
+// purge and the version purge share (protectedPathChecked) also tests the
+// symlink-resolved spelling since #4256, so the file under the iTunes folder stays.
 func TestSweepKeptFiles_RealGuardSymlinkIntoITunesFolder(t *testing.T) {
-	t.Skip("known hole in protectedPathChecked (shared with the book purge): TODO-PROTECTED-PATH-SYMLINK")
 	f := newVersionGuardFixtureBookTrashed(t)
 	prevRead := config.AppConfig.ITunes.LibraryReadPath
 	t.Cleanup(func() { config.AppConfig.ITunes.LibraryReadPath = prevRead })
