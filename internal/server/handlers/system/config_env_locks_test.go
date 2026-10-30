@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/config_env_locks_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2e6b0d47-9a13-4c85-bf20-5d81c7a4e396
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package system_test
 
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 )
 
@@ -171,4 +172,25 @@ func TestGetConfig_ReportsDelugeLocks(t *testing.T) {
 	assert.Equal(t, "DELUGE_WEB_URL", locks["deluge_web_url"])
 	assert.Equal(t, "DELUGE_WEB_PASSWORD", locks["deluge_web_password"])
 	assert.NotContains(t, locks, "deluge_move_enabled")
+}
+
+// TestGetConfig_ServesNamingPatternTokens pins the single-source-of-truth wiring:
+// the Settings naming-pattern help renders from this list, so it must be the
+// resolver's own, not a copy.
+func TestGetConfig_ServesNamingPatternTokens(t *testing.T) {
+	h, d := newTestHandler(t)
+	d.cfgUpd.EXPECT().MaskSecrets(mock.Anything).Return(config.Config{})
+
+	cfg := getConfigBody(t, h)
+
+	raw, ok := cfg["naming_pattern_tokens"].([]any)
+	require.True(t, ok, "naming_pattern_tokens missing from the config object; got %T", cfg["naming_pattern_tokens"])
+	got := make([]string, 0, len(raw))
+	for _, v := range raw {
+		got = append(got, v.(string))
+	}
+	assert.Equal(t, organizer.NamingPatternTokens(), got)
+	assert.Contains(t, got, "{series_prefix}")
+	assert.NotContains(t, got, "{track_number}")
+	assert.NotContains(t, got, "{audiobook_release_year}")
 }

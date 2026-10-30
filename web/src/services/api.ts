@@ -986,6 +986,13 @@ export interface Config {
    * of the unit file. Never sent back on save.
    */
   setting_locks?: Record<string, string>;
+  /**
+   * Read-only: the "{token}" placeholders the server's path builder resolves in
+   * folder/file naming patterns (organizer.NamingPatternTokens). The Settings
+   * naming-pattern help and unknown-token warning render from it. Never sent
+   * back on save.
+   */
+  naming_pattern_tokens?: string[];
 
   // Library organization
   organization_strategy: string;
