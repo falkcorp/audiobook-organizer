@@ -1,7 +1,7 @@
 // file: internal/remux/remux.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package remux
 
@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -22,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	taglib "go.senan.xyz/taglib"
 )
 
@@ -155,6 +157,12 @@ func (r *Remuxer) AlreadyDone() bool {
 // checks ctx per file and stops early via fs.SkipAll when canceled (SYS-1);
 // a canceled run does not write the done flag, so the next startup resumes.
 //
+// opts make the walk resumable (walkresume.WithRun): the candidates are
+// collected and sorted, items before the resume cursor are skipped, a cursor is
+// checkpointed as files complete (a pool, so several files are in flight), and
+// the walk returns walkresume.ErrYield after a checkpoint when the run says its
+// time budget is nearly spent. Without options it is the plain sequential walk.
+//
 // progress is called every 25 processed files (and once more at the end)
 // with the running counts, so a caller wired to an op reporter's
 // UpdateProgress can surface a live "X/Y" during a multi-hour run instead of
@@ -166,7 +174,7 @@ func (r *Remuxer) AlreadyDone() bool {
 // failures are expected in normal operation (the transcode op is the
 // designed fallback for files that can't be remuxed) and are counted in the
 // progress message rather than failing the whole run.
-func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
+func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(processed, total int, msg string), opts ...walkresume.Option) error {
 	if r.store == nil {
 		return nil
 	}
@@ -193,84 +201,62 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 		return fmt.Errorf("RemuxMalformedFiles: %w", errProtectedListNotLoaded)
 	}
 
-	// Pre-count candidates so progress can report an accurate "X/Y" instead
-	// of an unbounded counter. Cheap relative to the ffmpeg work itself —
-	// this pass does no file content reads, just a directory walk.
-	total := 0
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		select {
-		case <-ctx.Done():
-			return fs.SkipAll
-		default:
-		}
-		if walkErr != nil {
-			return nil
-		}
-		if d.IsDir() {
-			// The library root holds the application's own state as well
-			// as books -- a backup directory of multi-GB archives and an
-			// OpenLibrary dump directory containing an embedded database
-			// of ~1,200 files. Neither has a leading dot by default, so
-			// nothing excluded them before. This pass opens and REWRITES
-			// files it accepts, so descending is not merely wasted I/O.
-			if pathutil.ShouldSkipDir(root, path, app) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if isRemuxCandidate(path, d) {
-			total++
-		}
+	// Collect the candidates first (a directory walk, no content reads): the
+	// list is the progress denominator AND the sorted sequence a resume cursor
+	// is searched in. The walk skips what the work used to skip, so the
+	// denominator never drifts from what is processed. The library root holds
+	// the application's own state as well as books -- a backup directory of
+	// multi-GB archives and an OpenLibrary dump directory containing an
+	// embedded database of ~1,200 files. Neither has a leading dot by default,
+	// and this pass opens and REWRITES files it accepts, so descending is not
+	// merely wasted I/O.
+	files, err := walkresume.CollectFiles(ctx, root,
+		func(path string) bool { return pathutil.ShouldSkipDir(root, path, app) },
+		isRemuxCandidate, nil)
+	if err != nil {
+		log := logger.New("remux")
+		log.Info("Malformed M4B remux not marked done (the walk was canceled); it runs again next time")
 		return nil
-	})
+	}
+	total := len(files)
 
-	slog.Info("Starting malformed M4B remux scan under", "root", root, "candidates", total)
-	remuxed, clean, failed, skippedProtected, processed := 0, 0, 0, 0, 0
+	run := walkresume.Resolve(opts)
+	base := run.Resume
+	slog.Info("Starting malformed M4B remux scan under", "root", root, "candidates", total, "resume_cursor", base.Cursor)
+	var remuxed, clean, failed, skippedProtected, processed atomic.Int64
 	log := logger.New("remux")
+	state := func() walkresume.State {
+		return walkresume.State{
+			Processed:        base.Processed + int(processed.Load()),
+			Changed:          base.Changed + int(remuxed.Load()),
+			Clean:            base.Clean + int(clean.Load()),
+			Failed:           base.Failed + int(failed.Load()),
+			SkippedProtected: base.SkippedProtected + int(skippedProtected.Load()),
+		}
+	}
+	message := func() string {
+		st := state()
+		return fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d skipped_protected=%d)", min(st.Processed, total), total, st.Changed, st.Failed, st.SkippedProtected)
+	}
 
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
-		// without an error; WalkDir's return is discarded above by design.
-		select {
-		case <-ctx.Done():
-			return fs.SkipAll
-		default:
-		}
-		if walkErr != nil {
-			return nil
-		}
-		if d.IsDir() {
-			// The library root holds the application's own state as well
-			// as books -- a backup directory of multi-GB archives and an
-			// OpenLibrary dump directory containing an embedded database
-			// of ~1,200 files. Neither has a leading dot by default, so
-			// nothing excluded them before. This pass opens and REWRITES
-			// files it accepts, so descending is not merely wasted I/O.
-			if pathutil.ShouldSkipDir(root, path, app) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !isRemuxCandidate(path, d) {
-			return nil
+	derr := walkresume.Drive(ctx, run, files, func(ctx context.Context, path string) error {
+		abs := base.Processed + int(processed.Add(1))
+		if progress != nil && abs%25 == 0 {
+			progress(min(abs, total), total, message())
 		}
 
-		processed++
-		if progress != nil && processed%25 == 0 {
-			progress(processed, total, fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d skipped_protected=%d)", processed, total, remuxed, failed, skippedProtected))
-		}
-
-		// A protected file is counted by both walks (it is a candidate) and
-		// skipped here, after processed++, so the two still agree. It is never
-		// probed or rewritten: remux replaces the file with ffmpeg's output.
+		// A protected file is counted by the collection (it is a candidate) and
+		// skipped here, after processed is counted, so the two still agree. It
+		// is never probed or rewritten: remux replaces the file with ffmpeg's
+		// output.
 		if isProtected(r.protected, path) {
 			log.Info("malformed M4B remux: skipping protected file %s", logger.SanitizeLogValue(path))
-			skippedProtected++
+			skippedProtected.Add(1)
 			return nil
 		}
 
 		if _, err := taglib.ReadTags(path); err == nil {
-			clean++
+			clean.Add(1)
 			return nil
 		}
 
@@ -278,36 +264,47 @@ func (r *Remuxer) RemuxMalformedFiles(ctx context.Context, progress func(process
 		if err := r.remuxAndRecord(ctx, path, RemuxFile); err != nil {
 			if ctx.Err() != nil {
 				// Cancelled mid-ffmpeg: not a failure of this file, and the
-				// original is untouched (the temp output is removed).
-				return fs.SkipAll
+				// original is untouched (the temp output is removed), and the
+				// item stays past the watermark, so a resume redoes it.
+				return ctx.Err()
 			}
 			slog.Warn("malformed M4B remux failed for", "path", path, "err", err)
-			failed++
+			failed.Add(1)
 			return nil
 		}
 
 		// Verify the output is now readable.
 		if _, err := taglib.ReadTags(path); err != nil {
 			slog.Warn("malformed M4B remux produced unreadable file for", "path", path, "err", err)
-			failed++
+			failed.Add(1)
 			return nil
 		}
 
 		slog.Info("malformed M4B remuxed", "path", path)
-		remuxed++
+		remuxed.Add(1)
 		return nil
-	})
+	}, state)
 
 	if progress != nil {
-		progress(processed, total, fmt.Sprintf("Probing M4B: %d/%d (remuxed=%d failed=%d skipped_protected=%d)", processed, total, remuxed, failed, skippedProtected))
+		progress(min(base.Processed+int(processed.Load()), total), total, message())
+	}
+	if errors.Is(derr, walkresume.ErrYield) {
+		log.Info("Malformed M4B remux yielding to continue under the same operation: %s", message())
+		return derr
+	}
+	if derr != nil && ctx.Err() == nil {
+		return fmt.Errorf("RemuxMalformedFiles: %w", derr)
 	}
 
-	log.Info("Malformed M4B remux complete: remuxed=%d clean=%d failed=%d skipped_protected=%d", remuxed, clean, failed, skippedProtected)
+	st := state()
+	log.Info("Malformed M4B remux complete: remuxed=%d clean=%d failed=%d skipped_protected=%d", st.Changed, st.Clean, st.Failed, st.SkippedProtected)
 	// The done flag means every candidate was considered. A canceled walk
 	// stopped part-way and a protected file was never probed; marking either
 	// done stops the pass from ever reaching the files it left. Until
-	// 2026-09-14 the flag was set after both.
-	if why := notDoneReason(ctx, skippedProtected); why != "" {
+	// 2026-09-14 the flag was set after both. st.SkippedProtected includes the
+	// earlier attempts' count, so a file skipped before a resume still holds
+	// the flag back.
+	if why := notDoneReason(ctx, st.SkippedProtected); why != "" {
 		log.Info("Malformed M4B remux not marked done (%s); it runs again next time", why)
 		return nil
 	}

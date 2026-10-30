@@ -1,13 +1,14 @@
 // file: internal/remux/transcode.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package remux
 
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -23,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	taglib "go.senan.xyz/taglib"
 )
 
@@ -154,7 +157,12 @@ func (t *Transcoder) AlreadyDone() bool {
 // letting the op report success while doing nothing. Per-file transcode
 // failures are expected (files get marked permanently-unfixable and are
 // counted in the progress message) rather than failing the whole run.
-func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(processed, total int, msg string)) error {
+//
+// opts make the walk resumable exactly as for RemuxMalformedFiles (cursor,
+// checkpoints, pool). The transcode is ResumeAsk, so the registry never
+// restarts it by itself and it is never given a YieldDue: a checkpoint is what
+// an operator's Retry of an interrupted run continues from.
+func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(processed, total int, msg string), opts ...walkresume.Option) error {
 	if t.store == nil {
 		return nil
 	}
@@ -195,94 +203,66 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 		}
 	}
 
-	// Pre-count candidates so progress can report an accurate "X/Y" instead
-	// of an unbounded counter. Cheap relative to the ffmpeg work itself —
-	// this pass does no file content reads, just a directory walk.
-	total := 0
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		select {
-		case <-ctx.Done():
-			return fs.SkipAll
-		default:
-		}
-		if walkErr != nil {
-			return nil
-		}
-		if d.IsDir() {
-			// The library root holds the application's own state as well
-			// as books -- a backup directory of multi-GB archives and an
-			// OpenLibrary dump directory containing an embedded database
-			// of ~1,200 files. Neither has a leading dot by default, so
-			// nothing excluded them before. This pass opens and REWRITES
-			// files it accepts, so descending is not merely wasted I/O.
-			if pathutil.ShouldSkipDir(root, path, app) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if isTranscodeCandidate(path, d) {
-			total++
-		}
+	// Collect the candidates first; see RemuxMalformedFiles for why (progress
+	// denominator, the sorted sequence a cursor is searched in, and the app
+	// directories this REWRITING pass must not descend into).
+	files, err := walkresume.CollectFiles(ctx, root,
+		func(path string) bool { return pathutil.ShouldSkipDir(root, path, app) },
+		isTranscodeCandidate, nil)
+	if err != nil {
+		log := logger.New("remux")
+		log.Info("Malformed M4B transcode not marked done (the walk was canceled); it runs again next time")
 		return nil
-	})
+	}
+	total := len(files)
 
-	slog.Info("Starting malformed M4B transcode scan under", "root", root, "candidates", total)
+	run := walkresume.Resolve(opts)
+	base := run.Resume
+	slog.Info("Starting malformed M4B transcode scan under", "root", root, "candidates", total, "resume_cursor", base.Cursor)
 	// skipped counts files marked permanently unfixable; skippedProtected
 	// counts protected files, which are never rewritten. Two meanings, two
 	// counters.
-	transcoded, clean, failed, skipped, skippedProtected, processed := 0, 0, 0, 0, 0, 0
+	var transcoded, clean, failed, skipped, skippedProtected, processed atomic.Int64
 	log := logger.New("remux")
+	state := func() walkresume.State {
+		return walkresume.State{
+			Processed:        base.Processed + int(processed.Load()),
+			Changed:          base.Changed + int(transcoded.Load()),
+			Clean:            base.Clean + int(clean.Load()),
+			Failed:           base.Failed + int(failed.Load()),
+			Skipped:          base.Skipped + int(skipped.Load()),
+			SkippedProtected: base.SkippedProtected + int(skippedProtected.Load()),
+		}
+	}
+	message := func() string {
+		st := state()
+		return fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d skipped_protected=%d)", min(st.Processed, total), total, st.Changed, st.Failed, st.Skipped, st.SkippedProtected)
+	}
 
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
-		// without an error; WalkDir's return is discarded above by design.
-		select {
-		case <-ctx.Done():
-			return fs.SkipAll
-		default:
-		}
-		if walkErr != nil {
-			return nil
-		}
-		if d.IsDir() {
-			// The library root holds the application's own state as well
-			// as books -- a backup directory of multi-GB archives and an
-			// OpenLibrary dump directory containing an embedded database
-			// of ~1,200 files. Neither has a leading dot by default, so
-			// nothing excluded them before. This pass opens and REWRITES
-			// files it accepts, so descending is not merely wasted I/O.
-			if pathutil.ShouldSkipDir(root, path, app) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !isTranscodeCandidate(path, d) {
-			return nil
+	derr := walkresume.Drive(ctx, run, files, func(ctx context.Context, path string) error {
+		abs := base.Processed + int(processed.Add(1))
+		if progress != nil && abs%25 == 0 {
+			progress(min(abs, total), total, message())
 		}
 
-		processed++
-		if progress != nil && processed%25 == 0 {
-			progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d skipped_protected=%d)", processed, total, transcoded, failed, skipped, skippedProtected))
-		}
-
-		// Counted by both walks, skipped here after processed++ so they agree.
-		// A protected file is never probed or re-encoded.
+		// Counted by the collection, skipped here after processed is counted so
+		// they agree. A protected file is never probed or re-encoded.
 		if isProtected(t.protected, path) {
 			log.Info("malformed M4B transcode: skipping protected file %s", logger.SanitizeLogValue(path))
-			skippedProtected++
+			skippedProtected.Add(1)
 			return nil
 		}
 
 		if _, err := taglib.ReadTags(path); err == nil {
-			clean++
+			clean.Add(1)
 			return nil
 		}
 
 		// Skip files that have already been confirmed permanently unfixable.
 		if skip, err := t.store.GetSetting(TranscodeSkipKey(path)); err == nil && skip != nil && skip.Value == "true" {
 			slog.Info("malformed M4B transcode skipping known-unfixable", "path", path)
-			skipped++
-			failed++
+			skipped.Add(1)
+			failed.Add(1)
 			return nil
 		}
 
@@ -291,11 +271,11 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 			if ctx.Err() != nil {
 				// Cancelled mid-ffmpeg: the file is not unfixable, so it must
 				// not get a skip key (the quarantine step would act on one).
-				return fs.SkipAll
+				return ctx.Err()
 			}
 			slog.Warn("malformed M4B transcode failed for", "path", path, "err", err)
 			_ = t.store.SetSetting(TranscodeSkipKey(path), "true", "bool", false)
-			failed++
+			failed.Add(1)
 			return nil
 		}
 
@@ -303,22 +283,31 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 		if _, err := taglib.ReadTags(path); err != nil {
 			slog.Warn("malformed M4B transcode produced unreadable file for", "path", path, "err", err)
 			_ = t.store.SetSetting(TranscodeSkipKey(path), "true", "bool", false)
-			failed++
+			failed.Add(1)
 			return nil
 		}
 
 		slog.Info("malformed M4B transcoded", "path", path)
-		transcoded++
+		transcoded.Add(1)
 		return nil
-	})
+	}, state)
 
 	if progress != nil {
-		progress(processed, total, fmt.Sprintf("Transcoding M4B: %d/%d (transcoded=%d failed=%d skipped=%d skipped_protected=%d)", processed, total, transcoded, failed, skipped, skippedProtected))
+		progress(min(base.Processed+int(processed.Load()), total), total, message())
+	}
+	if errors.Is(derr, walkresume.ErrYield) {
+		log.Info("Malformed M4B transcode yielding to continue under the same operation: %s", message())
+		return derr
+	}
+	if derr != nil && ctx.Err() == nil {
+		return fmt.Errorf("TranscodeMalformedFiles: %w", derr)
 	}
 
-	log.Info("Malformed M4B transcode complete: transcoded=%d clean=%d failed=%d skipped=%d skipped_protected=%d", transcoded, clean, failed, skipped, skippedProtected)
-	// Same rule as the remux pass: not done after a cancel or a protected skip.
-	if why := notDoneReason(ctx, skippedProtected); why != "" {
+	st := state()
+	log.Info("Malformed M4B transcode complete: transcoded=%d clean=%d failed=%d skipped=%d skipped_protected=%d", st.Changed, st.Clean, st.Failed, st.Skipped, st.SkippedProtected)
+	// Same rule as the remux pass: not done after a cancel or a protected skip
+	// (st carries the earlier attempts' protected count).
+	if why := notDoneReason(ctx, st.SkippedProtected); why != "" {
 		log.Info("Malformed M4B transcode not marked done (%s); it runs again next time", why)
 		return nil
 	}

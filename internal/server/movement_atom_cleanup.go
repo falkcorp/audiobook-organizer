@@ -1,17 +1,19 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package server
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -19,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	taglib "go.senan.xyz/taglib"
 )
 
@@ -35,6 +38,10 @@ var movementAtoms = []string{"SHOWWORKMOVEMENT", "MOVEMENTNUMBER", "MOVEMENTNAME
 // stops early via fs.SkipAll when canceled (SYS-1), so shutdown's 30s grace
 // period is not blown by a first-run walk over a large library. A canceled
 // run does not write the done flag, so the next startup resumes the cleanup.
+// opts make the walk resumable (walkresume.WithRun, 04-P6): the candidates are
+// collected and sorted, files before the resume cursor are skipped, a cursor is
+// checkpointed as files complete on a worker pool, and the walk stops after a
+// checkpoint (result.Yielded) when the run says its time budget is nearly spent.
 // movementAtomCleanupResult reports what the walk actually visited.
 //
 // The function previously returned nothing, which made its walk unobservable:
@@ -55,9 +62,13 @@ type movementAtomCleanupResult struct {
 	Visited          int // Stripped + Clean + Failed + SkippedProtected: every file the walk accepted
 	Completed        bool
 	AlreadyDone      bool // the done flag was already set; nothing was walked
+	// Yielded: the walk stopped on purpose after a checkpoint because the run's
+	// time budget is nearly spent (walkresume.Run.YieldDue); the done flag is
+	// unset and the op continues from the cursor under the same operation.
+	Yielded bool
 }
 
-func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResult {
+func (s *Server) stripMovementAtoms(ctx context.Context, opts ...walkresume.Option) movementAtomCleanupResult {
 	store := s.Ops()
 	if store == nil {
 		return movementAtomCleanupResult{}
@@ -81,77 +92,103 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 	writeCtx := tagger.WithoutBackup(ctx)
 	app := appdirs.Current()
 
-	slog.Info("Starting movement atom cleanup under …", "root", root)
-	stripped, clean, failed, skippedProtected, walkErrs := 0, 0, 0, 0, 0
+	// Collect the candidates first: the sorted list is the progress denominator
+	// and the sequence a resume cursor is searched in (see walkresume.Drive).
+	// The directory skip is unchanged: this pass REWRITES tag atoms in place on
+	// every .m4b/.m4a it accepts, and the library root contains the
+	// application's backup directory and OpenLibrary dump directory, neither
+	// dot-named by default; an .m4b archived into a backup tree would be edited.
 	log := logger.New("movement-atom-cleanup")
-
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		// Stop the walk cleanly on shutdown (SYS-1). fs.SkipAll ends WalkDir
-		// without an error, so completion is detected via ctx.Err() below.
-		select {
-		case <-ctx.Done():
-			return fs.SkipAll
-		default:
-		}
-		if walkErr != nil {
+	var walkErrs atomic.Int64
+	files, cerr := walkresume.CollectFiles(ctx, root,
+		func(path string) bool { return pathutil.ShouldSkipDir(root, path, app) },
+		func(path string, _ fs.DirEntry) bool {
+			ext := strings.ToLower(filepath.Ext(path))
+			return ext == ".m4b" || ext == ".m4a"
+		},
+		func(path string, err error) {
 			// Previously swallowed: an unreadable dir/file silently shrank
 			// the walk. Log it so partial coverage is visible.
-			slog.Warn("movement atom cleanup: walk error", "path", path, "err", walkErr)
-			walkErrs++
-			return nil
-		}
-		if d.IsDir() {
-			// This pass REWRITES tag atoms in place on every .m4b/.m4a it
-			// accepts. The library root contains the application's backup
-			// directory and OpenLibrary dump directory, neither dot-named by
-			// default; an .m4b archived into a backup tree would be edited.
-			if pathutil.ShouldSkipDir(root, path, app) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".m4b" && ext != ".m4a" {
-			return nil
-		}
+			slog.Warn("movement atom cleanup: walk error", "path", path, "err", err)
+			walkErrs.Add(1)
+		})
+	if cerr != nil {
+		log.Info("movement atom cleanup canceled before completion — done flag not written, will resume next startup")
+		return movementAtomCleanupResult{WalkErrs: int(walkErrs.Load())}
+	}
+	total := len(files)
 
+	run := walkresume.Resolve(opts)
+	base := run.Resume
+	slog.Info("Starting movement atom cleanup under …", "root", root, "candidates", total, "resume_cursor", base.Cursor)
+	var stripped, clean, failed, skippedProtected, processed atomic.Int64
+	state := func() walkresume.State {
+		return walkresume.State{
+			Processed:        base.Processed + int(processed.Load()),
+			Changed:          base.Changed + int(stripped.Load()),
+			Clean:            base.Clean + int(clean.Load()),
+			Failed:           base.Failed + int(failed.Load()),
+			SkippedProtected: base.SkippedProtected + int(skippedProtected.Load()),
+		}
+	}
+	message := func() string {
+		st := state()
+		return fmt.Sprintf("Stripping movement atoms: %d/%d (stripped=%d failed=%d skipped_protected=%d)", min(st.Processed, total), total, st.Changed, st.Failed, st.SkippedProtected)
+	}
+
+	derr := walkresume.Drive(ctx, run, files, func(ctx context.Context, path string) error {
 		changed, err := removeMovementAtomsFromFile(writeCtx, path, deps)
 		switch {
 		case errors.Is(err, tagger.ErrProtectedPathWrite):
 			log.Info("movement atom cleanup: skipping protected file %s: %v", logger.SanitizeLogValue(path), err)
-			skippedProtected++
+			skippedProtected.Add(1)
 		case err != nil:
+			if ctx.Err() != nil {
+				return ctx.Err() // canceled mid-write: the resume redoes this file
+			}
 			slog.Warn("movement atom cleanup:", "path", path, "err", err)
-			failed++
+			failed.Add(1)
 		case changed:
-			stripped++
+			stripped.Add(1)
 		default:
-			clean++
+			clean.Add(1)
 		}
-		if processed := stripped + clean + failed + skippedProtected; processed%500 == 0 {
+		abs := base.Processed + int(processed.Add(1))
+		if abs%500 == 0 {
+			st := state()
 			log.Info("movement atom cleanup: progress: processed=%d stripped=%d clean=%d failed=%d skipped_protected=%d",
-				processed, stripped, clean, failed, skippedProtected)
+				st.Processed, st.Changed, st.Clean, st.Failed, st.SkippedProtected)
+		}
+		if run.Progress != nil && abs%25 == 0 {
+			run.Progress(min(abs, total), total, message())
 		}
 		return nil
-	})
-	if err != nil {
-		slog.Warn("movement atom cleanup: walk aborted", "root", root, "err", err)
+	}, state)
+	if run.Progress != nil {
+		run.Progress(min(base.Processed+int(processed.Load()), total), total, message())
 	}
 
+	st := state()
 	log.Info("Movement atom cleanup: stripped=%d clean=%d failed=%d skipped_protected=%d walk_errors=%d",
-		stripped, clean, failed, skippedProtected, walkErrs)
+		st.Changed, st.Clean, st.Failed, st.SkippedProtected, int(walkErrs.Load()))
 
 	res := movementAtomCleanupResult{
-		Stripped: stripped, Clean: clean, Failed: failed, SkippedProtected: skippedProtected, WalkErrs: walkErrs,
-		Visited: stripped + clean + failed + skippedProtected,
+		Stripped: st.Changed, Clean: st.Clean, Failed: st.Failed, SkippedProtected: st.SkippedProtected,
+		WalkErrs: int(walkErrs.Load()),
+		Visited:  st.Changed + st.Clean + st.Failed + st.SkippedProtected,
 	}
 
-	if ctx.Err() != nil {
-		slog.Info("movement atom cleanup canceled before completion — done flag not written, will resume next startup")
+	if errors.Is(derr, walkresume.ErrYield) {
+		log.Info("movement atom cleanup yielding with a checkpoint — it continues under the same operation")
+		res.Yielded = true
 		return res
 	}
-	if err != nil {
-		slog.Warn("movement atom cleanup: walk did not complete — done flag not written, will re-run next startup")
+	if ctx.Err() != nil {
+		log.Info("movement atom cleanup canceled before completion — done flag not written, will resume next startup")
+		return res
+	}
+	if derr != nil {
+		slog.Warn("movement atom cleanup: walk did not complete — done flag not written, will re-run next startup", "err", derr)
 		return res
 	}
 	if serr := store.SetSetting(movementAtomCleanupKey, "true", "bool", false); serr != nil {

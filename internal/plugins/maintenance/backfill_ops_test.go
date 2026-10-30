@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill_ops_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d8e9f0a-1b2c-3d4e-5f6a-7b8c9d0e1f2a
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 // Package maintenance tests for T09 (C2/H7): proves runExternalIDBackfill,
 // runMalformedM4BRemux, and runMalformedM4BTranscode thread the op reporter's
@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
 // t09OpsFakeDeps wraps fakeDeps (from title_backfill_test.go) and overrides
@@ -28,21 +30,21 @@ type t09OpsFakeDeps struct {
 	transcodeErr error
 }
 
-func (d t09OpsFakeDeps) BackfillExternalIDs(_ context.Context, _ bool, progress func(processed, total int, msg string)) (bool, error) {
+func (d t09OpsFakeDeps) BackfillExternalIDs(_ context.Context, _ bool, progress func(processed, total int, msg string), _ walkresume.Run) (bool, error) {
 	if progress != nil {
 		progress(1, 2, "half done")
 	}
 	return false, d.backfillErr
 }
 
-func (d t09OpsFakeDeps) RemuxMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string)) (bool, error) {
+func (d t09OpsFakeDeps) RemuxMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string), _ walkresume.Run) (bool, error) {
 	if progress != nil {
 		progress(5, 10, "remuxing")
 	}
 	return false, d.remuxErr
 }
 
-func (d t09OpsFakeDeps) TranscodeMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string)) (bool, error) {
+func (d t09OpsFakeDeps) TranscodeMalformedM4BFiles(_ context.Context, progress func(processed, total int, msg string), _ walkresume.Run) (bool, error) {
 	if progress != nil {
 		progress(3, 7, "transcoding")
 	}
