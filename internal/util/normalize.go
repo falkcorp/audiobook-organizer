@@ -1,7 +1,7 @@
 // file: internal/util/normalize.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a3f7e2d1-9b4c-4e8a-b6f0-2c5d7a1e3f9b
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 // Package util provides shared string normalization helpers.
 package util
@@ -9,6 +9,8 @@ package util
 import (
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // NormalizeTitle trims whitespace and lowercases a title for comparison.
@@ -61,6 +63,31 @@ func CollapseSpaces(s string) string {
 		} else {
 			b.WriteRune(r)
 			prevSpace = false
+		}
+	}
+	return b.String()
+}
+
+// FoldKey is the one name-matching key for people: case, diacritics,
+// punctuation and spacing all folded away, so "J.N. Chaney" and "J. N. Chaney",
+// "Bryce OConnor" and "Bryce O'Connor", "Emma Törzs" and "Emma Torzs",
+// "Ursula K. Le Guin" and "Ursula K. LeGuin", "Michael-Scott Earle" and
+// "Michael Scott Earle" are one key. NormalizeAuthor (the name indexes' key)
+// folds only case and whitespace, so either alone mints a near-duplicate row.
+//
+// The output holds letters and digits only, so it never contains ':' or any
+// other separator, and is empty for a name with no letter or digit.
+//
+// It lives here, in the leaf package, so internal/database can key an index by
+// it without importing internal/authorjunk (a domain-layer package).
+// authorjunk.FoldKey delegates to this function.
+func FoldKey(name string) string {
+	var b strings.Builder
+	for _, r := range norm.NFD.String(name) {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(unicode.ToLower(r))
 		}
 	}
 	return b.String()
