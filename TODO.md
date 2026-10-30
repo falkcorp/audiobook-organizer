@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.22 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -325,7 +325,7 @@ into one of the curated sections below, is a normal direct edit.
       that counts or reverts these rows (revert, count, preflight), and a resolver
       pass. Needs a design decision before work starts.
 
-- [ ] **TODO-CANDIDATE-FETCH-V1-TYPE-CHECK** `metabatch.ResolveCandidateFetch`'s v1 fallback (`internal/metabatch/fetch_ops_index.go`, the `GetOperationByID` branch) returns any v1 operation row for any id, with no type check, on `GET /operations/:id/results` (`library.view`). It predates the Repairs visibility work, and a Repairs run is unreachable through it (Repairs runs are v2-only and the v1 keyspace is legacy), so nothing leaks today. Close it with an `op.Type == candidateFetchOpType` check on the fallback, and a test that a v1 row of another type answers 404.
+- [x] **TODO-CANDIDATE-FETCH-V1-TYPE-CHECK** (done 2026-10-30: v1 fallback type-gated, test added) `metabatch.ResolveCandidateFetch`'s v1 fallback (`internal/metabatch/fetch_ops_index.go`, the `GetOperationByID` branch) returns any v1 operation row for any id, with no type check, on `GET /operations/:id/results` (`library.view`). It predates the Repairs visibility work, and a Repairs run is unreachable through it (Repairs runs are v2-only and the v1 keyspace is legacy), so nothing leaks today. Close it with an `op.Type == candidateFetchOpType` check on the fallback, and a test that a v1 row of another type answers 404.
 
 - [ ] **CREDITS-PR3-RUN** Run `maintenance.credits-backfill` on prod: the dry run
       first (`{}`), owner reads the classes, samples and `filing_author_changes`,
