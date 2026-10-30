@@ -1,7 +1,7 @@
 // file: internal/versions/purge_nothing_served_escalation_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a34f7fd-614f-42d4-a946-7e16987a4312
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package versions
 
@@ -66,8 +66,10 @@ func storedVersion(t *testing.T, f *keptFixture, id string) *database.BookVersio
 
 func TestPurgeVersion_PurgingVersionWhoseBookServesNothingHasAWayOut(t *testing.T) {
 	f, v, slotFile := nothingServedPurging(t, database.BookVersionStatusPurging)
+	clock := useDay(t, time.Date(2026, 10, 1, 3, 0, 0, 0, time.Local))
 
 	for n := 1; n < PurgeUndecidedEscalateAfter; n++ {
+		clock.next()
 		err := PurgeVersion(f.store, storedVersion(t, f, v.ID), testGuard)
 		var ns *NothingServedError
 		if !errors.Is(err, ErrPurgeNothingServed) || errors.Is(err, ErrPurgeFailed) || !errors.As(err, &ns) || ns.Attempt != n || ns.Escalated {
@@ -83,6 +85,7 @@ func TestPurgeVersion_PurgingVersionWhoseBookServesNothingHasAWayOut(t *testing.
 		requireOnDisk(t, slotFile)
 	}
 
+	clock.next()
 	err := PurgeVersion(f.store, storedVersion(t, f, v.ID), testGuard)
 	var ns *NothingServedError
 	if !errors.Is(err, ErrPurgeNothingServed) || !errors.Is(err, ErrPurgeFailed) || !errors.As(err, &ns) || !ns.Escalated {
@@ -156,7 +159,9 @@ func TestPurgeVersion_NothingServedDoesNotCountATrashedOrPurgeFailedVersion(t *t
 // attention instead of retrying it.
 func TestCleanup_PurgingVersionWhoseBookServesNothingEscalatesWithoutFailing(t *testing.T) {
 	f, v, slotFile := nothingServedPurging(t, database.BookVersionStatusPurging)
+	clock := useDay(t, time.Date(2026, 10, 1, 3, 0, 0, 0, time.Local))
 	for night := 1; night <= PurgeUndecidedEscalateAfter; night++ {
+		clock.next()
 		res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 		if err != nil || res.Failed != 0 || res.Purged != 0 {
 			t.Fatalf("night %d: err=%v failed=%d purged=%d, want a clean run that purged nothing", night, err, res.Failed, res.Purged)
@@ -171,6 +176,42 @@ func TestCleanup_PurgingVersionWhoseBookServesNothingEscalatesWithoutFailing(t *
 	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if err != nil || len(res.NeedsAttention) != 1 || res.NeedsAttention[0].VersionID != v.ID || len(res.NothingServed) != 0 {
 		t.Errorf("next night: err=%v NeedsAttention=%+v NothingServed=%+v, want it listed as needing attention only", err, res.NeedsAttention, res.NothingServed)
+	}
+	requireOnDisk(t, slotFile)
+}
+
+// A refusal counts at most one night per calendar day, as a stuck attempt does:
+// a Purge now click the same day runs but does not advance the count toward
+// purge_failed; the next day's refusal does.
+func TestSettleNothingServed_CountsAtMostOncePerCalendarDay(t *testing.T) {
+	f, v, slotFile := nothingServedPurging(t, database.BookVersionStatusPurging)
+	clock := useDay(t, time.Date(2026, 10, 1, 3, 0, 0, 0, time.Local))
+	attempt := func() (*database.BookVersion, *NothingServedError) {
+		t.Helper()
+		err := PurgeVersion(f.store, storedVersion(t, f, v.ID), testGuard)
+		var ns *NothingServedError
+		if !errors.As(err, &ns) {
+			t.Fatalf("PurgeVersion = %v, want a *NothingServedError", err)
+		}
+		return storedVersion(t, f, v.ID), ns
+	}
+
+	clock.next()
+	if cur, ns := attempt(); cur.PurgeUndecidedNights != 1 || ns.Attempt != 1 {
+		t.Fatalf("first refusal of day 1: nights=%d attempt=%d, want 1 and 1", cur.PurgeUndecidedNights, ns.Attempt)
+	}
+	clock.t = clock.t.Add(5 * time.Hour) // a Purge now click later the same day
+	cur, ns := attempt()
+	if cur.PurgeUndecidedNights != 1 || ns.Attempt != 1 || cur.PurgeUndecidedNightOn != "2026-10-01" {
+		t.Fatalf("second refusal of day 1: nights=%d attempt=%d on=%q, want 1, 1 and 2026-10-01", cur.PurgeUndecidedNights, ns.Attempt, cur.PurgeUndecidedNightOn)
+	}
+	clock.t = clock.t.Add(-5 * time.Hour)
+	clock.next()
+	if cur, ns := attempt(); cur.PurgeUndecidedNights != 2 || ns.Attempt != 2 || cur.PurgeUndecidedNightOn != "2026-10-02" {
+		t.Fatalf("day 2: nights=%d attempt=%d on=%q, want 2, 2 and 2026-10-02", cur.PurgeUndecidedNights, ns.Attempt, cur.PurgeUndecidedNightOn)
+	}
+	if cur := storedVersion(t, f, v.ID); cur.Status != database.BookVersionStatusPurging {
+		t.Errorf("status = %s, want purging", cur.Status)
 	}
 	requireOnDisk(t, slotFile)
 }
