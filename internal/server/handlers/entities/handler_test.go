@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package entities_test
 
@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -927,16 +929,237 @@ func TestListAuthors_LimitBeyondEndIsClamped(t *testing.T) {
 	assert.Len(t, items, 4)
 }
 
-// Garbage values are ignored rather than erroring, matching the other list
-// endpoints — a bad limit must not turn a working page into a 400.
+// Unparseable values are ignored rather than erroring, matching the other list
+// endpoints -- a bad limit must not turn a working page into a 400.
 func TestListAuthors_IgnoresUnparseableParams(t *testing.T) {
 	h, d := newHandler(t)
 	d.authorsCache.Set("all", authorsFixture(6))
-	c, w := newCtx(http.MethodGet, "/authors?limit=abc&offset=-3", "", nil)
+	c, w := newCtx(http.MethodGet, "/authors?limit=abc&offset=xyz", "", nil)
 	h.ListAuthors(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 	items, _ := decodeAuthors(t, w)
 	assert.Len(t, items, 6)
+}
+
+// A NEGATIVE window is a pager that underflowed, not noise: it is a 400 on both
+// list endpoints, never a page nobody asked for and never a negative slice index.
+func TestListAuthorsAndSeries_RejectNegativeWindow(t *testing.T) {
+	for _, path := range []string{"offset=-1", "limit=-1", "limit=5&offset=-3"} {
+		h, d := newHandler(t)
+		d.authorsCache.Set("all", authorsFixture(6))
+		d.seriesCache.Set("all", batmanSeriesFixture())
+		c, w := newCtx(http.MethodGet, "/authors?"+path, "", nil)
+		h.ListAuthors(c)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "authors "+path)
+		c, w = newCtx(http.MethodGet, "/series?"+path, "", nil)
+		h.ListSeries(c)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "series "+path)
+	}
+}
+
+// A limit of MaxInt must not overflow start+limit, and an offset past the end is
+// an empty page, on both endpoints.
+func TestListAuthorsAndSeries_HugeLimitAndOffsetPastEnd(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", batmanAuthorsFixture())
+	d.seriesCache.Set("all", batmanSeriesFixture())
+	huge := strconv.Itoa(math.MaxInt)
+
+	c, w := newCtx(http.MethodGet, "/authors?offset=2&limit="+huge, "", nil)
+	h.ListAuthors(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	items, _ := decodeAuthors(t, w)
+	assert.Len(t, items, 3, "offset 2 of 5 with an unbounded limit is the tail")
+
+	c, w = newCtx(http.MethodGet, "/series?offset="+huge+"&limit=2", "", nil)
+	h.ListSeries(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	items, _ = decodeAuthors(t, w)
+	assert.Empty(t, items)
+
+	c, w = newCtx(http.MethodGet, "/series?offset=6&limit=2", "", nil)
+	h.ListSeries(c)
+	items, _ = decodeAuthors(t, w)
+	assert.Empty(t, items, "offset 6 > 5 rows")
+}
+
+// ── Authors / series search, filter, sort (WEB-01 / WEB-02) ──────────────
+//
+// The pages used to download the whole table and search, filter, sort and page
+// it in the browser. These pin the server doing it, on a Batman fixture.
+
+func batmanAuthorsFixture() *audiobooks.AuthorWithCountListResponse {
+	alias := func(id, authorID int, name string) database.AuthorAlias {
+		return database.AuthorAlias{ID: id, AuthorID: authorID, AliasName: name, AliasType: "alias"}
+	}
+	items := []audiobooks.AuthorWithCount{
+		{ID: 1, Name: "Bruce Wayne", BookCount: 4, Aliases: []database.AuthorAlias{alias(1, 1, "The Dark Knight")}},
+		{ID: 2, Name: "Alfred Pennyworth", BookCount: 2, Aliases: []database.AuthorAlias{}},
+		{ID: 3, Name: "Selina Kyle", BookCount: 0, Aliases: []database.AuthorAlias{alias(2, 3, "Catwoman")}},
+		{ID: 4, Name: "Dick Grayson", BookCount: 3, Aliases: []database.AuthorAlias{}},
+		{ID: 5, Name: "Barbara Gordon", BookCount: 0, Aliases: []database.AuthorAlias{}},
+	}
+	return &audiobooks.AuthorWithCountListResponse{Items: items, Count: len(items), Total: len(items)}
+}
+
+func authorNames(items []map[string]any) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i], _ = it["name"].(string)
+	}
+	return out
+}
+
+func decodeListTotals(t *testing.T, w *httptest.ResponseRecorder) (count, total int) {
+	t.Helper()
+	var body struct {
+		Data struct {
+			Count int `json:"count"`
+			Total int `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body.Data.Count, body.Data.Total
+}
+
+func TestListAuthors_SortsAndPagesOnTheServer(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", batmanAuthorsFixture())
+
+	// Name descending: Selina Kyle, Dick Grayson, Bruce Wayne, Barbara Gordon,
+	// Alfred Pennyworth. Page 2 of size 2 is the third and fourth.
+	c, w := newCtx(http.MethodGet, "/authors?sort=name&order=desc&limit=2&offset=2", "", nil)
+	h.ListAuthors(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	items, _ := decodeAuthors(t, w)
+	assert.Equal(t, []string{"Bruce Wayne", "Barbara Gordon"}, authorNames(items))
+	count, total := decodeListTotals(t, w)
+	assert.Equal(t, 5, count)
+	assert.Equal(t, 5, total)
+}
+
+func TestListAuthors_SortByBookCountDescendingIsServerSide(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", batmanAuthorsFixture())
+	c, w := newCtx(http.MethodGet, "/authors?sort=book_count&order=desc&limit=3", "", nil)
+	h.ListAuthors(c)
+	items, _ := decodeAuthors(t, w)
+	assert.Equal(t, []string{"Bruce Wayne", "Dick Grayson", "Alfred Pennyworth"}, authorNames(items))
+}
+
+func TestListAuthors_SearchMatchesAliasAndCountsMatches(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", batmanAuthorsFixture())
+	c, w := newCtx(http.MethodGet, "/authors?q=cat&limit=25", "", nil)
+	h.ListAuthors(c)
+	items, _ := decodeAuthors(t, w)
+	assert.Equal(t, []string{"Selina Kyle"}, authorNames(items), "the alias Catwoman finds Selina Kyle")
+	count, total := decodeListTotals(t, w)
+	assert.Equal(t, 1, count, "count is the matches, not the table")
+	assert.Equal(t, 5, total, "total is the whole table")
+}
+
+func TestListAuthors_FilterZeroBooks(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", batmanAuthorsFixture())
+	c, w := newCtx(http.MethodGet, "/authors?filter=zero_books&sort=name&limit=25", "", nil)
+	h.ListAuthors(c)
+	items, _ := decodeAuthors(t, w)
+	assert.Equal(t, []string{"Barbara Gordon", "Selina Kyle"}, authorNames(items))
+
+	c, w = newCtx(http.MethodGet, "/authors?filter=with_books&limit=25", "", nil)
+	h.ListAuthors(c)
+	items, _ = decodeAuthors(t, w)
+	assert.Len(t, items, 3)
+}
+
+func TestListAuthors_RejectsUnknownSortFilterOrder(t *testing.T) {
+	for _, path := range []string{
+		"/authors?sort=created_at",
+		"/authors?filter=empty",
+		"/authors?sort=name&order=sideways",
+	} {
+		h, d := newHandler(t)
+		d.authorsCache.Set("all", batmanAuthorsFixture())
+		c, w := newCtx(http.MethodGet, path, "", nil)
+		h.ListAuthors(c)
+		assert.Equal(t, http.StatusBadRequest, w.Code, path)
+	}
+}
+
+// Sorting a request must not reorder the cached list every other request reads.
+func TestListAuthors_SortDoesNotReorderTheCache(t *testing.T) {
+	h, d := newHandler(t)
+	d.authorsCache.Set("all", batmanAuthorsFixture())
+	c, w := newCtx(http.MethodGet, "/authors?sort=name&order=desc&limit=5", "", nil)
+	h.ListAuthors(c)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	c, w = newCtx(http.MethodGet, "/authors", "", nil)
+	h.ListAuthors(c)
+	items, _ := decodeAuthors(t, w)
+	assert.Equal(t, []string{"Bruce Wayne", "Alfred Pennyworth", "Selina Kyle", "Dick Grayson", "Barbara Gordon"}, authorNames(items))
+}
+
+func batmanSeriesFixture() *audiobooks.SeriesWithCountsResponse {
+	return &audiobooks.SeriesWithCountsResponse{Items: []audiobooks.SeriesWithCount{
+		{Series: database.Series{ID: 1, Name: "Year One"}, BookCount: 1, AuthorName: "Frank Miller"},
+		{Series: database.Series{ID: 2, Name: "The Long Halloween"}, BookCount: 3, AuthorName: "Jeph Loeb"},
+		{Series: database.Series{ID: 3, Name: "Hush"}, BookCount: 0, AuthorName: "Jeph Loeb"},
+		{Series: database.Series{ID: 4, Name: "Knightfall"}, BookCount: 3},
+		{Series: database.Series{ID: 5, Name: "Court of Owls"}, BookCount: 0, AuthorName: "Scott Snyder"},
+	}, Count: 5, Total: 5}
+}
+
+func TestListSeries_PagesSortsFiltersAndSearchesOnTheServer(t *testing.T) {
+	h, d := newHandler(t)
+	d.seriesCache.Set("all", batmanSeriesFixture())
+
+	c, w := newCtx(http.MethodGet, "/series?filter=with_books&sort=name&limit=2&offset=0", "", nil)
+	h.ListSeries(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	items, _ := decodeAuthors(t, w)
+	assert.Equal(t, []string{"Knightfall", "The Long Halloween"}, authorNames(items))
+	count, total := decodeListTotals(t, w)
+	assert.Equal(t, 3, count)
+	assert.Equal(t, 5, total)
+
+	c, w = newCtx(http.MethodGet, "/series?filter=with_books&sort=name&limit=2&offset=2", "", nil)
+	h.ListSeries(c)
+	items, _ = decodeAuthors(t, w)
+	assert.Equal(t, []string{"Year One"}, authorNames(items), "page 2 is the tail of the sorted, filtered list")
+
+	c, w = newCtx(http.MethodGet, "/series?q=loeb&sort=author_name&order=desc&limit=25", "", nil)
+	h.ListSeries(c)
+	items, _ = decodeAuthors(t, w)
+	assert.Equal(t, []string{"The Long Halloween", "Hush"}, authorNames(items), "author name is searchable; both rows tie on author, so id ascending decides, even when descending")
+
+	c, w = newCtx(http.MethodGet, "/series?filter=empty&limit=25", "", nil)
+	h.ListSeries(c)
+	items, _ = decodeAuthors(t, w)
+	assert.Equal(t, []string{"Hush", "Court of Owls"}, authorNames(items))
+}
+
+// An unparameterised GET /series keeps returning every series: the Library
+// page's series filter reads the list that way.
+func TestListSeries_NoParamsStillReturnsEverything(t *testing.T) {
+	h, d := newHandler(t)
+	d.seriesCache.Set("all", batmanSeriesFixture())
+	c, w := newCtx(http.MethodGet, "/series", "", nil)
+	h.ListSeries(c)
+	items, count := decodeAuthors(t, w)
+	assert.Len(t, items, 5)
+	assert.Equal(t, 5, count)
+}
+
+func TestListSeries_RejectsUnknownSortAndFilter(t *testing.T) {
+	for _, path := range []string{"/series?sort=created_at", "/series?filter=zero_books", "/series?order=up"} {
+		h, d := newHandler(t)
+		d.seriesCache.Set("all", batmanSeriesFixture())
+		c, w := newCtx(http.MethodGet, path, "", nil)
+		h.ListSeries(c)
+		assert.Equal(t, http.StatusBadRequest, w.Code, path)
+	}
 }
 
 // TestSplitCompositeAuthor_RepointsPrimaryAuthorID pins the fix for the dangling
