@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.26.1
+// version: 1.27.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-30
 
@@ -45,6 +45,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
@@ -634,6 +635,9 @@ func withEnvLocks(cfg config.Config) any {
 	// name, or a command-line flag. A field disabled with no reason, or with the
 	// wrong reason, sends the operator to edit the wrong half of the unit file.
 	flat["setting_locks"] = config.SettingLocks()
+	// The placeholders a folder/file naming pattern may use, straight from the
+	// resolver, so the Settings help text cannot advertise one BuildPath rejects.
+	flat["naming_pattern_tokens"] = organizer.NamingPatternTokens()
 	return flat
 }
 

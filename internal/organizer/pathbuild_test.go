@@ -1,11 +1,15 @@
 // file: internal/organizer/pathbuild_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b4e0d97-1a52-4c8f-93de-77c0a1e5b204
-// last-edited: 2026-08-15
+// last-edited: 2026-10-30
 
 package organizer
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // Format specs ({track:02d}) were a scheme-#2-only feature that BuildPath lost
 // in the first unification pass. They are not cosmetic: the leftover-placeholder
@@ -82,5 +86,63 @@ func TestBuildPath_FormatSpecOnNonNumericFieldErrors(t *testing.T) {
 	_, err := BuildPath("{title:02d}", PathVars{Title: "Foundation"}, BuildOpts{})
 	if err == nil {
 		t.Fatal("BuildPath with a format spec on {title}: want error, got nil")
+	}
+}
+
+// TestNamingPatternTokens_EveryTokenResolves is the guard behind the Settings
+// help text: each token NamingPatternTokens advertises must come out of
+// BuildPath as a real value on a fully populated book, never as literal braces
+// and never as an unresolved-placeholder error. Without this the exported list
+// could name a token the resolver cannot expand, which is the drift it replaced.
+func TestNamingPatternTokens_EveryTokenResolves(t *testing.T) {
+	v := PathVars{
+		Author:       "Bruce Wayne",
+		Title:        "The Long Halloween",
+		Series:       "Gotham Chronicles",
+		SeriesNumber: "3",
+		Narrator:     "Alfred Pennyworth",
+		Publisher:    "DC Audio",
+		Language:     "English",
+		Edition:      "Unabridged",
+		PrintYear:    "1996",
+		ISBN10:       "1401207529",
+		ISBN13:       "9781401207526",
+		Bitrate:      "64kbps",
+		Codec:        "AAC",
+		Quality:      "64kbps AAC",
+		TrackTitle:   "Part One",
+		Track:        2,
+		TotalTracks:  13,
+		Ext:          "m4b",
+	}
+	opts := BuildOpts{AuthorFallback: placeholderAuthor, TitleFallback: defaultTitle}
+
+	tokens := NamingPatternTokens()
+	if len(tokens) == 0 {
+		t.Fatal("NamingPatternTokens returned nothing")
+	}
+	if !slices.IsSorted(tokens) {
+		t.Errorf("tokens not sorted: %v", tokens)
+	}
+	for _, token := range []string{"{series_prefix}", "{edition_suffix}", "{title}", "{track}"} {
+		if !slices.Contains(tokens, token) {
+			t.Errorf("expected %s in %v", token, tokens)
+		}
+	}
+	for _, phantom := range []string{"{track_number}", "{audiobook_release_year}"} {
+		if slices.Contains(tokens, phantom) {
+			t.Errorf("%s is advertised but BuildPath cannot resolve it", phantom)
+		}
+	}
+
+	for _, token := range tokens {
+		got, err := BuildPath(token, v, opts)
+		if err != nil {
+			t.Errorf("BuildPath(%q) error: %v", token, err)
+			continue
+		}
+		if strings.TrimSpace(got) == "" || strings.ContainsAny(got, "{}") {
+			t.Errorf("BuildPath(%q) = %q, want a resolved non-empty value", token, got)
+		}
 	}
 }
