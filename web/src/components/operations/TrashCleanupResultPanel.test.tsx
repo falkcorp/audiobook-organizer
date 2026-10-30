@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6255d3b3-6c19-482d-a750-5e14a4ad74e5
 // last-edited: 2026-10-29
 
@@ -260,5 +260,94 @@ describe('TrashCleanupResultPanel', () => {
     const { container } = renderWithProviders(<TrashCleanupResultPanel opId="op-5" />);
     await vi.waitFor(() => expect(mockedResult).toHaveBeenCalledWith('op-5'));
     expect(container).toBeEmptyDOMElement();
+  });
+  it('lists what a report-only kept-file sweep would remove, with version, book and reason', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: {
+        purged: 0,
+        kept_sweep_report_only: true,
+        kept_sweep_would_remove: 1,
+        kept_sweep_would_drop: 1,
+        kept_sweep_still_kept: 4,
+        kept_sweep_would_remove_files: [
+          {
+            version_id: 'v-year-one-0001',
+            book_id: 'book-year-one',
+            path: '/lib/Gotham/Year One/.versions/v1/part1.m4b',
+            reason: 'book_file x of book y still names it',
+          },
+        ],
+        kept_sweep_would_drop_files: [
+          {
+            version_id: 'v-hush-0002',
+            book_id: 'book-hush',
+            path: '/lib/Gotham/Hush/gone.m4b',
+            reason: 'kept once',
+          },
+        ],
+      },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-9" />);
+
+    const report = await screen.findByTestId('trash-cleanup-kept-sweep-report');
+    expect(report).toHaveTextContent('report only (nothing was changed)');
+    expect(report).toHaveTextContent('it would remove 1 file');
+    expect(report).toHaveTextContent('4 still owned');
+    expect(screen.queryByTestId('trash-cleanup-kept-sweep-applied')).not.toBeInTheDocument();
+
+    const button = screen.getByRole('button', { name: '1 file it would remove' });
+    expect(
+      screen.queryByText('/lib/Gotham/Year One/.versions/v1/part1.m4b')
+    ).not.toBeInTheDocument();
+    await userEvent.setup().click(button);
+    expect(
+      await screen.findByText('/lib/Gotham/Year One/.versions/v1/part1.m4b')
+    ).toBeInTheDocument();
+    const entry = screen.getByTestId('trash-cleanup-kept-sweep-would-remove');
+    expect(entry).toHaveTextContent('version v-year-one-');
+    expect(entry).toHaveTextContent('kept because: book_file x of book y still names it');
+    expect(screen.getByRole('link', { name: 'book-year-on' })).toHaveAttribute(
+      'href',
+      '/library/book-year-one'
+    );
+    expect(
+      screen.getByRole('button', { name: '1 note of already-gone files it would drop' })
+    ).toBeInTheDocument();
+  });
+
+  it('says what an applying sweep removed, and flags a version it escalated', async () => {
+    mockedResult.mockResolvedValue({
+      result_data: {
+        purged: 0,
+        kept_sweep_removed: 2,
+        kept_sweep_gone: 1,
+        kept_sweep_escalated: 1,
+        kept_sweep_escalated_version_ids: ['v-stuck'],
+        kept_sweep_escalated_files: [
+          {
+            version_id: 'v-stuck',
+            book_id: 'book-hush',
+            path: '/lib/Gotham/Hush/stuck.m4b',
+            reason: 'owner lookup down',
+          },
+        ],
+      },
+    });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-10" />);
+
+    const applied = await screen.findByTestId('trash-cleanup-kept-sweep-applied');
+    expect(applied).toHaveTextContent('removed 2 files');
+    expect(applied).toHaveTextContent('dropped 1 note');
+    expect(screen.queryByTestId('trash-cleanup-kept-sweep-report')).not.toBeInTheDocument();
+    expect(screen.getByTestId('trash-cleanup-kept-sweep-escalated')).toHaveTextContent(
+      '1 version became purge failed'
+    );
+  });
+
+  it('shows no kept-file sweep section for a run without one', async () => {
+    mockedResult.mockResolvedValue({ result_data: { purged: 2 } });
+    renderWithProviders(<TrashCleanupResultPanel opId="op-night-11" />);
+    await screen.findByTestId('trash-cleanup-result');
+    expect(screen.queryByTestId('trash-cleanup-kept-sweep')).not.toBeInTheDocument();
   });
 });

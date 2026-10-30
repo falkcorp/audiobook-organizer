@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle_test.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
 // last-edited: 2026-10-29
 
@@ -470,5 +470,79 @@ func TestHandlePurgeVersion_KeepsFileTheBookServes(t *testing.T) {
 	got, _ := store.GetBookVersion(ver.ID)
 	if got.Status != database.BookVersionStatusTrash {
 		t.Errorf("status = %s, want trash", got.Status)
+	}
+}
+
+// The kept-file sweep ships report-only, through the real wiring. The server
+// reads kept_sweep_apply_enabled for each cleanup run: with the default config the
+// run reports what it would remove and leaves the file and its note alone, and
+// with the switch on it removes the file and drops the note. The unit tests pass
+// the flag to the sweep by hand; this one is the wiring (a call site that handed
+// the sweep a constant would pass every one of them).
+func TestServerCleanupTrashedVersions_KeptSweepFollowsTheConfigSwitch(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+
+	bookDir := libraryDir(t, "Year One")
+	played := filepath.Join(bookDir, "book.m4b")
+	if err := os.WriteFile(played, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Batman: Year One", FilePath: played}); err != nil {
+		t.Fatalf("create book: %v", err)
+	}
+	purgedAt := time.Now().Add(-48 * time.Hour)
+	ver, err := store.CreateBookVersion(&database.BookVersion{
+		BookID: "b1", Status: database.BookVersionStatusInactivePurged, Format: "m4b", Source: "imported", PurgedDate: &purgedAt,
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	left := filepath.Join(versions.VersionSlotDir(bookDir, ver.ID), "part1.m4b")
+	if err := os.MkdirAll(filepath.Dir(left), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(left, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ver.PurgeKept = []database.PurgeFileNote{{Path: left, Reason: "book_file x of book y still names it"}}
+	if err := store.UpdateBookVersion(ver); err != nil {
+		t.Fatalf("note the kept file: %v", err)
+	}
+
+	// The shipped default: report-only.
+	res, err := srv.CleanupTrashedVersions()
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if !res.KeptSweep.ReportOnly || res.KeptSweep.WouldRemove != 1 || res.KeptSweep.Removed != 0 {
+		t.Fatalf("default config: ReportOnly=%v WouldRemove=%d Removed=%d, want true, 1 and 0 (%+v)",
+			res.KeptSweep.ReportOnly, res.KeptSweep.WouldRemove, res.KeptSweep.Removed, res.KeptSweep)
+	}
+	if _, err := os.Stat(left); err != nil {
+		t.Fatalf("report-only removed the file: %v", err)
+	}
+	if got, _ := store.GetBookVersion(ver.ID); len(got.PurgeKept) != 1 {
+		t.Fatalf("report-only dropped the note: %+v", got.PurgeKept)
+	}
+
+	// The switch on, flipped between runs with no restart.
+	prev := config.KeptSweepApplyEnabled()
+	config.Mutate(func(c *config.Config) { c.KeptSweepApplyEnabled = true })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.KeptSweepApplyEnabled = prev }) })
+	res, err = srv.CleanupTrashedVersions()
+	if err != nil {
+		t.Fatalf("cleanup with the switch on: %v", err)
+	}
+	if res.KeptSweep.ReportOnly || res.KeptSweep.Removed != 1 {
+		t.Fatalf("switch on: ReportOnly=%v Removed=%d, want false and 1 (%+v)", res.KeptSweep.ReportOnly, res.KeptSweep.Removed, res.KeptSweep)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Errorf("the file is still on disk with the switch on (stat err %v)", err)
+	}
+	if got, _ := store.GetBookVersion(ver.ID); len(got.PurgeKept) != 0 {
+		t.Errorf("PurgeKept = %+v, want it emptied", got.PurgeKept)
+	}
+	if _, err := os.Stat(played); err != nil {
+		t.Errorf("the book's own file is gone: %v", err)
 	}
 }

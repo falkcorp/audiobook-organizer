@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.175.0
+// version: 1.175.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-29
 
@@ -1250,11 +1250,15 @@ type Config struct {
 	// to remove the ones nothing names any more. Off (the default) keeps the sweep
 	// report-only: it makes every decision and lists the files it WOULD remove
 	// (and the notes it would drop) in the operation result and summary, but
-	// unlinks nothing and drops no note. On, it removes those files and drops
-	// their notes. Either way it escalates a note it cannot settle for
-	// versions.PurgeUndecidedEscalateAfter nights in a row to purge_failed. Env
-	// override KEPT_SWEEP_APPLY_ENABLED; read once per cleanup run, so flipping it
-	// needs no restart and a run never mixes the two modes.
+	// unlinks no file and drops no note. On, it removes those files and drops
+	// their notes. Report-only is not read-only: in either mode a note the sweep
+	// cannot settle (an owner lookup that errors, a path the disk cannot settle, a
+	// failed unlink) is counted per calendar day on the version, and after
+	// versions.PurgeUndecidedEscalateAfter days in a row the version's status moves
+	// to purge_failed and the unsettled notes into its PurgeFailed list (record
+	// writes, never file changes). Env override KEPT_SWEEP_APPLY_ENABLED; read
+	// once per cleanup run, so flipping it needs no restart and a run never mixes
+	// the two modes.
 	KeptSweepApplyEnabled bool `json:"kept_sweep_apply_enabled" mapstructure:"kept_sweep_apply_enabled"`
 	// ABSItunesPositionBackfillUserID pins the one-time iTunes-position
 	// backfill job to a specific user ID instead of the default

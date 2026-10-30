@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.33.0
+// version: 1.33.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-10-29
 
@@ -494,7 +494,7 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Purge trashed book versions",
-		Description:     "Purges trashed book file versions past their 14-day TTL.",
+		Description:     "Purges trashed book file versions past their 14-day TTL, then sweeps the files those purges left in place because another row or book named them (report-only until kept_sweep_apply_enabled is on; a file it cannot settle for 3 nights in a row moves its version to purge_failed).",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.trash-cleanup",
@@ -739,7 +739,7 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		}
 	}
 	if n := len(res.KeptSweep.Escalated); n > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed, so the sweep stops warning about them; Purge now retries one, or hard delete drops it (versions %s, files %s)",
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed, so the sweep stops warning about those files (it still sweeps the other kept files of the version); Purge now retries one, or hard delete drops it (versions %s, files %s)",
 			n, versions.PurgeUndecidedEscalateAfter, strings.Join(payload.KeptSweepEscalatedVersions, ", "), strings.Join(escalatedPaths(payload.KeptSweepEscalatedFiles), ", ")))
 	}
 	if n := res.KeptSweep.KeptOnError; n > 0 {
@@ -747,7 +747,7 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 			n, strings.Join(payload.KeptSweepKeptOnErrorVersions, ", "), strings.Join(payload.KeptSweepKeptOnErrorPaths, ", ")))
 	}
 	if len(res.NeedsAttention) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) cannot be purged (a file cannot be removed: permission or a read-only filesystem) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) need the owner (a file cannot be removed: permission or a read-only filesystem; or the kept-file sweep could not settle one for several nights) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
 			len(res.NeedsAttention), strings.Join(payload.NeedsAttentionVersionIDs, ", "), strings.Join(payload.NeedsAttentionBookIDs, ", ")))
 	}
 	// One WARN per version a live book still serves, so the run's journal lists

@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d2c9e41-6b0a-4f58-a3d7-1e4b8c5f0926
 // last-edited: 2026-10-29
 
@@ -126,21 +126,42 @@ func (f *keptFixture) bookOwner(t *testing.T, p string) string {
 	return b.ID
 }
 
-func sweep(t *testing.T, store KeptSweepStore, guard PurgeGuard) KeptSweepResult {
+// testNight numbers the nights the test clock has been moved through.
+var testNight int
+
+// nextNight moves the sweep's clock to the next calendar day: the sweep counts
+// one night a day (BookVersion.PurgeUndecidedNightOn), and the helpers below are
+// one nightly run each. A test that wants two runs on the same day uses
+// sweepSameNight.
+func nextNight(t *testing.T) {
 	t.Helper()
-	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{Apply: true})
-	if err != nil {
-		t.Fatalf("SweepKeptFiles: %v", err)
-	}
-	return res
+	testNight++
+	now := time.Date(2026, 6, 1, 3, 0, 0, 0, time.UTC).AddDate(0, 0, testNight)
+	keptSweepNow = func() time.Time { return now }
+	t.Cleanup(func() { keptSweepNow = time.Now })
 }
 
-// sweepReport runs the sweep report-only (the switch off, the shipped default).
+// sweep is one nightly run with the switch on, on a new day.
+func sweep(t *testing.T, store KeptSweepStore, guard PurgeGuard) KeptSweepResult {
+	t.Helper()
+	nextNight(t)
+	return sweepSameNight(t, store, guard, true)
+}
+
+// sweepReport is one nightly run with the switch off (the shipped default), on a
+// new day.
 func sweepReport(t *testing.T, store KeptSweepStore, guard PurgeGuard) KeptSweepResult {
 	t.Helper()
-	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{})
+	nextNight(t)
+	return sweepSameNight(t, store, guard, false)
+}
+
+// sweepSameNight runs the sweep again on the day the clock is at.
+func sweepSameNight(t *testing.T, store KeptSweepStore, guard PurgeGuard, apply bool) KeptSweepResult {
+	t.Helper()
+	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{Apply: apply})
 	if err != nil {
-		t.Fatalf("SweepKeptFiles (report-only): %v", err)
+		t.Fatalf("SweepKeptFiles (apply=%v): %v", apply, err)
 	}
 	return res
 }

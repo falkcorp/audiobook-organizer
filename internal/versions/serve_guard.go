@@ -1,5 +1,5 @@
 // file: internal/versions/serve_guard.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
 // last-edited: 2026-10-28
 
@@ -52,6 +52,11 @@ type servedGuard struct {
 
 	// skipOwn is set when the own book is itself trashed: it serves nothing.
 	skipOwn bool
+
+	// bookExists is false only when the own book row is gone (hard-deleted, no
+	// tombstone). A trashed book still exists: it can be restored and wants its
+	// audio back, though it serves nothing now (skipOwn).
+	bookExists bool
 
 	exact  map[string]struct{} // canonical served file paths of the own book
 	folder string              // canonical folder the own book's FilePath names, or ""
@@ -130,7 +135,7 @@ func newServedGuard(store versionPurger, book *database.Book, bookID string, fil
 	if missing {
 		book = &database.Book{ID: bookID}
 	}
-	g := &servedGuard{store: store, book: book, verID: verID, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
+	g := &servedGuard{store: store, book: book, verID: verID, bookExists: !missing, exact: map[string]struct{}{}, others: map[string]*otherBook{}}
 	if missing || bookIsTrashed(book) {
 		g.skipOwn = true
 		return g, nil

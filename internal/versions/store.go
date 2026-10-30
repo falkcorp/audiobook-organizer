@@ -1,5 +1,5 @@
 // file: internal/versions/store.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
 // last-edited: 2026-10-29
 
@@ -72,16 +72,17 @@ type KeptSweepStore interface {
 	// ListPurgedBookVersions lists inactive_purged versions (and
 	// blocked_for_redownload ones, which the sweep skips by status).
 	ListPurgedBookVersions() ([]database.BookVersion, error)
+	// ListTrashedBookVersions lists the trash, the purges that were claimed and
+	// did not finish (status purging), so the cleanup retries those too, and
+	// the purges that gave up (status purge_failed), which it counts as
+	// needing attention and does not retry. The kept-file sweep takes the
+	// purge_failed ones from it (it sweeps their PurgeKept notes).
+	ListTrashedBookVersions() ([]database.BookVersion, error)
 }
 
 type TrashedVersionCleaner interface {
 	KeptSweepStore
 
-	// ListTrashedBookVersions lists the trash, the purges that were claimed and
-	// did not finish (status purging), so the cleanup retries those too, and
-	// the purges that gave up (status purge_failed), which it counts as
-	// needing attention and does not retry.
-	ListTrashedBookVersions() ([]database.BookVersion, error)
 	// ListSwappingBookVersions lists the versions a swap left in swapping_*;
 	// the cleanup reports their books (SwapIncompleteLister) and touches
 	// nothing.

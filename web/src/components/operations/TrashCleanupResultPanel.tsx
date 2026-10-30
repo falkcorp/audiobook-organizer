@@ -1,5 +1,5 @@
 // file: web/src/components/operations/TrashCleanupResultPanel.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 142d4823-4f1c-4c19-95fe-7a3c0f9f05b4
 // last-edited: 2026-10-29
 
@@ -11,12 +11,16 @@ import {
   cleanupBookIds,
   cleanupVersionsLink,
   parseTrashCleanupResult,
+  type KeptSweepFile,
   type TrashCleanupResult,
   type TrashCleanupSet,
 } from '../../utils/trashCleanupResult';
 
 /** How many books and file paths are listed before the rest is left to the versions page. */
 const LIST_CAP = 10;
+
+/** How many sweep files are listed before the rest is left to the operation's log (one line each). */
+const SWEEP_LIST_CAP = 50;
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -108,6 +112,69 @@ function PathList({ paths, opId, set, label }: PathListProps) {
             <Link component={RouterLink} to={cleanupVersionsLink(opId, set)}>
               and {more.toLocaleString()} more: see the versions
             </Link>
+          )}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
+interface SweepFileListProps {
+  files: KeptSweepFile[];
+  /** the button text for n files */
+  label: (n: number) => string;
+  /** what the reason says, in front of it */
+  reasonLead: string;
+  testId: string;
+}
+
+/**
+ * The kept-file sweep's files behind a button: each path with its version, a
+ * link to its book and the reason. The list is the owner's evidence for flipping
+ * kept_sweep_apply_enabled, so it shows more than the other path lists do.
+ */
+function SweepFileList({ files, label, reasonLead, testId }: SweepFileListProps) {
+  const [open, setOpen] = useState(false);
+  if (files.length === 0) return null;
+  const shown = files.slice(0, SWEEP_LIST_CAP);
+  const more = files.length - shown.length;
+  return (
+    <Box sx={{ mb: 0.5 }} data-testid={testId}>
+      <Button
+        size="small"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        aria-expanded={open}
+      >
+        {label(files.length)}
+      </Button>
+      <Collapse in={open} unmountOnExit>
+        <Box sx={{ pl: 1 }}>
+          {shown.map((f) => (
+            <Box key={`${f.version_id}:${f.path}`} sx={{ mb: 0.5 }}>
+              <Box sx={{ fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' }}>
+                {f.path}
+              </Box>
+              <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
+                version {f.version_id.slice(0, 12)}
+                {f.book_id !== '' && (
+                  <>
+                    {', book '}
+                    <Link component={RouterLink} to={`/library/${encodeURIComponent(f.book_id)}`}>
+                      {f.book_id.slice(0, 12)}
+                    </Link>
+                  </>
+                )}
+                {f.reason !== '' && ` (${reasonLead}: ${f.reason})`}
+              </Typography>
+            </Box>
+          ))}
+          {more > 0 && (
+            <Typography variant="caption" component="div">
+              and {more.toLocaleString()} more: the operation&apos;s log below lists every file.
+            </Typography>
           )}
         </Box>
       </Collapse>
@@ -225,6 +292,70 @@ export default function TrashCleanupResultPanel({ opId }: { opId: string }) {
             label={(n) => `${n.toLocaleString()} ${plural(n, 'book path', 'book paths')} to repair`}
           />
         </>
+      )}
+      {(result.kept_sweep_report_only ||
+        result.kept_sweep_removed > 0 ||
+        result.kept_sweep_gone > 0 ||
+        result.kept_sweep_escalated > 0) && (
+        <Box data-testid="trash-cleanup-kept-sweep" sx={{ mb: 0.5 }}>
+          {result.kept_sweep_report_only ? (
+            <Typography variant="body2" data-testid="trash-cleanup-kept-sweep-report">
+              Kept-file sweep, report only (nothing was changed): it would remove{' '}
+              {result.kept_sweep_would_remove.toLocaleString()}{' '}
+              {plural(result.kept_sweep_would_remove, 'file', 'files')} and drop the notes of{' '}
+              {result.kept_sweep_would_drop.toLocaleString()}{' '}
+              {plural(result.kept_sweep_would_drop, 'file', 'files')} that{' '}
+              {plural(result.kept_sweep_would_drop, 'is', 'are')} already gone.{' '}
+              {result.kept_sweep_still_kept.toLocaleString()} still owned,{' '}
+              {result.kept_sweep_kept_on_error.toLocaleString()} could not be decided. Read the
+              list, then turn on kept_sweep_apply_enabled to let it act.
+            </Typography>
+          ) : (
+            <Typography variant="body2" data-testid="trash-cleanup-kept-sweep-applied">
+              Kept-file sweep: removed {result.kept_sweep_removed.toLocaleString()}{' '}
+              {plural(result.kept_sweep_removed, 'file', 'files')} nothing names any more and
+              dropped {result.kept_sweep_gone.toLocaleString()}{' '}
+              {plural(result.kept_sweep_gone, 'note', 'notes')} of files already gone.
+            </Typography>
+          )}
+          <SweepFileList
+            files={result.kept_sweep_would_remove_files}
+            label={(n) => `${n.toLocaleString()} ${plural(n, 'file', 'files')} it would remove`}
+            reasonLead="kept because"
+            testId="trash-cleanup-kept-sweep-would-remove"
+          />
+          <SweepFileList
+            files={result.kept_sweep_would_drop_files}
+            label={(n) =>
+              `${n.toLocaleString()} ${plural(n, 'note', 'notes')} of already-gone files it would drop`
+            }
+            reasonLead="kept because"
+            testId="trash-cleanup-kept-sweep-would-drop"
+          />
+          {result.kept_sweep_escalated > 0 && (
+            <>
+              <Typography
+                variant="body2"
+                sx={{ color: 'warning.main' }}
+                data-testid="trash-cleanup-kept-sweep-escalated"
+              >
+                {result.kept_sweep_escalated.toLocaleString()}{' '}
+                {plural(result.kept_sweep_escalated, 'version', 'versions')} became purge failed:
+                the sweep could not settle a kept file several nights in a row. See{' '}
+                {plural(result.kept_sweep_escalated, 'it', 'them')} on the trashed versions page;
+                Purge now retries one, hard delete drops it.
+              </Typography>
+              <SweepFileList
+                files={result.kept_sweep_escalated_files}
+                label={(n) =>
+                  `${n.toLocaleString()} ${plural(n, 'file', 'files')} it could not settle`
+                }
+                reasonLead="why"
+                testId="trash-cleanup-kept-sweep-escalated-files"
+              />
+            </>
+          )}
+        </Box>
       )}
       {result.stopped_for_merge && (
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>

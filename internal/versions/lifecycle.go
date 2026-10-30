@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-29
 //
@@ -442,8 +442,17 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGua
 // file in it, the guard has nothing to compare against, and "nothing served"
 // would be a guess. The purge then returns a *NothingServedError (errors.Is
 // ErrPurgeNothingServed, not ErrPurgeCannotTell: the book's path is what is
-// wrong, not a drive) and leaves the version in the trash, restorable
-// (servedGuard.requireServedFileOnDisk).
+// wrong, not a drive) and leaves the version as it is: in the trash, restorable,
+// or, for a version already purging or purge_failed (which cannot go back to the
+// trash), unchanged and retried once the book's path is fixed
+// (servedGuard.requireServedFileOnDisk). The rule is the kept-file sweep's too,
+// so a retry of a version that sweep escalated cannot delete what it refused to.
+//
+// A retry (purging, purge_failed) also decides every file the version's notes name
+// (PurgeKept, PurgeFailed), not only the files of its slot and rows: a note that
+// the retry did not ask about again would be erased with its file still on disk.
+// Such a file outside the version's own slot is never removed while the version's
+// own book row exists (classifyNotedPath).
 //
 // It never removes a file that some other book_file row still names. A
 // retired version keeps the rows of a book that was retired into this one's
@@ -630,6 +639,30 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 			addTarget(f.FilePath)
 		}
 	}
+	// A retry (purging, purge_failed) also owes every file the version's notes
+	// name: PurgeKept (files an earlier attempt, or the kept-file sweep, left
+	// because something owned them) and PurgeFailed (files that could not be
+	// removed or settled). The slot walk and the rows do not find them (they lie
+	// outside the slot, or the rows are gone), and finishPurge replaces PurgeKept
+	// and markPurged clears PurgeFailed, so a note that was not asked about again
+	// would be erased with its file still on disk. Asked here, each is removed,
+	// found gone, kept (and so noted again) or left undecided; none is dropped
+	// unasked. noteOnly marks those found only through a note: they are decided
+	// by classifyNotedPath.
+	noteOnly := map[string]struct{}{}
+	if ver.Status == database.BookVersionStatusPurging || ver.Status == database.BookVersionStatusPurgeFailed {
+		for _, n := range slices.Concat(ver.PurgeKept, ver.PurgeFailed) {
+			if n.Path == "" {
+				continue
+			}
+			k := targetKey(n.Path)
+			if _, ok := targets[k]; ok {
+				continue
+			}
+			targets[k] = n.Path
+			noteOnly[k] = struct{}{}
+		}
+	}
 	paths := make([]string, 0, len(targets))
 	for _, p := range targets {
 		paths = append(paths, p)
@@ -651,12 +684,18 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 	for _, p := range ver.PurgeUnlinked {
 		recorded[p] = struct{}{}
 	}
+	classify := func(p string) (pathVerdict, string, error) {
+		if _, ok := noteOnly[targetKey(p)]; ok {
+			return classifyNotedPath(store, decider, sg, ver, p, recorded)
+		}
+		return classifyPurgePath(store, decider, sg, ver, p, recorded)
+	}
 	var doomed []string
 	kept := map[string]string{}
 	var undecided []database.PurgeFileNote
 	var served []string
 	for _, p := range paths {
-		verdict, why, err := classifyPurgePath(store, decider, sg, ver, p, recorded)
+		verdict, why, err := classify(p)
 		if err != nil {
 			return fmt.Errorf("purge version %s: %w", ver.ID, err)
 		}
@@ -693,15 +732,20 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 		}
 	}
 
-	// A trashed version is deleted only while the book is known to serve a file
-	// that exists: with none, the guard has nothing to compare against (a stale
+	// A version is deleted only while the book is known to serve a file that
+	// exists: with none, the guard has nothing to compare against (a stale
 	// FilePath, a lost file) and "nothing served" would be a guess. It comes
 	// after the served files above, so a file the book is found to serve still
-	// answers BookServesFilesError. A purge that is already under way has removed
-	// files and is not held back by this.
-	if len(doomed) > 0 && ver.Status == database.BookVersionStatusTrash {
+	// answers BookServesFilesError. It holds for a purge that is already under
+	// way (purging, purge_failed) as well: an escalated version is retried by
+	// Purge now, and the kept-file sweep refuses to remove anything while the
+	// book serves nothing on disk, so a retry must not delete what the sweep
+	// would not. Such a version cannot go back to the trash, so the refusal
+	// leaves it as it is (the book's path is what to fix; a purge_failed version
+	// can also be hard-deleted).
+	if len(doomed) > 0 {
 		if err := sg.requireServedFileOnDisk(); err != nil {
-			lifecycleLog.Warn("trash purge kept version %s of book %s in the trash: %v", ver.ID, ver.BookID, err)
+			lifecycleLog.Warn("purge kept version %s (%s) of book %s untouched: %v", ver.ID, ver.Status, ver.BookID, err)
 			return err
 		}
 	}
@@ -770,7 +814,7 @@ loop:
 		// The owners and the decision again, for this path, right before its
 		// removal: a row can have been written, or a mount gone, since the pass
 		// above.
-		verdict, why, err := classifyPurgePath(store, decider, sg, ver, p, recorded)
+		verdict, why, err := classify(p)
 		if err != nil {
 			stuck.failed = append(stuck.failed, stuckFailure{path: p, err: err})
 			continue
@@ -953,6 +997,26 @@ func classifyPurgePath(store versionPurger, decider PurgeDecider, sg *servedGuar
 		return verdictKept, why, nil
 	}
 	return verdictRemove, "", nil
+}
+
+// OwnBookStillExistsReason is why a noted file outside the version's own slot
+// is kept while the version's own book still exists.
+const OwnBookStillExistsReason = "the version's own book still exists (a trashed book can be restored) and this file is outside the version's own folder, so it may be the book's audio"
+
+// classifyNotedPath is classifyPurgePath for a path that comes from a note
+// (BookVersion.PurgeKept or PurgeFailed) rather than from the version's own slot
+// or rows. Such a path was kept because something else owned it, and what owned
+// it may well have been the version's own book: a live book serves it
+// (classifyPurgePath says so while the book is live), but a book trashed since
+// serves nothing, and its audio is still the book's, restorable. So a noted path
+// outside the version's own slot is never removed while the own book row exists,
+// trashed or live. Only a book that is gone entirely hands the path back.
+func classifyNotedPath(store versionPurger, decider PurgeDecider, sg *servedGuard, ver *database.BookVersion, p string, recorded map[string]struct{}) (pathVerdict, string, error) {
+	verdict, why, err := classifyPurgePath(store, decider, sg, ver, p, recorded)
+	if err == nil && verdict == verdictRemove && sg.bookExists && !sg.inVersionSlot(p) {
+		return verdictKept, OwnBookStillExistsReason, nil
+	}
+	return verdict, why, err
 }
 
 // stuckPaths is what one purge attempt could not settle: paths it could not
@@ -1196,6 +1260,7 @@ func markPurged(store versionPurger, ver *database.BookVersion) error {
 	ver.PurgeFailedAt = nil
 	ver.PurgeUnlinked = nil
 	ver.PurgeUndecidedNights = 0
+	ver.PurgeUndecidedNightOn = ""
 	return store.UpdateBookVersion(ver)
 }
 

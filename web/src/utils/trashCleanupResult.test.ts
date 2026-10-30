@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 63a5ee65-33c3-4d7d-b8dc-cc5de376cdcd
 // last-edited: 2026-10-29
 
@@ -42,10 +42,62 @@ describe('parseTrashCleanupResult', () => {
       swap_incomplete_version_ids: [],
       swap_incomplete_book_ids: [],
       swap_incomplete_file_paths: [],
+      kept_sweep_report_only: false,
+      kept_sweep_would_remove: 0,
+      kept_sweep_would_drop: 0,
+      kept_sweep_would_remove_files: [],
+      kept_sweep_would_drop_files: [],
+      kept_sweep_removed: 0,
+      kept_sweep_gone: 0,
+      kept_sweep_still_kept: 0,
+      kept_sweep_kept_on_error: 0,
+      kept_sweep_escalated: 0,
+      kept_sweep_escalated_version_ids: [],
+      kept_sweep_escalated_files: [],
       stopped_for_merge: false,
       stopped_for_merge_nights: 0,
       stopped_for_merge_repeatedly: false,
     });
+  });
+
+  it('reads the kept-file sweep report, each file with its version, book and reason', () => {
+    const r = parseTrashCleanupResult({
+      kept_sweep_report_only: true,
+      kept_sweep_would_remove: 1,
+      kept_sweep_would_remove_files: [
+        {
+          version_id: 'v-year-one',
+          book_id: 'b-year-one',
+          path: '/lib/Gotham/Year One/.versions/v-year-one/part1.m4b',
+          reason: 'book_file x of book y still names it',
+        },
+        'not a file',
+        { path: 7 },
+      ],
+      kept_sweep_would_drop: 1,
+      kept_sweep_would_drop_files: [
+        { version_id: 'v2', book_id: 'b2', path: '/lib/gone.m4b', reason: 'kept once' },
+      ],
+      kept_sweep_escalated: 1,
+      kept_sweep_escalated_version_ids: ['v3'],
+      kept_sweep_escalated_files: [
+        { version_id: 'v3', book_id: 'b3', path: '/lib/stuck.m4b', reason: 'owner lookup down' },
+      ],
+    });
+    expect(r?.kept_sweep_report_only).toBe(true);
+    expect(r?.kept_sweep_would_remove).toBe(1);
+    expect(r?.kept_sweep_would_remove_files).toEqual([
+      {
+        version_id: 'v-year-one',
+        book_id: 'b-year-one',
+        path: '/lib/Gotham/Year One/.versions/v-year-one/part1.m4b',
+        reason: 'book_file x of book y still names it',
+      },
+      { version_id: '', book_id: '', path: '', reason: '' },
+    ]);
+    expect(r?.kept_sweep_would_drop_files[0].path).toBe('/lib/gone.m4b');
+    expect(r?.kept_sweep_escalated_version_ids).toEqual(['v3']);
+    expect(r?.kept_sweep_escalated_files[0].reason).toBe('owner lookup down');
   });
 
   it('reads the kept, needs-attention and stopped fields', () => {

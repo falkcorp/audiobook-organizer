@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.17 -->
+<!-- version: 10.78.18 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -149,6 +149,12 @@ into one of the curated sections below, is a normal direct edit.
       nothing, drops no note), and a note it cannot settle for 3 nights in a row escalates
       the version to `purge_failed` (the purge's own exit; see `PurgeUndecidedNights`).
       Switching it on is tracked in `TODO-KEPT-SWEEP-APPLY`.
+      Review follow-ups (PR 4255), done: a book that serves nothing never counts toward
+      escalation, and Purge now on a `purging` / `purge_failed` version applies the same
+      refusal; the sweep never removes a file outside the version's own slot while its
+      own book row exists; a retry decides every file in `PurgeKept` / `PurgeFailed`;
+      `purge_failed` versions' `PurgeKept` notes stay swept; one escalation night per
+      calendar day (`PurgeUndecidedNightOn`).
 
 - [ ] **Retired-versions decision records: three remaining gaps** (from the review follow-up of #4240)
   - **Backfill for retires that predate the records.** No `applied` record exists for a shell retired before part 8 shipped. Finishing a retire's tail now writes one as a side effect, but a version with no tail pending (the `already_retired` class) never gets one. Decide whether to backfill `applied` from each retired version's `RetireOpID`, or to leave the ledger starting at part 8.

@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0a0e6a4a-3f6e-4f0c-9b4f-6d7a1e2c8b35
 // last-edited: 2026-10-29
 
@@ -45,24 +45,37 @@ import (
 // as KeptSweepOptions.Apply by the wiring layer once per run). Off, it makes every
 // decision and reports what it WOULD do (KeptSweepResult.WouldRemoveFiles,
 // WouldDropFiles: version, book, path and the reason the file had been kept), and
-// changes nothing on disk or in any note: the gate sits ahead of both the unlink
-// and the note drop. The owner reads a night or two of that list and flips the
-// switch. On, it behaves as described above.
+// removes no file and drops no note: the gate sits ahead of both the unlink and
+// the note drop. It is not a read-only run, though: a note that really cannot be
+// settled (see below) is still counted, and at the third night the version's
+// status moves to purge_failed and the unsettled notes into PurgeFailed. Those
+// are writes to the version record, never to a file. The owner reads a night or
+// two of the would-remove list and flips the switch. On, it behaves as described
+// above.
 //
 // A note it cannot settle. A note the sweep cannot decide (an owner lookup that
 // errors, a path the disk cannot settle, an unlink that fails) would be retried,
 // and warned about, every night for ever. So the nights are counted, on the
 // version, in the purge's own counter (BookVersion.PurgeUndecidedNights): a night
-// that leaves such a note and removes or drops nothing adds one, any other night
-// resets it, and at PurgeUndecidedEscalateAfter in a row the version moves from
-// inactive_purged to purge_failed, with the unsettled notes in PurgeFailed. That is
-// the purge's own exit for a version that can never finish: the trashed-versions
-// page lists it with its files and reasons, the owner retries (Purge now) or
-// hard-deletes it, and the sweep stops looking at it (ListPurgedBookVersions does
-// not return purge_failed). Only real "could not settle" counts. A decision that
-// would only have removed something (report-only), and anything environmental (the
-// library not ready, the merge lock busy, a version write that failed on an earlier
-// path) is not a night: none of those says anything about the note.
+// that leaves such a note and removes or drops nothing adds one (at most one a
+// calendar day: PurgeUndecidedNightOn), any other night resets it, and at
+// PurgeUndecidedEscalateAfter in a row the version moves from inactive_purged to
+// purge_failed, with the unsettled notes in PurgeFailed. That is the purge's own
+// exit for a version that can never finish: the trashed-versions page lists it
+// with its files and reasons, and the owner retries (Purge now, which decides
+// every noted file again) or hard-deletes it. The unsettled notes leave the sweep
+// (it stops warning about them); the notes still in PurgeKept stay swept, every
+// night, and are never escalated again. Only real "could not settle" counts. A
+// decision that would only have removed something (report-only), a book that
+// serves nothing on disk (the purge's ErrPurgeNothingServed: only fixing the book
+// changes that), and anything environmental (the library not ready, the merge
+// lock busy, a version write that failed on an earlier path) is not a night: none
+// of those says anything about the note.
+//
+// A file outside the version's own slot is never removed while the version's own
+// book row exists, trashed or live (classifyNotedPath): the note was probably
+// kept because that book served the file, and a trashed book is restorable and
+// wants its audio back. Only a book that is gone entirely hands the file back.
 //
 // Fail closed, everywhere: a read that errors, a path the disk cannot settle, a
 // guard that is not ready, a merge lock that stays busy, a removal that fails, a
@@ -84,9 +97,10 @@ import (
 // KeptSweepOptions is how the caller runs the sweep.
 type KeptSweepOptions struct {
 	// Apply is the kept_sweep_apply_enabled switch, read once per run by the
-	// caller. False (report-only) decides everything and changes nothing: no
-	// unlink, no note dropped. The one thing a report-only run may write is the
-	// escalation count of a note that really cannot be settled.
+	// caller. False (report-only) decides everything and unlinks no file and drops
+	// no note. It still writes the version record when a note really cannot be
+	// settled: the night count, and at the third night the move to purge_failed
+	// with the unsettled notes in PurgeFailed.
 	Apply bool
 	// Skip names versions the caller has just purged, and so just asked.
 	Skip map[string]struct{}
@@ -129,9 +143,10 @@ type KeptSweepResult struct {
 	WouldDropFiles   []KeptVersion
 	ErrorFiles       []KeptVersion
 	// Escalated lists the versions this run moved to purge_failed because a note
-	// stayed unsettled for PurgeUndecidedEscalateAfter nights in a row; Files are
-	// the unsettled notes (now BookVersion.PurgeFailed), with the reason each could
-	// not be settled. They are not listed as kept on error from the next night on.
+	// stayed unsettled for PurgeUndecidedEscalateAfter nights in a row (also in a
+	// report-only run); Files are the unsettled notes (now
+	// BookVersion.PurgeFailed), with the reason each could not be settled. They
+	// are not listed as kept on error from the next night on.
 	Escalated []KeptVersion
 }
 
@@ -150,6 +165,16 @@ func (r *KeptSweepResult) merge(o KeptSweepResult) {
 	r.ErrorFiles = append(r.ErrorFiles, o.ErrorFiles...)
 	r.Escalated = append(r.Escalated, o.Escalated...)
 }
+
+// sweepable is whether the sweep looks at v: an inactive_purged or purge_failed
+// version with notes in PurgeKept.
+func sweepable(v *database.BookVersion) bool {
+	return (v.Status == database.BookVersionStatusInactivePurged || v.Status == database.BookVersionStatusPurgeFailed) && len(v.PurgeKept) > 0
+}
+
+// keptSweepNow is the clock the sweep counts nights by; a var only so a test can
+// move it from one night to the next.
+var keptSweepNow = time.Now
 
 // keptSweepWorkers bounds the sweep's worker pool. A var only so a test can pin
 // it.
@@ -171,8 +196,8 @@ type keptJudgement struct {
 	why    string
 	// counts is set on a keptError that is a real "could not settle": it counts
 	// toward escalation. It is false for a would-remove that could not go ahead
-	// because the book serves nothing on disk, in a report-only run (nothing is
-	// being removed, so nothing failed), and for environmental failures.
+	// because the book serves nothing on disk (the purge's ErrPurgeNothingServed,
+	// which only fixing the book changes), and for environmental failures.
 	counts bool
 }
 
@@ -180,8 +205,11 @@ type keptJudgement struct {
 // A removal is allowed only while the version's own book is known to serve a
 // file that exists, as a trashed version's purge requires: with none, the served
 // guard has nothing to compare against and "nothing is served" would be a guess.
-// apply only decides whether that last downgrade counts toward escalation.
-func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVersion, apply bool) ([]keptJudgement, *servedGuard) {
+// That downgrade never counts toward escalation, in either mode: it says the
+// book's path is stale or lost, which only fixing the book changes, and it is the
+// same refusal the purge makes (ErrPurgeNothingServed), which the purge does not
+// count either.
+func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVersion) ([]keptJudgement, *servedGuard) {
 	out := make([]keptJudgement, len(ver.PurgeKept))
 	sg, err := rebuildServedGuard(store, ver)
 	if err != nil {
@@ -193,7 +221,7 @@ func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVers
 	removable := false
 	for i, n := range ver.PurgeKept {
 		j := keptJudgement{note: n}
-		verdict, why, err := classifyPurgePath(store, decider, sg, ver, n.Path, nil)
+		verdict, why, err := classifyNotedPath(store, decider, sg, ver, n.Path, nil)
 		switch {
 		case err != nil:
 			j.action, j.why, j.counts = keptError, err.Error(), true
@@ -213,7 +241,7 @@ func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVers
 		if err := sg.requireServedFileOnDisk(); err != nil {
 			for i := range out {
 				if out[i].action == keptRemove {
-					out[i].action, out[i].why, out[i].counts = keptError, err.Error(), apply
+					out[i].action, out[i].why = keptError, err.Error()
 				}
 			}
 		}
@@ -244,10 +272,19 @@ func SweepKeptFiles(store KeptSweepStore, guard PurgeGuard, opts KeptSweepOption
 	if err != nil {
 		return res, fmt.Errorf("kept-file sweep: list purged versions: %w", err)
 	}
+	// A purge_failed version keeps its PurgeKept notes too (the files the purge, or
+	// an earlier sweep, left because something owned them), and nothing else looks
+	// at them: the nightly cleanup does not retry it, and the trashed-versions page
+	// lists only its PurgeFailed files. They are swept, never re-escalated.
+	trash, err := store.ListTrashedBookVersions()
+	if err != nil {
+		return res, fmt.Errorf("kept-file sweep: list purge_failed versions: %w", err)
+	}
+	purged = append(purged, trash...)
 	var cands []database.BookVersion
 	for i := range purged {
 		v := &purged[i]
-		if v.Status != database.BookVersionStatusInactivePurged || len(v.PurgeKept) == 0 {
+		if !sweepable(v) {
 			continue
 		}
 		if _, ok := opts.Skip[v.ID]; ok {
@@ -334,9 +371,12 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 	// acts on a note, so a version needs the lock only to count a note it cannot
 	// settle (or to reset that count).
 	look := *snap
-	judged, _ := judgeKept(store, guard.NewDecider(), &look, apply)
+	judged, _ := judgeKept(store, guard.NewDecider(), &look)
 	acts := apply && slices.ContainsFunc(judged, func(j keptJudgement) bool { return j.action == keptRemove || j.action == keptGone })
-	if !acts && countedErrors(judged) == 0 && snap.PurgeUndecidedNights == 0 {
+	// Nights are counted only for an inactive_purged version: a purge_failed one
+	// has been escalated already, and is not escalated again.
+	counting := snap.Status == database.BookVersionStatusInactivePurged
+	if !acts && !(counting && (countedErrors(judged) > 0 || snap.PurgeUndecidedNights > 0)) {
 		tally(&res, snap, judged)
 		return res
 	}
@@ -379,13 +419,13 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 	if err != nil {
 		return notActed(fmt.Sprintf("read the version again under the merge lock: %v", err))
 	}
-	if fresh == nil || fresh.Status != database.BookVersionStatusInactivePurged || len(fresh.PurgeKept) == 0 {
-		// Hard-deleted, or its notes already settled, while this waited: nothing
-		// is owed.
+	if fresh == nil || !sweepable(fresh) {
+		// Hard-deleted, purged again, or its notes already settled, while this
+		// waited: nothing is owed.
 		return KeptSweepResult{}
 	}
 	decider := guard.NewDecider()
-	judged, sg := judgeKept(store, decider, fresh, apply)
+	judged, sg := judgeKept(store, decider, fresh)
 
 	// Files that may be unlinked are unlinked one at a time, and the note of each
 	// is dropped (and the version written) right after, never before.
@@ -417,7 +457,7 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 			// take the merge lock (the library scan) can have started naming it since
 			// the pass above, and that pass is older by every removal and record
 			// written before this one.
-			verdict, why, cerr := classifyPurgePath(store, decider, sg, fresh, j.note.Path, nil)
+			verdict, why, cerr := classifyNotedPath(store, decider, sg, fresh, j.note.Path, nil)
 			switch {
 			case cerr != nil:
 				n := database.PurgeFileNote{Path: j.note.Path, Reason: cerr.Error()}
@@ -501,14 +541,18 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 	// The folders the removals emptied, only when no note is left: a folder
 	// pruned while a noted file of the slot is not there yet would make that file
 	// read as "its folder is missing too" for ever (finishPurge has the same rule).
-	if stopped == "" && (len(removed) > 0 || len(gone) > 0) && len(fresh.PurgeKept) == 0 {
+	// Not for a purge_failed version: files of its slot may still be waiting for
+	// the retry, and the retry prunes when it finishes.
+	if stopped == "" && fresh.Status == database.BookVersionStatusInactivePurged && (len(removed) > 0 || len(gone) > 0) && len(fresh.PurgeKept) == 0 {
 		if _, bookDir, _, derr := versionBookDir(store, fresh); derr != nil {
 			lifecycleLog.Warn("kept-file sweep: version %s: cannot locate its folder to tidy it: %v", fresh.ID, derr)
 		} else if bookDir != "" {
 			pruneVersionDirs(decider, bookDir, fresh.ID)
 		}
 	}
-	settleNights(store, fresh, &res, counted, len(removed)+len(gone) > 0)
+	if fresh.Status == database.BookVersionStatusInactivePurged {
+		settleNights(store, fresh, &res, counted, len(removed)+len(gone) > 0)
+	}
 	return res
 }
 
@@ -532,10 +576,16 @@ func countedErrors(judged []keptJudgement) int {
 // PurgeKept. The version is the fresh copy read under the merge lock and written
 // by this sweep, so the write is its own.
 func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSweepResult, counted []database.PurgeFileNote, progress bool) {
-	was := ver.PurgeUndecidedNights
-	nights := 0
+	was, wasOn := ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn
+	today := keptSweepNow().Format(time.DateOnly)
+	nights, on := 0, ""
 	if !progress && len(counted) > 0 {
-		nights = was + 1
+		// One night is one calendar day: a sweep that runs again the same day (a
+		// manual run, a retry) leaves the count where the first run put it.
+		nights, on = was+1, today
+		if wasOn == today && was > 0 {
+			nights, on = was, wasOn
+		}
 	}
 	if nights >= PurgeUndecidedEscalateAfter {
 		prevKept, prevStatus := ver.PurgeKept, ver.Status
@@ -547,9 +597,10 @@ func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSwee
 		ver.PurgeKept = slices.DeleteFunc(slices.Clone(prevKept), func(n database.PurgeFileNote) bool {
 			return slices.ContainsFunc(counted, func(c database.PurgeFileNote) bool { return c.Path == n.Path })
 		})
-		ver.PurgeUndecidedNights = 0
+		ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn = 0, ""
 		if err := store.UpdateBookVersion(ver); err != nil {
 			ver.Status, ver.PurgeFailed, ver.PurgeFailedAt, ver.PurgeKept, ver.PurgeUndecidedNights = prevStatus, nil, nil, prevKept, was
+			ver.PurgeUndecidedNightOn = wasOn
 			lifecycleLog.Warn("kept-file sweep: version %s (book %s): %d night(s) in a row could not settle %s, and recording that failed: %v",
 				ver.ID, ver.BookID, nights, notePaths(counted), err)
 			return
@@ -559,12 +610,12 @@ func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSwee
 		res.Escalated = append(res.Escalated, KeptVersion{VersionID: ver.ID, BookID: ver.BookID, Files: counted})
 		return
 	}
-	if nights == was {
+	if nights == was && on == wasOn {
 		return
 	}
-	ver.PurgeUndecidedNights = nights
+	ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn = nights, on
 	if err := store.UpdateBookVersion(ver); err != nil {
-		ver.PurgeUndecidedNights = was
+		ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn = was, wasOn
 		lifecycleLog.Warn("kept-file sweep: version %s: cannot store the night count (%d): %v; escalation is delayed", ver.ID, nights, err)
 	}
 }

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-29-purge-kept-files-sweep-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2b6d9f3e-8a41-4c70-9d5e-0f7a3c1b8e64 -->
 <!-- last-edited: 2026-10-29 -->
 
@@ -42,17 +42,31 @@ is never touched.
 
 Because this clean-up deletes files, it starts in a "show me first" mode (a setting
 named kept_sweep_apply_enabled, off until the owner turns it on). While it is off,
-the nightly clean-up makes every decision but removes nothing and changes no list;
-it only reports, in the night's result, which files it would remove and why each
-had been skipped in the first place. The owner reads that list, and turns the
-setting on when it looks right.
+the nightly clean-up makes every decision but removes no file and crosses nothing
+off a list; it only reports, in the night's result (and on the result page of the
+clean-up), which files it would remove and why each had been skipped in the first
+place. The owner reads that list, and turns the setting on when it looks right.
+The one thing it may still write while off is the hand-over described next, which
+changes a version's status on the trashed-versions page and never touches a file.
 
 If the clean-up cannot make up its mind about a skipped file for three nights in a
 row (a failed read, a disk that will not answer, a removal that keeps failing), it
 no longer reports the same warning for ever. It hands the version to the owner on
 the trashed-versions page, with the files and the reasons, where the owner can
 retry it or delete the record. Nights where the library was simply not mounted, or
-another job held things up, do not count towards that.
+another job held things up, do not count towards that, and neither does a book
+whose own file is missing (that needs the book fixed, not a hand-over). A night
+is a calendar day, however many times the clean-up runs that day. The skipped
+files that were not the problem stay on the list and are still checked every night.
+
+Two further protections came out of review. A skipped file that lies outside the
+purged version's own folder is never removed while the version's book still
+exists, even in the trash: it may be that book's audio, and the book can be
+restored. And when the owner presses Purge now on a version that was handed over,
+the purge asks about every file named on its lists, instead of only the files in
+its folder, and refuses to delete anything while its book plays no file that
+exists, so a retry can no longer erase a note, or remove a file, that the nightly
+clean-up had left alone.
 
 The night's report now says how many files were removed, how many notes were
 dropped because the file was already gone, how many files are still needed, and how

@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_modes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8a5c17-92d4-4b06-8f1a-6c0d7b2e9a54
 // last-edited: 2026-10-29
 
@@ -199,13 +199,18 @@ func TestSweepKeptFiles_EscalatesAfterThreeNightsOfARealError(t *testing.T) {
 	requireOnDisk(t, p) // escalating deletes nothing
 	requireOnDisk(t, other)
 
-	// Night four: the version is no longer the sweep's, so it is not warned about
-	// again; the cleanup lists it for the owner instead.
+	// Night four: the unsettled note is the owner's now (PurgeFailed), so it is not
+	// warned about again, and the version is not escalated twice. The sweep still
+	// looks at the notes left in PurgeKept (the still-owned file) and finds it kept.
 	night4 := sweep(t, s, testGuard)
-	requireCounts(t, night4, 0, 0, 0, 0)
-	if night4.Versions != 0 {
-		t.Errorf("night 4 looked at %d version(s), want none", night4.Versions)
+	requireCounts(t, night4, 0, 0, 1, 0)
+	if night4.Versions != 1 || len(night4.Escalated) != 0 {
+		t.Errorf("night 4 looked at %d version(s) and escalated %d, want 1 and 0", night4.Versions, len(night4.Escalated))
 	}
+	if again := f.stored(t); again.Status != database.BookVersionStatusPurgeFailed || len(again.PurgeFailed) != 1 || again.PurgeUndecidedNights != 0 {
+		t.Errorf("after night 4: status=%s purge_failed=%v nights=%d, want it unchanged", again.Status, again.PurgeFailed, again.PurgeUndecidedNights)
+	}
+	nextNight(t)
 	clean, err := cleanupTrashedVersionsAt(s, time.Now(), testGuard, true)
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
@@ -326,20 +331,27 @@ func TestSweepKeptFiles_ReportOnlyNeverEscalatesAWouldRemove(t *testing.T) {
 	})
 }
 
-// In an applying run the same held-back removal is a real "cannot settle": the
-// book's path has to be fixed, and the owner is told by the escalation.
-func TestSweepKeptFiles_ApplyEscalatesABookThatServesNothing(t *testing.T) {
+// A held-back removal because the book serves nothing on disk never escalates,
+// in an applying run either: it is the purge's ErrPurgeNothingServed (the book's
+// path is stale or lost, and only fixing the book changes that), which the purge
+// does not count, and an escalated version could be retried by Purge now, which
+// would have to delete what the sweep refused to. The file stays, every night,
+// reported as kept on error.
+func TestSweepKeptFiles_ApplyNeverEscalatesABookThatServesNothing(t *testing.T) {
 	f := newKeptFixture(t)
 	p := f.addKept(t, "kept once")
 	if err := os.Remove(filepath.Join(f.bookDir, "year-one.m4b")); err != nil {
 		t.Fatal(err)
 	}
-	var res KeptSweepResult
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
-		res = sweep(t, f.store, testGuard)
+	for night := 0; night < PurgeUndecidedEscalateAfter+3; night++ {
+		res := sweep(t, f.store, testGuard)
+		requireCounts(t, res, 0, 0, 0, 1)
+		if len(res.Escalated) != 0 {
+			t.Fatalf("night %d escalated a book that serves nothing: %+v", night+1, res.Escalated)
+		}
 	}
-	if len(res.Escalated) != 1 {
-		t.Fatalf("Escalated = %+v, want the version", res.Escalated)
+	if cur := f.stored(t); cur.Status != database.BookVersionStatusInactivePurged || cur.PurgeUndecidedNights != 0 {
+		t.Fatalf("stored = %s nights %d, want inactive_purged and 0", cur.Status, cur.PurgeUndecidedNights)
 	}
 	requireOnDisk(t, p)
 }
@@ -413,6 +425,7 @@ func TestCleanup_ReportsAVersionTheSweepEscalated(t *testing.T) {
 	var res CleanupResult
 	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
 		var err error
+		nextNight(t)
 		if res, err = cleanupTrashedVersionsAt(s, time.Now(), testGuard, true); err != nil {
 			t.Fatalf("cleanup: %v", err)
 		}

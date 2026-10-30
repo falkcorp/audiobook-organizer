@@ -1,5 +1,5 @@
 // file: web/src/utils/trashCleanupResult.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: dfb540be-d220-4087-9ed6-56cdd16b0e8c
 // last-edited: 2026-10-29
 
@@ -15,6 +15,19 @@ export const TRASH_CLEANUP_DEF_ID = 'maintenance.trash-cleanup';
  */
 export function isTrashCleanupDef(defId: string | undefined | null): boolean {
   return defId === TRASH_CLEANUP_DEF_ID;
+}
+
+/**
+ * One file of the kept-file sweep's report (maintenance.KeptSweepFile): the
+ * version and book that noted it, and a reason. For the would-remove and
+ * would-drop lists that is why the purge had kept the file; for the escalated
+ * list, why the note could not be settled.
+ */
+export interface KeptSweepFile {
+  version_id: string;
+  book_id: string;
+  path: string;
+  reason: string;
 }
 
 /**
@@ -52,6 +65,30 @@ export interface TrashCleanupResult {
   swap_incomplete_version_ids: string[];
   swap_incomplete_book_ids: string[];
   swap_incomplete_file_paths: string[];
+  /**
+   * The kept-file sweep revisits files earlier purges left on disk. It ships
+   * report-only (kept_sweep_apply_enabled off): it then lists what it would
+   * remove and removes nothing, so removed and gone are zero.
+   */
+  kept_sweep_report_only: boolean;
+  /** files a report-only run found nothing naming any more (the files it would unlink once switched on) */
+  kept_sweep_would_remove: number;
+  /** notes of files already gone that a report-only run would drop */
+  kept_sweep_would_drop: number;
+  kept_sweep_would_remove_files: KeptSweepFile[];
+  kept_sweep_would_drop_files: KeptSweepFile[];
+  /** files the sweep unlinked (nothing names them any more) */
+  kept_sweep_removed: number;
+  /** notes of already-gone files the sweep dropped */
+  kept_sweep_gone: number;
+  /** files left in place because something still owns them */
+  kept_sweep_still_kept: number;
+  /** files left in place because the sweep could not decide or act; tried again next run */
+  kept_sweep_kept_on_error: number;
+  /** versions the sweep moved to purge_failed this run: a note stayed unsettled for several nights in a row */
+  kept_sweep_escalated: number;
+  kept_sweep_escalated_version_ids: string[];
+  kept_sweep_escalated_files: KeptSweepFile[];
   /** a merge or combine held the merge lock for the whole wait, so the run stopped and left the rest for the next night */
   stopped_for_merge: boolean;
   /** how many nights in a row, this one included, the run stopped for the merge lock */
@@ -67,6 +104,18 @@ export type TrashCleanupSet =
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+
+const sweepFiles = (v: unknown): KeptSweepFile[] =>
+  Array.isArray(v)
+    ? v
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+        .map((x) => ({
+          version_id: typeof x.version_id === 'string' ? x.version_id : '',
+          book_id: typeof x.book_id === 'string' ? x.book_id : '',
+          path: typeof x.path === 'string' ? x.path : '',
+          reason: typeof x.reason === 'string' ? x.reason : '',
+        }))
+    : [];
 
 /**
  * Reads a stored operation result as a trash cleanup result. The server omits
@@ -101,6 +150,18 @@ export function parseTrashCleanupResult(raw: unknown): TrashCleanupResult | null
     swap_incomplete_version_ids: strings(r.swap_incomplete_version_ids),
     swap_incomplete_book_ids: strings(r.swap_incomplete_book_ids),
     swap_incomplete_file_paths: strings(r.swap_incomplete_file_paths),
+    kept_sweep_report_only: r.kept_sweep_report_only === true,
+    kept_sweep_would_remove: num(r.kept_sweep_would_remove),
+    kept_sweep_would_drop: num(r.kept_sweep_would_drop),
+    kept_sweep_would_remove_files: sweepFiles(r.kept_sweep_would_remove_files),
+    kept_sweep_would_drop_files: sweepFiles(r.kept_sweep_would_drop_files),
+    kept_sweep_removed: num(r.kept_sweep_removed),
+    kept_sweep_gone: num(r.kept_sweep_gone),
+    kept_sweep_still_kept: num(r.kept_sweep_still_kept),
+    kept_sweep_kept_on_error: num(r.kept_sweep_kept_on_error),
+    kept_sweep_escalated: num(r.kept_sweep_escalated),
+    kept_sweep_escalated_version_ids: strings(r.kept_sweep_escalated_version_ids),
+    kept_sweep_escalated_files: sweepFiles(r.kept_sweep_escalated_files),
     stopped_for_merge: r.stopped_for_merge === true,
     stopped_for_merge_nights: num(r.stopped_for_merge_nights),
     stopped_for_merge_repeatedly: r.stopped_for_merge_repeatedly === true,
