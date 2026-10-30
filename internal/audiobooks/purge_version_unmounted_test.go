@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_version_unmounted_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7d2c9e41-0b58-4a3f-9c6e-1f8a5b3d7e20
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -248,7 +248,15 @@ func TestR4210b_UnrecordedUnlinkEscalatesToPurgeFailedSoItCanBeHardDeleted(t *te
 	require.NoError(t, f.store.UpdateBookVersion(v))
 	require.NoError(t, os.Remove(own))
 
+	// A stuck attempt counts at most once per calendar day, so each retry below
+	// stands for a later night: forget the day the previous one was counted on.
+	nextNight := func() {
+		cur := f.reread(t)
+		cur.PurgeUndecidedNightOn = ""
+		require.NoError(t, f.store.UpdateBookVersion(cur))
+	}
 	for i := 1; i < versions.PurgeUndecidedEscalateAfter; i++ {
+		nextNight()
 		err := f.purge(t)
 		require.ErrorIs(t, err, versions.ErrPurgeCannotTell, "retry %d", i)
 		require.Equal(t, database.BookVersionStatusPurging, f.reread(t).Status, "retry %d", i)
@@ -256,6 +264,7 @@ func TestR4210b_UnrecordedUnlinkEscalatesToPurgeFailedSoItCanBeHardDeleted(t *te
 	assert.ErrorIs(t, f.store.DeleteBookVersion(f.ver.ID), database.ErrVersionPurging, "hard delete is refused while purging")
 	assert.Error(t, versions.MarkRestored(f.reread(t)), "restore is refused: some files are gone")
 
+	nextNight()
 	err := f.purge(t)
 	require.ErrorIs(t, err, versions.ErrPurgeFailed)
 	got := f.reread(t)

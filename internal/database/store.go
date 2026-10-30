@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.129.3
+// version: 2.129.4
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package database
 
@@ -869,9 +869,9 @@ type BookVersion struct {
 	// PurgeUndecidedNightOn is the calendar day (YYYY-MM-DD, server local time)
 	// the kept-file sweep last added a night to PurgeUndecidedNights, so a sweep
 	// that runs more than once in a day (a manual run, a retry) counts one night,
-	// not several. Written and read only by the sweep; the purge's own attempts
-	// are counted per attempt (a Purge now click is an attempt) and ignore it.
-	// Cleared whenever the count is reset and when a purge finishes.
+	// not several. The purge's own stuck attempts (versions.settleStuck) use it the
+	// same way, so a Purge now click on a day that already counted a night runs but
+	// adds none. Cleared whenever the count is reset and when a purge finishes.
 	PurgeUndecidedNightOn string    `json:"purge_undecided_night_on,omitempty"`
 	MetadataJSON          string    `json:"metadata_json,omitempty"` // source-specific catch-all
 	CreatedAt             time.Time `json:"created_at"`

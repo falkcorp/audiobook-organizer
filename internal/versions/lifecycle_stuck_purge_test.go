@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_stuck_purge_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4e8b1d27-6c93-4f05-a7d2-9b3e5f0c8a61
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package versions
 
@@ -95,8 +95,10 @@ func TestPurgeVersion_PurgingVersionThatNeverSettlesEscalatesToPurgeFailedAndCan
 	f := newSharedPathFixture(t)
 	setStatus(t, f, database.BookVersionStatusPurging)
 	guard := undecidableOwn(f)
+	day := useDay(t, time.Date(2026, 10, 1, 3, 0, 0, 0, time.Local))
 
 	for n := 1; n < PurgeUndecidedEscalateAfter; n++ {
+		day.next()
 		v, _ := f.store.GetBookVersion(f.trashed.ID)
 		if err := PurgeVersion(f.store, v, guard); !errors.Is(err, ErrPurgeCannotTell) {
 			t.Fatalf("attempt %d = %v, want ErrPurgeCannotTell", n, err)
@@ -111,6 +113,7 @@ func TestPurgeVersion_PurgingVersionThatNeverSettlesEscalatesToPurgeFailedAndCan
 		}
 	}
 
+	day.next()
 	v, _ := f.store.GetBookVersion(f.trashed.ID)
 	err := PurgeVersion(f.store, v, guard)
 	if !errors.Is(err, ErrPurgeFailed) {
@@ -212,8 +215,10 @@ func TestPurgeVersion_UnlinkedButNeverRecordedFileDoesNotWedgeTheVersion(t *test
 	}
 	guard := undecidableOwn(f)
 
+	day := useDay(t, time.Date(2026, 10, 1, 3, 0, 0, 0, time.Local))
 	var last error
 	for n := 1; n <= PurgeUndecidedEscalateAfter; n++ {
+		day.next()
 		v, _ := f.store.GetBookVersion(f.trashed.ID)
 		last = PurgeVersion(f.store, v, guard)
 	}
@@ -385,4 +390,54 @@ func TestCleanup_AServedVersionIsListedUnderKeptAndNothingElse(t *testing.T) {
 		t.Fatalf("Kept = %+v, want %s with the served path and the reason", res.Kept, f.trashed.ID)
 	}
 	requireTrashed(t, f)
+}
+
+// dayClock moves purgeClock one calendar day at a time.
+type dayClock struct{ t time.Time }
+
+func (d *dayClock) next() { d.t = d.t.AddDate(0, 0, 1) }
+
+// useDay installs a purgeClock that reads d, starting one day before t so the
+// first next() lands on t. Tests using it must not run in parallel.
+func useDay(t *testing.T, start time.Time) *dayClock {
+	t.Helper()
+	d := &dayClock{t: start.AddDate(0, 0, -1)}
+	old := purgeClock
+	purgeClock = func() time.Time { return d.t }
+	t.Cleanup(func() { purgeClock = old })
+	return d
+}
+
+// A Purge now click is a purge attempt, but not another night: two stuck attempts
+// on one calendar day count once, and the next day's counts again.
+func TestSettleStuck_CountsAtMostOncePerCalendarDay(t *testing.T) {
+	f := newSharedPathFixture(t)
+	setStatus(t, f, database.BookVersionStatusPurging)
+	guard := undecidableOwn(f)
+	day := useDay(t, time.Date(2026, 10, 1, 3, 0, 0, 0, time.Local))
+	attempt := func() *database.BookVersion {
+		t.Helper()
+		v, _ := f.store.GetBookVersion(f.trashed.ID)
+		if err := PurgeVersion(f.store, v, guard); !errors.Is(err, ErrPurgeCannotTell) {
+			t.Fatalf("PurgeVersion = %v, want ErrPurgeCannotTell", err)
+		}
+		got, _ := f.store.GetBookVersion(f.trashed.ID)
+		return got
+	}
+
+	day.next()
+	if got := attempt(); got.PurgeUndecidedNights != 1 {
+		t.Fatalf("first attempt of day 1: nights = %d, want 1", got.PurgeUndecidedNights)
+	}
+	day.t = day.t.Add(5 * time.Hour) // a Purge now click later the same day
+	got := attempt()
+	if got.PurgeUndecidedNights != 1 || got.PurgeUndecidedNightOn != "2026-10-01" {
+		t.Fatalf("second attempt of day 1: nights=%d on=%q, want 1 and 2026-10-01", got.PurgeUndecidedNights, got.PurgeUndecidedNightOn)
+	}
+	day.t = day.t.Add(-5 * time.Hour)
+	day.next()
+	if got := attempt(); got.PurgeUndecidedNights != 2 || got.PurgeUndecidedNightOn != "2026-10-02" {
+		t.Fatalf("day 2: nights=%d on=%q, want 2 and 2026-10-02", got.PurgeUndecidedNights, got.PurgeUndecidedNightOn)
+	}
+	requirePurging(t, f)
 }
