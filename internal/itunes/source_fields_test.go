@@ -1,7 +1,7 @@
 // file: internal/itunes/source_fields_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6962328d-38b0-4622-ad29-190879f0ac5e
-// last-edited: 2026-09-11
+// last-edited: 2026-10-30
 
 package itunes
 
@@ -28,10 +28,12 @@ func TestParseLibrary_ITLDeclaresNoBookmark(t *testing.T) {
 
 	assert.Equal(t, ITLSourceFields(), lib.Carries)
 	assert.False(t, lib.Carries.Bookmark, "ITL decodes no bookmark")
+	assert.False(t, lib.Carries.Bookmarkable, "ITL decodes no Bookmarkable flag")
 	assert.True(t, lib.Carries.PlayCount, "ITL decodes play count at mhit offset 76")
 	assert.True(t, lib.Carries.PlayDate, "ITL decodes last-played at mhit offset 100")
 	for _, tr := range lib.Tracks {
 		assert.Zero(t, tr.Bookmark, "an ITL track's Bookmark is always 0 (unknown)")
+		assert.False(t, tr.Bookmarkable, "an ITL track's Bookmarkable is false (unknown), never an assumed true")
 	}
 }
 
@@ -68,6 +70,7 @@ func TestParseLibrary_XMLDeclaresAllPlaybackFields(t *testing.T) {
 	require.Len(t, lib.Tracks, 1)
 
 	assert.Equal(t, XMLSourceFields(), lib.Carries)
+	assert.True(t, lib.Carries.Bookmarkable, "the plist carries Bookmarkable")
 	for _, tr := range lib.Tracks {
 		assert.Equal(t, 2, tr.PlayCount)
 		assert.Zero(t, tr.Bookmark, "an absent Bookmark key decodes to 0")

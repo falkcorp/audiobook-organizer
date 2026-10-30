@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_convert_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b7e4c912-3f58-4d71-9a02-e8d61c5f47b3
+// last-edited: 2026-10-30
 
 package itunes
 
@@ -180,7 +181,7 @@ func TestParseITLAsLibrary_FieldMapping(t *testing.T) {
 	assert.Equal(t, 2023, track.Year)
 	assert.Equal(t, 7, track.PlayCount)
 	assert.Equal(t, 60, track.Rating)
-	assert.True(t, track.Bookmarkable)
+	assert.False(t, track.Bookmarkable, "ITL carries no Bookmarkable flag; it must not be assumed true")
 
 	// DateAdded should be non-zero (Mac epoch + 1 second)
 	assert.False(t, track.DateAdded.IsZero(), "DateAdded should not be zero")

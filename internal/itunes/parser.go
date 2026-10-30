@@ -1,7 +1,7 @@
 // file: internal/itunes/parser.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9c3d7e51-2f84-4b60-ae91-d8c72b4f36e0
-// last-edited: 2026-09-11
+// last-edited: 2026-10-30
 
 // Package itunes provides functionality for importing audiobooks from iTunes Library.xml files
 package itunes
@@ -51,20 +51,25 @@ type Library struct {
 // that never declares its capabilities preserves stored values instead of
 // zeroing them.
 type SourceFields struct {
-	Bookmark  bool // Track.Bookmark
-	PlayCount bool // Track.PlayCount
-	PlayDate  bool // Track.PlayDate
+	Bookmark     bool // Track.Bookmark
+	Bookmarkable bool // Track.Bookmarkable
+	PlayCount    bool // Track.PlayCount
+	PlayDate     bool // Track.PlayDate
 }
 
-// XMLSourceFields is what an iTunes Library.xml plist carries: all three
-// playback fields. An absent key there is a real zero (see SourceFields).
+// XMLSourceFields is what an iTunes Library.xml plist carries: every playback
+// field, plus the Bookmarkable flag. An absent key there is a real zero (see
+// SourceFields).
 func XMLSourceFields() SourceFields {
-	return SourceFields{Bookmark: true, PlayCount: true, PlayDate: true}
+	return SourceFields{Bookmark: true, Bookmarkable: true, PlayCount: true, PlayDate: true}
 }
 
 // ITLSourceFields is what ParseITLAsLibrary fills. Play count (mhit offset 76)
 // and last-played date (offset 100) are decoded by itl_le.go / itl_be.go, but
 // no bookmark offset is, so Track.Bookmark is always 0 from this source.
+// Bookmarkable is likewise not decoded: the mhit block has no such bit, so
+// Track.Bookmarkable is always false (unknown) from this source, never an
+// assumed true.
 func ITLSourceFields() SourceFields {
 	return SourceFields{PlayCount: true, PlayDate: true}
 }
