@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
@@ -111,9 +111,11 @@ func (p *PebbleStore) lockBookFiles(ids []string) func() {
 // outermost lock of the retired-version writers (before the file stripes,
 // before the owner stripes): UpdateBookVersion and DeleteBookVersion hold it
 // across their read and commit, and RetireBookFiles, UnretireBookFiles and
-// RehomeRetiredVersion hold it across the whole attempt loop, so the set of
-// rows that carry a retired version and the version's holder cannot change
-// under any of them. Nothing takes a book, book_file or owner stripe and then a
+// RehomeRetiredVersion hold it across each staging round of the attempt loop
+// (restageUnderVersionLock: released over the backoff sleep between rounds and
+// re-checked on re-taking it), so the set of rows that carry a retired version
+// and the version's holder cannot change under any of them within a round.
+// Nothing takes a book, book_file or owner stripe and then a
 // version stripe.
 func (p *PebbleStore) lockBookVersion(versionID string) func() {
 	mu := &p.bookVersionLocks[stripeFor(versionID)]

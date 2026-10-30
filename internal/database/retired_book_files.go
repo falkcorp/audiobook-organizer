@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package database
 
@@ -602,18 +602,56 @@ func (p *PebbleStore) RetireBookFiles(moves []BookFileMove, holderID, versionID 
 	}
 	// The version stripe makes "versionID is a retired version of holderID"
 	// stay true until the rows are re-keyed: RehomeRetiredVersion and
-	// UpdateBookVersion take it too.
-	unlockVersion := p.lockBookVersion(versionID)
-	defer unlockVersion()
-	if _, err := p.requireRetiredVersionOf(versionID, holderID); err != nil {
-		return fmt.Errorf("RetireBookFiles: %w", err)
+	// UpdateBookVersion take it too. It is held per staging round, not across
+	// the backoff between rounds, so the check runs again each round.
+	check := func() error {
+		if _, err := p.requireRetiredVersionOf(versionID, holderID); err != nil {
+			return fmt.Errorf("RetireBookFiles: %w", err)
+		}
+		if err := p.requireHolderNotSoftDeleted(holderID); err != nil {
+			return fmt.Errorf("RetireBookFiles: %w", err)
+		}
+		return nil
 	}
-	if err := p.requireHolderNotSoftDeleted(holderID); err != nil {
-		return fmt.Errorf("RetireBookFiles: %w", err)
-	}
-	return restageBookFileBatch("RetireBookFiles", func(rows *bookFileRowCache) error {
+	return p.restageUnderVersionLock("RetireBookFiles", versionID, check, func(rows *bookFileRowCache) error {
 		return p.retireBookFilesAttempt(rows, moves, ids, holderID, versionID)
 	})
+}
+
+// restageUnderVersionLock is the locked, retried body the three retired-row
+// writers (RetireBookFiles, UnretireBookFiles, moveRetiredVersion) share: the
+// version stripe is taken for each staging round and released when the round
+// ends, so the backoff sleep between whole-batch re-stage rounds (up to 9 sleeps
+// of 5-100 ms) runs with the stripe free and a batch upsert or version writer
+// for that version is not queued behind it.
+//
+// Releasing the stripe is safe because nothing the stripe protected survives the
+// sleep unchecked:
+//   - check, when set, runs with the stripe held at the start of EVERY round and
+//     re-reads the version-level facts the writer relied on (the version is still
+//     a retired version of its holder, the holder is not trashed, the rehome
+//     destination is acceptable). Its error ends the call as a refusal.
+//   - The rows are not trusted across the gap either: the attempt reads them
+//     through the row cache, whose bytes the commit compares (the indexCAS
+//     note/verify pattern and bookFileUnchanged in commitBookFileBatchVerified),
+//     so a row another writer changed while the stripe was free refuses the
+//     commit and is re-read next round, exactly as for a stripe-less writer; the
+//     rehome attempt reads its rows afresh each round.
+//
+// Lock order is unchanged: the version stripe is the outermost lock, taken
+// before the attempt takes the file and owner stripes.
+func (p *PebbleStore) restageUnderVersionLock(who, versionID string, check func() error, attempt func(rows *bookFileRowCache) error) error {
+	guard := func() (func(), error) {
+		unlock := p.lockBookVersion(versionID)
+		if check != nil {
+			if err := check(); err != nil {
+				unlock()
+				return nil, err
+			}
+		}
+		return unlock, nil
+	}
+	return restageBookFileBatchGuarded(who, guard, attempt)
 }
 
 func (p *PebbleStore) retireBookFilesAttempt(rows *bookFileRowCache, moves []BookFileMove, retiring map[string]struct{}, holderID, versionID string) error {
@@ -793,9 +831,7 @@ func (p *PebbleStore) UnretireBookFiles(moves []BookFileMove, backToBookID, reti
 			return fmt.Errorf("UnretireBookFiles: rows are already under book %s", backToBookID)
 		}
 	}
-	unlockVersion := p.lockBookVersion(retireVersionID)
-	defer unlockVersion()
-	return restageBookFileBatch("UnretireBookFiles", func(rows *bookFileRowCache) error {
+	return p.restageUnderVersionLock("UnretireBookFiles", retireVersionID, nil, func(rows *bookFileRowCache) error {
 		return p.unretireBookFilesAttempt(rows, moves, backToBookID, retireVersionID, versionIDBefore)
 	})
 }
@@ -985,22 +1021,18 @@ func (p *PebbleStore) RestoreRetiredVersionHolder(versionID, previousHolderID st
 }
 
 // moveRetiredVersion is the locked, retried body both rehome entry points
-// share. checkDest, when set, is an early destination check, run once the
-// version stripe is held, that gives a clearer refusal than the commit's own
+// share. checkDest, when set, is an early destination check, run with the
+// version stripe held at the start of every staging round, that gives a clearer refusal than the commit's own
 // owner check (which is the real guard: see RestoreRetiredVersionHolder); nil
 // means the caller has already decided the destination is acceptable.
 func (p *PebbleStore) moveRetiredVersion(versionID, newHolderID string, checkDest func() error) error {
 	// The version stripe excludes RetireBookFiles, UnretireBookFiles and
 	// UpdateBookVersion for this version, so neither its holder nor the set of
-	// rows that carry it changes between the reads below and the commit.
-	unlockVersion := p.lockBookVersion(versionID)
-	defer unlockVersion()
-	if checkDest != nil {
-		if err := checkDest(); err != nil {
-			return err
-		}
-	}
-	return restageBookFileBatch("RehomeRetiredVersion", func(_ *bookFileRowCache) error {
+	// rows that carry it changes between the reads below and the commit of one
+	// staging round.
+	// Held per staging round, not across the backoff between rounds, so checkDest
+	// runs again each round (see restageUnderVersionLock).
+	return p.restageUnderVersionLock("RehomeRetiredVersion", versionID, checkDest, func(_ *bookFileRowCache) error {
 		return p.rehomeRetiredVersionAttempt(versionID, newHolderID)
 	})
 }
