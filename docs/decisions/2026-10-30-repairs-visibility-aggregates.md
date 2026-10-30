@@ -1,5 +1,5 @@
 <!-- file: docs/decisions/2026-10-30-repairs-visibility-aggregates.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 4f9a7c12-d83e-4b05-a1c6-2e7b90d35f48 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -73,3 +73,17 @@ reviewer can reverse a choice.
 - Not examined: the live batcher's `original_count` (`internal/activity/batcher.go`, shown by
   `BatchActivityEntry.tsx`) is a different count, over rows still in the feed, and was not checked for Repairs
   leakage.
+
+### TODO-REPAIRS-CANCEL-NO-FIXER-RUNS
+
+- Chosen: a holder of `settings.manage` may cancel a legacy Repairs run that names no fixer
+  (`opaccess.UnattributedRepairsRun`), through the v3 cancel route. The run stays hidden from everyone for
+  reads. Starts that name no fixer are already a 400, so nothing new can be created. Rejected: leaving it
+  refused for everyone (the v1 cancel route already lets `settings.manage` stop the same row, so the v3 refusal
+  protected nothing and left a stuck run with no v3 way out); and letting `scan.trigger` plus the definition's
+  permission cancel it (that is the generic rule, and it would let a caller act on a run nobody can vouch for).
+- Purge: no new path. `DELETE /operations/v2/:id/record` is already `settings.manage` and does not resolve the
+  row's fixer, so it already discards these rows. The v3 routes have no purge route to extend.
+- The 409 answers for a terminal or settled run are given to the `settings.manage` caller, who is allowed to act
+  on the run.
+

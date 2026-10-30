@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
 // last-edited: 2026-10-30
 
@@ -614,4 +614,25 @@ func TestReader_MayReadEveryRepairsOp(t *testing.T) {
 	require.False(t, unwired.For(c).MayReadEveryRepairsOp())
 	var nilReader *Reader
 	require.False(t, nilReader.MayReadEveryRepairsOp())
+}
+
+// TestUnattributedRepairsRun: only a Repairs run that states no fixer, in its
+// params or its result, is unattributed.
+func TestUnattributedRepairsRun(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rec  *database.RunRecord
+		want bool
+	}{
+		{"nil", nil, false},
+		{"apply, empty params", &database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`{}`)}, true},
+		{"plan, no params", &database.RunRecord{DefID: repairs.PlanOpID}, true},
+		{"apply, fixer in params", &database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`{"fixer_id":"plain"}`)}, false},
+		{"apply, fixer only in result", &database.RunRecord{DefID: repairs.ApplyOpID, Params: []byte(`{}`), Result: []byte(`{"fixer_id":"plain"}`)}, false},
+		{"scan, no params", &database.RunRecord{DefID: "library.scan"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, UnattributedRepairsRun(tc.rec))
+		})
+	}
 }
