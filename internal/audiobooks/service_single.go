@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.6
+// version: 1.27.7
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-29
 
@@ -1012,6 +1012,14 @@ func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, refer
 		// go with the file left behind and no record): a path that cannot be
 		// decided, which keeps the book in the trash for a retry, or for a link
 		// cycle (ELOOP) gives up after a few passes like any unresolvable path.
+		if errors.Is(protErr, pathutil.ErrProtectedFolderUnresolved) {
+			// The trouble is a configured protected folder, not this path, so it
+			// is never marked errPathUnresolvable: that class is not held in the
+			// trash, and a looping folder would let every due book go with its
+			// file left behind. Every book is held until the configuration is
+			// fixed, and the message names the folder.
+			return purgeFileVerdict{keptErr: fmt.Errorf("cannot verify %s is outside the protected folders: %w: %w", path, errPathLookupFailed, protErr)}
+		}
 		return purgeFileVerdict{keptErr: statLookupError(path, "resolve symlinks for the protected-path check", protErr)}
 	}
 	if protected {

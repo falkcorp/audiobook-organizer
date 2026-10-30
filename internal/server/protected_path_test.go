@@ -1,5 +1,6 @@
 // file: internal/server/protected_path_test.go
 // version: 1.1.0
+// guid: 7e2c4a19-0b53-4d86-9f1a-c8d5e3b7a602
 // last-edited: 2026-10-29
 
 package server

@@ -211,6 +211,32 @@ func TestProtectedPathChecked_ImportPathErrorStillReportedAndSymlinkStillWins(t 
 	assert.NoError(t, err)
 }
 
+// A configured protected folder that cannot be resolved is the configuration's
+// problem, not the path's. It must hold the book in the trash (a lookup that may
+// pass), never be marked errPathUnresolvable: that class is not held, so one
+// looping iTunes folder would let every due book go with its file left behind.
+func TestPlanPurgePathIn_UnresolvableProtectedFolderHoldsTheBook(t *testing.T) {
+	resetImportPathCacheForHelper(t)
+	svc, _, base := setupPurgeBoundary(t)
+	loopA := filepath.Join(base, "music-a")
+	loopB := filepath.Join(base, "music-b")
+	require.NoError(t, os.Symlink(loopB, loopA))
+	require.NoError(t, os.Symlink(loopA, loopB))
+	setITunesPaths(t, filepath.Join(loopA, "Library.xml"), "")
+	x := filepath.Join(base, "lib", "Gotham", "year-one.m4b")
+	writeFile(t, x)
+
+	v := svc.planPurgePathIn(x, nil, nil)
+	assert.False(t, v.protected, "%+v", v)
+	assert.Empty(t, v.remove, "the file is not removed")
+	require.Error(t, v.keptErr)
+	assert.ErrorIs(t, v.keptErr, errPathLookupFailed)
+	assert.NotErrorIs(t, v.keptErr, errPathUnresolvable, "a bad folder is not an unresolvable path")
+	assert.Contains(t, v.keptErr.Error(), "music-a", "the message names the folder")
+	assert.NotNil(t, fileUndecided(&database.Book{ID: "year-one"}, v), "the book is held in the trash")
+	assert.True(t, fileExists(x))
+}
+
 // The decision the book purge and the version purge share: a file reached
 // through a symlink into the iTunes folder is protected (kept, not an error).
 func TestPlanPurgePathIn_SymlinkIntoITunesFolderIsProtected(t *testing.T) {
