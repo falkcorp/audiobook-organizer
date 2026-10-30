@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.49.3
+# version: 2.49.4
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-29
+# last-edited: 2026-10-30
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -335,7 +335,8 @@ test-short-shard:
 ## without editing this target. The script also RUNS the tests (--run): a
 ## package too heavy for one shard (internal/server, internal/plugins/maintenance)
 ## is split by test name into several `go test -run` processes that land in
-## different shards; see its docstring.
+## different shards (FIXTURE_JOBS caps the test binaries a shard runs at once,
+## default the CPU count); see its docstring.
 ##
 ## FIXTURE_TIMEOUT is go test's per-process -timeout (default 25m; each of the three
 ## Woodpecker test-fixtures-N workflows passes it explicitly).

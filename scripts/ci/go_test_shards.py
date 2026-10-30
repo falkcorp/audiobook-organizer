@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/go_test_shards.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: 3b8e6d21-7c4f-4a90-b1e5-9f2d0c7a6e48
-# last-edited: 2026-10-11
+# last-edited: 2026-10-30
 """Run Go test packages split into shards, then merge their coverage.
 
 `go test` runs packages in parallel but each package's tests in one process,
@@ -39,8 +39,20 @@ import tempfile
 import time
 
 # `go test -list` prints test, fuzz and example names plus an "ok" summary.
-# Benchmarks only run with -bench, so they are left out of the -run patterns.
-_NAME_RE = re.compile(r"^(Test|Fuzz|Example)[A-Za-z0-9_]*$")
+# \w, not [A-Za-z0-9_]: Go identifiers may hold any Unicode letter or digit, and
+# a name outside the ASCII class used to match nothing and so was dropped from
+# every shard without a trace.
+_NAME_RE = re.compile(r"^(Test|Fuzz|Example)\w*$")
+
+# Benchmarks only run with -bench, so they are listed but left out of the -run
+# patterns.
+_BENCH_RE = re.compile(r"^Benchmark\w*$")
+
+# A lone token that starts like a test name. `go test -list` runs the test
+# binary, so package init output (log lines) shares stdout with the names and
+# any other line is noise; but a single token that begins with Test, Fuzz or
+# Example and is not a valid name is a test this parser would otherwise drop.
+_NAMEISH_RE = re.compile(r"^(Test|Fuzz|Example)\S*$")
 
 
 # The per-package summary line that ends a package's names in -list output:
@@ -76,6 +88,10 @@ def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]
     flight). One call builds the shared graph once, with go's own
     parallelism. Measured on PR #3882 (2026-10-09, cold cache): six calls
     across four workers took 9 min 18 s per shard before the first test ran.
+
+    A line that looks like a test name (one token starting with Test, Fuzz or
+    Example) but is not a valid one is an error, not skipped: a skipped test is
+    in no shard. Other lines are package init output (log lines) and ignored.
     """
     if not pkgs:
         return {}
@@ -117,6 +133,12 @@ def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]
             pending = set()
         elif _NAME_RE.match(ln):
             pending.add(ln)
+        elif _NAMEISH_RE.match(ln):
+            print(res.stdout, flush=True)
+            raise SystemExit(
+                f"::error::go test -list printed {ln!r}, which looks like a test name but is not a "
+                "valid one; refusing to skip it, because a skipped test runs in no shard"
+            )
     missing = [p for p in pkgs if by_import[p] not in found]
     if missing or pending:
         print(res.stdout, flush=True)
