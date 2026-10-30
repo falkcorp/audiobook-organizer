@@ -1,81 +1,66 @@
 // file: internal/server/absauth/hash_cost_guard_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 6e0b7d24-91c3-4f8a-b5d6-3a28c4f1e907
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package absauth
 
 import (
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// SetHashCostForTest makes every password HashPassword writes cheap to guess.
-// It exists for test binaries' TestMain; a call from production code would ship
-// that. TestMain lives in a _test.go file, so no non-test file may name it.
-func TestSetHashCostForTestIsNotCalledByProductionCode(t *testing.T) {
-	// os.Getwd, not runtime.Caller: CI builds with -trimpath.
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := dir
-	for {
-		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-			break
+// The static guard that keeps non-test code from naming SetHashCostForTest
+// lives in internal/arch (TestHashCostSeamStaysInTests), which loads the whole
+// module, the root main package included. These tests cover the function's own
+// runtime guards and the cost it writes.
+
+func requirePanic(t *testing.T, want string, f func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("no panic, want one containing %q", want)
 		}
-		parent := filepath.Dir(root)
-		if parent == root {
-			t.Fatalf("go.mod not found above %s", dir)
+		if msg, _ := r.(string); !strings.Contains(msg, want) {
+			t.Fatalf("panic %v, want one containing %q", r, want)
 		}
-		root = parent
-	}
-	defining := filepath.Join(root, "internal", "server", "absauth", "password.go")
-	scanned := 0
-	for _, top := range []string{"internal", "cmd", "pkg", "tools"} {
-		err := filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				name := d.Name()
-				if path != filepath.Join(root, top) &&
-					(name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || path == defining {
-				return nil
-			}
-			scanned++
-			src, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if strings.Contains(string(src), "SetHashCostForTest") {
-				rel, _ := filepath.Rel(root, path)
-				t.Errorf("%s names SetHashCostForTest; production code must not lower the password hash cost", rel)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if scanned < 500 {
-		t.Fatalf("scanned only %d files; the walk is broken, not the code", scanned)
+	}()
+	f()
+}
+
+func TestSetHashCostForTestPanicsOutsideATestBinary(t *testing.T) {
+	oldFn, oldT, oldM := isTestBinary, hashTime, hashMemory
+	t.Cleanup(func() { isTestBinary, hashTime, hashMemory = oldFn, oldT, oldM })
+
+	isTestBinary = func() bool { return false }
+	requirePanic(t, "outside a test binary", func() { SetHashCostForTest(1, 64) })
+	if hashTime != oldT || hashMemory != oldM {
+		t.Fatalf("the refused call changed the cost to t=%d m=%d", hashTime, hashMemory)
 	}
 }
 
-func TestSetHashCostForTestChangesWhatIsWrittenAndStillVerifies(t *testing.T) {
+func TestSetHashCostForTestPanicsOnceTheDummyHashIsBuilt(t *testing.T) {
 	oldT, oldM := hashTime, hashMemory
 	t.Cleanup(func() { hashTime, hashMemory = oldT, oldM })
 
-	SetHashCostForTest(1, 64)
+	WarmLoginDummy() // builds it at whatever cost is current; sticks for the process
+	if !LoginDummyReadyForTest() {
+		t.Fatal("the dummy hash was not built")
+	}
+	requirePanic(t, "after the dummy hash was built", func() { SetHashCostForTest(1, 64) })
+	if hashTime != oldT || hashMemory != oldM {
+		t.Fatalf("the refused call changed the cost to t=%d m=%d", hashTime, hashMemory)
+	}
+}
+
+func TestLoweredHashCostChangesWhatIsWrittenAndStillVerifies(t *testing.T) {
+	oldT, oldM := hashTime, hashMemory
+	t.Cleanup(func() { hashTime, hashMemory = oldT, oldM })
+
+	// Not through SetHashCostForTest: another test in this binary may already
+	// have built the dummy hash, which that function refuses.
+	hashTime, hashMemory = 1, 64
 	algo, hash, err := HashPassword("correct horse")
 	if err != nil {
 		t.Fatal(err)

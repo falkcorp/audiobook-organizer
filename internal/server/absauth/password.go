@@ -1,7 +1,7 @@
 // file: internal/server/absauth/password.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package absauth
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -55,6 +56,10 @@ var (
 	hashMemory = argonMemory
 )
 
+// isTestBinary reports whether this process is a test binary. It is a variable
+// only so a test can stand in for a production binary.
+var isTestBinary = testing.Testing
+
 // SetHashCostForTest lowers the argon2id cost HashPassword writes for the rest
 // of the process.
 //
@@ -68,12 +73,24 @@ var (
 // hash written at the lowered cost verifies and fails exactly as before.
 //
 // Call it once from TestMain, before any test starts and before anything
-// builds the dummy hash: the variables are read without synchronization. The
-// tests of the cost itself (absauth's own, which pin m=65536 and count the
-// derivations) live in a package whose binary never calls this. Production
-// code must not call it; TestSetHashCostForTestIsNotCalledByProductionCode
-// enforces that. argon2 panics on a time of 0, so pass at least 1.
+// builds the dummy hash: the variables are read without synchronization. It
+// panics outside a test binary (testing.Testing is false there), so a call
+// that reached a production binary, from any file the repo's static guard
+// (internal/arch, TestHashCostSeamStaysInTests) could miss, still cannot lower
+// a real password's cost; and it panics once the dummy hash exists, because
+// that hash would keep the cost it was built at and the call would silently do
+// less than it says. argon2 panics on a time of 0, so pass at least 1.
+//
+// The tests of the cost itself (absauth's own: they pin m=65536 and count the
+// derivations) never call it, apart from the ones that prove its guards, which
+// panic before changing anything.
 func SetHashCostForTest(time, memoryKiB uint32) {
+	if !isTestBinary() {
+		panic("absauth.SetHashCostForTest called outside a test binary")
+	}
+	if dummyBuilt.Load() {
+		panic("absauth.SetHashCostForTest called after the dummy hash was built; call it first thing in TestMain")
+	}
 	hashTime, hashMemory = time, memoryKiB
 }
 

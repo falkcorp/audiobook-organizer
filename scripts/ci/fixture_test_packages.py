@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/fixture_test_packages.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: 92f31101-2399-4ce9-9b83-0af332666123
-# last-edited: 2026-10-29
+# last-edited: 2026-10-30
 """Select, partition and run the Go packages whose tests skip under -short, for
 `make test-fixtures`.
 
@@ -62,9 +62,25 @@ the same way): a test that only passes after another test ran in the same
 process would fail here, and TestMain-level state is rebuilt per process.
 
 --run executes the selected units: one `go test` for all the shard's whole
-packages (they run side by side, as before) and one per slice, all at once,
-each printed when it finishes. A slice that selects no test, or a `-run` that
-matches none, fails instead of reporting `ok [no tests to run]`.
+packages (they run side by side, as before) and one per slice. Concurrency is
+capped by a job budget, FIXTURE_JOBS or else the CPU count: the slices run in a
+pool of min(slices, budget // 2), heaviest first, and the whole-package run gets
+`-p budget - pool`, so the test binaries running at once stay at or under the
+budget, the old envelope of a single `go test` at -p NumCPU (parallel -race
+suites have OOM-killed CI steps on these agents). Each child's output goes to a
+log file under FIXTURE_LOG_DIR (default: a fresh temp dir) as it is produced and
+is printed when the child finishes; a SIGTERM kills the children and prints
+what they had written. A slice that selects no test, or a `-run` that matches
+none, fails instead of reporting `ok [no tests to run]`.
+
+Each slice logs how many tests it selected and a short hash of their names, so
+two hosts' logs can be compared. The names come from the native `go test -list`
+(the only list that can be produced here: a linux test binary cannot run on a
+darwin agent). On a host other than linux a name that a static scan of the
+linux test files finds but the native list lacks is reported as a ::warning::
+and not as an error: a darwin agent legitimately lacks linux-only tests, and
+failing it would turn every shard that holds one red on that agent. The linux
+agents run it; the warning is how a run that did not stays visible.
 
 Exits non-zero if nothing is selected, if a known helper in _REQUIRED_HELPERS is
 not detected as one, or if a shard comes out empty, so a broken discovery can
@@ -81,8 +97,11 @@ import json
 import math
 import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -340,8 +359,13 @@ def units(pkgs: list[str]) -> list[Unit]:
 
 def shard(pkgs: list[str], index: int, count: int) -> list[Unit]:
     """Longest-first greedy split of the units; deterministic for a given
-    package list. A split package's parts weigh weight/parts each and may land
-    in different shards; that is the point."""
+    package list. A split package's parts weigh weight/parts each and go to
+    different shards while there are shards to spare: a unit prefers a shard
+    that holds no other part of its package, and only a package with more
+    parts than there are shards doubles up. Without that preference two parts
+    of one package can land in the same shard (one process per part, but the
+    same agent and the same budget), which is the pile-up splitting is meant to
+    avoid."""
 
     def unit_weight(u: Unit) -> float:
         return weight(u.pkg) / u.parts
@@ -350,7 +374,8 @@ def shard(pkgs: list[str], index: int, count: int) -> list[Unit]:
     loads = [0.0] * count
     all_units = units(pkgs)
     for u in sorted(all_units, key=lambda u: (-unit_weight(u), u.pkg, u.part)):
-        b = min(range(count), key=lambda k: (loads[k], k))
+        free = [k for k in range(count) if all(o.pkg != u.pkg for o in bins[k])]
+        b = min(free or range(count), key=lambda k: (loads[k], k))
         bins[b].append(u)
         loads[b] += unit_weight(u)
     if sorted(u for b in bins for u in b) != sorted(all_units):
@@ -362,27 +387,75 @@ def shard_load(us: list[Unit]) -> float:
     return sum(weight(u.pkg) / u.parts for u in us)
 
 
-def invocations(
+class Invocation(NamedTuple):
+    """One `go test` process of a shard's plan."""
+
+    label: str
+    argv: list[str]
+    is_slice: bool  # a -run slice of a split package, not the whole-packages run
+    weight: float  # estimated seconds; slices start heaviest first
+    tests: int = 0  # slices: how many top-level tests the -run selects
+    names_hash: str = ""  # slices: short hash of those names
+
+
+def names_hash(names: list[str]) -> str:
+    return hashlib.sha256("\n".join(sorted(names)).encode()).hexdigest()[:12]
+
+
+def job_budget() -> int:
+    """How many test binaries may run at once: FIXTURE_JOBS, else the CPU count.
+    Mirrors go_test_shards.default_jobs, which caps its concurrent `go test`
+    processes the same way and for the same reason."""
+    raw = os.environ.get("FIXTURE_JOBS")
+    if raw:
+        if not raw.isdigit() or int(raw) < 1:
+            raise SystemExit(
+                f"fixture_test_packages: FIXTURE_JOBS={raw!r}; want a positive integer"
+            )
+        return int(raw)
+    return max(1, os.cpu_count() or 1)
+
+
+def plan_concurrency(n_slices: int, budget: int) -> tuple[int, int]:
+    """(slices running at once, -p for the whole-packages run). The two add up
+    to the budget whenever there are slices, so the test binaries alive at once
+    stay at or under it: a slice is one binary, and `go test -p N` runs at most
+    N."""
+    pool = min(n_slices, max(1, budget // 2))
+    return pool, max(1, budget - pool)
+
+
+def list_split(
     us: list[Unit],
     go_args: list[str],
     list_tests: Callable[[list[str], list[str]], dict[str, list[str]]] = (
         go_test_shards.list_tests_many
     ),
-) -> list[tuple[str, list[str]]]:
-    """The `go test` commands that run the units: one for every whole package
-    (so they still run side by side under go's own -p), and one per split part,
-    selecting that part's top-level tests with -run.
+) -> dict[str, list[str]]:
+    """`go test -list` names of every split package among us, in one call."""
+    pkgs = sorted({u.pkg for u in us if u.parts > 1})
+    return list_tests(pkgs, go_args) if pkgs else {}
 
-    Split packages' test names come from `go test -list`, in one call for all
-    of them. A part left with no test fails here rather than running as
+
+def invocations(
+    us: list[Unit], go_args: list[str], names: dict[str, list[str]], budget: int
+) -> list[Invocation]:
+    """The `go test` commands that run the units: one for every whole package
+    (so they still run side by side under go's own -p, capped at what the
+    slices leave of the budget) and one per split part, selecting that part's
+    top-level tests with -run. `names` holds each split package's tests, from
+    list_split.
+
+    A part left with no test fails here rather than running as
     `[no tests to run]`, which `go test` reports as ok."""
-    cmds: list[tuple[str, list[str]]] = []
-    whole = sorted(u.pkg for u in us if u.parts == 1)
+    slices = [u for u in us if u.parts > 1]
+    pool, p = plan_concurrency(len(slices), budget)
+    out: list[Invocation] = []
+    whole = sorted(u for u in us if u.parts == 1)
     if whole:
-        cmds.append((f"{len(whole)} whole packages", ["go", "test", *go_args, *whole]))
-    split = [u for u in us if u.parts > 1]
-    names = list_tests(sorted({u.pkg for u in split}), go_args) if split else {}
-    for u in split:
+        argv = ["go", "test", *go_args, "-p", str(p), *(u.pkg for u in whole)]
+        out.append(Invocation(f"{len(whole)} whole packages", argv, False, shard_load(whole)))
+    for u in sorted(slices, key=lambda u: (-weight(u.pkg) / u.parts, u.pkg, u.part)):
         mine = [n for n in names[u.pkg] if part_of(n, u.parts) == u.part]
         if not mine:
             raise SystemExit(
@@ -390,32 +463,152 @@ def invocations(
                 "tests; it would run nothing and still report ok"
             )
         pattern = "^(" + "|".join(mine) + ")$"
-        cmds.append((str(u), ["go", "test", *go_args, "-run", pattern, u.pkg]))
-    return cmds
+        argv = ["go", "test", *go_args, "-run", pattern, u.pkg]
+        out.append(Invocation(str(u), argv, True, shard_load([u]), len(mine), names_hash(mine)))
+    return out
 
 
-def run_invocations(cmds: list[tuple[str, list[str]]]) -> int:
-    """Run the commands side by side, as one `go test` over every package did,
-    print each one's output as it finishes, and return 1 if any failed."""
+_TEST_FUNC_RE = re.compile(r"^func (Test|Fuzz)(\w*)\(\s*\w+ \*testing\.[TF]\s*\)", re.MULTILINE)
 
-    def run(item: tuple[str, list[str]]) -> tuple[str, int, float, str]:
-        label, argv = item
+
+def static_test_names(root: Path, pkgs: list[str]) -> dict[str, set[str]]:
+    """Top-level Test and Fuzz functions in the test files `go list` selects
+    under the discovery platform (GOOS=linux), by scanning their source. `go
+    test -list` cannot give this on another host: it runs the test binary, and
+    a linux binary does not run on darwin."""
+    out: dict[str, set[str]] = {}
+    for p in _go_list_json(root, pkgs, _DISCOVERY_ENV):
+        names: set[str] = set()
+        for f in [*p.get("TestGoFiles", []), *p.get("XTestGoFiles", [])]:
+            try:
+                text = (Path(p["Dir"]) / f).read_text(encoding="utf-8")
+            except OSError as e:
+                raise SystemExit(f"fixture_test_packages: cannot read {p['Dir']}/{f}: {e}")
+            for kind, rest in _TEST_FUNC_RE.findall(text):
+                # Go: the character after Test/Fuzz must not be a lowercase letter.
+                if not rest[:1].islower():
+                    names.add(kind + rest)
+        out[p["ImportPath"]] = names
+    return out
+
+
+def missing_here(
+    native: dict[str, list[str]], discovery: dict[str, set[str]]
+) -> dict[str, list[str]]:
+    """Tests the linux test files declare that this host's `go test -list` does
+    not show, per package. Examples are not compared: go lists only those with
+    an output comment, which a source scan cannot tell."""
+    out = {}
+    for pkg, names in sorted(native.items()):
+        here = {n for n in names if n.startswith(("Test", "Fuzz"))}
+        gone = sorted(discovery.get(pkg, set()) - here)
+        if gone:
+            out[pkg] = gone
+    return out
+
+
+def native_goos() -> str:
+    res = subprocess.run(["go", "env", "GOOS"], capture_output=True, text=True)
+    return res.stdout.strip()
+
+
+class Result(NamedTuple):
+    label: str
+    rc: int
+    secs: float
+    output: str
+    ok: bool
+    is_slice: bool
+
+
+def run_invocations(invs: list[Invocation], budget: int, log_dir: Path | None = None) -> int:
+    """Run the plan and return 1 if any command failed, else 0.
+
+    The whole-packages run goes in its own thread; the slices go through a pool
+    of plan_concurrency's size, heaviest first. Each child writes to its own
+    file under log_dir as it runs and the file is printed when the child exits,
+    so output survives a killed script; SIGTERM (Woodpecker's cancel) kills the
+    children and prints what they wrote."""
+    log_dir = log_dir or Path(os.environ.get("FIXTURE_LOG_DIR") or tempfile.mkdtemp("-fixtures"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    print(f"fixture_test_packages: child logs in {log_dir}", flush=True)
+    pool, _ = plan_concurrency(sum(i.is_slice for i in invs), budget)
+    procs: dict[int, subprocess.Popen] = {}
+    lock = threading.Lock()
+    stopping = threading.Event()
+    logs: dict[str, Path] = {}
+    printed: set[str] = set()
+
+    def log_path(idx: int, inv: Invocation) -> Path:
+        return (
+            log_dir / f"{idx:02d}-{re.sub(r'[^A-Za-z0-9]+', '_', inv.label).strip('_')[-60:]}.log"
+        )
+
+    def run(idx: int, inv: Invocation) -> Result:
         start = time.monotonic()
-        res = subprocess.run(argv, capture_output=True, text=True)
-        return label, res.returncode, time.monotonic() - start, res.stdout + res.stderr
+        path = logs[inv.label] = log_path(idx, inv)
+        with open(path, "w", encoding="utf-8") as f:
+            with lock:
+                if stopping.is_set():
+                    return Result(inv.label, 143, 0.0, "", False, inv.is_slice)
+                proc = procs[idx] = subprocess.Popen(
+                    inv.argv, stdout=f, stderr=subprocess.STDOUT, text=True
+                )
+            rc = proc.wait()
+        out = path.read_text(encoding="utf-8", errors="replace")
+        # A -run that matched nothing exits 0 with this marker. Only a slice
+        # has a -run: the whole-packages run lists no tests, and a package in
+        # it that has no test files says `[no test files]`, not this.
+        empty = inv.is_slice and "[no tests to run]" in out
+        return Result(
+            inv.label, rc, time.monotonic() - start, out, rc == 0 and not empty, inv.is_slice
+        )
 
+    def report(res: Result) -> bool:
+        printed.add(res.label)
+        print(f"=== {res.label}: {'ok' if res.ok else 'FAIL'} in {res.secs:.0f}s", flush=True)
+        print(res.output, end="" if res.output.endswith("\n") else "\n", flush=True)
+        if res.rc == 0 and not res.ok:
+            print(f"::error::{res.label} ran no tests; -list and -run disagree", flush=True)
+        return res.ok
+
+    def stop(*_: object) -> None:
+        stopping.set()
+        with lock:
+            for proc in procs.values():
+                if proc.poll() is None:
+                    proc.terminate()
+
+    def on_sigterm(signum: int, _frame: object) -> None:
+        stop()
+        raise SystemExit(128 + signum)
+
+    old = None
+    if threading.current_thread() is threading.main_thread():
+        old = signal.signal(signal.SIGTERM, on_sigterm)
     failed = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(cmds)) as ex:
-        for fut in concurrent.futures.as_completed([ex.submit(run, c) for c in cmds]):
-            label, rc, secs, out = fut.result()
-            # A -run that matched nothing exits 0 with this marker.
-            empty = "[no tests to run]" in out
-            ok = rc == 0 and not empty
-            print(f"=== {label}: {'ok' if ok else 'FAIL'} in {secs:.0f}s", flush=True)
-            print(out, end="" if out.endswith("\n") else "\n", flush=True)
-            if empty:
-                print(f"::error::{label} ran no tests; -list and -run disagree", flush=True)
-            failed += not ok
+    try:
+        whole = [(i, inv) for i, inv in enumerate(invs) if not inv.is_slice]
+        sliced = [(i, inv) for i, inv in enumerate(invs) if inv.is_slice]
+        wex = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(whole)))
+        sex = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, pool))
+        with wex, sex:
+            futs = [wex.submit(run, i, inv) for i, inv in whole]
+            futs += [sex.submit(run, i, inv) for i, inv in sliced]
+            try:
+                for fut in concurrent.futures.as_completed(futs):
+                    failed += not report(fut.result())
+            except BaseException:
+                stop()
+                raise
+    finally:
+        if old is not None:
+            signal.signal(signal.SIGTERM, old)
+        # Whatever the children wrote before they were stopped.
+        for label, path in logs.items():
+            if label not in printed and path.exists():
+                print(f"=== {label}: INTERRUPTED; output so far", flush=True)
+                print(path.read_text(encoding="utf-8", errors="replace"), flush=True)
     return 1 if failed else 0
 
 
@@ -457,10 +650,31 @@ def main() -> None:
     if not args.run:
         print("\n".join(str(u) for u in us))
         return
-    cmds = invocations(us, go_args)
-    for label, argv in cmds:
-        print(f"fixture_test_packages: {label}: {' '.join(argv[:-1])[:200]}", flush=True)
-    sys.exit(run_invocations(cmds))
+    budget = job_budget()
+    names = list_split(us, go_args)
+    if names and native_goos() != "linux":
+        gone = missing_here(names, static_test_names(_REPO_ROOT, sorted(names)))
+        for pkg, miss in gone.items():
+            sys.stderr.write(
+                f"::warning::{pkg}: {len(miss)} test(s) in the linux test files are not in this "
+                f"host's `go test -list` and will not run here: {', '.join(miss[:20])}"
+                f"{' ...' if len(miss) > 20 else ''}\n"
+            )
+    invs = invocations(us, go_args, names, budget)
+    pool, p = plan_concurrency(sum(i.is_slice for i in invs), budget)
+    print(
+        f"fixture_test_packages: job budget {budget}: {pool} slice(s) at once, whole-package "
+        f"run at -p {p}",
+        flush=True,
+    )
+    for inv in invs:
+        extra = f", {inv.tests} tests, names {inv.names_hash}" if inv.is_slice else ""
+        print(
+            f"fixture_test_packages: {inv.label}: est {inv.weight:.0f}s{extra}: "
+            f"{' '.join(inv.argv[:-1])[:200]}",
+            flush=True,
+        )
+    sys.exit(run_invocations(invs, budget))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # file: scripts/tests/test_go_test_shards.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 9d4a1f63-2b7e-4c85-a0f1-6e3b8c2d7a59
-# last-edited: 2026-10-11
+# last-edited: 2026-10-30
 """Tests for scripts/ci/go_test_shards.py: shard balancing and coverage merge.
 
 The merge feeds the CI coverage gate, so a block counted twice (once per shard)
@@ -172,3 +172,33 @@ class ListTestsManyTest(unittest.TestCase):
 
         with mock.patch.object(gts.subprocess, "run", truncated), self.assertRaises(SystemExit):
             gts.list_tests_many(["m/a"], [])
+
+    def _list_with(self, out: str) -> dict[str, list[str]]:
+        def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            if cmd[1] == "list":
+                return mock.Mock(returncode=0, stdout="m/a\n", stderr="")
+            return mock.Mock(returncode=0, stdout=out, stderr="")
+
+        with mock.patch.object(gts.subprocess, "run", fake_run):
+            return gts.list_tests_many(["m/a"], [])
+
+    def test_a_non_ascii_test_name_is_listed_not_dropped(self) -> None:
+        # Go identifiers may hold any Unicode letter. [A-Za-z0-9_] matched none
+        # of these and so dropped them from every shard without a trace.
+        got = self._list_with("TestÄrger\nTestPlain\nFuzzÜber\nok  \tm/a\t0.01s\n")
+        self.assertEqual(got, {"m/a": ["FuzzÜber", "TestPlain", "TestÄrger"]})
+
+    def test_benchmarks_blank_lines_and_init_log_output_are_ignored(self) -> None:
+        # Listing runs the test binary, so a package's init logging reaches the
+        # same stdout (seen with internal/server: "... INFO plugin registered ...").
+        out = (
+            "TestA1\n\nBenchmarkA\n  \n2026/10/30 10:40:03 INFO plugin registered name=X\n"
+            "Testing the connection\ntestlower\nok  \tm/a\t0.01s\n"
+        )
+        self.assertEqual(self._list_with(out), {"m/a": ["TestA1"]})
+
+    def test_a_token_that_looks_like_a_test_name_but_is_not_valid_fails_loudly(self) -> None:
+        for stray in ("Test-Dash", "TestA1;x", "Fuzz.Dot", "Example/Slash"):
+            with self.subTest(stray=stray), self.assertRaises(SystemExit) as cm:
+                self._list_with(f"TestA1\n{stray}\nok  \tm/a\t0.01s\n")
+            self.assertIn("looks like a test name", str(cm.exception))
