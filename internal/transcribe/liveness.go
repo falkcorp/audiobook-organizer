@@ -1,5 +1,5 @@
 // file: internal/transcribe/liveness.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c1d7e92-6a38-4b05-8f1e-9d2a5c7b3e61
 // last-edited: 2026-10-30
 
@@ -98,6 +98,12 @@ func superviseRequest(ctx context.Context, url string, h remoteHealth, timeout t
 		if ic, ok := context.Cause(rctx).(*identityChangedCause); ok {
 			return swappedError(url, ic, time.Since(started), jobs)
 		}
+		// The poll cannot see a swap in the window after its last probe (up to
+		// livenessInterval), nor at all for a worker it does not poll, so the
+		// answer is checked once more before it is accepted.
+		if fw, frozen := frozenWorkerFrom(ctx); frozen {
+			return verifyAfterResponse(ctx, url, fw, time.Since(started), jobs)
+		}
 		return nil
 	}
 	if superviseAfterRequestHook != nil {
@@ -136,6 +142,36 @@ func superviseRequest(ctx context.Context, url string, h remoteHealth, timeout t
 		return swappedError(url, ic, elapsed, jobs)
 	}
 	return stuckFromHTTP(ctx, err, url, timeout, jobs)
+}
+
+// verifyAfterResponse is the check made before a successful response is
+// accepted on a request with a frozen identity: one synchronous /health probe,
+// judged by swappedTo. A response is the one thing the poll cannot vouch for: a
+// port handed over after the poll's last probe answers as the new machine and
+// would be stored under the old one's name. It returns nil when the worker is
+// still the frozen machine (or the frozen identity names none).
+//
+// An unreadable probe withholds the response (a WorkerSwappedError with
+// Unverified set): nothing says it came from the frozen machine, and the cost of
+// withholding is only that the jobs are sent again elsewhere, while the cost of
+// accepting is a strike or a transcript credited to a machine that never saw the
+// file. This is the rule regate applies after a cooldown wait (a port that cannot
+// be read is not used). The probe is not tied to the request's cancellation: a
+// cancelled op still must not store an unverified answer, and the probe is
+// bounded by healthProbeTimeout. The durable fix is for the worker to echo its
+// machine_id in the batch response itself (see the decision note).
+func verifyAfterResponse(ctx context.Context, url string, fw frozenWorker, after time.Duration, jobs []string) error {
+	if !fw.comparable() {
+		return nil
+	}
+	h, ok := probeRemoteHealth(context.WithoutCancel(ctx), url)
+	if !ok {
+		return &WorkerSwappedError{URL: url, Was: fw.key, After: after, Jobs: jobs, Unverified: true}
+	}
+	if now, swapped := fw.swappedTo(url, h); swapped {
+		return &WorkerSwappedError{URL: url, Was: fw.key, Now: now, After: after, Jobs: jobs}
+	}
+	return nil
 }
 
 // swappedError is the error for a request ended by an identityChangedCause. It

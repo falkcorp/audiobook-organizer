@@ -1,7 +1,7 @@
 // file: internal/transcribe/path.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 7e41c9a8-2b6d-4f03-8a15-d3c0e9b57a24
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -313,6 +313,11 @@ func transcribePathRemote(ctx context.Context, g gatedEndpoint, jobs map[string]
 		// A failed send still carries the chunks that completed before it.
 		maps.Copy(results, sent)
 		if err != nil {
+			if IsWorkerSwapped(err) {
+				// Withheld by the dispatcher as a whole, so not replayable from the
+				// journal either (see invalidateWritten).
+				ej.invalidateWritten()
+			}
 			maps.Copy(results, served)
 			return results, err
 		}

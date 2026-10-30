@@ -1,7 +1,7 @@
 // file: internal/transcribe/journal.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 60c7ae00-b3ec-476b-a63e-00418bb73933
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -14,6 +14,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -51,8 +52,9 @@ type journalResult struct {
 // A nil *endpointJournal is valid and means "no journal": plan passes every
 // job through and complete is a no-op, which is the pre-journal behaviour.
 //
-// Immutable after construction, so the per-file workers and the batch loop
-// can use it without locking; the journal itself is safe for concurrent use.
+// Immutable after construction except for written (under mu), so the per-file
+// workers and the batch loop can use it without further locking; the journal
+// itself is safe for concurrent use.
 type endpointJournal struct {
 	journal  ResultJournal
 	endpoint string
@@ -69,6 +71,13 @@ type endpointJournal struct {
 	// arguments). Folded into path-job keys ONLY, so retuning extraction never
 	// invalidates upload-path entries and retuning decoding invalidates both.
 	extract string
+
+	// written is the content key of every result this call journalled, so that a
+	// call whose request is found to have been answered by another machine than
+	// the one it was sent to can take them back (invalidateWritten). A key is
+	// recorded only after its write succeeded.
+	mu      sync.Mutex
+	written []string
 }
 
 // key is the journal key for a clip with the given sha256.
@@ -264,6 +273,37 @@ func (ej *endpointJournal) put(id, key string, r BatchResult) {
 	}
 	if err := ej.journal.Complete(key, ej.endpoint, ej.label(), journalResult{Text: r.Text}); err != nil {
 		journalLog.Warn("journal write failed, result not restart-protected: job=%s err=%v", id, err)
+		return
+	}
+	ej.mu.Lock()
+	ej.written = append(ej.written, key)
+	ej.mu.Unlock()
+}
+
+// invalidateWritten removes from the journal every result this call journalled.
+// The caller does it when its request ended as a WorkerSwappedError: the
+// dispatcher withholds every answer of such a call (they cannot be told from
+// the swapped-in machine's), so none may be replayed to a later run, and the
+// journal is keyed by clip content and model, not by machine, so any endpoint
+// running that model would be served them. Entries are written as each chunk
+// completes (restart protection), so the removal is what keeps the journal in
+// step with what the dispatcher keeps. A key some other call journalled for the
+// same clip is removed with it, which costs only a repeated decode. A failed
+// removal is logged: the entries then stay, which is the state before this
+// existed.
+func (ej *endpointJournal) invalidateWritten() {
+	if ej == nil {
+		return
+	}
+	ej.mu.Lock()
+	keys := slices.Clone(ej.written)
+	ej.written = nil
+	ej.mu.Unlock()
+	if len(keys) == 0 {
+		return
+	}
+	if err := ej.journal.Invalidate(keys); err != nil {
+		journalLog.Warn("journal entries of a swapped request could not be removed, they may be replayed: url=%s entries=%d err=%v", ej.endpoint, len(keys), err)
 	}
 }
 

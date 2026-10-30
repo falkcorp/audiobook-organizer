@@ -1,7 +1,7 @@
 // file: internal/transcribe/remote.go
-// version: 2.17.1
+// version: 2.17.2
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -311,6 +311,11 @@ func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteH
 		// with the error and let the dispatcher keep them.
 		maps.Copy(results, sent)
 		if err != nil {
+			if IsWorkerSwapped(err) {
+				// Withheld by the dispatcher as a whole, so not replayable from the
+				// journal either (see invalidateWritten).
+				ej.invalidateWritten()
+			}
 			fanOut(results, followers)
 			// Journal-served results are as valid as the sent ones; dropping
 			// them here would force every later run to re-read them.

@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerswap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c80f6dd-e49e-4cf4-acef-60b49489f7aa
 // last-edited: 2026-10-30
 
@@ -7,8 +7,10 @@ package transcribe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -356,5 +358,318 @@ func TestIdentitySwap_TheOnlyEndpointSwappedMidRequestStoresNothingAndDefers(t *
 	}
 	if got := len(p.canaryLog()); got != 0 {
 		t.Errorf("canary asked %d time(s)", got)
+	}
+}
+
+// ── the result journal ──────────────────────────────────────────────────────
+
+// flipOnSecondPost makes srv's second POST to post hang until the request is
+// cancelled and, from then on, its /health report machine swappedInMachine
+// instead of batMachine: a port handed to another machine while the second chunk
+// of a send is in flight, after the first chunk was answered and journalled.
+func flipOnSecondPost(t *testing.T, srv *httptest.Server, post string, base map[string]any) {
+	t.Helper()
+	var posts atomic.Int32
+	var flipped atomic.Bool
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/health":
+			body := map[string]any{}
+			for k, v := range base {
+				body[k] = v
+			}
+			if flipped.Load() {
+				body["machine_id"] = swappedInMachine
+			}
+			_ = json.NewEncoder(rw).Encode(body)
+		case r.Method == http.MethodPost && r.URL.Path == post && posts.Add(1) == 2:
+			flipped.Store(true)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		default:
+			inner.ServeHTTP(rw, r)
+		}
+	})
+}
+
+func swapBaseHealth(extra map[string]any) map[string]any {
+	h := map[string]any{"status": "ok", "model": "M", "backend": backendMLX, "machine_id": batMachine, "busy_seconds": 0.0, "busy_limit_seconds": nil}
+	for k, v := range extra {
+		h[k] = v
+	}
+	return h
+}
+
+// requireNothingReplayable fails unless the journal holds no entry a later run
+// could be served from, and reports that the entries the send wrote were taken
+// back (so the test is not blind to a send that never journalled anything).
+func requireNothingReplayable(t *testing.T, j *mapJournal, wrote int) {
+	t.Helper()
+	if got := len(j.invalidated); got != wrote {
+		t.Errorf("journal was asked to invalidate %d entries, want the %d the send wrote before the swap was seen", got, wrote)
+	}
+	if got := j.len(); got != 0 {
+		t.Errorf("journal still holds %d entry(ies) of a swapped send, replayable by a later run", got)
+	}
+}
+
+// An upload send: chunk 1 is answered and journalled, chunk 2 is in flight when
+// the port is handed to another machine. The dispatcher withholds every answer
+// of the send; the journal must not keep and replay the chunk that was answered.
+func TestJournalSwap_ASwappedUploadSendLeavesNothingReplayable(t *testing.T) {
+	shortLiveness(t, 20*time.Millisecond)
+	srv, _ := batchServer(t, swapBaseHealth(nil))
+	useEndpoints(t, 2, srv.URL)
+	flipOnSecondPost(t, srv, "/transcribe-batch", swapBaseHealth(map[string]any{"batch_pipeline": true}))
+	noteCanaryPort(batKey, srv.URL, true)
+	h, ok := probeRemoteHealth(context.Background(), srv.URL)
+	if !ok {
+		t.Fatal("setup: health")
+	}
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	j := newMapJournal()
+
+	jobs := writeClips(t, 4)
+	res, err := transcribeRemoteWithHealth(ctx, srv.URL, h, true, 1, jobs, nil, j)
+	if !IsWorkerSwapped(err) {
+		t.Fatalf("err = %T %v, want a swap", err, err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("the sender returned %d result(s), want the 2 of chunk 1 (the dispatcher withholds them)", len(res))
+	}
+	requireNothingReplayable(t, j, 2)
+
+	// A later run plans the same clips again: nothing is served from the journal.
+	served, _, _ := newEndpointJournal(j, srv.URL, h, true).plan(jobs)
+	if len(served) != 0 {
+		t.Errorf("a later run is served %d result(s) of the swapped send", len(served))
+	}
+}
+
+// The same for a path send.
+func TestJournalSwap_ASwappedPathSendLeavesNothingReplayable(t *testing.T) {
+	shortLiveness(t, 20*time.Millisecond)
+	w := newPathWorker(t, pathHealth(map[string]any{"machine_id": batMachine, "busy_seconds": 0.0, "busy_limit_seconds": nil}))
+	useEndpoints(t, 2, w.srv.URL)
+	flipOnSecondPost(t, w.srv, "/transcribe-path-batch", pathHealth(map[string]any{"machine_id": batMachine, "busy_seconds": 0.0, "busy_limit_seconds": nil}))
+	noteCanaryPort(batKey, w.srv.URL, true)
+	h, ok := probeRemoteHealth(context.Background(), w.srv.URL)
+	if !ok {
+		t.Fatal("setup: health")
+	}
+	g := gatedEndpoint{Endpoint: Endpoint{URL: w.srv.URL, Concurrency: 1}, Health: h, Probed: true, resolved: batKey}
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	j := newMapJournal()
+	jobs := pathJobs(t, 4)
+
+	res, err := transcribePathRemote(ctx, g, jobs, nil, j)
+	if !IsWorkerSwapped(err) {
+		t.Fatalf("err = %T %v, want a swap", err, err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("the sender returned %d result(s), want the 2 of chunk 1", len(res))
+	}
+	requireNothingReplayable(t, j, 2)
+
+	served, _, _ := newEndpointJournal(j, w.srv.URL, h, true).planPath(jobs)
+	if len(served) != 0 {
+		t.Errorf("a later run is served %d result(s) of the swapped send", len(served))
+	}
+}
+
+// Control: the same send with no swap keeps its entries, so the two tests above
+// are not passing because nothing is ever journalled.
+func TestJournalSwap_ASendWithNoSwapKeepsItsEntries(t *testing.T) {
+	shortLiveness(t, 20*time.Millisecond)
+	srv, _ := batchServer(t, swapBaseHealth(nil))
+	useEndpoints(t, 2, srv.URL)
+	noteCanaryPort(batKey, srv.URL, true)
+	h, _ := probeRemoteHealth(context.Background(), srv.URL)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	j := newMapJournal()
+	if _, err := transcribeRemoteWithHealth(ctx, srv.URL, h, true, 1, writeClips(t, 4), nil, j); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if j.len() != 4 || len(j.invalidated) != 0 {
+		t.Errorf("journal holds %d entries, %d invalidated; want 4 and 0", j.len(), len(j.invalidated))
+	}
+}
+
+// ── the response itself ─────────────────────────────────────────────────────
+
+// A swap in the window after the poll's last probe is not seen by the poll; the
+// answer is checked once more before it is accepted.
+func TestLiveness_ASwapAfterTheLastPollIsCaughtWhenTheResponseIsAccepted(t *testing.T) {
+	shortLiveness(t, time.Hour) // the poll never probes during the request
+	freshCanaryMemory(t)
+	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(swappedInMachine) })
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	sw, ok := errors.AsType[*WorkerSwappedError](err)
+	if !ok || sw.Unverified || sw.Now != "m:"+swappedInMachine {
+		t.Fatalf("err = %T %v, want a swap to the new machine", err, err)
+	}
+	requireNoStrikeKind(t, err)
+	if hits.Load() != 1 {
+		t.Errorf("probed %d time(s), want the one post-response probe", hits.Load())
+	}
+}
+
+// A worker the poll skips (no busy_seconds: its event loop is busy during a
+// request) is checked once the request is over, when its /health answers.
+func TestLiveness_AWorkerThePollSkipsIsStillCheckedAfterItsResponse(t *testing.T) {
+	shortLiveness(t, 10*time.Millisecond)
+	freshCanaryMemory(t)
+	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(swappedInMachine) })
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	err := superviseRequest(ctx, srv.URL, remoteHealth{}, time.Hour, []string{"a"}, func(context.Context) error {
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	})
+	if !IsWorkerSwapped(err) {
+		t.Fatalf("err = %T %v, want a swap", err, err)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("probed %d time(s): the poll must not run for this worker, only the post-response probe", hits.Load())
+	}
+}
+
+// An unreadable probe withholds the response: nothing says it came from the
+// frozen machine.
+func TestLiveness_AnUnreadableProbeAfterTheResponseWithholdsIt(t *testing.T) {
+	shortLiveness(t, time.Hour)
+	freshCanaryMemory(t)
+	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusInternalServerError, nil })
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	sw, ok := errors.AsType[*WorkerSwappedError](err)
+	if !ok || !sw.Unverified || sw.Now != "" {
+		t.Fatalf("err = %T %v, want a withheld, unverified answer", err, err)
+	}
+	requireNoStrikeKind(t, err)
+	if !errors.Is(classifyTransport([]string{srv.URL}, err), errPortChangedHands) {
+		t.Error("an unverified answer must defer like a port that changed hands")
+	}
+}
+
+func TestLiveness_AResponseFromTheSameMachineIsAcceptedAfterTheProbe(t *testing.T) {
+	shortLiveness(t, time.Hour)
+	freshCanaryMemory(t)
+	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(batMachine) })
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("probed %d time(s)", hits.Load())
+	}
+	// A frozen identity that names no machine costs no probe.
+	hits.Store(0)
+	unk := withFrozenWorker(context.Background(), frozenWorker{key: "?abc", capable: true})
+	if err := superviseRequest(unk, srv.URL, remoteHealth{}, time.Hour, nil, func(context.Context) error { return nil }); err != nil || hits.Load() != 0 {
+		t.Errorf("unknown identity: err=%v probes=%d, want none", err, hits.Load())
+	}
+}
+
+// A cancelled op still does not store an unverified answer.
+func TestLiveness_ACancelledOpStillVerifiesTheAnswerItAccepts(t *testing.T) {
+	shortLiveness(t, time.Hour)
+	freshCanaryMemory(t)
+	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(swappedInMachine) })
+	noteCanaryPort(batKey, srv.URL, true)
+	base, cancel := context.WithCancel(context.Background())
+	ctx := withFrozenWorker(base, frozenWorker{key: batKey, capable: true})
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error {
+		cancel() // the op ends just as the answer arrives
+		return nil
+	})
+	if !IsWorkerSwapped(err) {
+		t.Fatalf("err = %v, want the answer withheld although the op was cancelled", err)
+	}
+}
+
+// ── the lone endpoint's learned machine ─────────────────────────────────────
+
+// A lone endpoint frozen as "u:" whose worker gained its machine id keeps it
+// (reprobed), but only as the machine it already showed.
+func TestIdentitySwap_ALoneEndpointIsPinnedToTheMachineItLearned(t *testing.T) {
+	freshCanaryMemory(t)
+	const url = "http://192.0.2.7:8000"
+	weak := "u:" + shortHash(url)
+	mlx := func(id string) remoteHealth {
+		return remoteHealth{Backend: backendMLX, MachineID: id}
+	}
+	fw := frozenWorker{key: weak, capable: true, lone: true, pin: newWorkerPin(batKey)}
+	if now, swapped := fw.swappedTo(url, mlx(batMachine)); swapped {
+		t.Errorf("the learned machine itself was read as a swap (now=%s)", now)
+	}
+	if now, swapped := fw.swappedTo(url, mlx(swappedInMachine)); !swapped || now != "m:"+swappedInMachine {
+		t.Errorf("a strong id that contradicts the learned machine: swapped=%v now=%s, want a swap", swapped, now)
+	}
+	// A worker that missed its id again is not a contradiction.
+	if _, swapped := fw.swappedTo(url, mlx("")); swapped {
+		t.Error("a worker that only missed its id again was read as a swap")
+	}
+}
+
+// With nothing learned, the first strong identity any poll sees is pinned and a
+// later, different one is a swap.
+func TestIdentitySwap_ALoneEndpointPinsTheFirstStrongIdentityItSees(t *testing.T) {
+	freshCanaryMemory(t)
+	const url = "http://192.0.2.7:8000"
+	fw := frozenWorker{key: "u:" + shortHash(url), capable: true, lone: true, pin: newWorkerPin("")}
+	mlx := func(id string) remoteHealth { return remoteHealth{Backend: backendMLX, MachineID: id} }
+	if _, swapped := fw.swappedTo(url, mlx(batMachine)); swapped {
+		t.Fatal("the first strong identity is the worker gaining its id, not a swap")
+	}
+	if _, swapped := fw.swappedTo(url, mlx(batMachine)); swapped {
+		t.Error("the pinned machine read as a swap")
+	}
+	if _, swapped := fw.swappedTo(url, mlx(swappedInMachine)); !swapped {
+		t.Error("a different strong identity after the pin is a swap")
+	}
+	// A pool port has no pin and takes no such allowance.
+	pool := frozenWorker{key: "u:" + shortHash(url), capable: true}
+	if _, swapped := pool.swappedTo(url, mlx(batMachine)); !swapped {
+		t.Error("a pool port that gained an id must be a swap")
+	}
+}
+
+// dispatchSingle seeds the pin from the machine it learned and shares it across
+// the requests of the dispatch, and a request that then reads another machine
+// stores nothing.
+func TestIdentitySwap_TheLoneEndpointStoresNothingUnderALearnedMachineThePollContradicted(t *testing.T) {
+	shortLiveness(t, 20*time.Millisecond)
+	freshCanaryMemory(t)
+	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(swappedInMachine) })
+	h := remoteHealth{Backend: backendMLX, BusySeconds: f64(0)}
+	weak := "u:" + shortHash(srv.URL)
+	g := gatedEndpoint{Endpoint: Endpoint{URL: srv.URL, Concurrency: 1}, Health: h, Probed: true, resolved: weak, learned: batKey}
+
+	var seen frozenWorker
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, _ ProgressFunc) (map[string]BatchResult, error) {
+		seen, _ = frozenWorkerFrom(ctx)
+		ids := sortedIDs(sub)
+		err := superviseRequest(ctx, g.Endpoint.URL, g.Health, time.Hour, ids, waitOrAnswer(10*time.Second))
+		return map[string]BatchResult{ids[0]: {Text: "T:" + ids[0]}}, err
+	}
+	res, err := dispatchSingle(testCtx(t), g, nil, singleGate{}, map[string]string{"chap1": "u", "chap2": "u"}, nil, send, nil)
+	if !seen.lone || seen.pin == nil || seen.pin.id != batKey {
+		t.Fatalf("frozen worker = %+v, want a lone endpoint pinned to the learned machine", seen)
+	}
+	if !IsWorkerSwapped(err) {
+		t.Fatalf("err = %T %v, want a swap", err, err)
+	}
+	if len(res) != 0 {
+		t.Errorf("results = %+v: an answer was stored under a machine the poll contradicted", res)
 	}
 }

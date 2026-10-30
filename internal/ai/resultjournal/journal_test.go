@@ -1,7 +1,7 @@
 // file: internal/ai/resultjournal/journal_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5c28e392-3a6b-4bf2-9949-6f7efc1aedd2
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package resultjournal
 
@@ -344,5 +344,41 @@ func TestPrune_NonPositiveRetentionIsRefused(t *testing.T) {
 	}
 	if left, _ := s.CountPrefix("aijournal:whisper:"); left != 4 {
 		t.Fatalf("%d whisper entries left, want all 4", left)
+	}
+}
+
+func TestInvalidate_RemovesExactlyTheNamedKeysAndToleratesMissingOnes(t *testing.T) {
+	s := openPebble(t, t.TempDir())
+	t.Cleanup(func() { _ = s.Close() })
+	j, err := New(s, "whisper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := New(s, "llm")
+	a, b, c := ContentKey("a"), ContentKey("b"), ContentKey("c")
+	for _, k := range []string{a, b, c} {
+		if err := j.Complete(k, "http://x", "m", result{Text: k}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := other.Complete(a, "http://x", "m", result{Text: "other kind"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Invalidate(nil); err != nil {
+		t.Fatalf("empty Invalidate: %v", err)
+	}
+	if err := j.Invalidate([]string{a, b, ContentKey("never written")}); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+	for _, k := range []string{a, b} {
+		if _, ok, _ := j.Lookup(k); ok {
+			t.Errorf("%s is still replayable after Invalidate", k)
+		}
+	}
+	if _, ok, _ := j.Lookup(c); !ok {
+		t.Error("an entry that was not named was removed")
+	}
+	if _, ok, _ := other.Lookup(a); !ok {
+		t.Error("another kind's entry under the same content key was removed")
 	}
 }
