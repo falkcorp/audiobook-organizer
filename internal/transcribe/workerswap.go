@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerswap.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3815e00-3772-41f5-b825-2a63377081fc
 // last-edited: 2026-10-30
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -47,9 +48,18 @@ type WorkerSwappedError struct {
 	After time.Duration
 	// Jobs are the ids of the request that was ended.
 	Jobs []string
+	// Unverified marks a response withheld because the /health probe that
+	// follows every successful response could not be read (Now is then empty):
+	// it cannot be told from the frozen machine's, so it is treated like a swap
+	// (see verifyAfterResponse).
+	Unverified bool
 }
 
 func (e *WorkerSwappedError) Error() string {
+	if e.Unverified {
+		return fmt.Sprintf("worker not verified: the machine behind %s could not be confirmed after a request of %d job(s) was answered, so the answer is withheld",
+			e.URL, len(e.Jobs))
+	}
 	return fmt.Sprintf("worker swapped: %s answers /health as another machine than the one a request of %d job(s) was sent to, %s into the request",
 		e.URL, len(e.Jobs), e.After.Round(time.Second))
 }
@@ -85,6 +95,37 @@ type frozenWorker struct {
 	// lone marks the lone endpoint (dispatchSingle), which keeps a worker that
 	// gained a machine id (gatedEndpoint.reprobed); a pool drops it.
 	lone bool
+	// pin is the lone endpoint's record of the machine a worker that gained its
+	// id has shown (see workerPin). Nil for a pool port.
+	pin *workerPin
+}
+
+// workerPin is the one machine a lone endpoint's weakly-frozen worker may be.
+// Such a worker (frozen as "u:") can gain its machine id during the dispatch,
+// and reprobed accepts that without knowing whether it is the machine that was
+// behind the URL or another that took it over. The pin makes the acceptance
+// consistent: it starts as the machine the dispatch already learned
+// (gatedEndpoint.learned), or else the first strong identity any poll of the
+// dispatch sees, and a later poll that reports a different strong identity is a
+// swap. It lives for the whole dispatchSingle, so it holds across the requests
+// (chunks) of a send and across sends. Shared by the poller goroutine and the
+// post-response probe, hence the lock.
+type workerPin struct {
+	mu sync.Mutex
+	id string
+}
+
+func newWorkerPin(learned string) *workerPin { return &workerPin{id: learned} }
+
+// accept reports whether the strong identity now is the pinned machine, pinning
+// it if none is yet.
+func (p *workerPin) accept(now string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.id == "" {
+		p.id = now
+	}
+	return p.id == now
 }
 
 type frozenWorkerCtxKey struct{}
@@ -111,7 +152,7 @@ func frozenWorkerFrom(ctx context.Context) (frozenWorker, bool) {
 // nothing to compare. It reads the canary memory and never writes it: the next
 // dispatch's gate does that.
 func (fw frozenWorker) swappedTo(url string, h remoteHealth) (now string, swapped bool) {
-	if fw.key == "" || unknownKey(fw.key) {
+	if !fw.comparable() {
 		return "", false
 	}
 	g := gatedEndpoint{Endpoint: Endpoint{URL: url}, Health: h, Probed: true}
@@ -120,5 +161,19 @@ func (fw frozenWorker) swappedTo(url string, h remoteHealth) (now string, swappe
 	if _, ok := g.reprobed(fw.key, fw.capable); !ok {
 		return now, true
 	}
-	return now, !fw.lone && now != fw.key
+	if !fw.lone {
+		return now, now != fw.key
+	}
+	// The lone endpoint accepts a worker that gained its id (reprobed above), but
+	// only the machine it has already shown: a strong identity that contradicts
+	// the pin, learned at the start or seen first during the dispatch, is another
+	// machine, and no answer may be stored under a learned machine the poll has
+	// contradicted.
+	if fw.pin != nil && isStrongKey(now) && !isStrongKey(fw.key) {
+		return now, !fw.pin.accept(now)
+	}
+	return now, false
 }
+
+// comparable reports whether the frozen identity names a machine at all.
+func (fw frozenWorker) comparable() bool { return fw.key != "" && !unknownKey(fw.key) }

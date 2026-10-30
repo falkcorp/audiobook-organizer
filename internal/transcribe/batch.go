@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -78,6 +78,12 @@ type ResultJournal interface {
 	// Complete durably journals result; it must not return before the write
 	// is persisted.
 	Complete(contentKey, endpoint, model string, result any) error
+	// Invalidate durably removes the entries for contentKeys (a missing key is
+	// not an error). The transport calls it for the results it journalled during
+	// a request that was then found to have been answered by another machine
+	// than the one the dispatch sent it to (WorkerSwappedError): they must not be
+	// replayed to a later run.
+	Invalidate(contentKeys []string) error
 }
 
 // BatchOptions are TranscribeBatchOpts' optional inputs.
