@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -26,11 +26,12 @@ import (
 	"maps"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -327,12 +328,18 @@ func cachedImportPathsForHelper(store importPathLister) ([]database.ImportPath, 
 	return paths, nil
 }
 
+// protectedPathLog reports a path that was treated as protected because its symlinks
+// could not be resolved (pathutil.UnderProtectedPath fails closed).
+var protectedPathLog = logger.New("audiobooks.protected-path")
+
 // isProtectedPath returns true if filePath is under a configured import
 // path, an iTunes library path, or another protected location. Takes an
 // explicit importPathLister so callers thread their own database
 // reference rather than reaching for the package global
 // (SERVER-GLOBAL-STORE-AUDIT phase 6). Pass nil to skip the import-path
-// check; the iTunes / .failed checks still apply.
+// check; the iTunes / .failed checks still apply. A path is tested as spelled
+// and with its symlinks resolved (pathutil.UnderProtectedPath), and one whose
+// symlinks cannot be resolved counts as protected.
 //
 // An import-path list that cannot be read is treated as "no import paths" here,
 // which is right for the callers that only decide whether to touch a file's
@@ -343,52 +350,57 @@ func isProtectedPath(store importPathLister, filePath string) bool {
 	return protected
 }
 
+// errProtectedPathUnresolved marks a protectedPathChecked answer that is
+// "protected" only because the path (or a protected folder) could not be
+// resolved through its symlinks. It wraps the resolve error, so errors.Is
+// syscall.ELOOP still tells a link cycle from a filesystem that failed to answer.
+var errProtectedPathUnresolved = errors.New("symlinks of the path cannot be resolved")
+
 // protectedPathChecked is isProtectedPath that says when it could not tell. err
 // is non-nil when the import paths could not be listed; protected is then what
 // the other checks (iTunes, .failed) found, which may be false for a path that
 // an import path covers. A caller that deletes must not read that false as "not
 // protected": it treats the error as a question it could not answer and leaves
 // the file alone (planPurgePathIn).
+//
+// err also wraps errProtectedPathUnresolved, with protected true, when the
+// symlinks of the path or of a protected folder cannot be resolved. That is a
+// refusal to say "not protected", not a finding that the path is a protected
+// one: isProtectedPath (tags, previews) takes it as protected, and a caller that
+// deletes (planPurgePathIn) keeps the file and retries rather than reading it as
+// a protected path it is done with.
 func protectedPathChecked(store importPathLister, filePath string) (protected bool, err error) {
-	absPath, _ := filepath.Abs(filePath)
-
+	var roots []string
 	if store != nil {
 		importPaths, lerr := cachedImportPathsForHelper(store)
 		if lerr != nil {
 			err = lerr
 		} else {
 			for _, ip := range importPaths {
-				ipAbs, _ := filepath.Abs(ip.Path)
-				if strings.HasPrefix(absPath, ipAbs+"/") || absPath == ipAbs {
-					return true, nil
-				}
+				roots = append(roots, ip.Path)
 			}
 		}
 	}
-
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
-		itunesAbs, _ := filepath.Abs(itunesDir)
-		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
-			return true, nil
-		}
+		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryReadPath))
 	}
 	if config.AppConfig.ITunes.LibraryITLPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryITLPath)
-		itunesAbs, _ := filepath.Abs(itunesDir)
-		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
-			return true, nil
-		}
+		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryITLPath))
 	}
 
-	if strings.Contains(absPath, "iTunes Media") || strings.Contains(absPath, "iTunes%20Media") {
+	// The path as spelled and with its symlinks resolved (and the folders
+	// likewise): a path reached through a link into an iTunes or import folder is
+	// the same file. Until 2026-10-29 only the spelled path was tested, so such a
+	// file could be purged. A path that cannot be resolved is protected.
+	under, perr := pathutil.UnderProtectedPath(filePath, roots)
+	if perr != nil {
+		protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
+			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(perr.Error()))
+		return true, fmt.Errorf("%w: %w", errProtectedPathUnresolved, perr)
+	}
+	if under {
 		return true, nil
 	}
-
-	if strings.Contains(filepath.ToSlash(absPath), "/.failed/") {
-		return true, nil
-	}
-
 	return false, err
 }
 

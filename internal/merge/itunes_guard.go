@@ -1,18 +1,14 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-10-26
+// last-edited: 2026-10-29
 
 package merge
 
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
-	"slices"
-	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -251,7 +247,7 @@ type protectedRoot struct {
 func resolveProtectedRoots(roots []string) []protectedRoot {
 	out := make([]protectedRoot, len(roots))
 	for i, r := range roots {
-		res, err := resolveExistingPrefix(r)
+		res, err := pathutil.ResolveExistingPrefix(r)
 		out[i] = protectedRoot{raw: r, resolved: res, err: err}
 	}
 	return out
@@ -273,7 +269,7 @@ func checkITunesPathResolved(bookID, p string, roots []protectedRoot) error {
 			return &ITunesProtectedError{BookID: bookID, Path: p, Root: root.raw}
 		}
 	}
-	resolved, err := resolveExistingPrefix(clean)
+	resolved, err := pathutil.ResolveExistingPrefix(clean)
 	if err != nil {
 		return &ITunesProtectedError{BookID: bookID, Path: p, Reason: "cannot resolve symlinks to verify the path is outside the iTunes library", Cause: err}
 	}
@@ -289,75 +285,4 @@ func checkITunesPathResolved(bookID, p string, roots []protectedRoot) error {
 		}
 	}
 	return nil
-}
-
-// maxSymlinkHops bounds link following, so a link cycle is an error.
-const maxSymlinkHops = 255
-
-// resolveExistingPrefix is filepath.EvalSymlinks for a path that may not
-// exist: it resolves the longest existing prefix and re-appends the rest.
-// A DANGLING symlink is followed with os.Readlink (a relative target resolves
-// against the link's directory), because EvalSymlinks reports only "not
-// exist" for it -- a dangling link into the iTunes tree would otherwise
-// resolve to itself and pass. A resolve error other than not-exist is
-// returned, and the guard refuses on it.
-func resolveExistingPrefix(p string) (string, error) {
-	return resolveExistingPrefixDepth(p, 0)
-}
-
-// maxResolveDepth bounds the nested resolution of a relative link's folder.
-const maxResolveDepth = 40
-
-func resolveExistingPrefixDepth(p string, depth int) (string, error) {
-	if depth > maxResolveDepth {
-		return "", fmt.Errorf("symlink nesting deeper than %d resolving %s", maxResolveDepth, p)
-	}
-	var tail []string
-	cur := p
-	hops := 0
-	for {
-		r, err := filepath.EvalSymlinks(cur)
-		if err == nil {
-			for _, t := range slices.Backward(tail) {
-				r = filepath.Join(r, t)
-			}
-			return r, nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
-			return "", err
-		}
-		if fi, lerr := os.Lstat(cur); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
-			hops++
-			if hops > maxSymlinkHops {
-				return "", fmt.Errorf("more than %d symlinks resolving %s", maxSymlinkHops, p)
-			}
-			target, rerr := os.Readlink(cur)
-			if rerr != nil {
-				return "", rerr
-			}
-			if !filepath.IsAbs(target) {
-				// A relative target is relative to where the link really
-				// lives. Its folder may itself be reached through a symlink,
-				// so resolve the folder before joining: textually, "../b.m4b"
-				// from /lib/d/a.m4b is /lib/b.m4b even when /lib/d is a link
-				// into the iTunes tree.
-				dir, derr := resolveExistingPrefixDepth(filepath.Dir(cur), depth+1)
-				if derr != nil {
-					return "", derr
-				}
-				target = filepath.Join(dir, target)
-			}
-			cur = filepath.Clean(target)
-			continue
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			for _, t := range slices.Backward(tail) {
-				cur = filepath.Join(cur, t)
-			}
-			return cur, nil
-		}
-		tail = append(tail, filepath.Base(cur))
-		cur = parent
-	}
 }

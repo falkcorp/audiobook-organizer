@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.5
+// version: 1.27.6
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package audiobooks
 
@@ -1006,6 +1006,14 @@ func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, refer
 	// one; otherwise the question could not be answered and the file stays
 	// (errPathLookupFailed: transient, retried).
 	protected, protErr := protectedPathChecked(svc.store, path)
+	if errors.Is(protErr, errProtectedPathUnresolved) {
+		// The path's symlinks cannot be resolved, so whether it leads into a
+		// protected folder is not known. Not "protected" (that would let the book
+		// go with the file left behind and no record): a path that cannot be
+		// decided, which keeps the book in the trash for a retry, or for a link
+		// cycle (ELOOP) gives up after a few passes like any unresolvable path.
+		return purgeFileVerdict{keptErr: statLookupError(path, "resolve symlinks for the protected-path check", protErr)}
+	}
 	if protected {
 		return purgeFileVerdict{protected: true}
 	}

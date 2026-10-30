@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
-// last-edited: 2026-10-10
+// last-edited: 2026-10-29
 
 package metafetch
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -121,5 +122,37 @@ func TestProtectedListLoaded_ReflectsCache(t *testing.T) {
 	}
 	if (&Service{safeWriteDeps: tagger.SafeWriteDeps{ProtectedCache: unloadedChecker{}}}).protectedListLoaded() {
 		t.Error("unloaded cache reported loaded")
+	}
+}
+
+// A path spelled through a symlink into the iTunes library folder is protected,
+// and an unrelated path next to a link is not.
+func TestIsProtectedPath_SymlinkIntoITunesFolder(t *testing.T) {
+	prev := config.AppConfig.ITunes.LibraryReadPath
+	t.Cleanup(func() { config.AppConfig.ITunes.LibraryReadPath = prev })
+	base := t.TempDir()
+	itunes := filepath.Join(base, "lib", "Gotham Music")
+	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "Library.xml")
+	if err := os.MkdirAll(filepath.Join(itunes, "Hush"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "lib", "Arkham", "Joker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	into := filepath.Join(base, "lib", "link")
+	away := filepath.Join(base, "lib", "away")
+	if err := os.Symlink(filepath.Join(itunes, "Hush"), into); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "lib", "Arkham", "Joker"), away); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{}
+	if !svc.isProtectedPath(filepath.Join(into, "hush.m4b")) {
+		t.Error("a file reached through a symlink into the iTunes folder is not protected")
+	}
+	if svc.isProtectedPath(filepath.Join(away, "killing-joke.m4b")) {
+		t.Error("a file reached through a symlink to an unprotected folder reported protected")
 	}
 }
