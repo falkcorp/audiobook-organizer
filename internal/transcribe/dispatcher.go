@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -193,8 +193,18 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	// re-probes that follow a wait judge a port and nothing else: the dispatch
 	// keeps the identities (keyOf) its gate gave it, and the next dispatch's own
 	// gate reconciles the memory.
-	gate := func(eps []Endpoint, reconcile bool) ([]gatedEndpoint, []gpuRefusal) {
-		gated, refused := gateEndpoints(ctx, eps, requires)
+	//
+	// Only the dispatch's FIRST gate may reuse a recent clean /health answer
+	// (cached; gateEndpointsCached): a path batch of 8 files would otherwise
+	// probe every endpoint once per 8 files for a whole library. Every later
+	// look (the pacing loop's retries, regate, the lone endpoint's reprobe) is
+	// asked precisely because the first answer may be stale, so it probes.
+	gate := func(eps []Endpoint, reconcile, cached bool) ([]gatedEndpoint, []gpuRefusal) {
+		gateFn := gateEndpoints
+		if cached {
+			gateFn = gateEndpointsCached
+		}
+		gated, refused := gateFn(ctx, eps, requires)
 		kept := gated[:0:0]
 		for _, g := range gated {
 			// A wedged worker is refused for every kind of job: a request sent
@@ -276,9 +286,9 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		m, ok := probed[url]
 		return ok && (m.cooled || m.gen != endpointFailureGeneration(url))
 	}
-	for {
+	for firstGate := true; ; firstGate = false {
 		marks := markProbes(endpoints)
-		gated, refused = gate(endpoints, true)
+		gated, refused = gate(endpoints, true, firstGate)
 		maps.Copy(probed, marks)
 		if len(gated) > 0 || !allTransient(refused) || !time.Now().Before(paceUntil) {
 			break
@@ -404,7 +414,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	}
 
 	if len(eligible) == 1 {
-		return dispatchSingle(ctx, probeByURL[eligible[0].URL], refused, singleGate{paceUntil: paceUntil, gate: func(eps []Endpoint) ([]gatedEndpoint, []gpuRefusal) { return gate(eps, false) }, noEndpoint: noEndpointError}, jobs, onProgress, send, canary)
+		return dispatchSingle(ctx, probeByURL[eligible[0].URL], refused, singleGate{paceUntil: paceUntil, gate: func(eps []Endpoint) ([]gatedEndpoint, []gpuRefusal) { return gate(eps, false, false) }, noEndpoint: noEndpointError}, jobs, onProgress, send, canary)
 	}
 
 	ordered := make([]Endpoint, len(eligible))
@@ -933,7 +943,7 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 	regate := func(eps []Endpoint, what string) regated {
 		out := regated{live: make(map[string]bool), waiting: make(map[string]bool), gone: make(map[string]bool)}
 		marks := markProbes(eps)
-		kept, refusedNow := gate(eps, false)
+		kept, refusedNow := gate(eps, false, false)
 		if ctx.Err() != nil {
 			// Every port looks unreachable because nobody could ask.
 			out.cancelled = true
