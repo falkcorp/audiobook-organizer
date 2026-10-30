@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -59,7 +60,10 @@ type authorConjunctionRepairParams struct {
 	// TRUE. The population is small enough (46 rows on 2026-08-14) that the
 	// full per-row plan is readable, and merges delete author rows — a
 	// destructive step that deserves to be read before it runs.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 
 	// SkipAuthorIDs excludes specific author rows from the run, reported as
 	// their own outcome bucket rather than silently dropped.
@@ -148,7 +152,10 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 			return fmt.Errorf("maintenance.author-conjunction-repair: decode params: %w", err)
 		}
 	}
-	dryRun := params.DryRun == nil || *params.DryRun
+	dryRun, err := opmode.ResolveDryRun("maintenance.author-conjunction-repair", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	skip := make(map[int]struct{}, len(params.SkipAuthorIDs))
 	for _, id := range params.SkipAuthorIDs {
 		skip[id] = struct{}{}

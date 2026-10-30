@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -85,7 +86,11 @@ type libraryStateRepairParams struct {
 	// DryRun defaults to TRUE and is a *bool for exactly that reason: a plain
 	// bool cannot tell "absent" from "false", and the safe reading of an
 	// omitted field on a writing op is "do not write".
-	DryRun *bool `json:"dry_run"`
+	//
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// IncludeSuspicious widens the allowlist to the derived "suspicious" state.
 	// Defaults false: see the note above on why that is a separate decision.
 	IncludeSuspicious bool `json:"include_suspicious"`
@@ -110,7 +115,13 @@ type libraryStateRepairParams struct {
 	BookIDs []string `json:"book_ids"`
 }
 
-func (p libraryStateRepairParams) dryRun() bool { return p.DryRun == nil || *p.DryRun }
+// dryRun is the effective mode. A disagreement between the two spellings is
+// refused up front by runRepairLibraryState; opmode.ResolveDryRun pairs that
+// error with true, so a caller that skips the check still fails toward preview.
+func (p libraryStateRepairParams) dryRun() bool {
+	dry, _ := opmode.ResolveDryRun("maintenance.repair-library-state", p.DryRun, p.DryRunCamel)
+	return dry
+}
 
 func (p libraryStateRepairParams) onlyPrimary() bool {
 	return p.OnlyPrimary == nil || *p.OnlyPrimary
@@ -200,6 +211,9 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 	var params libraryStateRepairParams
 	if err := decodeStrictParams(rawParams, &params); err != nil {
 		return fmt.Errorf("repair-library-state: decode params: %w", err)
+	}
+	if _, err := opmode.ResolveDryRun("maintenance.repair-library-state", params.DryRun, params.DryRunCamel); err != nil {
+		return err
 	}
 
 	rootDir := strings.TrimRight(p.deps.RootDir(), "/")

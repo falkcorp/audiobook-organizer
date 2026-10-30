@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.5.7
+// version: 1.5.8
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -64,7 +65,10 @@ type introMigrateParams struct {
 	// DryRun reports what WOULD be written without writing it. Defaults to
 	// TRUE: this op touches ~33,780 rows, and the counts per skip-reason are
 	// the thing worth reading before any of that happens.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// LastBookID resumes past a prior run's checkpoint.
 	LastBookID string `json:"last_book_id,omitempty"`
 	// Overwrite re-copies onto files that already carry a transcript. Off by
@@ -126,7 +130,10 @@ func (p *Plugin) runIntroMigrateSingleFile(ctx context.Context, rawParams json.R
 			return fmt.Errorf("maintenance.intro-migrate-single-file: decode params: %w", err)
 		}
 	}
-	dryRun := params.DryRun == nil || *params.DryRun
+	dryRun, err := opmode.ResolveDryRun("maintenance.intro-migrate-single-file", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	overwrite := params.Overwrite != nil && *params.Overwrite
 
 	log := reporter.Logger()

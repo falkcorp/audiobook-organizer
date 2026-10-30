@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/guard_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 4e03d07d-8575-4704-af45-0699789f2293
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package opmode
 
@@ -125,6 +125,167 @@ var allowPlainBool = map[string]string{
 	"internal/server/handlers/metadata/handler.go:func handleBulkWriteBackImpl": "HTTP handler; omitted dry_run enqueues library.bulk-write-back -- owner decision pending",
 }
 
+// TestGuard_DryRunParamsAcceptBothSpellings is the guard for the spelling half
+// of the same rule. dry_run and dryRun are both in use across the op registry
+// and encoding/json DROPS a key it has no field for, so an op whose params
+// struct declares only one of them silently ignores the other: a caller that
+// reached for the other spelling got the op's default with no warning. A
+// {"dryRun":false} sent to an op that decodes only dry_run previewed, and the
+// run's own summary was a truthful dry-run summary, so it looked like a
+// completed repair.
+//
+// Every non-output struct in internal/ and pkg/ that declares a *bool dry_run
+// or dryRun must therefore declare the other spelling beside it (or embed
+// opmode.DryRunParams, which carries both), so that opmode.ResolveDryRun sees
+// both. A plain bool is TestGuard_NoPlainBoolDryRunParams's business and is
+// not counted here.
+//
+// The scan cannot tell an op's params from any other request body, so the
+// structs that are NOT op params are listed in allowSingleSpelling with the
+// reason. The registry-wide check of the structs the ops actually declare is
+// TestOpsV3_DryRunFamilyDecodesBothSpellings in internal/server.
+func TestGuard_DryRunParamsAcceptBothSpellings(t *testing.T) {
+	root := repoRoot(t)
+	var violations []string
+	seen := map[string]bool{}
+	for _, dir := range []string{"internal", "pkg"} {
+		base := filepath.Join(root, dir)
+		err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				name := d.Name()
+				if name == "testdata" || name == "mocks" || name == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			rel, _ := filepath.Rel(root, path)
+			rel = filepath.ToSlash(rel)
+			for _, v := range scanSingleSpelling(t, path, rel) {
+				key := v.file + ":" + v.owner
+				if _, ok := allowSingleSpelling[key]; ok {
+					seen[key] = true
+					continue
+				}
+				violations = append(violations, v.String())
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", base, err)
+		}
+	}
+	sort.Strings(violations)
+	for _, v := range violations {
+		t.Errorf("dry-run param declares one spelling only (the other is silently dropped): %s -- add the other spelling as a *bool and resolve both with opmode.ResolveDryRun", v)
+	}
+	for key := range allowSingleSpelling {
+		if !seen[key] {
+			t.Errorf("allowSingleSpelling entry %q matched nothing; delete it", key)
+		}
+	}
+}
+
+// allowSingleSpelling exempts structs that carry one spelling and are NOT an
+// op's params, keyed "<repo-relative file>:<owner>" like allowPlainBool. Every
+// entry is one of three kinds:
+//
+//   - a SENDER: the struct is marshalled into an op's params and always sets
+//     dry_run explicitly, so it never relies on a default and the op accepts
+//     both spellings;
+//   - an HTTP request body: the API's own contract names dry_run, the handler
+//     reads it into a *bool where omitted means preview, and a dryRun key sent
+//     to the endpoint is not an op-params question (the endpoints are tracked
+//     under OPS-PREVIEW-HTTP-ENDPOINTS);
+//   - a READER of a stored result or advertised default, never of a request.
+var allowSingleSpelling = map[string]string{
+	// Senders: the scheduler tasks that enqueue an op with an explicit live mode.
+	"internal/scheduler/tasks.go:identificationAdvanceTaskParams":  "sender; always dry_run=false via opmode.Live(); identification.advance accepts both spellings",
+	"internal/scheduler/tasks.go:collectionsRefreshTaskParams":     "sender; always dry_run=false via opmode.Live(); collections.refresh-relative-dynamic accepts both spellings",
+	"internal/scheduler/tasks.go:catalogHarvestTaskParams":         "sender; always dry_run=false via opmode.Live(); catalog.harvest-authors accepts both spellings",
+	"internal/scheduler/tasks.go:asinBackfillTaskParams":           "sender; always dry_run=false via opmode.Live(); metafetch.asin-backfill accepts both spellings",
+	"internal/server/handlers/audiobooks/handler.go:purgeOpParams": "sender; DryRun is never omitted (see its comment); library.purge-soft-deleted accepts both spellings",
+
+	// HTTP request bodies.
+	"internal/server/handlers/repairs/handler.go:ApplyRequest":                     "HTTP request body of POST /repairs/:fixer/apply; omitted previews; the handler forwards an explicit dry_run to repairs.apply",
+	"internal/metabatch/candidates.go:BatchApplyRequest":                           "HTTP request body; omitted previews (metadata.bulk-apply-preview)",
+	"internal/server/handlers/dedup/manual_candidates.go:manualCandidatesRequest":  "HTTP request body; omitted previews",
+	"internal/server/handlers/split_book.go:bulkSplitBookMergeRequest":             "HTTP request body; omitted previews",
+	"internal/server/handlers/user_merge.go:mergeParams":                           "HTTP request body; omitted previews",
+	"internal/server/handlers/ai.go:func ApplyScanResults":                         "HTTP request body; omitted previews",
+	"internal/server/handlers/metadata_cache.go:func BatchApplyFromCache":          "HTTP request body; omitted previews",
+	"internal/server/handlers/duplicates/handler.go:func DeduplicateSeriesHandler": "HTTP request body; omitted previews; forwarded into dedup.series-dedup, which accepts both spellings",
+
+	// Readers.
+	"internal/server/handlers/repairs/handler.go:OpRef":                      "response shape; DryRun echoes a stored apply result",
+	"internal/server/handlers/repairs/handler.go:func opRef":                 "decodes a stored result's summary, not a request",
+	"internal/server/maintenance_dispatcher.go:func advertisedDryRunDefault": "reads a maintenance job's advertised DefaultParams, not a request",
+}
+
+type singleSpellingStruct struct {
+	file, owner, have string
+	line              int
+}
+
+func (v singleSpellingStruct) String() string {
+	return v.file + ":" + strconv.Itoa(v.line) + " " + v.owner + " declares only `" + v.have + "`"
+}
+
+// scanSingleSpelling returns every input struct in a file that declares exactly
+// one of the dry_run / dryRun spellings as a *bool and not the other.
+func scanSingleSpelling(t *testing.T, path, rel string) []singleSpellingStruct {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+	var out []singleSpellingStruct
+	eachInputStruct(f, func(st *ast.StructType, owner string) {
+		spellings := map[string]bool{} // json name -> declared as *bool
+		for _, fld := range st.Fields.List {
+			// An embedded opmode.DryRunParams carries both spellings.
+			if len(fld.Names) == 0 {
+				if sel, ok := fld.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "DryRunParams" {
+					return
+				}
+			}
+			if fld.Tag == nil {
+				continue
+			}
+			tagVal, err := strconv.Unquote(fld.Tag.Value)
+			if err != nil {
+				continue
+			}
+			name, _, _ := strings.Cut(reflect.StructTag(tagVal).Get("json"), ",")
+			if name != "dry_run" && name != "dryRun" {
+				continue
+			}
+			star, ok := fld.Type.(*ast.StarExpr)
+			if !ok {
+				spellings[name] = false // a plain bool: TestGuard_NoPlainBoolDryRunParams's business
+				continue
+			}
+			if id, ok := star.X.(*ast.Ident); ok && id.Name == "bool" {
+				spellings[name] = true
+			}
+		}
+		if len(spellings) == 1 {
+			for name, isPtr := range spellings {
+				if isPtr {
+					out = append(out, singleSpellingStruct{file: rel, owner: owner, have: name, line: fset.Position(st.Pos()).Line})
+				}
+			}
+		}
+	})
+	return out
+}
+
 // previewWhenTrueTags are the JSON names of a mode flag whose TRUE value is the
 // preview. A plain bool under any of them is live when omitted. dry_run and
 // dryRun are the two spellings in use; the rest are the other ways the same
@@ -178,6 +339,16 @@ func scanFile(t *testing.T, path, rel string) []plainBoolField {
 			out = append(out, plainBoolField{file: rel, owner: owner, field: fieldName, tag: name, line: fset.Position(fld.Pos()).Line})
 		}
 	}
+	eachInputStruct(f, check)
+	return out
+}
+
+// eachInputStruct calls fn for every struct in f that could be an op's INPUT:
+// every named struct whose name does not end in an outputTypeSuffixes entry,
+// and every anonymous struct declared inside a function other than a
+// maintenance job's DefaultParams, unless it looks like a response body. owner
+// is the struct's type name, or "func <Name>" for an anonymous one.
+func eachInputStruct(f *ast.File, fn func(st *ast.StructType, owner string)) {
 	isOutput := func(name string) bool {
 		for _, s := range outputTypeSuffixes {
 			if strings.HasSuffix(name, s) {
@@ -196,21 +367,21 @@ func scanFile(t *testing.T, path, rel string) []plainBoolField {
 		if st, ok := ts.Type.(*ast.StructType); ok {
 			named[st] = true
 			if !isOutput(ts.Name.Name) {
-				check(st, ts.Name.Name)
+				fn(st, ts.Name.Name)
 			}
 		}
 		return true
 	})
 	// Anonymous struct types, attributed to their enclosing function.
 	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
+		d, ok := decl.(*ast.FuncDecl)
+		if !ok || d.Body == nil {
 			continue
 		}
-		if fn.Name.Name == "DefaultParams" {
+		if d.Name.Name == "DefaultParams" {
 			continue // covered by the maintenance-jobs registry guard
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ast.Inspect(d.Body, func(n ast.Node) bool {
 			st, ok := n.(*ast.StructType)
 			if !ok || named[st] {
 				return true
@@ -224,11 +395,10 @@ func scanFile(t *testing.T, path, rel string) []plainBoolField {
 			if anonymousLooksLikeOutput(st) {
 				return true
 			}
-			check(st, "func "+fn.Name.Name)
+			fn(st, "func "+d.Name.Name)
 			return true
 		})
 	}
-	return out
 }
 
 // anonymousLooksLikeOutput reports whether an anonymous struct is a response

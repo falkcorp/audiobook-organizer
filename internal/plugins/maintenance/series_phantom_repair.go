@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -24,6 +24,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -95,7 +96,11 @@ type seriesPhantomRepairParams struct {
 	// DryRun defaults to TRUE for the two repair modes and is ignored for
 	// "report". A dry run does everything except the book writes (and, for
 	// recreate, the series creates) and reports what it WOULD have done.
-	DryRun *bool `json:"dry_run,omitempty"`
+	//
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// Names maps a phantom series id (as a decimal string, the JSON-object-key
 	// form) to the name to recreate it under. Only consulted by "recreate";
 	// phantom ids with no entry are skipped and counted.
@@ -231,9 +236,14 @@ func (p *Plugin) seriesPhantomRepair(ctx context.Context, params seriesPhantomRe
 			mode, seriesPhantomModeReport, seriesPhantomModeNull, seriesPhantomModeRecreate)
 	}
 	// Dry run is the default for BOTH repairs and is not a choice for the report.
-	dryRun := true
-	if mode != seriesPhantomModeReport && params.DryRun != nil {
-		dryRun = *params.DryRun
+	// The two spellings are resolved for every mode, so a body that states them
+	// with different values is refused even where the flag is then ignored.
+	dryRun, modeErr := opmode.ResolveDryRun(seriesPhantomRepairOpID, params.DryRun, params.DryRunCamel)
+	if modeErr != nil {
+		return nil, modeErr
+	}
+	if mode == seriesPhantomModeReport {
+		dryRun = true
 	}
 
 	store := p.deps.OpsStore()

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/preview_default_wiring_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6f1a9c3d-2b84-4e57-a0d9-3c5e7b8f1a26
-// last-edited: 2026-09-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -45,6 +45,7 @@ func TestOps_DryRunRoutesThroughOpmode(t *testing.T) {
 		{"maintenance.author-path-link", p.runAuthorPathLink},
 		{"maintenance.author-split-scan", p.runAuthorSplitScan},
 		{"maintenance.resolve-production-authors", p.runResolveProductionAuthors},
+		{"maintenance.duration-reextract", p.runDurationBackfill},
 	}
 	for _, op := range ops {
 		for _, body := range []string{`{"dry_run":false,"dryRun":true}`, `{"dry_run":true,"dryRun":false}`} {

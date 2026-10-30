@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -32,7 +33,10 @@ type autoMatchTranscribedParams struct {
 	LastBookID string `json:"last_book_id,omitempty"`
 	// DryRun defaults to true when nil. The op MUST NOT mutate any book unless
 	// this is explicitly set to false.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 	// MinScore is the minimum candidate score required to qualify for apply.
 	// Defaults to 0.75 when ≤0. Scores are uncapped (transcription boosts can
 	// push them above 1.0), so 0.75 sits well above a random token-overlap hit.
@@ -78,8 +82,11 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		}
 	}
 
-	// Default dry_run to true — safety first.
-	dryRun := params.DryRun == nil || *params.DryRun
+	// Default dry_run to true — safety first. Both spellings, disagreement refused.
+	dryRun, err := opmode.ResolveDryRun("maintenance.auto-match-transcribed", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 
 	// Default min_score to 0.75.
 	minScore := params.MinScore

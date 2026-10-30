@@ -1,7 +1,7 @@
 // file: internal/server/series_ops_partial_failure_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5d8a2f37-c1e9-4b64-a0f3-7e29b6d41c85
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 package server
 
@@ -393,4 +393,34 @@ func TestSeriesMergeOp_RefusesToApplyWithoutAnOperationID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "without an operation id")
 	assert.Empty(t, *deleted)
+}
+
+// dedup.series-dedup read only dry_run until 2026-10-30, so a caller using the
+// spelling every neighbouring op accepts ({"dryRun":false}) got a preview and a
+// completed-looking run that deleted nothing. Both spellings now reach
+// opmode.ResolveDryRun.
+func TestSeriesDedupOp_DryRunSpellings(t *testing.T) {
+	t.Run("dryRun=false applies", func(t *testing.T) {
+		store, deleted := newSeriesDedupFixture()
+		_, _ = runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), `{"dryRun":false}`)
+		assert.NotEmpty(t, *deleted, "dryRun=false must apply; the camelCase spelling is being dropped")
+	})
+	for _, body := range []string{`{"dryRun":true}`, `{"dry_run":true}`, `{}`} {
+		t.Run("preview "+body, func(t *testing.T) {
+			store, deleted := newSeriesDedupFixture()
+			_, err := runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), body)
+			require.NoError(t, err)
+			assert.Empty(t, *deleted)
+		})
+	}
+	for _, body := range []string{`{"dry_run":false,"dryRun":true}`, `{"dry_run":true,"dryRun":false}`} {
+		t.Run("conflict "+body, func(t *testing.T) {
+			store, deleted := newSeriesDedupFixture()
+			_, err := runSeriesDedupOp(t, newSeriesMergeOpServer(t, store), body)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "disagree")
+			assert.Contains(t, err.Error(), "dedup.series-dedup")
+			assert.Empty(t, *deleted, "a refused body must not delete anything")
+		})
+	}
 }

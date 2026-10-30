@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.31.3
+// version: 2.31.4
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -42,6 +42,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -902,6 +903,16 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 					return fmt.Errorf("dedup.series-dedup: decode params: %w", err)
 				}
 			}
+			// Absent dry_run means TRUE. This op deletes series rows and had
+			// no preview at all before TODO.md L3966, so the default has to be
+			// the safe one; a caller that wants the writes says so explicitly.
+			// Both spellings go through opmode.ResolveDryRun, which refuses a
+			// body that states them with different values, before the op
+			// touches anything.
+			dryRun, modeErr := opmode.ResolveDryRun("dedup.series-dedup", p.DryRun, p.DryRunCamel)
+			if modeErr != nil {
+				return modeErr
+			}
 			store := s.storeForWiring()
 			if store == nil {
 				return fmt.Errorf("dedup.series-dedup: database not initialized")
@@ -921,12 +932,6 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 			ctx = logging.WithOp(ctx, op)
 
 			progress := registryProgressAdapter{r: reporter}
-
-			// Absent dry_run means TRUE. This op deletes series rows and had
-			// no preview at all before TODO.md L3966, so the default has to be
-			// the safe one; a caller that wants the writes says so explicitly.
-			// Same nil-means-true read as maintenance.author-conjunction-repair.
-			dryRun := p.DryRun == nil || *p.DryRun
 
 			logging.Info(ctx, "series deduplication starting", "dry_run", dryRun)
 

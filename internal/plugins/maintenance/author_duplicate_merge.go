@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -75,7 +76,10 @@ type authorDuplicateMergeParams struct {
 	// There is deliberately no second `apply` knob. Two flags that both mean
 	// "write" have a combination that means both at once, and on an op that
 	// deletes rows that ambiguity is the whole hazard.
-	DryRun *bool `json:"dry_run,omitempty"`
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run,omitempty"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 
 	// Names is the operator's explicit allowlist, matched after
 	// util.NormalizeAuthor so an operator does not have to reproduce a row's
@@ -127,7 +131,10 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			return fmt.Errorf("maintenance.author-duplicate-merge: decode params: %w", err)
 		}
 	}
-	dryRun := params.DryRun == nil || *params.DryRun
+	dryRun, err := opmode.ResolveDryRun("maintenance.author-duplicate-merge", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
 	log := reporter.Logger()
 
 	// Build the allowlist FIRST, before any store read. Two listed names that

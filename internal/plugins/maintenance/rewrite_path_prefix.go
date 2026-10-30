@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/rewrite_path_prefix.go
-// version: 2.6.1
+// version: 2.6.2
 // guid: 584360e3-4976-406c-b4d1-80bbe47ed390
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 
 // Package maintenance — REWRITE a stored path PREFIX across every row that
 // records a location under it, after a directory was renamed or moved on disk.
@@ -100,6 +100,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -128,7 +129,11 @@ type rewritePathPrefixParams struct {
 	// the divergence is deliberate and safe because decodeStrictParams rejects
 	// unknown keys, so a habitual {"apply": true} fails loudly here instead of
 	// silently not writing.
-	DryRun *bool `json:"dry_run"`
+	//
+	// dryRun (camelCase) is accepted as an alias; sending both with different
+	// values is refused by opmode.ResolveDryRun, never guessed at.
+	DryRun      *bool `json:"dry_run"`
+	DryRunCamel *bool `json:"dryRun,omitempty"`
 
 	// RequireTargetExists, default TRUE, refuses to rewrite a row unless the
 	// NEW path exists on disk. The intended operator sequence is: rename on
@@ -151,8 +156,13 @@ type rewritePathPrefixParams struct {
 	ReportPath string `json:"report_path,omitempty"`
 }
 
+// dryRun is the effective mode. A disagreement between the two spellings is
+// refused up front by runRewritePathPrefix; opmode.ResolveDryRun pairs that
+// error with true, so a caller that skips the check (the plan tests call
+// planRewritePathPrefix directly) still fails toward preview.
 func (p rewritePathPrefixParams) dryRun() bool {
-	return p.DryRun == nil || *p.DryRun
+	dry, _ := opmode.ResolveDryRun("maintenance.rewrite-path-prefix", p.DryRun, p.DryRunCamel)
+	return dry
 }
 
 func (p rewritePathPrefixParams) requireTargetExists() bool {
@@ -387,6 +397,9 @@ func (p *Plugin) runRewritePathPrefix(ctx context.Context, rawParams json.RawMes
 	var params rewritePathPrefixParams
 	if err := decodeStrictParams(rawParams, &params); err != nil {
 		return fmt.Errorf("rewrite-path-prefix: decode params: %w", err)
+	}
+	if _, err := opmode.ResolveDryRun("maintenance.rewrite-path-prefix", params.DryRun, params.DryRunCamel); err != nil {
+		return err
 	}
 	if err := params.validate(); err != nil {
 		return fmt.Errorf("rewrite-path-prefix: %w", err)
