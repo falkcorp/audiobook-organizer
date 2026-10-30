@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 31722b4f-1d15-4404-a9f4-7a792efd86f0
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package metadata
 
@@ -713,5 +713,33 @@ func TestGraphQLRefusal(t *testing.T) {
 				t.Errorf("the provider's own message was lost: %v", err)
 			}
 		})
+	}
+}
+
+func TestRegistry_ReleaseHold(t *testing.T) {
+	r := NewThrottleRegistry()
+	st := newFakeThrottleStore()
+	if _, err := r.AttachStore(st); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.RecordFailure("a", &ProviderStatusError{Provider: "a", Status: 429, Body: "per day"}); !ok {
+		t.Fatal("a not held")
+	}
+	if _, ok := r.RecordFailure("b", &ProviderStatusError{Provider: "b", Status: 401}); !ok {
+		t.Fatal("b not held")
+	}
+
+	if _, released, err := r.ReleaseHold("missing"); err != nil || released {
+		t.Fatalf("missing: released=%v err=%v", released, err)
+	}
+	got, released, err := r.ReleaseHold("a")
+	if err != nil || !released || got.ProviderID != "a" {
+		t.Fatalf("a: got=%+v released=%v err=%v", got, released, err)
+	}
+	if r.Throttled("a") || !r.Throttled("b") {
+		t.Fatal("ReleaseHold must drop only the named provider")
+	}
+	if st.rowCount() != 1 {
+		t.Fatalf("persisted row not deleted: %d rows", st.rowCount())
 	}
 }
