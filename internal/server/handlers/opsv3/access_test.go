@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opsv3/access_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 91c4e7a2-5d38-4b06-a2f1-6e0b8d3c7a95
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package opsv3
 
@@ -166,6 +166,9 @@ func (k *keepRuns) ListRunsV3(q database.RunQuery) (database.RunPage, error) {
 		if q.DefID != "" && r.DefID != q.DefID {
 			continue
 		}
+		if q.State != "" && r.State != q.State {
+			continue
+		}
 		if q.SkipID != nil && q.SkipID(r.ID) {
 			continue
 		}
@@ -294,5 +297,47 @@ func TestRepairsRun_TimelineLeavesOutUnreadableRuns(t *testing.T) {
 	admin := caller{perms: auth.PermLibraryView + "," + auth.PermUsersManage, user: "u-adm", method: string(auth.MethodSession)}
 	if w := do(t, r, admin, http.MethodGet, "/api/v3/ops/timeline", nil); !strings.Contains(w.Body.String(), "run1") {
 		t.Fatalf("permitted caller's timeline = %d %s, want run1 too", w.Code, w.Body.String())
+	}
+}
+
+// countsRuns is a keepRuns with a maintained census, as the store keeps it
+// (every run counts under its true state and definition, readable or not).
+type countsRuns struct {
+	*keepRuns
+	oc database.OpCounts
+}
+
+func (c *countsRuns) OpCountsV3() (database.OpCounts, error) { return c.oc, nil }
+
+// A corrupt run record in the counts census must not fail /counts: it is
+// skipped and logged, and its group gives it up exactly as the run listing
+// leaves it out, so a group's count stays the length of its href's list.
+func TestRepairsCounts_SurvivesACorruptRecord(t *testing.T) {
+	kr := &keepRuns{
+		memRuns: &memRuns{runs: map[string]database.RunRecord{}},
+		recs: []database.RunRecord{
+			repairsRun("hidden", "needs.users", state.V3Running, "x"),
+			repairsRun("corrupt", "needs.users", state.V3Running, "x"),
+			{ID: "plain", DefID: "library.scan", State: state.V3Succeeded},
+		},
+		corrupt: map[string]bool{"corrupt": true},
+	}
+	cr := &countsRuns{keepRuns: kr, oc: database.OpCounts{
+		ByState: map[state.V3]int64{state.V3Running: 2, state.V3Succeeded: 1},
+		ByDef:   map[string]int64{repairs.ApplyOpID: 2, "library.scan": 1},
+	}}
+	r := newRouter(New(Deps{
+		Runs:          cr,
+		RepairsAccess: opaccess.NewRepairs(fixerSet{"needs.users": usersManageFixer{}}, noOpRows{}, holdsHeader),
+	}))
+	for _, by := range []string{"state", "def"} {
+		w := do(t, r, viewer, http.MethodGet, "/api/v3/ops/counts?group_by="+by, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("counts %s = %d %s, want 200", by, w.Code, w.Body.String())
+		}
+		got := decode[countsResp](t, w)
+		if got.Total != 1 || len(got.Groups) != 1 {
+			t.Errorf("counts %s = %+v, want the one plain run alone", by, got)
+		}
 	}
 }
