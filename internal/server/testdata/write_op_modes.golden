@@ -187,6 +187,7 @@ maintenance.series-phantom-repair	preview
 maintenance.split-joined-narrators	preview
 maintenance.tag-backfill	preview
 maintenance.temp-file-cleanup	no-mode
+maintenance.throttle-reset	preview
 maintenance.title-backfill	preview
 maintenance.title-repair	preview
 maintenance.tombstone-cleanup	no-mode
