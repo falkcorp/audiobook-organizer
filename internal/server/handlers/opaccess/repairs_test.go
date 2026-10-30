@@ -1,5 +1,5 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
 // last-edited: 2026-10-30
 
@@ -598,4 +598,20 @@ func TestReader_ReadableLegacyOps(t *testing.T) {
 	all := NewRepairs(reg, noOps, holdsOnly(auth.All()...)).For(c)
 	require.Equal(t, []string{"scan", "plain", "scoped"}, ids(all.ReadableLegacyOps(ops)))
 	require.NotNil(t, viewer.ReadableLegacyOps(nil))
+}
+
+// TestReader_MayReadEveryRepairsOp: only a caller holding every permission there
+// is (what an unregistered fixer needs) may read every Repairs operation, and an
+// unwired check fails closed. A narrower caller is refused even when they hold
+// every permission of the fixers that happen to be registered.
+func TestReader_MayReadEveryRepairsOp(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}, "scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
+	c, _ := ctxHolding()
+	require.True(t, NewRepairs(reg, noOps, holdsOnly(auth.All()...)).For(c).MayReadEveryRepairsOp())
+	require.False(t, NewRepairs(reg, noOps, holdsOnly(auth.PermLibraryView, auth.PermLibraryEditMetadata, auth.PermSettingsManage)).For(c).MayReadEveryRepairsOp())
+	require.False(t, NewRepairs(reg, noOps, holdsOnly(auth.PermLibraryView)).For(c).MayReadEveryRepairsOp())
+	var unwired *Repairs
+	require.False(t, unwired.For(c).MayReadEveryRepairsOp())
+	var nilReader *Reader
+	require.False(t, nilReader.MayReadEveryRepairsOp())
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.37.1
+// version: 1.38.2
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
 // last-edited: 2026-10-30
 
@@ -1541,10 +1541,14 @@ type pactDigestScratch struct {
 	counts                        map[string]int
 	total                         int
 	auditItems, errItems, normals []DigestItem
+	// agg is the per-operation share of counts and total (DigestOpAggregate), so
+	// a reader who may not read some operations can be served exact numbers
+	// without them.
+	agg *aggregateScratch
 }
 
 func newPactDigestScratch() *pactDigestScratch {
-	return &pactDigestScratch{counts: make(map[string]int)}
+	return &pactDigestScratch{counts: make(map[string]int), agg: newAggregateScratch()}
 }
 
 // add folds one entry into the scratch, keeping at most maxDigestItems per
@@ -1553,6 +1557,7 @@ func newPactDigestScratch() *pactDigestScratch {
 func (sc *pactDigestScratch) add(e ActivityEntry) {
 	sc.counts[e.Type]++
 	sc.total++
+	sc.agg.add(e)
 
 	var bucket *[]DigestItem
 	switch {
@@ -1593,6 +1598,8 @@ func (sc *pactDigestScratch) add(e ActivityEntry) {
 func (sc *pactDigestScratch) addOpaque() {
 	sc.counts["unreadable"]++
 	sc.total++
+	// An entry nobody could decode names no operation as far as anyone can tell.
+	sc.agg.add(ActivityEntry{Type: "unreadable"})
 }
 
 // details renders the accumulated scratch as a DigestDetails for dateKey.
@@ -1607,14 +1614,27 @@ func (sc *pactDigestScratch) details(dateKey string) DigestDetails {
 		truncated = true
 		truncatedCount = sc.total - len(items)
 	}
-	return DigestDetails{
+	dd := DigestDetails{
 		Date:           dateKey,
 		OriginalCount:  sc.total,
 		Counts:         sc.counts,
+		TagCounts:      sc.agg.tags,
 		Items:          items,
 		Truncated:      truncated,
 		TruncatedCount: truncatedCount,
 	}
+	if len(dd.TagCounts) == 0 {
+		dd.TagCounts = nil
+	}
+	if !sc.agg.unattributable {
+		dd.AggregatesVersion = DigestAggregatesVersion
+		dd.OpAggregates = sc.agg.ops
+		dd.NoOpAggregate = sc.agg.noOp
+		if len(dd.OpAggregates) == 0 {
+			dd.OpAggregates = nil
+		}
+	}
+	return dd
 }
 
 // CompactByDay collapses every compactable-tier entry older than olderThan into
@@ -1845,6 +1865,7 @@ func (s *PebbleActivityStore) stageDayDigest(batch *GatedBatch, startOfDay time.
 			dd.Counts[k] += v
 		}
 		dd.OriginalCount += existing.OriginalCount
+		dd.mergeAggregates(existing)
 		combined := append(existing.Items, dd.Items...)
 		if len(combined) > maxDigestItems {
 			combined = combined[:maxDigestItems]
@@ -1978,41 +1999,53 @@ func (s *PebbleActivityStore) RecompactDigests(ctx context.Context) (result Reco
 			if !isLegacyItem(item) {
 				continue
 			}
-			derivedType, derivedTier := deriveTypeFromMessage(item.Summary, "")
-			derivedTags := enrichLegacyLogTags(item.Summary, "", "info")
-			c.dd.Items[i].Type = derivedType
-			c.dd.Items[i].Tier = derivedTier
-			c.dd.Items[i].Tags = derivedTags
+			c.dd.Items[i] = rederiveLegacyItem(item)
 		}
 
-		// Rebuild Counts from updated items.
-		newCounts := make(map[string]int)
-		for _, item := range c.dd.Items {
-			newCounts[item.Type]++
-		}
-		c.dd.Counts = newCounts
-
-		// Rebuild TagCounts from updated items (action: and source: namespaces only).
-		newTagCounts := make(map[string]map[string]int)
-		for _, item := range c.dd.Items {
-			for _, tag := range item.Tags {
-				colonIdx := strings.Index(tag, ":")
-				if colonIdx < 1 {
-					continue
-				}
-				ns := tag[:colonIdx]
-				val := tag[colonIdx+1:]
-				if ns != "action" && ns != "source" {
-					continue
-				}
-				if newTagCounts[ns] == nil {
-					newTagCounts[ns] = make(map[string]int)
-				}
-				newTagCounts[ns][val]++
+		// Rebuild the aggregates from the updated items, when the items are all
+		// there is to go on or all there is at all.
+		//
+		// A digest that carries per-operation aggregates states exact totals
+		// (Counts, TagCounts, OriginalCount) that sum to them. Its items are a
+		// sample of at most maxDigestItems, so rebuilding the totals from them
+		// would replace exact numbers with a sample and leave the aggregates
+		// disagreeing with them; the totals are rebuilt (with the aggregates)
+		// only when the items are every row the day held, and are left alone
+		// when they are not. A digest without aggregates is rebuilt from its
+		// items as it always was.
+		switch {
+		case c.dd.AggregatesVersion == 0:
+			c.dd.Counts = make(map[string]int)
+			newTagCounts := make(map[string]map[string]int)
+			for _, item := range c.dd.Items {
+				c.dd.Counts[item.Type]++
+				addTagCounts(newTagCounts, item.Tags)
 			}
-		}
-		if len(newTagCounts) > 0 {
-			c.dd.TagCounts = newTagCounts
+			if len(newTagCounts) > 0 {
+				c.dd.TagCounts = newTagCounts
+			}
+		case c.dd.OriginalCount == len(c.dd.Items):
+			agg := newAggregateScratch()
+			counts := make(map[string]int)
+			for _, item := range c.dd.Items {
+				counts[item.Type]++
+				agg.add(digestItemAsEntry(item))
+			}
+			c.dd.Counts = counts
+			c.dd.TagCounts = agg.tags
+			if len(c.dd.TagCounts) == 0 {
+				c.dd.TagCounts = nil
+			}
+			if agg.unattributable {
+				// A row of several operations: the shares cannot be stated.
+				c.dd.AggregatesVersion, c.dd.OpAggregates, c.dd.NoOpAggregate = 0, nil, nil
+				break
+			}
+			c.dd.OpAggregates = agg.ops
+			if len(c.dd.OpAggregates) == 0 {
+				c.dd.OpAggregates = nil
+			}
+			c.dd.NoOpAggregate = agg.noOp
 		}
 
 		// Merge updated DigestDetails back into the entry's Details map.

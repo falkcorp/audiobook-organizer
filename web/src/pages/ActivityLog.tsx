@@ -1,5 +1,5 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.39.0
+// version: 2.39.1
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
 // last-edited: 2026-10-30
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -1364,6 +1364,10 @@ export default function ActivityLog() {
             }>;
             truncated?: boolean;
             truncated_count?: number;
+            // Set by the server when the day's totals would include rows of
+            // Repairs runs this caller may not read and the digest cannot say
+            // which: counts, original_count and tag_counts are then absent.
+            aggregates_withheld?: boolean;
           }
         | undefined;
       // Pre-2026-05-20 digests won't have per-item timestamps or tags
@@ -1431,6 +1435,16 @@ export default function ActivityLog() {
                       label={`${count} ${type.replace(/_/g, ' ')}`}
                     />
                   ))}
+                {details?.aggregates_withheld && (
+                  <Tooltip title="Counts hidden because this day includes operations you may not read">
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label="counts hidden"
+                      data-testid="digest-counts-hidden"
+                    />
+                  </Tooltip>
+                )}
               </Stack>
             </TableCell>
             <TableCell colSpan={isMobile ? 1 : 2}>
