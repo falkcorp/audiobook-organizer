@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.65.0
+// version: 1.65.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-30
 
@@ -1391,7 +1391,7 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 			log.Debug("Organize: failed to stamp book %s: %s", book.ID, updateErr.Error())
 		}
 		if operationID != "" {
-			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+			orgSvc.recordChange(&database.OperationChange{
 				ID:          ulid.Make().String(),
 				OperationID: operationID,
 				BookID:      book.ID,
@@ -1424,7 +1424,7 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 				// move; the landing carries what it was before.
 				oldState = landing.SourceLibraryState
 			}
-			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+			orgSvc.recordChange(&database.OperationChange{
 				ID:          ulid.Make().String(),
 				OperationID: operationID,
 				BookID:      book.ID,
@@ -1446,7 +1446,7 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 		// fewer than N organize_failed rows, and the gap looked like clean
 		// books rather than unrecorded failures.
 		if operationID != "" {
-			_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+			orgSvc.recordChange(&database.OperationChange{
 				ID:          ulid.Make().String(),
 				OperationID: operationID,
 				BookID:      book.ID,
@@ -1683,7 +1683,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 			stats.addCollision(CollisionLibraryCopyExists, 1)
 			statsMu.Unlock()
 			if operationID != "" {
-				if cerr := orgSvc.db.CreateOperationChange(&database.OperationChange{
+				if cerr := database.RecordOperationChange(orgSvc.db, &database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: operationID,
 					BookID:      book.ID,
@@ -1705,7 +1705,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 			stats.addCollision(conflict.Category, 1)
 			statsMu.Unlock()
 			if operationID != "" {
-				_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+				orgSvc.recordChange(&database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: operationID,
 					BookID:      book.ID,
@@ -1722,7 +1722,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 			statsMu.Unlock()
 
 			if operationID != "" {
-				_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+				orgSvc.recordChange(&database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: operationID,
 					BookID:      book.ID,
@@ -1895,7 +1895,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 
 	// Record summary as operation change
 	if operationID != "" {
-		_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+		orgSvc.recordChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: operationID,
 			BookID:      "",
@@ -2606,7 +2606,7 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	}
 
 	if operationID != "" {
-		_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+		orgSvc.recordChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: operationID,
 			BookID:      createdBook.ID,
@@ -2615,7 +2615,7 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 			OldValue:    "",
 			NewValue:    fmt.Sprintf("version_of:%s path:%s", book.ID, newPath),
 		})
-		_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+		orgSvc.recordChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: operationID,
 			BookID:      book.ID,

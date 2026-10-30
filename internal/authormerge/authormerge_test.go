@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 8a1e4c62-9d37-4b05-b6f8-2e7a5c0d9f13
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package authormerge
 
@@ -135,7 +135,7 @@ func TestStep_RefusesAnEmptyOperationID(t *testing.T) {
 
 func TestStep_VoidMarksTheRowVoided(t *testing.T) {
 	f := newFake()
-	void, err := Step(f, "op", &database.OperationChange{ChangeType: "x"})
+	void, err := Step(f, "op", &database.OperationChange{ChangeType: undo.ChangeTypeAuthorMergeDelete})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +145,17 @@ func TestStep_VoidMarksTheRowVoided(t *testing.T) {
 	row := f.only(t)
 	if !row.Voided || row.RevertedAt == nil || row.OperationID != "op" {
 		t.Fatalf("voided row: %+v", row)
+	}
+}
+
+func TestStep_RefusesAnUnclassifiedChangeType(t *testing.T) {
+	f := newFake()
+	_, err := Step(f, "op", &database.OperationChange{ChangeType: "batman_gotham_unclassified"})
+	if !errors.Is(err, database.ErrUnclassifiedChangeType) {
+		t.Fatalf("err = %v, want ErrUnclassifiedChangeType", err)
+	}
+	if len(f.rows) != 0 {
+		t.Fatalf("an unclassified row was written: %+v", f.rows)
 	}
 }
 
@@ -238,6 +249,9 @@ func TestMergeDelete_JournalsTheAuthorAndItsAliases(t *testing.T) {
 	row := f.only(t)
 	if row.ChangeType != undo.ChangeTypeAuthorMergeDelete {
 		t.Fatalf("row %+v", row)
+	}
+	if _, classified := database.ClassifyChangeType(row.ChangeType); !classified {
+		t.Fatalf("row landed under an unclassified change type %q", row.ChangeType)
 	}
 	var snap undo.AuthorSnapshot
 	if err := json.Unmarshal([]byte(row.OldValue), &snap); err != nil {

@@ -1,7 +1,7 @@
 // file: internal/dedup/series_dedup.go
-// version: 1.16.1
+// version: 1.16.3
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 // Package dedup: series_dedup.go contains the extracted execution logic for the
 // "dedup.series-scan", "dedup.series-dedup", and "dedup.series-merge" async
@@ -644,7 +644,7 @@ func DedupSeries(
 				// MergeSeries uses. A book that was reassigned but not journalled
 				// is an un-undoable write, which is precisely the state this
 				// guard exists to remove; it must not be silent.
-				if cerr := store.CreateOperationChange(&database.OperationChange{
+				if cerr := database.RecordOperationChange(store, &database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: opID,
 					BookID:      full.ID,
@@ -708,7 +708,7 @@ func DedupSeries(
 				// books went, and MergeSeries writes exactly the same shape.
 				// s.Name is already in hand from the group iteration, so no
 				// extra GetSeriesByID read is needed to fill it.
-				if cerr := store.CreateOperationChange(&database.OperationChange{
+				if cerr := database.RecordOperationChange(store, &database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: opID,
 					BookID:      "",
@@ -887,7 +887,7 @@ func MergeSeries(
 		// metadata_update/series_name rows this used to write carried no
 		// series id, and those stay record-only (internal/undo/restorable.go).
 		keepSeriesID := keepID
-		_ = store.CreateOperationChange(&database.OperationChange{
+		recordSeriesChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  undo.ChangeTypeSeriesRename,
@@ -1097,7 +1097,7 @@ func MergeSeries(
 			members.Move(bookCore.ID, mergeID, &keepID)
 			moved++
 			if changed {
-				_ = store.CreateOperationChange(&database.OperationChange{
+				recordSeriesChange(store, &database.OperationChange{
 					ID:          ulid.Make().String(),
 					OperationID: opID,
 					BookID:      bookCore.ID,
@@ -1153,7 +1153,7 @@ func MergeSeries(
 			result.LeftIDs = append(result.LeftIDs, mergeID)
 		} else {
 			result.MergedCount++
-			_ = store.CreateOperationChange(&database.OperationChange{
+			recordSeriesChange(store, &database.OperationChange{
 				ID:          ulid.Make().String(),
 				OperationID: opID,
 				BookID:      "",
@@ -1225,7 +1225,7 @@ func MergeSeries(
 						result.Errors = append(result.Errors,
 							fmt.Sprintf("failed to set authors for book %s: %v", book.ID, err))
 					} else {
-						_ = store.CreateOperationChange(&database.OperationChange{
+						recordSeriesChange(store, &database.OperationChange{
 							ID:          ulid.Make().String(),
 							OperationID: opID,
 							BookID:      book.ID,

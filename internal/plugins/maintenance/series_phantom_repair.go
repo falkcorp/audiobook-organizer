@@ -579,7 +579,7 @@ func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder,
 			skip = "locked"
 			return database.ErrSkipBookWrite
 		}
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		if jerr := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      h.BookID,

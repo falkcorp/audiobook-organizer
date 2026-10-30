@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -1383,7 +1383,7 @@ func (p *Plugin) authorPathLinkApplyOne(
 	// which the result names in created_authors) purge-empty-authors removes
 	// the row once nothing credits it. A real reversible undo needs a change
 	// type that carries both keys; that is a follow-up, not a claim made here.
-	if lErr := store.CreateOperationChange(&database.OperationChange{
+	if lErr := database.RecordOperationChange(store, &database.OperationChange{
 		ID:          ulid.Make().String(),
 		OperationID: opID,
 		BookID:      ch.BookID,

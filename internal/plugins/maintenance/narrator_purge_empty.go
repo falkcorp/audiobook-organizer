@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -332,7 +332,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 		// failed write skips the delete. The row can describe a delete that
 		// then fails; a stray record of a narrator that still exists is
 		// harmless, the reverse is not.
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		if jerr := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  "narrator_delete",

@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -98,7 +98,7 @@ func runSeriesRename(store seriesRenameStore, opID string, seriesID int, name st
 		}
 		id := seriesID
 		rowID := ulid.Make().String()
-		if err := store.CreateOperationChange(&database.OperationChange{
+		if err := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          rowID,
 			OperationID: opID,
 			SeriesID:    &id,

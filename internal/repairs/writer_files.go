@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.20.1
+// version: 1.21.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package repairs
 
@@ -47,20 +47,22 @@ import (
 var ErrNotJournaled = errors.New("repairs: undo row not recorded; the write was not made")
 
 // ErrUnclassifiedChangeType: a fixer asked the Writer to journal a change type
-// that undo.ClassifyChangeType does not know, so nobody has decided whether its
-// rows carry one user's data. The journal routes serve rows to callers who may
-// not manage users and keep the user-data types from them (undo.IsUserDataChangeType);
-// an unclassified type would be served as library history by default. The
-// write is not made, so it also matches ErrNotJournaled. Declare the type as an
-// undo constant and classify it in undo's changeTypeHoldsUserData.
-var ErrUnclassifiedChangeType = errors.New("repairs: change type is not classified as user or library data; the write was not made")
+// the journal's classification table (database.ClassifyChangeType) does not
+// know, so nobody has decided whether its rows carry one user's data. It is
+// database.ErrUnclassifiedChangeType, the error every journal writer gets from
+// database.RecordOperationChange, so one errors.Is matches all of them. The
+// write is not made, so it also matches ErrNotJournaled. Classify the type in
+// internal/database/change_type_class.go.
+var ErrUnclassifiedChangeType = database.ErrUnclassifiedChangeType
 
-// checkChangeTypeClassified refuses a change type undo does not classify. Every
-// journaled write reaches the journal through journalRow or journalRows, and both
-// ask it first, before the lease beat and before anything is written.
+// checkChangeTypeClassified refuses a change type the journal does not
+// classify. Every journaled write reaches the journal through journalRow or
+// journalRows, and both ask it first, before the lease beat and before anything
+// is written; it is database.CheckChangeTypeClassified, the one check, wrapped
+// in ErrNotJournaled.
 func checkChangeTypeClassified(changeType string) error {
-	if _, known := undo.ClassifyChangeType(changeType); !known {
-		return fmt.Errorf("%w: %w: %q", ErrNotJournaled, ErrUnclassifiedChangeType, changeType)
+	if err := database.CheckChangeTypeClassified(changeType); err != nil {
+		return fmt.Errorf("%w: %w", ErrNotJournaled, err)
 	}
 	return nil
 }
@@ -265,7 +267,7 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 		// telling its own earlier writes from another's still can.
 		Source: w.source,
 	}
-	if err := w.journal.CreateOperationChange(change); err != nil {
+	if err := database.RecordOperationChange(w.journal, change); err != nil {
 		w.log.Warn("%s: undo row not recorded; the write is not made: book_id=%s change=%s err=%s",
 			w.source, logger.SanitizeLogValue(bookID), changeType, logger.SanitizeLogValue(err.Error()))
 		return journaledRow{}, fmt.Errorf("%w: %s on %s: %v", ErrNotJournaled, changeType, bookID, err)
@@ -344,11 +346,11 @@ func (w *Writer) journalRows(steps []BookStep) ([]journaledRow, error) {
 	var err error
 	switch batch, ok := database.AsCapability[ChangeBatchJournal](w.journal); {
 	case len(changes) == 1:
-		err = w.journal.CreateOperationChange(changes[0])
+		err = database.RecordOperationChange(w.journal, changes[0])
 	case !ok:
 		err = errBatchJournalMissing
 	default:
-		err = batch.CreateOperationChanges(changes)
+		err = database.RecordOperationChanges(batch, changes)
 	}
 	if err != nil {
 		w.log.Warn("%s: undo rows not recorded; the write is not made: rows=%d err=%s",
@@ -430,7 +432,7 @@ func (w *Writer) voidRows(rows []journaledRow) error {
 	case len(voided) == 0:
 		return nil
 	case len(voided) == 1:
-		if err := w.journal.CreateOperationChange(voided[0]); err != nil {
+		if err := database.RecordOperationChange(w.journal, voided[0]); err != nil {
 			return fmt.Errorf("void undo row %s of a refused write: %w", todo[0].id, err)
 		}
 	default:
@@ -438,7 +440,7 @@ func (w *Writer) voidRows(rows []journaledRow) error {
 		if !ok {
 			return fmt.Errorf("void %d undo rows of a refused write: %w", len(voided), errBatchJournalMissing)
 		}
-		if err := batch.CreateOperationChanges(voided); err != nil {
+		if err := database.RecordOperationChanges(batch, voided); err != nil {
 			return fmt.Errorf("void undo rows of a refused write: %w", err)
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -732,7 +732,7 @@ func rbfApplyOne(env rbfEnv, r *rbfResult, claims map[string][]string, opID stri
 		}
 		// Journal first: a failure here returns before any field changes, so
 		// ModifyBookFile writes nothing.
-		if jErr := env.store.CreateOperationChange(change); jErr != nil {
+		if jErr := database.RecordOperationChange(env.store, change); jErr != nil {
 			return fmt.Errorf("%w: journal row: %w", errRBFNothingWritten, jErr)
 		}
 		journaled = change
@@ -797,7 +797,7 @@ func rbfVoidJournal(store rbfWriter, journaled *database.OperationChange) error 
 	v := *journaled
 	now := time.Now()
 	v.RevertedAt, v.Voided = &now, true
-	if err := store.CreateOperationChange(&v); err != nil {
+	if err := database.RecordOperationChange(store, &v); err != nil {
 		return fmt.Errorf("void journal row %s: %w", v.ID, err)
 	}
 	return nil

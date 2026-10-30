@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -456,7 +456,7 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		// The ledger row can describe a delete that then fails. That is the right
 		// trade (a stray record of an author that still exists is harmless; a
 		// deleted author with no record is not), and it is logged below.
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		if jerr := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  "author_delete",

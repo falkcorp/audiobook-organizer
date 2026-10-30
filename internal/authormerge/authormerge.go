@@ -1,7 +1,7 @@
 // file: internal/authormerge/authormerge.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 7d3e9a51-2c84-4b6f-a0e7-5f19c3d82b46
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 // Package authormerge is the journaled write path every author merge shares:
 // moving one book's credits off the merged author, and removing the merged author
@@ -46,7 +46,7 @@ func Step(store JournalStore, opID string, row *database.OperationChange) (void 
 	}
 	row.ID = ulid.Make().String()
 	row.OperationID = opID
-	if err := store.CreateOperationChange(row); err != nil {
+	if err := database.RecordOperationChange(store, row); err != nil {
 		return nil, err
 	}
 	return func() error {
@@ -55,7 +55,7 @@ func Step(store JournalStore, opID string, row *database.OperationChange) (void 
 		// RevertedAt is the wall time; the store stamps RevertedSeq, the order the
 		// undo decisions use, as it writes a row that is born reverted.
 		voided.RevertedAt, voided.Voided = &now, true
-		return store.CreateOperationChange(&voided)
+		return database.RecordOperationChange(store, &voided)
 	}, nil
 }
 
@@ -162,7 +162,7 @@ func MoveCredits(store CreditsStore, opID string, m CreditMove) (MoveResult, err
 		nv, merr := json.Marshal(move)
 		if merr == nil {
 			row.NewValue = string(nv)
-			merr = store.CreateOperationChange(row)
+			merr = database.RecordOperationChange(store, row)
 		}
 		if merr != nil {
 			res.Problems = append(res.Problems, fmt.Sprintf("undo row not updated %s: %v", what, merr))
@@ -326,7 +326,7 @@ func MergeDelete(store DeleteStore, opID string, from, into database.Author) (De
 		fixed, ferr := undo.NewAuthorDeleteRow(undo.ChangeTypeAuthorMergeDelete, exact, value)
 		if ferr == nil {
 			row.OldValue = fixed.OldValue
-			ferr = store.CreateOperationChange(row)
+			ferr = database.RecordOperationChange(store, row)
 		}
 		if ferr != nil {
 			out.Problems = append(out.Problems, fmt.Sprintf("undo row not updated to what the delete moved: %v", ferr))

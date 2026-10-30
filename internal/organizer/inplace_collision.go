@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_collision.go
-// version: 1.5.1
+// version: 1.5.3
 // guid: df0b8ccd-c8b3-4b73-b9ab-89836b0d4c37
-// last-edited: 2026-10-11
+// last-edited: 2026-10-30
 
 // Destination-conflict resolution for ReOrganizeInPlace.
 //
@@ -495,7 +495,7 @@ func (orgSvc *Service) recordAdoptChanges(book *database.Book, r *InPlaceResolut
 		return
 	}
 	add := func(bookID, changeType, field, oldV, newV string) {
-		_ = orgSvc.db.CreateOperationChange(&database.OperationChange{
+		orgSvc.recordChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: operationID,
 			BookID:      bookID,
