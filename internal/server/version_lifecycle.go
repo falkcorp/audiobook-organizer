@@ -1,5 +1,5 @@
 // file: internal/server/version_lifecycle.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-29
 //
@@ -694,8 +694,10 @@ func (s *Server) handleResumeVersionSwap(c *gin.Context) {
 }
 
 // CleanupTrashedVersions delegates to versions.CleanupTrashedVersions.
-func CleanupTrashedVersions(store trashedVersionCleaner, guard versions.PurgeGuard) (versions.CleanupResult, error) {
-	return versions.CleanupTrashedVersions(store, guard)
+// keptSweepApply is the kept-file sweep's switch (config kept_sweep_apply_enabled),
+// read by the caller once per run.
+func CleanupTrashedVersions(store trashedVersionCleaner, guard versions.PurgeGuard, keptSweepApply bool) (versions.CleanupResult, error) {
+	return versions.CleanupTrashedVersions(store, guard, keptSweepApply)
 }
 
 // registerVersionLifecycleRoutes wires the version lifecycle endpoints.

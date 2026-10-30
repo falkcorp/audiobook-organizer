@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle_review_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7b1e4c92-5d38-4a06-b9f7-2c6a8d0e3f15
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package versions
 
@@ -71,7 +71,7 @@ var testGuard PurgeGuard = &fsGuard{}
 // cleanupAt and cleanupNow are the nightly cleanup with the permissive guard,
 // reduced to the counts most tests assert on.
 func cleanupAt(store TrashedVersionCleaner, now time.Time) (purged, failed int, err error) {
-	res, err := cleanupTrashedVersionsAt(store, now, testGuard)
+	res, err := cleanupTrashedVersionsAt(store, now, testGuard, true)
 	return res.Purged, res.Failed, err
 }
 
@@ -249,7 +249,7 @@ func TestCleanupTrashedVersions_StopsAtABusyMergeLockInsteadOfWaitingForEveryVer
 	}()
 
 	started := time.Now()
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("cleanup under a held merge lock returned %v, want nil (a busy library is not a failure)", err)
@@ -275,7 +275,7 @@ func TestCleanupTrashedVersions_StopsAtABusyMergeLockInsteadOfWaitingForEveryVer
 
 	merge.UnlockMergeRMW()
 	locked = false
-	next, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	next, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if err != nil || next.StoppedForMerge || next.Purged != 2 || next.Failed != 0 {
 		t.Fatalf("next run: purged=%d failed=%d stopped=%v err=%v, want both versions purged", next.Purged, next.Failed, next.StoppedForMerge, err)
 	}
@@ -347,14 +347,14 @@ func TestCleanupTrashedVersions_APurgeFailedVersionIsReportedNotRetriedOrFailedE
 		return nil
 	})
 
-	first, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	first, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if !errors.Is(err, ErrPurgeFailed) || first.Failed != 1 {
 		t.Fatalf("first night: failed=%d err=%v, want the purge that gave up reported once", first.Failed, err)
 	}
 	attemptsAfterFirst := len(*attempts)
 
 	for night := 2; night <= 4; night++ {
-		res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+		res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 		if err != nil || res.Failed != 0 || res.Purged != 0 {
 			t.Fatalf("night %d: purged=%d failed=%d err=%v, want a quiet run", night, res.Purged, res.Failed, err)
 		}
@@ -445,7 +445,7 @@ func TestCleanupTrashedVersions_ADirectoryRowThatHoldsFilesDoesNotFailEveryNight
 	f := newSharedPathFixture(t)
 	f.stuckRow(t)
 	for night := 1; night <= 3; night++ {
-		res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+		res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 		if err != nil || res.Failed != 0 {
 			t.Fatalf("night %d: failed=%d err=%v, want none", night, res.Failed, err)
 		}
@@ -465,7 +465,7 @@ func TestCleanupTrashedVersions_KeptFilesAreReportedWithTheVersionAndPaths(t *te
 			t.Fatal(err)
 		}
 	}
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if err != nil || res.Purged != 1 || res.Failed != 0 {
 		t.Fatalf("purged=%d failed=%d err=%v, want 1, 0, nil", res.Purged, res.Failed, err)
 	}
@@ -494,7 +494,7 @@ func TestCleanupTrashedVersions_KeptFilesAreReportedWithTheVersionAndPaths(t *te
 // carries no kept list.
 func TestCleanupTrashedVersions_ANoKeepPurgeReportsNoKeptFiles(t *testing.T) {
 	f := newTrashFixtureStamped(t, time.Now().Add(-90*day), database.BookVersionStatusTrash, ptrTime(time.Now().Add(-40*day)))
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if err != nil || res.Purged != 1 || len(res.KeptFiles) != 0 || len(res.NeedsAttention) != 0 {
 		t.Fatalf("res=%+v err=%v, want one plain purge", res, err)
 	}
@@ -541,7 +541,7 @@ func TestPurgeVersion_AnUnreadyLibraryRootDoesNothing(t *testing.T) {
 	}
 	requireTrashed(t, f)
 
-	res, cerr := cleanupTrashedVersionsAt(f.store, time.Now(), g)
+	res, cerr := cleanupTrashedVersionsAt(f.store, time.Now(), g, true)
 	if cerr == nil || res.Purged != 0 || res.Failed != 1 {
 		t.Errorf("cleanup on an unready root = purged %d failed %d err %v, want 0 purged, 1 failed, an error", res.Purged, res.Failed, cerr)
 	}
@@ -656,7 +656,7 @@ func TestCleanupTrashedVersions_APurgingVersionThatLeftThePurgeIsNotAFailure(t *
 	snapshot[0].Status = database.BookVersionStatusPurging
 	st := stalePurgingStore{f.store, f.trashed.ID, snapshot}
 
-	res, err := cleanupTrashedVersionsAt(st, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(st, time.Now(), testGuard, true)
 	if err != nil || res.Failed != 0 || res.Purged != 0 {
 		t.Fatalf("purged=%d failed=%d err=%v, want a quiet run", res.Purged, res.Failed, err)
 	}

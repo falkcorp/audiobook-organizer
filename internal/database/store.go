@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.129.1
+// version: 2.129.2
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-29
 
@@ -827,7 +827,9 @@ type BookVersion struct {
 	// not reported as one that removed them all. Empty when it removed
 	// everything. The nightly trash cleanup revisits these notes
 	// (versions.SweepKeptFiles): a file nothing names any more is removed and its
-	// note dropped; a file that is still owned keeps its note.
+	// note dropped; a file that is still owned keeps its note. That is once the
+	// config switch kept_sweep_apply_enabled is on; until then the sweep only
+	// reports what it would remove and leaves every note as it is.
 	PurgeKept []PurgeFileNote `json:"purge_kept,omitempty"`
 	// PurgeFailed, PurgeFailedAt: the files a purge could not remove for a
 	// reason that retrying will not change (permission, read-only filesystem),
@@ -855,6 +857,14 @@ type BookVersion struct {
 	// versions.PurgeUndecidedEscalateAfter the version moves to purge_failed,
 	// which is the exit: purge_failed can be hard-deleted. Reset by an attempt
 	// that unlinks something, and cleared when the purge finishes.
+	//
+	// The kept-file sweep (versions.SweepKeptFiles) reuses it on an
+	// inactive_purged version: the number of nightly sweeps in a row that left a
+	// PurgeKept note unsettled (an owner lookup that errors, a path the disk
+	// cannot settle, an unlink that fails) and removed or dropped nothing. At the
+	// same threshold the version moves to purge_failed, with the unsettled notes
+	// in PurgeFailed. A purge clears it when it finishes (markPurged), so a
+	// version starts the sweep at zero.
 	PurgeUndecidedNights int       `json:"purge_undecided_nights,omitempty"`
 	MetadataJSON         string    `json:"metadata_json,omitempty"` // source-specific catch-all
 	CreatedAt            time.Time `json:"created_at"`
@@ -910,6 +920,10 @@ const (
 	// not tell whether a file is gone, or could not finish, for
 	// versions.PurgeUndecidedEscalateAfter attempts in a row (the version would
 	// otherwise sit in purging, which refuses restore and hard delete, for ever).
+	// The kept-file sweep (versions.SweepKeptFiles) also sets it, from
+	// inactive_purged, for a version with a PurgeKept note it could not settle for
+	// that many nights in a row: the unsettled notes are then in PurgeFailed, the
+	// rest stay in PurgeKept, and the owner retries (Purge now) or hard-deletes.
 	BookVersionStatusPurgeFailed = "purge_failed"
 )
 
@@ -929,8 +943,8 @@ var ErrVersionPurged = errors.New("version is already purged and cannot be trash
 
 // ErrVersionPurgeClaimLost is returned by UpdateBookVersion when a write sets
 // BookVersionStatusPurging and the stored version is none of trash, purging
-// and purge_failed (or a write sets purge_failed and the stored version is not
-// purging): it was restored (or otherwise left the trash) after the caller read
+// and purge_failed (or a write sets purge_failed and the stored version is none
+// of purging, purge_failed and inactive_purged): it was restored (or otherwise left the trash) after the caller read
 // it, so its files must not be removed.
 var ErrVersionPurgeClaimLost = errors.New("version is no longer in the trash, so its purge was not claimed")
 

@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d2c9e41-6b0a-4f58-a3d7-1e4b8c5f0926
 // last-edited: 2026-10-29
 
@@ -128,9 +128,19 @@ func (f *keptFixture) bookOwner(t *testing.T, p string) string {
 
 func sweep(t *testing.T, store KeptSweepStore, guard PurgeGuard) KeptSweepResult {
 	t.Helper()
-	res, err := SweepKeptFiles(store, guard, nil)
+	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{Apply: true})
 	if err != nil {
 		t.Fatalf("SweepKeptFiles: %v", err)
+	}
+	return res
+}
+
+// sweepReport runs the sweep report-only (the switch off, the shipped default).
+func sweepReport(t *testing.T, store KeptSweepStore, guard PurgeGuard) KeptSweepResult {
+	t.Helper()
+	res, err := SweepKeptFiles(store, guard, KeptSweepOptions{})
+	if err != nil {
+		t.Fatalf("SweepKeptFiles (report-only): %v", err)
 	}
 	return res
 }
@@ -440,7 +450,7 @@ func TestSweepKeptFiles_SkipsVersionsJustPurged(t *testing.T) {
 	f := newKeptFixture(t)
 	p := f.addKept(t, "kept once")
 
-	res, err := SweepKeptFiles(f.store, testGuard, map[string]struct{}{f.ver.ID: {}})
+	res, err := SweepKeptFiles(f.store, testGuard, KeptSweepOptions{Apply: true, Skip: map[string]struct{}{f.ver.ID: {}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +479,7 @@ func TestSweepKeptFiles_ListErrorIsReturned(t *testing.T) {
 	p := f.addKept(t, "kept once")
 	s := &failingListStore{PebbleStore: f.store}
 
-	if _, err := SweepKeptFiles(s, testGuard, nil); err == nil {
+	if _, err := SweepKeptFiles(s, testGuard, KeptSweepOptions{Apply: true}); err == nil {
 		t.Fatal("SweepKeptFiles succeeded although the purged versions could not be listed")
 	}
 	requireOnDisk(t, p)
@@ -478,7 +488,7 @@ func TestSweepKeptFiles_ListErrorIsReturned(t *testing.T) {
 func TestSweepKeptFiles_NoGuardRemovesNothing(t *testing.T) {
 	f := newKeptFixture(t)
 	p := f.addKept(t, "kept once")
-	if _, err := SweepKeptFiles(f.store, nil, nil); err == nil {
+	if _, err := SweepKeptFiles(f.store, nil, KeptSweepOptions{Apply: true}); err == nil {
 		t.Fatal("SweepKeptFiles succeeded with no guard")
 	}
 	requireOnDisk(t, p)
@@ -574,7 +584,7 @@ func TestCleanup_RunsTheKeptFileSweepAfterThePurges(t *testing.T) {
 	f := newKeptFixture(t)
 	p := f.addKept(t, "kept once")
 
-	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard)
+	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}

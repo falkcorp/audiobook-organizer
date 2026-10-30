@@ -1,5 +1,5 @@
 // file: internal/audiobooks/kept_sweep_guard_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4e8b1a37-9c52-4d06-b7f3-2a6d0c9e5b18
 // last-edited: 2026-10-29
 
@@ -40,7 +40,7 @@ func TestSweepKeptFiles_RealGuardNeverTouchesITunesAndRemovesAnUnownedLibraryFil
 	}
 	require.NoError(t, f.store.UpdateBookVersion(cur))
 
-	res, err := versions.SweepKeptFiles(f.store, f.svc.VersionPurgeGuard(), nil)
+	res, err := versions.SweepKeptFiles(f.store, f.svc.VersionPurgeGuard(), versions.KeptSweepOptions{Apply: true})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, res.Removed, "%+v", res)
@@ -55,7 +55,7 @@ func TestSweepKeptFiles_RealGuardNeverTouchesITunesAndRemovesAnUnownedLibraryFil
 	assert.False(t, ok)
 
 	// A second run changes nothing.
-	res, err = versions.SweepKeptFiles(f.store, f.svc.VersionPurgeGuard(), nil)
+	res, err = versions.SweepKeptFiles(f.store, f.svc.VersionPurgeGuard(), versions.KeptSweepOptions{Apply: true})
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.Removed)
 	assert.Equal(t, 2, res.StillKept)
@@ -72,7 +72,7 @@ func keptSweepOnPurged(t *testing.T, f *versionGuardFixture, paths ...string) ve
 		cur.PurgeKept = append(cur.PurgeKept, database.PurgeFileNote{Path: p, Reason: "kept once"})
 	}
 	require.NoError(t, f.store.UpdateBookVersion(cur))
-	res, err := versions.SweepKeptFiles(f.store, f.svc.VersionPurgeGuard(), nil)
+	res, err := versions.SweepKeptFiles(f.store, f.svc.VersionPurgeGuard(), versions.KeptSweepOptions{Apply: true})
 	require.NoError(t, err)
 	return res
 }

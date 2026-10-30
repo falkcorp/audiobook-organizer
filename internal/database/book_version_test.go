@@ -1,5 +1,5 @@
 // file: internal/database/book_version_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a3d9e1c-5b4f-4a60-b8c5-2e7f0c1b9a48
 // last-edited: 2026-10-29
 
@@ -356,5 +356,27 @@ func TestUpdateBookVersion_PurgeFailedState(t *testing.T) {
 	}
 	if err := set(got, BookVersionStatusInactivePurged); err != nil {
 		t.Errorf("purge_failed -> inactive_purged: %v", err)
+	}
+
+	// The kept-file sweep (versions.SweepKeptFiles) escalates a finished purge
+	// whose file note it cannot settle: inactive_purged -> purge_failed is the one
+	// way back into the purge states. It is purge_failed and nothing else: a
+	// purge is not re-claimed from inactive_purged, and it is not put back in the
+	// trash.
+	purged, err := store.GetBookVersion(v.ID)
+	if err != nil || purged == nil || purged.Status != BookVersionStatusInactivePurged {
+		t.Fatalf("stored = %+v (%v), want inactive_purged", purged, err)
+	}
+	if err := set(purged, BookVersionStatusPurging); !errors.Is(err, ErrVersionPurgeClaimLost) {
+		t.Errorf("inactive_purged -> purging = %v, want ErrVersionPurgeClaimLost", err)
+	}
+	if err := set(purged, BookVersionStatusTrash); !errors.Is(err, ErrVersionPurged) {
+		t.Errorf("inactive_purged -> trash = %v, want ErrVersionPurged", err)
+	}
+	if err := set(purged, BookVersionStatusPurgeFailed); err != nil {
+		t.Errorf("inactive_purged -> purge_failed (the kept-file sweep's escalation): %v", err)
+	}
+	if after, _ := store.GetBookVersion(v.ID); after == nil || after.Status != BookVersionStatusPurgeFailed {
+		t.Errorf("stored after the escalation = %+v, want purge_failed", after)
 	}
 }
