@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.135.2
+// version: 1.135.3
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -818,7 +818,11 @@ type Book struct {
 	// else sets it: the scan derives no year of its own. Only the queued
 	// library.ai-parse saver (saveAIFieldsToPrimary) reads it, as a gap-fill
 	// of audiobook_release_year. saveBookToDatabase ignores it.
-	Year             int
+	Year int
+	// AIConfidence is the model's self-reported confidence (high, medium, low,
+	// or empty) for the AI parse that filled this book. Only the queued
+	// library.ai-parse saver reads it, to tag the change-history source.
+	AIConfidence     string
 	BookOrganizerID  string // Embedded AUDIOBOOK_ORGANIZER_ID for re-linking
 	ASIN             string
 	OpenLibraryID    string
