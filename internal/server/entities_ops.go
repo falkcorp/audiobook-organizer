@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -89,6 +89,16 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 
 			progress := registryProgressAdapter{r: reporter}
 
+			// Stand the library scanner down for the whole merge, before the first
+			// write: a concurrent library.scan rewrites book_authors on the rows
+			// this loop repoints. Nothing is written when this refuses, so there is
+			// nothing to invalidate.
+			release, herr := s.holdAuthorMergeStandDown(ctx, opID, "author-merge apply")
+			if herr != nil {
+				return fmt.Errorf("author-merge: %w", herr)
+			}
+			defer release()
+
 			_ = progress.Log("info", fmt.Sprintf("Merging %d author(s) into %q", len(mergeIDs), p.KeepName), nil)
 			_ = progress.UpdateProgress(0, len(mergeIDs), "Starting author merge...")
 
@@ -99,6 +109,7 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 				// view's request carries no such field, and a merge of many groups
 				// from one click must not move a book whose author the owner pinned.
 				HonorLocks: p.HonorLocks == nil || *p.HonorLocks,
+				Scan:       s.scanGate(),
 			}, progress.IsCanceled, func(done, total int) {
 				_ = progress.UpdateProgress(done, total, fmt.Sprintf("Merged %d/%d authors", done, total))
 			})
@@ -118,14 +129,20 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 			// Invalidate even on a partial failure: the ids that DID merge are gone.
 			s.dedupCache.InvalidateAll()
 			s.authorsCache.InvalidateAll()
-			if failed := unmergedAuthorIDs(mergeIDs, keepID, out.MergedIDs); len(failed) > 0 {
+			// A lost stand-down lease stops the loop part way, so it fails the op even
+			// when the ids it never reached were all already merged: the run did not
+			// finish under the gate.
+			if failed := unmergedAuthorIDs(mergeIDs, keepID, out.MergedIDs); len(failed) > 0 || out.Aborted != "" {
 				// Report failure rather than completing: the op used to return nil
 				// here, so the UI treated a merge that left authors behind as done
 				// and dropped the whole group. The id list is in a fixed form
 				// (AuthorMergeFailedIDsPrefix) so the client can keep exactly the
 				// variants that remain.
 				detail := ""
-				if len(out.Errors) > 0 {
+				switch {
+				case out.Aborted != "":
+					detail = ": " + out.Aborted
+				case len(out.Errors) > 0:
 					detail = ": " + strings.Join(out.Errors[:min(len(out.Errors), 3)], "; ")
 				}
 				return fmt.Errorf("%s%s] of %d not merged, %d merged%s",
@@ -172,10 +189,29 @@ type authorMergeSpec struct {
 	// reports what it would have done in the outcome (Merged counts the authors
 	// it would delete; Errors names the locks that would hold an author back).
 	DryRun bool
+	// Scan is the scan stand-down the CALLER already holds under the merge's op id;
+	// the loop only renews its lease, once per author, and stops writing when the
+	// lease is lost (the DedupSeries / MergeSeriesOptions.Scan contract). The
+	// caller acquires, not the loop, because ai.author-scan-apply runs this loop
+	// once per result and a hold keyed by the op id cannot be taken again after the
+	// first loop releases it: one hold has to span all of them. Nil means no gate
+	// is held (a preview, which writes nothing).
+	Scan scanLeaseRenewer
+}
+
+// scanLeaseRenewer is the half of the scan stand-down a merge loop needs once its
+// caller holds it. *Server and opsregistry.ScanStandDownGate satisfy it.
+type scanLeaseRenewer interface {
+	// RenewScanStandDown extends the holder's lease; false means the lease is gone
+	// and the scanner has been (or is about to be) resumed.
+	RenewScanStandDown(holderOpID string) bool
 }
 
 // authorMergeOutcome is what a merge did.
 type authorMergeOutcome struct {
+	// Aborted is set when the stand-down lease was lost and the loop stopped before
+	// writing the next author. What was merged before stays merged.
+	Aborted string
 	// Merged counts authors this run folded in and deleted.
 	Merged int
 	// MergedIDs is every merge id that no longer exists as a distinct author: the
@@ -246,6 +282,14 @@ func mergeAuthorsInto(
 	for i, mergeID := range spec.MergeIDs {
 		if canceled != nil && canceled() {
 			return out, true
+		}
+		// Heartbeat the lease before each author's writes and treat a lost lease as
+		// a HARD ABORT: a lapsed lease resumes the scanner, so writing past it means
+		// two writers on the same book_authors rows with no gate.
+		if spec.Scan != nil && !spec.Scan.RenewScanStandDown(opID) {
+			out.Aborted = scanStandDownLostMessage(i, len(spec.MergeIDs))
+			out.Errors = append(out.Errors, out.Aborted)
+			return out, false
 		}
 		if mergeID == keepID {
 			continue
@@ -392,6 +436,38 @@ func mergeAuthorsInto(
 		}
 	}
 	return out, false
+}
+
+// scanStandDownLostMessage is what a merge says when its stand-down lease lapsed
+// after done of total authors.
+func scanStandDownLostMessage(done, total int) string {
+	return fmt.Sprintf(
+		"scan stand-down lease lost after %d/%d authors; aborting the remaining merges before the library scanner resumes",
+		done, total)
+}
+
+// holdAuthorMergeStandDown stands the library scanner down for an author-merge
+// apply and returns the release to defer. It is the series merge's gate
+// (dedup.MergeSeriesOptions.Scan) for the author merge loop, and fails CLOSED the
+// same way: without an op id the undo-ledger rows would be unattributable and the
+// gate has no holder key, and a scan that will not park refuses the run, so the
+// caller writes nothing in either case. The release is always safe to call.
+//
+// The ops' ConcurrencyKey stays "entities.author-merge", and library.scan's key is
+// not touched: the stand-down is the registry's separate interlock against it.
+func (s *Server) holdAuthorMergeStandDown(ctx context.Context, opID, reason string) (release func(), err error) {
+	if opID == "" {
+		return nil, fmt.Errorf(
+			"refusing to apply without an operation id: its undo-ledger rows would be unattributable and the scan stand-down is keyed by it")
+	}
+	release, aerr := s.scanGate().AcquireScanStandDown(ctx, opID, reason)
+	if aerr != nil {
+		return nil, fmt.Errorf("refusing to apply while a library.scan is running or queued: %w", aerr)
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return release, nil
 }
 
 // mergeFinish journals and merge-deletes one author whose books are all moved,
