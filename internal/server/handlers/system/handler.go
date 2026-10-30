@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -395,7 +395,7 @@ func (h *Handler) GetSystemStorage(c *gin.Context) {
 func (h *Handler) GetSystemLogs(c *gin.Context) {
 	// For operation-specific logs, redirect to the operations handler.
 	if id := c.Query("operation_id"); id != "" {
-		h.opLogs.GetOperationLogs(c)
+		h.opLogs.OperationLogsByID(c, id)
 		return
 	}
 

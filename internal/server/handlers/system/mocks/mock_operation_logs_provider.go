@@ -45,42 +45,48 @@ func (_m *MockOperationLogsProvider) EXPECT() *MockOperationLogsProvider_Expecte
 	return &MockOperationLogsProvider_Expecter{mock: &_m.Mock}
 }
 
-// GetOperationLogs provides a mock function for the type MockOperationLogsProvider
-func (_mock *MockOperationLogsProvider) GetOperationLogs(c *gin.Context) {
-	_mock.Called(c)
+// OperationLogsByID provides a mock function for the type MockOperationLogsProvider
+func (_mock *MockOperationLogsProvider) OperationLogsByID(c *gin.Context, id string) {
+	_mock.Called(c, id)
 	return
 }
 
-// MockOperationLogsProvider_GetOperationLogs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetOperationLogs'
-type MockOperationLogsProvider_GetOperationLogs_Call struct {
+// MockOperationLogsProvider_OperationLogsByID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OperationLogsByID'
+type MockOperationLogsProvider_OperationLogsByID_Call struct {
 	*mock.Call
 }
 
-// GetOperationLogs is a helper method to define mock.On call
+// OperationLogsByID is a helper method to define mock.On call
 //   - c *gin.Context
-func (_e *MockOperationLogsProvider_Expecter) GetOperationLogs(c any) *MockOperationLogsProvider_GetOperationLogs_Call {
-	return &MockOperationLogsProvider_GetOperationLogs_Call{Call: _e.mock.On("GetOperationLogs", c)}
+//   - id string
+func (_e *MockOperationLogsProvider_Expecter) OperationLogsByID(c any, id any) *MockOperationLogsProvider_OperationLogsByID_Call {
+	return &MockOperationLogsProvider_OperationLogsByID_Call{Call: _e.mock.On("OperationLogsByID", c, id)}
 }
 
-func (_c *MockOperationLogsProvider_GetOperationLogs_Call) Run(run func(c *gin.Context)) *MockOperationLogsProvider_GetOperationLogs_Call {
+func (_c *MockOperationLogsProvider_OperationLogsByID_Call) Run(run func(c *gin.Context, id string)) *MockOperationLogsProvider_OperationLogsByID_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 *gin.Context
 		if args[0] != nil {
 			arg0 = args[0].(*gin.Context)
 		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
 }
 
-func (_c *MockOperationLogsProvider_GetOperationLogs_Call) Return() *MockOperationLogsProvider_GetOperationLogs_Call {
+func (_c *MockOperationLogsProvider_OperationLogsByID_Call) Return() *MockOperationLogsProvider_OperationLogsByID_Call {
 	_c.Call.Return()
 	return _c
 }
 
-func (_c *MockOperationLogsProvider_GetOperationLogs_Call) RunAndReturn(run func(c *gin.Context)) *MockOperationLogsProvider_GetOperationLogs_Call {
+func (_c *MockOperationLogsProvider_OperationLogsByID_Call) RunAndReturn(run func(c *gin.Context, id string)) *MockOperationLogsProvider_OperationLogsByID_Call {
 	_c.Run(run)
 	return _c
 }

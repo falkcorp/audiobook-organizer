@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -34,7 +34,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
@@ -82,6 +85,32 @@ func newTestHandler(t *testing.T) (*system.Handler, deps) {
 		func() string { return "test-version" },
 		func(g []dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup { return g },
 		nil, // getDegraded: no startup runner
+	)
+	return h, d
+}
+
+// newTestHandlerWithOpLogs is newTestHandler with a real operation-logs provider.
+func newTestHandlerWithOpLogs(t *testing.T, opLogs system.OperationLogsProvider) (*system.Handler, deps) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	d := deps{
+		store:   systemmocks.NewMockSystemStore(t),
+		sysSvc:  systemmocks.NewMockSystemService(t),
+		cfgUpd:  systemmocks.NewMockConfigUpdateService(t),
+		plugins: systemmocks.NewMockPluginHealthChecker(t),
+		hub:     systemmocks.NewMockEventStreamer(t),
+	}
+	h := system.New(
+		func() system.SystemStore { return d.store },
+		d.sysSvc, d.cfgUpd, d.plugins,
+		func() system.EventStreamer { return d.hub },
+		opLogs,
+		nil,
+		func(path string) (uint64, uint64, error) { return 1000, 400, nil },
+		func() {},
+		func() string { return "test-version" },
+		func(g []dedup.AuthorDedupGroup) []dedup.AuthorDedupGroup { return g },
+		nil,
 	)
 	return h, d
 }
@@ -255,7 +284,9 @@ func TestGetSystemStorage_OK(t *testing.T) {
 
 func TestGetSystemLogs_DelegatesToOperationLogs(t *testing.T) {
 	h, d := newTestHandler(t)
-	d.opLogs.EXPECT().GetOperationLogs(mock.Anything).Run(func(c *gin.Context) {
+	// The id must arrive as an argument: GetOperationLogs(c) read c.Param("id"),
+	// which is empty on /system/logs, so the branch served nothing.
+	d.opLogs.EXPECT().OperationLogsByID(mock.Anything, "op-1").Run(func(c *gin.Context, _ string) {
 		c.JSON(http.StatusOK, gin.H{"delegated": true})
 	}).Return()
 
@@ -264,6 +295,43 @@ func TestGetSystemLogs_DelegatesToOperationLogs(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "delegated")
+}
+
+// systemLogsWithRealOpLogs wires GET /system/logs to a real OperationsV2Handler
+// (not the mock provider), so the operation_id branch is exercised end to end.
+func systemLogsWithRealOpLogs(t *testing.T, store *databasemocks.MockOpsV2Store) *httptest.ResponseRecorder {
+	t.Helper()
+	h, _ := newTestHandlerWithOpLogs(t, handlers.NewOperationsV2Handler(store, nil, nil, false))
+	return run(http.MethodGet, "/system/logs", "/system/logs?operation_id=op-1", nil, func(r *gin.Engine) {
+		r.GET("/system/logs", h.GetSystemLogs)
+	})
+}
+
+// GET /system/logs?operation_id=X returns X's logs.
+func TestGetSystemLogs_OperationIDServesThatOperationsLogs(t *testing.T) {
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("op-1").Return(nil, nil)
+	store.EXPECT().GetOpLogsV2("op-1", 50).Return([]database.OpLogV2Row{
+		{OperationID: "op-1", Level: "info", Message: "scanned Year One"},
+	}, nil)
+
+	w := systemLogsWithRealOpLogs(t, store)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "scanned Year One")
+}
+
+// An operation the caller may not read is refused here exactly as on the
+// operation's own route: the visibility gate is shared.
+func TestGetSystemLogs_OperationIDRefusesAnUnreadableOperation(t *testing.T) {
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("op-1").Return(&database.OperationV2Row{
+		ID: "op-1", DefID: repairs.PlanOpID, Params: `{"fixer_id":"needs.users"}`,
+	}, nil)
+	// No GetOpLogsV2 expectation: reading the lines at all is the failure.
+
+	w := systemLogsWithRealOpLogs(t, store)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.NotContains(t, w.Body.String(), "REPAIRS-LOG-LINE")
 }
 
 func TestGetSystemLogs_Collect(t *testing.T) {

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -505,15 +505,18 @@ func (h *OperationsV2Handler) DownloadOperationLogs(c *gin.Context) {
 	}
 }
 
-// GetOperationLogs serves an operation's log lines on their own, satisfying
-// system.OperationLogsProvider.
+// OperationLogsByID serves operation id's log lines on their own, satisfying
+// system.OperationLogsProvider. The id is an argument rather than a route
+// param so GET /system/logs?operation_id= can call it: the old
+// GetOperationLogs(c) read c.Param("id"), which is empty on that route, and the
+// branch answered nothing for every caller. The visibility gate
+// (mayReadLogsOf, readableLogs) lives here so every caller is gated alike.
 //
 // It exists because the legacy operations handler used to provide this and the
 // system/diagnostics routes consumed it from there. That implementation fell back
 // to the legacy `operations` table, which never moves rows out of `pending`; this
 // one reads v2 only. Same interface, truthful source.
-func (h *OperationsV2Handler) GetOperationLogs(c *gin.Context) {
-	id := c.Param("id")
+func (h *OperationsV2Handler) OperationLogsByID(c *gin.Context, id string) {
 	if h.opsStore == nil {
 		httputil.RespondWithOK(c, gin.H{"items": []OpLogV2Response{}})
 		return
