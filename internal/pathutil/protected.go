@@ -1,7 +1,7 @@
 // file: internal/pathutil/protected.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f82848e0-20ca-446c-b8c5-b0e2f209bd51
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package pathutil
 
@@ -139,6 +139,10 @@ var protectedRootCacheTTL = 5 * time.Second
 type RootError struct {
 	Root string
 	Err  error
+	// gen is the failure-clear generation (failureClearGen) when the attempt that
+	// failed began; ShouldLogProtectedPathError drops a failure older than the
+	// last time its folder resolved.
+	gen uint64
 }
 
 func (e *RootError) Error() string {
@@ -147,23 +151,44 @@ func (e *RootError) Error() string {
 
 func (e *RootError) Unwrap() []error { return []error{ErrProtectedFolderUnresolved, e.Err} }
 
-// rootFailureRelogInterval is how long a protected folder that keeps failing to
-// resolve stays unreported after a report. Not a const so tests can shrink it.
-var rootFailureRelogInterval = time.Hour
-
-// clock is the time source of the failure log throttle, replaceable by tests.
-var clock = time.Now
-
-// absPath makes a protected folder absolute; replaceable by tests, because
-// filepath.Abs fails only when the working directory is gone.
-var absPath = filepath.Abs
-
-// reportedRootFailures holds, for each folder whose failure has been reported,
-// when it was last reported. A folder that resolves again is removed.
+// The failure-report state and the test hooks below share reportedRootFailuresMu,
+// so a hook is never read while a test swaps it: callers read through the
+// accessors, tests write through setFailureLogHooks / setAbsPath (protected_test.go).
 var (
 	reportedRootFailuresMu sync.Mutex
-	reportedRootFailures   = map[string]time.Time{}
+	// reportedRootFailures holds, for each folder whose failure has been
+	// reported, when it was last reported. A folder that resolves again is removed.
+	reportedRootFailures = map[string]time.Time{}
+	// failureClearGen counts the times any folder resolved after having been
+	// tried; clearedAtGen holds, per folder, the count at its latest such time.
+	// A RootError whose attempt began before that is about a folder that has
+	// resolved since (a cached failed set still being served), and is not reported.
+	failureClearGen uint64
+	clearedAtGen    = map[string]uint64{}
+	// rootFailureRelogInterval is how long a protected folder that keeps failing
+	// to resolve stays unreported after a report.
+	rootFailureRelogInterval = time.Hour
+	// clock is the time source of the failure log throttle.
+	clock = time.Now
+	// absPath makes a protected folder absolute; replaceable by tests, because
+	// filepath.Abs fails only when the working directory is gone.
+	absPath = filepath.Abs
 )
+
+// currentFailureGen is the generation a resolve attempt starting now belongs to.
+func currentFailureGen() uint64 {
+	reportedRootFailuresMu.Lock()
+	defer reportedRootFailuresMu.Unlock()
+	return failureClearGen
+}
+
+// makeAbsolute is absPath, read under the lock.
+func makeAbsolute(r string) (string, error) {
+	reportedRootFailuresMu.Lock()
+	f := absPath
+	reportedRootFailuresMu.Unlock()
+	return f(r)
+}
 
 // ShouldLogProtectedPathError says whether a caller of UnderProtectedPath should
 // log err. A failure in a protected folder is the same for every path asked
@@ -171,12 +196,17 @@ var (
 // rootFailureRelogInterval while the folder keeps failing (a process that runs
 // for weeks must not go silent about a folder that is still broken), and at once
 // when it fails again after having resolved; any other failure is about one path
-// and is always reported.
+// and is always reported. A failure from an attempt that began before the folder
+// last resolved is not reported at all: it is a cached failed set still being
+// served for the rest of its window, and the folder is already fine.
 func ShouldLogProtectedPathError(err error) bool {
 	var re *RootError
 	if errors.As(err, &re) {
 		reportedRootFailuresMu.Lock()
 		defer reportedRootFailuresMu.Unlock()
+		if g, ok := clearedAtGen[re.Root]; ok && g > re.gen {
+			return false
+		}
 		now := clock()
 		if last, seen := reportedRootFailures[re.Root]; seen && now.Sub(last) < rootFailureRelogInterval {
 			return false
@@ -187,10 +217,13 @@ func ShouldLogProtectedPathError(err error) bool {
 	return true
 }
 
-// clearRootFailure forgets that root's failure was reported.
+// clearRootFailure forgets that root's failure was reported, and records that it
+// resolved now.
 func clearRootFailure(root string) {
 	reportedRootFailuresMu.Lock()
 	delete(reportedRootFailures, root)
+	failureClearGen++
+	clearedAtGen[root] = failureClearGen
 	reportedRootFailuresMu.Unlock()
 }
 
@@ -217,9 +250,10 @@ var (
 func newProtectedRoots(roots []string, at time.Time) *protectedRoots {
 	pr := &protectedRoots{at: at, raw: roots}
 	for _, r := range roots {
-		ra, err := absPath(r)
+		gen := currentFailureGen()
+		ra, err := makeAbsolute(r)
 		if err != nil {
-			pr.absErr = &RootError{Root: r, Err: fmt.Errorf("make absolute: %w", err)}
+			pr.absErr = &RootError{Root: r, Err: fmt.Errorf("make absolute: %w", err), gen: gen}
 			break
 		}
 		pr.abs = append(pr.abs, ra)
@@ -254,9 +288,10 @@ func (pr *protectedRoots) resolved() ([]string, error) {
 	pr.once.Do(func() {
 		out := make([]string, 0, len(pr.abs))
 		for i, r := range pr.abs {
+			gen := currentFailureGen()
 			rr, err := ResolveExistingPrefix(r)
 			if err != nil {
-				pr.resErr = &RootError{Root: pr.raw[i], Err: err}
+				pr.resErr = &RootError{Root: pr.raw[i], Err: err, gen: gen}
 				return
 			}
 			clearRootFailure(pr.raw[i])

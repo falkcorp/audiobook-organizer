@@ -12,15 +12,28 @@
   `protected_source` while the list is down. A run logs one Warn with the count of
   moves held back (the per-book line stays Debug). `RenameFiles` holds a plan back
   for the same reason with the new `ErrRenameProtectedListNotLoaded` (not
-  `ErrProtectedRenameSource`), logged at Warn at most once a minute.
-- **The purge always resolves the protected folders afresh.** `pathutil.UnderProtectedPath`
-  reuses folders resolved up to 5 s ago, so a protected folder's symlink re-pointed
-  inside that window could make the book purge and the version purge protect less
-  than a fresh look. They now use the new `pathutil.UnderProtectedPathUncached`
-  (`planPurgePathIn`); tag writes, previews and organize keep the cache.
+  `ErrProtectedRenameSource`), logged at Warn at most once a minute. Only an
+  explicit `SourceMovable` clears a source: the zero value of `SourceVerdict` and
+  any verdict the code does not know refuse (outcome `unknown_guard_verdict`,
+  `ErrRenameGuardVerdictUnknown`). With no guard installed (tests, tools) nothing
+  is asked and nothing is refused, as before. The server reads whether the Deluge
+  list has loaded before it runs the protected check, so a refresh that lands in
+  between cannot make a seeding file look movable.
+- **The purge protects at least as much as a fresh look, for both inputs.**
+  `pathutil.UnderProtectedPath` reuses folders resolved up to 5 s ago, and the
+  audiobooks helper reuses an import-path list read up to 5 s ago, so inside that
+  window a protected folder's symlink re-pointed, or an import folder added under
+  the library root, could make the book purge and the version purge protect less
+  than a fresh look. They now resolve the folders afresh
+  (`pathutil.UnderProtectedPathUncached`) and read the import paths straight from
+  the store (`GetAllImportPaths`) in `planPurgePathIn`; a list that cannot be read
+  still holds the file back for a retry. Tag writes, previews and organize keep
+  both caches.
 - **A protected folder that keeps failing to resolve is logged again after an hour**
   (it was logged once per process and then never), and `RootError.Root` is now always
   the folder as configured, so a folder that could not be made absolute is cleared
-  from the "already reported" set when it resolves again.
+  from the "already reported" set when it resolves again. Callers still served a
+  cached failed set after the folder has resolved (the purge's fresh look clears
+  it) no longer log it on every call for the rest of the cache window.
 - The `UnderProtectedPath` documentation now says `deluge.ProtectedPathCache` also
   holds `config.ProtectedPaths`, and that both are still compared as spelled.

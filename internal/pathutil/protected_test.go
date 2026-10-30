@@ -1,7 +1,7 @@
 // file: internal/pathutil/protected_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c0d7e92-3b84-4f1a-9a6e-2d18c4b7e063
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package pathutil
 
@@ -488,22 +488,51 @@ func TestUnderProtectedPath_ConcurrentCallsAgree(t *testing.T) {
 	}
 }
 
+// setFailureLogHooks swaps the failure log's clock and interval under the lock
+// the production code reads them with, and returns the func that restores them.
+func setFailureLogHooks(clk func() time.Time, interval time.Duration) (restore func()) {
+	reportedRootFailuresMu.Lock()
+	prevClock, prevInterval := clock, rootFailureRelogInterval
+	clock, rootFailureRelogInterval = clk, interval
+	reportedRootFailuresMu.Unlock()
+	return func() {
+		reportedRootFailuresMu.Lock()
+		clock, rootFailureRelogInterval = prevClock, prevInterval
+		reportedRootFailuresMu.Unlock()
+	}
+}
+
+// setAbsPath swaps the make-absolute function under the same lock.
+func setAbsPath(f func(string) (string, error)) (restore func()) {
+	reportedRootFailuresMu.Lock()
+	prev := absPath
+	absPath = f
+	reportedRootFailuresMu.Unlock()
+	return func() {
+		reportedRootFailuresMu.Lock()
+		absPath = prev
+		reportedRootFailuresMu.Unlock()
+	}
+}
+
+// resetFailureLog forgets every reported and cleared failure.
+func resetFailureLog() {
+	reportedRootFailuresMu.Lock()
+	reportedRootFailures = map[string]time.Time{}
+	clearedAtGen = map[string]uint64{}
+	reportedRootFailuresMu.Unlock()
+}
+
 // withFailureLog resets the report throttle and drives its clock and interval,
 // restoring everything afterwards. The returned func moves the clock.
 func withFailureLog(t *testing.T, interval time.Duration) (advance func(time.Duration)) {
 	t.Helper()
-	prevClock, prevInterval := clock, rootFailureRelogInterval
+	var mu sync.Mutex
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
-	clock = func() time.Time { return now }
-	rootFailureRelogInterval = interval
-	reset := func() {
-		reportedRootFailuresMu.Lock()
-		reportedRootFailures = map[string]time.Time{}
-		reportedRootFailuresMu.Unlock()
-	}
-	reset()
-	t.Cleanup(func() { clock, rootFailureRelogInterval = prevClock, prevInterval; reset() })
-	return func(d time.Duration) { now = now.Add(d) }
+	restore := setFailureLogHooks(func() time.Time { mu.Lock(); defer mu.Unlock(); return now }, interval)
+	resetFailureLog()
+	t.Cleanup(func() { restore(); resetFailureLog() })
+	return func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
 }
 
 // A link re-pointed inside the cache window: the cached answer is the stale
@@ -594,11 +623,12 @@ func TestUnderProtectedPath_AbsoluteFailureIsClearedWhenTheFolderResolves(t *tes
 	withFailureLog(t, time.Hour)
 	f := newProtectedFixture(t)
 	t.Chdir(f.base)
-	prev := absPath
-	t.Cleanup(func() { absPath = prev })
+	restoreAbs := setAbsPath(filepath.Abs)
+	t.Cleanup(restoreAbs)
 	roots := []string{filepath.Join("lib", "Gotham Music")} // not an ancestor of f.unrelated, so the check reaches the resolve step
 
-	absPath = func(string) (string, error) { return "", errors.New("getwd: the working directory is gone") }
+	brokenAbs := func(string) (string, error) { return "", errors.New("getwd: the working directory is gone") }
+	setAbsPath(brokenAbs)
 	_, err := UnderProtectedPath(f.unrelated, roots)
 	var re *RootError
 	require.ErrorAs(t, err, &re)
@@ -606,12 +636,88 @@ func TestUnderProtectedPath_AbsoluteFailureIsClearedWhenTheFolderResolves(t *tes
 	assert.True(t, ShouldLogProtectedPathError(err), "first report")
 	assert.False(t, ShouldLogProtectedPathError(err), "throttled")
 
-	absPath = prev
+	setAbsPath(filepath.Abs)
 	_, err = UnderProtectedPath(f.unrelated, roots)
 	require.NoError(t, err, "the folder resolves now")
 
-	absPath = func(string) (string, error) { return "", errors.New("getwd: the working directory is gone") }
+	setAbsPath(brokenAbs)
 	_, err = UnderProtectedPath(f.unrelated, roots)
 	require.ErrorAs(t, err, &re)
 	assert.True(t, ShouldLogProtectedPathError(err), "failed again after resolving: reported at once")
+}
+
+// A folder that has started resolving again must not be reported by the callers
+// still served its failed, cached set: the purge's uncached look clears the
+// failure, and until the cached window ends those callers would log it again on
+// every call. A fresh failure after that is reported at once.
+func TestUnderProtectedPath_StaleCachedFailureIsNotReportedAfterTheFolderResolved(t *testing.T) {
+	withRootCacheTTL(t, time.Hour)
+	withFailureLog(t, time.Hour)
+	f := newProtectedFixture(t)
+	a := filepath.Join(f.arkham, "loop-a")
+	b := filepath.Join(f.arkham, "loop-b")
+	require.NoError(t, os.Symlink(b, a))
+	require.NoError(t, os.Symlink(a, b))
+	roots := []string{a}
+
+	_, err := UnderProtectedPath(f.unrelated, roots)
+	require.ErrorIs(t, err, ErrProtectedFolderUnresolved)
+	require.True(t, ShouldLogProtectedPathError(err), "first report")
+
+	require.NoError(t, os.Remove(a))
+	require.NoError(t, os.Remove(b))
+	_, err = UnderProtectedPathUncached(f.unrelated, roots)
+	require.NoError(t, err, "the purge's fresh look sees the folder resolve")
+
+	for range 20 {
+		_, err = UnderProtectedPath(f.unrelated, roots)
+		require.ErrorIs(t, err, ErrProtectedFolderUnresolved, "the cached set is still the failed one")
+		assert.False(t, ShouldLogProtectedPathError(err), "the folder has resolved since: no log storm")
+	}
+
+	require.NoError(t, os.Symlink(b, a))
+	require.NoError(t, os.Symlink(a, b))
+	_, err = UnderProtectedPathUncached(f.unrelated, roots)
+	require.ErrorIs(t, err, ErrProtectedFolderUnresolved)
+	assert.True(t, ShouldLogProtectedPathError(err), "a new failure after it resolved is reported at once")
+}
+
+// The test hooks are read under the lock the setters take, so a test that swaps
+// one while workers run does not race them. Meaningful under -race.
+func TestProtectedHooks_AreReadUnderTheirLock(t *testing.T) {
+	withRootCacheTTL(t, 0)
+	withFailureLog(t, time.Hour)
+	f := newProtectedFixture(t)
+	roots := []string{f.itunes}
+	loopA := filepath.Join(f.arkham, "loop-a")
+	loopB := filepath.Join(f.arkham, "loop-b")
+	require.NoError(t, os.Symlink(loopB, loopA))
+	require.NoError(t, os.Symlink(loopA, loopB))
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_, _ = UnderProtectedPath(f.unrelated, roots)
+				_, err := UnderProtectedPathUncached(f.unrelated, []string{loopA})
+				ShouldLogProtectedPathError(err)
+			}
+		}()
+	}
+	for range 200 {
+		restoreAbs := setAbsPath(filepath.Abs)
+		restoreLog := setFailureLogHooks(time.Now, time.Hour)
+		restoreLog()
+		restoreAbs()
+	}
+	close(stop)
+	wg.Wait()
 }

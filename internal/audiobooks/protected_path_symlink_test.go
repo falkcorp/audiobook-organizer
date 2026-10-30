@@ -1,7 +1,7 @@
 // file: internal/audiobooks/protected_path_symlink_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0d6b9f41-8a27-4c53-b1e8-73f5a2c90d14
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -331,4 +331,70 @@ func TestVersionPurgeDecider_ALinkRepointedInsideTheCacheWindowStillKeeps(t *tes
 	decision, _, err := svc.VersionPurgeGuard().NewDecider().Decide(hush)
 	require.NoError(t, err)
 	assert.Equal(t, versions.PurgeKeep, decision)
+}
+
+// importFolderAddedAfterTheListWasCached warms the shared import-path cache with
+// an EMPTY list, then adds an import folder inside the library root that holds a
+// file, as an admin would inside the cache window. It returns the file.
+func importFolderAddedAfterTheListWasCached(t *testing.T, store *database.PebbleStore, base string) string {
+	t.Helper()
+	resetImportPathCacheForHelper(t)
+	setITunesPaths(t, "", "")
+	incoming := filepath.Join(base, "lib", "Incoming")
+	file := filepath.Join(incoming, "Batman Hush", "hush.m4b")
+	writeFile(t, file)
+
+	require.False(t, isProtectedPath(store, file), "no import path yet, and the cache now holds the empty list")
+	_, err := store.CreateImportPath(incoming, "Incoming")
+	require.NoError(t, err)
+	return file
+}
+
+// The purge reads the import-path list from the store, not the 5 s cache the tag
+// writers share: a folder added as an import path inside that window, under the
+// library root, already protects its files.
+func TestPlanPurgePathIn_AnImportFolderAddedInsideTheCacheWindowStillProtects(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	file := importFolderAddedAfterTheListWasCached(t, store, base)
+
+	v := svc.planPurgePathIn(file, nil, nil)
+	assert.True(t, v.protected, "%+v", v)
+	assert.Empty(t, v.remove, "and it is not scheduled for removal")
+	assert.NoError(t, v.keptErr)
+}
+
+func TestVersionPurgeDecider_AnImportFolderAddedInsideTheCacheWindowStillKeeps(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	file := importFolderAddedAfterTheListWasCached(t, store, base)
+
+	decision, _, err := svc.VersionPurgeGuard().NewDecider().Decide(file)
+	require.NoError(t, err)
+	assert.Equal(t, versions.PurgeKeep, decision)
+}
+
+// A list the purge cannot read is still a question it could not answer: the file
+// stays and the lookup is retried (errPathLookupFailed), not read as "no import
+// paths", even with a good list sitting in the helper's cache.
+func TestPlanPurgePathIn_AnUnreadableImportListIsNotServedFromTheCache(t *testing.T) {
+	resetImportPathCacheForHelper(t)
+	setITunesPaths(t, "", "")
+	svc, store, base := setupPurgeBoundary(t)
+	file := filepath.Join(base, "lib", "Gotham", "year-one.m4b")
+	writeFile(t, file)
+	require.False(t, isProtectedPath(store, file), "warm the cache with a readable, empty list")
+
+	svc.store = failingImportPathStore{svc.store}
+	v := svc.planPurgePathIn(file, nil, nil)
+	assert.False(t, v.protected)
+	require.Error(t, v.keptErr)
+	assert.ErrorIs(t, v.keptErr, errPathLookupFailed)
+	assert.Empty(t, v.remove)
+}
+
+// failingImportPathStore is the service's store with a GetAllImportPaths that
+// fails, everything else passing through.
+type failingImportPathStore struct{ audiobookStore }
+
+func (failingImportPathStore) GetAllImportPaths() ([]database.ImportPath, error) {
+	return nil, errors.New("store is closed")
 }

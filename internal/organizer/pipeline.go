@@ -1,7 +1,7 @@
 // file: internal/organizer/pipeline.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 
@@ -768,8 +768,8 @@ func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameFil
 	// A protected file (Deluge seeding, the iTunes library) is never moved.
 	// Refuse the whole plan before anything moves, so no book is left half
 	// renamed (SetRenameSourceGuard).
-	prot, unverified := guardedRenameSources(entries)
-	if len(prot) > 0 {
+	guarded := guardedRenameSources(entries)
+	if prot := guarded.protected; len(prot) > 0 {
 		msg := fmt.Sprintf("rename plan would move %d protected file(s), which are never moved: %s", len(prot), strings.Join(prot, "; "))
 		pipelineLog.Error("RenameFiles refusing a plan that moves protected files; nothing was moved: detail=%s",
 			logger.SanitizeLogValue(msg))
@@ -778,14 +778,22 @@ func RenameFiles(entries []FileRenameEntry, policy *CollisionPolicy) (*RenameFil
 	}
 	// Nothing in the plan is known to be protected, but the Deluge list that
 	// would say so has not loaded: held back whole, for the list, not for a file.
-	if len(unverified) > 0 {
+	if unverified := guarded.listNotLoaded; len(unverified) > 0 {
 		msg := fmt.Sprintf("rename plan of %d file(s) not applied: %s", len(unverified), ProtectedListNotLoadedReason)
-		if shouldWarnListNotLoaded() {
+		if warn, every := shouldWarnListNotLoaded(); warn {
 			pipelineLog.Warn("RenameFiles holding back plans while the Deluge seeding list has not loaded; nothing was moved (logged at most once per %s): detail=%s",
-				listNotLoadedWarnEvery, logger.SanitizeLogValue(msg))
+				every, logger.SanitizeLogValue(msg))
 		}
 		result.Errors = append(result.Errors, msg)
 		return result, fmt.Errorf("%s: %w", msg, ErrRenameProtectedListNotLoaded)
+	}
+	// The guard answered with something that is not a verdict: not cleared.
+	if unknown := guarded.unknown; len(unknown) > 0 {
+		msg := fmt.Sprintf("rename plan of %d file(s) not applied: %s", len(unknown), UnknownGuardVerdictReason)
+		pipelineLog.Error("RenameFiles refusing a plan: the rename-source guard returned an unknown verdict; nothing was moved: detail=%s",
+			logger.SanitizeLogValue(msg))
+		result.Errors = append(result.Errors, msg)
+		return result, fmt.Errorf("%s: %w", msg, ErrRenameGuardVerdictUnknown)
 	}
 
 	// Pre-filter: skip entries where source doesn't exist — unless the file

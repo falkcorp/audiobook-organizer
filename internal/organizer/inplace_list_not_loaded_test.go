@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_list_not_loaded_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a217e80d-6a0c-49a9-ac4c-2d4b435b7c7c
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 
@@ -202,25 +202,115 @@ func TestRenameFiles_DelugeListNotLoadedIsItsOwnError(t *testing.T) {
 	}
 }
 
+// setListNotLoadedWarnHooks swaps the Warn throttle's clock and interval, and
+// forgets the last Warn, under the lock the production code reads them with. The
+// returned func restores them.
+func setListNotLoadedWarnHooks(clk func() time.Time, every time.Duration) (restore func()) {
+	listNotLoadedWarnMu.Lock()
+	prevClock, prevEvery, prevLast := renameClock, listNotLoadedWarnEvery, listNotLoadedWarnLast
+	renameClock, listNotLoadedWarnEvery, listNotLoadedWarnLast = clk, every, time.Time{}
+	listNotLoadedWarnMu.Unlock()
+	return func() {
+		listNotLoadedWarnMu.Lock()
+		renameClock, listNotLoadedWarnEvery, listNotLoadedWarnLast = prevClock, prevEvery, prevLast
+		listNotLoadedWarnMu.Unlock()
+	}
+}
+
 // RenameFiles can be called once per book, so its Warn is throttled.
 func TestShouldWarnListNotLoaded_IsThrottled(t *testing.T) {
-	prevClock, prevEvery, prevLast := renameClock, listNotLoadedWarnEvery, listNotLoadedWarnLast
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
-	renameClock = func() time.Time { return now }
-	listNotLoadedWarnEvery = time.Minute
-	listNotLoadedWarnLast = time.Time{}
-	t.Cleanup(func() { renameClock, listNotLoadedWarnEvery, listNotLoadedWarnLast = prevClock, prevEvery, prevLast })
+	t.Cleanup(setListNotLoadedWarnHooks(func() time.Time { return now }, time.Minute))
 
-	if !shouldWarnListNotLoaded() {
-		t.Fatal("the first refusal is logged")
+	if warn, every := shouldWarnListNotLoaded(); !warn || every != time.Minute {
+		t.Fatalf("the first refusal is logged (warn=%v every=%v)", warn, every)
 	}
 	for range 100 {
-		if shouldWarnListNotLoaded() {
+		if warn, _ := shouldWarnListNotLoaded(); warn {
 			t.Fatal("logged again inside the interval")
 		}
 	}
 	now = now.Add(61 * time.Second)
-	if !shouldWarnListNotLoaded() {
+	if warn, _ := shouldWarnListNotLoaded(); !warn {
 		t.Fatal("not logged again after the interval")
+	}
+}
+
+// The throttle's hooks are read under the lock the setter takes, so swapping them
+// while RenameFiles calls run does not race. Meaningful under -race.
+func TestShouldWarnListNotLoaded_HooksAreReadUnderTheirLock(t *testing.T) {
+	restore := setListNotLoadedWarnHooks(time.Now, time.Millisecond)
+	t.Cleanup(restore)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				shouldWarnListNotLoaded()
+			}
+		}
+	}()
+	for range 500 {
+		r := setListNotLoadedWarnHooks(time.Now, time.Millisecond)
+		r()
+	}
+	close(stop)
+	<-done
+}
+
+// Only an explicit SourceMovable clears a source. A guard that returns the zero
+// value (it decided nothing) or a verdict this code has never heard of is a
+// refusal under its own outcome, for the in-place move and for RenameFiles.
+func TestRenameSourceGuard_OnlyAnExplicitMovableClearsASource(t *testing.T) {
+	for name, verdict := range map[string]SourceVerdict{"zero value": SourceVerdict(0), "unknown value": SourceVerdict(99)} {
+		t.Run(name, func(t *testing.T) {
+			svc, store, root := setupInPlace(t)
+			t.Cleanup(SetRenameSourceGuard(func(string) SourceVerdict { return verdict }))
+			src := filepath.Join(root, "incoming", "killing-joke.m4b")
+			book := addInPlaceBook(t, store, "joker", "Killing Joke", src, filled(120, 3), nil, 0)
+
+			_, err := svc.ReOrganizeInPlace(book, &noopLogger{})
+			var conflict *DestinationConflictError
+			if !errors.As(err, &conflict) || conflict.Category != OutcomeUnknownGuardVerdict {
+				t.Fatalf("err = %v, want a %s refusal", err, OutcomeUnknownGuardVerdict)
+			}
+			if !strings.Contains(conflict.Reason, "unknown guard verdict") {
+				t.Fatalf("reason = %q", conflict.Reason)
+			}
+			requireStillThere(t, store, book, src, src)
+
+			dir := t.TempDir()
+			f := filepath.Join(dir, "a.m4b")
+			if werr := os.WriteFile(f, []byte("audio"), 0o644); werr != nil {
+				t.Fatal(werr)
+			}
+			entry := FileRenameEntry{SourcePath: f, TargetPath: filepath.Join(dir, "A", "a.m4b")}
+			_, rerr := RenameFiles([]FileRenameEntry{entry}, nil)
+			if !errors.Is(rerr, ErrRenameGuardVerdictUnknown) || errors.Is(rerr, ErrProtectedRenameSource) || errors.Is(rerr, ErrRenameProtectedListNotLoaded) {
+				t.Fatalf("err = %v, want ErrRenameGuardVerdictUnknown alone", rerr)
+			}
+			if _, statErr := os.Stat(f); statErr != nil {
+				t.Fatalf("source moved: %v", statErr)
+			}
+			if _, statErr := os.Stat(entry.TargetPath); statErr == nil {
+				t.Fatal("target created")
+			}
+		})
+	}
+}
+
+// With no guard installed (tests, tools) nothing is asked and every source is
+// movable; only an installed guard has to say SourceMovable.
+func TestRenameSourceGuard_NoGuardInstalledProtectsNothing(t *testing.T) {
+	t.Cleanup(SetRenameSourceGuard(nil))
+	if err := refuseProtectedInPlaceSource(filepath.Join(t.TempDir(), "a.m4b"), "x"); err != nil {
+		t.Fatalf("no guard: %v", err)
+	}
+	if g := guardedRenameSources([]FileRenameEntry{{SourcePath: "/a", TargetPath: "/b"}}); len(g.protected)+len(g.listNotLoaded)+len(g.unknown) != 0 {
+		t.Fatalf("no guard objected: %+v", g)
 	}
 }

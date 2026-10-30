@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_ownership.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: febbcbf3-dd0e-4f14-b704-ef979dcf2873
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 
@@ -39,6 +39,10 @@ const (
 	// skip, never a failure, and retried on the next run: it clears by itself once
 	// the list loads.
 	OutcomeProtectedListNotLoaded = "protected_list_not_loaded"
+	// OutcomeUnknownGuardVerdict: the rename-source guard returned a verdict this
+	// code does not know, the zero value of SourceVerdict included. The source is
+	// not cleared, so it is not moved; counted as a skip and retried on a later run.
+	OutcomeUnknownGuardVerdict = "unknown_guard_verdict"
 	// OutcomeOwnedByOtherBook: a file the move would take is claimed by a
 	// book_file row of a DIFFERENT book. Moving it strands that book's row at
 	// a path that no longer exists -- how the Eldest and Scattered Suns parents
@@ -123,15 +127,25 @@ func refuseProtectedInPlaceSource(src, target string) error {
 		return &DestinationConflictError{Category: OutcomeFrozenITunes, Source: src, Target: target,
 			Reason: "the file resolves into the iTunes-managed tree (" + pathutil.FrozenITunesSegment + ") at " + resolved + "; it is never moved"}
 	}
-	switch classifyRenameSource(src) {
+	guard := loadRenameSourceGuard()
+	if guard == nil {
+		return nil // no guard installed: nothing to ask
+	}
+	switch guard(src) {
+	case SourceMovable:
+		return nil
 	case SourceProtected:
 		return &DestinationConflictError{Category: OutcomeProtectedSource, Source: src, Target: target,
 			Reason: "the file is in a protected location (an iTunes or import folder, the quarantine folder or a seeding path), directly or through a symlink; it is never moved"}
 	case SourceListNotLoaded:
 		return &DestinationConflictError{Category: OutcomeProtectedListNotLoaded, Source: src, Target: target,
 			Reason: ProtectedListNotLoadedReason}
+	default:
+		// Only an explicit SourceMovable clears a source: the zero value or a
+		// verdict from a newer guard is a refusal, not a pass.
+		return &DestinationConflictError{Category: OutcomeUnknownGuardVerdict, Source: src, Target: target,
+			Reason: UnknownGuardVerdictReason}
 	}
-	return nil
 }
 
 // refuseFilesOwnedElsewhere returns a *DestinationConflictError when any of

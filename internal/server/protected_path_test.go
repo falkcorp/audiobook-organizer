@@ -1,11 +1,12 @@
 // file: internal/server/protected_path_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e2c4a19-0b53-4d86-9f1a-c8d5e3b7a602
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package server
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,20 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
+
+// closedLoopbackURL is the URL of a loopback port nothing listens on: the port is
+// bound and released, so a client dialling it is refused at once instead of
+// waiting out a DNS lookup or the client's timeout.
+func closedLoopbackURL(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+	return "http://" + addr
+}
 
 func TestIsProtectedPath_FailedDir(t *testing.T) {
 	// isProtectedPath is now a method on *Server (SERVER-GLOBAL-STORE-AUDIT
@@ -69,7 +83,7 @@ func TestRenameSourceVerdict_TellsAnUnloadedDelugeListFromAProtectedPath(t *test
 	keep := filepath.Join(t.TempDir(), "Gotham Music")
 	library := filepath.Join(t.TempDir(), "Arkham", "Joker", "killing-joke.m4b")
 
-	unreachable, err := deluge.New("http://deluge.invalid:8112", "deluge")
+	unreachable, err := deluge.New(closedLoopbackURL(t), "deluge")
 	require.NoError(t, err)
 	down := &Server{protectedPathCache: deluge.NewProtectedPathCache(unreachable, []string{keep})}
 	require.False(t, down.protectedPathCache.Loaded(), "fixture: the Deluge list must not have loaded")
@@ -83,4 +97,37 @@ func TestRenameSourceVerdict_TellsAnUnloadedDelugeListFromAProtectedPath(t *test
 	assert.Equal(t, organizer.SourceProtected, up.renameSourceVerdict(filepath.Join(keep, "Hush", "hush.m4b")))
 
 	assert.Equal(t, organizer.SourceMovable, (&Server{}).renameSourceVerdict(library), "no cache: nothing to wait for")
+}
+
+// fakeDelugeList is a protected-path checker whose Deluge list loads at a moment
+// the test chooses; before that it reports nothing protected, as the real one does.
+type fakeDelugeList struct {
+	loaded  bool
+	seeding string
+}
+
+func (f *fakeDelugeList) IsProtected(p string) bool { return f.loaded && p == f.seeding }
+func (f *fakeDelugeList) Loaded() bool              { return f.loaded }
+
+var _ tagger.PathChecker = (*fakeDelugeList)(nil)
+var _ tagger.LoadReporter = (*fakeDelugeList)(nil)
+
+// A Deluge refresh that lands DURING the protected check must not make a seeding
+// file look movable. The check below sees the list unloaded (so the seeding file
+// is not found), and the refresh then lands; reading "loaded" after the check
+// would say true and the file would be cleared to move.
+func TestRenameVerdict_ARefreshLandingDuringTheCheckDoesNotClearASeedingFile(t *testing.T) {
+	list := &fakeDelugeList{seeding: "/downloads/Batman Hush/hush.m4b"}
+	isProtected := func(p string) bool {
+		found := list.IsProtected(p)
+		list.loaded = true // the refresh lands right after the check looked
+		return found
+	}
+
+	got := renameVerdict(list.seeding, list, isProtected)
+	assert.Equal(t, organizer.SourceListNotLoaded, got,
+		"the list was down when the check began, so this answer is 'wait', not 'movable'")
+
+	assert.Equal(t, organizer.SourceProtected, renameVerdict(list.seeding, list, isProtected),
+		"asked again with the list loaded, the seeding file is protected")
 }

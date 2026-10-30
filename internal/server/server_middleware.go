@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package server
 
@@ -173,10 +173,22 @@ func (s *Server) isProtectedPath(filePath string) bool {
 // nothing protects is SourceListNotLoaded while the list has not loaded, so the
 // organizer can say to wait for Deluge instead of calling the file protected.
 func (s *Server) renameSourceVerdict(src string) organizer.SourceVerdict {
-	if s.isProtectedPath(src) {
+	return renameVerdict(src, s.protectedChecker(), s.isProtectedPath)
+}
+
+// renameVerdict is renameSourceVerdict with its two questions injected. Whether
+// the list has loaded is read BEFORE the protected check, never after: the check
+// is what can refresh the Deluge list, and a refresh that lands between the two
+// reads would otherwise make a seeding file the check could not yet see look
+// movable ("loaded" read true afterwards, "protected" read false before). Read
+// first, a list that was down when the check began stays down in this answer, and
+// loaded is sticky once true.
+func renameVerdict(src string, checker tagger.PathChecker, isProtected func(string) bool) organizer.SourceVerdict {
+	loaded := tagger.ProtectedListLoaded(checker)
+	if isProtected(src) {
 		return organizer.SourceProtected
 	}
-	if !tagger.ProtectedListLoaded(s.protectedChecker()) {
+	if !loaded {
 		return organizer.SourceListNotLoaded
 	}
 	return organizer.SourceMovable

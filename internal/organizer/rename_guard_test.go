@@ -1,7 +1,7 @@
 // file: internal/organizer/rename_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e7b2a93-1d5c-4f86-9a0e-b3c8d61f2e74
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 

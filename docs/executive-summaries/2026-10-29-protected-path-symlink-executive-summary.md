@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-29-protected-path-symlink-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 33552e57-ccc8-45c9-95a3-eafe9d145b0e -->
-<!-- last-edited: 2026-10-29 -->
+<!-- last-edited: 2026-10-30 -->
 
 # A file reached through a shortcut can no longer slip past the iTunes protection
 
@@ -36,16 +36,22 @@ skipped test, TestSweepKeptFiles_RealGuardSymlinkIntoITunesFolder, reproduced it
 - The protected folders are looked up through their shortcuts once every few
   seconds instead of once per file, and a folder that cannot be resolved is
   reported once, not once per file, while every path stays protected meanwhile.
-  The permanent purges are the exception: they look the folders up afresh for
-  every file, so a shortcut that was re-pointed a moment ago can never make them
+  The permanent purges are the exception: for every file they look the folders up
+  afresh and read the list of import folders straight from the database, not from
+  the copies kept for a few seconds. So a shortcut that was re-pointed a moment ago,
+  or an import folder added a moment ago inside the library, can never make a purge
   protect less than a fresh look would. A folder that stays unresolvable is
-  reported again after an hour, so it does not go quiet for weeks.
+  reported again after an hour, so it does not go quiet for weeks, and is not
+  reported over and over once it has started resolving again.
 - When the app cannot reach the download client to learn which folders are being
   seeded, it still refuses to rename or re-organize in place, as before. It now
   says why ("the seeding list has not loaded yet; try again once it has") instead
   of claiming the file is in a protected location, counts those books as skipped,
   not failed, and moves them on the next run once the list is back. A file that is
-  protected is still reported as protected.
+  protected is still reported as protected, and the app reads whether the list is
+  back before it looks at the file, so the list arriving halfway through cannot
+  make a seeded file look free to move. If the protection check ever gives an
+  answer the app does not understand, the file is left alone.
 - Verified with tests for a shortcut to a file, a shortcut to a folder, a
   protected folder that is itself a shortcut, a shortcut to a file that no longer
   exists, a new file under a shortcut, and a loop; each fails when the new

@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_protected_symlink_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a7d19c3-62be-4f80-b5e1-9d03c8a6f742
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 
