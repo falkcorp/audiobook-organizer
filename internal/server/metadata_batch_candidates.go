@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.29.1
+// version: 4.30.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // Re-export metabatch types under server-local aliases so existing
@@ -102,8 +103,14 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		batchFetchCandidatesLog.Info("stale refetch resolved %d books", len(staleIDs))
 	}
 	if len(candidateIDs) == 0 && req.Selection != nil {
+		// The signed-in user's own listening rows judge a per-user filter; with auth
+		// off there is no one, and such a filter is refused rather than widened.
+		viewerID := ""
+		if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+			viewerID = u.ID
+		}
 		resolved, err := operations.ResolveBookIDs(*req.Selection, func(f operations.FilterSpec) ([]string, error) {
-			return s.resolveFilterToBookIDs(c.Request.Context(), f)
+			return s.resolveFilterToBookIDs(c.Request.Context(), f, viewerID)
 		})
 		if busy, ok := errors.AsType[*querygrammar.BusyError](err); ok {
 			// Load, not a bad request: the client may retry.
