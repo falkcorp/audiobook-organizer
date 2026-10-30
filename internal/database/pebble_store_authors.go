@@ -1196,20 +1196,9 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 	// Allocation path. nameIdx.narrator makes the name check and the commit
 	// that claims narrator_name:<norm> one step with respect to every other
 	// writer of that key (DeleteNarrator included; see nameIndexLocks for the
-	// lock order). counterMu, nested inside it, serializes the narrator_counter
-	// read-modify-write -- the same mutex nextID uses for every other ID -- so
-	// concurrent CreateNarrator calls can't allocate a duplicate/lost narrator
-	// ID. Record + name index + counter commit in a SINGLE batch so a crash
-	// can't leave a record with no name index (or an un-bumped counter).
-	// NOTE: we keep the legacy narrator_counter key rather than switching to
-	// nextID("narrator"), which uses a different (uninitialized) counter:narrator
-	// key that would collide with / orphan the existing narrator numbering. Both
-	// locks are held across the pebble.Sync commit, which is acceptable on this
-	// cold create path.
+	// lock order).
 	p.nameIdx.narrator.Lock()
 	defer p.nameIdx.narrator.Unlock()
-	p.counterMu.Lock()
-	defer p.counterMu.Unlock()
 
 	// Re-check under the lock: another goroutine may have created it between our
 	// fast-path check and acquiring the lock.
@@ -1218,6 +1207,24 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 	} else if existing != nil {
 		return existing, nil
 	}
+	return p.mintNarratorLocked(name)
+}
+
+// mintNarratorLocked allocates and commits a new narrator record for name.
+// The caller holds nameIdx.narrator and has just checked that no record owns
+// the name's narrator_name: key. counterMu, nested inside it, serializes the
+// narrator_counter read-modify-write -- the same mutex nextID uses for every
+// other ID -- so concurrent callers can't allocate a duplicate/lost narrator
+// ID. Record + name index + fold index + counter commit in a SINGLE batch so a
+// crash can't leave a record with no name index (or an un-bumped counter).
+// NOTE: we keep the legacy narrator_counter key rather than switching to
+// nextID("narrator"), which uses a different (uninitialized) counter:narrator
+// key that would collide with / orphan the existing narrator numbering. Both
+// locks are held across the pebble.Sync commit, which is acceptable on this
+// cold create path.
+func (p *PebbleStore) mintNarratorLocked(name string) (*Narrator, error) {
+	p.counterMu.Lock()
+	defer p.counterMu.Unlock()
 
 	counterKey := []byte("narrator_counter")
 	var nextID int
@@ -1246,6 +1253,10 @@ func (p *PebbleStore) CreateNarrator(name string) (*Narrator, error) {
 	if err := batch.Set(nameKey, idData, nil); err != nil {
 		batch.Close()
 		return nil, fmt.Errorf("pebble Set narrator name index: %w", err)
+	}
+	if err := stageNarratorFoldSet(batch, narrator); err != nil {
+		batch.Close()
+		return nil, fmt.Errorf("pebble Set narrator fold index: %w", err)
 	}
 	if err := batch.Set(counterKey, idData, nil); err != nil {
 		batch.Close()
@@ -1368,7 +1379,8 @@ func (p *PebbleStore) setBookNarratorsLocked(bookID string, narrators []BookNarr
 // DeleteNarrator removes a narrator and every reference the store holds to it,
 // mirroring DeleteAuthor: the narrator:<id> record, its narrator_name:<norm>
 // index entries (underscore, not colon — see CreateNarrator; current and
-// legacy key, each only while this row still owns it), and its entries in
+// legacy key, each only while this row still owns it), its narrator_fold:
+// key, and its entries in
 // the book_narrators junction all go in one Pebble batch, then memdb is
 // brought in line. A missing id is a no-op returning nil, as with DeleteAuthor.
 // nameIdx.narrator is held from the row read through the commit, which is what
@@ -1399,6 +1411,12 @@ func (p *PebbleStore) DeleteNarrator(id int) error {
 	if err := p.deleteNameIndexIfOwned(batch, nil, narratorNameIndexKey, narrator.Name, nameIndexOwner(id)); err != nil {
 		batch.Close()
 		return fmt.Errorf("pebble Delete narrator_name: %w", err)
+	}
+	// The fold key is per (fold, id), so it is this row's alone: no ownership
+	// check, unlike narrator_name:.
+	if err := stageNarratorFoldDelete(batch, narrator); err != nil {
+		batch.Close()
+		return fmt.Errorf("pebble Delete narrator_fold: %w", err)
 	}
 
 	// Drop this narrator from the book_narrators junction in the same batch,
