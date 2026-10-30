@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-29-protected-path-symlink-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 33552e57-ccc8-45c9-95a3-eafe9d145b0e -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -104,12 +104,14 @@ configuration is fixed, and the message names that folder.
 
 ## What to know
 
-- Left as they were, for a later decision: the list of Deluge seeding folders
-  (a separate check the callers consult next to the shared one; it still compares
-  paths as written) and the explicitly configured protected paths, the
-  classification used when restoring a trashed book, the fs-regroup and
-  iTunes-repoint maintenance tools (they change database rows, not files), and a
-  few maintenance checks that look only at the frozen iTunes tree. The merge
-  tools and the deduplication jobs already followed shortcuts.
-- The purge check still does not apply the frozen iTunes tree rule on its own;
-  that rule is enforced by the merge tools and the maintenance tools.
+- Follow-up 2026-10-30: the list of Deluge seeding folders and the explicitly
+  configured protected paths (a separate check the callers consult next to the
+  shared one) now follow shortcuts the same way, and the shared check now
+  protects the frozen iTunes tree (any "books/itunes" folder) on its own, whether
+  or not an iTunes library path is configured. See
+  docs/decisions/2026-10-30-deluge-protected-paths-symlinks.md.
+- Left as they were, for a later decision: the classification used when
+  restoring a trashed book, the fs-regroup and iTunes-repoint maintenance tools
+  (they change database rows, not files), and a few maintenance checks that look
+  only at the frozen iTunes tree. The merge tools and the deduplication jobs
+  already followed shortcuts.
