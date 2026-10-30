@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_files.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: 969b284a-5657-442b-beba-275e325e000b
 // last-edited: 2026-10-30
 
@@ -388,7 +388,15 @@ func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy co
 		// Deleted while this job waited: the file steps report it.
 		return nil, nil
 	}
-	target, ok := mfs.existingLibraryCopy(fresh)
+	// The import-path list is read ONCE here and every decision below is made
+	// from that read. Two reads can disagree: a first that fails makes the book
+	// look protected with no sibling, and a second that succeeds would then let
+	// the copy go ahead for a book that was never protected.
+	r := mfs.readImportRoots()
+	if _, rerr := r.get(); rerr != nil && policy == createLibraryCopy {
+		return nil, fmt.Errorf("apply file work for book %s: not creating a library copy: %w", id, tagger.ErrProtectedListNotLoaded)
+	}
+	target, ok := mfs.existingLibraryCopyMatchingIn(r, fresh, nil)
 	if ok || policy != createLibraryCopy {
 		return target, nil
 	}
@@ -396,7 +404,7 @@ func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy co
 	// book outside root_dir looks protected (isProtectedPath), so a copy made
 	// now could be a copy of a book that needs none. Refuse until the lists
 	// load.
-	if !mfs.protectedListLoaded() {
+	if !mfs.protectedListLoadedIn(r) {
 		return nil, fmt.Errorf("apply file work for book %s: not creating a library copy: %w", id, tagger.ErrProtectedListNotLoaded)
 	}
 	if err := standDown(checkpoint, id, "creating the library copy"); err != nil {
