@@ -1,13 +1,12 @@
 // file: internal/server/server_middleware.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-10-21
+// last-edited: 2026-10-29
 
 package server
 
 import (
 	"encoding/json"
-
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/gin-gonic/gin"
 )
 
@@ -114,6 +115,10 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 	}
 }
 
+// protectedPathLog reports a path that was treated as protected because its symlinks
+// could not be resolved (pathutil.UnderProtectedPath fails closed).
+var protectedPathLog = logger.New("server.protected-path")
+
 // isProtectedPath is now a method on *Server so it uses the server's
 // resolved store rather than the package-level GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 3a). Nil-safe — if s.Ops() is
@@ -132,46 +137,32 @@ func (s *Server) isProtectedPath(filePath string) bool {
 		return true
 	}
 
-	// Check import paths
+	// The static rules, on the path as spelled and with its symlinks resolved
+	// (pathutil.UnderProtectedPath): the import paths, the folders of the iTunes
+	// library files, any "iTunes Media" folder and the .failed/ quarantine
+	// folder. A path that cannot be resolved counts as protected, since this
+	// also gates the organizer's moves.
+	var roots []string
 	if store := s.Ops(); store != nil {
 		importPaths, err := cachedImportPaths(store)
 		if err == nil {
 			for _, ip := range importPaths {
-				ipAbs, _ := filepath.Abs(ip.Path)
-				if strings.HasPrefix(absPath, ipAbs+"/") || absPath == ipAbs {
-					return true
-				}
+				roots = append(roots, ip.Path)
 			}
 		}
 	}
-
-	// Check iTunes library paths
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
-		itunesAbs, _ := filepath.Abs(itunesDir)
-		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
-			return true
-		}
+		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryReadPath))
 	}
 	if config.AppConfig.ITunes.LibraryITLPath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryITLPath)
-		itunesAbs, _ := filepath.Abs(itunesDir)
-		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
-			return true
-		}
+		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryITLPath))
 	}
-
-	// Also check if path contains "iTunes Media" as a safety net
-	if strings.Contains(absPath, "iTunes Media") || strings.Contains(absPath, "iTunes%20Media") {
-		return true
+	protected, err := pathutil.UnderProtectedPath(absPath, roots)
+	if err != nil {
+		protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
+			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
 	}
-
-	// Hard-block .failed/ quarantine folder — never write to or move quarantined files.
-	if strings.Contains(filepath.ToSlash(absPath), "/.failed/") {
-		return true
-	}
-
-	return false
+	return protected
 }
 
 func loadDismissedDedupGroups(store userPreferenceReader) map[string]bool {
