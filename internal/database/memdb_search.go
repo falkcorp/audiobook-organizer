@@ -1,7 +1,7 @@
 // file: internal/database/memdb_search.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7b1d9c34-2e58-4a07-9f61-3c8ad5e0b742
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
@@ -66,10 +66,10 @@ func (p *PebbleStore) getBookRowForSearch(id string) (*Book, error) {
 // handler overfetches through it) and a "tidier" predicate here would silently
 // change what they match:
 //
-//   - Author names compare against util.NormalizeAuthor (lower + TrimSpace)
-//     while Title and Narrator compare against a bare strings.ToLower. The
-//     query itself is only lowercased. That asymmetry is pre-existing; it is
-//     reproduced rather than fixed so this change stays a pure speed-up.
+//   - Author names compare against util.NormalizeAuthor (lower + whitespace
+//     collapse) while Title and Narrator compare against a bare
+//     strings.ToLower. The author branch accepts the query as typed OR
+//     normalized the same way (authorMatchesQuery), so it only ever widens.
 //   - `offset` skips the first N *matches* in ranked order (see
 //     SubstringSearchRank / SearchRank), not the first N books. Results are
 //     ranked by relevance tier, then title length, then ID — not ULID order —
