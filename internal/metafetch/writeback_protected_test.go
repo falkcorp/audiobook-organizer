@@ -1,5 +1,5 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
 // last-edited: 2026-10-30
 
@@ -236,5 +236,45 @@ func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 	}
 	if _, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil }); errors.Is(err, tagger.ErrProtectedListNotLoaded) {
 		t.Errorf("still refused once the store reads: %v", err)
+	}
+}
+
+// The import-path list is read once per decision. A store that fails its first
+// read and succeeds on the second must still refuse: were existingLibraryCopy
+// and the loaded check to read separately, the first would call the book
+// protected for want of a list and the second would pass, so a book that was
+// never protected would get a copy.
+func TestResolveLibraryCopy_ReadsImportPathsOnce(t *testing.T) {
+	libRoot := t.TempDir()
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.RootDir = libRoot
+
+	book := &database.Book{ID: "b1", Title: "Hush", FilePath: filepath.Join(t.TempDir(), "Hush")}
+	var reads int
+	mock := &database.MockStore{
+		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
+			reads++
+			if reads == 1 {
+				return nil, errors.New("pebble: closed")
+			}
+			return nil, nil
+		},
+		GetBookByIDFunc: func(string) (*database.Book, error) { b := *book; return &b, nil },
+	}
+	svc := NewService(mock)
+
+	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil })
+	if !errors.Is(err, tagger.ErrProtectedListNotLoaded) {
+		t.Fatalf("err = %v, want ErrProtectedListNotLoaded", err)
+	}
+	if got != nil {
+		t.Errorf("a library copy was returned: %+v", got)
+	}
+	if reads != 1 {
+		t.Errorf("import paths read %d times, want 1", reads)
+	}
+	if entries, _ := os.ReadDir(libRoot); len(entries) != 0 {
+		t.Errorf("library root not empty: %v", entries)
 	}
 }

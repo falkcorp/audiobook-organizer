@@ -8,3 +8,7 @@
 - The metafetch library-copy path now refuses with the protected-list-not-loaded
   error while the import-path list is unreadable, instead of copying a book that
   may need no copy (every book outside the library folder reads as protected then).
+- The library-copy decision in metafetch reads the import-path list once and
+  decides the lookup, the sibling checks and the loaded check from that read.
+  Before, a read that failed and a second that succeeded could let a copy be made
+  of a book that was never protected.

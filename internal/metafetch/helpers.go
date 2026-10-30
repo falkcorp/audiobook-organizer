@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.4
+// version: 1.24.5
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-30
 
@@ -34,10 +34,42 @@ import (
 // a library copy because "every book outside root_dir looks protected" refuses
 // instead.
 func (mfs *Service) protectedListLoaded() bool {
+	return mfs.protectedListLoadedIn(mfs.readImportRoots())
+}
+
+// importRootsRead is one read of the import-path list, taken on first use and
+// then fixed: the roots, or the error that read failed with. A caller that makes
+// several decisions about one book (resolveLibraryCopy) takes it once and passes
+// it down, so every decision sees the same list. Two reads can disagree (the
+// first failing, the second not), and a copy made on the strength of the second
+// would copy a book the first read had only ever called protected for want of a
+// list. It is lazy so a decision that never reaches a protected-path question
+// (a book already under root_dir) reads nothing, as before.
+type importRootsRead struct {
+	mfs   *Service
+	once  sync.Once
+	roots []string
+	err   error
+}
+
+// readImportRoots returns an import-path read that has not happened yet.
+func (mfs *Service) readImportRoots() *importRootsRead {
+	return &importRootsRead{mfs: mfs}
+}
+
+// get performs the read on the first call and returns the same result after.
+func (r *importRootsRead) get() ([]string, error) {
+	r.once.Do(func() { r.roots, r.err = r.mfs.importPathRoots() })
+	return r.roots, r.err
+}
+
+// protectedListLoadedIn is protectedListLoaded decided from the import-path
+// read r instead of a fresh one.
+func (mfs *Service) protectedListLoadedIn(r *importRootsRead) bool {
 	if mfs == nil {
 		return true
 	}
-	if _, err := mfs.importPathRoots(); err != nil {
+	if _, err := r.get(); err != nil {
 		return false
 	}
 	return tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
@@ -663,6 +695,12 @@ func logImportPathReadFailure(err error) {
 // Method on *Service so it uses mfs.db rather than database.GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 4).
 func (mfs *Service) isProtectedPath(filePath string) bool {
+	return mfs.isProtectedPathIn(mfs.readImportRoots(), filePath)
+}
+
+// isProtectedPathIn is isProtectedPath decided from the import-path read r
+// instead of a fresh one; a failed read protects every path.
+func (mfs *Service) isProtectedPathIn(r *importRootsRead, filePath string) bool {
 	absPath, _ := filepath.Abs(filePath)
 
 	// Deluge save paths and the static protected prefixes: the same cache
@@ -686,10 +724,11 @@ func (mfs *Service) isProtectedPath(filePath string) bool {
 	// Fail closed: without the import paths nothing can be shown to be
 	// outside an import folder, and callers write or move on "not protected".
 	// True means "leave the file alone" to all of them.
-	roots, rerr := mfs.importPathRoots()
+	rootsRead, rerr := r.get()
 	if rerr != nil {
 		return true
 	}
+	roots := append([]string(nil), rootsRead...)
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
 		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryReadPath))
 	}
