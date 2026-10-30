@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0a0e6a4a-3f6e-4f0c-9b4f-6d7a1e2c8b35
 // last-edited: 2026-10-29
 
@@ -348,8 +348,7 @@ func groupBySharedPath(cands []database.BookVersion) [][]int {
 	for i := range parent {
 		parent[i] = i
 	}
-	var find func(int) int
-	find = func(i int) int {
+	find := func(i int) int {
 		for parent[i] != i {
 			parent[i] = parent[parent[i]]
 			i = parent[i]
