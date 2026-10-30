@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-29-protected-path-symlink-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 33552e57-ccc8-45c9-95a3-eafe9d145b0e -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -108,7 +108,9 @@ configuration is fixed, and the message names that folder.
   configured protected paths (a separate check the callers consult next to the
   shared one) now follow shortcuts the same way, and the shared check now
   protects the frozen iTunes tree (any "books/itunes" folder) on its own, whether
-  or not an iTunes library path is configured. See
+  or not an iTunes library path is configured. The importer's own check of those
+  prefixes follows shortcuts too, and the scheduled job that refreshes the
+  seeding-folder list now really refreshes it (it had been doing nothing). See
   docs/decisions/2026-10-30-deluge-protected-paths-symlinks.md.
 - Left as they were, for a later decision: the classification used when
   restoring a trashed book, the fs-regroup and iTunes-repoint maintenance tools

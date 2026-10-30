@@ -1,7 +1,7 @@
 // file: internal/plugins/deluge/protected_paths.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-30
 
 package deluge
 
@@ -36,12 +36,12 @@ func (p *Plugin) runProtectedPathsSync(ctx context.Context, _ json.RawMessage, r
 	prog := sdk.NewProgress(reporter, 1)
 	prog.Start("Refreshing protected paths from Deluge...")
 
-	// Force refresh the protected path cache by invalidating it.
-	p.cache.Invalidate()
-
-	// Trigger the lazy refresh by calling IsProtected with a dummy path.
-	// The next IsProtected call will trigger a fresh fetch from Deluge.
-	p.cache.IsProtected("")
+	// Fetch now, whatever the cache TTL says. This used to be Invalidate()
+	// followed by IsProtected(""), which fetched nothing: an empty path is
+	// answered before the cache looks at its TTL.
+	if err := p.cache.Refresh(); err != nil {
+		return err
+	}
 	prog.Step("Cache refreshed")
 
 	prog.Finalize("Writing results...")
