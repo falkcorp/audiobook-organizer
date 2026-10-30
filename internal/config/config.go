@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.175.1
+// version: 1.175.2
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-29
 
@@ -1247,11 +1247,13 @@ type Config struct {
 	// KeptSweepApplyEnabled is the switch of the nightly kept-file sweep
 	// (versions.SweepKeptFiles, a step of maintenance.trash-cleanup): files a
 	// version purge left on disk because another row or book named them, revisited
-	// to remove the ones nothing names any more. Off (the default) keeps the sweep
-	// report-only: it makes every decision and lists the files it WOULD remove
-	// (and the notes it would drop) in the operation result and summary, but
-	// unlinks no file and drops no note. On, it removes those files and drops
-	// their notes. Report-only is not read-only: in either mode a note the sweep
+	// to remove the ones nothing names any more. It removes a file ONLY inside the
+	// version's own .versions/{id}/ folder; a noted file anywhere else is never
+	// removed in either mode, and is listed in the result every run. Off (the
+	// default) keeps the sweep report-only: it makes every decision and lists the
+	// files it WOULD remove (and the notes it would drop) in the operation result
+	// and summary, but unlinks no file and drops no note. On, it removes those
+	// files and drops their notes. Report-only is not read-only: in either mode a note the sweep
 	// cannot settle (an owner lookup that errors, a path the disk cannot settle, a
 	// failed unlink) is counted per calendar day on the version, and after
 	// versions.PurgeUndecidedEscalateAfter days in a row the version's status moves

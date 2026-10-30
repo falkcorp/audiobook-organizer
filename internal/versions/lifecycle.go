@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-29
 //
@@ -346,6 +346,15 @@ type NothingServedError struct {
 	// Files are the paths the book is taken to serve (its FilePath and the rows
 	// of its active version), each with why it does not count.
 	Files []database.PurgeFileNote
+	// Attempt is, for a version that is purging (it cannot go back to the trash),
+	// how many attempts in a row this one makes (BookVersion.PurgeUndecidedNights):
+	// the refusal is counted like a stuck attempt (settleStuck). Zero for a trashed
+	// or purge_failed version, which is not counted.
+	Attempt int
+	// Escalated is set on the attempt that reached PurgeUndecidedEscalateAfter: the
+	// version is now purge_failed (nothing was deleted to get there), so the error
+	// also matches ErrPurgeFailed.
+	Escalated bool
 }
 
 func (e *NothingServedError) Error() string {
@@ -353,11 +362,21 @@ func (e *NothingServedError) Error() string {
 	if e.BookPath != "" {
 		where = fmt.Sprintf("the book's path is %s", e.BookPath)
 	}
+	switch {
+	case e.Escalated:
+		return fmt.Sprintf("version %s of book %s not purged: %v (%s); %d attempts in a row found nothing the book serves, so the version is now purge_failed (nothing was deleted), no longer retried every night, and can be hard-deleted or retried with Purge now once the book's path is fixed: %s",
+			e.VersionID, e.BookID, ErrPurgeNothingServed, where, e.Attempt, notePaths(e.Files))
+	case e.Attempt > 0:
+		return fmt.Sprintf("version %s of book %s not purged: %v (%s); attempt %d of %d, after which the version becomes purge_failed (nothing is deleted) and can be hard-deleted; fixing the book's path lets the purge finish: %s",
+			e.VersionID, e.BookID, ErrPurgeNothingServed, where, e.Attempt, PurgeUndecidedEscalateAfter, notePaths(e.Files))
+	}
 	return fmt.Sprintf("version %s of book %s not purged: %v (%s); fix the book's path, or restore the version: %s",
 		e.VersionID, e.BookID, ErrPurgeNothingServed, where, notePaths(e.Files))
 }
 
-func (e *NothingServedError) Is(target error) bool { return target == ErrPurgeNothingServed }
+func (e *NothingServedError) Is(target error) bool {
+	return target == ErrPurgeNothingServed || (e.Escalated && target == ErrPurgeFailed)
+}
 
 // PurgeUndecidedEscalateAfter is how many purge attempts in a row, while the
 // version is purging, may leave a path unsettled with nothing unlinked before the
@@ -442,17 +461,22 @@ func PurgeVersion(store versionPurger, ver *database.BookVersion, guard PurgeGua
 // file in it, the guard has nothing to compare against, and "nothing served"
 // would be a guess. The purge then returns a *NothingServedError (errors.Is
 // ErrPurgeNothingServed, not ErrPurgeCannotTell: the book's path is what is
-// wrong, not a drive) and leaves the version as it is: in the trash, restorable,
-// or, for a version already purging or purge_failed (which cannot go back to the
-// trash), unchanged and retried once the book's path is fixed
-// (servedGuard.requireServedFileOnDisk). The rule is the kept-file sweep's too,
+// wrong, not a drive) and deletes nothing (servedGuard.requireServedFileOnDisk).
+// A trashed version stays in the trash, restorable. A purge_failed version stays
+// purge_failed (it can be hard-deleted). A purging version cannot go back to the
+// trash and refuses restore and hard delete, so the refusal is counted like a
+// stuck attempt (settleNothingServed): after PurgeUndecidedEscalateAfter in a row
+// it becomes purge_failed, with the files it could not decide in PurgeFailed, and
+// the error of that attempt also matches ErrPurgeFailed. The rule is the kept-file sweep's too,
 // so a retry of a version that sweep escalated cannot delete what it refused to.
 //
 // A retry (purging, purge_failed) also decides every file the version's notes name
 // (PurgeKept, PurgeFailed), not only the files of its slot and rows: a note that
 // the retry did not ask about again would be erased with its file still on disk.
-// Such a file outside the version's own slot is never removed while the version's
-// own book row exists (classifyNotedPath).
+// A purge deletes only inside the version's own .versions/{id}/ slot: a noted
+// file outside it is never removed, whether or not the version's own book still
+// exists (classifyNotedPath, OutsideSlotNeverAutoRemovedReason). It is kept, noted
+// again and listed, never dropped.
 //
 // It never removes a file that some other book_file row still names. A
 // retired version keeps the rows of a book that was retired into this one's
@@ -740,13 +764,16 @@ func purgeVersionLocked(store versionPurger, ver *database.BookVersion, guard Pu
 	// way (purging, purge_failed) as well: an escalated version is retried by
 	// Purge now, and the kept-file sweep refuses to remove anything while the
 	// book serves nothing on disk, so a retry must not delete what the sweep
-	// would not. Such a version cannot go back to the trash, so the refusal
-	// leaves it as it is (the book's path is what to fix; a purge_failed version
-	// can also be hard-deleted).
+	// would not. A trashed version is left in the trash, restorable, and a
+	// purge_failed one as it is (it can be hard-deleted). A purging version
+	// cannot go back to the trash and refuses restore and hard delete, so the
+	// refusal is counted like a stuck attempt and, after
+	// PurgeUndecidedEscalateAfter in a row, moves it to purge_failed
+	// (settleNothingServed); that deletes nothing.
 	if len(doomed) > 0 {
 		if err := sg.requireServedFileOnDisk(); err != nil {
 			lifecycleLog.Warn("purge kept version %s (%s) of book %s untouched: %v", ver.ID, ver.Status, ver.BookID, err)
-			return err
+			return settleNothingServed(store, ver, kept, doomed, undecided, err)
 		}
 	}
 
@@ -999,22 +1026,29 @@ func classifyPurgePath(store versionPurger, decider PurgeDecider, sg *servedGuar
 	return verdictRemove, "", nil
 }
 
-// OwnBookStillExistsReason is why a noted file outside the version's own slot
-// is kept while the version's own book still exists.
-const OwnBookStillExistsReason = "the version's own book still exists (a trashed book can be restored) and this file is outside the version's own folder, so it may be the book's audio"
+// OutsideSlotNeverAutoRemovedReason is why a noted file outside the version's
+// own slot is kept: the purge and the kept-file sweep delete only inside the
+// version's own .versions/{id}/ slot.
+const OutsideSlotNeverAutoRemovedReason = "this file is outside the version's own .versions folder, and a purge or sweep removes files only inside it; it is kept and listed so the owner can decide"
 
 // classifyNotedPath is classifyPurgePath for a path that comes from a note
 // (BookVersion.PurgeKept or PurgeFailed) rather than from the version's own slot
-// or rows. Such a path was kept because something else owned it, and what owned
-// it may well have been the version's own book: a live book serves it
-// (classifyPurgePath says so while the book is live), but a book trashed since
-// serves nothing, and its audio is still the book's, restorable. So a noted path
-// outside the version's own slot is never removed while the own book row exists,
-// trashed or live. Only a book that is gone entirely hands the path back.
+// or rows. Such a path was kept because something else owned it, and the notes
+// cannot say that nothing owns it again: a book trashed or hard-deleted since
+// serves nothing, a row can be stored under a spelling no lookup produces, a
+// trashed book's FilePath can be the parent folder, and a path can be reused by
+// a re-import before the scan writes its row. Deleting on the strength of "no
+// owner found" is exactly the guess the notes exist to avoid, so the rule is
+// the plain one: a noted path outside this version's own slot
+// (servedGuard.inVersionSlot) is never removed, whether or not the own book
+// still exists. It is kept (and so noted again, and listed in the sweep's
+// report) with OutsideSlotNeverAutoRemovedReason. A path found already gone is
+// still gone (nothing is deleted to settle it), and a path inside the slot is
+// decided like any other.
 func classifyNotedPath(store versionPurger, decider PurgeDecider, sg *servedGuard, ver *database.BookVersion, p string, recorded map[string]struct{}) (pathVerdict, string, error) {
 	verdict, why, err := classifyPurgePath(store, decider, sg, ver, p, recorded)
-	if err == nil && verdict == verdictRemove && sg.bookExists && !sg.inVersionSlot(p) {
-		return verdictKept, OwnBookStillExistsReason, nil
+	if err == nil && verdict == verdictRemove && !sg.inVersionSlot(p) {
+		return verdictKept, OutsideSlotNeverAutoRemovedReason, nil
 	}
 	return verdict, why, err
 }
@@ -1089,16 +1123,8 @@ func settleStuck(store versionPurger, ver *database.BookVersion, kept map[string
 	}
 	if ver.PurgeUndecidedNights >= PurgeUndecidedEscalateAfter {
 		notes := stuck.notes()
-		now := time.Now()
-		ver.Status = database.BookVersionStatusPurgeFailed
-		ver.PurgeFailed = notes
-		ver.PurgeFailedAt = &now
-		ver.PurgeKept = keptNotes(kept)
 		nights := ver.PurgeUndecidedNights
-		ver.PurgeUndecidedNights = 0
-		if err := store.UpdateBookVersion(ver); err != nil {
-			ver.Status = database.BookVersionStatusPurging
-			ver.PurgeUndecidedNights = nights
+		if err := escalateToPurgeFailed(store, ver, kept, notes); err != nil {
 			return fmt.Errorf("purge version %s: %d attempt(s) in a row could not settle %d file(s), and recording that failed: %w",
 				ver.ID, nights, len(notes), errors.Join(append(stuck.errs(), err)...))
 		}
@@ -1111,6 +1137,67 @@ func settleStuck(store versionPurger, ver *database.BookVersion, kept map[string
 		lifecycleLog.Warn("purge version %s: cannot store the attempt count: %v", ver.ID, err)
 	}
 	return mkErr()
+}
+
+// escalateToPurgeFailed moves a purging version to purge_failed: notes (the
+// files this and the earlier attempts could not settle) go in PurgeFailed, kept
+// (the files left because something owns them) in PurgeKept, and the attempt count
+// is cleared. It deletes nothing. When the record cannot be written the version is
+// put back as it was, in memory, and the error returned.
+func escalateToPurgeFailed(store versionPurger, ver *database.BookVersion, kept map[string]string, notes []database.PurgeFileNote) error {
+	now := time.Now()
+	prevKept, prevFailed, prevFailedAt, prevNights := ver.PurgeKept, ver.PurgeFailed, ver.PurgeFailedAt, ver.PurgeUndecidedNights
+	ver.Status = database.BookVersionStatusPurgeFailed
+	ver.PurgeFailed = notes
+	ver.PurgeFailedAt = &now
+	ver.PurgeKept = keptNotes(kept)
+	ver.PurgeUndecidedNights = 0
+	if err := store.UpdateBookVersion(ver); err != nil {
+		ver.Status = database.BookVersionStatusPurging
+		ver.PurgeFailed, ver.PurgeFailedAt, ver.PurgeKept = prevFailed, prevFailedAt, prevKept
+		ver.PurgeUndecidedNights = prevNights
+		return err
+	}
+	return nil
+}
+
+// settleNothingServed ends an attempt that deleted nothing because the version's
+// live book serves no file that exists on disk (requireServedFileOnDisk). err is
+// that refusal (a *NothingServedError), returned as it is for a trashed or
+// purge_failed version: the first stays trash, restorable, the second stays
+// purge_failed, which can be hard-deleted.
+//
+// A purging version has no such way out (it refuses restore and hard delete, and
+// the book's path may never be fixed), so the refusal is counted like a stuck
+// attempt (settleStuck): BookVersion.PurgeUndecidedNights goes up, and at
+// PurgeUndecidedEscalateAfter in a row the version becomes purge_failed, with the
+// files it could not decide in PurgeFailed. Escalating deletes nothing, and the
+// returned error then also matches ErrPurgeFailed (NothingServedError.Escalated).
+func settleNothingServed(store versionPurger, ver *database.BookVersion, kept map[string]string, doomed []string, undecided []database.PurgeFileNote, err error) error {
+	var ns *NothingServedError
+	if ver.Status != database.BookVersionStatusPurging || !errors.As(err, &ns) {
+		return err
+	}
+	ver.PurgeUndecidedNights++
+	ns.Attempt = ver.PurgeUndecidedNights
+	if ver.PurgeUndecidedNights < PurgeUndecidedEscalateAfter {
+		if uerr := store.UpdateBookVersion(ver); uerr != nil {
+			lifecycleLog.Warn("purge version %s: cannot store the attempt count: %v", ver.ID, uerr)
+		}
+		return ns
+	}
+	notes := slices.Clone(undecided)
+	for _, p := range doomed {
+		notes = append(notes, database.PurgeFileNote{Path: p, Reason: "not removed: the version's book serves nothing that exists on disk, so there was nothing to check this file against"})
+	}
+	slices.SortFunc(notes, func(a, b database.PurgeFileNote) int { return strings.Compare(a.Path, b.Path) })
+	nights := ver.PurgeUndecidedNights
+	if uerr := escalateToPurgeFailed(store, ver, kept, notes); uerr != nil {
+		return fmt.Errorf("purge version %s: %d attempt(s) in a row found nothing the book serves, and recording that failed: %w", ver.ID, nights, errors.Join(ns, uerr))
+	}
+	ns.Escalated = true
+	lifecycleLog.Warn("purge version %s: %d attempts in a row found nothing the book serves; the version is now purge_failed (nothing was deleted) so it can be hard-deleted", ver.ID, nights)
+	return ns
 }
 
 // dirOfPath is the directory part of path ("" when it has no slash), as the
@@ -1423,13 +1510,17 @@ type CleanupResult struct {
 	// PurgeUndecidedEscalateAfter. The paths and reasons are in Files. Not a
 	// failure (the library may simply be down) and not counted in Failed.
 	CannotTell []KeptVersion
-	// NothingServed are the versions left in the trash, untouched and
-	// restorable, because the book serves nothing that exists on disk
-	// (NothingServedError): its path is stale or lost, or a folder with no file
-	// in it. Each entry carries the book's path (BookPath). Not a failure, not
-	// counted in Failed, and tried again every run: nothing escalates, because
-	// the version is never claimed; it stays listed here until the book's path
-	// is fixed or the version restored.
+	// NothingServed are the versions the run left untouched because the book
+	// serves nothing that exists on disk (NothingServedError): its path is stale
+	// or lost, or a folder with no file in it. Each entry carries the book's path
+	// (BookPath). Not a failure and not counted in Failed, and listed again every
+	// run until the book's path is fixed or the version restored. A trashed
+	// version stays in the trash, restorable, and is never escalated (it is never
+	// claimed). A purging version cannot be restored, so each run counts the
+	// refusal like a stuck attempt and, after PurgeUndecidedEscalateAfter in a row,
+	// moves it to purge_failed (nothing is deleted): the entry of that night
+	// carries the files it could not decide, and from the next night the version is
+	// in NeedsAttention, where it can be hard-deleted.
 	NothingServed []KeptVersion
 	// SwapIncomplete are the books with a version left in swapping_out/swapping_in
 	// by a version swap that did not finish (ListSwapIncompleteBooks): each has no
@@ -1663,7 +1754,7 @@ trashLoop:
 	// After the purges, so a failure here never holds one up. Not when the run
 	// stopped for the merge lock: the sweep would wait on it as well.
 	if !res.StoppedForMerge {
-		res.KeptSweep, res.KeptSweepErr = SweepKeptFiles(store, guard, KeptSweepOptions{Apply: keptSweepApply, Skip: purgedNow})
+		res.KeptSweep, res.KeptSweepErr = SweepKeptFiles(store, guard, KeptSweepOptions{Apply: keptSweepApply, Skip: purgedNow, Now: now})
 		if res.KeptSweepErr != nil {
 			lifecycleLog.Warn("trash cleanup: %v", res.KeptSweepErr)
 		}
@@ -1672,8 +1763,8 @@ trashLoop:
 			if k.ReportOnly {
 				mode = "REPORT ONLY (nothing changed): would remove " + strconv.Itoa(k.WouldRemove) + ", would drop " + strconv.Itoa(k.WouldDrop) + " notes of files already gone"
 			}
-			lifecycleLog.Info("trash cleanup: kept-file sweep of %d purged version(s): %s, %d still owned, %d kept on error",
-				k.Versions, mode, k.StillKept, k.KeptOnError)
+			lifecycleLog.Info("trash cleanup: kept-file sweep of %d purged version(s): %s, %d still owned (%d of them outside their version's own folder, which the sweep never removes), %d kept on error",
+				k.Versions, mode, k.StillKept, k.OutsideSlot, k.KeptOnError)
 		}
 		if n := len(res.KeptSweep.Escalated); n > 0 {
 			lifecycleLog.Warn("trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed: %s",

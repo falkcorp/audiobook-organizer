@@ -59,18 +59,36 @@ serve a file that exists, as the purge requires of a trashed version.
   purge's `ErrPurgeNothingServed`), nor an unready library or a busy merge lock. The store now accepts `inactive_purged` to `purge_failed` for
   this (and nothing else from `inactive_purged`). The escalation is reported in the
   result on the night it happens (`kept_sweep_escalated`).
-- A file outside the version's own `.versions/{id}/` folder is never removed by the
-  sweep while the version's own book row exists, trashed or live: the note was kept
-  because that book served the file, and a trashed book is restorable and wants its
-  audio back. Only a book that is gone entirely hands the file back.
+- **Files are deleted only inside the version's own `.versions/{id}/` folder.** A
+  noted file anywhere else is never removed by the sweep or by a purge retry, whether
+  or not the version's own book still exists (reason
+  `OutsideSlotNeverAutoRemovedReason`). The notes cannot prove nothing wants such a
+  file: the book may be trashed or deleted since, a row can be stored under a spelling
+  no lookup produces, a trashed book's path can be the parent folder, and a re-import
+  can reuse the path before the scan writes its row. Such a file stays on disk and its
+  note stays; it is counted in `kept_sweep_still_kept`, listed every run in
+  `kept_sweep_outside_slot_files` (version, book, path, reason, with
+  `kept_sweep_outside_slot` as the count), written to the run's journal one line per
+  file, and named in the summary. The owner decides those files by hand.
 - Purge now on a `purging` or `purge_failed` version (a retry, including one the
   sweep escalated) applies the "the book serves nothing that exists on disk" refusal
   too, which used to hold only for a trashed version, so a retry can no longer
   delete a file the sweep refused to. It also decides every file named in the
   version's `PurgeKept` and `PurgeFailed` notes, not only the slot and the rows;
   before, a note the retry did not find was erased with its file still on disk. Each
-  is removed, kept (and noted again, with the same owner rule as above) or left
-  undecided.
+  is removed (only inside the version's own folder), kept (and noted again, with the
+  same only-inside-the-folder rule as above) or left undecided.
+- A `purging` version whose live book serves no file that exists on disk can no
+  longer be stuck for ever (it cannot be restored or hard-deleted while purging, and
+  the refusal above kept it that way). Each refused attempt, the nightly retry or
+  Purge now, is counted like any other stuck attempt, and after three in a row the
+  version becomes `purge_failed` and can be hard-deleted. Nothing is deleted by that;
+  the files it could not decide are listed on it. The night it escalates is filed
+  under "left in the trash, their book serves nothing" and does not fail the
+  operation. The restore and hard-delete refusals for a purging version now say that
+  this is how it ends.
+- The sweep's night count uses the clock the cleanup run started with, not a second
+  reading of the time, so a run that crosses midnight counts one day.
 - The result panel of the trash-cleanup operation now shows the kept-file sweep: the
   report-only line, the would-remove and would-drop lists (path, version, book, the
   reason the file was kept) and any version it escalated.

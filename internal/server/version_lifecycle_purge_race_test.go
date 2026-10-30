@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_purge_race_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f1b6a93-7c28-4d05-b3e8-0a9d5c2e7f16
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 
 // staleFirstRead is a store whose first read of one version returns the copy a
@@ -131,5 +132,75 @@ func TestHandlePurgeVersion_RestoredAfterTheReadStillSaysRestored(t *testing.T) 
 
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "restored while the purge was starting") {
 		t.Fatalf("purge-now after a restore: got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A purging version whose live book serves no file that exists on disk (its path
+// is stale: the book's own file is missing) has a way out. The restore and hard
+// delete refusals say how it ends; each Purge now is counted; the third makes it
+// purge_failed (nothing deleted) and the answer says so; and hard delete then works.
+func TestHandlePurgeVersion_PurgingVersionWhoseBookServesNothingEndsAsPurgeFailed(t *testing.T) {
+	srv, store := setupVersionLifecycleServer(t)
+	// A live book whose own file, book.m4b, is never written: it serves nothing that
+	// exists on disk. The version owes one file, in its own slot.
+	bookDir := libraryDir(t, "Year One")
+	if _, err := store.CreateBook(&database.Book{ID: "b1", Title: "Batman: Year One", FilePath: filepath.Join(bookDir, "book.m4b")}); err != nil {
+		t.Fatal(err)
+	}
+	ver, err := store.CreateBookVersion(&database.BookVersion{BookID: "b1", Status: database.BookVersionStatusTrash, Format: "m4b", Source: "imported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slotFile := filepath.Join(versions.VersionSlotDir(bookDir, ver.ID), "part1.m4b")
+	if err := os.MkdirAll(filepath.Dir(slotFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(slotFile, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	claimed := *ver
+	claimed.Status = database.BookVersionStatusPurging
+	if err := store.UpdateBookVersion(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	wantAfter := "becomes purge_failed after 3 attempts in a row"
+
+	restore := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/b1/versions/"+ver.ID+"/restore", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, restore)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "book that serves no file that exists on disk") || !strings.Contains(w.Body.String(), wantAfter) {
+		t.Errorf("restore of a purging version: %d %s, want 409 saying how it ends", w.Code, w.Body.String())
+	}
+	del := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/purged-versions/"+ver.ID, nil)
+		w := httptest.NewRecorder()
+		srv.router.ServeHTTP(w, req)
+		return w
+	}
+	if w := del(); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "book that serves no file that exists on disk") || !strings.Contains(w.Body.String(), wantAfter) {
+		t.Errorf("hard delete of a purging version: %d %s, want 409 saying how it ends", w.Code, w.Body.String())
+	}
+
+	for n := 1; n <= versions.PurgeUndecidedEscalateAfter; n++ {
+		w := postPurgeNow(t, srv, ver)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("purge-now %d: expected 409, got %d: %s", n, w.Code, w.Body.String())
+		}
+		last := n == versions.PurgeUndecidedEscalateAfter
+		if got := strings.Contains(w.Body.String(), "now purge_failed"); got != last {
+			t.Errorf("purge-now %d: answer %s, says purge_failed = %v, want %v", n, w.Body.String(), got, last)
+		}
+	}
+	if got, _ := store.GetBookVersion(ver.ID); got == nil || got.Status != database.BookVersionStatusPurgeFailed {
+		t.Fatalf("version = %+v, want purge_failed after %d refused attempts", got, versions.PurgeUndecidedEscalateAfter)
+	}
+	if _, err := os.Stat(slotFile); err != nil {
+		t.Errorf("the slot file was touched: %v", err)
+	}
+	if w := del(); w.Code != http.StatusOK {
+		t.Fatalf("hard delete of the escalated version: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(slotFile); err != nil {
+		t.Errorf("hard delete removed the file named in purge_failed: %v", err)
 	}
 }

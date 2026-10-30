@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0a0e6a4a-3f6e-4f0c-9b4f-6d7a1e2c8b35
 // last-edited: 2026-10-29
 
@@ -36,9 +36,10 @@ import (
 // it (an import path, the iTunes library, .failed, outside the library root, a
 // folder that still holds files), and can the disk say whether it is gone. It
 // is the same function with the same store and the same guard, so the purge and
-// the sweep cannot disagree. A path that now comes back "remove" is unlinked and
-// dropped from the notes; a path that is already gone (its folder vouches for
-// that) is dropped; every other answer leaves the file and its note alone.
+// the sweep cannot disagree. A path inside the version's own slot that now comes
+// back "remove" is unlinked and dropped from the notes; a path that is already
+// gone (its folder vouches for that) is dropped; every other answer, including a
+// "remove" for a path outside the slot, leaves the file and its note alone.
 //
 // Report-only first. The sweep unlinks files nobody asked it to look for, in
 // production, so it ships switched off (config kept_sweep_apply_enabled, passed in
@@ -72,10 +73,14 @@ import (
 // lock busy, a version write that failed on an earlier path) is not a night: none
 // of those says anything about the note.
 //
-// A file outside the version's own slot is never removed while the version's own
-// book row exists, trashed or live (classifyNotedPath): the note was probably
-// kept because that book served the file, and a trashed book is restorable and
-// wants its audio back. Only a book that is gone entirely hands the file back.
+// Only inside the slot. The sweep removes a noted file ONLY when it lies inside
+// the version's own .versions/{id}/ slot (classifyNotedPath). A noted file
+// anywhere else is reported and kept, with OutsideSlotNeverAutoRemovedReason,
+// whether or not the version's own book still exists: the notes cannot prove that
+// nothing wants it (a book trashed or hard-deleted since, a row stored under a
+// spelling no lookup produces, a path reused by a re-import before the scan wrote
+// its row), and the owner is asked about those, not the sweep. Such a note stays
+// in PurgeKept for good, and the file is listed every night as kept.
 //
 // Fail closed, everywhere: a read that errors, a path the disk cannot settle, a
 // guard that is not ready, a merge lock that stays busy, a removal that fails, a
@@ -104,6 +109,11 @@ type KeptSweepOptions struct {
 	Apply bool
 	// Skip names versions the caller has just purged, and so just asked.
 	Skip map[string]struct{}
+	// Now is the run's clock: the calendar day a night is counted on
+	// (BookVersion.PurgeUndecidedNightOn) and the time a version is stamped
+	// purge_failed. The cleanup passes the one it started the run with, so a
+	// whole run (the purges and the sweep) has one clock. Zero means time.Now().
+	Now time.Time
 }
 
 // KeptSweepResult is what one sweep did, in files (paths), not versions.
@@ -127,8 +137,16 @@ type KeptSweepResult struct {
 	// StillKept counts files left in place because something still owns them: a
 	// row or book that names them, a live book that serves them, or the guard
 	// (an import path, the iTunes library, .failed, outside the library root, a
-	// folder that still holds files).
+	// folder that still holds files); and every file outside the version's own
+	// .versions/{id}/ slot, which the sweep never removes
+	// (OutsideSlotNeverAutoRemovedReason).
 	StillKept int
+	// OutsideSlot counts, within StillKept, the files kept only because they lie
+	// outside the version's own .versions/{id}/ slot, which the sweep never
+	// removes (OutsideSlotNeverAutoRemovedReason). They are listed in
+	// OutsideSlotFiles whatever the mode, so the owner can see what the sweep
+	// will not touch and decide those files by hand.
+	OutsideSlot int
 	// KeptOnError counts files left in place because the sweep could not decide or
 	// could not act: a read error, a path the disk cannot settle, a guard that is
 	// not ready, a busy merge lock, a failed removal or record.
@@ -142,6 +160,8 @@ type KeptSweepResult struct {
 	WouldRemoveFiles []KeptVersion
 	WouldDropFiles   []KeptVersion
 	ErrorFiles       []KeptVersion
+	// OutsideSlotFiles lists the files behind OutsideSlot, per version.
+	OutsideSlotFiles []KeptVersion
 	// Escalated lists the versions this run moved to purge_failed because a note
 	// stayed unsettled for PurgeUndecidedEscalateAfter nights in a row (also in a
 	// report-only run); Files are the unsettled notes (now
@@ -157,12 +177,14 @@ func (r *KeptSweepResult) merge(o KeptSweepResult) {
 	r.WouldRemove += o.WouldRemove
 	r.WouldDrop += o.WouldDrop
 	r.StillKept += o.StillKept
+	r.OutsideSlot += o.OutsideSlot
 	r.KeptOnError += o.KeptOnError
 	r.RemovedFiles = append(r.RemovedFiles, o.RemovedFiles...)
 	r.GoneFiles = append(r.GoneFiles, o.GoneFiles...)
 	r.WouldRemoveFiles = append(r.WouldRemoveFiles, o.WouldRemoveFiles...)
 	r.WouldDropFiles = append(r.WouldDropFiles, o.WouldDropFiles...)
 	r.ErrorFiles = append(r.ErrorFiles, o.ErrorFiles...)
+	r.OutsideSlotFiles = append(r.OutsideSlotFiles, o.OutsideSlotFiles...)
 	r.Escalated = append(r.Escalated, o.Escalated...)
 }
 
@@ -171,10 +193,6 @@ func (r *KeptSweepResult) merge(o KeptSweepResult) {
 func sweepable(v *database.BookVersion) bool {
 	return (v.Status == database.BookVersionStatusInactivePurged || v.Status == database.BookVersionStatusPurgeFailed) && len(v.PurgeKept) > 0
 }
-
-// keptSweepNow is the clock the sweep counts nights by; a var only so a test can
-// move it from one night to the next.
-var keptSweepNow = time.Now
 
 // keptSweepWorkers bounds the sweep's worker pool. A var only so a test can pin
 // it.
@@ -265,6 +283,10 @@ func judgeKept(store versionPurger, decider PurgeDecider, ver *database.BookVers
 // version.
 func SweepKeptFiles(store KeptSweepStore, guard PurgeGuard, opts KeptSweepOptions) (KeptSweepResult, error) {
 	res := KeptSweepResult{ReportOnly: !opts.Apply}
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	if guard == nil {
 		return res, errors.New("kept-file sweep: no purge guard is configured, so nothing is deleted")
 	}
@@ -278,7 +300,7 @@ func SweepKeptFiles(store KeptSweepStore, guard PurgeGuard, opts KeptSweepOption
 	// lists only its PurgeFailed files. They are swept, never re-escalated.
 	trash, err := store.ListTrashedBookVersions()
 	if err != nil {
-		return res, fmt.Errorf("kept-file sweep: list purge_failed versions: %w", err)
+		return res, fmt.Errorf("kept-file sweep: list trashed versions: %w", err)
 	}
 	purged = append(purged, trash...)
 	var cands []database.BookVersion
@@ -305,7 +327,7 @@ func SweepKeptFiles(store KeptSweepStore, guard PurgeGuard, opts KeptSweepOption
 	for gi := range groups {
 		eg.Go(func() error {
 			for _, idx := range groups[gi] {
-				results[gi].merge(sweepVersion(store, guard, &cands[idx], opts.Apply, &busy))
+				results[gi].merge(sweepVersion(store, guard, &cands[idx], opts.Apply, now, &busy))
 			}
 			return nil
 		})
@@ -364,7 +386,7 @@ func groupBySharedPath(cands []database.BookVersion) [][]int {
 }
 
 // sweepVersion sweeps one purged version.
-func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVersion, apply bool, busy *atomic.Bool) KeptSweepResult {
+func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVersion, apply bool, now time.Time, busy *atomic.Bool) KeptSweepResult {
 	res := KeptSweepResult{Versions: 1}
 	// First look, no lock: most versions have nothing to do (their other owner is
 	// still there) and must not queue behind a merge for it. Report-only never
@@ -536,6 +558,8 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 	res.Removed, res.Gone, res.StillKept, res.KeptOnError = len(removed), len(gone), len(still), len(errs)
 	res.WouldRemove, res.WouldDrop = len(wouldRemove), len(wouldDrop)
 	res.RemovedFiles, res.GoneFiles, res.ErrorFiles = file(removed), file(gone), file(errs)
+	outside := outsideSlotNotes(still)
+	res.OutsideSlot, res.OutsideSlotFiles = len(outside), file(outside)
 	res.WouldRemoveFiles, res.WouldDropFiles = file(wouldRemove), file(wouldDrop)
 
 	// The folders the removals emptied, only when no note is left: a folder
@@ -551,7 +575,7 @@ func sweepVersion(store KeptSweepStore, guard PurgeGuard, snap *database.BookVer
 		}
 	}
 	if fresh.Status == database.BookVersionStatusInactivePurged {
-		settleNights(store, fresh, &res, counted, len(removed)+len(gone) > 0)
+		settleNights(store, fresh, &res, counted, len(removed)+len(gone) > 0, now)
 	}
 	return res
 }
@@ -574,10 +598,10 @@ func countedErrors(judged []keptJudgement) int {
 // other night adds one; at PurgeUndecidedEscalateAfter the version becomes
 // purge_failed with the counted notes in PurgeFailed and the rest still in
 // PurgeKept. The version is the fresh copy read under the merge lock and written
-// by this sweep, so the write is its own.
-func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSweepResult, counted []database.PurgeFileNote, progress bool) {
+// by this sweep, so the write is its own. now is the run's clock.
+func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSweepResult, counted []database.PurgeFileNote, progress bool, now time.Time) {
 	was, wasOn := ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn
-	today := keptSweepNow().Format(time.DateOnly)
+	today := now.Format(time.DateOnly)
 	nights, on := 0, ""
 	if !progress && len(counted) > 0 {
 		// One night is one calendar day: a sweep that runs again the same day (a
@@ -590,7 +614,6 @@ func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSwee
 	if nights >= PurgeUndecidedEscalateAfter {
 		prevKept, prevStatus := ver.PurgeKept, ver.Status
 		slices.SortFunc(counted, func(a, b database.PurgeFileNote) int { return strings.Compare(a.Path, b.Path) })
-		now := time.Now()
 		ver.Status = database.BookVersionStatusPurgeFailed
 		ver.PurgeFailed = counted
 		ver.PurgeFailedAt = &now
@@ -620,6 +643,17 @@ func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSwee
 	}
 }
 
+// outsideSlotNotes are the kept notes whose reason is the outside-the-slot rule.
+func outsideSlotNotes(kept []database.PurgeFileNote) []database.PurgeFileNote {
+	var out []database.PurgeFileNote
+	for _, n := range kept {
+		if n.Reason == OutsideSlotNeverAutoRemovedReason {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // tally counts judged notes that no pass acted on: the ones something still owns,
 // the ones that could not be decided or acted on, and, in a report-only run, the
 // files and notes Apply would remove or drop.
@@ -638,6 +672,10 @@ func tally(res *KeptSweepResult, ver *database.BookVersion, judged []keptJudgeme
 		}
 	}
 	res.StillKept += len(still)
+	if outside := outsideSlotNotes(still); len(outside) > 0 {
+		res.OutsideSlot += len(outside)
+		res.OutsideSlotFiles = append(res.OutsideSlotFiles, KeptVersion{VersionID: ver.ID, BookID: ver.BookID, Files: outside})
+	}
 	res.KeptOnError += len(errs)
 	res.WouldRemove += len(wouldRemove)
 	res.WouldDrop += len(wouldDrop)

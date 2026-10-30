@@ -1,5 +1,5 @@
 // file: internal/versions/kept_sweep_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f96f6820-9489-4ec7-b233-d61df1dfbefd
 // last-edited: 2026-10-29
 
@@ -96,49 +96,118 @@ func TestPurgeVersion_PurgingRetryIsNotDeletedWhileTheBookServesNothing(t *testi
 	requireOnDisk(t, p)
 }
 
-// ---- 2. a restorable own book keeps its audio ----
+// ---- 2. the sweep deletes only inside the version's own slot ----
 
-// A note kept because the live own book served the file, and the own book trashed
-// since: the book serves nothing now, no other row or book names the file, and the
-// sweep used to unlink the audio of a book the owner can restore. A file outside
-// the version's own slot is not removed while the own book row exists, trashed or
-// live, in either mode. Only a book that is gone entirely hands it back.
-func TestSweepKeptFiles_NeverRemovesAFileOutsideTheSlotWhileTheOwnBookExists(t *testing.T) {
-	f := newKeptFixture(t)
-	audio := filepath.Join(f.bookDir, "year-one.m4b")
-	f.note(t, audio, KeptReason)
-	extra := filepath.Join(f.bookDir, "year-one-part2.m4b")
-	writeTestFile(t, extra, "audio")
-	if err := f.store.CreateBookFile(&database.BookFile{BookID: f.book.ID, VersionID: f.ver.ID, FilePath: extra, TrackNumber: 2}); err != nil {
-		t.Fatal(err)
+// A noted file outside the version's own .versions/{id}/ slot is never removed,
+// whatever the state of the own book and of the owner lookups: the notes cannot
+// prove nothing wants the file. Each case is a way the sweep used to (or could
+// have) read "no owner" for a file somebody wants: a book trashed since, a book
+// hard-deleted since, a trashed book whose FilePath is the parent folder, and a
+// path a re-import reused before the scan wrote its row. In both modes the file
+// stays, its note stays, the report lists it as kept outside the slot, and the
+// version is not escalated (holding a file is not a failure).
+func TestSweepKeptFiles_NeverRemovesAFileOutsideTheSlot(t *testing.T) {
+	trash := func(t *testing.T, f *keptFixture, filePath string) {
+		t.Helper()
+		if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error {
+			yes := true
+			b.MarkedForDeletion = &yes
+			if filePath != "" {
+				b.FilePath = filePath
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	f.note(t, extra, KeptReason)
-	if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error {
-		yes := true
-		b.MarkedForDeletion = &yes
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, f *keptFixture)
+	}{
+		{"own book trashed", func(t *testing.T, f *keptFixture) { trash(t, f, "") }},
+		{"own book hard-deleted", func(t *testing.T, f *keptFixture) {
+			if err := f.store.DeleteBook(f.book.ID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"trashed own book whose FilePath is the parent folder", func(t *testing.T, f *keptFixture) { trash(t, f, f.bookDir) }},
+		{"path reused by a re-import before the scan wrote its row", func(t *testing.T, f *keptFixture) {
+			if err := f.store.DeleteBook(f.book.ID); err != nil {
+				t.Fatal(err)
+			}
+			// A new import put different audio at the noted path; no row names it yet.
+			writeTestFile(t, filepath.Join(f.bookDir, "year-one-part2.m4b"), "the re-imported book's audio")
+		}},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newKeptFixture(t)
+			audio := filepath.Join(f.bookDir, "year-one.m4b")
+			extra := filepath.Join(f.bookDir, "year-one-part2.m4b")
+			writeTestFile(t, extra, "audio")
+			f.note(t, audio, KeptReason)
+			f.note(t, extra, KeptReason)
+			tc.setup(t, f)
 
-	noRemovals(t)
-	rep := sweepReport(t, f.store, testGuard)
-	requireCounts(t, rep, 0, 0, 2, 0)
-	if rep.WouldRemove != 0 {
-		t.Errorf("report-only would remove %d file(s) of a restorable book: %+v", rep.WouldRemove, rep.WouldRemoveFiles)
+			noRemovals(t)
+			rep := sweepReport(t, f.store, testGuard)
+			requireCounts(t, rep, 0, 0, 2, 0)
+			if rep.WouldRemove != 0 {
+				t.Errorf("report-only would remove %d file(s) outside the slot: %+v", rep.WouldRemove, rep.WouldRemoveFiles)
+			}
+			if rep.OutsideSlot != 2 || len(rep.OutsideSlotFiles) != 1 || len(rep.OutsideSlotFiles[0].Files) != 2 || rep.OutsideSlotFiles[0].Files[0].Reason != OutsideSlotNeverAutoRemovedReason {
+				t.Errorf("report-only OutsideSlot = %d files = %+v, want both files listed with the outside-slot reason", rep.OutsideSlot, rep.OutsideSlotFiles)
+			}
+			res := sweep(t, f.store, testGuard)
+			requireCounts(t, res, 0, 0, 2, 0)
+			if res.OutsideSlot != 2 || len(res.OutsideSlotFiles) != 1 {
+				t.Errorf("apply OutsideSlot = %d files = %+v, want both files listed", res.OutsideSlot, res.OutsideSlotFiles)
+			}
+			requireOnDisk(t, audio)
+			requireOnDisk(t, extra)
+			if got := f.kept(t); len(got) != 2 {
+				t.Fatalf("PurgeKept = %v, want both notes kept", got)
+			}
+			for _, sf := range res.Escalated {
+				t.Errorf("escalated %+v: holding a file outside the slot is not a failure", sf)
+			}
+			if cur := f.stored(t); cur.PurgeUndecidedNights != 0 {
+				t.Errorf("nights = %d, want 0", cur.PurgeUndecidedNights)
+			}
+		})
 	}
-	res := sweep(t, f.store, testGuard)
-	requireCounts(t, res, 0, 0, 2, 0)
-	requireOnDisk(t, audio)
-	requireOnDisk(t, extra)
-	if got := f.kept(t); len(got) != 2 {
-		t.Fatalf("PurgeKept = %v, want both notes kept", got)
-	}
-	for _, sf := range res.Escalated {
-		t.Errorf("escalated %+v: holding a restorable book's audio is not a failure", sf)
-	}
-	if cur := f.stored(t); cur.PurgeUndecidedNights != 0 {
-		t.Errorf("nights = %d, want 0", cur.PurgeUndecidedNights)
+}
+
+// The other half of the rule: a noted file INSIDE the slot whose owners are gone
+// is still removed, whether or not the own book exists.
+func TestSweepKeptFiles_StillRemovesAFileInsideTheSlotWhoseOwnerIsGone(t *testing.T) {
+	for _, ownBook := range []string{"trashed", "deleted"} {
+		t.Run(ownBook, func(t *testing.T) {
+			f := newKeptFixture(t)
+			inside := f.addKept(t, "kept once")
+			switch ownBook {
+			case "deleted":
+				if err := f.store.DeleteBook(f.book.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "trashed":
+				if _, err := f.store.ModifyBook(f.book.ID, func(b *database.Book) error {
+					yes := true
+					b.MarkedForDeletion = &yes
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rep := sweepReport(t, f.store, testGuard)
+			if rep.WouldRemove != 1 || rep.OutsideSlot != 0 {
+				t.Fatalf("report-only: would remove %d, outside slot %d, want 1 and 0 (%+v)", rep.WouldRemove, rep.OutsideSlot, rep)
+			}
+			requireOnDisk(t, inside)
+			res := sweep(t, f.store, testGuard)
+			requireCounts(t, res, 1, 0, 0, 0)
+			requireGone(t, inside)
+		})
 	}
 }
 
@@ -188,22 +257,60 @@ func escalatedWithOutsideNotes(t *testing.T, ownBook string) (f *keptFixture, s 
 // The own book is gone and its rows with it: the slot holds nothing and no row
 // names the noted files, so the retry found nothing to decide and erased both
 // notes (finishPurge replaced PurgeKept, markPurged cleared PurgeFailed) with the
-// files still on disk. Now it decides each: the free one is removed, the owned one
-// stays and keeps its note.
+// files still on disk. Now it decides each, and neither is dropped unasked: both
+// lie outside the version's slot, so a purge never removes them
+// (OutsideSlotNeverAutoRemovedReason, even though nothing names the one), and
+// both stay on disk with their notes.
 func TestPurgeVersion_RetryDecidesEveryNotedFileAndDropsNone(t *testing.T) {
-	f, s, gone, owned := escalatedWithOutsideNotes(t, "deleted")
+	f, s, free, owned := escalatedWithOutsideNotes(t, "deleted")
 
 	if err := PurgeVersion(s, f.stored(t), testGuard); err != nil {
 		t.Fatalf("PurgeVersion: %v", err)
 	}
-	requireGone(t, gone)
+	requireOnDisk(t, free)
 	requireOnDisk(t, owned)
 	cur := f.stored(t)
 	if cur.Status != database.BookVersionStatusInactivePurged || len(cur.PurgeFailed) != 0 {
 		t.Fatalf("stored = %s purge_failed=%v, want inactive_purged with the failure record cleared", cur.Status, cur.PurgeFailed)
 	}
-	if got := f.kept(t); !slices.Equal(got, []string{owned}) {
-		t.Errorf("PurgeKept = %v, want the still-owned %s noted again, not dropped", got, owned)
+	got := f.kept(t)
+	slices.Sort(got)
+	want := []string{free, owned}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("PurgeKept = %v, want both files noted again, not dropped: %v", got, want)
+	}
+	for _, n := range cur.PurgeKept {
+		if n.Path == free && n.Reason != OutsideSlotNeverAutoRemovedReason {
+			t.Errorf("note for %s has reason %q, want %q", free, n.Reason, OutsideSlotNeverAutoRemovedReason)
+		}
+	}
+}
+
+// A retry still removes a noted file that lies inside the version's own slot and
+// that nothing owns: the rule is "outside the slot is never auto-removed", not
+// "noted files are never removed". The own book is hard-deleted and the slot's
+// folder cannot be located, so the file is found only through its note.
+func TestPurgeVersion_RetryRemovesANotedFileInsideTheSlot(t *testing.T) {
+	f := newKeptFixture(t)
+	inside := f.addKept(t, "kept once")
+	outside := filepath.Join(f.bookDir, "year-one-extra1.m4b")
+	writeTestFile(t, outside, "audio")
+	f.note(t, outside, KeptReason)
+	if err := f.store.DeleteBook(f.book.ID); err != nil {
+		t.Fatalf("hard-delete the own book: %v", err)
+	}
+	s := &flakyOwnerStore{PebbleStore: f.store, path: inside, down: true}
+	escalate(t, f, s)
+	s.down = false
+
+	if err := PurgeVersion(s, f.stored(t), testGuard); err != nil {
+		t.Fatalf("PurgeVersion: %v", err)
+	}
+	requireGone(t, inside)
+	requireOnDisk(t, outside)
+	if got := f.kept(t); !slices.Equal(got, []string{outside}) {
+		t.Errorf("PurgeKept = %v, want only the outside file %s noted", got, outside)
 	}
 }
 
@@ -244,8 +351,9 @@ func TestPurgeVersion_RetryLeavesAnUnsettledNotedFileNoted(t *testing.T) {
 	}
 }
 
-// The own book is trashed, not gone: the noted file may be its audio, so Purge now
-// keeps it too (OwnBookStillExistsReason) and notes it, instead of removing it.
+// The own book is trashed, not gone: the noted file may be its audio, and it lies
+// outside the slot either way, so Purge now keeps it (OutsideSlotNeverAutoRemovedReason)
+// and notes it, instead of removing it.
 func TestPurgeVersion_RetryKeepsANotedFileOfATrashedOwnBook(t *testing.T) {
 	f, s, gone, owned := escalatedWithOutsideNotes(t, "trashed")
 
@@ -261,8 +369,8 @@ func TestPurgeVersion_RetryKeepsANotedFileOfATrashedOwnBook(t *testing.T) {
 			reason = n.Reason
 		}
 	}
-	if reason != OwnBookStillExistsReason {
-		t.Errorf("note for %s has reason %q, want %q (PurgeKept = %+v)", gone, reason, OwnBookStillExistsReason, cur.PurgeKept)
+	if reason != OutsideSlotNeverAutoRemovedReason {
+		t.Errorf("note for %s has reason %q, want %q (PurgeKept = %+v)", gone, reason, OutsideSlotNeverAutoRemovedReason, cur.PurgeKept)
 	}
 }
 
