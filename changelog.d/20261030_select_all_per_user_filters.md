@@ -8,3 +8,9 @@
   operation row that records no actor) it still refuses and names the filter
   rather than widening to the whole view. The bulk metadata fetch continuation
   keeps the original actor so later links of a chain resolve the same selection.
+- The bulk metadata fetch no longer widens to the whole library when a given
+  selection resolves to zero books. A filter that matches nothing (including a
+  per-user filter that matches none of the requesting user's books) now finishes
+  with nothing fetched; only a run that names no filter and no books fetches the
+  whole library. Each user's identical per-user selection now gets its own run
+  instead of being folded into another user's active one.

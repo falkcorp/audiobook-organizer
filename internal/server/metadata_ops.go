@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.43.0
+// version: 1.43.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-10-30
 //
@@ -655,6 +655,14 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 	return ids, nil
 }
 
+// bulkFetchSelectionIsWholeLibrary reports whether a selection asks for the whole
+// library: it names neither a filter nor any book. This is the ONLY shape that may
+// reach runBulkMetadataFetchAll. A selection that names a filter or books but
+// resolved to zero IDs asked for something narrower and must fetch nothing.
+func bulkFetchSelectionIsWholeLibrary(sel operations.SelectionSpec) bool {
+	return sel.Filter == nil && len(sel.BookIDs) == 0
+}
+
 // opActorIdentity is who an operation row says enqueued it, as the registry
 // recorded it from the verified request (servermiddleware.ActorOptions).
 type opActorIdentity struct {
@@ -736,8 +744,14 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 		Timeout:         6 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeRestart,
 		ConcurrencyKey:  "library.bulk-metadata-fetch",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead},
+		// A selection with a per-user filter (read_status, progress_pct, last_played)
+		// is judged by the rows of the user who enqueued the run (opActor). The
+		// ConcurrencyKey dedupe folds a byte-identical request into the active run,
+		// so without this user B's identical selection would be handed user A's run
+		// and judged by A's rows. Same mechanism as the diagnostics export.
+		DedupeSameActorOnly: true,
+		Permissions:         []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:        []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
 			var p bulkMetadataFetchV2Params
 			if len(rawParams) > 0 {
@@ -803,10 +817,20 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 			}
 
 			var incomplete bool
-			if len(bookIDs) > 0 {
+			switch {
+			case len(bookIDs) > 0:
 				incomplete, err = s.runBulkMetadataFetchForBookIDs(ctx, opID, bookIDs, fetchParams, store, progress)
-			} else {
+			case bulkFetchSelectionIsWholeLibrary(p.Selection):
 				incomplete, err = s.runBulkMetadataFetchAll(ctx, opID, fetchParams, store, progress)
+			default:
+				// A selection WAS given and it resolved to nothing (a filter nobody
+				// matches, a per-user filter that matches none of this user's books).
+				// That is a finished run over zero books, not a request for the whole
+				// library: falling through to runBulkMetadataFetchAll here widened the
+				// op to every book.
+				_ = reporter.Log(slog.LevelInfo, "bulk_metadata_fetch: the selection resolved to no books; nothing to fetch")
+				_ = reporter.UpdateProgress(0, 0, "selection resolved to no books")
+				return nil
 			}
 			if err != nil {
 				return err
