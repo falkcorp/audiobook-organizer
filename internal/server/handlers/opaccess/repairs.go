@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5d0e8a47-2b9c-4f63-a1d5-7c4e9b3f2a86
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package opaccess holds the read-access checks the generic operations routes
 // apply to operations whose data is scoped to something narrower than
@@ -36,7 +36,8 @@ import (
 // positions before and after). The generic routes (GET /operations/:id/result,
 // /changes, /undo/preflight, /operations/v2/:id and its logs, the system log
 // reader's operation_id branch, /operations/timeline, /operations/events,
-// /api/v3/ops runs, counts, timeline and events, the activity log's reads by
+// /api/v3/ops runs, counts, timeline and events, GET /operations/pause and
+// /operations/stale (through Reader.ReadableOps), the activity log's reads by
 // operation, and the per-book journal reads GET /audiobooks/:id/changes and
 // /audiobooks/:id/changelog) are library.view reads, and guests hold the
 // viewer role. So for these two definitions the caller must hold every
@@ -297,6 +298,44 @@ func (r *Reader) MayRead(row *database.OperationV2Row) bool {
 		return true
 	}
 	return r.MayReadFixer(row.DefID, RowFixerID(row))
+}
+
+// ReadableOps is rows without the operations the caller may not read (MayRead),
+// in order. It never returns nil. It is the one filter every route that lists
+// operation rows, or reports something derived from them (a definition id, a
+// count), applies, so that a new list route has one call to make rather than a
+// check of its own to get right; TestOperationsOverviewRoutes_... in package
+// server walks the wired routes and fails on a list route it has no driver for.
+func (r *Reader) ReadableOps(rows []database.OperationV2Row) []database.OperationV2Row {
+	out := make([]database.OperationV2Row, 0, len(rows))
+	for i := range rows {
+		if r.MayRead(&rows[i]) {
+			out = append(out, rows[i])
+		}
+	}
+	return out
+}
+
+// MayReadLegacy is MayRead for a row of the retired v1 operations table, which
+// states no params: a Repairs row's fixer comes from its stored result alone, and
+// one that names none is refused (fail closed), as MayReadFixer does.
+func (r *Reader) MayReadLegacy(op *database.Operation) bool {
+	if op == nil || !IsRepairsOp(op.Type) {
+		return true
+	}
+	return r.MayReadFixer(op.Type, fixerIDOf("", op.ResultData))
+}
+
+// ReadableLegacyOps is ReadableOps for rows of the retired v1 operations table
+// (GET /operations/stale). It never returns nil.
+func (r *Reader) ReadableLegacyOps(ops []database.Operation) []database.Operation {
+	out := make([]database.Operation, 0, len(ops))
+	for i := range ops {
+		if r.MayReadLegacy(&ops[i]) {
+			out = append(out, ops[i])
+		}
+	}
+	return out
 }
 
 // MayReadRun is MayRead for an operations v3 run record.

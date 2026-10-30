@@ -3,6 +3,7 @@
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -284,6 +285,9 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **TODO-REPAIRS-OPERATIONS-PAUSE-SOURCES** `GET /operations/pause` (definition ids), `GET /operations/stale` and the other overview lists still list Repairs operations without the visibility check.
 - [x] **TODO-ACTIVITY-SOURCES-COUNTS** `GET /activity/sources` counts entries per source through `GetDistinctSources`, which does not honour `ActivityFilter.ExcludeEntry`, so its counts include hidden Repairs runs and user-data lines. Give the store call the exclusion, or compute the counts from the filtered page. _Fixed 2026-10-30: the handler now sets `ExcludeEntry`, and `GetDistinctSources` bypasses its result cache for a filter that carries one._
 - [x] **TODO-SYSTEM-LOGS-OPERATION-ID** `GET /system/logs?operation_id=` hands `OperationsV2Handler.GetOperationLogs` an empty `c.Param("id")`, so the branch returns nothing for every caller. It is not a leak (it fails closed), but the filter never works; pass the query value, keeping `mayReadLogsOf`. _Fixed 2026-10-30: the provider is now `OperationLogsByID(c, id)`; `/system/logs` passes the query value through the shared gate._
+- [x] **TODO-REPAIRS-OPERATIONS-PAUSE-SOURCES** `GET /operations/pause` (definition ids), `GET /operations/stale` and the other overview lists still list Repairs operations without the visibility check. Done 2026-10-30: timeline, pause (GET and the POST answers) and stale filter through `opaccess.Reader.ReadableOps` / `ReadableLegacyOps`; `repairs_overview_lists_test.go` walks the wired routes and fails on an unclassified list route.
+- [ ] **TODO-ACTIVITY-SOURCES-COUNTS** `GET /activity/sources` counts entries per source through `GetDistinctSources`, which does not honour `ActivityFilter.ExcludeEntry`, so its counts include hidden Repairs runs and user-data lines. Give the store call the exclusion, or compute the counts from the filtered page.
+- [ ] **TODO-SYSTEM-LOGS-OPERATION-ID** `GET /system/logs?operation_id=` hands `OperationsV2Handler.GetOperationLogs` an empty `c.Param("id")`, so the branch returns nothing for every caller. It is not a leak (it fails closed), but the filter never works; pass the query value, keeping `mayReadLogsOf`.
 - [ ] **TODO-REVERT-RESULT-WORD-MATCH** `RevertResult.WithoutUserData` withholds a note when it contains the word "user" (`undo.NamesUser`), a deny-list that also hides notes that use the word for another reason. Carry the user ids as structured fields on the warnings and withhold by field.
 - [ ] **TODO-ACTIVITY-SOURCES-COUNTS** `GET /activity/sources` counts entries per source through `GetDistinctSources`, which does not honour `ActivityFilter.ExcludeEntry`, so its counts include hidden Repairs runs and user-data lines. Give the store call the exclusion, or compute the counts from the filtered page.
 - [ ] **TODO-SYSTEM-LOGS-OPERATION-ID** `GET /system/logs?operation_id=` hands `OperationsV2Handler.GetOperationLogs` an empty `c.Param("id")`, so the branch returns nothing for every caller. It is not a leak (it fails closed), but the filter never works; pass the query value, keeping `mayReadLogsOf`.
