@@ -2550,7 +2550,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] Fold the 216 held "suspicious" version groups (chapter fragments, owner 2026-09-24) into the parked chapter-consolidation work; leave them held until then. Also list the truncated m4bs found there (Neverwhere, the 10 Bobiverse 2 `_copyN` files).
 - [ ] Decide the `leftover_merged_elsewhere` groups from `maintenance.version-group-primary-repair` (organized copy merged into another group's book); the op only labels them. — ❓ owner decision 2026-10-03: delete, relink, or leave the leftover_merged_elsewhere organized copies?
 
-- [ ] **`metadata.batch-apply-cached` re-picks books whose refusal can never change.**
+- [x] **`metadata.batch-apply-cached` re-picks books whose refusal can never change.** — ✅ DONE 2026-10-30: per-book `apply_refusal:<book_id>` memory with an input fingerprint; see docs/decisions/2026-10-30-batch-apply-structural-refusal-backoff.md
       Measured 2026-09-20 over 4 completed batches: 359 gate refusals across only
       196 distinct books — 163 of them refused TWICE within ~40 minutes. The
       refusals are structural (a duplicated file set, a path with no author in

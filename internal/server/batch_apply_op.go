@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -412,6 +412,11 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// already applied and no single-row approval asked to re-apply
 			// (applySkipAlreadyApplied).
 			var alreadyApplied atomic.Int64
+			// refusalSkipped counts books left out WITHOUT being evaluated because
+			// an earlier run refused them for a structural reason and nothing the
+			// gate reads has changed since (applyRefusalLedger). Never counted for
+			// a pinned book.
+			var refusalSkipped atomic.Int64
 			// authorsUnreadable counts books refused because their live
 			// author credits could not be read (the gate would otherwise have
 			// judged them authorless, which loosens it).
@@ -496,7 +501,30 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// One import-path read shared by every book of this call
 			// (withCachedImportPaths), not one per resolver call per book.
 			applyBooks := withCachedImportPaths(s.store)
+			// Fail open: a server with no raw KV store simply remembers nothing.
+			var refusals *applyRefusalLedger
+			if s.store != nil {
+				refusals = newApplyRefusalLedger(s.store)
+			}
 			runOne := func(ctx context.Context, id string) error {
+				// A book an earlier run refused for a structural reason, whose
+				// gate inputs are unchanged, is not evaluated again. Checked
+				// before the write-back gate so a skipped book never holds a
+				// file-write slot (applyRefusalLedger.Skip: a pinned book is
+				// never skipped).
+				pin := p.pinOf(id)
+				prior, hadPrior, skip := refusals.Skip(svc, applyBooks, id, pin)
+				if skip {
+					refusalSkipped.Add(1)
+					notApplied.Add(1)
+					_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("skipped: book %s — refused as %s on %s with unchanged inputs",
+						opLogQuoted(id), prior.Reason, prior.RecordedAt.Format(time.DateOnly)),
+						slog.String("book_id", logger.SanitizeLogValue(id)),
+						slog.String("reason", "unchanged_structural_refusal"),
+						slog.String("gate_reason", prior.Reason),
+						slog.String("detail", logger.SanitizeLogValue(prior.Detail)))
+					return nil
+				}
 				// One timer per book, from before the gate wait to the end of
 				// its file work; FinishApplyFileWorkTimed logs it as the
 				// "apply phase durations" line.
@@ -536,7 +564,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					defer releaseFileWrite()
 				}
 				out := applyCachedCandidateForBookTimed(ctx, svc, applyBooks, id, p.WriteBack,
-					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id), p.Mode)
+					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, pin, p.Mode)
+				refusals.Settle(id, out, hadPrior, pin)
 
 				if out.OwnerReviewed && out.Gate != nil {
 					// The gate refused and the owner's review overrode it. The
@@ -781,10 +810,14 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
-				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, skipped because an earlier run refused them for a structural reason and nothing changed %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), refusalSkipped.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
+			if n := refusalSkipped.Load(); n > 0 {
+				_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("skipped %d books with unchanged structural refusals (their files, path, tags and candidate are what they were when an earlier run refused them; %s forgets these)", n, batchApplyRefusalsResetOpID),
+					slog.Int64("skipped", n))
+			}
 			if p.Mode == metafetch.BulkApplyModeReplace {
 				summary = fmt.Sprintf("%s; replace mode: owner replace overwrote existing values on %d", summary, ownerReplaced.Load())
 			}

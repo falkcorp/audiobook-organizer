@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.43.1
+// version: 1.43.2
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -177,6 +177,10 @@ type applyOutcome struct {
 	BookTitle  string
 	BookAuthor string
 	Candidate  *metafetch.MetadataCandidate
+	// Judged is what the gate read for this book, kept so the batch apply can
+	// remember a structural refusal against exactly those inputs
+	// (applyRefusalLedger). Nil on a plan that never reached the gate.
+	Judged *applyRefusalInputs
 }
 
 // withPlan stamps the plan's book and candidate onto an outcome.
@@ -188,6 +192,7 @@ func (o applyOutcome) withPlan(plan cachedApplyPlan) applyOutcome {
 		}
 	}
 	o.Candidate = plan.Candidate
+	o.Judged = plan.Judged
 	return o
 }
 
@@ -300,6 +305,10 @@ type cachedApplyPlan struct {
 	// which an owner's single review row lifts. Set on a plan without a row
 	// pin, so the dry-run preview reports the book as review-only.
 	FolderReviewable bool
+	// Judged is the inputs the gate evaluated, set once the gate has run
+	// (planCachedApply). The preview ignores it; the batch apply fingerprints
+	// it to remember a structural refusal.
+	Judged *applyRefusalInputs
 }
 
 // reviewOnly reports whether a pinless plan refused the book on legs a
@@ -499,8 +508,12 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	rowReview := pin != nil && pin.IsRowReview()
 	guard := bulkManualOnlyGuard(books, book, rowReview, metabatch.ResolveCandidateSearchQuery(books, book).Title)
 	rejections := applygate.LoadRejections(books, book.ID)
+	// The book's files are read ONCE and serve both the gate (its canonical
+	// runtime) and the refusal fingerprint, so a refusal is remembered against
+	// the very rows it was judged on.
+	files, rt := gateFilesAndRuntime(books, book)
 	evaluate := func(idErr error) applygate.Verdict {
-		return applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, rejections, ts, guard)
+		return applygate.EvaluateTranscribed(book, authors, rt, &cand, idErr, claims, rejections, ts, guard)
 	}
 	gateErr := idErr
 	if folderExplains && rowReview {
@@ -514,7 +527,9 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// for replace (withBulkMode, applied by the caller). A stale pin never gets
 	// here (stale_candidate above, nothing written).
 	ownerReview := pin != nil && pin.IsOwnerReview()
-	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: pin != nil && pin.IsRowReview()}
+	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: pin != nil && pin.IsRowReview(),
+		Judged: &applyRefusalInputs{RawCandidate: entry.Candidates[0], SearchFingerprint: entry.SearchFingerprint, CacheStale: entry.Stale,
+			Book: book, Authors: authors, Files: files}}
 	if !v.Allowed && folderExplains && !rowReview {
 		// Without a row pin the folder query stays identity_stale. Say whether
 		// a row pin would lift it, so the preview and the lane agree with the
@@ -882,10 +897,20 @@ func applyCachedCandidateForBookTimed(
 // file read is logged and yields an UNKNOWN runtime (the gate then treats the
 // runtime as missing evidence), never Book.Duration promoted to a total.
 func gateRuntime(books bookReader, book *database.Book) database.BookRuntime {
-	rt, err := database.LoadBookRuntime(books, book)
+	_, rt := gateFilesAndRuntime(books, book)
+	return rt
+}
+
+// gateFilesAndRuntime is gateRuntime that also returns the file rows it read
+// (nil when the read failed). It is database.LoadBookRuntime with the rows kept.
+func gateFilesAndRuntime(books bookReader, book *database.Book) ([]database.BookFile, database.BookRuntime) {
+	files, err := books.GetBookFiles(book.ID)
 	if err != nil {
 		logging.Warn(context.Background(), "apply gate: book files unreadable; runtime treated as unknown",
 			"book_id", book.ID, "err", err)
+		// A nil reader is LoadBookRuntime's "rows not read" answer.
+		rt, _ := database.LoadBookRuntime(nil, book)
+		return nil, rt
 	}
-	return rt
+	return files, database.ComputeBookRuntime(book, files)
 }

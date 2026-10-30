@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.17.3
+// version: 1.17.4
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package database
 
@@ -126,6 +126,7 @@ var keyFamilies = []KeyFamily{
 	{"merge:combine-retire:", "links a combine's absorbed shell to each retire op that retired it (one key per shell and op), so the combine's undo reverses the retire first", "internal/merge/retire_link.go"},
 	{"merge:survivor-reconcile:", "per-user markers that make a touched survivor's put-back safe to re-run", "internal/merge/combine_journal.go"},
 	{"scanner:ai_parse_single_fail:", "single-file AI parse give-up markers by path hash", "internal/scanner/ai_parse_giveup.go"},
+	{"apply_refusal:", "structural refusals the cached-metadata batch apply remembers, one per book, with the fingerprint of the inputs that produced them", "internal/server/batch_apply_refusal.go"},
 	{"metadata_cache:", "metadata provider response cache", "internal/database/pebble_store_metadata_cache.go"},
 	{"ident:state:", "book identification state and reason per book (derived, rebuilt on boot)", "internal/database/ident_state.go"},
 	{"ident:by:", "book identification membership by state, keys only plus a primary-scope byte", "internal/database/ident_state.go"},
