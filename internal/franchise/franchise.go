@@ -1,7 +1,7 @@
 // file: internal/franchise/franchise.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ddd241fe-c7e3-4ff5-b3df-7e2908d49f7b
-// last-edited: 2026-10-05
+// last-edited: 2026-10-30
 
 // Package franchise is the one matcher for the libraries the owner curates by
 // hand: Doctor Who, Big Finish and Torchwood. Every owner-manual guard
@@ -98,6 +98,21 @@ var coreRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|dr\.?[\s._-]*who|big[\
 	`gallifrey(?:an)?|daleks?|jago[\s._-]*(?:&|and)[\s._-]*litefoot|diary[\s._-]*of[\s._-]*river[\s._-]*song|` +
 	`bernice[\s._-]*summerfield|paternoster[\s._-]*gang|missy|blake[\x{2019}']?s[\s._-]*7)\b`)
 
+// coreAnchors are the lowercase literals coreRe's alternatives each contain:
+// "who" (doctor/dr who), "finish", "torchwood", "doctor" (ordinal, war and
+// fugitive doctors), "gallifrey", "dalek", "jago", "river", "summerfield",
+// "paternoster", "missy", "blake". coreRe runs only when one is present.
+var coreAnchors = []string{"who", "finish", "torchwood", "doctor", "gallifrey", "dalek", "jago", "river", "summerfield", "paternoster", "missy", "blake"}
+
+// unitAnchors, counterMeasuresAnchors and bfDownloadAnchors are the lowercase
+// literals the single-rule patterns need (unitRe is case-sensitive, but the
+// anchor check is only a filter, so lowercase "unit" is safe).
+var (
+	unitAnchors            = []string{"unit"}
+	counterMeasuresAnchors = []string{"counter"}
+	bfDownloadAnchors      = []string{".mp3"}
+)
+
 // unitRe matches Big Finish's UNIT range in its series forms only: all-caps
 // "UNIT" opening a path segment or the name, then a separator or a space
 // ("UNIT: Dominion", "UNIT - Extinction", "UNIT Silenced"). The word "unit"
@@ -180,6 +195,12 @@ type extTerm struct {
 	// need, when set, must also match the same text: the term alone is too
 	// common to count (Stargate novels from other publishers).
 	need *regexp.Regexp
+	// anchors are lowercase literals, at least one of which every text re
+	// matches must contain (see anchorsIn). MatchAll runs re only when one
+	// is present. TestAnchorsCoverEveryRule checks each anchor against a
+	// sample re matches, and TestMatchAllMatchesOracle checks the filtered
+	// result against the unfiltered one.
+	anchors []string
 }
 
 // segStart is "the start of the text or of a path segment, or just after a
@@ -199,67 +220,67 @@ var extTerms = []extTerm{
 	// least one separator is required between the words: Melissa McShane's
 	// "Warmaster" is a census false positive (census §1, precision notes) and
 	// Big Finish never spells the range as one word.
-	{id: "war-master", franchise: DoctorWho, rng: "war-master",
+	{id: "war-master", anchors: []string{"master"}, franchise: DoctorWho, rng: "war-master",
 		re:     regexp.MustCompile(`(?i)\bwar[\s.-]+master\b`),
 		reject: followedByPossessive},
-	{id: "call-me-master", franchise: DoctorWho, rng: "master",
+	{id: "call-me-master", anchors: []string{"master"}, franchise: DoctorWho, rng: "master",
 		re: regexp.MustCompile(`(?i)\bcall[\s.-]*me[\s.-]*master\b`)},
 	// "Master!" (Big Finish), only where a range name sits: never "Puppet
 	// Master!" in the middle of a title.
-	{id: "master-bang", franchise: DoctorWho, rng: "master",
+	{id: "master-bang", anchors: []string{"master!"}, franchise: DoctorWho, rng: "master",
 		re: regexp.MustCompile(`(?i)` + segStart + `master!`)},
-	{id: "bbv", franchise: DoctorWho, rng: "bbv",
+	{id: "bbv", anchors: []string{"bbv"}, franchise: DoctorWho, rng: "bbv",
 		re: regexp.MustCompile(`(?i)\bbbv\b`)},
-	{id: "audio-visuals", franchise: DoctorWho, rng: "audio-visuals",
+	{id: "audio-visuals", anchors: []string{"visuals"}, franchise: DoctorWho, rng: "audio-visuals",
 		re: regexp.MustCompile(`(?i)\baudio[\s.-]*visuals\b`)},
-	{id: "sirens-of-time", franchise: DoctorWho, rng: "sirens-of-time",
+	{id: "sirens-of-time", anchors: []string{"sirens"}, franchise: DoctorWho, rng: "sirens-of-time",
 		re: regexp.MustCompile(`(?i)\bsirens[\s.-]*of[\s.-]*time\b`)},
 	// Big Finish's Dark Shadows. Never "Castle of Dark Shadows" (a romance
 	// novel): a match right after "of" is rejected.
-	{id: "dark-shadows", franchise: BigFinish, rng: "dark-shadows",
+	{id: "dark-shadows", anchors: []string{"shadows"}, franchise: BigFinish, rng: "dark-shadows",
 		re:     regexp.MustCompile(`(?i)\bdark[\s.-]*shadows\b`),
 		reject: precededByOf},
 	// Big Finish's Stargate, only with Big Finish context in the same text:
 	// a "Series N" album name ("Stargate SG-1 - Series 2") or the studio.
 	// Stargate novels from other publishers carry neither.
-	{id: "stargate", franchise: BigFinish, rng: "stargate",
+	{id: "stargate", anchors: []string{"stargate"}, franchise: BigFinish, rng: "stargate",
 		re:   regexp.MustCompile(`(?i)\bstargate\b`),
 		need: regexp.MustCompile(`(?i)\bseries[\s.-]*\d|\bbig[\s.-]*finish\b`)},
-	{id: "companion-chronicles", franchise: DoctorWho, rng: "companion-chronicles",
+	{id: "companion-chronicles", anchors: []string{"chronicles"}, franchise: DoctorWho, rng: "companion-chronicles",
 		re: regexp.MustCompile(`(?i)\bcompanion[\s.-]*chronicles\b`)},
-	{id: "lost-stories", franchise: DoctorWho, rng: "lost-stories",
+	{id: "lost-stories", anchors: []string{"stories"}, franchise: DoctorWho, rng: "lost-stories",
 		re: regexp.MustCompile(`(?i)` + segStart + `the[\s.-]*lost[\s.-]*stories` + segEnd)},
-	{id: "short-trips", franchise: DoctorWho, rng: "short-trips",
+	{id: "short-trips", anchors: []string{"trips"}, franchise: DoctorWho, rng: "short-trips",
 		re: regexp.MustCompile(`(?i)` + segStart + `short[\s.-]*trips` + segEnd)},
-	{id: "eighth-of-march", franchise: DoctorWho, rng: "eighth-of-march",
+	{id: "eighth-of-march", anchors: []string{"march"}, franchise: DoctorWho, rng: "eighth-of-march",
 		re: regexp.MustCompile(`(?i)\beighth[\s.-]*of[\s.-]*march\b`)},
-	{id: "susans-war", franchise: DoctorWho, rng: "susans-war",
+	{id: "susans-war", anchors: []string{"susan"}, franchise: DoctorWho, rng: "susans-war",
 		re: regexp.MustCompile(`(?i)\bsusan[\x{2019}']?s[\s.-]*war\b`)},
-	{id: "kaldor-city", franchise: DoctorWho, rng: "kaldor-city",
+	{id: "kaldor-city", anchors: []string{"kaldor"}, franchise: DoctorWho, rng: "kaldor-city",
 		re: regexp.MustCompile(`(?i)\bkaldor[\s.-]*city\b`)},
-	{id: "zygon", franchise: DoctorWho, rng: "zygons",
+	{id: "zygon", anchors: []string{"zygon"}, franchise: DoctorWho, rng: "zygons",
 		re: regexp.MustCompile(`(?i)\bzygons?\b`)},
-	{id: "cybermen", franchise: DoctorWho, rng: "cybermen",
+	{id: "cybermen", anchors: []string{"cybermen"}, franchise: DoctorWho, rng: "cybermen",
 		re: regexp.MustCompile(`(?i)\bcybermen\b`)},
-	{id: "davros", franchise: DoctorWho, rng: "davros",
+	{id: "davros", anchors: []string{"davros"}, franchise: DoctorWho, rng: "davros",
 		re: regexp.MustCompile(`(?i)\bdavros\b`)},
-	{id: "sontaran", franchise: DoctorWho, rng: "sontarans",
+	{id: "sontaran", anchors: []string{"sontaran"}, franchise: DoctorWho, rng: "sontarans",
 		re: regexp.MustCompile(`(?i)\bsontarans?\b`)},
-	{id: "sarah-jane", franchise: DoctorWho, rng: "sarah-jane",
+	{id: "sarah-jane", anchors: []string{"sarah"}, franchise: DoctorWho, rng: "sarah-jane",
 		re: regexp.MustCompile(`(?i)\bsarah[\s.-]*jane[\s.-]*(?:smith|adventures)\b`)},
-	{id: "tardis", franchise: DoctorWho, rng: "",
+	{id: "tardis", anchors: []string{"tardis"}, franchise: DoctorWho, rng: "",
 		re: regexp.MustCompile(`(?i)\btardis\b`)},
-	{id: "dwad", franchise: DoctorWho, rng: "dwad",
+	{id: "dwad", anchors: []string{"dwad"}, franchise: DoctorWho, rng: "dwad",
 		re: regexp.MustCompile(`(?i)\bdwad\b`)},
 	// Big Finish's Survivors, only with its series number ("Survivors
 	// Series 3"): "Survivors" alone is a common title.
-	{id: "survivors", franchise: BigFinish, rng: "survivors",
+	{id: "survivors", anchors: []string{"survivors"}, franchise: BigFinish, rng: "survivors",
 		re: regexp.MustCompile(`(?i)\bsurvivors[\s.-]*(?:-[\s.]*)?series[\s.-]*\d`)},
-	{id: "timeslip", franchise: BigFinish, rng: "timeslip",
+	{id: "timeslip", anchors: []string{"timeslip"}, franchise: BigFinish, rng: "timeslip",
 		re: regexp.MustCompile(`(?i)` + segStart + `timeslip` + segEnd)},
-	{id: "time-tunnel", franchise: BigFinish, rng: "time-tunnel",
+	{id: "time-tunnel", anchors: []string{"tunnel"}, franchise: BigFinish, rng: "time-tunnel",
 		re: regexp.MustCompile(`(?i)\bthe[\s.-]*time[\s.-]*tunnel\b`)},
-	{id: "star-cops", franchise: BigFinish, rng: "star-cops",
+	{id: "star-cops", anchors: []string{"cops"}, franchise: BigFinish, rng: "star-cops",
 		re: regexp.MustCompile(`(?i)\bstar[\s.-]*cops\b`)},
 }
 
@@ -311,24 +332,67 @@ func MatchBFDownload(path string) (Hit, bool) {
 	return h, true
 }
 
+// anchorsIn reports whether lc, the lowercased text, contains any anchor.
+func anchorsIn(lc string, anchors []string) bool {
+	for _, a := range anchors {
+		if strings.Contains(lc, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// isASCII reports whether s is pure ASCII. The anchor prefilter applies only
+// then: a (?i) regexp also folds a few non-ASCII runes onto ASCII letters
+// (the long s onto "s", the Kelvin sign onto "k"), which a lowercased literal
+// check would miss. Non-ASCII text takes the full regexp path.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
 // MatchAll returns every hit in one value: the original pattern, UNIT,
 // Counter-Measures, the census range terms and a Big Finish download name.
+//
+// It runs on every scanned book and every dedup candidate, so every pattern
+// is compiled once at package init and each rule's regexp runs only when one
+// of its literal anchors occurs in the lowercased text (ASCII text; see
+// isASCII). The result is the same as running every rule.
 func MatchAll(s string) []Hit {
 	if s == "" {
 		return nil
 	}
 	f := Fold(s)
+	filter := isASCII(s)
+	lc := ""
+	if filter {
+		lc = strings.ToLower(f)
+	}
+	run := func(anchors []string) bool { return !filter || anchorsIn(lc, anchors) }
 	var out []Hit
-	for _, loc := range coreRe.FindAllStringIndex(f, -1) {
-		out = append(out, classifyCore(f[loc[0]:loc[1]]))
+	if run(coreAnchors) {
+		for _, loc := range coreRe.FindAllStringIndex(f, -1) {
+			out = append(out, classifyCore(f[loc[0]:loc[1]]))
+		}
 	}
-	if loc := unitRe.FindStringIndex(f); loc != nil {
-		out = append(out, Hit{Franchise: DoctorWho, Range: "unit", Term: "unit", Text: strings.TrimSpace(strings.Trim(f[loc[0]:loc[1]], `/\`))})
+	if run(unitAnchors) {
+		if loc := unitRe.FindStringIndex(f); loc != nil {
+			out = append(out, Hit{Franchise: DoctorWho, Range: "unit", Term: "unit", Text: strings.TrimSpace(strings.Trim(f[loc[0]:loc[1]], `/\`))})
+		}
 	}
-	if loc := counterMeasuresRe.FindStringIndex(s); loc != nil {
-		out = append(out, Hit{Franchise: DoctorWho, Range: "counter-measures", Term: "counter-measures", Text: s[loc[0]:loc[1]]})
+	if run(counterMeasuresAnchors) {
+		if loc := counterMeasuresRe.FindStringIndex(s); loc != nil {
+			out = append(out, Hit{Franchise: DoctorWho, Range: "counter-measures", Term: "counter-measures", Text: s[loc[0]:loc[1]]})
+		}
 	}
 	for _, t := range extTerms {
+		if !run(t.anchors) {
+			continue
+		}
 		if t.need != nil && !t.need.MatchString(f) {
 			continue
 		}
@@ -340,8 +404,10 @@ func MatchAll(s string) []Hit {
 			break
 		}
 	}
-	if h, ok := MatchBFDownload(s); ok {
-		out = append(out, h)
+	if run(bfDownloadAnchors) {
+		if h, ok := MatchBFDownload(s); ok {
+			out = append(out, h)
+		}
 	}
 	return out
 }
@@ -410,9 +476,19 @@ func namesDoctorWho(title string) bool {
 // terms. The bulk-apply guard reads titles through the broad Match, as it
 // always has; a title only the broad rule names is a WEAK signal in Detect.
 func MatchTitle(title string) (Hit, bool) {
+	h, ok, _ := matchTitleHits(title)
+	return h, ok
+}
+
+// matchTitleHits is MatchTitle plus, when no title rule matched (ok false),
+// every hit MatchAll found in the title: MatchTitle had to compute them to
+// look for a census range term, and Detect needs the same set for its weak
+// signal, so it reads them here instead of running MatchAll a second time.
+// all is nil when ok is true.
+func matchTitleHits(title string) (h Hit, ok bool, all []Hit) {
 	f := Fold(title)
 	if namesDoctorWho(f) {
-		return Hit{Franchise: DoctorWho, Term: "title", Text: "Doctor Who"}, true
+		return Hit{Franchise: DoctorWho, Term: "title", Text: "Doctor Who"}, true, nil
 	}
 	if loc := titleRe.FindStringIndex(f); loc != nil {
 		text := strings.Trim(f[loc[0]:loc[1]], " -–—:|()[]")
@@ -420,15 +496,20 @@ func MatchTitle(title string) (Hit, bool) {
 		if strings.Contains(strings.ToLower(text), "torchwood") {
 			fr = Torchwood
 		}
-		return Hit{Franchise: fr, Term: "title", Text: text}, true
+		return Hit{Franchise: fr, Term: "title", Text: text}, true, nil
 	}
+	all = MatchAll(title)
 	var ext []Hit
-	for _, h := range MatchAll(title) {
+	for _, h := range all {
 		if h.Term != "core" && h.Term != "unit" && h.Term != "counter-measures" {
 			ext = append(ext, h)
 		}
 	}
-	return best(ext)
+	h, ok = best(ext)
+	if ok {
+		all = nil
+	}
+	return h, ok, all
 }
 
 // heldFranchiseTags are the franchise tags that hold a book: the owner-manual
