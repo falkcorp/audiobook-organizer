@@ -1,7 +1,7 @@
 // file: internal/server/version_lifecycle_purge_race_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f1b6a93-7c28-4d05-b3e8-0a9d5c2e7f16
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package server
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
@@ -181,7 +182,12 @@ func TestHandlePurgeVersion_PurgingVersionWhoseBookServesNothingEndsAsPurgeFaile
 		t.Errorf("hard delete of a purging version: %d %s, want 409 saying how it ends", w.Code, w.Body.String())
 	}
 
+	// One unsettled night is counted per calendar day, however many attempts
+	// land on it, so each attempt here is made on its own day.
+	day := time.Date(2026, 10, 1, 3, 0, 0, 0, time.UTC)
+	t.Cleanup(versions.SetPurgeClockForTest(func() time.Time { return day }))
 	for n := 1; n <= versions.PurgeUndecidedEscalateAfter; n++ {
+		day = day.AddDate(0, 0, 1)
 		w := postPurgeNow(t, srv, ver)
 		if w.Code != http.StatusConflict {
 			t.Fatalf("purge-now %d: expected 409, got %d: %s", n, w.Code, w.Body.String())

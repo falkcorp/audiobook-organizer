@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-30
 //
@@ -391,6 +391,16 @@ const PurgeUndecidedEscalateAfter = 3
 // purgeClock is the clock settleStuck reads for the calendar day an attempt is
 // counted on. A variable only so a test can move the day; production leaves it.
 var purgeClock = time.Now
+
+// SetPurgeClockForTest replaces the clock the purge counts nights on and
+// returns the function that restores it. It exists for tests in other packages
+// (the server's purge-now route tests) that need several attempts to fall on
+// different calendar days; production never calls it.
+func SetPurgeClockForTest(now func() time.Time) (restore func()) {
+	old := purgeClock
+	purgeClock = now
+	return func() { purgeClock = old }
+}
 
 // nextNightCount is the unsettled-night count after one more unsettled attempt
 // on the calendar day today (YYYY-MM-DD), given the count was and the day wasOn
