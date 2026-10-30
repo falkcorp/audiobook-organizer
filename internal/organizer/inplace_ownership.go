@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_ownership.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: febbcbf3-dd0e-4f14-b704-ef979dcf2873
 // last-edited: 2026-10-29
 
@@ -32,6 +32,13 @@ const (
 	// library path spelled through a link into such a folder names a file the
 	// move would take out of it.
 	OutcomeProtectedSource = "protected_source"
+	// OutcomeProtectedListNotLoaded: nothing protects the source as far as the
+	// loaded lists know, but the Deluge seeding list has not loaded (Deluge is
+	// configured and unreachable), and an unloaded list reports every seeding
+	// file unprotected, so no in-place move can be shown to be safe. Counted as a
+	// skip, never a failure, and retried on the next run: it clears by itself once
+	// the list loads.
+	OutcomeProtectedListNotLoaded = "protected_list_not_loaded"
 	// OutcomeOwnedByOtherBook: a file the move would take is claimed by a
 	// book_file row of a DIFFERENT book. Moving it strands that book's row at
 	// a path that no longer exists -- how the Eldest and Scattered Suns parents
@@ -101,7 +108,10 @@ func (orgSvc *Service) refuseUnsafeInPlaceMove(book *database.Book, src string, 
 //   - The server's protected-path check (SetRenameSourceGuard, the one RenameFiles
 //     asks) is asked about src; it resolves symlinks and knows the iTunes
 //     folders, import paths, .failed and the Deluge save paths. Nil, as in tests
-//     that do not wire it, protects nothing.
+//     that do not wire it, protects nothing. It also refuses while the Deluge
+//     list has not loaded, as OutcomeProtectedListNotLoaded and not as a
+//     protected location: the file is not known to be protected, the list that
+//     could say so is not there yet.
 //
 // Fail closed: a src whose symlinks cannot be resolved is an error, not a pass.
 func refuseProtectedInPlaceSource(src, target string) error {
@@ -113,9 +123,13 @@ func refuseProtectedInPlaceSource(src, target string) error {
 		return &DestinationConflictError{Category: OutcomeFrozenITunes, Source: src, Target: target,
 			Reason: "the file resolves into the iTunes-managed tree (" + pathutil.FrozenITunesSegment + ") at " + resolved + "; it is never moved"}
 	}
-	if g := renameSourceGuard.Load(); g != nil && (*g)(src) {
+	switch classifyRenameSource(src) {
+	case SourceProtected:
 		return &DestinationConflictError{Category: OutcomeProtectedSource, Source: src, Target: target,
 			Reason: "the file is in a protected location (an iTunes or import folder, the quarantine folder or a seeding path), directly or through a symlink; it is never moved"}
+	case SourceListNotLoaded:
+		return &DestinationConflictError{Category: OutcomeProtectedListNotLoaded, Source: src, Target: target,
+			Reason: ProtectedListNotLoadedReason}
 	}
 	return nil
 }

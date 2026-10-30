@@ -1,7 +1,7 @@
 // file: internal/organizer/rename_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7b2a93-1d5c-4f86-9a0e-b3c8d61f2e74
-// last-edited: 2026-09-14
+// last-edited: 2026-10-29
 
 package organizer
 
@@ -33,8 +33,11 @@ func TestRenameFiles_RefusesPlanThatMovesProtectedSource(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(SetRenameSourceGuard(func(p string) bool {
-		return strings.HasPrefix(p, seeding+string(os.PathSeparator))
+	t.Cleanup(SetRenameSourceGuard(func(p string) SourceVerdict {
+		if strings.HasPrefix(p, seeding+string(os.PathSeparator)) {
+			return SourceProtected
+		}
+		return SourceMovable
 	}))
 
 	entries := []FileRenameEntry{
@@ -65,7 +68,7 @@ func TestRenameFiles_ProtectedEntryAlreadyInPlaceIsNotRefused(t *testing.T) {
 	if err := os.WriteFile(f, []byte("audio"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(SetRenameSourceGuard(func(string) bool { return true }))
+	t.Cleanup(SetRenameSourceGuard(func(string) SourceVerdict { return SourceProtected }))
 	if _, err := RenameFiles([]FileRenameEntry{{SourcePath: f, TargetPath: f}}, nil); err != nil {
 		t.Fatalf("in-place entry refused: %v", err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/server/server_middleware.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
 // last-edited: 2026-10-29
 
@@ -16,7 +16,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/gin-gonic/gin"
 )
 
@@ -163,6 +165,21 @@ func (s *Server) isProtectedPath(filePath string) bool {
 			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
 	}
 	return protected
+}
+
+// renameSourceVerdict is the organizer's rename-source guard: whether src may be
+// moved (SetRenameSourceGuard). A protected path is SourceProtected even while the
+// Deluge list is down, since that is the reason that holds for good; a path
+// nothing protects is SourceListNotLoaded while the list has not loaded, so the
+// organizer can say to wait for Deluge instead of calling the file protected.
+func (s *Server) renameSourceVerdict(src string) organizer.SourceVerdict {
+	if s.isProtectedPath(src) {
+		return organizer.SourceProtected
+	}
+	if !tagger.ProtectedListLoaded(s.protectedChecker()) {
+		return organizer.SourceListNotLoaded
+	}
+	return organizer.SourceMovable
 }
 
 func loadDismissedDedupGroups(store userPreferenceReader) map[string]bool {

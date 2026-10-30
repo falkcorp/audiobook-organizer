@@ -1,5 +1,5 @@
 // file: internal/organizer/inplace_protected_symlink_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a7d19c3-62be-4f80-b5e1-9d03c8a6f742
 // last-edited: 2026-10-29
 
@@ -35,9 +35,11 @@ func linkedLibraryDir(t *testing.T, root, realDir string) string {
 // server's does (symlinks resolved), and restores the previous one afterwards.
 func guardProtecting(t *testing.T, dir string) {
 	t.Helper()
-	restore := SetRenameSourceGuard(func(p string) bool {
-		protected, _ := pathutil.UnderProtectedPath(p, []string{dir})
-		return protected
+	restore := SetRenameSourceGuard(func(p string) SourceVerdict {
+		if protected, _ := pathutil.UnderProtectedPath(p, []string{dir}); protected {
+			return SourceProtected
+		}
+		return SourceMovable
 	})
 	t.Cleanup(restore)
 }
