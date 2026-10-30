@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -108,6 +108,23 @@ type Handler struct {
 	// journal and undo report. Unset (nil) refuses every repairs op: see
 	// WithRepairsOpAccess.
 	repairsAccess *opaccess.Repairs
+
+	// tombstoneGuard resolves, at request time, the guard that lets
+	// SweepTombstones unlink a file (see WithTombstoneSweepGuard). Nil, or a
+	// resolver that returns nil, means every file removal is refused.
+	tombstoneGuard func() sweep.FileGuard
+}
+
+// WithTombstoneSweepGuard installs the resolver for the guard the tombstone
+// sweep asks before it unlinks a file: the book purge's own checks, which live
+// in package audiobooks. A setter rather than a New parameter, like
+// WithRepairsOpAccess, and lazy for the same reason getScheduler is (the
+// service behind it is resolved after wiring). Omitting it fails closed: the
+// sweep still cleans tombstones, but removes no file. The server's wiring is
+// pinned by TestWireHandlers_TombstoneSweepGuardIsInstalled.
+func (h *Handler) WithTombstoneSweepGuard(resolve func() sweep.FileGuard) *Handler {
+	h.tombstoneGuard = resolve
+	return h
 }
 
 // WithRepairsOpAccess installs the check that keeps a Repairs operation's data
@@ -344,7 +361,11 @@ func (h *Handler) SweepTombstones(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
-	result, err := sweep.SweepTombstones(h.store)
+	var guard sweep.FileGuard // nil refuses every file removal
+	if h.tombstoneGuard != nil {
+		guard = h.tombstoneGuard()
+	}
+	result, err := sweep.SweepTombstones(h.store, guard)
 	if err != nil {
 		httputil.InternalError(c, "failed to sweep tombstones", err)
 		return

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.10
+// version: 1.27.12
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-30
 
@@ -786,16 +786,21 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book, plan *filePlan)
 			logger.SanitizeLogValue(book.ID), err)
 		return fmt.Sprintf("; the record of the removal of its file %s could not be taken back either (%v), so it stays until a purge with delete_files finds the book still here, keeps the file and clears it", plan.v.remove, err)
 	}
-	// Step 1: Create tombstone (snapshot of book for rollback)
-	if err := svc.store.CreateBookTombstone(book); err != nil {
+	// Step 1: Create tombstone (snapshot of book for rollback). When this purge
+	// has committed to removing the book's file it also records what it saw of
+	// that file, so the tombstone sweeper can tell the file it was about from a
+	// different one that appeared at the path later (writeTombstone).
+	if err := svc.writeTombstone(book, plan); err != nil {
 		return fmt.Errorf("failed to create tombstone: %w%s", err, forget())
 	}
 
 	// Step 2: Delete from database (book record gone, tombstone preserved).
 	// On failure the tombstone exists but the book still exists — the
-	// sweeper will clean up the tombstone — and no side effect has run.
+	// sweeper will clean up the tombstone — and no side effect has run. The
+	// tombstone's file stamp is withdrawn: no removal is decided for a book
+	// that is still here.
 	if err := svc.store.DeleteBook(book.ID); err != nil {
-		return fmt.Errorf("failed to delete DB record: %w%s", err, forget())
+		return fmt.Errorf("failed to delete DB record: %w%s%s", err, forget(), svc.withdrawTombstoneStamp(book, plan))
 	}
 
 	// Step 3: the side effects, now that the row is gone.

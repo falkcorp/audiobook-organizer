@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_pending_journal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b2d8e60-1c47-4a93-b0f5-9e3a7d1c4826
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -31,11 +31,15 @@ import (
 // (purgeFinish), removed once the path is decided (removeDeferredFiles), and
 // replayed by the next pass (replayPendingFileRemovals).
 //
-// Why not keep the tombstone instead. sweep.SweepTombstones os.Remove()s a
-// tombstone's FilePath with no library-root, protected-path or still-referenced
-// check (internal/sweep/sweeper.go), so a tombstone left standing would be a
-// worse hazard than an orphaned file. The journal is replayed only through the
-// same checks removeDeferredFiles runs.
+// Why not keep the tombstone instead. The tombstone sweeper
+// (sweep.SweepTombstones) is a second, independent remover of the same file and
+// runs on an operator's request, not at a moment the purge chooses. Since
+// 2026-10-30 it asks the same questions the purge does (TombstoneSweepGuard:
+// protected path, library root, any book_file or book row naming the path,
+// trashed and retired included) and unlinks only a file whose stamp the purge
+// recorded with the tombstone (writeTombstone). Even so, the journal is the
+// record that survives the tombstone's deletion and carries the retry, backoff
+// and aggregate reporting a sweep does not, so it stays the primary mechanism.
 const pendingFilePrefix = "purge_pending_file:"
 
 // pendingFileRecord is one journal entry. Identity is the file as the pass saw

@@ -30,6 +30,7 @@ import (
 	reviewhandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/review"
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
+	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/gin-gonic/gin"
@@ -292,7 +293,17 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// revertOperation also drops the series caches when a series_rename
 		// row was restored (series_rename_ops.go).
 		s.revertOperation,
-	).WithRepairsOpAccess(repairsOps)
+	).WithRepairsOpAccess(repairsOps).
+		// The tombstone sweep unlinks a file only with the book purge's own checks.
+		// Resolved per request: s.audiobookService is set from the container, and
+		// the closure must not box a nil *AudiobookService into the interface
+		// (it would pass the sweep's nil-guard test and panic in Check).
+		WithTombstoneSweepGuard(func() sweep.FileGuard {
+			if s.audiobookService == nil {
+				return nil
+			}
+			return s.audiobookService.TombstoneSweepGuard()
+		})
 	// getSystemLogs (system handler) delegates its operation_id branch to
 	// operationsH.OperationLogsByID; stash it on the Server for that call.
 	s.operationsHandler = operationsH

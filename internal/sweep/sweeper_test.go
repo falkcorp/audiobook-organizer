@@ -1,7 +1,7 @@
 // file: internal/sweep/sweeper_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8910-abcd-ef2345678902
-// last-edited: 2026-09-19
+// last-edited: 2026-10-30
 
 package sweep
 
@@ -25,10 +25,14 @@ func (m *MockBookStore) ListBookTombstones(limit int) ([]database.Book, error) {
 	if err, ok := m.errors["ListBookTombstones"]; ok {
 		return nil, err
 	}
-	if limit < len(m.tombstones) {
-		return m.tombstones[:limit], nil
+	// A copy, as the real store returns a fresh slice: DeleteBookTombstone
+	// shifts m.tombstones in place, which would skip entries of a caller that
+	// is still ranging over the listing.
+	out := append([]database.Book(nil), m.tombstones...)
+	if limit < len(out) {
+		return out[:limit], nil
 	}
-	return m.tombstones, nil
+	return out, nil
 }
 
 func (m *MockBookStore) GetBookByID(id string) (*database.Book, error) {
@@ -194,7 +198,7 @@ func TestSweepTombstones_EmptyList(t *testing.T) {
 		books:      []database.Book{},
 	}
 
-	result, err := SweepTombstones(store)
+	result, err := SweepTombstones(store, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +233,7 @@ func TestSweepTombstones_RemoveOrphanedFile(t *testing.T) {
 		books: []database.Book{},
 	}
 
-	result, err := SweepTombstones(store)
+	result, err := SweepTombstones(store, &fakeGuard{verdicts: map[string]guardVerdict{tmpFile: {remove: true}}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +265,7 @@ func TestSweepTombstones_KeepLiveBook(t *testing.T) {
 		},
 	}
 
-	result, err := SweepTombstones(store)
+	result, err := SweepTombstones(store, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
