@@ -348,13 +348,14 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// rows are already in hand, so saying which statuses ARE present costs a map.
 	statusesPresent := make(map[string]struct{})
 	repairsReader := h.repairsAccess.For(c)
+	// scanned is the store's own count: scan_capped is a fact about the scan, not
+	// about what this caller may read.
+	scanned := len(rows)
+	// A Repairs op the caller may not read is not in their timeline at all, and
+	// is not counted in matched either: the id, status and counts of the op name
+	// the plan whose rows they may not read.
+	rows = repairsReader.ReadableOps(rows)
 	for _, r := range rows {
-		// A Repairs op the caller may not read is not in their timeline at all,
-		// and is not counted in matched either: the id, status and counts of
-		// the op name the plan whose rows they may not read.
-		if !repairsReader.MayRead(&r) {
-			continue
-		}
 		if defID != "" && h.canonicalDefID(r.DefID) != defID {
 			continue
 		}
@@ -392,7 +393,7 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 	// someone who might misread it, and two booleans with two different presence
 	// conventions is an invitation to treat a missing `scan_capped` as unknown
 	// rather than false.
-	scope["scan_capped"] = len(rows) >= timelineScanBound
+	scope["scan_capped"] = scanned >= timelineScanBound
 	// Only when the caller filtered by status AND got nothing — otherwise this is
 	// noise on every ordinary response. Sorted so the field is stable to diff.
 	if status != "" && matched == 0 && len(statusesPresent) > 0 {

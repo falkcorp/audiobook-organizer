@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -409,6 +409,9 @@ func (h *Handler) ListStaleOperations(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "failed to list stale operations")
 		return
 	}
+	// A Repairs row the caller may not read is not listed or counted: its type,
+	// status and message name the run (opaccess.Reader.ReadableLegacyOps).
+	stale = h.repairsAccess.For(c).ReadableLegacyOps(stale)
 	httputil.RespondWithOK(c, gin.H{
 		"timeout_minutes": timeoutMinutes,
 		"count":           len(stale),

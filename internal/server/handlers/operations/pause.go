@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package operations
 
@@ -99,7 +99,7 @@ func (h *Handler) PauseOperations(c *gin.Context) {
 	if err := registry.PauseOperations(reason, by); err != nil {
 		pauseLog.Warn("operations pause: hold is active but the marker could not be persisted; a restart would resume: %v", logging.SanitizeErr(err))
 	}
-	httputil.RespondWithOK(c, h.pauseStatePayload())
+	httputil.RespondWithOK(c, h.pauseStatePayload(c))
 }
 
 // ResumeOperations releases the hold.
@@ -107,17 +107,21 @@ func (h *Handler) ResumeOperations(c *gin.Context) {
 	if err := registry.ResumeOperations(); err != nil {
 		pauseLog.Warn("operations resume: hold released but the marker could not be cleared: %v", logging.SanitizeErr(err))
 	}
-	httputil.RespondWithOK(c, h.pauseStatePayload())
+	httputil.RespondWithOK(c, h.pauseStatePayload(c))
 }
 
 // GetPauseState reports the current gate state.
 func (h *Handler) GetPauseState(c *gin.Context) {
-	httputil.RespondWithOK(c, h.pauseStatePayload())
+	httputil.RespondWithOK(c, h.pauseStatePayload(c))
 }
 
 // pauseStatePayload builds the response, including which running ops will
-// actually park.
-func (h *Handler) pauseStatePayload() pauseResponse {
+// actually park. The two lists name definition ids taken from operation rows, so
+// a Repairs run the caller may not read is left out of them
+// (opaccess.Reader.ReadableOps): the id repairs.apply in running_not_pausable
+// says a fixer is running. All three pause routes answer with it, the POSTs
+// included, since settings.manage does not imply every fixer's permissions.
+func (h *Handler) pauseStatePayload(c *gin.Context) pauseResponse {
 	resp := pauseResponse{PauseState: registry.OperationsPauseState()}
 	if h.store != nil {
 		// The newest v2 rows + a terminal-status filter, because the store
@@ -136,7 +140,7 @@ func (h *Handler) pauseStatePayload() pauseResponse {
 			// reported for six weeks when it read the dead v1 keyspace.
 			pauseLog.Warn("operations pause: running-op list unavailable: %v", logging.SanitizeErr(err))
 		}
-		for _, op := range ops {
+		for _, op := range h.repairsAccess.For(c).ReadableOps(ops) {
 			if isTerminalOpStatus(op.Status) {
 				continue
 			}

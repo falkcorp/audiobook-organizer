@@ -1,7 +1,7 @@
 // file: internal/server/handlers/opaccess/repairs_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7e3a9d15-48bc-4f02-b6a1-0d9c5f8e2b74
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package opaccess
 
@@ -542,4 +542,60 @@ func TestReader_StreamOpenEndsAStreamWhoseCredentialIsGone(t *testing.T) {
 	require.True(t, access.For(c).StreamOpen(), "a request reader is not a stream")
 	var none *Reader
 	require.True(t, none.StreamOpen(), "an unwired reader does not end a stream")
+}
+
+// TestReader_ReadableOps: the shared list filter keeps every operation that is
+// not a Repairs one, keeps a Repairs one only when MayRead holds, preserves
+// order, and never returns nil.
+func TestReader_ReadableOps(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}, "scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
+	rows := []database.OperationV2Row{
+		{ID: "scan", DefID: "library.scan"},
+		{ID: "plain", DefID: repairs.ApplyOpID, Params: `{"fixer_id":"plain"}`},
+		{ID: "scoped", DefID: repairs.PlanOpID, Params: `{"fixer_id":"scoped"}`},
+		{ID: "nofixer", DefID: repairs.ApplyOpID, Params: `{}`},
+	}
+	ids := func(in []database.OperationV2Row) []string {
+		out := []string{}
+		for _, r := range in {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+	c, _ := ctxHolding()
+	edit := NewRepairs(reg, noOps, holdsOnly(auth.PermLibraryView, auth.PermLibraryEditMetadata)).For(c)
+	require.Equal(t, []string{"scan", "plain"}, ids(edit.ReadableOps(rows)))
+	all := NewRepairs(reg, noOps, holdsOnly(auth.All()...)).For(c)
+	require.Equal(t, []string{"scan", "plain", "scoped"}, ids(all.ReadableOps(rows)), "an op that states no fixer is hidden from everyone")
+	var unwired *Repairs
+	require.Equal(t, []string{"scan"}, ids(unwired.For(c).ReadableOps(rows)), "unwired fails closed")
+	require.NotNil(t, edit.ReadableOps(nil))
+}
+
+// TestReader_ReadableLegacyOps: a row of the retired v1 table states no params,
+// so a Repairs row's fixer comes from its stored result alone.
+func TestReader_ReadableLegacyOps(t *testing.T) {
+	reg := fixers{"plain": scopedFixer{}, "scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
+	ops := []database.Operation{
+		{ID: "scan", Type: "library.scan"},
+		{ID: "plain", Type: repairs.ApplyOpID, ResultData: ptr(`{"fixer_id":"plain"}`)},
+		{ID: "scoped", Type: repairs.PlanOpID, ResultData: ptr(`{"fixer_id":"scoped"}`)},
+		{ID: "nofixer", Type: repairs.ApplyOpID},
+		{ID: "garbled", Type: repairs.ApplyOpID, ResultData: ptr(`not json`)},
+	}
+	ids := func(in []database.Operation) []string {
+		out := []string{}
+		for _, o := range in {
+			out = append(out, o.ID)
+		}
+		return out
+	}
+	c, _ := ctxHolding()
+	viewer := NewRepairs(reg, noOps, holdsOnly(auth.PermLibraryView)).For(c)
+	require.Equal(t, []string{"scan"}, ids(viewer.ReadableLegacyOps(ops)))
+	edit := NewRepairs(reg, noOps, holdsOnly(auth.PermLibraryView, auth.PermLibraryEditMetadata)).For(c)
+	require.Equal(t, []string{"scan", "plain"}, ids(edit.ReadableLegacyOps(ops)))
+	all := NewRepairs(reg, noOps, holdsOnly(auth.All()...)).For(c)
+	require.Equal(t, []string{"scan", "plain", "scoped"}, ids(all.ReadableLegacyOps(ops)))
+	require.NotNil(t, viewer.ReadableLegacyOps(nil))
 }
