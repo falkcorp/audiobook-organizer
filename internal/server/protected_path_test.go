@@ -1,20 +1,23 @@
 // file: internal/server/protected_path_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e2c4a19-0b53-4d86-9f1a-c8d5e3b7a602
 // last-edited: 2026-10-30
 
 package server
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
@@ -130,4 +133,47 @@ func TestRenameVerdict_ARefreshLandingDuringTheCheckDoesNotClearASeedingFile(t *
 
 	assert.Equal(t, organizer.SourceProtected, renameVerdict(list.seeding, list, isProtected),
 		"asked again with the list loaded, the seeding file is protected")
+}
+
+// While the import-path list cannot be read, a file under an import path must not
+// be answered "not protected": the rename-source guard would call it movable and an
+// in-place move could take it out of the import folder. Every path is protected
+// until the list reads again, and the next read recovers.
+func TestIsProtectedPath_UnreadableImportPathListFailsClosed(t *testing.T) {
+	importPathCacheMu.Lock()
+	importPathCache = nil
+	importPathCacheAt = time.Time{}
+	importPathCacheMu.Unlock()
+	t.Cleanup(func() {
+		importPathCacheMu.Lock()
+		importPathCache = nil
+		importPathCacheAt = time.Time{}
+		importPathCacheMu.Unlock()
+	})
+
+	base := t.TempDir()
+	imports := filepath.Join(base, "Gotham Imports")
+	library := filepath.Join(base, "Arkham", "Joker", "killing-joke.m4b")
+	inImports := filepath.Join(imports, "Hush", "hush.m4b")
+
+	failing := true
+	mock := &database.MockStore{
+		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
+			if failing {
+				return nil, errors.New("pebble: closed")
+			}
+			return []database.ImportPath{{Path: imports}}, nil
+		},
+	}
+	srv := newTestServer(t, mock)
+
+	assert.True(t, srv.isProtectedPath(inImports), "a file under an import path is protected while the list is unreadable")
+	assert.True(t, srv.isProtectedPath(library), "no path can be vouched for while the list is unreadable")
+	assert.Equal(t, organizer.SourceProtected, srv.renameSourceVerdict(inImports),
+		"the rename-source guard must refuse, not answer SourceMovable")
+
+	failing = false
+	assert.True(t, srv.isProtectedPath(inImports))
+	assert.False(t, srv.isProtectedPath(library), "once the list reads again a library file is movable")
+	assert.Equal(t, organizer.SourceMovable, srv.renameSourceVerdict(library))
 }

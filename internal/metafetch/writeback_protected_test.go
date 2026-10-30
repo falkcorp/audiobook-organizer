@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.2.0
+// version: 2.4.0
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -154,5 +155,86 @@ func TestIsProtectedPath_SymlinkIntoITunesFolder(t *testing.T) {
 	}
 	if svc.isProtectedPath(filepath.Join(away, "killing-joke.m4b")) {
 		t.Error("a file reached through a symlink to an unprotected folder reported protected")
+	}
+}
+
+// While the import-path list cannot be read, a file under an import path must not
+// be reported unprotected: write-back and renames act on "not protected". Every
+// path is protected until the list reads again.
+func TestIsProtectedPath_UnreadableImportPathListFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	imports := filepath.Join(base, "Gotham Imports")
+	library := filepath.Join(base, "Arkham", "Joker", "killing-joke.m4b")
+	inImports := filepath.Join(imports, "Hush", "hush.m4b")
+
+	failing := true
+	svc := &Service{db: &database.MockStore{
+		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
+			if failing {
+				return nil, errors.New("pebble: closed")
+			}
+			return []database.ImportPath{{Path: imports}}, nil
+		},
+	}}
+
+	if !svc.isProtectedPath(inImports) {
+		t.Error("a file under an import path is not protected while the list is unreadable")
+	}
+	if !svc.isProtectedPath(library) {
+		t.Error("a library file was vouched for while the list is unreadable")
+	}
+
+	failing = false
+	if !svc.isProtectedPath(inImports) {
+		t.Error("import path not protected once the list reads again")
+	}
+	if svc.isProtectedPath(library) {
+		t.Error("library file still protected once the list reads again")
+	}
+}
+
+// With the import-path list unreadable every book looks protected, so the
+// createLibraryCopy policy must refuse (as it does for an unloaded Deluge list)
+// instead of copying a book that may need no copy; it works again once the
+// store reads.
+func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
+	libRoot := t.TempDir()
+	orig := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = orig })
+	config.AppConfig.RootDir = libRoot
+
+	book := &database.Book{ID: "b1", Title: "Hush", FilePath: filepath.Join(t.TempDir(), "Hush")}
+	failing := true
+	mock := &database.MockStore{
+		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
+			if failing {
+				return nil, errors.New("pebble: closed")
+			}
+			return nil, nil
+		},
+		GetBookByIDFunc: func(string) (*database.Book, error) { b := *book; return &b, nil },
+	}
+	svc := NewService(mock)
+
+	if svc.protectedListLoaded() {
+		t.Fatal("protectedListLoaded true while the import-path list is unreadable")
+	}
+	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil })
+	if !errors.Is(err, tagger.ErrProtectedListNotLoaded) {
+		t.Fatalf("err = %v, want ErrProtectedListNotLoaded", err)
+	}
+	if got != nil {
+		t.Errorf("a library copy was returned: %+v", got)
+	}
+	if entries, _ := os.ReadDir(libRoot); len(entries) != 0 {
+		t.Errorf("library root not empty: %v", entries)
+	}
+
+	failing = false
+	if !svc.protectedListLoaded() {
+		t.Error("protectedListLoaded false once the store reads again")
+	}
+	if _, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil }); errors.Is(err, tagger.ErrProtectedListNotLoaded) {
+		t.Errorf("still refused once the store reads: %v", err)
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.2
+// version: 1.24.4
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -26,10 +27,40 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
-// protectedListLoaded reports whether the protected-path list the service
-// checks (the Deluge save paths) has loaded; true when none is wired.
+// protectedListLoaded reports whether the protected-path lists the service
+// checks (the Deluge save paths and the import-path list) are usable; true when
+// none is wired. An import-path list that cannot be read counts as not loaded,
+// the same condition isProtectedPath fails closed on, so a caller that creates
+// a library copy because "every book outside root_dir looks protected" refuses
+// instead.
 func (mfs *Service) protectedListLoaded() bool {
-	return mfs == nil || tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
+	if mfs == nil {
+		return true
+	}
+	if _, err := mfs.importPathRoots(); err != nil {
+		return false
+	}
+	return tagger.ProtectedListLoaded(mfs.safeWriteDeps.ProtectedCache)
+}
+
+// importPathRoots reads the import paths from the store: the one read
+// isProtectedPath and protectedListLoaded share. A failed read is logged (at
+// most once a minute) and returned; nil roots and a nil error when no store is
+// wired.
+func (mfs *Service) importPathRoots() ([]string, error) {
+	if mfs == nil || mfs.db == nil {
+		return nil, nil
+	}
+	importPaths, err := mfs.db.GetAllImportPaths()
+	if err != nil {
+		logImportPathReadFailure(err)
+		return nil, err
+	}
+	roots := make([]string, 0, len(importPaths))
+	for _, ip := range importPaths {
+		roots = append(roots, ip.Path)
+	}
+	return roots, nil
 }
 
 // The stripChapterFromTitle patterns, compiled once. They were compiled on
@@ -605,6 +636,29 @@ func keepDiagnosis(cur, next error) error {
 // could not be resolved (pathutil.UnderProtectedPath fails closed).
 var protectedPathLog = logger.New("metafetch.protected-path")
 
+// importPathReadFailureRelog is how often an unreadable import-path list is
+// reported: every path checked while the read fails is refused, so one line per
+// check would flood the log during a whole-library run.
+const importPathReadFailureRelog = time.Minute
+
+var (
+	importPathReadFailureMu   sync.Mutex
+	importPathReadFailureLast time.Time
+)
+
+// logImportPathReadFailure reports a failed import-path read at most once per
+// importPathReadFailureRelog.
+func logImportPathReadFailure(err error) {
+	importPathReadFailureMu.Lock()
+	defer importPathReadFailureMu.Unlock()
+	if !importPathReadFailureLast.IsZero() && time.Since(importPathReadFailureLast) < importPathReadFailureRelog {
+		return
+	}
+	importPathReadFailureLast = time.Now()
+	protectedPathLog.Warn("treating paths as protected: cannot read the import-path list: error=%s",
+		logger.SanitizeLogValue(err.Error()))
+}
+
 // isProtectedPath returns true if the file path is within import or iTunes paths.
 // Method on *Service so it uses mfs.db rather than database.GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 4).
@@ -629,14 +683,12 @@ func (mfs *Service) isProtectedPath(filePath string) bool {
 	// (pathutil.UnderProtectedPath): the import paths, the folders of the iTunes
 	// library files, any "iTunes Media" folder and the .failed/ quarantine
 	// folder. A path that cannot be resolved counts as protected.
-	var roots []string
-	if mfs != nil && mfs.db != nil {
-		importPaths, err := mfs.db.GetAllImportPaths()
-		if err == nil {
-			for _, ip := range importPaths {
-				roots = append(roots, ip.Path)
-			}
-		}
+	// Fail closed: without the import paths nothing can be shown to be
+	// outside an import folder, and callers write or move on "not protected".
+	// True means "leave the file alone" to all of them.
+	roots, rerr := mfs.importPathRoots()
+	if rerr != nil {
+		return true
 	}
 	if config.AppConfig.ITunes.LibraryReadPath != "" {
 		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryReadPath))
