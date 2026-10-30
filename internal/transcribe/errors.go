@@ -1,5 +1,5 @@
 // file: internal/transcribe/errors.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e630c83e-990b-47c4-ac80-dea9e41b20c5
 // last-edited: 2026-10-30
 
@@ -173,9 +173,11 @@ func classifyTransport(endpoints []string, err error) error {
 // instead (re-queue elsewhere, then defer), and what reaches an op is deferred.
 // A mid-request swap (ErrWorkerSwapped) is not one either: the request was ended
 // on purpose because another machine answers at the URL, and the jobs are
-// deferred without counting toward stopping a run.
+// deferred without counting toward stopping a run. Nor is a response withheld
+// because its /health probe could not be read (ErrAnswerUnverified): the worker
+// answered, and nothing is known about it.
 func isTransportishError(err error) bool {
-	if IsWorkerFault(err) || IsWorkerSwapped(err) {
+	if IsWorkerFault(err) || IsWorkerSwapped(err) || IsWorkerUnverified(err) {
 		return false
 	}
 	if _, ok := errors.AsType[net.Error](err); ok {
