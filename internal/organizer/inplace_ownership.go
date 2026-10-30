@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_ownership.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: febbcbf3-dd0e-4f14-b704-ef979dcf2873
-// last-edited: 2026-09-28
+// last-edited: 2026-10-29
 
 package organizer
 
@@ -26,6 +26,12 @@ const (
 	// Original iTunes tree (pathutil.UnderFrozenITunesTree). iTunes owns those
 	// files; moving one breaks the iTunes library that references it.
 	OutcomeFrozenITunes = "frozen_itunes"
+	// OutcomeProtectedSource: the source is protected once its symlinks are
+	// followed or by the server's protected-path check (an iTunes library
+	// folder, an import path, the quarantine folder, a Deluge save path). A
+	// library path spelled through a link into such a folder names a file the
+	// move would take out of it.
+	OutcomeProtectedSource = "protected_source"
 	// OutcomeOwnedByOtherBook: a file the move would take is claimed by a
 	// book_file row of a DIFFERENT book. Moving it strands that book's row at
 	// a path that no longer exists -- how the Eldest and Scattered Suns parents
@@ -70,6 +76,10 @@ func (orgSvc *Service) refuseUnsafeInPlaceMove(book *database.Book, src string, 
 			Reason: "the file is in the iTunes-managed tree (" + pathutil.FrozenITunesSegment + "); it is never moved"}
 	}
 
+	if err := refuseProtectedInPlaceSource(src, target); err != nil {
+		return err
+	}
+
 	files := []string{src}
 	if srcInfo != nil && srcInfo.IsDir() {
 		var err error
@@ -78,6 +88,36 @@ func (orgSvc *Service) refuseUnsafeInPlaceMove(book *database.Book, src string, 
 		}
 	}
 	return orgSvc.refuseFilesOwnedElsewhere(book, files, src, target)
+}
+
+// refuseProtectedInPlaceSource refuses to move src when it is protected in a
+// way the spelled path does not show. The book's path is a library path, but it
+// can be spelled through a symlink into the iTunes tree or another protected
+// folder, and moveExclusive (link, then unlink) would then take the real file
+// out of there.
+//
+//   - The frozen iTunes tree is tested on the symlink-resolved src as well as
+//     the spelled one (the caller tests the spelled one).
+//   - The server's protected-path check (SetRenameSourceGuard, the one RenameFiles
+//     asks) is asked about src; it resolves symlinks and knows the iTunes
+//     folders, import paths, .failed and the Deluge save paths. Nil, as in tests
+//     that do not wire it, protects nothing.
+//
+// Fail closed: a src whose symlinks cannot be resolved is an error, not a pass.
+func refuseProtectedInPlaceSource(src, target string) error {
+	resolved, err := pathutil.ResolveExistingPrefix(src)
+	if err != nil {
+		return fmt.Errorf("cannot resolve the symlinks of %s to check it is not protected before moving it: %w", src, err)
+	}
+	if pathutil.UnderFrozenITunesTree(resolved) {
+		return &DestinationConflictError{Category: OutcomeFrozenITunes, Source: src, Target: target,
+			Reason: "the file resolves into the iTunes-managed tree (" + pathutil.FrozenITunesSegment + ") at " + resolved + "; it is never moved"}
+	}
+	if g := renameSourceGuard.Load(); g != nil && (*g)(src) {
+		return &DestinationConflictError{Category: OutcomeProtectedSource, Source: src, Target: target,
+			Reason: "the file is in a protected location (an iTunes or import folder, the quarantine folder or a seeding path), directly or through a symlink; it is never moved"}
+	}
+	return nil
 }
 
 // refuseFilesOwnedElsewhere returns a *DestinationConflictError when any of
