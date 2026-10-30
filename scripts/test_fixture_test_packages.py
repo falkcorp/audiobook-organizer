@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_fixture_test_packages.py
-# version: 1.3.0
+# version: 1.4.0
 # guid: 3c6e9a41-7f2d-4b85-9e10-d4a8b25c7f93
 # last-edited: 2026-10-30
 
@@ -20,6 +20,7 @@ Needs `go` on PATH (ci.yml runs this step after setup-go).
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import signal
 import subprocess
@@ -498,6 +499,65 @@ class StaticTestNames(unittest.TestCase):
         self.assertEqual(
             ftp.missing_here(native, discovery), {"m/x": ["FuzzLinux", "TestLinuxOnly"]}
         )
+
+class TimingEmission(unittest.TestCase):
+    def _res(self, label, out, ok=True, is_slice=False, secs=9.0):
+        return ftp.Result(label, 0 if ok else 1, secs, out, ok, is_slice)
+
+    def test_sidecar_is_what_the_planner_weighs_by(self):
+        doc = json.loads((Path(ftp.__file__).with_name("fixture_weights.json")).read_text())
+        self.assertEqual(ftp._WEIGHTS, doc["weights"])
+
+    def test_a_slice_is_timed_by_its_ok_line_and_a_whole_run_per_package(self):
+        slice_ = self._res(
+            f"{M}/internal/server#1/2", f"ok  \t{M}/internal/server\t605.4s\n", is_slice=True
+        )
+        whole = self._res(
+            "2 whole packages",
+            f"ok  \t{M}/internal/undo\t68.2s\nok  \t{M}/internal/merge\t3.0s\n",
+        )
+        self.assertEqual(
+            [(t.unit, t.seconds) for t in ftp.result_timings(slice_)],
+            [("internal/server#1/2", 605.4)],
+        )
+        self.assertEqual(
+            [(t.unit, t.seconds) for t in ftp.result_timings(whole)],
+            [("internal/undo", 68.2), ("internal/merge", 3.0)],
+        )
+
+    def test_a_slice_without_an_ok_line_falls_back_to_wall_time(self):
+        res = self._res(f"{M}/internal/server#2/2", "", is_slice=True, secs=41.0)
+        self.assertEqual([(t.unit, t.seconds) for t in ftp.result_timings(res)], [("internal/server#2/2", 41.0)])
+
+    def test_a_failed_package_reports_no_timing_but_its_passing_mates_do(self):
+        res = self._res(
+            "2 whole packages",
+            f"ok  \t{M}/internal/merge\t3.0s\nFAIL\t{M}/internal/undo\t5.0s\n",
+            ok=False,
+        )
+        self.assertEqual([t.unit for t in ftp.result_timings(res)], ["internal/merge"])
+
+    def test_a_failed_slice_gets_no_wall_time_fallback(self):
+        res = self._res(f"{M}/internal/server#1/2", "", ok=False, is_slice=True, secs=77.0)
+        self.assertEqual(ftp.result_timings(res), [])
+
+    def test_emit_prints_lines_and_writes_the_json_file(self):
+        res = self._res("1 whole packages", f"ok  \t{M}/internal/undo\t68.2s\n")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "fixture-times.json"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ftp.emit_timings([res], str(path))
+            self.assertIn("::timing::internal/undo=68.2", buf.getvalue())
+            rows = json.loads(path.read_text())["timings"]
+            self.assertEqual([(r["unit"], r["seconds"]) for r in rows], [("internal/undo", 68.2)])
+
+    def test_emit_writes_no_file_when_none_is_asked_for(self):
+        res = self._res("1 whole packages", f"ok  \t{M}/internal/undo\t68.2s\n")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FIXTURE_TIMES_FILE", None)
+            with contextlib.redirect_stdout(io.StringIO()):
+                ftp.emit_timings([res])  # must not raise
 
 
 if __name__ == "__main__":

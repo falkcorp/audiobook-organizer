@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.32.1
+# version: 3.33.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-29
+# last-edited: 2026-10-30
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -875,5 +875,20 @@ jobs:
       - name: Install system dependencies
         run: scripts/ci/apt_install.sh libtag1-dev ffmpeg libchromaprint-tools
 
+      # FIXTURE_TIMES_FILE makes the run write per-package wall times as JSON;
+      # the artifact below feeds scripts/ci/fixture_shard_weights.py, which
+      # recalibrates scripts/ci/fixture_weights.json (shard weights). Woodpecker
+      # prints the same numbers as `::timing::` lines in its step log instead.
       - name: Run fixture tests without -short (shard ${{ matrix.shard }})
+        env:
+          FIXTURE_TIMES_FILE: ${{ runner.temp }}/fixture-times-${{ strategy.job-index }}.json
         run: make test-fixtures FIXTURE_SHARD=${{ matrix.shard }}
+
+      - name: Upload fixture timings (shard ${{ matrix.shard }})
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fixture-times-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/fixture-times-${{ strategy.job-index }}.json
+          if-no-files-found: ignore
+          retention-days: 30
