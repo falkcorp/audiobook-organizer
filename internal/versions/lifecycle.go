@@ -1,5 +1,5 @@
 // file: internal/versions/lifecycle.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-30
 //
@@ -1200,7 +1200,9 @@ func settleNothingServed(store versionPurger, ver *database.BookVersion, kept ma
 	if ver.Status != database.BookVersionStatusPurging || !errors.As(err, &ns) {
 		return err
 	}
-	ver.PurgeUndecidedNights++
+	// One night is one calendar day, as in settleStuck: a second refusal the same
+	// day runs, stores the record, and adds no night.
+	ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn = nextNightCount(ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn, purgeClock().Format(time.DateOnly))
 	ns.Attempt = ver.PurgeUndecidedNights
 	if ver.PurgeUndecidedNights < PurgeUndecidedEscalateAfter {
 		if uerr := store.UpdateBookVersion(ver); uerr != nil {

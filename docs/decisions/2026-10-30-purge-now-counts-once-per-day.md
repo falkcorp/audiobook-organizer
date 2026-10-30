@@ -1,5 +1,5 @@
 <!-- file: docs/decisions/2026-10-30-purge-now-counts-once-per-day.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 34a44fdf-1d3b-417d-a3d4-858de10bfe70 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -40,9 +40,8 @@ move it.
   change than the seam needs; the sweep takes its clock as an option, the purge
   has no options struct.
 
-## Not changed
+## Also covered: settleNothingServed
 
-`settleNothingServed` (a purging version whose book serves nothing on disk) still
-counts per attempt. It shares the counter, so the same Purge now inflation applies
-there. It was outside this task; moving it onto `nextNightCount` is a one-line
-follow-up.
+`settleNothingServed` (a purging version whose book serves nothing on disk) shares
+the counter and had the same Purge now inflation. It now uses `nextNightCount` with
+the same clock, so both stuck paths count one night per calendar day.
