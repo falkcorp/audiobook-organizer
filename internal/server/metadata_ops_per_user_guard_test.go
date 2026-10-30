@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops_per_user_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e7a9c15-6b24-4d80-9f13-a0c5d8e2b749
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// resolveFilterToBookIDs decides which books a background operation targets, with
-// no viewer. A per-user term (read_status, progress_pct, last_played) in its
+// resolveFilterToBookIDs decides which books a background operation targets. With
+// no viewer, a per-user term (read_status, progress_pct, last_played) in its
 // FilterSpec has no listening state to be judged by, and resolving it anyway
 // widened "my finished books" to the whole library: the field filters were dropped,
 // and the search path ignores a per-user term when no user is present. The web
@@ -25,26 +25,30 @@ import (
 // read from it, so a refused spec never reaches the service.
 func TestResolveFilterToBookIDs_RefusesAPerUserTerm(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		spec operations.FilterSpec
+		name  string
+		spec  operations.FilterSpec
+		named string
 	}{
 		{"field filter read_status", operations.FilterSpec{
-			FieldFilters: []operations.FieldFilter{{Field: "read_status", Value: "finished"}}}},
+			FieldFilters: []operations.FieldFilter{{Field: "read_status", Value: "finished"}}}, "read_status"},
 		{"negated field filter", operations.FilterSpec{
-			FieldFilters: []operations.FieldFilter{{Field: "progress_pct", Value: ">50", Negated: true}}}},
+			FieldFilters: []operations.FieldFilter{{Field: "progress_pct", Value: ">50", Negated: true}}}, "progress_pct"},
 		{"per-user filter among others", operations.FilterSpec{
 			FieldFilters: []operations.FieldFilter{
 				{Field: "author", Value: "kyle"},
 				{Field: "last_played", Value: ">-30d"},
-			}}},
-		{"search text term", operations.FilterSpec{Search: "read_status:finished author:kyle"}},
-		{"search text in a group", operations.FilterSpec{Search: "(read_status:finished tag:noir)"}},
-		{"search text that does not parse", operations.FilterSpec{Search: "read_status:finished OR ("}},
+			}}, "last_played"},
+		{"search text term", operations.FilterSpec{Search: "read_status:finished author:kyle"}, "read_status"},
+		{"search text in a group", operations.FilterSpec{Search: "(read_status:finished tag:noir)"}, "read_status"},
+		{"search text that does not parse", operations.FilterSpec{Search: "read_status:finished OR ("}, "read_status"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ids, err := (&Server{}).resolveFilterToBookIDs(context.Background(), tc.spec)
+			ids, err := (&Server{}).resolveFilterToBookIDs(context.Background(), tc.spec, "")
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "per-user")
+			// The refusal names what it refused, so the operator can see which
+			// part of the selection to change.
+			assert.Contains(t, err.Error(), tc.named)
 			assert.Nil(t, ids)
 		})
 	}
