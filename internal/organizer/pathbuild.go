@@ -1,7 +1,7 @@
 // file: internal/organizer/pathbuild.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f7c4a19-6e58-4b03-9d21-8a05e3f16c74
-// last-edited: 2026-09-12
+// last-edited: 2026-10-30
 
 // The single place a book's target path is computed.
 //
@@ -44,6 +44,7 @@ package organizer
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -332,6 +333,25 @@ func (v PathVars) replacements(opts BuildOpts) map[string]string {
 	}
 
 	return out
+}
+
+// NamingPatternTokens returns, sorted and brace-wrapped ("{title}"), every
+// placeholder BuildPath resolves.
+//
+// It is read straight off the map replacements() builds, so a token cannot be
+// resolvable without being listed or listed without being resolvable. The
+// Settings page renders its "Available:" help from this (served on GET /config
+// as naming_pattern_tokens) instead of keeping a hand-written copy that had
+// drifted: it advertised {audiobook_release_year} and {track_number}, which
+// nothing here resolves, and omitted {series_prefix}.
+func NamingPatternTokens() []string {
+	repl := PathVars{}.replacements(BuildOpts{})
+	tokens := make([]string, 0, len(repl))
+	for token := range repl {
+		tokens = append(tokens, token)
+	}
+	slices.Sort(tokens)
+	return tokens
 }
 
 // BuildPath expands one naming pattern into one path component-set.
