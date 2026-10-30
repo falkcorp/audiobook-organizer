@@ -818,7 +818,11 @@ type Book struct {
 	// else sets it: the scan derives no year of its own. Only the queued
 	// library.ai-parse saver (saveAIFieldsToPrimary) reads it, as a gap-fill
 	// of audiobook_release_year. saveBookToDatabase ignores it.
-	Year             int
+	Year int
+	// AIConfidence is the model's self-reported confidence (high, medium, low,
+	// or empty) for the AI parse that filled this book. Only the queued
+	// library.ai-parse saver reads it, to tag the change-history source.
+	AIConfidence     string
 	BookOrganizerID  string // Embedded AUDIOBOOK_ORGANIZER_ID for re-linking
 	ASIN             string
 	OpenLibraryID    string

@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.10.2
+// version: 1.11.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -117,6 +117,14 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	var failures atomic.Int64
 	var started atomic.Int64
 	var batchesOK, booksParsed, savesFailed, batchesSplit, booksFailed, booksGivenUp atomic.Int64
+	// booksDiscarded counts rows the saver could not resolve (deleted, merged,
+	// files gone): the LLM answered, the save raised no error, and nothing was
+	// written. A third outcome, neither parsed nor save-failed.
+	var booksDiscarded atomic.Int64
+	// confHigh/Medium/Low/Unrated tally ParsedMetadata.Confidence over the rows
+	// that were actually saved. Read here, never gated on: see
+	// docs/decisions/2026-10-30-ai-parse-confidence.md.
+	var confHigh, confMedium, confLow, confUnrated atomic.Int64
 	var abortedPermanent, abortedThreshold atomic.Bool
 	aborted := make(chan struct{})
 	var abortOnce sync.Once
@@ -146,6 +154,14 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 		defer detailMu.Unlock()
 		if len(batchFailures) < maxRecordedBatchFailures {
 			batchFailures = append(batchFailures, f)
+		}
+	}
+	var discarded []AIDiscard
+	recordDiscard := func(f AIDiscard) {
+		detailMu.Lock()
+		defer detailMu.Unlock()
+		if len(discarded) < maxRecordedDiscards {
+			discarded = append(discarded, f)
 		}
 	}
 	recordSaveFailure := func(f AISaveFailure) {
@@ -295,13 +311,47 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				// (nothing compares ParsedMetadata.Confidence).
 				recordParseResult(ai.TaskBatchParse, hadResult && snapshotAIMerge(&books[idx]) != before)
 
+				// The model's self-reported confidence rides on the book to the
+				// saver, which records it in the change-history source. Empty
+				// when the model returned nothing for this filename.
+				conf := ""
+				if hadResult {
+					conf = normalizeAIConfidence(aiMeta.Confidence)
+				}
+				books[idx].AIConfidence = conf
+
 				stampPath, saveErr := save(ctx, &books[idx])
-				if saveErr != nil {
+				switch {
+				case saveErr != nil:
 					savesFailed.Add(1)
 					recordSaveFailure(AISaveFailure{Path: books[idx].FilePath, Err: saveErr.Error()})
 					log.Warn("failed to re-save AI-enriched book %s: %v", books[idx].FilePath, saveErr)
+				case stampPath == "":
+					// No error and no row: the saver could not resolve the book
+					// (deleted or merged since nomination, files gone). Nothing
+					// was written, so it is NOT parsed. Counted on its own
+					// because the per-book Warn the saver emits lives in the
+					// process log and is dropped by the activity channel under
+					// load; this counter is what reaches the operation record.
+					booksDiscarded.Add(1)
+					recordDiscard(AIDiscard{Path: books[idx].FilePath})
+					log.Debug("AI parse discarded for %s: no book row to save to", books[idx].FilePath)
+				default:
+					booksParsed.Add(1)
+					if hadResult {
+						switch conf {
+						case aiConfidenceHigh:
+							confHigh.Add(1)
+						case aiConfidenceMedium:
+							confMedium.Add(1)
+						case aiConfidenceLow:
+							confLow.Add(1)
+						default:
+							confUnrated.Add(1)
+						}
+						log.Debug("AI parsed %s: confidence=%s", books[idx].FilePath, confidenceLabel(conf))
+					}
 				}
-				booksParsed.Add(1)
 
 				// A parse has now been ATTEMPTED for this book, which is what
 				// earns the scan-cache stamp the scan deliberately withheld
@@ -470,14 +520,21 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	defer detailMu.Unlock()
 
 	return AIPhaseSummary{
-		BooksNominated:   nominated,
-		BooksSkipped:     booksSkipped,
-		BooksGivenUp:     int(booksGivenUp.Load()),
-		BatchesTotal:     totalBatches,
-		BatchesOK:        int(batchesOK.Load()),
-		BatchesFailed:    int(failures.Load()),
-		BooksParsed:      int(booksParsed.Load()),
-		SavesFailed:      int(savesFailed.Load()),
+		BooksNominated: nominated,
+		BooksSkipped:   booksSkipped,
+		BooksGivenUp:   int(booksGivenUp.Load()),
+		BatchesTotal:   totalBatches,
+		BatchesOK:      int(batchesOK.Load()),
+		BatchesFailed:  int(failures.Load()),
+		BooksParsed:    int(booksParsed.Load()),
+		SavesFailed:    int(savesFailed.Load()),
+		BooksDiscarded: int(booksDiscarded.Load()),
+		Confidence: AIConfidenceCounts{
+			High:    int(confHigh.Load()),
+			Medium:  int(confMedium.Load()),
+			Low:     int(confLow.Load()),
+			Unrated: int(confUnrated.Load()),
+		},
 		BatchesSplit:     int(batchesSplit.Load()),
 		BooksFailed:      int(booksFailed.Load()),
 		AbortedPermanent: abortedPermanent.Load(),
@@ -485,6 +542,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 		BatchFailures:    batchFailures,
 		SaveFailures:     saveFailures,
 		BookFailures:     bookFailures,
+		Discarded:        discarded,
 	}
 }
 
@@ -659,7 +717,59 @@ const (
 	maxRecordedFilenames     = 10
 	maxRecordedSaveFailures  = 10
 	maxRecordedBookFailures  = 10
+	maxRecordedDiscards      = 10
 )
+
+// The three values the ParseBatch prompt asks the model for. Anything else
+// (empty, "very high", "N/A") is unrated.
+const (
+	aiConfidenceHigh   = "high"
+	aiConfidenceMedium = "medium"
+	aiConfidenceLow    = "low"
+)
+
+// normalizeAIConfidence maps the model's free-text confidence onto the three
+// values the prompt requests, or "" when it said anything else.
+func normalizeAIConfidence(c string) string {
+	switch v := strings.ToLower(strings.TrimSpace(c)); v {
+	case aiConfidenceHigh, aiConfidenceMedium, aiConfidenceLow:
+		return v
+	}
+	return ""
+}
+
+func confidenceLabel(c string) string {
+	if c == "" {
+		return "unrated"
+	}
+	return c
+}
+
+// aiParseHistorySource is the change-history source for an AI-filled field. The
+// confidence is appended ("scan.ai-parse:low") so a field the model was unsure
+// of can be told apart from one it was sure of; a row with no rated confidence
+// keeps the bare source.
+func aiParseHistorySource(confidence string) string {
+	if c := normalizeAIConfidence(confidence); c != "" {
+		return scanAIHistorySource + ":" + c
+	}
+	return scanAIHistorySource
+}
+
+// AIConfidenceCounts tallies the model's self-reported confidence over the rows
+// that were saved.
+type AIConfidenceCounts struct {
+	High, Medium, Low, Unrated int
+}
+
+// Rated is the number of rows the model gave a recognised confidence for.
+func (c AIConfidenceCounts) Rated() int { return c.High + c.Medium + c.Low }
+
+// AIDiscard is one book whose parse was thrown away because no row could be
+// resolved to save it to.
+type AIDiscard struct {
+	Path string `json:"path"`
+}
 
 // AIBookFailure is one book the split could not resolve: it came back with the
 // wrong number of results even when asked about on its own. Distinct from a
@@ -724,6 +834,12 @@ type AIPhaseSummary struct {
 	BatchesFailed  int
 	BooksParsed    int
 	SavesFailed    int
+	// BooksDiscarded counts rows the saver could not resolve (deleted, merged,
+	// files gone) and so wrote nothing for, without an error. BooksParsed counts
+	// only rows actually saved; these are neither parsed nor failed.
+	BooksDiscarded int
+	// Confidence is the model's self-reported confidence over the saved rows.
+	Confidence AIConfidenceCounts
 	// BatchesSplit counts batches re-asked in smaller pieces after a reply
 	// with the wrong number of results (parseBatchSplitting). BooksFailed
 	// counts the books that still failed alone, with detail in BookFailures.
@@ -743,6 +859,7 @@ type AIPhaseSummary struct {
 	BatchFailures []AIBatchFailure
 	SaveFailures  []AISaveFailure
 	BookFailures  []AIBookFailure
+	Discarded     []AIDiscard
 }
 
 // Aborted reports whether the phase stopped short, leaving nominated books
@@ -778,6 +895,16 @@ func (s AIPhaseSummary) Failed() bool {
 	return s.Aborted() || s.BatchesFailed > 0 || s.SavesFailed > 0 || s.BooksFailed > 0
 }
 
+// Degraded reports a run that did not fail but wrote nothing for some of the
+// books it parsed: rows discarded because they could not be resolved. The
+// operation vocabulary has no "completed with warnings" status, so this is
+// surfaced as a warn-level operation log line rather than a failure: a row
+// legitimately deleted or merged between nomination and the batch is not an
+// error, and failing the op for it would train everyone to ignore the status.
+func (s AIPhaseSummary) Degraded() bool {
+	return !s.Disabled && !s.Failed() && s.BooksDiscarded > 0
+}
+
 // String renders the summary in the same shape as the scan's own
 // "scan summary:" line, which is the established idiom for per-run counters
 // in this package.
@@ -787,6 +914,16 @@ func (s AIPhaseSummary) String() string {
 	}
 	msg := fmt.Sprintf("ai parse summary: %d/%d book(s) parsed in %d/%d batches; %d batch failure(s), %d save failure(s)",
 		s.BooksParsed, s.BooksNominated, s.BatchesOK, s.BatchesTotal, s.BatchesFailed, s.SavesFailed)
+	if s.BooksDiscarded > 0 {
+		msg += fmt.Sprintf("; %d discarded (book not found / nothing saved)", s.BooksDiscarded)
+	}
+	if s.Confidence.Rated() > 0 || s.Confidence.Unrated > 0 {
+		msg += fmt.Sprintf("; confidence high %d / medium %d / low %d",
+			s.Confidence.High, s.Confidence.Medium, s.Confidence.Low)
+		if s.Confidence.Unrated > 0 {
+			msg += fmt.Sprintf(" / unrated %d", s.Confidence.Unrated)
+		}
+	}
 	// Only when a split happened, so the line is unchanged for every run that
 	// never needed one.
 	if s.BatchesSplit > 0 || s.BooksFailed > 0 {
@@ -829,10 +966,17 @@ func (s AIPhaseSummary) String() string {
 // logged into the operation record, where the expanded row shows them. Empty
 // for a run with nothing to report, so the caller can range over it blindly.
 func (s AIPhaseSummary) FailureDetails() []string {
-	if len(s.BatchFailures) == 0 && len(s.SaveFailures) == 0 && len(s.BookFailures) == 0 {
+	if len(s.BatchFailures) == 0 && len(s.SaveFailures) == 0 && len(s.BookFailures) == 0 && len(s.Discarded) == 0 {
 		return nil
 	}
-	lines := make([]string, 0, len(s.BatchFailures)+len(s.SaveFailures)+len(s.BookFailures)+3)
+	lines := make([]string, 0, len(s.BatchFailures)+len(s.SaveFailures)+len(s.BookFailures)+len(s.Discarded)+4)
+	for _, d := range s.Discarded {
+		lines = append(lines, fmt.Sprintf("parse discarded, no book row to save to: %s", d.Path))
+	}
+	if s.BooksDiscarded > len(s.Discarded) {
+		lines = append(lines, fmt.Sprintf("... and %d further discarded parse(s) not recorded (cap %d)",
+			s.BooksDiscarded-len(s.Discarded), maxRecordedDiscards))
+	}
 	for _, f := range s.BookFailures {
 		lines = append(lines, fmt.Sprintf("book failed even on its own after a batch split: %s: %s", f.Path, f.Err))
 	}
@@ -893,7 +1037,7 @@ func (s AIPhaseSummary) FailureDetails() []string {
 // monotonic. Calling UpdateProgress here would clobber that with a much
 // smaller number and make a healthy scan's progress bar jump backwards.
 func (s AIPhaseSummary) ReportTo(warn func(string)) {
-	if warn == nil || !s.Failed() {
+	if warn == nil || (!s.Failed() && !s.Degraded()) {
 		return
 	}
 	warn(s.String())

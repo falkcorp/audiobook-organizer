@@ -1,7 +1,7 @@
 // file: internal/server/library_ai_parse_op.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 60e01771-b827-4cf4-b3db-0b4b00bc9389
-// last-edited: 2026-09-09
+// last-edited: 2026-10-30
 
 package server
 
@@ -140,7 +140,9 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 			// claiming it had parsed every filename, with the only evidence in
 			// journalctl on the box.
 			level := slog.LevelInfo
-			if summary.Failed() {
+			// Degraded (rows discarded, nothing else wrong) is a warn-level line,
+			// not a failure: the registry has no completed-with-warnings status.
+			if summary.Failed() || summary.Degraded() {
 				level = slog.LevelWarn
 			}
 			_ = reporter.Log(level, summary.String())
@@ -152,7 +154,7 @@ func (s *Server) RegisterLibraryAIParseOp(reg *opsregistry.Registry) error {
 			for _, line := range summary.FailureDetails() {
 				_ = reporter.Log(slog.LevelWarn, line)
 			}
-			_ = reporter.UpdateProgress(summary.BooksParsed, len(p.Books), summary.String())
+			_ = reporter.UpdateProgress(summary.BooksParsed+summary.BooksDiscarded, len(p.Books), summary.String())
 
 			// Failing on any failed batch or lost save, not only on an abort.
 			//

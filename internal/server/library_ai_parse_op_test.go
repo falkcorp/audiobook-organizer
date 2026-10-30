@@ -1,18 +1,22 @@
 // file: internal/server/library_ai_parse_op_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 32147e60-f02b-47a1-8b05-cf56ca320f50
-// last-edited: 2026-09-13
+// last-edited: 2026-10-30
 
 package server
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -241,4 +245,68 @@ func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
 		require.NotContains(t, m, "Parsed 1 filename(s)",
 			"the op reported a fabricated success count after every batch failed")
 	}
+}
+
+// TestLibraryAIParseOpReportsDiscardedRowsNotAFullyGreenParse is the 2026-09-09
+// prod probe: three book IDs that do not exist. The LLM parses all three, the
+// saver finds no row for any of them and returns ("", nil), and the operation
+// used to log "3/3 book(s) parsed ... 0 save failure(s)" with nothing written.
+//
+// The run is not a failure (a row deleted or merged under a queued batch is
+// legitimate) so the op returns nil, but the operation record must say 0 parsed
+// / 3 discarded at WARN level, name the books, and carry the confidence tally.
+func TestLibraryAIParseOpReportsDiscardedRowsNotAFullyGreenParse(t *testing.T) {
+	restoreEnqueueHook(t)
+
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content := `{"results":[` +
+			`{"title":"Year One","author":"Bruce Wayne","confidence":"high"},` +
+			`{"title":"The Long Halloween","author":"Jeph Loeb","confidence":"medium"},` +
+			`{"title":"Knightfall","author":"Doug Moench","confidence":"low"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-test", "object": "chat.completion", "created": 1, "model": "test-model",
+			"choices": []map[string]any{{
+				"index": 0, "finish_reason": "stop",
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(llm.Close)
+
+	oldAI := config.AppConfig.EnableAIParsing
+	oldBackend := config.AppConfig.AIBackend
+	t.Cleanup(func() {
+		config.AppConfig.EnableAIParsing = oldAI
+		config.AppConfig.AIBackend = oldBackend
+	})
+	config.AppConfig.EnableAIParsing = true
+	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
+	config.AppConfig.AIBackend.LocalBaseURL = llm.URL
+	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+
+	reg := aiParseTestReg(t)
+	// After aiParseTestReg, which clears the scanner store: this test needs a
+	// real one so the saver can look the (nonexistent) rows up.
+	store, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { scanner.SetStore(nil); _ = store.Close() })
+	scanner.SetStore(store)
+
+	require.NoError(t, (&Server{opRegistry: reg}).RegisterLibraryAIParseOp(reg))
+	def, ok := reg.Def("library.ai-parse")
+	require.True(t, ok)
+
+	rep := &aiParseStubReporter{}
+	runErr := def.Run(context.Background(), []byte(`{"books":[`+
+		`{"id":"no-such-book-1","file_path":"/lib/gotham-1.m4b"},`+
+		`{"id":"no-such-book-2","file_path":"/lib/gotham-2.m4b"},`+
+		`{"id":"no-such-book-3","file_path":"/lib/gotham-3.m4b"}]}`), rep)
+	require.NoError(t, runErr, "discarded rows are a warning, not a failed operation")
+
+	logged := strings.Join(rep.logged(), "\n")
+	require.Contains(t, logged, "0/3 book(s) parsed")
+	require.Contains(t, logged, "3 discarded")
+	require.NotContains(t, logged, "3/3 book(s) parsed")
+	require.Contains(t, logged, "gotham-2.m4b", "the discarded books must be named in the operation record")
 }

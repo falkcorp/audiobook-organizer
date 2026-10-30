@@ -3155,7 +3155,7 @@ given a longer budget without changing the OpenAI path.
       `maintenance.transcribe-book-intros`, and the migration checkpoint proven
       in prod on 2026-09-08 (`resumed=true`, cursor 972k→1.72M).
 
-- [ ] **`ai parse summary` reports a fully-green line for a batch where nothing
+- [x] **`ai parse summary` reports a fully-green line for a batch where nothing
       was written.** Found 2026-09-09 by probing `library.ai-parse` in prod with
       three deliberately nonexistent book IDs. Every row was discarded; the op
       log said:
@@ -3225,7 +3225,7 @@ given a longer budget without changing the OpenAI path.
       discard ratio non-clean, so it surfaces rather than reading as success.
       Cheap, and it converts a silent outcome into a counted one.
 
-- [ ] **`ParsedMetadata.Confidence` is asked for, paid for, and never read —
+- [x] **`ParsedMetadata.Confidence` is asked for, paid for, and never read —
       decide whether to gate saves on it or stop requesting it.** The
       `ParseBatch` system prompt in `internal/ai/openai_parser.go` instructs the
       model to return `"confidence": "high|medium|low"` and to "set confidence
