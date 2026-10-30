@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -636,7 +637,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **TODO-FILE-INTRO-RUN** Once `feat/whisper-remote-extract` and the per-file intro PR are both merged and deployed, run `maintenance.transcribe-file-intros` as a dry run, record the real per-file time on the Mac workers, and replace the unmeasured 5.3 s/file estimate.
 - [ ] **TODO-FILE-INTRO-META** `transcribe.BatchResult` carries no model or language, so `IntroMeta.Model` and `.Language` are empty on every per-file result; have the path transport report the worker's model (from `/health`) so "same model for every track" is checkable per file.
-- [ ] **TODO-FILE-INTRO-FLUSH-ORDER** `fileIntroAccum.flush` copies the counters under its mutex but calls `PutFileIntroStats` after releasing it, so two workers flushing at once can land the older snapshot last and the persisted stats briefly go backwards (the final `flush(true)` is not exposed to it only because the pool has drained by then). Serialise the copy and the write behind a second mutex, or stamp a sequence and drop stale writes in the sink.
+- [x] **TODO-FILE-INTRO-FLUSH-ORDER** `fileIntroAccum.flush` copies the counters under its mutex but calls `PutFileIntroStats` after releasing it, so two workers flushing at once can land the older snapshot last and the persisted stats briefly go backwards (the final `flush(true)` is not exposed to it only because the pool has drained by then). Serialise the copy and the write behind a second mutex, or stamp a sequence and drop stale writes in the sink. Done 2026-10-30: `flush` now holds a dedicated `writeMu` across the copy and the Put; `-race` tests in `file_intro_flush_order_test.go`.
 - [ ] **TODO-FILE-INTRO-PROBE-PER-BATCH** `transcribe.TranscribeByPathBatch` runs `gateEndpoints` (one `/health` probe per endpoint) on every call, and the file-intro op sends batches of 8 files, so a full-library run issues a probe round for every 8 files. Measure it against the endpoints' own load; if it matters, cache the probe result for a short TTL inside `gateEndpoints` (a failed probe must still bench the endpoint immediately) or pass an already-probed endpoint set into the batch call.
 
 - [ ] **TODO-MLIST-PR1** Master-list import PR 1 follow-ups found in review of #4126. The delete/retention, parser, matcher and master-list auth-off items are fixed by the import apply (PR 2); only the upload-limit item remains open here. The new open items from PR 2 are filed as their own tasks.
