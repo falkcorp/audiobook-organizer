@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 553f618b-e6c3-4b54-ad05-30f3d39136b9
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package admindebug
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -80,7 +81,7 @@ func (fx *fixture) router(user *database.User) *gin.Engine {
 		}
 		c.Next()
 	})
-	fx.handler.Register(r.Group("/api/v1"))
+	fx.handler.Register(r.Group("/api/v1"), servermiddleware.RequireAdmin())
 	return r
 }
 
@@ -288,6 +289,48 @@ func TestRoutes_RequireAdmin(t *testing.T) {
 	w, _ := do(t, fx.router(nil), http.MethodGet, "/api/v1/admin/debug/books/"+fx.book.ID, "")
 	require.Equal(t, http.StatusUnauthorized, w.Code)
 	require.Equal(t, 0, fx.fileDuration(t, fx.broken))
+}
+
+// A pass-through read gate (what the server passes with authentication off)
+// opens the four reads to a request with no user, and only those: the three
+// writes sit behind RequireAdmin inside Register, so they still answer 401, and
+// nothing is written. The returned route table marks exactly those three.
+func TestRegister_ReadGateOpensReadsOnly(t *testing.T) {
+	fx := newFixture(t)
+	r := gin.New()
+	routes := fx.handler.Register(r.Group("/api/v1"), func(c *gin.Context) { c.Next() })
+
+	for _, rt := range []struct{ method, url string }{
+		{http.MethodGet, "/api/v1/admin/debug/books/" + fx.book.ID},
+		{http.MethodGet, "/api/v1/admin/debug/book-files/" + fx.broken.ID},
+		{http.MethodGet, "/api/v1/admin/debug/edits"},
+	} {
+		w, _ := do(t, r, rt.method, rt.url, "")
+		require.Equal(t, http.StatusOK, w.Code, "%s %s: %s", rt.method, rt.url, w.Body.String())
+	}
+	for _, rt := range []struct{ method, url, body string }{
+		{http.MethodPatch, "/api/v1/admin/debug/books/" + fx.book.ID + "?apply=true", `{"title":"Changed"}`},
+		{http.MethodPatch, "/api/v1/admin/debug/book-files/" + fx.broken.ID + "?apply=true", `{"duration":44962}`},
+		{http.MethodPost, "/api/v1/admin/debug/edits/x/undo", ""},
+	} {
+		w, _ := do(t, r, rt.method, rt.url, rt.body)
+		require.Equal(t, http.StatusUnauthorized, w.Code, "%s %s", rt.method, rt.url)
+	}
+	require.Equal(t, 0, fx.fileDuration(t, fx.broken))
+	require.Zero(t, fx.editCount(t))
+
+	var writes, reads int
+	for _, rt := range routes {
+		if rt.Writes {
+			writes++
+			require.NotEqual(t, http.MethodGet, rt.Method, rt.Path)
+		} else {
+			reads++
+			require.Equal(t, http.MethodGet, rt.Method, rt.Path)
+		}
+	}
+	require.Equal(t, 3, writes)
+	require.Equal(t, 4, reads)
 }
 
 func TestITunesGuard(t *testing.T) {
