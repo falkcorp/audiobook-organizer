@@ -721,10 +721,10 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           label="Create backups before modifying files"
         />
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 6 }}>
-          Before a single-book tag write (an edit, fetch or apply), the file&apos;s previous
-          version is kept beside it as a .bak-&lt;time&gt; file. Bulk operations keep none. Old
-          backups are removed after the backup retention period, but only inside the library folder:
-          a backup beside a file in an import path stays until you delete it.
+          Before a single-book tag write (an edit, fetch or apply), the file&apos;s previous version
+          is kept beside it as a .bak-&lt;time&gt; file. Bulk operations keep none. Old backups are
+          removed after the backup retention period, but only inside the library folder: a backup
+          beside a file in an import path stays until you delete it.
         </Typography>
       </Grid>
 
