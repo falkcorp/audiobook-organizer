@@ -1,15 +1,18 @@
 // file: internal/database/search_rank_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3f7c1e0a-9b2d-4e65-8a14-6d0c2b9e7f53
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 func TestSubstringSearchRank_Tiers(t *testing.T) {
@@ -166,3 +169,53 @@ func TestSubstringSearch_UnderscoreReadsAsSpace(t *testing.T) {
 	_, ok = SubstringSearchRank("b3", "x", &narr, nil, nil, "some reader")
 	require.True(t, ok)
 }
+
+// TestSubstringSearchRank_AuthorQueryNormalizedLikeStoredSide pins the
+// author-branch contract: the stored name is util.NormalizeAuthor(name) (lower +
+// every unicode whitespace run collapsed to one space), so a query carrying a
+// tab, NBSP or ideographic space used to miss it. legacyHit is what the
+// predicate returned before the query was normalized the same way; the table
+// records which rows were real mismatches.
+func TestSubstringSearchRank_AuthorQueryNormalizedLikeStoredSide(t *testing.T) {
+	cases := []struct {
+		name       string
+		author     string
+		query      string
+		wantHit    bool
+		legacyHit  bool
+		wantTier   int
+		titleMatch bool
+	}{
+		{"plain lower-case", "Bruce Wayne", "bruce wayne", true, true, SearchTierAuthor, false},
+		{"mixed-case query", "Bruce Wayne", "BRUCE Wayne", true, true, SearchTierAuthor, false},
+		{"stored name has double space", "Selina  Kyle", "selina kyle", true, true, SearchTierAuthor, false},
+		{"query has double space", "Selina Kyle", "selina  kyle", true, true, SearchTierAuthor, false},
+		{"stored name has tab, query typed with space", "Dick\tGrayson", "dick grayson", true, true, SearchTierAuthor, false},
+		{"query typed with tab", "Dick Grayson", "dick\tgrayson", true, false, SearchTierAuthor, false},
+		{"query pasted with NBSP", "Harvey Dent", "harvey dent", true, false, SearchTierAuthor, false},
+		{"query with ideographic space", "Barbara Gordon", "barbara　gordon", true, false, SearchTierAuthor, false},
+		{"query with newline between words", "Alfred Pennyworth", "alfred\npennyworth", true, false, SearchTierAuthor, false},
+		{"query in stored form (lower-cased fallback)", "Jim Gordon", "jim gordon", true, true, SearchTierAuthor, false},
+		{"trailing space on an author query is trimmed like the stored side", "Bruce Wayne", "wayne ", true, false, SearchTierAuthor, false},
+		{"trailing NBSP normalizes to a trailing space", "Bruce Wayne", "wayne ", true, false, SearchTierAuthor, false},
+		{"unrelated author", "Oswald Cobblepot", "bruce wayne", false, false, 0, false},
+		{"whitespace-only query normalizes to empty and matches no author", "Bruce Wayne", "\t", false, false, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := 3
+			stored := map[int]string{id: normalizeAuthorForTest(tc.author)}
+
+			legacy := strings.Contains(searchFold(stored[id]), searchFold(strings.ToLower(tc.query)))
+			require.Equal(t, tc.legacyHit, legacy, "table's legacyHit must describe the pre-fix predicate")
+
+			rank, ok := SubstringSearchRank("b1", "The Long Halloween", nil, &id, stored, strings.ToLower(tc.query))
+			require.Equal(t, tc.wantHit, ok)
+			if ok {
+				require.Equal(t, tc.wantTier, rank.Tier)
+			}
+		})
+	}
+}
+
+func normalizeAuthorForTest(s string) string { return util.NormalizeAuthor(s) }
