@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -1126,7 +1127,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Retired ops leave their `opv2:def:` rows behind.** `DeleteOrphanOpDefsV2` (`internal/database/pebble_store_ops_v2.go`) has no caller, so the op_definitions_v2 row of every retired op (most recently `maintenance.batch-poller`, 04-P12) stays in Pebble indefinitely. Nothing reads those rows, so the cost is clutter only. Decide whether boot should call it once the registry is built, so the def table matches the registry. Found in the #4030 review.
 
-- [ ] **Remove hardcoded library paths from the transcode pass** `internal/remux/transcode.go` (`TranscodeMalformedFiles`, the `permanentlyUnfixable` list) pre-marks two absolute library file paths as permanently unfixable on every completed run. They are one install's real files in a public repo, and on any other install they mark paths that do not exist. This is production logic, not test data, so it needs a decision: drop the list (those two keys are already set on the install that needed them), or move it to configuration. Afterwards, check whether the paths should be scrubbed from history.
+- [x] **Remove hardcoded library paths from the transcode pass** `internal/remux/transcode.go` (`TranscodeMalformedFiles`, the `permanentlyUnfixable` list) pre-marks two absolute library file paths as permanently unfixable on every completed run. They are one install's real files in a public repo, and on any other install they mark paths that do not exist. This is production logic, not test data, so it needs a decision: drop the list (those two keys are already set on the install that needed them), or move it to configuration. Afterwards, check whether the paths should be scrubbed from history.
 
 - [ ] **05-PR5-FINISH-ON-DECLINE** Add a third decision, **Finish without
       resuming**, next to Retry and Discard for a v3 run in
