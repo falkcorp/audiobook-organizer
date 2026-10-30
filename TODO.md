@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -551,13 +552,17 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Purge round-11 notes (PR 4165)** The sampler skips books with `LibraryState == "deleted"` and trashed books but not rows whose `Missing` flag is set (deliberate: a file the scanner already flagged missing is still evidence of a lost mount); revisit if a genuinely deleted-by-hand library keeps refusing.
 
-- [ ] **TODO-REPORTS-PRUNE** Prune `{library root}/.reports` — `backfill-file-hashes`
+- [x] **TODO-REPORTS-PRUNE** Prune `{library root}/.reports` — `backfill-file-hashes`
       writes one report per run named for its op ID (about 100 MB of TSV for a
       full-library run, and a rerun is a new op with a new file), and nothing ever
       removes them, so the directory grows without bound on the library volume.
       Decide a retention rule (keep the newest N per op kind, or by age), delete
       only regular files this op family wrote (never follow a symlink, never
       touch a `.pending` file of a live run), and log what was removed.
+      Done 2026-10-30: `maintenance.reports-prune`, driven nightly by the
+      `reports_prune` scheduler task; keeps the newest 3 per op kind and anything
+      under 14 days (`keep_per_kind`, `max_age_days`). See
+      `docs/decisions/2026-10-30-reports-dir-prune.md`.
 
 - [x] **Retired versions: per-scan cache for `RetiredBookFilesWithHash`** (#4173 review N4). While memdb is not serving and retired versions exist, each hash lookup re-enumerates every retired version (`internal/database/retired_hash_lookup.go`). Needs a scan-lifetime cache with invalidation against concurrent retire/unretire. Do before retire-apply runs library-wide scans. Done 2026-10-29: `BeginRetiredHashScope` (opened by `ProcessBooksParallel`) caches the retired rows by hash for the scan, invalidated by a generation bumped after every retire, un-retire, rehome and retired-row hash rewrite; the live side is never cached.
 - [x] **Retired versions: `isRetiredShell` stays true after un-retire** (#4173 review N5). A version can remain `Status=retired` with zero rows after `UnretireBookFiles`, so the shell check keeps paying extra lookups (`internal/database/retired_book_files.go`). Fix by clearing the version's status when its last row is un-retired, or by checking for rows (one extra read per shell check on the scan path). Done 2026-10-29: `isRetiredShell` counts held retired rows (`RetiredRowsHeldFor`) instead of listing versions. The version keeps `Status=retired` on purpose: the retire revert and the retire apply's empty-version adoption both need it.

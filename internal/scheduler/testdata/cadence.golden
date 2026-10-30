@@ -1,7 +1,7 @@
-library_scan|0s||false|false|18|false
+library_scan|0s||false|false|19|false
 library_scan_full|0s||false|false|-1|false
-library_organize|0s||false|false|17|true
-library_size_refresh|0s||false|false|15|true
+library_organize|0s||false|false|18|true
+library_size_refresh|0s||false|false|16|true
 transcode|0s||false|false|-1|false
 dedup_refresh|0s||false|false|1|false
 label_refinement|0s||false|false|-1|false
@@ -17,9 +17,10 @@ acoustid_backfill|0s||false|false|-1|false
 temp_file_cleanup|0s||true|true|13|true
 transcode_temp_cleanup|1h0m0s||true|false|-1|true
 trash_cleanup|0s||false|true|14|true
+reports_prune|24h0m0s||false|true|15|true
 metadata_upgrade|0s||false|false|-1|false
 author_split_scan|0s||false|false|3|false
-db_optimize|0s||false|false|16|false
+db_optimize|0s||false|false|17|false
 acoustid_online_lookup|0s||false|false|-1|false
 cleanup_old_backups|0s||false|false|12|false
 purge_deleted|0s||false|false|8|false

@@ -1,0 +1,3 @@
+### Added
+
+- New nightly maintenance op `maintenance.reports-prune` removes old per-run TSV reports from `{library root}/.reports`, which `backfill-file-hashes` (about 100 MB per full-library run) and the other report-writing ops grew without bound. It keeps the newest 3 reports per op kind and anything younger than 14 days (`keep_per_kind`, `max_age_days`), only removes regular files named for this op family, never follows a symlink, never touches a `.pending` file or the report of a queued or running operation, and previews unless `dry_run` is false. It logs each removal and reports counts and bytes freed.

@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // Package scheduler — task registrations.
 // Every registered task is defined here. Each task's TriggerFn and
@@ -1166,6 +1166,26 @@ func (ts *TaskScheduler) registerAllTasks() {
 		},
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return true },
+	})
+
+	// Nightly prune of old per-run TSV reports under {library root}/.reports
+	// (maintenance.reports-prune). The op previews unless told otherwise, so
+	// this task passes dry_run=false explicitly.
+	ts.registerTask(TaskDefinition{
+		Name:        "reports_prune",
+		Description: "Remove old per-run op reports from the library's .reports directory (newest 3 per kind and anything under 14 days are kept)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.reports-prune", map[string]any{"dry_run": false})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue maintenance.reports-prune: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "reports-prune"), nil
+		},
+		IsEnabled:              func() bool { return true },
+		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
 	})
