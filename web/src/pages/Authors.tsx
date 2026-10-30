@@ -1,8 +1,9 @@
 // file: web/src/pages/Authors.tsx
-// version: 1.5.2
+// version: 1.6.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-10-30
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -20,6 +21,7 @@ import {
   DialogTitle,
   Divider,
   Drawer,
+  LinearProgress,
   FormControl,
   IconButton,
   InputLabel,
@@ -59,7 +61,11 @@ import {
   ColumnPicker,
   type ColumnDef,
 } from '../components/common/ConfigurableTable';
+import { useDebouncedSearch } from '../hooks/useDebouncedSearch';
 import * as api from '../services/api';
+
+/** How long the search box waits after the last keystroke before asking the server. */
+const SEARCH_DEBOUNCE_MS = 300;
 
 interface ActionHistoryEntry {
   id: string;
@@ -82,7 +88,6 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     defaultWidth: 300,
     minWidth: 120,
     sortable: true,
-    sortValue: (a) => a.name.toLowerCase(),
     render: (a) => (
       <Box>
         <Typography
@@ -118,7 +123,6 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     minWidth: 80,
     align: 'right',
     sortable: true,
-    sortValue: (a) => a.book_count,
     render: (a) =>
       a.file_count > a.book_count ? `${a.book_count} (${a.file_count} files)` : `${a.book_count}`,
   },
@@ -130,7 +134,6 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     minWidth: 60,
     align: 'right',
     sortable: true,
-    sortValue: (a) => a.aliases?.length ?? 0,
     render: (a) => a.aliases?.length || '-',
   },
   {
@@ -141,7 +144,6 @@ const authorColumns: ColumnDef<api.AuthorWithCount>[] = [
     minWidth: 50,
     align: 'right',
     sortable: true,
-    sortValue: (a) => a.id,
     render: (a) => a.id,
   },
 ];
@@ -364,12 +366,24 @@ function AuthorRow({
 // --- Main Component ---
 
 export function Authors() {
+  // The CURRENT PAGE only. The table is paged, searched, filtered and sorted by
+  // the server (WEB-01); this component never holds the whole authors table.
   const [authors, setAuthors] = useState<api.AuthorWithCount[]>([]);
+  // matchCount: authors matching the search and filter across every page.
+  // totalAuthors: the whole table, for the header line.
+  const [matchCount, setMatchCount] = useState(0);
+  const [totalAuthors, setTotalAuthors] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<AuthorFilter>('with_books');
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Selection survives page turns, so it stores the author rows themselves, not
+  // just ids: merge and bulk delete name the selected authors in their dialogs,
+  // and a row on another page is no longer in `authors`. The header checkbox
+  // acts on the CURRENT PAGE only (there is no "all matching" mode: merging or
+  // deleting every author matching a search is not an action this page offers).
+  const [selected, setSelected] = useState<Map<number, api.AuthorWithCount>>(new Map());
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
 
@@ -406,7 +420,6 @@ export function Authors() {
     toggleColumn,
     isColumnVisible,
     startResize,
-    sortRows,
     resetColumns,
   } = useConfigurableTable<api.AuthorWithCount>({
     storageKey: 'authors',
@@ -421,61 +434,104 @@ export function Authors() {
     );
   };
 
+  const debouncedSearch = useDebouncedSearch(search, SEARCH_DEBOUNCE_MS);
+
+  // A new settled search term starts again from page 0. Done during render
+  // rather than in the keystroke handler so the page does not reset (and fetch)
+  // once on the first keystroke and again when the debounce settles.
+  const [appliedSearch, setAppliedSearch] = useState('');
+  if (appliedSearch !== debouncedSearch) {
+    setAppliedSearch(debouncedSearch);
+    setPage(0);
+  }
+
+  // Only the newest request may write state: a slow response for an old page or
+  // search must not overwrite the page the user is now looking at.
+  const requestSeq = useRef(0);
+
+  // Fetches the page the table is showing. Every refresh after a rename, merge,
+  // split, delete or undo is this same call, so it refetches one page, never
+  // the table.
   const loadAuthors = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getAuthorsWithCounts();
-      setAuthors(data);
+      const result = await api.getAuthorsPage({
+        limit: rowsPerPage,
+        offset: page * rowsPerPage,
+        search: appliedSearch,
+        filter,
+        sort: sortField,
+        order: sortDir,
+      });
+      if (seq !== requestSeq.current) return;
+      // The last page can vanish under us (the final row on it was just merged
+      // or deleted): step back to the new last page, which refetches.
+      if (result.items.length === 0 && result.count > 0 && page > 0) {
+        setPage(Math.ceil(result.count / rowsPerPage) - 1);
+        return;
+      }
+      setAuthors(result.items);
+      setMatchCount(result.count);
+      setTotalAuthors(result.total);
+      setLoadedOnce(true);
+      // Keep stored selection rows current (a rename changes the name the merge
+      // dialog shows) for the ones this page carries.
+      setSelected((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Map(prev);
+        for (const a of result.items) if (next.has(a.id)) next.set(a.id, a);
+        return next;
+      });
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load authors');
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, []);
+  }, [page, rowsPerPage, appliedSearch, filter, sortField, sortDir]);
 
   useEffect(() => {
     void loadAuthors();
   }, [loadAuthors]);
 
-  const filtered = useMemo(() => {
-    let list = authors;
-    if (filter === 'with_books') {
-      list = list.filter((a) => a.book_count > 0);
-    } else if (filter === 'zero_books') {
-      list = list.filter((a) => a.book_count === 0);
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(
-        (a) =>
-          a.name.toLowerCase().includes(q) ||
-          (a.aliases ?? []).some((al) => al.alias_name.toLowerCase().includes(q))
-      );
-    }
-    return sortRows(list);
-  }, [authors, search, filter, sortRows]);
+  // Changing the sort starts again from page 0, like a new search or filter.
+  const handleSortColumn = (field: string) => {
+    handleSort(field);
+    setPage(0);
+  };
 
-  const paged = useMemo(
-    () => filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage),
-    [filtered, page, rowsPerPage]
-  );
+  const selectedAuthors = useMemo(() => [...selected.values()], [selected]);
 
   const handleSelect = (id: number) => {
     setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const next = new Map(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        const row = authors.find((a) => a.id === id);
+        if (row) next.set(id, row);
+      }
       return next;
     });
   };
 
+  const pageAllSelected = authors.length > 0 && authors.every((a) => selected.has(a.id));
+  const pageSomeSelected = authors.some((a) => selected.has(a.id));
+
+  // Header checkbox: this page's rows only. Rows selected on other pages are
+  // left alone either way.
   const handleSelectAll = () => {
-    if (selected.size === paged.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(paged.map((a) => a.id)));
-    }
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (pageAllSelected) {
+        for (const a of authors) next.delete(a.id);
+      } else {
+        for (const a of authors) next.set(a.id, a);
+      }
+      return next;
+    });
   };
 
   // Rename
@@ -563,7 +619,7 @@ export function Authors() {
   };
   const handleMerge = async () => {
     if (typeof mergeCanonical !== 'number') return;
-    const mergeIds = [...selected].filter((id) => id !== mergeCanonical);
+    const mergeIds = [...selected.keys()].filter((id) => id !== mergeCanonical);
     if (mergeIds.length === 0) return;
     setActionLoading(true);
     try {
@@ -584,7 +640,7 @@ export function Authors() {
         severity: 'success',
       });
       setMergeDialog(false);
-      setSelected(new Set());
+      setSelected(new Map());
       await loadAuthors();
     } catch (err) {
       setSnackbar({
@@ -601,7 +657,7 @@ export function Authors() {
   const handleBulkDelete = async () => {
     setActionLoading(true);
     try {
-      const result = await api.bulkDeleteAuthors([...selected]);
+      const result = await api.bulkDeleteAuthors([...selected.keys()]);
       const msg =
         result.skipped > 0
           ? `Deleted ${result.deleted}, skipped ${result.skipped} (have books)`
@@ -609,7 +665,7 @@ export function Authors() {
       addHistory({ action: 'delete', description: msg, undoable: false });
       setSnackbar({ open: true, message: msg, severity: 'success' });
       setBulkDeleteDialog(false);
-      setSelected(new Set());
+      setSelected(new Map());
       await loadAuthors();
     } catch (err) {
       setSnackbar({
@@ -709,7 +765,7 @@ export function Authors() {
     }
   };
 
-  if (loading) {
+  if (!loadedOnce && loading) {
     return (
       <Box sx={{ py: 6, display: 'flex', justifyContent: 'center' }}>
         <CircularProgress />
@@ -717,7 +773,7 @@ export function Authors() {
     );
   }
 
-  if (error) {
+  if (error && !loadedOnce) {
     return (
       <Stack spacing={2}>
         <Typography variant="h4">Authors</Typography>
@@ -735,7 +791,6 @@ export function Authors() {
     );
   }
 
-  const selectedAuthors = authors.filter((a) => selected.has(a.id));
   const totalCols = visibleColumns.length + 3; // checkbox + expand + actions
 
   return (
@@ -747,7 +802,7 @@ export function Authors() {
           color: 'text.secondary',
         }}
       >
-        Manage authors, aliases, and merge duplicates. {authors.length} total authors.
+        Manage authors, aliases, and merge duplicates. {totalAuthors} total authors.
       </Typography>
 
       {/* Toolbar */}
@@ -763,10 +818,7 @@ export function Authors() {
           size="small"
           placeholder="Search authors..."
           value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(0);
-          }}
+          onChange={(e) => setSearch(e.target.value)}
           sx={{ minWidth: 250 }}
         />
         <FormControl size="small" sx={{ minWidth: 160 }}>
@@ -831,18 +883,32 @@ export function Authors() {
           color: 'text.secondary',
         }}
       >
-        {filtered.length} author{filtered.length !== 1 ? 's' : ''} shown
+        {matchCount} author{matchCount !== 1 ? 's' : ''} shown
       </Typography>
 
+      {error && (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => void loadAuthors()}>
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Alert>
+      )}
+
       {/* Table */}
+      {loading && <LinearProgress aria-label="Loading authors" />}
       <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
         <Table size="small" sx={{ tableLayout: 'fixed', minWidth: 500 }}>
           <TableHead>
             <TableRow>
               <TableCell padding="checkbox" sx={{ width: 42 }}>
                 <Checkbox
-                  indeterminate={selected.size > 0 && selected.size < paged.length}
-                  checked={paged.length > 0 && selected.size === paged.length}
+                  indeterminate={pageSomeSelected && !pageAllSelected}
+                  checked={pageAllSelected}
                   onChange={handleSelectAll}
                 />
               </TableCell>
@@ -857,7 +923,7 @@ export function Authors() {
                   sortable={col.sortable}
                   sortActive={sortField === col.key}
                   sortDirection={sortField === col.key ? sortDir : 'asc'}
-                  onSort={() => handleSort(col.key)}
+                  onSort={() => handleSortColumn(col.key)}
                   onStartResize={startResize}
                 />
               ))}
@@ -867,7 +933,7 @@ export function Authors() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {paged.length === 0 ? (
+            {authors.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={totalCols} align="center">
                   <Typography
@@ -877,12 +943,12 @@ export function Authors() {
                       py: 4,
                     }}
                   >
-                    {search ? 'No authors match your search.' : 'No authors found.'}
+                    {appliedSearch ? 'No authors match your search.' : 'No authors found.'}
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              paged.map((author) => (
+              authors.map((author) => (
                 <AuthorRow
                   key={author.id}
                   author={author}
@@ -901,7 +967,7 @@ export function Authors() {
         </Table>
         <TablePagination
           component="div"
-          count={filtered.length}
+          count={matchCount}
           page={page}
           onPageChange={(_, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
