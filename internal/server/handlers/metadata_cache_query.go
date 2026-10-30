@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -1046,70 +1046,76 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, budget *queryg
 		return ""
 	}
 
-	out.refs = make([]reviewRef, 0, len(rows.reviewable))
-	for i := range rows.reviewable {
-		if budget.Expired() {
-			return
-		}
-		r := &rows.reviewable[i]
-		cand := r.row.cand
-		book := r.row.book
-		// The lane's beforeRuntime filters are a conjunction, so their order
-		// does not change the result; the title (the one that can run a
-		// regex) goes last, over only the rows the cheap ones kept.
-		if q.Source != "" && base.provider[i] != q.Source {
-			continue
-		}
-		if r.status == reviewStatusMatched && !(cand.Score*100 >= q.MinConfidence) {
-			continue
-		}
-		if q.HideApplied || q.HideRejected || q.HideSkipped {
-			switch rowState(r) {
-			case "applied":
-				if q.HideApplied {
-					continue
-				}
-			case "rejected":
-				if q.HideRejected {
-					continue
-				}
-			case "skipped":
-				if q.HideSkipped {
-					continue
-				}
+	filterRows := func(minConfidence float64, countRuntime bool) []reviewRef {
+		refs := make([]reviewRef, 0, len(rows.reviewable))
+		for i := range rows.reviewable {
+			if budget.Expired() {
+				return refs
 			}
-		}
-		if q.HideNoMatch && r.status == reviewStatusNoMatch {
-			continue
-		}
-		if q.title != nil && !q.title.match(r.row, book.Title, budget) {
-			continue
-		}
-		// Every row past this point is one the lane's beforeRuntime keeps,
-		// which is the set runtimeHidden is counted over.
-		if q.HideRuntime && reviewRuntimeHidden(cand, r.row.files) {
-			out.runtimeHidden++
-			continue
-		}
-		if q.MatchLanguage && reviewLanguageHidden(book.Language, base.candLang[i]) {
-			continue
-		}
-		if q.HasTranscription && (book.TranscribedTitle == nil || *book.TranscribedTitle == "") {
-			continue
-		}
-		if q.TranscriptionMatched || q.TranscriptionRuntimeFlagged {
-			// Both read the live verdict, not the search-time stamp, so the
-			// filters agree with the chip and with the apply gate.
-			confirms, chk := r.liveRuntimeCheck()
-			if q.TranscriptionMatched && !reviewTranscriptionMatched(cand, confirms, chk) {
+			r := &rows.reviewable[i]
+			cand := r.row.cand
+			book := r.row.book
+			// The lane's beforeRuntime filters are a conjunction, so their order
+			// does not change the result; the title (the one that can run a
+			// regex) goes last, over only the rows the cheap ones kept.
+			if q.Source != "" && base.provider[i] != q.Source {
 				continue
 			}
-			if q.TranscriptionRuntimeFlagged && !(confirms && chk != nil) {
+			if r.status == reviewStatusMatched && !(cand.Score*100 >= minConfidence) {
 				continue
 			}
+			if q.HideApplied || q.HideRejected || q.HideSkipped {
+				switch rowState(r) {
+				case "applied":
+					if q.HideApplied {
+						continue
+					}
+				case "rejected":
+					if q.HideRejected {
+						continue
+					}
+				case "skipped":
+					if q.HideSkipped {
+						continue
+					}
+				}
+			}
+			if q.HideNoMatch && r.status == reviewStatusNoMatch {
+				continue
+			}
+			if q.title != nil && !q.title.match(r.row, book.Title, budget) {
+				continue
+			}
+			// Every row past this point is one the lane's beforeRuntime keeps,
+			// which is the set runtimeHidden is counted over.
+			if q.HideRuntime && reviewRuntimeHidden(cand, r.row.files) {
+				if countRuntime {
+					out.runtimeHidden++
+				}
+				continue
+			}
+			if q.MatchLanguage && reviewLanguageHidden(book.Language, base.candLang[i]) {
+				continue
+			}
+			if q.HasTranscription && (book.TranscribedTitle == nil || *book.TranscribedTitle == "") {
+				continue
+			}
+			if q.TranscriptionMatched || q.TranscriptionRuntimeFlagged {
+				// Both read the live verdict, not the search-time stamp, so the
+				// filters agree with the chip and with the apply gate.
+				confirms, chk := r.liveRuntimeCheck()
+				if q.TranscriptionMatched && !reviewTranscriptionMatched(cand, confirms, chk) {
+					continue
+				}
+				if q.TranscriptionRuntimeFlagged && !(confirms && chk != nil) {
+					continue
+				}
+			}
+			refs = append(refs, reviewRef(i))
 		}
-		out.refs = append(out.refs, reviewRef(i))
+		return refs
 	}
+	out.refs = filterRows(q.MinConfidence, true)
 
 	if !q.HideMultiBook {
 		return
@@ -1129,18 +1135,28 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, budget *queryg
 		_, pulledOut := ungrouped[r.row.sum.BookID]
 		return !pulledOut
 	}
+	// Groups are counted over the set the OTHER filters keep, before the
+	// minimum score: a book just under the minimum still shares its candidate
+	// with a book above it, so the sharing book stays hidden whatever the
+	// slider says. Counted over the post-score set instead, lowering the
+	// minimum admitted a second book to a group and hid the first one, so a
+	// lower minimum returned a list that was not a superset (owner report
+	// 2026-10-29: nothing at 150, 40 rows at 200).
+	basis := out.refs
+	if q.MinConfidence > 0 {
+		basis = filterRows(0, false)
+	}
 	counts := map[string]int{}
-	keys := make([]string, len(out.refs))
-	for n, ref := range out.refs {
+	for _, ref := range basis {
 		r := &rows.reviewable[ref]
 		if groupable(r) {
-			keys[n] = reviewCandidateKey(r.row.cand)
-			counts[keys[n]]++
+			counts[reviewCandidateKey(r.row.cand)]++
 		}
 	}
 	kept := out.refs[:0]
-	for n, ref := range out.refs {
-		if keys[n] != "" && counts[keys[n]] > 1 {
+	for _, ref := range out.refs {
+		r := &rows.reviewable[ref]
+		if groupable(r) && counts[reviewCandidateKey(r.row.cand)] > 1 {
 			continue
 		}
 		kept = append(kept, ref)

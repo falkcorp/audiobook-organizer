@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.17.4
+// version: 1.17.5
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -1863,4 +1863,34 @@ func TestReviewQuery_TranscriptionFiltersUseLiveRuntimeVerdict(t *testing.T) {
 		require.Equal(t, stamp.Verdict, chk.Verdict)
 		require.Equal(t, stamp.Detail, chk.Detail)
 	}
+}
+
+// TestReviewQuery_MinConfidenceMonotonicWithHideMultiBook pins the owner
+// report of 2026-10-29: with hide_multi_book on, lowering the minimum score
+// must never remove a row. Two books share one candidate; the one scoring
+// 1.95 passes a 190 minimum alone, the one scoring 1.60 joins at 150. Groups
+// counted after the score filter listed the first book at 190 and hid it at
+// 150, so 150 listed fewer rows than 190 for it. A group is the books that share a
+// candidate among the rows every OTHER filter keeps.
+func TestReviewQuery_MinConfidenceMonotonicWithHideMultiBook(t *testing.T) {
+	mk := func(id string, score float64, asin, title string) queryCaseRow {
+		fr := queryCaseRow{Bucket: reviewBucketReviewable, Status: reviewStatusMatched}
+		fr.Book.ID, fr.Book.Title = id, title
+		fr.Candidate = &metafetch.MetadataCandidate{Source: "Audible", Score: score, Title: title, Author: "Bruce Wayne", ASIN: asin}
+		return fr
+	}
+	rows := []queryCaseRow{
+		mk("joker-a", 1.95, "B0JOKER001", "The Killing Joke"),
+		mk("joker-b", 1.60, "B0JOKER001", "The Killing Joke"),
+		mk("solo-hush", 1.70, "B0HUSH0001", "Hush"),
+	}
+	base := baseFromSnapshot(t, snapshotFromCases(t, rows))
+	at := func(min string) []string {
+		return listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"min_confidence": min, "hide_multi_book": "true"})))
+	}
+	hi, mid, lo := at("190"), at("150"), at("0")
+	require.Empty(t, hi, "joker-a shares a candidate with joker-b, which is only under the minimum: still a group")
+	require.Subset(t, mid, hi, "a lower minimum must list a superset of a higher one")
+	require.Equal(t, []string{"solo-hush"}, mid, "joker-a and joker-b share a candidate; both stay hidden")
+	require.Subset(t, lo, mid)
 }
