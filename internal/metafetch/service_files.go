@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -392,9 +392,10 @@ func (mfs *Service) resolveLibraryCopy(id string, book *database.Book, policy co
 	if ok || policy != createLibraryCopy {
 		return target, nil
 	}
-	// With the Deluge list unloaded every book outside root_dir looks
-	// protected (isProtectedPath), so a copy made now could be a copy of a
-	// book that needs none. Refuse until the list loads.
+	// With the Deluge list unloaded, or the import-path list unreadable, every
+	// book outside root_dir looks protected (isProtectedPath), so a copy made
+	// now could be a copy of a book that needs none. Refuse until the lists
+	// load.
 	if !mfs.protectedListLoaded() {
 		return nil, fmt.Errorf("apply file work for book %s: not creating a library copy: %w", id, tagger.ErrProtectedListNotLoaded)
 	}
