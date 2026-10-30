@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -817,7 +818,7 @@ into one of the curated sections below, is a normal direct edit.
       and cover each path with a test that a pre-existing web session stops
       authenticating, including one created mid-change.
 
-- [ ] **LIBRARY-READ-STATUS-ALTERNATION-EMPTY** The Library list's `filters=` JSON
+- [x] **LIBRARY-READ-STATUS-ALTERNATION-EMPTY** The Library list's `filters=` JSON
       route answers `200` with `count: 0` for a read_status value written as an
       alternation: `[{"field":"read_status","value":"(finished|in_progress)"}]`
       and `"finished|in_progress"` both return an empty list (probed 2026-10-18
