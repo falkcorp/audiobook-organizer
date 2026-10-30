@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.9
+// version: 1.27.10
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -1005,9 +1005,10 @@ func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, refer
 	// import paths". The protected answer still wins when the other checks found
 	// one; otherwise the question could not be answered and the file stays
 	// (errPathLookupFailed: transient, retried). The protected folders are
-	// resolved afresh, not from the cache the tag writers share: a link
-	// re-pointed inside the cache window would otherwise let a protected file
-	// through to the removal below.
+	// resolved afresh and the import-path list read from the store, not from the
+	// caches the tag writers share: a link re-pointed, or an import folder added,
+	// inside a cache window would otherwise let a protected file through to the
+	// removal below.
 	protected, protErr := protectedPathCheckedFresh(svc.store, path)
 	if errors.Is(protErr, errProtectedPathUnresolved) {
 		// The path's symlinks cannot be resolved, so whether it leads into a
