@@ -1,5 +1,5 @@
 // file: internal/deluge/protected_paths_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e6c9f3b2-4d0a-5187-c8e5-2b9f4e1c0d74
 // last-edited: 2026-10-30
 
@@ -36,7 +36,7 @@ func newTestCache(lf listFunc, extraPaths []string) *ProtectedPathCache {
 		client:     nil, // never called in tests — we populate manually
 		extraPaths: extraPaths,
 	}
-	c.extraResolved = resolveRoots("static", extraPaths)
+	c.extraResolved, c.extraKnown, _ = resolveRoots(extraPaths, nil)
 	populateCacheForTest(c, lf)
 	return c
 }

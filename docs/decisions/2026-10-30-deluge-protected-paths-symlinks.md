@@ -1,5 +1,5 @@
 <!-- file: docs/decisions/2026-10-30-deluge-protected-paths-symlinks.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 54eeb0e8-5181-432b-82bd-16aa26572f3d -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -91,10 +91,56 @@ rule; they are the same kind of guard and need it for the same reason.
   spelled path but not the resolved one, which is only visible inside
   `underProtectedPath`, so a link into the tree would still pass.
 
+## Second pass (same day, after review)
+
+Taken autonomously, as above.
+
+- **The scheduled sync now fetches (`ProtectedPathCache.Refresh`).** The op
+  called `Invalidate()` then `IsProtected("")`, but `ProtectedBy("")` returns
+  before the TTL check, so it never fetched. `Refresh() error` forces a fetch
+  and re-resolves the static prefixes, and returns the Deluge error. The op
+  returns that error, so a scheduled sync against a down Deluge fails visibly
+  instead of reporting "Protected paths refreshed". Rejected: making
+  `ProtectedBy("")` refresh (a lookup of nothing must not do network I/O), and
+  swallowing the error (the previous behaviour, which hid the bug).
+- **`staticProtection` (import.go) resolves too.** Both its branches
+  (`cfg.ProtectedPaths`, the iTunes library folder) go through
+  `underResolvedPrefix`: spelled and resolved on both sides, with the same
+  fail-closed rules as the cache. Rejected: adding the iTunes folder to the
+  cache's static list in `register.go` (it would make every tag write refuse the
+  iTunes folder, a behaviour change beyond this fix) and calling
+  `pathutil.UnderProtectedPath` (it adds the "iTunes Media" / ".failed" rules to
+  an import refusal). It resolves the prefixes per call and keeps nothing; the
+  lists are one or two entries and the call is per import file.
+- **Resolve attempts are stamped (`lastResolve`).** While Deluge was down
+  `lastRefresh` stayed unstamped, so each call re-resolved the static prefixes
+  and re-logged an unresolvable one. The attempt is now stamped whether or not
+  it worked, so a prefix is retried and warned about once per
+  `protectedPathTTL`; `Invalidate` and `Refresh` clear the stamp.
+- **A spelled Deluge hit is no longer final.** Only a spelled static hit is.
+  A spelled Deluge hit is resolved too and upgraded to `ProtectedByStatic` when
+  the resolved form is in the frozen tree or under a static prefix, or cannot be
+  resolved. Without this a link inside a seeding folder that points at the
+  iTunes tree was reported as an importable Deluge file. Cost: one stat walk for
+  a seeding file's lookup, which the unprotected path already paid.
+- **A prefix that stops resolving keeps its last-known resolved form**
+  (`delugeKnown`, `extraKnown`: root to the form it had when it last
+  resolved), instead of dropping to its spelled form. A prefix that never
+  resolved keeps spelled protection only. Both warn once per interval.
+  Rejected: failing the whole list closed on one unresolvable prefix (see above).
+  Residual: a re-pointed link whose new target cannot be resolved keeps
+  protecting the OLD target, not the new one.
+- **A candidate with a `..` segment is protected as `ProtectedByStatic`.**
+  `filepath.Abs` cleans `x/..` lexically, but the kernel applies `..` to the
+  directory a symlink led to, so `shortcut/../f` (shortcut into `vault/sub`)
+  names `vault/f` while the cleaned spelling `free/f` looks unprotected. The
+  check runs on the raw string before any cleaning and logs at debug. Rejected:
+  resolving the raw path component by component ourselves (a second path
+  resolver to get subtly wrong), and cleaning with symlink-aware logic.
+  Residual: a protected prefix configured with a `..` segment is still made
+  absolute by `filepath.Abs`; config, not input.
+
 ## Left alone (outside this change)
 
-- `deluge.staticProtection` (`internal/deluge/import.go`) still compares
-  `cfg.ProtectedPaths` and the iTunes library folder as spelled, after asking
-  the cache. The cache now covers the symlink cases for `cfg.ProtectedPaths`
-  (they are its static list), but the iTunes library folder branch there is
-  lexical only.
+- `UnderProtectedPath` (pathutil) has the same `filepath.Abs` cleaning of `..`
+  in the candidate; its callers pass paths from the database. Not changed here.

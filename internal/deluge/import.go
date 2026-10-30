@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move
@@ -421,8 +421,11 @@ func staticProtection(cfg *config.Config, protected tagger.PathChecker, path str
 	if cfg == nil {
 		return ""
 	}
+	// Each prefix is tested as the path is by the cache: spelled and with
+	// symlinks resolved, on both sides, and a path with a ".." segment or one
+	// that cannot be resolved counts as under it (underResolvedPrefix).
 	for _, p := range cfg.ProtectedPaths {
-		if p != "" && pathutil.IsWithin(path, p) {
+		if p != "" && underResolvedPrefix(path, []string{p}) {
 			return "the configured protected path " + p
 		}
 	}
@@ -430,7 +433,7 @@ func staticProtection(cfg *config.Config, protected tagger.PathChecker, path str
 		if lib == "" {
 			continue
 		}
-		if dir := filepath.Dir(lib); pathutil.IsWithin(path, dir) {
+		if dir := filepath.Dir(lib); underResolvedPrefix(path, []string{dir}) {
 			return "the iTunes library " + dir
 		}
 	}

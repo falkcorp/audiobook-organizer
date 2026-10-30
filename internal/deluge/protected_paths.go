@@ -1,5 +1,5 @@
 // file: internal/deluge/protected_paths.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: d5b8e2a1-3c9f-4076-b7d4-0e8a2c5f1b93
 // last-edited: 2026-10-30
 
@@ -7,7 +7,9 @@
 package deluge
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,9 +59,22 @@ const (
 // resolved through its nearest existing parent, and a dangling link is followed
 // to where it points, so a dangling link inside a protected folder stays
 // protected (the spelled check also catches it). A prefix whose links cannot be
-// resolved (a cycle, a permission error) keeps its spelled protection only and
-// is logged at each refresh; a candidate that cannot be resolved is protected
-// (fail closed), reported as ProtectedByStatic.
+// resolved (a cycle, a permission error, a stale mount) keeps the resolved form
+// it had at the last refresh that could resolve it, or its spelled form when it
+// never had one, and is logged once per refresh interval (not once per call,
+// including while Deluge is down). A candidate that cannot be resolved is
+// protected (fail closed), reported as ProtectedByStatic.
+//
+// Only a spelled ProtectedByStatic hit is final. A spelled Deluge hit is still
+// resolved, because the same file can be a static one by another route (a
+// seeding folder holding a link into the iTunes tree or a static prefix): the
+// answer is then upgraded to ProtectedByStatic.
+//
+// A candidate with a ".." segment is protected (ProtectedByStatic) without being
+// looked at. filepath.Abs cleans ".." lexically, but the kernel applies it to
+// the directory a symlink has led to, so "protected/../free/f" can name a
+// different file than its cleaned spelling does. Callers pass cleaned absolute
+// paths; one that does not is not trusted.
 //
 // The hands-off iTunes tree (books/itunes/**, pathutil.UnderFrozenITunesTree)
 // is protected whatever the configuration says, as ProtectedByStatic.
@@ -73,8 +88,17 @@ type ProtectedPathCache struct {
 	// of delugePaths and extraPaths, rebuilt with them (see resolveRoots).
 	delugeResolved []string
 	extraResolved  []string
-	client         *Client
-	lastRefresh    time.Time
+	// delugeKnown and extraKnown map each prefix to the resolved form it had at
+	// the last refresh that could resolve it, so a prefix that fails to resolve
+	// keeps that form (last-known), instead of falling back to its spelling.
+	delugeKnown map[string]string
+	extraKnown  map[string]string
+	// lastResolve is when the static prefixes were last resolved, whether or not
+	// that worked, so a failure is retried and reported once per interval even
+	// while a failing Deluge keeps lastRefresh from being stamped.
+	lastResolve time.Time
+	client      *Client
+	lastRefresh time.Time
 	// loaded is true once the Deluge list has been fetched successfully, or
 	// immediately when there is no client (no list to load).
 	loaded bool
@@ -114,6 +138,10 @@ func (c *ProtectedPathCache) ProtectedBy(filePath string) string {
 	if pathutil.UnderFrozenITunesTree(filePath) {
 		return ProtectedByStatic
 	}
+	if hasParentSegment(filePath) {
+		protectedLog.Debug("treating path as protected: it has a '..' segment: path=%s", logger.SanitizeLogValue(filePath))
+		return ProtectedByStatic
+	}
 	c.maybeRefresh()
 	// The lists are replaced wholesale on refresh, never edited in place, so a
 	// snapshot of the slice headers is safe to use after the lock is released:
@@ -122,22 +150,17 @@ func (c *ProtectedPathCache) ProtectedBy(filePath string) string {
 	snap := prefixSnapshot{c.extraPaths, c.extraResolved, c.delugePaths, c.delugeResolved}
 	c.mu.RUnlock()
 
-	// As spelled, against the prefixes as spelled: no filesystem access, and a
-	// hit here is final, so what was protected before symlinks were considered
-	// still is, whatever resolution does.
-	if by := snap.match([]string{filePath}, false); by != "" {
-		return by
+	// As spelled, against the prefixes as spelled: no filesystem access. A
+	// static hit is final, so what was protected before symlinks were considered
+	// still is, whatever resolution does. A Deluge hit is not: see below.
+	spelled := snap.match([]string{filePath}, false)
+	if spelled == ProtectedByStatic {
+		return ProtectedByStatic
 	}
 
 	// Resolved. The spelled path is made absolute first (the prefixes' resolved
 	// forms are absolute), then resolved through its nearest existing parent.
-	abs, err := filepath.Abs(filePath)
-	if err != nil {
-		protectedLog.Warn("treating path as protected: cannot make it absolute: path=%s error=%s",
-			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
-		return ProtectedByStatic
-	}
-	resolved, err := pathutil.ResolveExistingPrefix(abs)
+	abs, resolved, err := resolveCandidate(filePath)
 	if err != nil {
 		protectedLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
 			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
@@ -148,7 +171,59 @@ func (c *ProtectedPathCache) ProtectedBy(filePath string) string {
 	}
 	// Every pairing of {abs, resolved} path with {spelled, resolved} prefixes
 	// that the spelled check above did not already make.
-	return snap.match([]string{abs, resolved}, true)
+	if by := snap.match([]string{abs, resolved}, true); by != "" {
+		return by
+	}
+	return spelled
+}
+
+// resolveCandidate makes filePath absolute and resolves its symlinks through
+// the nearest existing parent (pathutil.ResolveExistingPrefix).
+func resolveCandidate(filePath string) (abs, resolved string, err error) {
+	abs, err = filepath.Abs(filePath)
+	if err != nil {
+		return "", "", fmt.Errorf("make %q absolute: %w", filePath, err)
+	}
+	resolved, err = pathutil.ResolveExistingPrefix(abs)
+	if err != nil {
+		return "", "", err
+	}
+	return abs, resolved, nil
+}
+
+// hasParentSegment reports whether p has a ".." path segment, before any
+// cleaning.
+func hasParentSegment(p string) bool {
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// underResolvedPrefix reports whether path lies under any of roots, tested the
+// way ProtectedBy tests the static list: as spelled, then resolved, against the
+// roots as spelled and resolved, failing closed on a ".." segment or a path
+// that cannot be resolved. It resolves the roots on each call and keeps nothing,
+// for callers (staticProtection) that hold no cache; a root that cannot be
+// resolved keeps its spelled protection.
+func underResolvedPrefix(path string, roots []string) bool {
+	if path == "" {
+		return false
+	}
+	if underAny([]string{path}, roots) {
+		return true
+	}
+	if hasParentSegment(path) {
+		return true
+	}
+	abs, resolved, err := resolveCandidate(path)
+	if err != nil {
+		return true
+	}
+	resolvedRoots, _, _ := resolveRoots(roots, nil)
+	return underAny([]string{abs, resolved}, roots) || underAny([]string{abs, resolved}, resolvedRoots)
 }
 
 // prefixSnapshot is the four prefix lists as ProtectedBy read them: the static
@@ -186,14 +261,25 @@ func underAny(forms, roots []string) bool {
 	return false
 }
 
+// rootFailure is a prefix that could not be resolved.
+type rootFailure struct {
+	root string
+	err  error
+	// lastKnown is true when the prefix keeps the resolved form it had at an
+	// earlier refresh, false when only its spelled form protects it.
+	lastKnown bool
+}
+
 // resolveRoots returns the absolute, symlink-resolved form of each non-empty
-// root, for the prefixes of one list. A root that cannot be made absolute or
-// resolved (a link cycle, a permission error, a stale mount) is logged and
-// left out: it keeps the protection of its spelled form, which is what every
-// prefix had before resolution, rather than closing every path in the library
-// on one bad entry.
-func resolveRoots(kind string, roots []string) []string {
-	out := make([]string, 0, len(roots))
+// root, for the prefixes of one list, and the map from root to its resolved
+// form (the next call's last). A root that cannot be made absolute or resolved
+// (a link cycle, a permission error, a stale mount) keeps its form from last,
+// when last has one, and otherwise only its spelled form protects it; either
+// way it is reported in failed, and does not close every path in the library
+// the way one bad entry otherwise would.
+func resolveRoots(roots []string, last map[string]string) (out []string, known map[string]string, failed []rootFailure) {
+	out = make([]string, 0, len(roots))
+	known = make(map[string]string, len(roots))
 	for _, r := range roots {
 		if r == "" {
 			continue
@@ -203,13 +289,31 @@ func resolveRoots(kind string, roots []string) []string {
 			var res string
 			if res, err = pathutil.ResolveExistingPrefix(abs); err == nil {
 				out = append(out, res)
+				known[r] = res
 				continue
 			}
 		}
-		protectedLog.Warn("protected %s path %s cannot be resolved through its symlinks; only its spelled form protects: %s",
-			kind, logger.SanitizeLogValue(r), logger.SanitizeLogValue(err.Error()))
+		prev, ok := last[r]
+		if ok {
+			out = append(out, prev)
+			known[r] = prev
+		}
+		failed = append(failed, rootFailure{root: r, err: err, lastKnown: ok})
 	}
-	return out
+	return out, known, failed
+}
+
+// warnRootFailures logs each unresolvable prefix of one list; its callers run
+// once per refresh interval.
+func warnRootFailures(kind string, failed []rootFailure) {
+	for _, f := range failed {
+		keep := "only its spelled form protects it"
+		if f.lastKnown {
+			keep = "keeping the form it resolved to at the last refresh"
+		}
+		protectedLog.Warn("protected %s path %s cannot be resolved through its symlinks; %s: %s",
+			kind, logger.SanitizeLogValue(f.root), keep, logger.SanitizeLogValue(f.err.Error()))
+	}
 }
 
 // Loaded reports whether the Deluge save_path list has been fetched at least
@@ -226,7 +330,18 @@ func (c *ProtectedPathCache) Loaded() bool {
 func (c *ProtectedPathCache) Invalidate() {
 	c.mu.Lock()
 	c.lastRefresh = time.Time{} // zero value — older than any TTL
+	c.lastResolve = time.Time{}
 	c.mu.Unlock()
+}
+
+// Refresh fetches the Deluge save_path list now, whatever the TTL says, and
+// re-resolves the static prefixes. It returns the error that kept the list from
+// loading (Deluge unreachable); the last-known list is kept then, as for a lazy
+// refresh. With no Deluge client there is nothing to fetch and it returns nil.
+// This is what the scheduled sync calls: a call to IsProtected("") cannot do it,
+// because an empty path is answered before any refresh.
+func (c *ProtectedPathCache) Refresh() error {
+	return c.refresh(true)
 }
 
 // maybeRefresh checks whether the TTL has expired and, if so, calls refresh.
@@ -238,36 +353,45 @@ func (c *ProtectedPathCache) maybeRefresh() {
 	if !expired {
 		return
 	}
-	c.refresh()
+	_ = c.refresh(false) // a failure is logged there and retried on the next call
 }
 
 // refresh fetches current torrent save paths from Deluge and rebuilds the
-// Deluge list. If Deluge is unreachable, the existing list is kept unchanged
-// (and, if it never loaded, Loaded stays false).
-func (c *ProtectedPathCache) refresh() {
+// Deluge list; force skips the TTL checks. If Deluge is unreachable, the
+// existing list is kept unchanged (and, if it never loaded, Loaded stays false)
+// and the error is returned.
+func (c *ProtectedPathCache) refresh(force bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Re-check under write lock in case another goroutine refreshed first.
-	if time.Since(c.lastRefresh) <= protectedPathTTL {
-		return
+	if !force && time.Since(c.lastRefresh) <= protectedPathTTL {
+		return nil
+	}
+
+	// The static prefixes' resolved forms are rebuilt once per interval, whatever
+	// Deluge does, so a link re-pointed in front of one is seen within
+	// protectedPathTTL even while Deluge is down. The attempt is stamped
+	// whether or not it worked: while Deluge is down lastRefresh is not, and an
+	// unresolvable prefix would otherwise be retried and logged on every call.
+	if force || time.Since(c.lastResolve) > protectedPathTTL {
+		var failed []rootFailure
+		c.extraResolved, c.extraKnown, failed = resolveRoots(c.extraPaths, c.extraKnown)
+		c.lastResolve = time.Now()
+		warnRootFailures("static", failed)
 	}
 
 	// No Deluge client (deluge not configured): there is no list to load, and
 	// the static paths are consulted directly by ProtectedBy. Without this
 	// guard, c.client.ListTorrents() → Login() dereferences the nil receiver
 	// and every tag write's IsProtected pre-flight panics.
-	// The static prefixes' resolved forms are rebuilt on every refresh attempt,
-	// whatever Deluge does, so a link re-pointed in front of one is seen within
-	// protectedPathTTL even while Deluge is down.
-	c.extraResolved = resolveRoots("static", c.extraPaths)
-
 	if c.client == nil {
 		c.delugePaths = nil
 		c.delugeResolved = nil
+		c.delugeKnown = nil
 		c.loaded = true
 		c.lastRefresh = time.Now()
-		return
+		return nil
 	}
 
 	torrents, err := c.client.ListTorrents()
@@ -276,9 +400,10 @@ func (c *ProtectedPathCache) refresh() {
 		// so the next call will try again.
 		protectedLog.Warn("ProtectedPathCache failed to refresh from Deluge (loaded=%v, using last-known list of %d save paths): %v",
 			c.loaded, len(c.delugePaths), err)
-		return
+		return fmt.Errorf("refresh protected paths from Deluge: %w", err)
 	}
 	c.setDelugePathsLocked(torrents)
+	return nil
 }
 
 // setDelugePathsLocked replaces the Deluge list with the unique save paths of
@@ -296,7 +421,9 @@ func (c *ProtectedPathCache) setDelugePathsLocked(torrents map[string]TorrentSta
 		}
 	}
 	c.delugePaths = fresh
-	c.delugeResolved = resolveRoots("deluge save", fresh)
+	var failed []rootFailure
+	c.delugeResolved, c.delugeKnown, failed = resolveRoots(fresh, c.delugeKnown)
+	warnRootFailures("deluge save", failed)
 	c.loaded = true
 	c.lastRefresh = time.Now()
 	protectedLog.Debug("ProtectedPathCache refreshed: %d Deluge save paths, %d static paths", len(c.delugePaths), len(c.extraPaths))

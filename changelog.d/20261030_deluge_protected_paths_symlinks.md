@@ -12,3 +12,13 @@
   (`pathutil.UnderProtectedPath`, used by the purge, organizer, metadata
   write-back, server middleware and metafetch) whatever the configuration says,
   including for a link into the tree.
+- The scheduled `deluge.protected-paths-sync` op now actually fetches the
+  torrent save paths (it called `IsProtected("")`, which returns before the
+  cache looks at its TTL) and fails when Deluge is unreachable.
+- The Deluge cache no longer treats a spelled seeding-folder hit as final: a
+  file there that is really in the frozen iTunes tree or under a static prefix
+  is reported static. A candidate with a `..` segment is protected, a prefix
+  that stops resolving keeps its last resolved form, and an unresolvable prefix
+  warns once per refresh interval instead of once per call.
+- The Deluge importer's static-prefix check (configured protected paths and the
+  iTunes library folder) now follows symlinks too.
