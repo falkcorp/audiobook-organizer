@@ -1,5 +1,5 @@
 // file: internal/server/server_middleware.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
 // last-edited: 2026-10-29
 
@@ -158,7 +158,7 @@ func (s *Server) isProtectedPath(filePath string) bool {
 		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryITLPath))
 	}
 	protected, err := pathutil.UnderProtectedPath(absPath, roots)
-	if err != nil {
+	if err != nil && pathutil.ShouldLogProtectedPathError(err) {
 		protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
 			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
 	}

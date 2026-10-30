@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.7
+// version: 1.27.8
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-29
 
@@ -1008,10 +1008,17 @@ func (svc *AudiobookService) planPurgePathIn(path string, emptied *dirSet, refer
 	protected, protErr := protectedPathChecked(svc.store, path)
 	if errors.Is(protErr, errProtectedPathUnresolved) {
 		// The path's symlinks cannot be resolved, so whether it leads into a
-		// protected folder is not known. Not "protected" (that would let the book
-		// go with the file left behind and no record): a path that cannot be
-		// decided, which keeps the book in the trash for a retry, or for a link
-		// cycle (ELOOP) gives up after a few passes like any unresolvable path.
+		// protected folder is not known, and the file is not removed either way.
+		// Not "protected" (that would let the book go silently): statLookupError
+		// classifies it like any other path the purge cannot settle. A failure
+		// that may pass (permission denied, an I/O error) holds the book in the
+		// trash and is asked again on the next pass. A link cycle or an over-long
+		// path (ELOOP, ENAMETOOLONG: errPathUnresolvable) will not resolve by
+		// trying again, so a pass purge does NOT hold the book for it
+		// (fileUndecided): the book is purged, the file is left where it is, and
+		// the line "book purged, file kept" says so. No journal record is written
+		// for it; the bounded retries (maxUnresolvableAttempts) apply only to a
+		// record the journal already holds.
 		if errors.Is(protErr, pathutil.ErrProtectedFolderUnresolved) {
 			// The trouble is a configured protected folder, not this path, so it
 			// is never marked errPathUnresolvable: that class is not held in the

@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.1
+// version: 1.24.2
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-29
 
@@ -645,7 +645,7 @@ func (mfs *Service) isProtectedPath(filePath string) bool {
 		roots = append(roots, filepath.Dir(config.AppConfig.ITunes.LibraryITLPath))
 	}
 	protected, err := pathutil.UnderProtectedPath(absPath, roots)
-	if err != nil {
+	if err != nil && pathutil.ShouldLogProtectedPathError(err) {
 		protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",
 			logger.SanitizeLogValue(filePath), logger.SanitizeLogValue(err.Error()))
 	}
