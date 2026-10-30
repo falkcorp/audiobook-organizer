@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.17.2
+// version: 2.17.3
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-10-30
 
@@ -323,6 +323,10 @@ func transcribeRemoteWithHealth(ctx context.Context, remoteURL string, h remoteH
 			if stuck, ok := errors.AsType[*WorkerStuckError](err); ok && len(followers) > 0 {
 				// The followers' leader is stuck; they share its fate.
 				stuck.Followers = followers
+			}
+			if unv, ok := errors.AsType[*WorkerUnverifiedError](err); ok && len(followers) > 0 {
+				// Likewise a withheld response's followers.
+				unv.Followers = followers
 			}
 			if fault, ok := errors.AsType[*WorkerFaultError](err); ok && len(followers) > 0 {
 				// Likewise a faulted leader's followers: they were never sent, and

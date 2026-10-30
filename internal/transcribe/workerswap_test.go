@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerswap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c80f6dd-e49e-4cf4-acef-60b49489f7aa
 // last-edited: 2026-10-30
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -500,6 +501,207 @@ func TestJournalSwap_ASendWithNoSwapKeepsItsEntries(t *testing.T) {
 	}
 }
 
+// healthDownDuringSecondPost makes srv's second POST to post take hold to
+// answer, and /health unreadable (HTTP 500) from the moment that POST arrives
+// until the test ends: a worker that blocks /health while it decodes its second
+// chunk. Chunk 1 is answered with a readable /health, so it passes its own
+// verified probe.
+func healthDownDuringSecondPost(t *testing.T, srv *httptest.Server, post string, base map[string]any, hold time.Duration) {
+	t.Helper()
+	var posts atomic.Int32
+	var down atomic.Bool
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/health":
+			if down.Load() {
+				rw.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(rw).Encode(base)
+		case r.Method == http.MethodPost && r.URL.Path == post && posts.Add(1) == 2:
+			down.Store(true)
+			time.Sleep(hold)
+			inner.ServeHTTP(rw, r)
+		default:
+			inner.ServeHTTP(rw, r)
+		}
+	})
+}
+
+// unverifiedWindow sets the timings of the tests below: the poll ticks every
+// 200 ms, so the second chunk's request (300 ms) sees one unreadable poll probe
+// (never the three that would end it as an outage), and the confirmation chunk 1
+// left is older than livenessInterval+healthProbeTimeout (210 ms) when chunk 2
+// is answered.
+func unverifiedWindow(t *testing.T) time.Duration {
+	t.Helper()
+	shortLiveness(t, 200*time.Millisecond)
+	old := healthProbeTimeout
+	healthProbeTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { healthProbeTimeout = old })
+	return 300 * time.Millisecond
+}
+
+// An upload send: chunk 1 is answered and verified, chunk 2 is answered but
+// /health cannot be read afterwards and nothing recent vouches for the worker.
+// Only chunk 2 is withheld: chunk 1's results are returned and its journal
+// entries are NOT invalidated (it passed a verified probe), so a later run is
+// served them. It is not a swap, so nothing is dropped as having changed hands.
+func TestJournalVerify_AnUnreadableProbeAfterVerifiedChunksKeepsThemAndTheirJournalEntries(t *testing.T) {
+	hold := unverifiedWindow(t)
+	srv, _ := batchServer(t, swapBaseHealth(nil))
+	useEndpoints(t, 2, srv.URL)
+	healthDownDuringSecondPost(t, srv, "/transcribe-batch", swapBaseHealth(map[string]any{"batch_pipeline": true}), hold)
+	noteCanaryPort(batKey, srv.URL, true)
+	h, ok := probeRemoteHealth(context.Background(), srv.URL)
+	if !ok {
+		t.Fatal("setup: health")
+	}
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	j := newMapJournal()
+
+	jobs := writeClips(t, 4)
+	res, err := transcribeRemoteWithHealth(ctx, srv.URL, h, true, 1, jobs, nil, j)
+	unv, isUnv := errors.AsType[*WorkerUnverifiedError](err)
+	if !isUnv {
+		t.Fatalf("err = %T %v, want an unverified answer (not an outage, not a swap)", err, err)
+	}
+	if IsWorkerSwapped(err) {
+		t.Error("an unreadable probe must not read as a swap")
+	}
+	if len(unv.Jobs) != 2 {
+		t.Errorf("withheld %d job(s), want only chunk 2's 2", len(unv.Jobs))
+	}
+	if len(res) != 2 {
+		t.Fatalf("the sender returned %d result(s), want the 2 of verified chunk 1", len(res))
+	}
+	for _, id := range unv.Jobs {
+		if _, has := res[id]; has {
+			t.Errorf("job %s of the withheld chunk was returned", id)
+		}
+	}
+	if len(j.invalidated) != 0 {
+		t.Errorf("journal was asked to invalidate %d entries: chunk 1 passed a verified probe and must stay replayable", len(j.invalidated))
+	}
+	if j.len() != 2 {
+		t.Errorf("journal holds %d entries, want chunk 1's 2 and none of the withheld chunk", j.len())
+	}
+	served, _, _ := newEndpointJournal(j, srv.URL, h, true).plan(jobs)
+	if len(served) != 2 {
+		t.Errorf("a later run is served %d result(s), want chunk 1's 2", len(served))
+	}
+}
+
+// The same for a path send.
+func TestJournalVerify_AnUnreadableProbeAfterVerifiedPathChunksKeepsThem(t *testing.T) {
+	hold := unverifiedWindow(t)
+	base := pathHealth(map[string]any{"machine_id": batMachine, "busy_seconds": 0.0, "busy_limit_seconds": nil})
+	w := newPathWorker(t, base)
+	useEndpoints(t, 2, w.srv.URL)
+	healthDownDuringSecondPost(t, w.srv, "/transcribe-path-batch", base, hold)
+	noteCanaryPort(batKey, w.srv.URL, true)
+	h, ok := probeRemoteHealth(context.Background(), w.srv.URL)
+	if !ok {
+		t.Fatal("setup: health")
+	}
+	g := gatedEndpoint{Endpoint: Endpoint{URL: w.srv.URL, Concurrency: 1}, Health: h, Probed: true, resolved: batKey}
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	j := newMapJournal()
+	jobs := pathJobs(t, 4)
+
+	res, err := transcribePathRemote(ctx, g, jobs, nil, j)
+	if !IsWorkerUnverified(err) || IsWorkerSwapped(err) {
+		t.Fatalf("err = %T %v, want an unverified answer", err, err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("the sender returned %d result(s), want the 2 of verified chunk 1", len(res))
+	}
+	if len(j.invalidated) != 0 || j.len() != 2 {
+		t.Errorf("journal holds %d entries with %d invalidated, want chunk 1's 2 and none invalidated", j.len(), len(j.invalidated))
+	}
+}
+
+// A pool port whose chunk could not be attributed keeps the chunks above it, is
+// not benched or marked as having changed hands, and only the withheld jobs go
+// to the other port.
+func TestIdentityVerify_APoolKeepsTheEarlierChunksAndResendsOnlyTheWithheldOnes(t *testing.T) {
+	p := swapPool(t, robinMachine, batMachine)
+	port0, port1 := p.h.eps[0].URL, p.h.eps[1].URL
+	var once sync.Once
+	var kept, withheld string
+	gen := endpointFailureGeneration(port0)
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		if g.Endpoint.URL == port0 {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				ids := sortedIDs(sub)
+				kept, withheld = ids[0], ids[1]
+				p.mu.Lock()
+				p.sends = append(p.sends, sendRecord{port0, ids})
+				p.mu.Unlock()
+				return map[string]BatchResult{kept: {Text: "T:" + kept}},
+					fmt.Errorf("chunk: %w", &WorkerUnverifiedError{URL: port0, Was: robinKey, Jobs: ids[1:], Probes: livenessMisses})
+			}
+		}
+		return p.send(ctx, g, sub, pf)
+	}
+	res, err := dispatchOn(testCtx(t), p.h.eps, nil, send, p.canary, 4)
+	if err != nil {
+		t.Fatalf("err = %v: the other port could take the withheld jobs", err)
+	}
+	if r := res[kept]; r.Text != "T:"+kept || r.Endpoint != port0 || r.Worker != robinKey {
+		t.Errorf("%s = %+v, want the verified chunk's answer kept under port 0 (%s)", kept, r, robinKey)
+	}
+	if r := res[withheld]; r.Text != "T:"+withheld || r.Endpoint != port1 || r.Worker != batKey {
+		t.Errorf("%s = %+v, want the withheld job answered by port 1 (%s)", withheld, r, batKey)
+	}
+	for _, id := range loopers(4, "chap") {
+		if r := res[id]; r.Text != "T:"+id || r.Condemned || IsStrikeError(r.Error) {
+			t.Errorf("%s = %+v, want a plain transcript", id, r)
+		}
+	}
+	if endpointInCooldown(port0) || endpointFailureGeneration(port0) != gen {
+		t.Error("an unverifiable answer benched the port process-wide")
+	}
+	if failedCanaryBefore(robinKey) || len(p.canaryLog()) != 0 {
+		t.Errorf("the unverified answer touched the canary memory (asked=%v)", p.canaryLog())
+	}
+}
+
+// The lone endpoint: the chunks above the withheld one stand, the rest are
+// deferred with an error the ops do not count.
+func TestIdentityVerify_TheOnlyEndpointKeepsTheEarlierChunksAndDefersTheRest(t *testing.T) {
+	p := swapPool(t, robinMachine)
+	port0 := p.h.eps[0].URL
+	var kept string
+	gen := endpointFailureGeneration(port0)
+	send := func(ctx context.Context, g gatedEndpoint, sub map[string]string, pf ProgressFunc) (map[string]BatchResult, error) {
+		ids := sortedIDs(sub)
+		kept = ids[0]
+		return map[string]BatchResult{kept: {Text: "T:" + kept}},
+			fmt.Errorf("chunk: %w", &WorkerUnverifiedError{URL: port0, Was: robinKey, Jobs: ids[1:], Probes: livenessMisses})
+	}
+	res, err := dispatchOn(testCtx(t), p.h.eps, nil, send, p.canary, 4)
+	if !IsWorkerUnverified(err) {
+		t.Fatalf("err = %T %v, want the unverified answer to defer the rest", err, err)
+	}
+	if IsWorkerSwapped(err) || errors.Is(err, errPortChangedHands) {
+		t.Error("an unreadable probe must not read as a swap or a port that changed hands")
+	}
+	requireNoStrikeKind(t, err)
+	if r, ok := res[kept]; !ok || r.Text != "T:"+kept || r.Worker != robinKey {
+		t.Errorf("%s = %+v (present=%v), want the verified chunk's answer kept", kept, r, ok)
+	}
+	if len(res) != 1 {
+		t.Errorf("results = %+v, want only the verified chunk's", res)
+	}
+	if endpointInCooldown(port0) || endpointFailureGeneration(port0) != gen {
+		t.Error("the port was benched process-wide")
+	}
+}
+
 // ── the response itself ─────────────────────────────────────────────────────
 
 // A swap in the window after the poll's last probe is not seen by the poll; the
@@ -512,7 +714,7 @@ func TestLiveness_ASwapAfterTheLastPollIsCaughtWhenTheResponseIsAccepted(t *test
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
 	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
 	sw, ok := errors.AsType[*WorkerSwappedError](err)
-	if !ok || sw.Unverified || sw.Now != "m:"+swappedInMachine {
+	if !ok || sw.Now != "m:"+swappedInMachine {
 		t.Fatalf("err = %T %v, want a swap to the new machine", err, err)
 	}
 	requireNoStrikeKind(t, err)
@@ -541,22 +743,164 @@ func TestLiveness_AWorkerThePollSkipsIsStillCheckedAfterItsResponse(t *testing.T
 	}
 }
 
-// An unreadable probe withholds the response: nothing says it came from the
-// frozen machine.
-func TestLiveness_AnUnreadableProbeAfterTheResponseWithholdsIt(t *testing.T) {
+// An unreadable probe is not a swap: it is the absence of evidence. With nothing
+// recent to vouch for the worker, only THIS response is withheld, as a distinct
+// error that blames nobody and does not read as a port that changed hands.
+func TestLiveness_AnUnreadableProbeAfterTheResponseWithholdsOnlyThatResponseAndIsNotASwap(t *testing.T) {
+	shortLiveness(t, time.Hour)
+	freshCanaryMemory(t)
+	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusInternalServerError, nil })
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	// The window is livenessInterval+healthProbeTimeout, so an hour-old
+	// confirmation is outside it only because there is none at all.
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	unv, ok := errors.AsType[*WorkerUnverifiedError](err)
+	if !ok || unv.Probes != livenessMisses || len(unv.Jobs) != 1 {
+		t.Fatalf("err = %T %v, want a withheld, unverified answer after %d attempts", err, err, livenessMisses)
+	}
+	if IsWorkerSwapped(err) || errors.Is(err, errPortChangedHands) {
+		t.Error("an unreadable probe must not read as a swap or a port that changed hands")
+	}
+	requireNoStrikeKind(t, err)
+	if te, isTE := errors.AsType[*TransportError](classifyTransport([]string{srv.URL}, err)); !isTE || te.Recognized {
+		t.Error("an unverified answer must defer without counting toward stopping a run")
+	}
+	if got := hits.Load(); got != livenessMisses {
+		t.Errorf("probed %d time(s), want %d attempts", got, livenessMisses)
+	}
+}
+
+// The probe is retried before anything is concluded: a worker that blocks
+// /health while it decodes answers it a moment later.
+func TestVerify_AProbeThatFailsTwiceThenAnswersAcceptsTheResponse(t *testing.T) {
+	shortLiveness(t, time.Hour)
+	freshCanaryMemory(t)
+	var n atomic.Int32
+	srv, hits := probeServer(t, func() (int, map[string]any) {
+		if n.Add(1) <= 2 {
+			return http.StatusServiceUnavailable, nil
+		}
+		return http.StatusOK, swapHealth(batMachine)
+	})
+	noteCanaryPort(batKey, srv.URL, true)
+	fw := frozenWorker{key: batKey, capable: true}
+	ctx := withFrozenWorker(context.Background(), fw)
+	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("err = %v, want the response accepted once the retry read /health", err)
+	}
+	if hits.Load() != 3 {
+		t.Errorf("probed %d time(s), want 3 (two unreadable, one readable)", hits.Load())
+	}
+}
+
+// A retry that reads a different machine is still a swap.
+func TestVerify_AProbeThatFailsOnceThenShowsAnotherMachineIsASwap(t *testing.T) {
+	shortLiveness(t, time.Hour)
+	freshCanaryMemory(t)
+	var n atomic.Int32
+	srv, _ := probeServer(t, func() (int, map[string]any) {
+		if n.Add(1) == 1 {
+			return http.StatusServiceUnavailable, nil
+		}
+		return http.StatusOK, swapHealth(swappedInMachine)
+	})
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	if sw, ok := errors.AsType[*WorkerSwappedError](err); !ok || sw.Now != "m:"+swappedInMachine {
+		t.Fatalf("err = %T %v, want a swap to the new machine", err, err)
+	}
+}
+
+// A polled worker whose identity a readable probe confirmed shortly before the
+// response keeps the response although its /health is unreadable after it; one
+// confirmed longer ago does not.
+func TestVerify_ARecentConfirmationVouchesForAnUnreadableProbeAndAnOldOneDoesNot(t *testing.T) {
 	shortLiveness(t, time.Hour)
 	freshCanaryMemory(t)
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusInternalServerError, nil })
 	noteCanaryPort(batKey, srv.URL, true)
-	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
-	sw, ok := errors.AsType[*WorkerSwappedError](err)
-	if !ok || !sw.Unverified || sw.Now != "" {
-		t.Fatalf("err = %T %v, want a withheld, unverified answer", err, err)
+	run := func(confirmedAgo time.Duration) error {
+		seen := &identityEvidence{}
+		seen.record(time.Now().Add(-confirmedAgo))
+		ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true, seen: seen})
+		return superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
 	}
-	requireNoStrikeKind(t, err)
-	if !errors.Is(classifyTransport([]string{srv.URL}, err), errPortChangedHands) {
-		t.Error("an unverified answer must defer like a port that changed hands")
+	if err := run(time.Minute); err != nil {
+		t.Errorf("confirmed a minute ago: err = %v, want the response kept", err)
+	}
+	if err := run(2 * time.Hour); !IsWorkerUnverified(err) {
+		t.Errorf("confirmed two hours ago: err = %v, want the response withheld as unverified", err)
+	}
+}
+
+// The poll is the usual source of that confirmation: a probe it read during the
+// request vouches for a response whose own probe is then unreadable.
+func TestVerify_APollProbeDuringTheRequestVouchesForTheResponse(t *testing.T) {
+	shortLiveness(t, 15*time.Millisecond)
+	freshCanaryMemory(t)
+	var down atomic.Bool
+	srv, hits := probeServer(t, func() (int, map[string]any) {
+		if down.Load() {
+			return http.StatusInternalServerError, nil
+		}
+		return http.StatusOK, swapHealth(batMachine)
+	})
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error {
+		deadline := time.Now().Add(5 * time.Second)
+		for hits.Load() == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		down.Store(true) // the worker stops answering /health the moment it answers the request
+		return nil
+	})
+	if hits.Load() == 0 {
+		t.Fatal("setup: the poll never probed")
+	}
+	if err != nil {
+		t.Fatalf("err = %v, want the response kept: the poll confirmed the machine within the window", err)
+	}
+}
+
+// A poll probe from a worker that reports no machine id of its own proves
+// nothing about a strong frozen identity: it resolved to the machine last seen at
+// the URL, the very link a swap breaks.
+func TestVerify_OnlyAProbeWithItsOwnMachineIDConfirmsAStrongIdentity(t *testing.T) {
+	strong := frozenWorker{key: batKey, capable: true}
+	if !strong.confirms(remoteHealth{MachineID: batMachine}) {
+		t.Error("a probe with the frozen machine's own id must confirm it")
+	}
+	if strong.confirms(remoteHealth{}) {
+		t.Error("a probe with no machine id must not confirm a strong identity")
+	}
+	weak := frozenWorker{key: "u:abc123", capable: true}
+	if !weak.confirms(remoteHealth{}) {
+		t.Error("a weak identity has nothing stronger: a readable probe that is no swap confirms it")
+	}
+}
+
+// A worker that is never polled (no busy_seconds) can produce nothing but an
+// unreadable probe when it blocks /health, so withholding would discard every
+// answer of it: the response is kept and the situation is logged once.
+func TestVerify_AnUnpolledWorkerWithAnUnreadableProbeKeepsItsResponse(t *testing.T) {
+	shortLiveness(t, 10*time.Millisecond)
+	freshCanaryMemory(t)
+	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusInternalServerError, nil })
+	noteCanaryPort(batKey, srv.URL, true)
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	for i := range 2 {
+		if err := superviseRequest(ctx, srv.URL, remoteHealth{}, time.Hour, []string{"a"}, func(context.Context) error { return nil }); err != nil {
+			t.Fatalf("response %d: err = %v, want it kept", i, err)
+		}
+	}
+	if got := hits.Load(); got != 2*livenessMisses {
+		t.Errorf("probed %d time(s), want %d (the retries of two responses, no poll)", got, 2*livenessMisses)
+	}
+	if _, logged := unpolledUnverified.Load(srv.URL); !logged {
+		t.Error("the unverifiable response of an unpolled worker was not recorded as logged")
 	}
 }
 
