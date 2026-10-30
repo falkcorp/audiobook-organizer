@@ -1,5 +1,5 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
 // last-edited: 2026-10-30
 
@@ -118,10 +118,12 @@ func TestDropProtectedRenameEntries_DropsDelugeSources(t *testing.T) {
 // outside root_dir looks protected then, so a copy could be made of a book
 // that needs none.
 func TestProtectedListLoaded_ReflectsCache(t *testing.T) {
-	if !(&Service{}).protectedListLoaded() {
+	none := &Service{}
+	if !none.protectedListLoadedIn(none.readImportRoots()) {
 		t.Error("no cache wired must count as loaded")
 	}
-	if (&Service{safeWriteDeps: tagger.SafeWriteDeps{ProtectedCache: unloadedChecker{}}}).protectedListLoaded() {
+	unloadedSvc := &Service{safeWriteDeps: tagger.SafeWriteDeps{ProtectedCache: unloadedChecker{}}}
+	if unloadedSvc.protectedListLoadedIn(unloadedSvc.readImportRoots()) {
 		t.Error("unloaded cache reported loaded")
 	}
 }
@@ -216,7 +218,7 @@ func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 	}
 	svc := NewService(mock)
 
-	if svc.protectedListLoaded() {
+	if svc.protectedListLoadedIn(svc.readImportRoots()) {
 		t.Fatal("protectedListLoaded true while the import-path list is unreadable")
 	}
 	got, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil })
@@ -231,7 +233,7 @@ func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 	}
 
 	failing = false
-	if !svc.protectedListLoaded() {
+	if !svc.protectedListLoadedIn(svc.readImportRoots()) {
 		t.Error("protectedListLoaded false once the store reads again")
 	}
 	if _, err := svc.resolveLibraryCopy("b1", book, createLibraryCopy, func() error { return nil }); errors.Is(err, tagger.ErrProtectedListNotLoaded) {
