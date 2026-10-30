@@ -1,5 +1,5 @@
 // file: internal/database/activity_types.go
-// version: 1.14.1
+// version: 1.15.3
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-30
 
@@ -294,6 +294,246 @@ type DigestDetails struct {
 	Items          []DigestItem              `json:"items"`
 	Truncated      bool                      `json:"truncated,omitempty"`
 	TruncatedCount int                       `json:"truncated_count,omitempty"`
+
+	// AggregatesVersion is DigestAggregatesVersion for a digest whose every row
+	// is accounted for in OpAggregates and NoOpAggregate, and 0 for one that is
+	// not: a digest compacted before 2026-10-30, one an older build added rows
+	// to, or one whose day named more operations than maxDigestOpAggregates. The
+	// aggregates above (Counts, OriginalCount, TagCounts) cover every row of the
+	// day, so a reader who may not read some of those rows can only subtract
+	// their share when the share is known: at version 0 it is not.
+	AggregatesVersion int `json:"aggregates_version,omitempty"`
+	// OpAggregates is each operation's share of the aggregates above, by
+	// operation id; NoOpAggregate is the share of rows that name no operation.
+	// They sum to Counts, OriginalCount and TagCounts exactly. They are for the
+	// server's own use (activity redactDigest) and are never sent to a client.
+	OpAggregates  map[string]*DigestOpAggregate `json:"op_aggregates,omitempty"`
+	NoOpAggregate *DigestOpAggregate            `json:"no_op_aggregate,omitempty"`
+	// AggregatesWithheld is set on the copy served to a caller who may not read
+	// every row the day folded and for whom the share of the rows they may not
+	// read is unknown (AggregatesVersion 0): Counts, OriginalCount and TagCounts
+	// are then omitted rather than served with hidden rows in them. Never stored.
+	AggregatesWithheld bool `json:"aggregates_withheld,omitempty"`
+}
+
+// DigestAggregatesVersion is the AggregatesVersion of a digest that carries the
+// per-operation aggregates for every row it folded.
+const DigestAggregatesVersion = 1
+
+// maxDigestOpAggregates caps how many distinct operations one digest keeps an
+// aggregate for. Each is a few hundred bytes of JSON in a row read for every
+// page that includes the digest, so a day that names more operations than this
+// stores none (AggregatesVersion 0) rather than an unbounded row.
+const maxDigestOpAggregates = 1000
+
+// DigestAggregate is a count of folded rows: in total, per entry type, and per
+// tag value in the action: and source: namespaces (the same shape as
+// DigestDetails.Counts and DigestDetails.TagCounts).
+type DigestAggregate struct {
+	Count     int                       `json:"count"`
+	Counts    map[string]int            `json:"counts,omitempty"`
+	TagCounts map[string]map[string]int `json:"tag_counts,omitempty"`
+}
+
+// DigestOpAggregate is the share of a digest's aggregates that came from the
+// rows of one operation (or, for NoOpAggregate, from rows that name none).
+// RepairsLike is the part of it from rows whose own type, or whose def: tag,
+// names a Repairs definition (EntryLooksRepairs): a reader decides an
+// operation it cannot find a record for by those, so they can be hidden when
+// the operation as a whole is not.
+type DigestOpAggregate struct {
+	DigestAggregate
+	RepairsLike *DigestAggregate `json:"repairs_like,omitempty"`
+}
+
+// repairsDefIDs are the definitions of the Repairs lane: repairs.plan and
+// repairs.apply (internal/repairs owns the names; handlers.TestEntryLooksRepairs_MatchesTheHandlersJudgement
+// pins these to them, since this package cannot import it).
+var repairsDefIDs = [...]string{"repairs.plan", "repairs.apply"}
+
+// digestDefTagPrefix is the tag every operation activity row carries to name its
+// definition (reporter_db.go).
+const digestDefTagPrefix = "def:"
+
+// EntryLooksRepairs reports whether an entry says it belongs to the Repairs
+// lane: its type, or its def: tag, names repairs.plan or repairs.apply. It is
+// all that is left to go on for an operation no record exists for.
+func EntryLooksRepairs(e ActivityEntry) bool {
+	if slices.Contains(repairsDefIDs[:], e.Type) {
+		return true
+	}
+	for _, t := range e.Tags {
+		if def, ok := strings.CutPrefix(t, digestDefTagPrefix); ok && slices.Contains(repairsDefIDs[:], def) {
+			return true
+		}
+	}
+	return false
+}
+
+// digestTagNamespaces are the tag namespaces TagCounts aggregates.
+var digestTagNamespaces = [...]string{"action", "source"}
+
+// addTagCounts adds one entry's (or item's) action: and source: tags to into.
+func addTagCounts(into map[string]map[string]int, tags []string) {
+	for _, tag := range tags {
+		ns, val, ok := strings.Cut(tag, ":")
+		if !ok || ns == "" || !slices.Contains(digestTagNamespaces[:], ns) {
+			continue
+		}
+		if into[ns] == nil {
+			into[ns] = make(map[string]int)
+		}
+		into[ns][val]++
+	}
+}
+
+// add folds one entry into the aggregate.
+func (a *DigestAggregate) add(e ActivityEntry) {
+	a.Count++
+	if a.Counts == nil {
+		a.Counts = make(map[string]int)
+	}
+	a.Counts[e.Type]++
+	if a.TagCounts == nil {
+		a.TagCounts = make(map[string]map[string]int)
+	}
+	addTagCounts(a.TagCounts, e.Tags)
+}
+
+// Merge adds o into a.
+func (a *DigestAggregate) Merge(o *DigestAggregate) {
+	if o == nil {
+		return
+	}
+	a.Count += o.Count
+	if a.Counts == nil && len(o.Counts) > 0 {
+		a.Counts = make(map[string]int, len(o.Counts))
+	}
+	for k, v := range o.Counts {
+		a.Counts[k] += v
+	}
+	if a.TagCounts == nil && len(o.TagCounts) > 0 {
+		a.TagCounts = make(map[string]map[string]int, len(o.TagCounts))
+	}
+	for ns, m := range o.TagCounts {
+		if a.TagCounts[ns] == nil {
+			a.TagCounts[ns] = make(map[string]int, len(m))
+		}
+		for k, v := range m {
+			a.TagCounts[ns][k] += v
+		}
+	}
+}
+
+// add folds one entry into the operation's aggregate.
+func (a *DigestOpAggregate) add(e ActivityEntry) {
+	a.DigestAggregate.add(e)
+	if EntryLooksRepairs(e) {
+		if a.RepairsLike == nil {
+			a.RepairsLike = &DigestAggregate{}
+		}
+		a.RepairsLike.add(e)
+	}
+}
+
+// Merge adds o into a.
+func (a *DigestOpAggregate) merge(o *DigestOpAggregate) {
+	if o == nil {
+		return
+	}
+	a.DigestAggregate.Merge(&o.DigestAggregate)
+	if o.RepairsLike != nil {
+		if a.RepairsLike == nil {
+			a.RepairsLike = &DigestAggregate{}
+		}
+		a.RepairsLike.Merge(o.RepairsLike)
+	}
+}
+
+// Subtract removes o's share from a: counts that reach zero drop out, and a
+// count that would go below zero stops at zero (a digest whose aggregates were
+// edited after compaction cannot make a reader's numbers negative).
+func (a *DigestAggregate) Subtract(o *DigestAggregate) {
+	if o == nil {
+		return
+	}
+	a.Count = max(0, a.Count-o.Count)
+	for k, v := range o.Counts {
+		if left := a.Counts[k] - v; left > 0 {
+			a.Counts[k] = left
+		} else {
+			delete(a.Counts, k)
+		}
+	}
+	for ns, m := range o.TagCounts {
+		for k, v := range m {
+			if left := a.TagCounts[ns][k] - v; left > 0 {
+				a.TagCounts[ns][k] = left
+			} else if a.TagCounts[ns] != nil {
+				delete(a.TagCounts[ns], k)
+			}
+		}
+		if len(a.TagCounts[ns]) == 0 {
+			delete(a.TagCounts, ns)
+		}
+	}
+}
+
+// aggregateScratch is the per-operation accounting of one digest being built.
+type aggregateScratch struct {
+	ops  map[string]*DigestOpAggregate
+	noOp *DigestOpAggregate
+	tags map[string]map[string]int
+	// unattributable: the rows cannot all be filed under one operation each, so
+	// no per-operation aggregate is stored (the digest stays at AggregatesVersion
+	// 0). Either a row belongs to several operations (a Summarize row, which a
+	// reader judges hidden when any operation it names is) or the day named more
+	// than maxDigestOpAggregates operations.
+	unattributable bool
+}
+
+func newAggregateScratch() *aggregateScratch {
+	return &aggregateScratch{ops: map[string]*DigestOpAggregate{}, tags: map[string]map[string]int{}}
+}
+
+// add files e under the operation it belongs to, by EntryOperationIDs, the same
+// membership the activity reader uses to decide whether a row is hidden: a
+// Summarize row names its operations in op: tags, not in OperationID, so
+// filing by OperationID alone would put a row a reader hides under "no
+// operation" and leave its share in the totals served to that reader.
+func (as *aggregateScratch) add(e ActivityEntry) {
+	addTagCounts(as.tags, e.Tags)
+	if as.unattributable {
+		return
+	}
+	var id string
+	n := 0
+	EntryOperationIDs(e, func(x string) bool {
+		id = x
+		n++
+		return false
+	})
+	switch {
+	case n > 1:
+		as.unattributable = true
+		return
+	case n == 0:
+		if as.noOp == nil {
+			as.noOp = &DigestOpAggregate{}
+		}
+		as.noOp.add(e)
+		return
+	}
+	a := as.ops[id]
+	if a == nil {
+		if len(as.ops) >= maxDigestOpAggregates {
+			as.unattributable = true
+			return
+		}
+		a = &DigestOpAggregate{}
+		as.ops[id] = a
+	}
+	a.add(e)
 }
 
 // maxDigestItems caps the number of DigestItems stored per daily digest.
@@ -425,6 +665,47 @@ func isLegacyItem(item DigestItem) bool {
 	return (item.Type == "system_log" || item.Type == "system") || len(item.Tags) == 0
 }
 
+// rederiveLegacyItem re-derives a legacy item's type, tier and tags from its
+// message (what enrichment would have given the row). The message cannot say
+// which operation the row belonged to, or that it belonged to the Repairs lane,
+// so what the item already states of that survives: a repairs.plan /
+// repairs.apply type is kept, and the item's existing def: and op: tags are kept
+// beside the derived tags. Without that, an item of an operation whose record is
+// gone would stop looking like a Repairs row, and a Summarize row would stop
+// naming the operations it spans; no reader could tell either from any other.
+func rederiveLegacyItem(item DigestItem) DigestItem {
+	derivedType, derivedTier := deriveTypeFromMessage(item.Summary, "")
+	derivedTags := enrichLegacyLogTags(item.Summary, "", "info")
+	if slices.Contains(repairsDefIDs[:], item.Type) {
+		derivedType = item.Type
+	}
+	for _, t := range item.Tags {
+		if (strings.HasPrefix(t, digestDefTagPrefix) || strings.HasPrefix(t, "op:")) && !slices.Contains(derivedTags, t) {
+			derivedTags = append(derivedTags, t)
+		}
+	}
+	item.Type, item.Tier, item.Tags = derivedType, derivedTier, derivedTags
+	return item
+}
+
+// DigestItemSource is the Source a digest item's row had, as far as operation
+// membership goes. An item keeps no Source, but only Summarize rows carry op:
+// tags, so an item with such a tag is the Summarize row it came from, whose
+// operations are the ones those tags name (EntryOperationIDs). The writer files
+// aggregates by it and the activity reader judges items by it, so the two agree.
+func DigestItemSource(tags []string) string {
+	if slices.ContainsFunc(tags, func(t string) bool { return strings.HasPrefix(t, "op:") }) {
+		return summarizeSource
+	}
+	return ""
+}
+
+// digestItemAsEntry is the activity row a digest item stood for, as far as
+// attribution goes.
+func digestItemAsEntry(item DigestItem) ActivityEntry {
+	return ActivityEntry{Type: item.Type, OperationID: item.OperationID, Tags: item.Tags, Source: DigestItemSource(item.Tags)}
+}
+
 // summarizeOpSampleMax caps how many operation ids a Summarize row keeps.
 //
 // Summarize groups by (day, type, source) and NEVER by operation_id. An
@@ -541,4 +822,50 @@ func entryHasOperation(e ActivityEntry, id string) bool {
 	}
 	want := "op:" + id
 	return slices.Contains(e.Tags, want)
+}
+
+// mergeAggregates folds the aggregates of the digest already stored for the day
+// (existing) into dd, the digest of the rows being added to it. A stored digest
+// without per-operation aggregates (AggregatesVersion 0) cannot say which of its
+// rows belong to which operation, so the merged digest does not either. Counts,
+// OriginalCount and the items are merged by the caller.
+func (dd *DigestDetails) mergeAggregates(existing DigestDetails) {
+	if existing.AggregatesVersion == 0 || dd.AggregatesVersion == 0 {
+		dd.AggregatesVersion = 0
+		dd.OpAggregates = nil
+		dd.NoOpAggregate = nil
+	} else {
+		if dd.OpAggregates == nil {
+			dd.OpAggregates = map[string]*DigestOpAggregate{}
+		}
+		for id, a := range existing.OpAggregates {
+			into := dd.OpAggregates[id]
+			if into == nil {
+				if len(dd.OpAggregates) >= maxDigestOpAggregates {
+					dd.AggregatesVersion = 0
+					dd.OpAggregates = nil
+					dd.NoOpAggregate = nil
+					break
+				}
+				into = &DigestOpAggregate{}
+				dd.OpAggregates[id] = into
+			}
+			into.merge(a)
+		}
+		if dd.AggregatesVersion != 0 && existing.NoOpAggregate != nil {
+			if dd.NoOpAggregate == nil {
+				dd.NoOpAggregate = &DigestOpAggregate{}
+			}
+			dd.NoOpAggregate.merge(existing.NoOpAggregate)
+		}
+		if len(dd.OpAggregates) == 0 {
+			dd.OpAggregates = nil
+		}
+	}
+	if len(existing.TagCounts) > 0 {
+		if dd.TagCounts == nil {
+			dd.TagCounts = map[string]map[string]int{}
+		}
+		(&DigestAggregate{TagCounts: dd.TagCounts}).Merge(&DigestAggregate{TagCounts: existing.TagCounts})
+	}
 }

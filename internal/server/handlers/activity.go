@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.20.1
+// version: 1.21.3
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-30
 
@@ -199,9 +199,13 @@ func withoutOthersUserData(entries []database.ActivityEntry, seeAll bool) {
 //     summary and tags) is not hidden: it names no operation itself, and
 //     hiding it would hide the day's other activity. Its items are redacted on
 //     the returned page instead, by the same verdicts, which leaves the page,
-//     offset and total as the store counted them. Its counts, original_count
-//     and tag_counts are aggregates over every row of the day and are not
-//     redacted: they say how many rows of a type were folded, nothing more.
+//     offset and total as the store counted them. Its counts, original_count,
+//     tag_counts and summary are aggregates over every row of the day, so they
+//     are rewritten to describe only what the caller may read: CompactByDay
+//     stores each operation's share and the hidden operations' shares are
+//     subtracted, and a digest compacted before those shares were stored has its
+//     totals left out (aggregates_withheld) unless nothing can be hidden from the
+//     caller (activity_digest_aggregates.go).
 //
 // An operation with neither record is not assumed harmless: an entry of it whose
 // type or def: tag names repairs.plan or repairs.apply is hidden (an entry with
@@ -317,6 +321,14 @@ func (v *opVisibility) excludes(e database.ActivityEntry) bool {
 	if !v.seeAll && activity.NamesOthersUserData(e) {
 		return true
 	}
+	return v.hidesRepairs(e)
+}
+
+// hidesRepairs is excludes without the user-data test: whether the entry belongs
+// to a Repairs operation the caller may not read, by the verdicts described
+// there. A daily digest's aggregates are judged by this alone, since they are
+// kept per operation and a row's text is not.
+func (v *opVisibility) hidesRepairs(e database.ActivityEntry) bool {
 	if !v.resolve {
 		// No reader wired: every operation is one with no record, so the
 		// entry's own type and tags decide, as for a pruned record.
@@ -387,51 +399,71 @@ func (v *opVisibility) lookup(id string) (opVerdict, error) {
 // this request; the underlying error was logged where it happened.
 var errOpLookupFailed = errors.New("operation lookup failed")
 
-// redactDigest removes from a daily digest's Details.items every item the caller
-// may not read, and returns e otherwise untouched. CompactByDay copies each row it
-// folds into an item (type, tier, operation id, summary, tags, and for a warn or
-// error row its error details), so the log line of a hidden Repairs run -- the
-// owner-apply line naming the owner's user id, a failed run's error naming its
-// target -- survives there after the row itself is deleted. The digest row names
-// no operation itself, so the store's predicate cannot see it (and on the
-// filter-index path has no Details to look at); the page is redacted instead.
-// Only items go: the row, its position and the count of rows stay, so the page,
-// offset and total the store computed remain right.
+// redactDigest removes from a daily digest what the caller may not read, and
+// returns e otherwise untouched.
 //
-// An item is judged the way a row is (excludes), from its type, operation id and
-// tags. One that is not a JSON object cannot be judged and is dropped. The
-// returned entry has its own Details map and items slice; the one passed in
-// is never written to, because a store may hand out a map it keeps.
+// Details.items: CompactByDay copies each row it folds into an item (type, tier,
+// operation id, summary, tags, and for a warn or error row its error details), so
+// the log line of a hidden Repairs run -- the owner-apply line naming the owner's
+// user id, a failed run's error naming its target -- survives there after the row
+// itself is deleted. The digest row names no operation itself, so the store's
+// predicate cannot see it (and on the filter-index path has no Details to look
+// at); the page is redacted instead. Only items go: the row and its position stay,
+// so the page, offset and total the store computed remain right. An item is judged
+// the way a row is (excludes), from its type, operation id and tags. One that is
+// not a JSON object cannot be judged and is dropped.
+//
+// counts, original_count, tag_counts and the summary's total: these cover every
+// row of the day, hidden ones included, and are redacted too
+// (redactDigestAggregates).
+//
+// The returned entry has its own Details map, items slice and aggregates; the
+// one passed in is never written to, because a store may hand out a map it keeps.
+// The per-operation aggregates themselves (op_aggregates, no_op_aggregate) are
+// for this check and are not sent to any client.
 func (v *opVisibility) redactDigest(e database.ActivityEntry) database.ActivityEntry {
 	if v == nil || (e.Tier != database.DigestTier && e.Type != database.DailyDigestType) {
 		return e
 	}
-	raw, present := e.Details["items"]
-	if !present || raw == nil {
-		return e
-	}
-	items, ok := raw.([]any)
-	if !ok {
-		// A typed slice (an in-process store keeping DigestItem values): take
-		// its JSON form, which is what a client is sent anyway.
-		b, err := json.Marshal(raw)
-		if err == nil {
-			err = json.Unmarshal(b, &items)
-		}
-		if err != nil {
-			items = nil // unreadable: nothing in it can be shown
-		}
-	}
-	kept := make([]any, 0, len(items))
-	for _, it := range items {
-		m, isObj := it.(map[string]any)
-		if !isObj || v.excludes(digestItemEntry(m)) {
-			continue
-		}
-		kept = append(kept, it)
+	if e.Details == nil {
+		// Nothing to redact, but the summary states the day's total.
+		return v.withholdDigestWithoutDetails(e)
 	}
 	details := maps.Clone(e.Details)
-	details["items"] = kept
+	keptItems, hidRepairs := 0, false
+	if raw, present := e.Details["items"]; present && raw != nil {
+		items, ok := raw.([]any)
+		if !ok {
+			// A typed slice (an in-process store keeping DigestItem values): take
+			// its JSON form, which is what a client is sent anyway.
+			b, err := json.Marshal(raw)
+			if err == nil {
+				err = json.Unmarshal(b, &items)
+			}
+			if err != nil {
+				items = nil // unreadable: nothing in it can be shown
+			}
+		}
+		kept := make([]any, 0, len(items))
+		for _, it := range items {
+			m, isObj := it.(map[string]any)
+			if !isObj {
+				hidRepairs = true // cannot be judged, so cannot be shown to anyone
+				continue
+			}
+			entry := digestItemEntry(m)
+			if v.hidesRepairs(entry) {
+				hidRepairs = true
+			}
+			if v.excludes(entry) {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		details["items"] = kept
+		keptItems = len(kept)
+	}
+	v.redactDigestAggregates(&e, details, keptItems, hidRepairs)
 	e.Details = details
 	return e
 }
@@ -461,6 +493,11 @@ func digestItemEntry(m map[string]any) database.ActivityEntry {
 	case []string:
 		e.Tags = tags
 	}
+	// A Summarize row names its operations in op: tags and has none of its own;
+	// the item lost its Source, so it is given back the way the writer files it
+	// (database.DigestItemSource). Without it an item naming a hidden run in a
+	// tag would be judged to belong to no operation and be shown.
+	e.Source = database.DigestItemSource(e.Tags)
 	return e
 }
 
