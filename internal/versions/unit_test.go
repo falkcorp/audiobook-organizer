@@ -1,7 +1,7 @@
 // file: internal/versions/unit_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 5d2f8a14-3c67-4e09-b1d8-7f4a2e6c9b03
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package versions
 
@@ -47,7 +47,8 @@ func TestCreateIngestVersion_StoreErrorOnCreate(t *testing.T) {
 	// The row lookup runs before anything is created (idempotency check).
 	mockStore.EXPECT().GetBookFiles("book-1").Return(nil, nil)
 	// No torrent hash so fingerprint check is skipped.
-	// First version — no active version exists.
+	// First version — no unfinished swap and no active version exists.
+	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(nil, errors.New("not found"))
 	mockStore.EXPECT().CreateBookVersion(mock.AnythingOfType("*database.BookVersion")).Return(nil, errors.New("db write failed"))
 
@@ -105,7 +106,8 @@ func TestCreateIngestVersion_FirstVersionIsActive_Mock(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
 	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
-	// No active version exists.
+	// No unfinished swap, and no active version exists.
+	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return(nil, nil)
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(nil, errors.New("not found"))
 
 	// Expect CreateBookVersion with status=active.
@@ -138,6 +140,9 @@ func TestCreateIngestVersion_SecondVersionIsAlt_Mock(t *testing.T) {
 
 	mockStore.EXPECT().GetAllImportPaths().Return([]database.ImportPath{{Path: "/"}}, nil)
 	// Active version already exists.
+	mockStore.EXPECT().GetBookVersionsByBookID("book-1").Return([]database.BookVersion{
+		{ID: "v-existing", BookID: "book-1", Status: database.BookVersionStatusActive},
+	}, nil)
 	mockStore.EXPECT().GetActiveVersionForBook("book-1").Return(&database.BookVersion{
 		ID: "v-existing", BookID: "book-1", Status: database.BookVersionStatusActive,
 	}, nil)

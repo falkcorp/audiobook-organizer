@@ -287,7 +287,7 @@ into one of the curated sections below, is a normal direct edit.
       Done 2026-10-30: added `deluge.NotifyDelugeMoveStorageToDir`; the swap's leaving-version
       call uses it. See `docs/decisions/2026-10-30-deluge-swap-slot-dir.md`.
 
-- [ ] **TODO-INGEST-ACTIVE-WHILE-SWAP-STUCK** Stop ingest from creating a second active version
+- [x] **TODO-INGEST-ACTIVE-WHILE-SWAP-STUCK** Stop ingest from creating a second active version
       for a book whose version swap did not finish. A book with a version in `swapping_out` /
       `swapping_in` has no active version, so `versions.CreateIngestVersion` (`internal/versions/ingest.go`, the
       `GetActiveVersionForBook` check that picks `active` over `alt` for a new version) makes
@@ -299,6 +299,10 @@ into one of the curated sections below, is a normal direct edit.
       an `alt` version, or hold it, until the swap is resumed. Add a test that ingests into a
       book left stuck by a `RunVersionSwap` that returned `ErrSwapIncomplete`. Found while
       doing TODO-SWAP-STUCK-RECOVERY; the resume itself only refuses, it does not pick a winner.
+      Done 2026-10-30: `versions.CreateIngestVersion` asks `unfinishedSwapVersionIDs` (the book's
+      own versions in `swapping_*`) before the active check and adds the download as `alt`, with
+      an Info log naming the stuck swap's version ids; `ResumeVersionSwap` already tolerates an
+      `alt`, so it needed no change. See `docs/decisions/2026-10-30-ingest-respects-unfinished-swap.md`.
 
 - [x] **TODO-REPAIRS-DIGEST-AGGREGATES** A compacted daily digest's `counts`, `original_count` and `tag_counts` still include rows of Repairs operations the caller may not read (only `Details.items` is redacted by `redactDigest`). Done 2026-10-30: `CompactByDay` stores each operation's share (`op_aggregates`, `aggregates_version` 1) and `redactDigest` subtracts the hidden operations' shares per caller; an older digest's totals are withheld (`aggregates_withheld`) from a caller who could be hidden something. See `docs/decisions/2026-10-30-repairs-visibility-aggregates.md`.
 - [x] **TODO-REPAIRS-CANCEL-NO-FIXER-RUNS** `CancelRun` refuses (before `mayCancel`) an admin who did not start a legacy Repairs run that names no fixer, because such a run is hidden from everyone. Done 2026-10-30: a `settings.manage` holder may cancel such a run (`opaccess.UnattributedRepairsRun`); the run stays unreadable. Purge needed no change: `DELETE /operations/v2/:id/record` is already `settings.manage`.
