@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package entities
 
@@ -87,7 +87,7 @@ type ReclassifyJournal struct {
 func (j *ReclassifyJournal) step(row *database.OperationChange) (void func() error, err error) {
 	row.ID = ulid.Make().String()
 	row.OperationID = j.OperationID
-	if err := j.Store.CreateOperationChange(row); err != nil {
+	if err := database.RecordOperationChange(j.Store, row); err != nil {
 		return nil, err
 	}
 	return func() error {
@@ -96,7 +96,7 @@ func (j *ReclassifyJournal) step(row *database.OperationChange) (void func() err
 		// RevertedAt is the wall time; the store stamps RevertedSeq, the order the
 		// undo decisions use, as it writes a row that is born reverted.
 		voided.RevertedAt, voided.Voided = &now, true
-		return j.Store.CreateOperationChange(&voided)
+		return database.RecordOperationChange(j.Store, &voided)
 	}, nil
 }
 
@@ -271,7 +271,7 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 			journaledMove.PrimaryChanged, journaledMove.PrimaryAfter = false, nil
 			if nv, merr := json.Marshal(journaledMove); merr == nil {
 				journaled.NewValue = string(nv)
-				if uerr := opts.Journal.Store.CreateOperationChange(journaled); uerr != nil {
+				if uerr := database.RecordOperationChange(opts.Journal.Store, journaled); uerr != nil {
 					skipped = append(skipped, fmt.Sprintf("book %s: undo row not updated after its primary author was not repointed: %v", book.ID, uerr))
 				}
 			}

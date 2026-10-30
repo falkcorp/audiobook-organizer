@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -575,7 +575,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		}
 		before, _ := json.Marshal(current)
 		after, _ := json.Marshal(next)
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		if jerr := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      bookID,
@@ -629,7 +629,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			continue
 		}
 		before, _ := json.Marshal(current)
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		if jerr := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      bookID,
@@ -671,7 +671,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			report.NarratorsHeld++
 			continue
 		}
-		if jerr := store.CreateOperationChange(&database.OperationChange{
+		if jerr := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  "narrator_delete",

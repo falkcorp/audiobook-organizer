@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -3027,7 +3027,7 @@ func (r *cbRun) createNarrator(name string) (*database.Narrator, error) {
 	// leave a record nothing in the operation's journal accounts for, and a
 	// later attempt would take it for one that was always there (seedLeftovers).
 	// A journal that cannot be written stops the create (fail closed).
-	if err := r.env.store.CreateOperationChange(&database.OperationChange{
+	if err := database.RecordOperationChange(r.env.store, &database.OperationChange{
 		ID:          ulid.Make().String(),
 		OperationID: r.env.opID,
 		ChangeType:  undo.ChangeTypeNarratorCreateIntent,
@@ -3057,7 +3057,7 @@ func (r *cbRun) voidJournal(row *database.OperationChange) error {
 	v := *row
 	now := time.Now()
 	v.RevertedAt, v.Voided = &now, true
-	return r.env.store.CreateOperationChange(&v)
+	return database.RecordOperationChange(r.env.store, &v)
 }
 
 // apply writes one planned book of the cohort: create its new narrators,
@@ -3181,7 +3181,7 @@ func (r *cbRun) apply(pb *cbPlanned) {
 		OldValue:    string(oldJSON),
 		NewValue:    string(newJSON),
 	}
-	if err := r.env.store.CreateOperationChange(row); err != nil {
+	if err := database.RecordOperationChange(r.env.store, row); err != nil {
 		r.fail(id, cbWriteFailed, fmt.Errorf("book %s: journal (book NOT written): %w", id, err))
 		return
 	}
@@ -3321,7 +3321,7 @@ func (r *cbRun) deleteUnusedCreated(standDownHeld bool) {
 			slices.Sort(from)
 			why += " source_op=" + strings.Join(from, ",")
 		}
-		if err := r.env.store.CreateOperationChange(&database.OperationChange{
+		if err := database.RecordOperationChange(r.env.store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: r.env.opID,
 			ChangeType:  "narrator_delete",

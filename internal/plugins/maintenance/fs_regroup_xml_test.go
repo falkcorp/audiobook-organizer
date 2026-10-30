@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -151,6 +151,9 @@ func fsLedgerTypes(t *testing.T, s *database.PebbleStore, opID string) map[strin
 	}
 	out := map[string]int{}
 	for _, c := range changes {
+		if _, classified := database.ClassifyChangeType(c.ChangeType); !classified {
+			t.Errorf("ledger row %s landed under a change type nobody classified", c.ChangeType)
+		}
 		out[c.ChangeType]++
 	}
 	return out

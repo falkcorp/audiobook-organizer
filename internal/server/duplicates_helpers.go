@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-10-11
+// last-edited: 2026-10-30
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -211,7 +211,7 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		}
 		c.ID = ulid.Make().String()
 		c.OperationID = operationID
-		return store.CreateOperationChange(c)
+		return database.RecordOperationChange(store, c)
 	}
 	// The cores' rows land after the write each describes (RecordAfterWrite),
 	// as the inline loop always wrote them.
@@ -816,7 +816,7 @@ func executeSeriesNormalizeCore(
 		// it can no longer be undone.
 		if operationID != "" {
 			seriesID := a.SeriesID
-			if cErr := store.CreateOperationChange(&database.OperationChange{
+			if cErr := database.RecordOperationChange(store, &database.OperationChange{
 				OperationID: operationID,
 				ChangeType:  undo.ChangeTypeSeriesRename,
 				FieldName:   "series_name",

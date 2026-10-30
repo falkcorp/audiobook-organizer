@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: baa66b78-fd15-4fb8-87c8-2892d296df6e
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -235,6 +235,8 @@ func TestSeriesPhantomRepair_NullApplyClearsEveryHolderAndJournalsEachOne(t *tes
 	byBook := map[string]*database.OperationChange{}
 	for _, c := range changes {
 		require.Equal(t, seriesPhantomChangeType, c.ChangeType)
+		_, classified := database.ClassifyChangeType(c.ChangeType)
+		require.True(t, classified, "the phantom row must land under a classified change type")
 		require.Equal(t, seriesPhantomFieldName, c.FieldName)
 		require.Equal(t, "", c.NewValue)
 		byBook[c.BookID] = c

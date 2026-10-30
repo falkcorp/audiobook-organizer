@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -362,6 +362,9 @@ func TestAuthorStripMerge_RelinkJournalReplaysOriginalCredits(t *testing.T) {
 	}
 	if row == nil {
 		t.Fatalf("no credits journal row; journal=%v", f.journal)
+	}
+	if _, classified := database.ClassifyChangeType(row.ChangeType); !classified {
+		t.Fatalf("credits journal row landed under an unclassified change type %q", row.ChangeType)
 	}
 	// Replay through the normal undo path.
 	var rows []*database.OperationChange

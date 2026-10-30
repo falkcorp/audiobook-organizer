@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.27.3
+// version: 1.27.4
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package reconcile
 
@@ -869,7 +869,7 @@ func ExecuteReconcile(ctx context.Context, store Store, operationID string, save
 			OldValue:    oldPath,
 			NewValue:    m.NewPath,
 		}
-		if err := store.CreateOperationChange(change); err != nil {
+		if err := database.RecordOperationChange(store, change); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("book %s: failed to record change: %v", m.BookID, err))
 			result.Skipped++
 			continue

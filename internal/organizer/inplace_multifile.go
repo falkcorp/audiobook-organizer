@@ -1,7 +1,7 @@
 // file: internal/organizer/inplace_multifile.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 3f0f7d52-6a2e-4b8e-9d3c-1b7e5a0c9e41
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 
@@ -460,7 +460,7 @@ func RecordInPlaceMove(store OperationChangeWriter, bookID string, landing *Land
 	}
 	var errs []error
 	add := func(changeType, field, oldValue, newValue string) {
-		if err := store.CreateOperationChange(&database.OperationChange{
+		if err := database.RecordOperationChange(store, &database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: operationID,
 			BookID:      bookID,

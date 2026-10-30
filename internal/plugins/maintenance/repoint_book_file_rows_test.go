@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4c8e1a57-92d3-4f6b-b0a4-6e3f9d2c7b18
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -166,6 +166,8 @@ func TestRepointBookFileRows_LiveRepointsJournalsAndRefreshes(t *testing.T) {
 	require.Len(t, changes, 1)
 	c := changes[0]
 	require.Equal(t, rbfChangeType, c.ChangeType)
+	_, classified := database.ClassifyChangeType(c.ChangeType)
+	require.True(t, classified, "the repoint row must land under a classified change type")
 	require.Equal(t, f.book, c.BookID)
 	require.Equal(t, f.row, c.FieldName)
 	require.Equal(t, f.newPath, c.NewValue)

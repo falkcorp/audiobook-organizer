@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -251,7 +251,7 @@ func journalAndDeleteBookFiles(store OpsStore, opID, bookID string, rows []datab
 			OldValue:    string(blob), // the ENTIRE row, so the deletion can be replayed back
 			NewValue:    "",
 		}
-		if jerr := store.CreateOperationChange(change); jerr != nil {
+		if jerr := database.RecordOperationChange(store, change); jerr != nil {
 			return nil, errors.Join(fmt.Errorf("journal row %s: %w", rows[i].ID, jerr), voidDeleteJournal(store, journaled))
 		}
 		journaled[rows[i].ID] = change
@@ -300,7 +300,7 @@ func journalAndDeleteBookFiles(store OpsStore, opID, bookID string, rows []datab
 		}
 		fresh := *change
 		fresh.OldValue = string(blob)
-		if jerr := store.CreateOperationChange(&fresh); jerr != nil {
+		if jerr := database.RecordOperationChange(store, &fresh); jerr != nil {
 			refreshErrs = append(refreshErrs, fmt.Errorf("rewrite journal row %s with the deleted bytes: %w", deleted[i].ID, jerr))
 		}
 	}
@@ -319,7 +319,7 @@ func voidDeleteJournal(store OpsStore, journaled map[string]*database.OperationC
 	for _, change := range journaled {
 		v := *change
 		v.RevertedAt, v.Voided = &now, true
-		if err := store.CreateOperationChange(&v); err != nil {
+		if err := database.RecordOperationChange(store, &v); err != nil {
 			errs = append(errs, fmt.Errorf("void journal row %s: %w", v.ID, err))
 		}
 	}

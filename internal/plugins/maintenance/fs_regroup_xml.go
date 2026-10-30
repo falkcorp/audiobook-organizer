@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.22.0
+// version: 2.22.1
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -920,7 +920,7 @@ func (a *fsApplier) journalRow(bookID, changeType, field, oldV, newV string) (*d
 		OperationID: a.opID, BookID: bookID, ChangeType: changeType,
 		FieldName: field, OldValue: oldV, NewValue: newV,
 	}
-	if err := a.store.CreateOperationChange(row); err != nil {
+	if err := database.RecordOperationChange(a.store, row); err != nil {
 		a.errs.Add(1)
 		a.log(slog.LevelWarn, "ledger row %s for book %s failed: %v", changeType, bookID, err)
 		return nil, false

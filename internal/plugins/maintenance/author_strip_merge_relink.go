@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -271,7 +271,7 @@ type titleRelinkJournal struct {
 }
 
 func (j *titleRelinkJournal) write(bookID, changeType, field, oldValue, newValue string) error {
-	if err := j.store.CreateOperationChange(&database.OperationChange{
+	if err := database.RecordOperationChange(j.store, &database.OperationChange{
 		ID:          ulid.Make().String(),
 		OperationID: j.opID,
 		BookID:      bookID,
