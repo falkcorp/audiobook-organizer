@@ -1,7 +1,7 @@
 // file: internal/franchise/detect.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b0e6d2a-8c4f-4e71-9a3d-1f7c2b9e4d60
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 package franchise
 
@@ -126,7 +126,7 @@ func Detect(e Evidence) Result {
 	}
 	one(FieldPath, e.Path)
 	if e.Title != "" {
-		if h, ok := MatchTitle(e.Title); ok {
+		if h, ok, all := matchTitleHits(e.Title); ok {
 			// Only the franchise's own words in a title are strong
 			// ("Doctor Who: ...", "Torchwood: ...", the studio). A title named
 			// only by a census range term ("Genesis of the Cybermen", "The
@@ -136,7 +136,7 @@ func Detect(e Evidence) Result {
 		} else {
 			// The bulk-apply guard has always held a title the broad rule
 			// names ("Big Finish to the Season"); not enough to tag.
-			add(FieldTitle, e.Title, true, MatchAll(e.Title))
+			add(FieldTitle, e.Title, true, all)
 		}
 	}
 	one(FieldSeries, e.Series)
