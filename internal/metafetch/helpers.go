@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.5
+// version: 1.24.6
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-30
 
@@ -27,16 +27,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
-// protectedListLoaded reports whether the protected-path lists the service
-// checks (the Deluge save paths and the import-path list) are usable; true when
-// none is wired. An import-path list that cannot be read counts as not loaded,
-// the same condition isProtectedPath fails closed on, so a caller that creates
-// a library copy because "every book outside root_dir looks protected" refuses
-// instead.
-func (mfs *Service) protectedListLoaded() bool {
-	return mfs.protectedListLoadedIn(mfs.readImportRoots())
-}
-
 // importRootsRead is one read of the import-path list, taken on first use and
 // then fixed: the roots, or the error that read failed with. A caller that makes
 // several decisions about one book (resolveLibraryCopy) takes it once and passes
@@ -63,8 +53,12 @@ func (r *importRootsRead) get() ([]string, error) {
 	return r.roots, r.err
 }
 
-// protectedListLoadedIn is protectedListLoaded decided from the import-path
-// read r instead of a fresh one.
+// protectedListLoadedIn reports whether the protected-path lists the service
+// checks (the Deluge save paths and the import-path list r) are usable; true
+// when none is wired. An import-path list that cannot be read counts as not
+// loaded, the same condition isProtectedPathIn fails closed on, so a caller that
+// creates a library copy because "every book outside root_dir looks protected"
+// refuses instead.
 func (mfs *Service) protectedListLoadedIn(r *importRootsRead) bool {
 	if mfs == nil {
 		return true
@@ -76,7 +70,7 @@ func (mfs *Service) protectedListLoadedIn(r *importRootsRead) bool {
 }
 
 // importPathRoots reads the import paths from the store: the one read
-// isProtectedPath and protectedListLoaded share. A failed read is logged (at
+// isProtectedPath and the importRootsRead behind protectedListLoadedIn share. A failed read is logged (at
 // most once a minute) and returned; nil roots and a nil error when no store is
 // wired.
 func (mfs *Service) importPathRoots() ([]string, error) {
