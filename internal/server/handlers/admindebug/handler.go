@@ -1,7 +1,7 @@
 // file: internal/server/handlers/admindebug/handler.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 64d11bf2-1597-4007-b152-e2803366a922
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // Package admindebug is the admin-only debug API for one-off record fixes:
 // read a book or book_file row in full, find what references a path, and edit
@@ -102,20 +102,51 @@ func New(store Store, activity ActivityRecorder) *Handler {
 	return &Handler{store: store, activity: activity, guard: merge.CheckPathOutsideITunes, now: time.Now}
 }
 
-// Register mounts the routes under /admin/debug on rg, behind RequireAdmin
-// (the admin ROLE, stricter than any single permission: a custom role granted
-// settings.manage does not pass). Production wiring and the tests both call
-// this, so the tests exercise the real gate.
-func (h *Handler) Register(rg *gin.RouterGroup) {
+// Route is one route Register mounted, for the server's route classification
+// (admin_routes_test.go). Path is the full path, group prefix included.
+type Route struct {
+	Method string
+	Path   string
+	// Writes is true for a route that edits or undoes an edit; it is gated by
+	// RequireAdmin whatever the caller passed as readGate.
+	Writes bool
+}
+
+// Register mounts the routes under /admin/debug on rg and returns them.
+//
+// The four reads (GET book, book_file, lookup, edits) only return state and
+// sit behind readGate; the server passes its adminRole gate, which is
+// RequireAdmin with authentication on and a pass-through with it off. The
+// three writes (the two PATCHes, preview included, and the undo) sit behind
+// servermiddleware.RequireAdmin whatever readGate is, so no caller can open
+// them and they answer 401 with authentication off. Both are the admin ROLE,
+// stricter than any single permission: a custom role granted settings.manage
+// does not pass. Production wiring and the tests both call this, so the tests
+// exercise the real gate.
+func (h *Handler) Register(rg *gin.RouterGroup, readGate gin.HandlerFunc) []Route {
 	g := rg.Group("/admin/debug")
-	g.Use(servermiddleware.RequireAdmin())
-	g.GET("/books/:id", h.GetBook)
-	g.GET("/book-files/:id", h.GetBookFile)
-	g.GET("/lookup", h.Lookup)
-	g.PATCH("/books/:id", h.PatchBook)
-	g.PATCH("/book-files/:id", h.PatchBookFile)
-	g.GET("/edits", h.ListEdits)
-	g.POST("/edits/:edit_id/undo", h.UndoEdit)
+	reads := g.Group("")
+	reads.Use(readGate)
+	reads.GET("/books/:id", h.GetBook)
+	reads.GET("/book-files/:id", h.GetBookFile)
+	reads.GET("/lookup", h.Lookup)
+	reads.GET("/edits", h.ListEdits)
+	writes := g.Group("")
+	writes.Use(servermiddleware.RequireAdmin())
+	writes.PATCH("/books/:id", h.PatchBook)
+	writes.PATCH("/book-files/:id", h.PatchBookFile)
+	writes.POST("/edits/:edit_id/undo", h.UndoEdit)
+
+	base := g.BasePath()
+	return []Route{
+		{http.MethodGet, base + "/books/:id", false},
+		{http.MethodGet, base + "/book-files/:id", false},
+		{http.MethodGet, base + "/lookup", false},
+		{http.MethodGet, base + "/edits", false},
+		{http.MethodPatch, base + "/books/:id", true},
+		{http.MethodPatch, base + "/book-files/:id", true},
+		{http.MethodPost, base + "/edits/:edit_id/undo", true},
+	}
 }
 
 // ── entity specs ────────────────────────────────────────────────────────────
