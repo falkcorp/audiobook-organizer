@@ -1,7 +1,7 @@
 // file: internal/transcribe/errors.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e630c83e-990b-47c4-ac80-dea9e41b20c5
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -171,8 +171,11 @@ func classifyTransport(endpoints []string, err error) error {
 // genuine loopers) re-sent the same clips into the same fault and then stopped
 // every later run at the same batch. A fault is handled by the dispatcher
 // instead (re-queue elsewhere, then defer), and what reaches an op is deferred.
+// A mid-request swap (ErrWorkerSwapped) is not one either: the request was ended
+// on purpose because another machine answers at the URL, and the jobs are
+// deferred without counting toward stopping a run.
 func isTransportishError(err error) bool {
-	if IsWorkerFault(err) {
+	if IsWorkerFault(err) || IsWorkerSwapped(err) {
 		return false
 	}
 	if _, ok := errors.AsType[net.Error](err); ok {

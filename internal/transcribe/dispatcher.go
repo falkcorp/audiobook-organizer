@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -1845,7 +1845,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			ep := healthy[idx]
 			wg.Go(func() {
 				g := probeByURL[ep.URL]
-				r, err := send(ctx, g, sub, progressFor())
+				// The request is watched for a swap of the machine behind the port
+				// (workerswap.go): the identity the dispatch froze for it travels in
+				// the context, as the senders take none.
+				sctx := withFrozenWorker(ctx, frozenWorker{key: keyOf(ep.URL), capable: capableFor[ep.URL]})
+				r, err := send(sctx, g, sub, progressFor())
 				resCh <- epResult{idx: idx, res: r, err: err}
 			})
 		}
@@ -1887,6 +1891,32 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 
 		for _, r := range round {
 			ep := healthy[r.idx]
+			if swap, swapped := errors.AsType[*WorkerSwappedError](r.err); swapped {
+				// Another machine answered at the port during the request (the
+				// liveness poll saw it): nothing the request returned can be told from
+				// the old machine's answer, and the old one may never have seen the
+				// file. So no result of it is stored (earlier chunks included), no
+				// strike or condemnation is written, the endpoint is not benched
+				// (markEndpointFailure is process-wide and the port is not down), and
+				// nothing is recorded in lastErr, soloStuck, faultedOn or the canary
+				// memory. Its jobs stay in remaining for the other ports, and the port
+				// is dropped like one regate found changed hands; the next dispatch's
+				// gate keys it by what it reports.
+				dispatchLog.Warn("a whisper port changed hands during a request, so none of the request's results are kept and the port is dropped from this dispatch: url=%s was=%s now=%s after=%s jobs=%d withheld=%d",
+					logger.SanitizeLogValue(ep.URL), logger.SanitizeLogValue(swap.Was), logger.SanitizeLogValue(swap.Now),
+					swap.After.Round(time.Second), len(swap.Jobs), len(r.res))
+				rf := newRefusal(probeByURL[ep.URL], "answered as a different worker than the one the dispatch froze for it during a request (its port changed hands), so it is sent no more work in this dispatch")
+				rf.ChangedHands = true
+				refused = append(refused, rf)
+				// Queued, not dropped now: dropPorts counts the machines again, which
+				// must not change soloLimit under the answers of this round that are
+				// still being judged (see holdDrops).
+				heldDrops[ep.URL] = true
+				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool { _, ok := remaining[id]; return !ok }); len(u) > 0 {
+					units = append(units, u)
+				}
+				continue
+			}
 			fault, isFault := errors.AsType[*WorkerFaultError](r.err)
 			if isFault {
 				registerFollowers(fault.Followers)
@@ -2282,7 +2312,21 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			base := len(results)
 			progress = func(d, _ int) { onProgress(min(base+d, total), total) }
 		}
-		res, err := send(ctx, g, pending, progress)
+		// Watched for a swap of the machine behind the port, like a pool's.
+		res, err := send(withFrozenWorker(ctx, frozenWorker{key: key, capable: capable, lone: true}), g, pending, progress)
+		if swap, swapped := errors.AsType[*WorkerSwappedError](err); swapped {
+			// Another machine answered at the port during the request. Nothing the
+			// request returned can be told from the old machine's answer (earlier
+			// chunks included), so it is withheld as a whole; there is no other
+			// port, so the unanswered jobs are deferred without a strike. The error
+			// is neither stuck nor an outage, and is not counted toward stopping the
+			// run (it is no recognised transport failure). Results of earlier sends
+			// of this dispatch stand.
+			dispatchLog.Warn("the only whisper port changed hands during a request, so none of the request's results are kept and the jobs are deferred: url=%s was=%s now=%s after=%s jobs=%d withheld=%d",
+				logger.SanitizeLogValue(url), logger.SanitizeLogValue(swap.Was), logger.SanitizeLogValue(swap.Now),
+				swap.After.Round(time.Second), len(swap.Jobs), len(res))
+			return results, classifyTransport([]string{url}, err)
+		}
 		fault, isFault := errors.AsType[*WorkerFaultError](err)
 		if isFault && fault.killMajority() {
 			holdKills = true // before the answers below: earlier chunks of this request too
