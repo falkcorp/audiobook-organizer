@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.17.4
+// version: 1.18.1
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-30
 
@@ -74,6 +74,8 @@ var keyFamilies = []KeyFamily{
 	// ── Authors, narrators, series, works ──
 	{"author:", "author rows", "internal/database/pebble_store_authors.go"},
 	{"author:name:", "author index by normalized name", "internal/database/pebble_store_name_index.go"},
+	{"author_books:", "author to books index, credit-row source (one key per author and book)", "internal/database/pebble_store_author_books_index.go"},
+	{"author_books_legacy:", "author to books index, Book.AuthorID source (one key per author and book)", "internal/database/pebble_store_author_books_index.go"},
 	{"author_alias:", "author aliases and their indexes", "internal/database/pebble_store_authors.go"},
 	{"author_tag:", "author tags", "internal/database/pebble_store.go"},
 	{"author_tag_idx:", "author tag reverse index", "internal/database/pebble_store.go"},

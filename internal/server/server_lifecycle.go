@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.63.1
+// version: 4.65.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-30
 
@@ -1290,6 +1290,26 @@ func (s *Server) startBackfills() {
 		}
 	})
 
+	// Author -> books index (database/pebble_store_author_books_index.go): the
+	// first boot after it shipped builds it (author_books: keys for every credit
+	// row and Book.AuthorID), then sets the sentinel that lets
+	// GET /authors/:id/books read it instead of scanning the library while
+	// memdb warms. Every later boot waits for warmup and reconciles in place,
+	// writing only keys that are absent (a rollback to a binary without the
+	// index leaves some). Resolved through resolveAuthorBooksIndexer for the
+	// reason resolveVGBackfiller exists. Never blocks startup.
+	s.bgWG.Go("author-books-index", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		b, ok := resolveAuthorBooksIndexer(s.Ops())
+		if !ok {
+			lifecycleLog.Warn("author-books-index: store does not implement the index, authors' book lists will scan until it does: store_type=%T", s.Ops())
+			return
+		}
+		runAuthorBooksIndexBoot(s.bgCtx, b)
+	})
+
 	// Book identification index (database/ident_state.go): rebuilt from
 	// scratch when its marker is absent or old -- ident: queries answer 503
 	// and the review summary reports ready=false until it finishes -- and
@@ -2187,6 +2207,33 @@ type vgBackfiller interface{ BackfillVersionGroupIndex() error }
 // path. A guard that cannot reach the production call site does not guard it.
 func resolveVGBackfiller(s any) (vgBackfiller, bool) {
 	return database.AsCapability[vgBackfiller](s)
+}
+
+// authorBooksIndexer is the author -> books index build (*PebbleStore methods
+// outside database.Store).
+type authorBooksIndexer interface {
+	AuthorBooksIndexTrusted() (bool, error)
+	ReconcileAuthorBooksIndex(ctx context.Context) (database.AuthorBooksIndexReport, error)
+}
+
+// resolveAuthorBooksIndexer finds the index build on the running store through
+// database.AsCapability, not a bare assertion (see resolveVGBackfiller).
+func resolveAuthorBooksIndexer(s any) (authorBooksIndexer, bool) {
+	return database.AsCapability[authorBooksIndexer](s)
+}
+
+// runAuthorBooksIndexBoot is the boot sequence of the author -> books index:
+// reconcile immediately, never after warmup. The index exists to cover the
+// warmup window, and a sentinel left by another build is only believed again
+// once this boot's reconcile has finished, so waiting for warmup would extend
+// the window in which readers fall back to the scan. The reconcile writes only
+// absent keys, so a boot that finds a complete index is a read-mostly pass. A
+// failure is logged and leaves readers on the scan: an unreadable credit row
+// removes the sentinel, and a failed pass never sets it.
+func runAuthorBooksIndexBoot(ctx context.Context, b authorBooksIndexer) {
+	if _, err := b.ReconcileAuthorBooksIndex(ctx); err != nil {
+		lifecycleLog.Warn("author-books-index: reconcile failed, authors' book lists keep scanning until a boot completes it: err=%s", logger.SanitizeLogValue(err.Error()))
+	}
 }
 
 // identIndexBuilder is the identification index's supervisor (boot build

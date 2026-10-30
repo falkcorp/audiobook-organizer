@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.235.4
+// version: 1.237.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-30
 
@@ -167,6 +167,11 @@ type PebbleStore struct {
 	// (pebble_store_book_hash_index.go): once true, lookups ignore the legacy
 	// single-valued keys.
 	bookHashTrusted atomic.Bool
+	// authorBooksVerifiedThisBoot is set when this process finished a clean
+	// ReconcileAuthorBooksIndex. The author -> books index reader requires it
+	// whenever the sentinel was recorded by a different build
+	// (pebble_store_author_books_index.go).
+	authorBooksVerifiedThisBoot atomic.Bool
 	// opChangeByBookGen and opChangeByBookBuiltAt cache a positive read of the
 	// opchange_by_book: backfill sentinel. The cache is valid only while
 	// opChangeByBookBuiltAt == opChangeByBookGen+1; the rebuild and Reset bump
@@ -2770,6 +2775,13 @@ func (p *PebbleStore) bookIDsInAuthorJunction(authorID int) (map[string]struct{}
 // GetBooksByAuthorIDWithRoleCore instead. See
 // internal/database/author_getter_conformance_test.go.
 func (p *PebbleStore) getBooksByAuthorIDFull(authorID int) ([]Book, error) {
+	// Once the author -> books index is complete (its build sentinel is set)
+	// the listing is a prefix scan plus point reads. Until then, and for the
+	// whole first boot after the index shipped, the scan below is the answer.
+	// See pebble_store_author_books_index.go.
+	if books, trusted, err := p.booksByAuthorIDFromIndex(authorID); err != nil || trusted {
+		return books, err
+	}
 	inJunction, err := p.bookIDsInAuthorJunction(authorID)
 	if err != nil {
 		return nil, err
@@ -3190,6 +3202,14 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 		return nil, err
 	}
 
+	// Author -> books index, Book.AuthorID source, same batch as the row
+	// (pebble_store_author_books_index.go). The credit-row source is written
+	// by the credit writers, never here.
+	if err := stageAuthorBooksLegacy(batch, book.ID, nil, book.AuthorID); err != nil {
+		batch.Close()
+		return nil, err
+	}
+
 	// Version-group index (PERF-VERSIONS): O(N) full-scan in
 	// GetBooksByVersionGroup was costing ~15s on a 10K-book library.
 	// Indexed by group_id so the read can iterate only matching keys.
@@ -3579,6 +3599,15 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// keys of the hashes it holds (unconditionally, so a missing key heals).
 	// Each key belongs to this book alone (pebble_store_book_hash_index.go).
 	if err := stageBookHashKeys(batch, id, oldBook, book); err != nil {
+		batch.Close()
+		return nil, err
+	}
+
+	// Author -> books index, Book.AuthorID source: delete the key of the author
+	// this book left, set the key of the one it holds (unconditionally, so a
+	// lost key heals). The credit-row keys belong to the credit writers and are
+	// not touched (pebble_store_author_books_index.go).
+	if err := stageAuthorBooksLegacy(batch, id, oldBook.AuthorID, book.AuthorID); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -4428,6 +4457,24 @@ func (p *PebbleStore) deleteBook(id string, opts deleteBookOpts) error {
 	identTx := p.beginIdent(batch)
 	defer identTx.end(false)
 	if err := identTx.stage(id, nil, identCacheView{}); err != nil {
+		batch.Close()
+		return err
+	}
+	// Author -> books index keys of both sources (pebble_store_author_books_index.go).
+	// The credit row is read under the book_authors stripe held above, so the
+	// ids deleted here are exactly the ones it holds; an undecodable row leaves
+	// its keys behind, which the reader's point-verify ignores once the book
+	// row is gone.
+	creditIDs, _, creditOK, err := readCreditAuthorIDs(p.db, id)
+	if err != nil {
+		batch.Close()
+		return err
+	}
+	if !creditOK {
+		authorBooksIndexLog.Warn("delete book %s: undecodable book_authors row, its author_books keys are left for the reader to ignore", logger.SanitizeLogValue(id))
+		creditIDs = nil
+	}
+	if err := stageAuthorBooksDelete(batch, id, creditIDs, book.AuthorID); err != nil {
 		batch.Close()
 		return err
 	}
@@ -6225,6 +6272,7 @@ func (p *PebbleStore) Reset() error {
 	// cached true would make lookups ignore the legacy keys of whatever is
 	// written back.
 	p.bookHashTrusted.Store(false)
+	p.authorBooksVerifiedThisBoot.Store(false)
 
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.

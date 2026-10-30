@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -2941,7 +2942,7 @@ into one of the curated sections below, is a normal direct edit.
 - [x] **CI-05** No concurrency guard between the two burndown-dispatch workflows sharing the same task hub, with a real Sunday overlap window — `.github/workflows/hard-burndown.yml:29`. Two concurrent dispatch batches against the same hub can claim overlapping tasks and double model spend for the Sunday window. Brief: `docs/agent-tasks/todo-completion-2026-09/ci-tooling/TASK-314-no-concurrency-guard-between-the-two-burndown-di.md`.
   ✅ **FALSE POSITIVE, closed 2026-09-12 (TASK-314):** both workflows call `falkcorp/github-common/.github/workflows/reusable-burndown.yml` at the same pinned commit (`d0c3326b`), whose top-level `concurrency: {group: burndown-${{ github.repository }}, cancel-in-progress: false}` (lines 78–80) already serializes them. The pin was the same at the audit's commit 42d187168. Re-check this whenever that pin moves.
 
-- [ ] **SQ-02** No persisted author->books secondary index; pre-memdb-warmup fallback does two full-keyspace scans for a single-author lookup — `internal/database/pebble_store.go:2254`. This fallback is not a rare cold-start-only edge case: memory/project notes record memdb warmup as consistently ~130s after every restart, a recurring window this project has been bitten by before (`memdb warmup is ASYNC ~130s after every restart`). Any hit to GET /authors/:id/books (an interactive  Brief: `docs/agent-tasks/todo-completion-2026-09/database/TASK-322-no-persisted-author-books-secondary-index-pre-me.md`.
+- [x] **SQ-02** No persisted author->books secondary index; pre-memdb-warmup fallback does two full-keyspace scans for a single-author lookup — `internal/database/pebble_store.go:2254`. This fallback is not a rare cold-start-only edge case: memory/project notes record memdb warmup as consistently ~130s after every restart, a recurring window this project has been bitten by before (`memdb warmup is ASYNC ~130s after every restart`). Any hit to GET /authors/:id/books (an interactive  Brief: `docs/agent-tasks/todo-completion-2026-09/database/TASK-322-no-persisted-author-books-secondary-index-pre-me.md`.
 
 - [ ] **WEB-06** No Vitest or Playwright coverage exists for the Authors or Series pages — `web/src/pages/__tests__:0`. These are the two primary-nav pages with zero automated coverage of any kind, and they carry irreversible bulk-delete/merge actions plus the perf issue above -- a regression in either (e.g. a broken confirm dialog, a merge sending the wrong IDs) would ship undetected. Brief: `docs/agent-tasks/todo-completion-2026-09/web/TASK-332-no-vitest-or-playwright-coverage-exists-for-the.md`.
 

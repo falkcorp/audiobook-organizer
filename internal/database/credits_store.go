@@ -1,7 +1,7 @@
 // file: internal/database/credits_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package database
 
@@ -169,7 +169,10 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 		if err := b.Set(bookNarratorsKey(bookID), narratorData, nil); err != nil {
 			return fmt.Errorf("stage book_narrators:%s: %w", bookID, err)
 		}
-		return nil
+		// The credit row's author_books: keys, in the same batch. `authors` is
+		// the row as read above under the book_authors stripe, so the ids it
+		// held that newAuthors drops are exactly the keys deleted.
+		return stageAuthorBooksCreditDiff(b, bookID, bookAuthorIDsOf(authors), true, bookAuthorIDsOf(newAuthors))
 	}
 	updated, err := p.updateBookLockedMode(bookID, fresh, bookWriteOpts{stage: stage, authorAsGiven: true})
 	if err != nil {
