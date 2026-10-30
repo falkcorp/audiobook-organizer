@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c1d4f60-2a97-4e35-b8d1-6f0e3a7c95b2
-// last-edited: 2026-09-19
+// last-edited: 2026-10-30
 
 package metabatch
 
@@ -162,7 +162,12 @@ func ResolveCandidateFetch(store CandidateFetchResolver, opID string) *database.
 		}
 		return op
 	}
-	if op, err := store.GetOperationByID(opID); err == nil && op != nil {
+	// The v1 fallback needs the same guard. The legacy keyspace holds every
+	// op type that ever ran, and this route is reached with `library.view`, so
+	// without the check any v1 row of any type would be served under the
+	// candidate-fetch contract. Nothing leaks through it today (Repairs runs are
+	// v2-only), but a generic route must not depend on that staying true.
+	if op, err := store.GetOperationByID(opID); err == nil && op != nil && op.Type == candidateFetchOpType {
 		return op
 	}
 	return nil

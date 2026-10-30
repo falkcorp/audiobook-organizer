@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b7e0a34-9c26-4d18-a0f7-3e9b2c41d685
-// last-edited: 2026-10-09
+// last-edited: 2026-10-30
 
 package metabatch_test
 
@@ -228,6 +228,20 @@ func TestResolveCandidateFetch_StillFindsLegacyRun(t *testing.T) {
 	op := metabatch.ResolveCandidateFetch(store, "v1op")
 	if op == nil || op.ID != "v1op" || op.Progress != 5 {
 		t.Fatalf("a v1-keyed run must still resolve, got %+v", op)
+	}
+}
+
+// The v1 fallback is type-gated like the v2 branch: a legacy row of another
+// type must not be served under the candidate-fetch contract, so the caller
+// answers 404 for it.
+func TestResolveCandidateFetch_V1RowOfAnotherTypeResolvesToNil(t *testing.T) {
+	store := &fetchIndexStore{
+		v1ByID: map[string]*database.Operation{
+			"scan1": {ID: "scan1", Type: "library_scan", Status: "completed"},
+		},
+	}
+	if op := metabatch.ResolveCandidateFetch(store, "scan1"); op != nil {
+		t.Fatalf("a v1 row of another type must resolve to nil so the caller 404s, got %+v", op)
 	}
 }
 
