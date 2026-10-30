@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package activity
 
@@ -170,27 +170,13 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// isBatchable returns true if e should be routed through the ActivityBatcher
-// rather than written directly to the channel. Entries are batchable only when
-// they come from a structured LogBatch call (operationID non-empty) AND their
-// type is registered as a high-volume batch type. The tier=debug gate is
-// deliberate: warn/error lines of a batchable type are rare and must stay
-// individually visible in the Activity Log, so they take the direct path and
-// are never coalesced into a batch entry (DA-04).
-func isBatchable(e database.ActivityEntry) bool {
-	if e.OperationID == "" || e.Tier != "debug" {
-		return false
-	}
-	switch e.Type {
-	case "embedded-tag-load", "tag-scan", "metadata-apply", "path-repair", "isbn-enrich":
-		return true
-	}
-	return false
-}
-
 // sendEntry parses a single log line and enqueues an ActivityEntry.
 // Debug entries are silently dropped when the channel is full.
 // Non-debug entries emit a warning to stdout when dropped.
+//
+// Every entry built here has Type "system" and goes straight to the channel.
+// Batching is not done here: only the structured LogBatch call (api.go), which
+// names a registered batch type, coalesces items through the ActivityBatcher.
 func (w *Writer) sendEntry(line string) {
 	if w.closed.Load() {
 		return
@@ -239,8 +225,8 @@ func (w *Writer) sendEntry(line string) {
 	}
 	// A line that names a user stays out of what a caller who may not manage
 	// users reads (NamesOthersUserData), so the row says so itself. The tag is
-	// decided before the batching branch: a batched line is one item of a
-	// flushed entry, and the batch carries the flag in its key.
+	// decided here, on the line itself; LogBatch carries the flag in its batch
+	// key instead.
 	userData := NamesUserText(entry.Summary)
 	if !userData {
 		for _, a := range parsed.Attrs {
@@ -252,15 +238,6 @@ func (w *Writer) sendEntry(line string) {
 	}
 	if userData {
 		entry.Tags = append(entry.Tags, TagUserData)
-	}
-	if isBatchable(entry) {
-		w.batcher.Submit(BatchKey{
-			Type:        entry.Type,
-			Source:      entry.Source,
-			OperationID: entry.OperationID,
-			UserData:    userData,
-		}, BatchItem{Name: entry.Summary})
-		return
 	}
 	select {
 	case w.ch <- entry:
