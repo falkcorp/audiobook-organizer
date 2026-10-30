@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/main_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fc5d9b1a-46ac-4001-84ff-5f6f759647af
 // last-edited: 2026-10-30
 
@@ -24,7 +24,7 @@ import (
 // SetHashCostForTest panics outside a test binary and once the dummy hash is
 // built, so it must be the first thing here, before any test code runs.
 func TestMain(m *testing.M) {
-	absauth.SetHashCostForTest(1, 64)
+	absauth.SetHashCostForTest(1, 8192)
 	os.Exit(m.Run())
 }
 
@@ -35,7 +35,7 @@ func TestMainLoweredTheHashCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(hash, "m=64,t=1,") {
+	if !strings.Contains(hash, "m=8192,t=1,") {
 		t.Fatalf("hash %q was written at the production cost; TestMain's SetHashCostForTest did not apply", hash)
 	}
 }
