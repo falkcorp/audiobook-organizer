@@ -755,7 +755,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	s.wireMetadataRoutes(protected, metadataH)
 
 	// Admin debug API: one-off field fixes of book / book_file rows with a
-	// preview, an audit row and an undo. Register applies RequireAdmin itself.
+	// preview, an audit row and an undo. The reads sit behind adminRole (open
+	// with authentication off); Register puts RequireAdmin on the writes
+	// itself, so they answer 401 in that mode (wire_admin_role.go).
 	// Typed-nil guard as above: a nil *activity.Service boxed into the
 	// interface would pass the handler's nil check (apply refuses with 503
 	// when there is no audit log).
@@ -763,7 +765,13 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.activityService != nil {
 		adminDebugActivity = s.activityService
 	}
-	admindebug.New(s.storeForWiring(), adminDebugActivity).Register(protected)
+	for _, rt := range admindebug.New(s.storeForWiring(), adminDebugActivity).Register(protected, s.adminRole()) {
+		kind := adminRouteReadOnly
+		if rt.Writes {
+			kind = adminRouteAlwaysAuthenticated
+		}
+		s.recordAdminRoute(rt.Method, rt.Path, kind)
+	}
 }
 
 // newOrganizeHandler builds the single-book organize handler. Preview and

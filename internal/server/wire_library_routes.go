@@ -1,14 +1,13 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.17.2
+// version: 1.17.3
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package server
 
 import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"net/http"
 )
@@ -191,35 +190,39 @@ func (s *Server) wireLibraryRoutes(
 	protected.POST("/audiobooks/:id/move-segments", s.perm(auth.PermLibraryEditMetadata), versionsH.MoveSegments)
 	protected.GET("/version-groups/:id", s.perm(auth.PermLibraryView), versionsH.GetVersionGroup)
 
-	// Admin-only Phase 2 routes
-	adminOnly := protected.Group("")
-	adminOnly.Use(servermiddleware.RequireAdmin())
-	{
-		adminOnly.GET("/cache/stats/keys", cacheH.HandleCacheKeysIntrospection)
-		// POST /cache/invalidate (flush one or all in-memory caches) had no
-		// caller in the repo and no replacement (01-P81g). It answers 410 Gone
-		// for one release (owner decision D9) and is then removed. It stays on
-		// the admin-only group, so an unauthenticated caller still gets 401, a
-		// non-admin 403, and only an admin learns it is gone. Until a
-		// registered op replaces it, flushing a stale cache takes a restart.
-		adminOnly.POST("/cache/invalidate", gone(""))
-		// POST /admin/recompact-digests only enqueued the
-		// maintenance.recompact-activity-digests op, which POST /operations/v2
-		// starts just as well, and it had no caller in the repo (01-P81g). It
-		// answers 410 Gone for one release (owner decision D9) and is then
-		// removed. It stays on the admin-only group, so an unauthenticated
-		// caller still gets 401, a non-admin 403, and only an admin learns it
-		// is gone.
-		adminOnly.POST("/admin/recompact-digests",
-			gone(`POST /api/v1/operations/v2 with {"def_id":"maintenance.recompact-activity-digests"}`))
-		// Per-guest Cloudflare service tokens (guest_service_tokens.go). All three
-		// are credential routes, GET included: the list names guests and their
-		// token ids and makes the server call Cloudflare, and the plan reads the
-		// real books policy, so no API key (a leaked or delegated one) may use
-		// them; the revoke ends one guest's phone-app access, and the plan and
-		// revoke also need the owner once one is set (ownerGateWhenOwnerSet).
-		s.credRoute(adminOnly, http.MethodGet, "/admin/guest-service-tokens", s.handleListGuestServiceTokens)
-		s.credRoute(adminOnly, http.MethodGet, "/admin/guest-service-tokens/plan", s.ownerGateWhenOwnerSet(), s.handlePlanGuestServiceToken)
-		s.credRoute(adminOnly, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.ownerGateWhenOwnerSet(), s.handleRevokeGuestServiceToken)
-	}
+	// Admin-only Phase 2 routes. Each is classified (wire_admin_role.go): the
+	// cache key listing only returns state, so it opens with authentication
+	// off; everything else keeps RequireAdmin and answers 401 in that mode.
+	s.adminRoute(protected, adminRouteReadOnly, http.MethodGet, "/cache/stats/keys", cacheH.HandleCacheKeysIntrospection)
+	// POST /cache/invalidate (flush one or all in-memory caches) had no
+	// caller in the repo and no replacement (01-P81g). It answers 410 Gone
+	// for one release (owner decision D9) and is then removed. It stays
+	// behind RequireAdmin, so an unauthenticated caller still gets 401, a
+	// non-admin 403, and only an admin learns it is gone. It is a flush
+	// verb, so it keeps the 401 with authentication off as well. Until a
+	// registered op replaces it, flushing a stale cache takes a restart.
+	s.adminRoute(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/cache/invalidate", gone(""))
+	// POST /admin/recompact-digests only enqueued the
+	// maintenance.recompact-activity-digests op, which POST /operations/v2
+	// starts just as well, and it had no caller in the repo (01-P81g). It
+	// answers 410 Gone for one release (owner decision D9) and is then
+	// removed. It stays behind RequireAdmin, so an unauthenticated caller
+	// still gets 401, a non-admin 403, and only an admin learns it is gone.
+	s.adminRoute(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/recompact-digests",
+		gone(`POST /api/v1/operations/v2 with {"def_id":"maintenance.recompact-activity-digests"}`))
+	// Per-guest Cloudflare service tokens (guest_service_tokens.go). All three
+	// are credential routes, GET included: the list names guests and their
+	// token ids and makes the server call Cloudflare, and the plan reads the
+	// real books policy, so no API key (a leaked or delegated one) may use
+	// them; the revoke ends one guest's phone-app access, and the plan and
+	// revoke also need the owner once one is set (ownerGateWhenOwnerSet). So
+	// even the two reads keep RequireAdmin and answer 401 with authentication
+	// off: they are not introspection. The admin gate runs before the
+	// credential guard.
+	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodGet, "/admin/guest-service-tokens"),
+		http.MethodGet, "/admin/guest-service-tokens", s.handleListGuestServiceTokens)
+	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodGet, "/admin/guest-service-tokens/plan"),
+		http.MethodGet, "/admin/guest-service-tokens/plan", s.ownerGateWhenOwnerSet(), s.handlePlanGuestServiceToken)
+	s.credRoute(s.adminGroup(protected, adminRouteAlwaysAuthenticated, http.MethodPost, "/admin/guest-service-tokens/:userId/revoke"),
+		http.MethodPost, "/admin/guest-service-tokens/:userId/revoke", s.ownerGateWhenOwnerSet(), s.handleRevokeGuestServiceToken)
 }

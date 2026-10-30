@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -597,12 +598,15 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **TODO-JUNK-TITLE-SLIPS** The junk-title fixer's string rules (v2, evidence ranking) still let 146 of the 261 reviewer-rejected transcription rows, 85 of 134 filename rows and 14 of 57 folder rows through, measured by replaying the 2026-10-23 plan offline. Classes left as they are because a string rule cannot tell them from a title: a misheard transcription (needs a corroborating folder, filename or candidate before it is applicable, the same ask as the garbled-transcription entry above), a plain series prefix with no "Book N", a bare leading or trailing year, "a novel" without a comma, a trailing "... Stories", a number-and-year prefix. Decide which of these the owner wants refused outright and which need a second source, then add them to `junk_title_filters.go` with invented fixtures. Also still refused although they can be real titles: an opening "Welcome to ...", a sentence-case "It ends ..." and a trailing "..." in a transcription (`junk_title_filters.go`), and `junkStoredAuthor` still uses `authorjunk.ClassifyName` with its relink-only rules; each is a refusal, so a title is listed for a person, never mis-proposed.
 
-- [ ] **TODO-MLIST-REQUIREADMIN-AUTHOFF** `servermiddleware.RequireAdmin` itself
-      still answers 401 with `EnableAuth=false` for its other users (retired wipe
-      stub, cache introspection, admin debug API, `/system` wipe routes). Decide
-      per route whether auth-off should open it, then give each the same
-      pass-through the master-list routes now have through `Server.adminRole()`.
-      Do not change `RequireAdmin` globally: it also guards destructive routes.
+- [x] **TODO-MLIST-REQUIREADMIN-AUTHOFF** Done 2026-10-30. Decided per route
+      (`docs/decisions/2026-10-30-admin-routes-auth-off.md`): read-only admin
+      introspection (`GET /cache/stats/keys`, the admin debug API's four `GET`
+      routes) now opens with `EnableAuth=false` through `Server.adminRole()`
+      (moved to `wire_admin_role.go`); destructive and credential routes (`/system`
+      wipes, debug `PATCH`/undo, the retired wipe, cache-flush and digest stubs, the
+      guest service token routes) keep `RequireAdmin` and still answer 401.
+      `RequireAdmin` itself is unchanged. `admin_routes_test.go` makes a new admin
+      route have to be classified.
 - [ ] **TODO-MLIST-AUDIBLE-CUTOVER** Cut over `maintenance.audible-read-status`
       to the `master-list-import` fixer (its Audible-specific input becomes a
       list upload) and retire the old op.
