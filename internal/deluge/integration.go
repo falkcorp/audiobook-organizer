@@ -1,7 +1,7 @@
 // file: internal/deluge/integration.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-1234-ef01-345678901234
-// last-edited: 2026-09-12
+// last-edited: 2026-10-30
 //
 // Deluge integration for library centralization.
 //
@@ -95,28 +95,39 @@ func SetGlobalClientForTest(c *Client) func() {
 }
 
 // NotifyDelugeMoveStorage tells Deluge to move a torrent's storage
-// to a new path. Called after a version swap or organize moves files
+// to the folder that holds a file. Called after organize moves files
 // that belong to a Deluge-sourced version.
 //
 // torrentHash is the infohash from BookVersion.TorrentHash.
-// newPath is the directory where the files now live.
+// newFilePath is the path of a FILE; Deluge is sent its parent
+// directory. To name a folder directly (a version slot, for example)
+// use NotifyDelugeMoveStorageToDir.
 //
 // Silently no-ops if Deluge is not configured or the torrent hash
 // is empty.
-func NotifyDelugeMoveStorage(torrentHash, newPath string) {
+func NotifyDelugeMoveStorage(torrentHash, newFilePath string) {
+	NotifyDelugeMoveStorageToDir(torrentHash, filepath.Dir(newFilePath))
+}
+
+// NotifyDelugeMoveStorageToDir tells Deluge to move a torrent's storage
+// to dir, exactly as given. Use it when the caller already holds the
+// folder the files live in (a .versions/{id} slot); NotifyDelugeMoveStorage
+// is the variant for a file path.
+//
+// Silently no-ops if Deluge is not configured or the torrent hash
+// is empty.
+func NotifyDelugeMoveStorageToDir(torrentHash, dir string) {
 	if torrentHash == "" {
 		return
 	}
 	if !config.AppConfig.DelugeMoveEnabled {
-		slog.Info("deluge move_storage skipped (deluge_move_enabledfalse) →", "torrentHash", torrentHash, "newPath", newPath)
+		slog.Info("deluge move_storage skipped (deluge_move_enabledfalse) →", "torrentHash", torrentHash, "dir", dir)
 		return
 	}
 	c := GetClient()
 	if c == nil {
 		return
 	}
-	// Deluge expects the parent directory, not the file path.
-	dir := filepath.Dir(newPath)
 	if err := c.MoveStorage([]string{torrentHash}, dir); err != nil {
 		slog.Warn("deluge move_storage →", "torrentHash", torrentHash, "dir", dir, "err", err)
 	} else {
@@ -170,7 +181,7 @@ func NotifyDelugeAfterVersionSwap(store swapNotifyStore, fromVer, toVer *databas
 		book, _ := store.GetBookByID(fromVer.BookID)
 		if book != nil {
 			slotDir := filepath.Join(filepath.Dir(book.FilePath), ".versions", fromVer.ID)
-			NotifyDelugeMoveStorage(fromVer.TorrentHash, slotDir)
+			NotifyDelugeMoveStorageToDir(fromVer.TorrentHash, slotDir)
 		}
 	}
 }

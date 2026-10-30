@@ -244,7 +244,7 @@ into one of the curated sections below, is a normal direct edit.
       tab. A swap that adopts files or handles folder books must keep that resume able to
       classify every file row (book folder or its own slot).
 
-- [ ] **TODO-DELUGE-SWAP-NOTIFY-SLOT-DIR** Fix the leaving version's Deluge follow after a version
+- [x] **TODO-DELUGE-SWAP-NOTIFY-SLOT-DIR** Fix the leaving version's Deluge follow after a version
       swap pointing the torrent one folder too high. `deluge.NotifyDelugeAfterVersionSwap`
       (`internal/deluge/integration.go`) passes the leaving version's slot FOLDER
       (`.versions/{id}`) to `NotifyDelugeMoveStorage`, which takes the path of a FILE and
@@ -255,6 +255,8 @@ into one of the curated sections below, is a normal direct edit.
       folder-taking sibling, and test the directory Deluge is sent for both versions of a
       swap. Found reviewing TODO-SWAP-STUCK-RECOVERY (the resume handler's Deluge call goes
       through the same function); not changed there.
+      Done 2026-10-30: added `deluge.NotifyDelugeMoveStorageToDir`; the swap's leaving-version
+      call uses it. See `docs/decisions/2026-10-30-deluge-swap-slot-dir.md`.
 
 - [ ] **TODO-INGEST-ACTIVE-WHILE-SWAP-STUCK** Stop ingest from creating a second active version
       for a book whose version swap did not finish. A book with a version in `swapping_out` /
