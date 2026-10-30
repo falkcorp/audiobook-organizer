@@ -1,7 +1,7 @@
 // file: internal/server/ai_scan_apply_op_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b3d1e97-0c45-4a28-9f7e-d2a8c5416b03
-// last-edited: 2026-10-14
+// last-edited: 2026-10-30
 
 package server
 
@@ -319,7 +319,7 @@ func TestAIScanApplyOp_ACancelStopsBetweenResultsAndKeepsWhatMerged(t *testing.T
 	def := relinkOpDef(t, f.s.RegisterAIScanApplyOp, handlers.AIScanApplyDefID)
 	raw, err := json.Marshal(handlers.AIScanApplyOpParams{ScanID: f.scan.ID, ResultIDs: []int{id}, DryRun: live()})
 	require.NoError(t, err)
-	err = def.Run(context.Background(), raw, &applyReporter{canceled: true})
+	err = def.Run(context.Background(), raw, &applyReporter{id: "op-cancel-test", canceled: true})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cancelled")
