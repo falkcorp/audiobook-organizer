@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.55.4
+// version: 1.55.5
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-12
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -1367,6 +1367,12 @@ func (mfs *Service) existingLibraryCopy(book *database.Book) (*database.Book, bo
 // existingLibraryCopyMatching is existingLibraryCopy with an extra sibling
 // filter; nil accepts every clean library sibling (the apply's rule).
 func (mfs *Service) existingLibraryCopyMatching(book *database.Book, accept func(*database.Book) bool) (*database.Book, bool) {
+	return mfs.existingLibraryCopyMatchingIn(mfs.readImportRoots(), book, accept)
+}
+
+// existingLibraryCopyMatchingIn is existingLibraryCopyMatching with every
+// protected-path decision made from the import-path read r.
+func (mfs *Service) existingLibraryCopyMatchingIn(r *importRootsRead, book *database.Book, accept func(*database.Book) bool) (*database.Book, bool) {
 	root := config.AppConfig.RootDir
 	if root == "" {
 		return book, true // no library configured
@@ -1374,10 +1380,10 @@ func (mfs *Service) existingLibraryCopyMatching(book *database.Book, accept func
 	if pathUnderRoot(book.FilePath, root) {
 		return book, true // already in library
 	}
-	if !mfs.isProtectedPath(book.FilePath) {
+	if !mfs.isProtectedPathIn(r, book.FilePath) {
 		return book, true // not protected, safe to modify
 	}
-	if sib := mfs.librarySiblingMatching(book, accept); sib != nil {
+	if sib := mfs.librarySiblingMatchingIn(r, book, accept); sib != nil {
 		slog.Info("using existing library copy for protected book", "siblingID", sib.ID, "bookID", book.ID)
 		return sib, true
 	}
@@ -1398,6 +1404,12 @@ func (mfs *Service) librarySibling(book *database.Book) *database.Book {
 // admits (nil admits all). The filter runs before the protected-file-row
 // check, so a rejected edition costs no book_file read.
 func (mfs *Service) librarySiblingMatching(book *database.Book, accept func(*database.Book) bool) *database.Book {
+	return mfs.librarySiblingMatchingIn(mfs.readImportRoots(), book, accept)
+}
+
+// librarySiblingMatchingIn is librarySiblingMatching with its protected-file-row
+// check made from the import-path read r.
+func (mfs *Service) librarySiblingMatchingIn(r *importRootsRead, book *database.Book, accept func(*database.Book) bool) *database.Book {
 	if book.VersionGroupID == nil || *book.VersionGroupID == "" {
 		return nil
 	}
@@ -1413,7 +1425,7 @@ func (mfs *Service) librarySiblingMatching(book *database.Book, accept func(*dat
 		if accept != nil && !accept(sib) {
 			continue
 		}
-		if p := mfs.firstProtectedFileRow(sib.ID); p != "" {
+		if p := mfs.firstProtectedFileRowIn(r, sib.ID); p != "" {
 			slog.Warn("version sibling under root_dir still has a file row under a protected path; not using it as the library copy",
 				"siblingID", sib.ID, "bookID", book.ID, "protected_path", p)
 			continue
@@ -1447,13 +1459,19 @@ func (mfs *Service) versionGroupSiblings(book *database.Book, purpose string) ([
 // defence, and refusing the sibling on a transient read error would make the
 // user-initiated apply create a duplicate library copy.
 func (mfs *Service) firstProtectedFileRow(bookID string) string {
+	return mfs.firstProtectedFileRowIn(mfs.readImportRoots(), bookID)
+}
+
+// firstProtectedFileRowIn is firstProtectedFileRow with its checks made from the
+// import-path read r.
+func (mfs *Service) firstProtectedFileRowIn(r *importRootsRead, bookID string) string {
 	files, err := mfs.db.GetBookFiles(bookID)
 	if err != nil {
 		slog.Warn("could not list a version sibling's files to check for protected rows", "bookID", bookID, "error", err)
 		return ""
 	}
 	for _, bf := range files {
-		if !bf.Missing && mfs.isProtectedPath(bf.FilePath) {
+		if !bf.Missing && mfs.isProtectedPathIn(r, bf.FilePath) {
 			return bf.FilePath
 		}
 	}

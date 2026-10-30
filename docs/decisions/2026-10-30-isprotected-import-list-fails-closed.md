@@ -38,3 +38,16 @@ read fails, via the `importPathRoots` helper that `isProtectedPath` shares, so
 `resolveLibraryCopy` refuses with `tagger.ErrProtectedListNotLoaded`. The server
 package has no equivalent copy-creating path keyed on a loaded flag: its only
 user, `renameVerdict`, already answers `SourceProtected` for a protected path.
+
+Two-read window (follow-on review): `resolveLibraryCopy` called
+`existingLibraryCopy` (which reads the import paths through `isProtectedPath`) and
+then `protectedListLoaded` (a second read). A first read failing (the book reads
+as protected, no sibling) and a second succeeding fell through to
+`createUsableLibraryCopy`, copying a book that was never protected. Now one
+`readImportRoots` snapshot is taken at the top and passed down through
+`existingLibraryCopyMatchingIn`, `librarySiblingMatchingIn`,
+`firstProtectedFileRowIn`, `isProtectedPathIn` and `protectedListLoadedIn`;
+`isProtectedPath` and the other callers keep their old signatures and read once
+themselves. On a failed read the create policy refuses before any lookup; the
+other policies continue on the snapshot, where every path is protected, so their
+behaviour is unchanged (they return no copy) rather than turning into an error.
