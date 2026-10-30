@@ -1,7 +1,7 @@
 // file: internal/versions/kept_sweep.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0a0e6a4a-3f6e-4f0c-9b4f-6d7a1e2c8b35
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package versions
 
@@ -605,10 +605,7 @@ func settleNights(store KeptSweepStore, ver *database.BookVersion, res *KeptSwee
 	if !progress && len(counted) > 0 {
 		// One night is one calendar day: a sweep that runs again the same day (a
 		// manual run, a retry) leaves the count where the first run put it.
-		nights, on = was+1, today
-		if wasOn == today && was > 0 {
-			nights, on = was, wasOn
-		}
+		nights, on = nextNightCount(was, wasOn, today)
 	}
 	if nights >= PurgeUndecidedEscalateAfter {
 		prevKept, prevStatus := ver.PurgeKept, ver.Status

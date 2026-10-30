@@ -1,7 +1,7 @@
 // file: internal/versions/lifecycle.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 5a3b4c0d-6e7f-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 //
 // Version lifecycle operations (spec 3.1 task 6).
 //
@@ -382,10 +382,27 @@ func (e *NothingServedError) Is(target error) bool {
 // version is purging, may leave a path unsettled with nothing unlinked before the
 // version moves to purge_failed. The nightly cleanup is one attempt a night, so
 // this is three nights, the same count as the merge-stop streak
-// (MergeStopEscalateAfter); a Purge now click is an attempt too. It is the exit
+// (MergeStopEscalateAfter); a Purge now click runs but adds no night on a day
+// that already counted one (nextNightCount). It is the exit
 // from a purging version that can never finish: purging refuses restore and hard
 // delete, purge_failed can be hard-deleted.
 const PurgeUndecidedEscalateAfter = 3
+
+// purgeClock is the clock settleStuck reads for the calendar day an attempt is
+// counted on. A variable only so a test can move the day; production leaves it.
+var purgeClock = time.Now
+
+// nextNightCount is the unsettled-night count after one more unsettled attempt
+// on the calendar day today (YYYY-MM-DD), given the count was and the day wasOn
+// it last grew. An attempt on the day the count last grew leaves it where it is;
+// any other day adds one. Shared by the purge (settleStuck) and the kept-file
+// sweep (settleNights) so a night means the same thing to both.
+func nextNightCount(was int, wasOn, today string) (nights int, on string) {
+	if wasOn == today && was > 0 {
+		return was, wasOn
+	}
+	return was + 1, today
+}
 
 // BackgroundMergeLockWait is how long the nightly cleanup waits, per version,
 // for a running merge or combine to release the merge lock before it gives up
@@ -1101,8 +1118,10 @@ func (s stuckPaths) errs() []error {
 //   - A trashed version never reaches the claim when nothing is removable, so it
 //     stays trash (restorable), unchanged.
 //   - A purge_failed version stays purge_failed.
-//   - A purging version counts the attempt (a progress attempt, one that unlinked
-//     something, resets the count).
+//   - A purging version counts the attempt, at most once per calendar day
+//     (BookVersion.PurgeUndecidedNightOn, via nextNightCount, the same rule the
+//     kept-file sweep uses); a progress attempt, one that unlinked something,
+//     resets the count.
 func settleStuck(store versionPurger, ver *database.BookVersion, kept map[string]string, stuck stuckPaths, unlinked, total int) error {
 	onlyUndecided := len(stuck.failed) == 0
 	mkErr := func() error {
@@ -1117,9 +1136,12 @@ func settleStuck(store versionPurger, ver *database.BookVersion, kept map[string
 		return mkErr()
 	}
 	if unlinked > 0 {
-		ver.PurgeUndecidedNights = 0
+		ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn = 0, ""
 	} else {
-		ver.PurgeUndecidedNights++
+		// One night is one calendar day, as in the kept-file sweep: a Purge now
+		// click that follows the nightly attempt (or another click) the same day
+		// still runs, and still stores the day, but does not add a night.
+		ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn = nextNightCount(ver.PurgeUndecidedNights, ver.PurgeUndecidedNightOn, purgeClock().Format(time.DateOnly))
 	}
 	if ver.PurgeUndecidedNights >= PurgeUndecidedEscalateAfter {
 		notes := stuck.notes()
