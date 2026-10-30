@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package database
 
@@ -409,10 +409,12 @@ func (p *PebbleStore) deleteAuthor(id, intoID int) (*AuthorMergeDeleteResult, er
 	// was its sole entry. Both writes join the batch the author row is deleted
 	// in, so the junction never outlives the author it points at.
 	//
-	// Cost: one full scan of the junction keyspace per delete. There is no
-	// author -> books reverse index in Pebble, and building one needs a
-	// backfill migration. Bulk callers (the purge-empty-authors maintenance
-	// task) pay this per author.
+	// Cost: one full scan of the junction keyspace per delete. The author ->
+	// books index (pebble_store_author_books_index.go) could narrow this to the
+	// author's own books, but this sweep is the authoritative orphan cleanup
+	// and deliberately does not depend on a derived index being complete.
+	// Bulk callers (the purge-empty-authors maintenance task) pay this per
+	// author.
 	affected, sweepErr := p.sweepAuthorFromBookAuthors(batch, id)
 	if sweepErr != nil {
 		batch.Close()
@@ -485,6 +487,13 @@ func (p *PebbleStore) sweepAuthorFromBookAuthors(batch *GatedBatch, authorID int
 		// iter.Key() is invalidated by Next(); string() copies.
 		key := string(iter.Key())
 		bookID := strings.TrimPrefix(key, "book_authors:")
+		// The credit-family index key for this (author, book) goes in the same
+		// batch. The Book.AuthorID key is left alone: a deleted author's
+		// legacy link is the caller's relink to clear, exactly as the scan
+		// this index replaces saw it.
+		if err := batch.Delete(authorBooksKey(authorID, bookID), nil); err != nil {
+			return nil, fmt.Errorf("pebble Delete author_books key for %s: %w", bookID, err)
+		}
 		if len(remaining) == 0 {
 			if err := batch.Delete([]byte(key), nil); err != nil {
 				return nil, fmt.Errorf("pebble Delete %s: %w", key, err)
@@ -936,7 +945,24 @@ func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) 
 	if err != nil {
 		return nil, err
 	}
-	if err := p.db.Set(bookAuthorsKey(bookID), data, pebble.Sync); err != nil {
+	// The credit row and its author_books: keys commit as one batch
+	// (pebble_store_author_books_index.go). The old row is read under the
+	// book_authors stripe the caller holds, so the ids dropped from it are
+	// exactly the keys deleted; an undecodable old row deletes nothing (its
+	// leftover keys fail the reader's point-verify).
+	oldIDs, _, oldOK, err := readCreditAuthorIDs(p.db, bookID)
+	if err != nil {
+		return nil, err
+	}
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set(bookAuthorsKey(bookID), data, nil); err != nil {
+		return nil, err
+	}
+	if err := stageAuthorBooksCreditDiff(batch, bookID, oldIDs, oldOK, bookAuthorIDsOf(authors)); err != nil {
+		return nil, err
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
 	// A credit change is a change to the book as every list reads it: an

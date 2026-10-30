@@ -1,7 +1,7 @@
 <!-- file: docs/database-pebble-schema.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 8f6e2c1b-7d4a-4f86-9f2a-5a6b7c8d9e0f -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-10-30 -->
 
 # PebbleDB Keyspace Schema and Data Model
 
@@ -58,7 +58,8 @@ Indexes (examples):
 - `idx:author:name:<normalized>` → `<authorULID>`
 - `idx:series:name:<normalized>` → `<seriesULID>`
 - `idx:series:author:<authorULID>:<seriesULID>` → `1`
-- `idx:book:author:<authorULID>:<bookULID>` → `1`
+- `author_books:<authorID>:<bookID>` and `author_books_legacy:<authorID>:<bookID>` → empty
+  (the implemented author→books index; see "Author → books index" below)
 - `idx:book:series:<seriesULID>:<posPadded>:<bookULID>` → `1`
 - `idx:book:title:<normalized>:<bookULID>` → `1`
 - `idx:book:tag:<tagLower>:<bookULID>` → `1`
@@ -159,7 +160,8 @@ Key: `b:<bookULID>` { "id": "<ulid>", "title": "...", "normalized_title": "...",
 
 Indexes:
 
-- `idx:book:author:<authorULID>:<bookULID>` → `1`
+- `author_books:<authorID>:<bookID>`, `author_books_legacy:<authorID>:<bookID>` → empty
+  (see "Author → books index" below)
 - `idx:book:series:<seriesULID>:<posPadded>:<bookULID>` → `1`
 - `idx:book:title:<normalizedTitle>:<bookULID>` → `1`
 - `idx:book:tag:<tagLower>:<bookULID>` → `1`
@@ -425,3 +427,42 @@ On startup:
 - Full-text search: external engine (Bleve/Meilisearch) fed by change log
 - Multi-tenant prefixing: `tenant:<tenantID>:` prepend to all keys
 - Encryption-at-rest: selective field-level encryption in JSON values
+
+## Author → books index (implemented)
+
+Answers "which books does author A hold" with a prefix scan, so
+`GET /authors/:id/books` does not read the whole library while memdb warms
+(about 130 s after every restart). Code:
+`internal/database/pebble_store_author_books_index.go`. Rationale and rejected
+alternatives: `docs/decisions/2026-10-30-author-books-index.md`.
+
+| Key | Value | Written by | Meaning |
+| --- | --- | --- | --- |
+| `author_books:<authorID>:<bookID>` | empty | credit writers (`SetBookAuthors`, `ModifyBookAuthors`, `ModifyBookCredits`), `DeleteBook`, `DeleteAuthor` sweep | the author is in the book's `book_authors:<bookID>` row, at any role or position |
+| `author_books_legacy:<authorID>:<bookID>` | empty | `CreateBook`, `UpdateBook` and its variants, `DeleteBook` | the author is the book's `Book.AuthorID` |
+| `system:backfill:author_books_index_v1_done` | VCS revision of the build that wrote it (`1` when unstamped) | `ReconcileAuthorBooksIndex` | every key above existed when this was written; deleted when a reconcile finds an undecodable credit row. Readers trust the index while it is present AND it names the running build or this boot's reconcile has finished |
+
+- `<authorID>` is decimal, so the scan range for one author is
+  `[author_books:<id>:, author_books:<id>;)` (`authorBooksBounds`, built with
+  `prefixEnd`). The trailing colon is what keeps author 1 out of author 10.
+  `<bookID>` is the rest of the key and may itself contain `:`.
+- The two sources are separate families so each key has one writer family: the
+  credit writers hold the `book_authors` stripe and cannot take the book stripe,
+  `UpdateBook` holds the book stripe and not the credit stripe, and one shared key
+  would let either delete the other's.
+- Every key is staged in the same batch as the row it derives from. Both
+  families include trashed and non-primary books; the reader filters them.
+- A missing key hides a book; an extra key is harmless, because the reader
+  point-verifies each candidate (row exists and decodes, still links the author)
+  before applying the soft-delete and primary-version filters.
+- Until the sentinel is set the reader keeps the old two-scan path. The first
+  boot after this shipped builds the index; every boot reconciles it
+  immediately (writes only absent keys), which repairs a rollback to a build
+  that does not maintain it. A sentinel recorded by a different build is not
+  believed until this boot's reconcile has finished, so the roll-forward boot
+  scans for the length of the reconcile pass and no longer. One intermediate
+  binary without this code cannot be detected (it leaves no mark). To force a
+  rebuild, delete the sentinel key.
+- Merges, deletes and relinks (`GetBooksByAuthorIDWithRoleCore`,
+  `GetBooksByAuthorIDForRelinkCore`) do not read this index; they keep the
+  authoritative scan.

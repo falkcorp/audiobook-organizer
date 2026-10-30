@@ -1,7 +1,7 @@
 // file: internal/server/store_capability_resolve_test.go
-// version: 2.2.0
+// version: 2.4.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package server
 
@@ -329,5 +329,46 @@ func TestDecoratedStoreResolvesStrictUserLister(t *testing.T) {
 	}
 	if _, err := merge.NewUserStateProbe(wrapped); !errors.Is(err, database.ErrUndecodableUserRows) {
 		t.Fatalf("NewUserStateProbe through a decorator = %v, want ErrUndecodableUserRows (fail closed)", err)
+	}
+}
+
+// TestStoreExposesAuthorBooksIndex: the author -> books index build is a
+// *PebbleStore method outside database.Store, so a bare assertion misses
+// through a decorator exactly as it did for the version-group backfill. This
+// resolves it through the production resolver and runs the real boot sequence.
+func TestStoreExposesAuthorBooksIndex(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	inner.WaitForWarmup()
+
+	var wrapped database.Store = &embeddingDecorator{Store: inner}
+	if _, ok := wrapped.(authorBooksIndexer); ok {
+		t.Fatal("a bare type assertion now resolves authorBooksIndexer through the " +
+			"decorator; this test no longer reproduces the production bug")
+	}
+	b, ok := resolveAuthorBooksIndexer(wrapped)
+	if !ok {
+		t.Fatal("resolveAuthorBooksIndexer through a decorator failed; the author -> books " +
+			"index would silently never be built")
+	}
+
+	trusted, err := b.AuthorBooksIndexTrusted()
+	if err != nil || trusted {
+		t.Fatalf("fresh store: trusted=%v err=%v, want false/nil", trusted, err)
+	}
+	runAuthorBooksIndexBoot(context.Background(), b)
+	trusted, err = b.AuthorBooksIndexTrusted()
+	if err != nil || !trusted {
+		t.Fatalf("after the boot build: trusted=%v err=%v, want true/nil", trusted, err)
+	}
+	// A second boot reconciles an already-built index (writes nothing) and
+	// must neither fail nor drop trust.
+	runAuthorBooksIndexBoot(context.Background(), b)
+	trusted, err = b.AuthorBooksIndexTrusted()
+	if err != nil || !trusted {
+		t.Fatalf("after the second boot: trusted=%v err=%v, want true/nil", trusted, err)
 	}
 }
