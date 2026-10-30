@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b3d5e17-4a92-4c06-9f38-1d7b2e5a09c4
-// last-edited: 2026-09-01
+// last-edited: 2026-10-30
 
 // In-package tests for resolveBookIDsMatching. The HTTP-level tests in
 // search_test.go cannot reach its empty-needle guard, because the handler
@@ -18,31 +18,23 @@ import (
 )
 
 // countingStore implements just enough of DedupStore to observe whether the
-// bulk readers were called at all. A mock that merely returns empty slices
-// could not tell "did not read the library" from "read it and found nothing".
+// projection was called at all. A mock that merely returns an empty slice could
+// not tell "did not read the library" from "read it and found nothing".
 type countingStore struct {
 	DedupStore
-	books       []database.BookCore
-	authors     []database.Author
-	booksErr    error
-	authorsErr  error
-	bookCalls   int
-	authorCalls int
+	rows     []database.BookSearchRow
+	rowsErr  error
+	rowCalls int
 }
 
-func (c *countingStore) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
-	c.bookCalls++
-	return c.books, c.booksErr
-}
-
-func (c *countingStore) GetAllAuthors() ([]database.Author, error) {
-	c.authorCalls++
-	return c.authors, c.authorsErr
+func (c *countingStore) ListBookSearchRows() ([]database.BookSearchRow, error) {
+	c.rowCalls++
+	return c.rows, c.rowsErr
 }
 
 func TestResolveBookIDsMatchingEmptyNeedleNeverReadsTheLibrary(t *testing.T) {
 	for _, needle := range []string{"", "   ", "\t\n"} {
-		s := &countingStore{books: []database.BookCore{{ID: "b1", Title: "Dune"}}}
+		s := &countingStore{rows: []database.BookSearchRow{{ID: "b1", Title: "Dune"}}}
 		got, err := resolveBookIDsMatching(s, needle)
 		if err != nil {
 			t.Fatalf("needle %q: unexpected error %v", needle, err)
@@ -52,50 +44,34 @@ func TestResolveBookIDsMatchingEmptyNeedleNeverReadsTheLibrary(t *testing.T) {
 		}
 		// The point of the guard: a blank needle must not pay for a
 		// full-library walk on every request that happens to carry one.
-		if s.bookCalls != 0 || s.authorCalls != 0 {
-			t.Fatalf("needle %q: read the library anyway (books=%d authors=%d)",
-				needle, s.bookCalls, s.authorCalls)
+		if s.rowCalls != 0 {
+			t.Fatalf("needle %q: read the library anyway (projection calls=%d)",
+				needle, s.rowCalls)
 		}
 	}
 }
 
 func TestResolveBookIDsMatchingPropagatesErrors(t *testing.T) {
-	t.Run("authors", func(t *testing.T) {
-		s := &countingStore{authorsErr: errors.New("boom")}
-		if _, err := resolveBookIDsMatching(s, "dune"); err == nil {
-			t.Fatal("want error, got nil -- a swallowed error here degrades search silently")
-		}
-		if s.bookCalls != 0 {
-			t.Fatal("must not read books after the author read failed")
-		}
-	})
-	t.Run("books", func(t *testing.T) {
-		s := &countingStore{booksErr: errors.New("boom")}
-		if _, err := resolveBookIDsMatching(s, "dune"); err == nil {
-			t.Fatal("want error, got nil")
-		}
-	})
+	s := &countingStore{rowsErr: errors.New("boom")}
+	if _, err := resolveBookIDsMatching(s, "dune"); err == nil {
+		t.Fatal("want error, got nil -- a swallowed error here degrades search silently")
+	}
 }
 
-func TestResolveBookIDsMatchingDanglingAuthorDoesNotPanic(t *testing.T) {
-	seven := 7
-	missing := 999
-	s := &countingStore{
-		books: []database.BookCore{
-			{ID: "ok", Title: "x", AuthorID: &seven},
-			// AuthorID pointing at a row GetAllAuthors does not return.
-			// Production carries a documented population of these.
-			{ID: "dangling", Title: "x", AuthorID: &missing},
-			{ID: "none", Title: "x"},
-		},
-		authors: []database.Author{{ID: 7, Name: "Neil Gaiman"}},
-	}
-	got, err := resolveBookIDsMatching(s, "gaiman")
+// A book whose AuthorID resolves to nothing arrives from the store with an
+// empty AuthorName; it must neither match nor panic, and a book with a real
+// author name must still match on it.
+func TestResolveBookIDsMatchingEmptyAuthorNameDoesNotMatch(t *testing.T) {
+	s := &countingStore{rows: []database.BookSearchRow{
+		{ID: "ok", Title: "x", AuthorName: "Bruce WAYNE"},
+		{ID: "dangling", Title: "x"},
+	}}
+	got, err := resolveBookIDsMatching(s, "wayne")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("want exactly the resolvable author match, got %v", got)
+		t.Fatalf("want exactly the author match, got %v", got)
 	}
 	if _, ok := got["ok"]; !ok {
 		t.Fatalf("want book \"ok\", got %v", got)

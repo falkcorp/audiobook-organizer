@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a2e8f31-9c47-4b06-8d1e-6f3a97c2b8d4
-// last-edited: 2026-09-01
+// last-edited: 2026-10-30
 
 package deduphandler
 
@@ -40,15 +40,20 @@ import (
 //
 // # Cost, and why this primitive
 //
-// GetAllBooksCore(0, 0) is one in-memory walk of the memdb books table (it
-// routes to memdb on PebbleStore and falls back to a Pebble scan only when
-// memdb is unavailable). It is not free -- it materializes a Book per row
-// before narrowing to Core -- but the alternatives are worse:
-// GetAllBooksFullFrom's memdb path lists IDs and then does a Pebble point read
-// PER BOOK, which trades transient allocation for tens of thousands of reads.
-// A dedicated store-level projection that matched during the walk and returned
-// only IDs would beat both; that is a store-surface change, filed as follow-up
-// rather than smuggled into this handler.
+// ListBookSearchRows is a store-level projection: one walk of the memdb books
+// table (a Pebble scan decoding only the needed fields when memdb is not
+// ready) that yields four strings per book -- id, title, path and the author
+// name, joined inside the store. The previous shape, GetAllBooksCore(0, 0) plus
+// GetAllAuthors, materialised a full BookCore per row (a value of several
+// dozen fields, copied twice on the memdb path) to read three strings of it;
+// the other alternative on the interface, GetAllBooksFullFrom, lists IDs from
+// memdb and then does a Pebble point read PER BOOK. See
+// BenchmarkResolveBookIDsMatching for the before/after allocations.
+//
+// Matching stays here and not in the store on purpose: the substring rule
+// (lower-cased contains over title, path and author name) is this handler's
+// contract, and pushing it into the store would put search policy in the
+// database layer.
 //
 // # On the concurrency rule
 //
@@ -56,41 +61,40 @@ import (
 // each item does meaningful work. This loop is deliberately serial: the
 // per-item work is three strings.Contains calls, not a DB read, network call,
 // hash, or fuzzy comparison. A worker pool over a substring test costs more in
-// coordination than it recovers, and the real expense here is the bulk read
-// above, not the matching.
+// coordination than it recovers, and the real expense was the bulk read, which
+// the projection removes.
 func resolveBookIDsMatching(store DedupStore, needle string) (map[string]struct{}, error) {
 	needle = strings.ToLower(strings.TrimSpace(needle))
 	if needle == "" {
 		return nil, nil
 	}
 
-	// Author names are stored on the author row, not the book, so they are
-	// pulled once into an ID->name map rather than looked up per book.
-	authorNames := map[int]string{}
-	authors, err := store.GetAllAuthors()
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range authors {
-		authorNames[a.ID] = strings.ToLower(a.Name)
-	}
-
-	books, err := store.GetAllBooksCore(0, 0)
+	rows, err := store.ListBookSearchRows()
 	if err != nil {
 		return nil, err
 	}
 
+	// A library has far fewer authors than books, so the author test runs once
+	// per distinct name and the verdict is reused for every later book by that
+	// author.
+	authorMatches := make(map[string]bool)
 	matched := make(map[string]struct{})
-	for _, b := range books {
-		if strings.Contains(strings.ToLower(b.Title), needle) ||
-			strings.Contains(strings.ToLower(b.FilePath), needle) {
-			matched[b.ID] = struct{}{}
+	for _, r := range rows {
+		if strings.Contains(strings.ToLower(r.Title), needle) ||
+			strings.Contains(strings.ToLower(r.FilePath), needle) {
+			matched[r.ID] = struct{}{}
 			continue
 		}
-		if b.AuthorID != nil {
-			if name, ok := authorNames[*b.AuthorID]; ok && strings.Contains(name, needle) {
-				matched[b.ID] = struct{}{}
-			}
+		if r.AuthorName == "" {
+			continue
+		}
+		hit, seen := authorMatches[r.AuthorName]
+		if !seen {
+			hit = strings.Contains(strings.ToLower(r.AuthorName), needle)
+			authorMatches[r.AuthorName] = hit
+		}
+		if hit {
+			matched[r.ID] = struct{}{}
 		}
 	}
 	return matched, nil

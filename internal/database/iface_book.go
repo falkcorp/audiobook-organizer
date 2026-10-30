@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.29.0
+// version: 2.30.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
@@ -71,6 +71,13 @@ type BookBulkReader interface {
 	// guarantees hold for whatever concrete store backs them.
 	GetAllBooksFullFrom(afterID string, limit int) ([]Book, error)
 	GetAllBookSummaries(limit, offset int) ([]BookSummary, error)
+	// ListBookSearchRows returns one (id, title, file_path, author name) row per
+	// non-deleted book, with the author name joined by the store. It is the
+	// projection for a whole-library text search that would otherwise read
+	// GetAllBooksCore(0, 0) plus GetAllAuthors and keep three strings per book.
+	// The book set is GetAllBooksCore's (soft-deleted rows excluded); an unknown
+	// or absent author yields an empty AuthorName.
+	ListBookSearchRows() ([]BookSearchRow, error)
 }
 
 // BookNaturalKeyReader resolves books by a single-valued natural key: the

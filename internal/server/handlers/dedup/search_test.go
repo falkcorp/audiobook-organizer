@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/search_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2f7a9d14-6c83-4e50-b927-8d1e5a3c07b6
-// last-edited: 2026-09-02
+// last-edited: 2026-10-30
 
 // Tests for the ?q= search path: the book-ID resolver's matching rules, and the
 // handler wiring that feeds it. Both were entirely untested when the feature
@@ -63,8 +63,7 @@ func TestSearchResolvesBooksByTitleAuthorAndPath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, d := newHandler(t)
 			insertCandidate(t, d.es, "b-title", "b-path")
-			d.store.EXPECT().GetAllAuthors().Return(authors, nil).Maybe()
-			d.store.EXPECT().GetAllBooksCore(0, 0).Return(books, nil).Maybe()
+			d.store.EXPECT().ListBookSearchRows().Return(searchRows(books, authors), nil).Maybe()
 			d.store.EXPECT().GetBookByID(mock.Anything).
 				Return(&database.Book{ID: "x"}, nil).Maybe()
 
@@ -97,8 +96,7 @@ func TestSearchMatchesTheRightBooks(t *testing.T) {
 			// One candidate per book so a match is attributable.
 			insertCandidate(t, d.es, tc.wantA, "other-side")
 			insertCandidate(t, d.es, "b-noauthor", "b-dangling")
-			d.store.EXPECT().GetAllAuthors().Return(authors, nil).Once()
-			d.store.EXPECT().GetAllBooksCore(0, 0).Return(books, nil).Once()
+			d.store.EXPECT().ListBookSearchRows().Return(searchRows(books, authors), nil).Once()
 			d.store.EXPECT().GetBookByID(mock.Anything).
 				Return(&database.Book{ID: "x"}, nil).Maybe()
 
@@ -141,12 +139,10 @@ func TestSearchWithNoNeedleNeverReadsTheLibrary(t *testing.T) {
 // which reads as "nothing matched" and is indistinguishable from a correct
 // empty result.
 func TestSearchRefusesWhenTheLibraryReadFails(t *testing.T) {
-	t.Run("author read fails", func(t *testing.T) {
+	t.Run("projection read fails", func(t *testing.T) {
 		h, d := newHandler(t)
 		insertCandidate(t, d.es, "book-a", "book-b")
-		// GetAllAuthors runs FIRST, so GetAllBooksCore is never reached; no
-		// expectation is set for it on purpose.
-		d.store.EXPECT().GetAllAuthors().Return(nil, errors.New("boom")).Once()
+		d.store.EXPECT().ListBookSearchRows().Return(nil, errors.New("boom")).Once()
 
 		w := doReq(t, h.ListDedupCandidates, http.MethodGet,
 			"/api/v1/dedup/candidates?q=dune", nil, nil)
@@ -154,19 +150,25 @@ func TestSearchRefusesWhenTheLibraryReadFails(t *testing.T) {
 			t.Fatalf("a failed resolve must NOT return 200; body=%s", w.Body.String())
 		}
 	})
+}
 
-	t.Run("book read fails", func(t *testing.T) {
-		h, d := newHandler(t)
-		insertCandidate(t, d.es, "book-a", "book-b")
-		d.store.EXPECT().GetAllAuthors().Return(nil, nil).Once()
-		d.store.EXPECT().GetAllBooksCore(0, 0).Return(nil, errors.New("boom")).Once()
-
-		w := doReq(t, h.ListDedupCandidates, http.MethodGet,
-			"/api/v1/dedup/candidates?q=dune", nil, nil)
-		if w.Code == http.StatusOK {
-			t.Fatalf("a failed resolve must NOT return 200; body=%s", w.Body.String())
+// searchRows joins books to author names the way the store's
+// ListBookSearchRows does, so these handler tests can keep their
+// book-plus-author corpus while the mock speaks the projection.
+func searchRows(books []database.BookCore, authors []database.Author) []database.BookSearchRow {
+	names := make(map[int]string, len(authors))
+	for _, a := range authors {
+		names[a.ID] = a.Name
+	}
+	rows := make([]database.BookSearchRow, 0, len(books))
+	for _, b := range books {
+		r := database.BookSearchRow{ID: b.ID, Title: b.Title, FilePath: b.FilePath}
+		if b.AuthorID != nil {
+			r.AuthorName = names[*b.AuthorID]
 		}
-	})
+		rows = append(rows, r)
+	}
+	return rows
 }
 
 func decodeCandidates(t *testing.T, w *httptest.ResponseRecorder) []map[string]any {

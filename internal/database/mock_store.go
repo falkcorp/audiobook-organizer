@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.156.0
+// version: 1.157.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package database
 
@@ -72,6 +72,7 @@ type MockStore struct {
 
 	GetAllBooksFullFromFunc    func(afterID string, limit int) ([]Book, error)
 	ListBookIDsFunc            func() ([]string, error)
+	ListBookSearchRowsFunc     func() ([]BookSearchRow, error)
 	GetAllBookSummariesFunc    func(limit, offset int) ([]BookSummary, error)
 	GetBooksByWorkIDFunc       func(workID string) ([]Book, error)
 	GetBooksBySeriesIDCoreFunc func(seriesID int) ([]BookCore, error)
@@ -1149,6 +1150,13 @@ func (m *MockStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, erro
 func (m *MockStore) GetAllBooksFullFrom(afterID string, limit int) ([]Book, error) {
 	if m.GetAllBooksFullFromFunc != nil {
 		return m.GetAllBooksFullFromFunc(afterID, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListBookSearchRows() ([]BookSearchRow, error) {
+	if m.ListBookSearchRowsFunc != nil {
+		return m.ListBookSearchRowsFunc()
 	}
 	return nil, nil
 }
