@@ -1,7 +1,7 @@
 // file: internal/transcribe/path_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,8 @@ type pathWorker struct {
 	requests []map[string]map[string]any // one decoded "jobs" object per POST
 	respond  func(key string, job map[string]any) map[string]any
 	canaries int // canary clips received on /transcribe, answered as a sound worker would
+
+	healthHits atomic.Int64 // GET /health requests received
 }
 
 func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
@@ -41,6 +44,7 @@ func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(rw http.ResponseWriter, _ *http.Request) {
+		w.healthHits.Add(1)
 		_ = json.NewEncoder(rw).Encode(health)
 	})
 	mux.HandleFunc("POST /transcribe-path-batch", func(rw http.ResponseWriter, r *http.Request) {
