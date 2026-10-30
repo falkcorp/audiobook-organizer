@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.20 -->
+<!-- version: 10.78.21 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -13,6 +13,31 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-KEPT-SWEEP-APPLY** the kept-file sweep (`versions.SweepKeptFiles`, a step of
+      `maintenance.trash-cleanup`) ships report-only. Read a night or two of its result
+      (`kept_sweep_would_remove_files`, `kept_sweep_would_drop_files`: version, book, path and
+      the reason each file had been kept), check the list, then set `kept_sweep_apply_enabled`
+      (env `KEPT_SWEEP_APPLY_ENABLED`) to true. Until then it removes nothing; `PurgeKept`
+      only exists since 2026-10-28, so the first list covers purges since then. Decide
+      afterwards whether the switch should be removed and the sweep always applying.
+      The sweep removes only inside a version's own `.versions/{id}/` folder: files it keeps
+      for being anywhere else are in `kept_sweep_outside_slot_files` (and the journal) and are
+      the owner's to decide by hand, whatever the switch says.
+
+- [ ] **TODO-ISPROTECTED-IMPORT-ERR-OPEN** `Server.isProtectedPath`
+      (`internal/server/server_middleware.go`, the import-path block) drops the
+      import paths when the cached read of the list fails (`err == nil` guards the
+      loop and nothing else happens on an error), so the static check runs without
+      them. The organizer's rename-source guard is built on it
+      (`renameSourceVerdict`), so while the list cannot be read a file under an
+      import path is answered `SourceMovable` and an in-place move or `RenameFiles`
+      can take it out of the import folder: fail-open, where the audiobooks helper
+      (`protectedPathChecked`) reports the failed read and the purge keeps the file.
+      Make the server's check fail closed on a failed list read (treat it as
+      protected, or return the error to the caller the way `protectedPathChecked`
+      does) and log it once; add a test with a store whose `GetAllImportPaths`
+      fails and a file under a configured import path. Found in the review of #4258.
 
 - [ ] **TODO-RETIRED-APPLY-PRECONDITIONS** before `retire_versions_apply_enabled`
       is turned on in production: (1) move the fixer's journaling onto PR 5's `repairs.Writer.RetireVersion`
