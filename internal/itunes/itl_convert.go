@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_convert.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-11
+// last-edited: 2026-10-30
 
 package itunes
 
@@ -53,7 +53,6 @@ func ParseITLAsLibrary(path string) (*Library, error) {
 			PlayCount:    t.PlayCount,
 			Rating:       t.Rating,
 			DateAdded:    t.DateAdded,
-			Bookmarkable: true, // ITL tracks don't expose this flag; assume true
 		}
 
 		// Prefer Location (hohm 0x0D); fall back to LocalURL (hohm 0x0B).
