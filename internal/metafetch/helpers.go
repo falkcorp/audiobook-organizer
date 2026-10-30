@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.2
+// version: 1.24.3
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -605,6 +606,29 @@ func keepDiagnosis(cur, next error) error {
 // could not be resolved (pathutil.UnderProtectedPath fails closed).
 var protectedPathLog = logger.New("metafetch.protected-path")
 
+// importPathReadFailureRelog is how often an unreadable import-path list is
+// reported: every path checked while the read fails is refused, so one line per
+// check would flood the log during a whole-library run.
+const importPathReadFailureRelog = time.Minute
+
+var (
+	importPathReadFailureMu   sync.Mutex
+	importPathReadFailureLast time.Time
+)
+
+// logImportPathReadFailure reports a failed import-path read at most once per
+// importPathReadFailureRelog.
+func logImportPathReadFailure(err error) {
+	importPathReadFailureMu.Lock()
+	defer importPathReadFailureMu.Unlock()
+	if !importPathReadFailureLast.IsZero() && time.Since(importPathReadFailureLast) < importPathReadFailureRelog {
+		return
+	}
+	importPathReadFailureLast = time.Now()
+	protectedPathLog.Warn("treating paths as protected: cannot read the import-path list: error=%s",
+		logger.SanitizeLogValue(err.Error()))
+}
+
 // isProtectedPath returns true if the file path is within import or iTunes paths.
 // Method on *Service so it uses mfs.db rather than database.GetGlobalStore
 // (SERVER-GLOBAL-STORE-AUDIT phase 4).
@@ -632,10 +656,15 @@ func (mfs *Service) isProtectedPath(filePath string) bool {
 	var roots []string
 	if mfs != nil && mfs.db != nil {
 		importPaths, err := mfs.db.GetAllImportPaths()
-		if err == nil {
-			for _, ip := range importPaths {
-				roots = append(roots, ip.Path)
-			}
+		if err != nil {
+			// Fail closed: without the import paths nothing can be shown to be
+			// outside an import folder, and callers write or move on "not
+			// protected". True means "leave the file alone" to all of them.
+			logImportPathReadFailure(err)
+			return true
+		}
+		for _, ip := range importPaths {
+			roots = append(roots, ip.Path)
 		}
 	}
 	if config.AppConfig.ITunes.LibraryReadPath != "" {

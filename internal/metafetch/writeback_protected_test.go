@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
@@ -154,5 +155,40 @@ func TestIsProtectedPath_SymlinkIntoITunesFolder(t *testing.T) {
 	}
 	if svc.isProtectedPath(filepath.Join(away, "killing-joke.m4b")) {
 		t.Error("a file reached through a symlink to an unprotected folder reported protected")
+	}
+}
+
+// While the import-path list cannot be read, a file under an import path must not
+// be reported unprotected: write-back and renames act on "not protected". Every
+// path is protected until the list reads again.
+func TestIsProtectedPath_UnreadableImportPathListFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	imports := filepath.Join(base, "Gotham Imports")
+	library := filepath.Join(base, "Arkham", "Joker", "killing-joke.m4b")
+	inImports := filepath.Join(imports, "Hush", "hush.m4b")
+
+	failing := true
+	svc := &Service{db: &database.MockStore{
+		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
+			if failing {
+				return nil, errors.New("pebble: closed")
+			}
+			return []database.ImportPath{{Path: imports}}, nil
+		},
+	}}
+
+	if !svc.isProtectedPath(inImports) {
+		t.Error("a file under an import path is not protected while the list is unreadable")
+	}
+	if !svc.isProtectedPath(library) {
+		t.Error("a library file was vouched for while the list is unreadable")
+	}
+
+	failing = false
+	if !svc.isProtectedPath(inImports) {
+		t.Error("import path not protected once the list reads again")
+	}
+	if svc.isProtectedPath(library) {
+		t.Error("library file still protected once the list reads again")
 	}
 }
