@@ -1,7 +1,7 @@
 // file: cmd/pebble-inject-skip/main.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-08-20
+// last-edited: 2026-10-30
 //
 // One-shot tool: writes transcode skip flags directly into PebbleDB.
 // Run while the service is stopped.
@@ -15,6 +15,7 @@ import (
 	"os"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/remux"
 )
 
 type Setting struct {
@@ -25,8 +26,8 @@ type Setting struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		slog.Error("usage pebble-inject-skip <pebble-db-path>")
+	if len(os.Args) < 3 {
+		slog.Error("usage pebble-inject-skip <pebble-db-path> <file-path>...")
 		os.Exit(1)
 	}
 	dbPath := os.Args[1]
@@ -38,9 +39,11 @@ func main() {
 	}
 	defer db.Close()
 
-	keys := []string{
-		"transcode_skip_5a89c8d2857e4899", // David Petrie
-		"transcode_skip_2b2d16b94596fe1a", // Eric Ugland "One More Last Time"
+	// The files to mark come from the command line, never from a literal:
+	// which files are permanently unfixable is per-install state.
+	keys := make([]string, 0, len(os.Args)-2)
+	for _, p := range os.Args[2:] {
+		keys = append(keys, remux.TranscodeSkipKey(p))
 	}
 
 	for _, k := range keys {
