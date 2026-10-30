@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.75.6
+// version: 1.76.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -40,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
 // Verify *Server implements maintenance.ServerDeps at compile time.
@@ -262,22 +263,28 @@ func (s *Server) RunAutoPurgeSoftDeleted(ctx context.Context, opID string) error
 // (an operator's run) runs in full even when an earlier pass recorded
 // completion; ifNeeded=true (the boot enqueue) skips once it has, and reports
 // skipped. See backfillExternalIDs.
-func (s *Server) BackfillExternalIDs(ctx context.Context, ifNeeded bool, progress func(processed, total int, msg string)) (skipped bool, err error) {
-	return s.backfillExternalIDs(ctx, progress, ifNeeded)
+func (s *Server) BackfillExternalIDs(ctx context.Context, ifNeeded bool, progress func(processed, total int, msg string), run walkresume.Run) (skipped bool, err error) {
+	return s.backfillExternalIDs(ctx, progress, ifNeeded, walkresume.WithRun(run))
 }
 
 // StripMovementAtoms backs maintenance.movement-atom-cleanup and reports
-// whether the cleanup's done flag was already set (nothing to do).
-func (s *Server) StripMovementAtoms(ctx context.Context) (alreadyDone bool) {
-	return s.stripMovementAtoms(ctx).AlreadyDone
+// whether the cleanup's done flag was already set (nothing to do). err is
+// walkresume.ErrYield when the walk stopped on purpose after a checkpoint
+// (run.YieldDue); the cleanup has no other error to report.
+func (s *Server) StripMovementAtoms(ctx context.Context, run walkresume.Run) (alreadyDone bool, err error) {
+	res := s.stripMovementAtoms(ctx, walkresume.WithRun(run))
+	if res.Yielded {
+		return false, walkresume.ErrYield
+	}
+	return res.AlreadyDone, nil
 }
 
-func (s *Server) RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) (alreadyDone bool, err error) {
-	return s.remuxMalformedM4BFiles(ctx, progress)
+func (s *Server) RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string), run walkresume.Run) (alreadyDone bool, err error) {
+	return s.remuxMalformedM4BFiles(ctx, progress, walkresume.WithRun(run))
 }
 
-func (s *Server) TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) (alreadyDone bool, err error) {
-	return s.transcodeMalformedM4BFiles(ctx, progress)
+func (s *Server) TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string), run walkresume.Run) (alreadyDone bool, err error) {
+	return s.transcodeMalformedM4BFiles(ctx, progress, walkresume.WithRun(run))
 }
 
 // QuarantineKnownBadFiles backs the quarantine_after step of

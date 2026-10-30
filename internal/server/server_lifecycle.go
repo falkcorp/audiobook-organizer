@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.63.0
+// version: 4.63.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
@@ -1532,14 +1532,20 @@ type opStatusLookup interface {
 // in its producer's select, and the reconcile checks it every 64 rows of the
 // check and per 2,000-row reindex chunk.
 //
-// Restart mid-run: the five ResumeDrop ops (the atpath one included) are
-// dropped and the next boot enqueues them again. The activity reconcile is
+// Restart mid-run (04-P6): external-id-backfill, movement-atom-cleanup and
+// malformed-m4b-remux are ResumeRestart. Each checkpoints a cursor and yields
+// before its deadline (registry.ErrContinueInPlace), so a restart, or a run too
+// big for its Timeout, continues from the cursor under the same operation
+// instead of starting over. The opchange rebuild, the atpath backfill and the
+// hash-index repair are ResumeDrop: they are dropped and the next boot enqueues
+// them again. The activity reconcile is
 // ResumeRestart: an interrupted run resumes with the same params, and since a
 // reconcile never checkpoints, it starts over from the store's start mark,
 // which is durable (ActivityFilterIndexReconcileFromKey: written at open when
 // rows sit above the persisted mark, deleted only by a clean check or a
 // completed backfill), so a restart before the check ran, or a failed run,
-// does not lose a rollback gap. The transcode is ResumeAsk: an interrupted (or
+// does not lose a rollback gap. The transcode is ResumeAsk (it checkpoints a
+// cursor too, which an operator's Retry continues from): an interrupted (or
 // never-started queued) row becomes interrupted_ask and waits for an
 // operator. That row is not queued or running, so the enqueue dedupe does not
 // see it; enqueueBootOps therefore skips the transcode while such a row exists

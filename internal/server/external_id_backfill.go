@@ -1,16 +1,18 @@
 // file: internal/server/external_id_backfill.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
 // ExternalIDStore defines the external ID mapping operations.
@@ -64,7 +66,7 @@ func asExternalIDStore(s any) ExternalIDStore {
 // whole-library pagination reports live progress (H7). The domain error is
 // returned to the caller, so a failure (e.g. a write error mid-backfill)
 // fails the op.
-func (s *Server) backfillExternalIDs(ctx context.Context, progress func(processed, total int, msg string), ifNeeded bool) (skipped bool, err error) {
+func (s *Server) backfillExternalIDs(ctx context.Context, progress func(processed, total int, msg string), ifNeeded bool, opts ...walkresume.Option) (skipped bool, err error) {
 	store := s.Ops()
 	if store == nil {
 		return false, nil
@@ -78,9 +80,14 @@ func (s *Server) backfillExternalIDs(ctx context.Context, progress func(processe
 
 	adapter := &externalIDStoreAdapter{eidStore: eidStore, store: store}
 	if ifNeeded {
-		skipped, err = itunes.BackfillExternalIDsOnce(ctx, adapter, progress)
+		skipped, err = itunes.BackfillExternalIDsOnce(ctx, adapter, progress, opts...)
 	} else {
-		err = itunes.BackfillExternalIDs(ctx, adapter, progress)
+		err = itunes.BackfillExternalIDs(ctx, adapter, progress, opts...)
+	}
+	if errors.Is(err, walkresume.ErrYield) {
+		// Stopped on purpose after a checkpoint: not a failure, and the done
+		// flag is unset, so the op continues from the cursor.
+		return false, err
 	}
 	if err != nil {
 		slog.Warn("backfillExternalIDs", "err", err)

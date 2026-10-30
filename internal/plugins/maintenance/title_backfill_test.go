@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.56.3
+// version: 1.56.4
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -290,14 +291,16 @@ func (d fakeDeps) RunAutoPurgeSoftDeleted(ctx context.Context, _ string) error {
 	}
 	return d.purgeErr
 }
-func (d fakeDeps) BackfillExternalIDs(_ context.Context, _ bool, _ func(int, int, string)) (bool, error) {
+func (d fakeDeps) BackfillExternalIDs(_ context.Context, _ bool, _ func(int, int, string), _ walkresume.Run) (bool, error) {
 	return false, nil
 }
-func (d fakeDeps) StripMovementAtoms(_ context.Context) bool { return false }
-func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) (bool, error) {
+func (d fakeDeps) StripMovementAtoms(_ context.Context, _ walkresume.Run) (bool, error) {
 	return false, nil
 }
-func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string)) (bool, error) {
+func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string), _ walkresume.Run) (bool, error) {
+	return false, nil
+}
+func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string), _ walkresume.Run) (bool, error) {
 	return false, nil
 }
 func (d fakeDeps) QuarantineKnownBadFiles(_ context.Context) (int, bool, error) { return 0, false, nil }

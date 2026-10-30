@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.102.5
+// version: 1.103.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -680,8 +681,10 @@ type MetadataRunners interface {
 	// BackfillExternalIDs runs on ctx (the op's run context, cancelled first
 	// at shutdown). ifNeeded=false runs the full pass even after an earlier
 	// one recorded completion; ifNeeded=true skips once one has, and returns
-	// skipped=true when it did.
-	BackfillExternalIDs(ctx context.Context, ifNeeded bool, progress func(processed, total int, msg string)) (skipped bool, err error)
+	// skipped=true when it did. run makes the pass resumable (see
+	// MediaFileRunners): the book pass checkpoints a book-ID cursor and the
+	// iTunes XML pass a track index.
+	BackfillExternalIDs(ctx context.Context, ifNeeded bool, progress func(processed, total int, msg string), run walkresume.Run) (skipped bool, err error)
 	// CachedMetadataCandidates returns the book's cached metadata-candidate
 	// row as the apply paths read it (metafetch.Service.GetCachedCandidates):
 	// candidates an earlier search version cached come back filtered by the
@@ -708,9 +711,18 @@ type MediaFileRunners interface {
 	// (SYS-1); pass the op's run context. Each is gated by its own one-time
 	// done flag and reports alreadyDone=true when the flag was set before the
 	// call, i.e. the run did nothing.
-	StripMovementAtoms(ctx context.Context) (alreadyDone bool)
-	RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) (alreadyDone bool, err error)
-	TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string)) (alreadyDone bool, err error)
+	//
+	// run (04-P6) makes the walk resumable: run.Resume is where an earlier
+	// attempt stopped, run.Checkpoint persists a new resume point as items
+	// complete, run.YieldDue asks the walk to stop at its next checkpoint, and
+	// run.Exec is the worker pool (registry.RunItems) the per-file work runs
+	// on. A walk that yielded returns an error wrapping walkresume.ErrYield with
+	// its done flag unset. The zero Run is the plain sequential walk.
+	// StripMovementAtoms reports progress through run.Progress and returns an
+	// error only for a yield.
+	StripMovementAtoms(ctx context.Context, run walkresume.Run) (alreadyDone bool, err error)
+	RemuxMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string), run walkresume.Run) (alreadyDone bool, err error)
+	TranscodeMalformedM4BFiles(ctx context.Context, progress func(processed, total int, msg string), run walkresume.Run) (alreadyDone bool, err error)
 	// QuarantineKnownBadFiles quarantines every book whose file the transcode
 	// marked permanently unreadable, once (its own done flag; alreadyDone as
 	// above). It checks ctx per book and leaves the flag unset when cancelled.

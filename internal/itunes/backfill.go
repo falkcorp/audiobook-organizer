@@ -1,7 +1,7 @@
 // file: internal/itunes/backfill.go
-// version: 1.13.0
+// version: 1.14.1
 // guid: b8c9d0e1-f2a3-b4c5-d6e7-f8a9b0c1d2e3
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package itunes
 
@@ -10,11 +10,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
+
+// backfillYieldLog carries the pause notices the resumable passes emit.
+var backfillYieldLog = logger.New("itunes.backfill")
 
 // ExternalIDBackfillStore defines the store interface needed for external ID backfill.
 type ExternalIDBackfillStore interface {
@@ -77,6 +84,12 @@ const (
 // book pass and sets how often progress is reported. It is a slice stride
 // over an in-memory snapshot, not a store page size.
 const backfillChunkSize = 10000
+
+// The phases of a resumable BackfillExternalIDs (walkresume.State.Phase).
+const (
+	phaseBooks = "books"
+	phaseXML   = "xml"
+)
 
 // loadBackfillBooks enumerates the whole library in ONE store call (limit 0
 // is unbounded on both store paths) instead of offset pages (PERF-5). Offset
@@ -144,7 +157,7 @@ func externalIDBackfillDone(store ExternalIDBackfillStore) (bool, string) {
 // reaches it through maintenance.external-id-backfill with
 // {"if_needed": true}; an operator's run without that param calls
 // BackfillExternalIDs directly, which ignores the flag.
-func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) (skipped bool, err error) {
+func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string), opts ...walkresume.Option) (skipped bool, err error) {
 	if store == nil {
 		return false, nil
 	}
@@ -155,7 +168,7 @@ func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore,
 		}
 		return true, nil
 	}
-	return false, BackfillExternalIDs(ctx, store, progress)
+	return false, BackfillExternalIDs(ctx, store, progress, opts...)
 }
 
 // BackfillExternalIDs scans all books and creates external ID mappings for any
@@ -184,15 +197,16 @@ func BackfillExternalIDsOnce(ctx context.Context, store ExternalIDBackfillStore,
 // Persistence errors (bulk-write failures, the track-PID pass) are now
 // returned instead of silently discarded — previously the op always reported
 // success even when nothing was actually written (H7).
-func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) error {
+func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string), opts ...walkresume.Option) error {
 	if store == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	run := walkresume.Resolve(opts)
 
-	slog.Info("Starting external ID backfill v4...")
+	slog.Info("Starting external ID backfill v4...", "resume_phase", run.Resume.Phase, "resume_cursor", run.Resume.Cursor)
 
 	// PERF-5: one batch read of every book_file row, reduced to the
 	// PID-bearing subset keyed by book ID (the holder, for a retired row),
@@ -261,9 +275,28 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 	// cross-page window. Per-book work is a map lookup and slice appends (no
 	// I/O), so the walk stays sequential — the one write per chunk is the
 	// only store call, and BulkCreateExternalIDMappings is a single batch.
-	backfilled := 0
-	booksScanned := 0
-	for start := 0; start < len(allBooks); start += backfillChunkSize {
+	//
+	// RESUME (04-P6): the snapshot is sorted by book ID, a stable order across
+	// attempts, and a checkpoint after each chunk's write names the last book ID
+	// of the chunk (Cursor) so a restart, or a yield before the run's deadline,
+	// continues at the next book instead of rereading the library from the top.
+	// A resume in the XML phase skips this pass: its writes are all durable.
+	// The pass stays sequential on purpose: nothing in it is slow per book.
+	// Sort a copy: the store may hand out a slice it shares with other readers.
+	allBooks = slices.Clone(allBooks)
+	sort.Slice(allBooks, func(i, j int) bool { return allBooks[i].ID < allBooks[j].ID })
+	startBook := 0
+	switch run.Resume.Phase {
+	case phaseXML:
+		startBook = len(allBooks)
+	default:
+		if run.Resume.Cursor != "" {
+			startBook = sort.Search(len(allBooks), func(i int) bool { return allBooks[i].ID > run.Resume.Cursor })
+		}
+	}
+	backfilled := run.Resume.Mappings
+	booksScanned := startBook
+	for start := startBook; start < len(allBooks); start += backfillChunkSize {
 		if err := ctx.Err(); err != nil {
 			slog.Info("external ID backfill canceled between chunks after mappings", "books_scanned", booksScanned, "backfilled", backfilled, "err", err)
 			return nil
@@ -315,6 +348,20 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 		if progress != nil {
 			progress(booksScanned, len(allBooks), fmt.Sprintf("Backfilling external IDs: %d books scanned (%d mappings written)", booksScanned, backfilled))
 		}
+		if run.Checkpoint != nil {
+			run.Checkpoint(walkresume.State{
+				Phase: phaseBooks, Cursor: books[len(books)-1].ID,
+				Processed: booksScanned, Mappings: backfilled,
+			})
+			if run.YieldDue != nil && run.YieldDue() {
+				backfillYieldLog.Info("external ID backfill yielding after a checkpoint, books_scanned=%d", booksScanned)
+				return walkresume.ErrYield
+			}
+		}
+	}
+	if run.Checkpoint != nil && run.Resume.Phase != phaseXML {
+		// The book pass is durable; a restart from here goes straight to XML.
+		run.Checkpoint(walkresume.State{Phase: phaseXML, Processed: booksScanned, Mappings: backfilled})
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -324,7 +371,7 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 	slog.Info("Backfilled external ID mappings from book + file records", "backfilled", backfilled)
 
 	// Backfill ALL track-level PIDs from the iTunes XML
-	itunesBackfilled, err := BackfillITunesTrackPIDs(ctx, store, progress)
+	itunesBackfilled, err := BackfillITunesTrackPIDs(ctx, store, progress, opts...)
 	if err != nil {
 		return fmt.Errorf("external ID backfill: track-PID pass: %w", err)
 	}
@@ -367,10 +414,11 @@ func BackfillExternalIDs(ctx context.Context, store ExternalIDBackfillStore, pro
 // failures now abort the stream and return an error instead of being logged
 // and discarded (H7) — a caller relying on the returned count/error to decide
 // whether the backfill "done" flag can be set needs it to be accurate.
-func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string)) (int, error) {
+func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore, progress func(processed, total int, msg string), opts ...walkresume.Option) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	run := walkresume.Resolve(opts)
 	xmlPath := config.AppConfig.ITunes.LibraryReadPath
 	if xmlPath == "" {
 		slog.Info("BackfillITunesTrackPIDs no iTunes XML path configured, skipping")
@@ -420,9 +468,24 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore,
 	var currentAlbum string
 	var currentAlbumTracks []*Track
 
+	// RESUME (04-P6): tracks before resumeTrack were registered by an earlier
+	// attempt and are skipped without grouping. A checkpoint is only taken at an
+	// ALBUM BOUNDARY with the batch flushed, so the saved index is the first
+	// track of an album and the resumed grouping starts clean. The index is a
+	// stream position, not a value, so an XML re-exported between attempts can
+	// shift it; every write is ignore-existing, so the worst case is a few
+	// albums not registered by this one-time catch-up.
+	resumeTrack := 0
+	if run.Resume.Phase == phaseXML {
+		resumeTrack = run.Resume.Index
+	}
+	lastCkpt := resumeTrack
 	trackedCount := 0
 	_, err = StreamingParseLibrary(ctx, xmlPath, func(track *Track) error {
 		trackedCount++
+		if trackedCount-1 < resumeTrack {
+			return nil
+		}
 		if trackedCount%10000 == 0 {
 			slog.Info("BackfillITunesTrackPIDs streaming progress", "tracks_processed", trackedCount)
 			if progress != nil {
@@ -470,6 +533,23 @@ func BackfillITunesTrackPIDs(ctx context.Context, store ExternalIDBackfillStore,
 
 			// Reset for new album
 			currentAlbumTracks = currentAlbumTracks[:0]
+
+			// Album boundary: everything before this track is in batch or
+			// already written. Flush, then checkpoint this track's index.
+			if idx := trackedCount - 1; run.Checkpoint != nil && idx-lastCkpt >= backfillChunkSize {
+				if len(batch) > 0 {
+					if batchErr := store.BulkCreateExternalIDMappings(batch); batchErr != nil {
+						return fmt.Errorf("BackfillITunesTrackPIDs: bulk write at checkpoint: %w", batchErr)
+					}
+					batch = batch[:0]
+				}
+				lastCkpt = idx
+				run.Checkpoint(walkresume.State{Phase: phaseXML, Index: idx, Mappings: run.Resume.Mappings + registered})
+				if run.YieldDue != nil && run.YieldDue() {
+					backfillYieldLog.Info("BackfillITunesTrackPIDs yielding after a checkpoint, track_index=%d", idx)
+					return walkresume.ErrYield
+				}
+			}
 		}
 
 		// Accumulate track for current album

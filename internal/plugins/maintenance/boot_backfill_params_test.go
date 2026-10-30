@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/boot_backfill_params_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 8c1e4d27-5b3a-4f69-9e02-7a6d3b8f1c45
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -22,6 +22,8 @@ import (
 
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
 // p6BootDeps records what the boot-enqueued ops asked their deps for. skipped
@@ -47,7 +49,7 @@ func (d *p6BootDeps) waitForCancel(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (d *p6BootDeps) BackfillExternalIDs(ctx context.Context, ifNeeded bool, _ func(int, int, string)) (bool, error) {
+func (d *p6BootDeps) BackfillExternalIDs(ctx context.Context, ifNeeded bool, _ func(int, int, string), _ walkresume.Run) (bool, error) {
 	d.mu.Lock()
 	d.gotIfNeeded = append(d.gotIfNeeded, ifNeeded)
 	d.mu.Unlock()
@@ -57,13 +59,15 @@ func (d *p6BootDeps) BackfillExternalIDs(ctx context.Context, ifNeeded bool, _ f
 	return ifNeeded && d.skipped, nil
 }
 
-func (d *p6BootDeps) StripMovementAtoms(_ context.Context) bool { return d.skipped }
-
-func (d *p6BootDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) (bool, error) {
+func (d *p6BootDeps) StripMovementAtoms(_ context.Context, _ walkresume.Run) (bool, error) {
 	return d.skipped, nil
 }
 
-func (d *p6BootDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string)) (bool, error) {
+func (d *p6BootDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string), _ walkresume.Run) (bool, error) {
+	return d.skipped, nil
+}
+
+func (d *p6BootDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int, string), _ walkresume.Run) (bool, error) {
 	return d.skipped, d.transcodeErr
 }
 
@@ -287,27 +291,36 @@ func TestBootOps_ReturnPromptlyWhenCancelledMidRun(t *testing.T) {
 
 // The registry's warmup gate (D44) is what makes these ops wait for the memdb
 // warmup now that boot enqueues them; a def that opted out would read a cold
-// store at boot. Their policies are pinned too: 04-P6 changes none of them.
+// store at boot. Their policies are pinned too. 04-P6 made the three that can
+// resume ResumeRestart (they checkpoint a cursor and yield before their
+// deadline); the transcode stays ResumeAsk, an owner decision (it re-encodes
+// audio in place), and the opchange rebuild stays ResumeDrop. Every Timeout is
+// pinned unchanged: the yield, not a longer timeout, is what lets a big first
+// run finish.
 func TestBootOpDefs_WaitForWarmupAndKeepTheirPolicies(t *testing.T) {
 	p := New(fakeDeps{})
 	for _, tc := range []struct {
-		def    sdk.OperationDef
-		resume sdk.ResumePolicy
+		def     sdk.OperationDef
+		resume  sdk.ResumePolicy
+		timeout time.Duration
 	}{
-		{p.externalIDBackfillDef(), sdk.ResumeDrop},
-		{p.movementAtomCleanupDef(), sdk.ResumeDrop},
-		{p.malformedM4BRemuxDef(), sdk.ResumeDrop},
-		{p.malformedM4BTranscodeDef(), sdk.ResumeAsk},
+		{p.externalIDBackfillDef(), sdk.ResumeRestart, 30 * time.Minute},
+		{p.movementAtomCleanupDef(), sdk.ResumeRestart, 60 * time.Minute},
+		{p.malformedM4BRemuxDef(), sdk.ResumeRestart, 120 * time.Minute},
+		{p.malformedM4BTranscodeDef(), sdk.ResumeAsk, 6 * time.Hour},
 		// 04-P7: boot enqueues it with {"ensure": true}. Its warmup wait
 		// lives here, in the dispatcher, since the goroutine's own wait was
 		// deleted.
-		{p.opChangeBookIndexRebuildDef(), sdk.ResumeDrop},
+		{p.opChangeBookIndexRebuildDef(), sdk.ResumeDrop, 60 * time.Minute},
 	} {
 		if tc.def.NoWarmupWait {
 			t.Errorf("%s: NoWarmupWait must be false so the dispatcher holds it until warmup", tc.def.ID)
 		}
 		if tc.def.ResumePolicy != tc.resume {
 			t.Errorf("%s: ResumePolicy = %v, want %v", tc.def.ID, tc.def.ResumePolicy, tc.resume)
+		}
+		if tc.def.Timeout != tc.timeout {
+			t.Errorf("%s: Timeout = %v, want %v (04-P6 keeps the timeouts; the ops yield and resume instead)", tc.def.ID, tc.def.Timeout, tc.timeout)
 		}
 		if !tc.def.Cancellable {
 			t.Errorf("%s: Cancellable = false, but the run honours ctx and boot enqueues it; it must be cancellable", tc.def.ID)
