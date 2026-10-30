@@ -1,7 +1,7 @@
 // file: internal/database/memdb_schema.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000002
-// last-edited: 2026-10-11
+// last-edited: 2026-10-30
 
 package database
 
@@ -45,11 +45,14 @@ const (
 	// decoded every book row in Pebble on each apply.
 	memIdxMetadataSourceHash = "metadata_source_hash"
 	memIdxTitle              = "title"
-	memIdxPath               = "path"
-	memIdxEnabled            = "enabled"
-	memIdxAliasName          = "alias_name"
-	memIdxHash               = "hash"
-	memIdxDelugeHash         = "deluge_hash"
+	// memIdxTitleDir backs MemStore.GetBooksByTitleInDir: (normalized title,
+	// parent dir of FilePath). See titleDirIndex.
+	memIdxTitleDir   = "title_dir"
+	memIdxPath       = "path"
+	memIdxEnabled    = "enabled"
+	memIdxAliasName  = "alias_name"
+	memIdxHash       = "hash"
+	memIdxDelugeHash = "deluge_hash"
 
 	// Sorted secondary indexes for the library list. Each turns a
 	// materialise-the-whole-filtered-set-and-sort into an ordered streaming
@@ -223,6 +226,16 @@ func baseMemdbSchema() *memdb.DBSchema {
 						// books from the library page.
 						Name:    memIdxTitle,
 						Indexer: titleSortIndex{},
+					},
+					memIdxTitleDir: {
+						// Always-on (not an opt-in sort index): the scanner's
+						// version-link lookup runs once per newly imported book
+						// and was a full-library walk. One short key per book
+						// (normalized title + dir, roughly 100-150 bytes), the
+						// same order of memory as memIdxFilePath. Every book is
+						// indexed -- see titleDirIndex for why there is no skip.
+						Name:    memIdxTitleDir,
+						Indexer: titleDirIndex{},
 					},
 				},
 			},

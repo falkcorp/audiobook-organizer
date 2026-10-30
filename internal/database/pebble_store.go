@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.235.2
+// version: 1.235.3
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package database
 
@@ -2042,18 +2042,73 @@ func (p *PebbleStore) GetDuplicateBooks() ([][]Book, error) {
 	return duplicateGroups, nil
 }
 
-// GetBooksByTitleInDir returns books whose lowercased title matches normalizedTitle
-// and whose FilePath lives directly under dirPath (same directory, any filename).
-// Always scans Pebble — MemStore has no title+dir index.
+var titleInDirLog = logger.New("database.title-in-dir")
+
+// GetBooksByTitleInDir returns every book whose util.NormalizeTitle(Title)
+// equals util.NormalizeTitle(normalizedTitle) and whose filepath.Dir(FilePath)
+// equals dirPath exactly (same directory, any filename). The argument is
+// normalized here, so a raw or an already-normalized title gives one answer.
+//
+// The set is deliberately unfiltered: soft-deleted, merged-away and
+// non-primary rows are all returned, because the sole caller (the scanner's
+// version-link step) must see them to decide what is live. Order is book ID
+// ascending on both backends.
+//
+// Delegates to the memdb (title, dir) index when memdb is published -- a point
+// lookup, cost proportional to the siblings found. The scanner calls this once
+// per newly imported book, so the previous unconditional Pebble walk made
+// importing a folder cost (new books) x (all book rows). Falls back to
+// getBooksByTitleInDirPebbleScan in two cases, and only those: memdb is not
+// published yet (warmup window, or UseMemDB off), or memdb is known to be
+// missing book rows (ErrMemdbIncomplete), where a short answer would silently
+// skip a version link. Any other memdb error is returned, not guessed around.
+//
+// The two backends differ only in which fields the returned Books carry: memdb
+// rows are the stripped projection (see MemStore.GetBooksByTitleInDir).
 func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]Book, error) {
+	if mem := p.memOrFallback("GetBooksByTitleInDir"); mem != nil {
+		books, err := mem.GetBooksByTitleInDir(normalizedTitle, dirPath)
+		if err == nil {
+			return books, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		// Per call, not once-per-process: it is Warn because the scan below
+		// answers correctly, only slowly, and the fallback counter carries the
+		// rate. The condition lasts until restart.
+		p.recordMemdbFallback("GetBooksByTitleInDir", memdbOutcomeFallback)
+		titleInDirLog.Warn("same-title-in-directory lookup: memdb is missing rows and will stay short until restart; scanning Pebble instead: err=%v lost_rows=%v",
+			err, mem.LostRows())
+	}
+	return p.getBooksByTitleInDirPebbleScan(normalizedTitle, dirPath)
+}
+
+// getBooksByTitleInDirPebbleScan is the authoritative full-keyspace answer
+// behind GetBooksByTitleInDir. It JSON-decodes EVERY book row, so it is O(all
+// books) per call and must stay a fallback: a caller that reaches it once per
+// imported book during the warmup window pays that full walk each time. The
+// warmup window is bounded (about two minutes on a production-sized library),
+// which is why it is kept rather than given a Pebble secondary index of its own.
+//
+// A row that fails to decode is skipped with a Warn naming it, not returned as
+// an error: memdb can never hold such a row, so failing here would make the
+// pre-warmup answer stricter than the steady-state one, and one corrupt row
+// would block version linking for the whole library. The Warn keeps the skip
+// from being silent. A read error from the scan itself is returned -- a short
+// answer must never read as complete (book_row_iter.go rule 3).
+func (p *PebbleStore) getBooksByTitleInDirPebbleScan(normalizedTitle, dirPath string) ([]Book, error) {
+	want := util.NormalizeTitle(normalizedTitle)
 
 	var results []Book
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var book Book
 		if err := json.Unmarshal(rowValue, &book); err != nil {
+			titleInDirLog.Warn("same-title-in-directory scan: skipping undecodable book row %s: %s",
+				logger.SanitizeLogValue(rowID), logger.SanitizeLogValue(err.Error()))
 			return nil
 		}
-		if util.NormalizeTitle(book.Title) != util.NormalizeTitle(normalizedTitle) {
+		if util.NormalizeTitle(book.Title) != want {
 			return nil
 		}
 		if filepath.Dir(book.FilePath) != dirPath {
@@ -2081,8 +2136,10 @@ func (p *PebbleStore) GetBooksByTitleInDir(normalizedTitle, dirPath string) ([]B
 // (mirrors GetBooksBySeriesIDCore's delegation shape); otherwise pages
 // through GetAllBooksCore (bounded pages) and resolves each book's parent
 // dir via GetBookFiles — a single pass over books, never a per-book
-// title-query fan-out (that O(N^2) shape is what GetBooksByTitleInDir would
-// produce if called per book, so this method never calls it).
+// title-query fan-out. GetBooksByTitleInDir is an indexed point lookup on the
+// memdb path now, but on its Pebble fallback it is still a full walk, and it
+// answers by Book.FilePath rather than by book_file rows, so this method does
+// not call it.
 func (p *PebbleStore) GetFolderDuplicatesCore() ([][]BookCore, error) {
 	if mem := p.memOrFallback("GetFolderDuplicatesCore"); mem != nil {
 		return mem.GetFolderDuplicatesCore()
