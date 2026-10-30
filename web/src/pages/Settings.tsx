@@ -765,9 +765,14 @@ export function Settings() {
           }
           label="Show advanced settings"
         />
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ ml: 6, mt: -0.5 }}>
-          Shows expert tools, such as the Advanced sections of the Review page's Dedup and
-          Metadata menus. Saved in this browser.
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="div"
+          sx={{ ml: 6, mt: -0.5 }}
+        >
+          Shows expert tools, such as the Advanced sections of the Review page's Dedup and Metadata
+          menus. Saved in this browser.
         </Typography>
       </Box>
 
