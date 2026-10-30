@@ -867,18 +867,18 @@ into one of the curated sections below, is a normal direct edit.
       re-approve is how approved-while-off decisions are meant to execute, give
       `/review/bulk` an `include_approved` option with a dry run.
 
-- [ ] **SELECT-ALL-PER-USER-FILTERS** The background select-all resolver in
-      `internal/server/metadata_ops.go` (the `for _, ff := range f.FieldFilters`
-      loop near line 572, doc comment at line 563) silently drops every per-user
-      `field_filters` entry (`read_status`, `progress_pct`, `last_played`)
-      because a background op has no user context. A select-all on a view that is
-      filtered by `read_status:unread` therefore resolves to the whole filtered
-      view minus that filter, and the op runs against more books than the
-      operator saw on screen. Found while reviewing 07-F5a (#4071); that PR left
-      the code alone because it is a separate code path. Fix properly: carry the
-      requesting user's id in the op params and evaluate the per-user filters
-      against that user's rows, or refuse the select-all with a clear error when
-      a per-user filter is present, instead of widening it silently.
+- [x] **SELECT-ALL-PER-USER-FILTERS** The background select-all resolver in
+      `internal/server/metadata_ops.go` silently dropped every per-user
+      `field_filters` entry (`read_status`, `progress_pct`, `last_played`) because
+      a background op has no user context. DONE 2026-10-30: the refusal landed
+      2026-10-26, and `resolveFilterToBookIDs` now takes the requesting user's id
+      (the bulk fetch op reads it off its own operation row, which the registry
+      stamps from the verified request; the batch-candidates handler uses the
+      signed-in caller) and judges per-user filters and per-user search terms
+      against that user's rows through the same `GetAudiobooks` path the Library
+      list uses. With no user id and a per-user term it still refuses, naming the
+      filter. The continuation op replays the actor so a chain keeps acting for
+      its starter. See `docs/decisions/2026-10-30-select-all-per-user-filters.md`.
 
 - [ ] **Make `absauth.HashPassword` / `VerifyPassword` context-aware** — the argon2id
   semaphore (`internal/server/absauth/password.go`, `argonSem`) is a plain blocking

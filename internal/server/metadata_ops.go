@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.42.1
+// version: 1.43.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -17,7 +17,7 @@
 //   - runBulkWriteBack — used by duplicates_ops.go / library_writeback_op.go /
 //     server_maintenance_deps.go.
 //   - runMetadataRefreshScan — used by server_maintenance_deps.go.
-//   - resolveFilterToBookIDs — used by metadata_batch_candidates.go.
+//   - resolveFilterToBookIDs — used by metadata_batch_candidates.go and the bulk fetch op.
 //   - RegisterBulkMetadataFetchOp + init() — register the v2 OperationDef.
 //   - bulkMetadataFetchV2Params alias.
 
@@ -563,15 +563,24 @@ func retryWhileSearchBusy(ctx context.Context, resolve func() ([]string, error))
 // memdb projection because stripBookForMemdb does not clear TranscribedTitle.
 //
 // A per-user term (read_status, progress_pct, last_played) in the search text or in
-// FieldFilters is REFUSED, not dropped: this resolves with no viewer, so there is
-// no listening state to judge it by. Dropping it (what the field filters did until
-// 2026-10-26) widened "my finished books" to every book, and the search text path
-// ignores a per-user term when no user is present (searchWithBleve). The web
-// select-all filter can carry such terms (buildSelectAllFilter), so the refusal is
-// here, where the op's target set is decided, not only in the UI.
-func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.FilterSpec) ([]string, error) {
-	if err := refuseUnscopedPerUserTerms(f); err != nil {
-		return nil, err
+// FieldFilters is judged against viewerID's listening rows, exactly as the Library
+// list judges it for the signed-in user: the field filters travel as
+// ListFilters.PerUserFilters and the search text through the same GetAudiobooks
+// path, both with UserID set, so there is no second matcher here to drift.
+//
+// With no viewerID (auth off, or an operation row that records no actor) such a
+// term is REFUSED, not dropped: there is no listening state to judge it by.
+// Dropping it (what the field filters did until 2026-10-26) widened "my finished
+// books" to every book, and the search text path ignores a per-user term when no
+// user is present (searchWithBleve). The web select-all filter can carry such
+// terms (buildSelectAllFilter), so the refusal is here, where the op's target set
+// is decided, not only in the UI. A spec with no per-user term resolves the same
+// with or without a viewerID.
+func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.FilterSpec, viewerID string) ([]string, error) {
+	if viewerID == "" {
+		if err := refuseUnscopedPerUserTerms(f); err != nil {
+			return nil, err
+		}
 	}
 	trueVal := true
 	filters := ListFilters{
@@ -579,6 +588,7 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 		LibraryState:     f.LibraryState,
 		Tag:              f.Tag,
 		Tags:             f.Tags,
+		UserID:           viewerID,
 	}
 	for _, ff := range f.FieldFilters {
 		// Refuse an empty value rather than resolving it. strings.Contains(x, "")
@@ -592,12 +602,21 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 			return nil, fmt.Errorf("filter on %q has an empty value, which would match every "+
 				"book and target the entire library; refusing to resolve it", ff.Field)
 		}
-		filters.FieldFilters = append(filters.FieldFilters, FieldFilter{
+		filter := FieldFilter{
 			Field:   ff.Field,
 			Value:   ff.Value,
 			Negated: ff.Negated,
 			Quoted:  ff.Quoted,
-		})
+		}
+		// The split the Library list makes (handlers/audiobooks parseListRequest):
+		// per-user fields are matched against UserID's rows, the rest against the
+		// book. Reaching here with a per-user field means viewerID is set, because
+		// the guard above refuses it otherwise.
+		if IsPerUserField(ff.Field) {
+			filters.PerUserFilters = append(filters.PerUserFilters, filter)
+		} else {
+			filters.FieldFilters = append(filters.FieldFilters, filter)
+		}
 	}
 	var authorID, seriesID *int
 	if f.AuthorID != nil {
@@ -636,10 +655,64 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 	return ids, nil
 }
 
-// refuseUnscopedPerUserTerms is resolveFilterToBookIDs's guard: a FilterSpec that
-// names a per-user field, in FieldFilters or in the search text, cannot be resolved
-// without a viewer, and resolving it anyway would target books the person never
-// selected.
+// bulkFetchSelectionIsWholeLibrary reports whether a selection asks for the whole
+// library: it names neither a filter nor any book. This is the ONLY shape that may
+// reach runBulkMetadataFetchAll. A selection that names a filter or books but
+// resolved to zero IDs asked for something narrower and must fetch nothing.
+func bulkFetchSelectionIsWholeLibrary(sel operations.SelectionSpec) bool {
+	return sel.Filter == nil && len(sel.BookIDs) == 0
+}
+
+// opActorIdentity is who an operation row says enqueued it, as the registry
+// recorded it from the verified request (servermiddleware.ActorOptions).
+type opActorIdentity struct {
+	userID      string
+	authMethod  string
+	permissions []string // nil when the row recorded no set
+}
+
+// options replays the identity onto a successor op, so a chain keeps acting for
+// the user who started it. Empty for an op that had no actor.
+func (a opActorIdentity) options() []opsregistry.EnqueueOption {
+	if a.userID == "" {
+		return nil
+	}
+	opts := []opsregistry.EnqueueOption{opsregistry.WithActor(a.userID)}
+	if a.authMethod != "" {
+		opts = append(opts, opsregistry.WithActorAuthMethod(a.authMethod))
+	}
+	if a.permissions != nil {
+		opts = append(opts, opsregistry.WithActorPermissions(a.permissions))
+	}
+	return opts
+}
+
+// opActor reads the actor recorded on operation row opID. A zero identity with a
+// nil error means no user enqueued it (or opID is unknown, e.g. a test reporter);
+// an error means the row could not be read, which the caller reports only if the
+// answer mattered.
+func (s *Server) opActor(opID string) (opActorIdentity, error) {
+	if opID == "" {
+		return opActorIdentity{}, nil
+	}
+	ops := database.GetOpsV2(s.Ops())
+	if ops == nil {
+		return opActorIdentity{}, errors.New("operation store cannot read this run's row")
+	}
+	row, err := ops.GetOperationV2(opID)
+	if err != nil {
+		return opActorIdentity{}, fmt.Errorf("read operation %s: %w", opID, err)
+	}
+	if row == nil || row.ActorUserID == nil {
+		return opActorIdentity{}, nil
+	}
+	return opActorIdentity{userID: *row.ActorUserID, authMethod: row.ActorAuthMethod, permissions: row.ActorPermissions}, nil
+}
+
+// refuseUnscopedPerUserTerms is resolveFilterToBookIDs's guard for a call with no
+// viewer: a FilterSpec that names a per-user field, in FieldFilters or in the
+// search text, cannot be resolved without one, and resolving it anyway would target
+// books the person never selected.
 func refuseUnscopedPerUserTerms(f operations.FilterSpec) error {
 	for _, ff := range f.FieldFilters {
 		if IsPerUserField(ff.Field) {
@@ -671,8 +744,14 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 		Timeout:         6 * time.Hour,
 		ResumePolicy:    opsregistry.ResumeRestart,
 		ConcurrencyKey:  "library.bulk-metadata-fetch",
-		Permissions:     []auth.Permission{auth.PermLibraryEditMetadata},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead},
+		// A selection with a per-user filter (read_status, progress_pct, last_played)
+		// is judged by the rows of the user who enqueued the run (opActor). The
+		// ConcurrencyKey dedupe folds a byte-identical request into the active run,
+		// so without this user B's identical selection would be handed user A's run
+		// and judged by A's rows. Same mechanism as the diagnostics export.
+		DedupeSameActorOnly: true,
+		Permissions:         []auth.Permission{auth.PermLibraryEditMetadata},
+		Capabilities:        []opsregistry.Capability{opsregistry.CapNetworkGeneric, opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
 			var p bulkMetadataFetchV2Params
 			if len(rawParams) > 0 {
@@ -721,18 +800,37 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 
 			progress := registryProgressAdapter{r: reporter}
 
+			// The user this run acts for, read off the operation row (stamped from the
+			// verified request at enqueue, never from params a caller could write). A
+			// selection that carries a per-user filter is judged against that user's
+			// listening rows; without one it is refused (resolveFilterToBookIDs).
+			actor, actorErr := s.opActor(opsregistry.ReporterOpID(reporter))
 			bookIDs, err := operations.ResolveBookIDs(p.Selection, func(f operations.FilterSpec) ([]string, error) {
-				return retryWhileSearchBusy(ctx, func() ([]string, error) { return s.resolveFilterToBookIDs(ctx, f) })
+				ids, rerr := retryWhileSearchBusy(ctx, func() ([]string, error) { return s.resolveFilterToBookIDs(ctx, f, actor.userID) })
+				if rerr != nil && actorErr != nil {
+					rerr = fmt.Errorf("%w (the requesting user could not be read from the operation row: %v)", rerr, actorErr)
+				}
+				return ids, rerr
 			})
 			if err != nil {
 				return fmt.Errorf("bulk_metadata_fetch: resolve selection: %w", err)
 			}
 
 			var incomplete bool
-			if len(bookIDs) > 0 {
+			switch {
+			case len(bookIDs) > 0:
 				incomplete, err = s.runBulkMetadataFetchForBookIDs(ctx, opID, bookIDs, fetchParams, store, progress)
-			} else {
+			case bulkFetchSelectionIsWholeLibrary(p.Selection):
 				incomplete, err = s.runBulkMetadataFetchAll(ctx, opID, fetchParams, store, progress)
+			default:
+				// A selection WAS given and it resolved to nothing (a filter nobody
+				// matches, a per-user filter that matches none of this user's books).
+				// That is a finished run over zero books, not a request for the whole
+				// library: falling through to runBulkMetadataFetchAll here widened the
+				// op to every book.
+				_ = reporter.Log(slog.LevelInfo, "bulk_metadata_fetch: the selection resolved to no books; nothing to fetch")
+				_ = reporter.UpdateProgress(0, 0, "selection resolved to no books")
+				return nil
 			}
 			if err != nil {
 				return err
@@ -749,7 +847,10 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 				return nil
 			}
 			next := nextContinuationParams(p, runKey)
-			nextID, eerr := reg.EnqueueOp(ctx, "library.bulk-metadata-fetch", next)
+			// The continuation re-resolves the same selection, so it must act for the
+			// same user: an op enqueued with no actor would refuse a per-user filter
+			// on its second link.
+			nextID, eerr := reg.EnqueueOp(ctx, "library.bulk-metadata-fetch", next, actor.options()...)
 			if eerr != nil {
 				// Not fatal to THIS run -- the books it did fetch are cached and
 				// ledgered -- but it does end the chain, so say so loudly rather
