@@ -1,7 +1,7 @@
 # file: scripts/tests/test_fixture_test_packages.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 5b7e2c94-1d3a-4f68-9a0e-c4d8b6f21a73
-# last-edited: 2026-10-27
+# last-edited: 2026-10-30
 """Tests for scripts/ci/fixture_test_packages.py: the shard partition must not
 depend on the host the shard job lands on, and a package assigned to this shard
 that this host cannot test must fail the job rather than vanish from it."""
@@ -64,8 +64,9 @@ class PartitionHostIndependentTest(unittest.TestCase):
             selected = ftp.select(pkgs, set(), calls_short=lambda d, f: True)
         self.assertEqual(selected, sorted(f"{M}/{n}" for n in "abcdefg"))
         shards = [ftp.shard(selected, i, 3) for i in (1, 2, 3)]
-        self.assertEqual(sorted(p for s in shards for p in s), selected)
-        self.assertEqual(len({p for s in shards for p in s}), len(selected))
+        # shard() returns Units; none of these test packages is heavy enough to split.
+        self.assertEqual(sorted(u.pkg for s in shards for u in s), selected)
+        self.assertEqual(len({u for s in shards for u in s}), len(selected))
 
     def test_partition_hash_is_order_independent_and_sensitive(self):
         self.assertEqual(ftp.partition_hash(["b", "a"]), ftp.partition_hash(["a", "b"]))
