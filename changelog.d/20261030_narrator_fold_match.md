@@ -1,0 +1,5 @@
+### Fixed
+
+#### Narrator sync fold-matches existing records instead of minting a duplicate
+
+`resolveNarratorCredit` (the book write path that keeps `book_narrators` in step with the Narrator column) now matches a credit name against existing narrator records by fold key (`util.FoldKey`: case, accents, punctuation, spacing) after the exact-name lookup, so a rescan that reads "Renee Montoya" back no longer creates a second record beside "Renée Montoya" and re-credits the book to it. A single fold match is linked and keeps its spelling; several matches go to the exact match, else the record with the most credits, logged at Warn with every candidate id; only an unmatched name creates a record, under the narrator name-index lock so two spellings resolved at once mint one record. Backed by a new `narrator_fold:<fold>:<id>` index kept in `CreateNarrator`/`DeleteNarrator` and reconciled on every boot (write-only-absent, bounded worker pool); readers scan the records until this boot's reconcile finishes. `FoldKey` moved to `internal/util` (the store cannot import `authorjunk`); `authorjunk.FoldKey` delegates to it. `CreateNarrator` itself is still exact-name.

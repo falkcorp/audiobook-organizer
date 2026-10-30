@@ -6221,6 +6221,9 @@ func (p *PebbleStore) Reset() error {
 	// bookIDsAtPathIndex can snapshot after the wipe and return an empty
 	// set. Reset is a factory-reset path with no concurrent library work.
 	p.bookAtPathBuilt.Store(false)
+	// The wiped keyspace took the narrator_fold: keys; trust the index again
+	// only after the next reconcile has checked it.
+	p.nameIdx.narratorFoldTrusted.Store(false)
 	// Same for the file-hash index sentinel: a wiped store has no index, and a
 	// cached true would make lookups ignore the legacy keys of whatever is
 	// written back.

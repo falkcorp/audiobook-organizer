@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -391,7 +392,7 @@ into one of the curated sections below, is a normal direct edit.
       owner decides release/tag/pin bumps. Expect consumers with broken frontends to go red after the pins move
       (migrate-loop, magnet-handler, subtitle-manager, ubuntu-autoinstall-agent). Owner 2026-10-27: note only.
 
-- [ ] **NARRATOR-SYNC-FOLD-MATCH** Narrator sync should fold-match existing
+- [x] **NARRATOR-SYNC-FOLD-MATCH** Narrator sync should fold-match existing
       records instead of minting a second one. `maintenance.credits-backfill`
       links a narrator name that matches a record only by its fold key
       (`authorjunk.FoldKey`: case, accents, punctuation, spaces; "Renee Montoya"
@@ -415,6 +416,13 @@ into one of the curated sections below, is a normal direct edit.
       (CreateBook, UpdateBook, ModifyBook), so it needs its own tests for
       concurrent creates of two spellings. Until then the credit census after a
       rescan is the check, and re-running the backfill finds the book again.
+      DONE 2026-10-30: `resolveNarratorCredit` now resolves through
+      `PebbleStore.resolveNarratorFolded` (exact name, then fold key under the
+      narrator name-index lock, then create), backed by a `narrator_fold:` index
+      reconciled on every boot. Ambiguous folds link to the exact match, else the
+      record with the most credits, and log at Warn (not "create nothing"; see
+      `docs/decisions/2026-10-30-narrator-fold-match.md`). The author side
+      (`scanner.resolveAuthorIDs`) has the same exact-name shape and is not fixed.
 
 - [x] **TODO-VERSION-PURGE-GUARD-FOLLOWUPS** Two follow-ups to the trash-purge
       guard (`internal/versions/serve_guard.go`, PR #4215) that were left out of

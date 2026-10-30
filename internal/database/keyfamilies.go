@@ -80,6 +80,7 @@ var keyFamilies = []KeyFamily{
 	{"author_tombstone:", "merged-away author id redirects", "internal/database/pebble_store_authors.go"},
 	{"narrator:", "narrator rows", "internal/database/pebble_store_authors.go"},
 	{"narrator_counter", "narrator id counter (single bare key)", "internal/database/pebble_store_authors.go"},
+	{"narrator_fold:", "narrator index by fold key (case, accents, punctuation, spacing folded), one key per fold and narrator id", "internal/database/pebble_store_narrator_fold_index.go"},
 	{"narrator_name:", "narrator index by normalized name", "internal/database/pebble_store_name_index.go"},
 	{"series:", "series rows", "internal/database/pebble_store_series.go"},
 	{"series:name:", "series index by normalized name and author", "internal/database/pebble_store_name_index.go"},
