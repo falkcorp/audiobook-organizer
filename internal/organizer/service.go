@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.64.0
+// version: 1.64.1
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-21
+// last-edited: 2026-10-29
 
 package organizer
 
@@ -1882,6 +1882,12 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 	// One tally line per batch instead of one error line per pair.
 	if tally := formatCollisionTally(stats.Collisions); tally != "" {
 		log.Info("Organize destination conflicts: %s", tally)
+	}
+	// Once per run, not once per book (each of those is a debug line): moves held
+	// back for the Deluge list are not a property of the books and clear by
+	// themselves, but a run that moves nothing for that reason must be visible.
+	if n := stats.Collisions[OutcomeProtectedListNotLoaded]; n > 0 {
+		log.Warn("Organize: %d in-place move(s) held back, not failed: %s", n, ProtectedListNotLoadedReason)
 	}
 
 	summary := formatOrganizeSummary(stats)

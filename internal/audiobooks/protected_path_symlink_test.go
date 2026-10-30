@@ -1,5 +1,5 @@
 // file: internal/audiobooks/protected_path_symlink_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0d6b9f41-8a27-4c53-b1e8-73f5a2c90d14
 // last-edited: 2026-10-29
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 
 // resetImportPathCacheForHelper empties the helper's process-wide import-path
@@ -280,4 +281,54 @@ func TestVersionPurgeGuard_NeverRemovesAFileReachedThroughASymlinkIntoITunes(t *
 	reason, ok := keptReason(f.reread(t), viaLink)
 	require.True(t, ok, "purge_kept = %+v", f.reread(t).PurgeKept)
 	assert.Contains(t, reason, "never deletes")
+}
+
+// repointedITunesFolder sets up the iTunes folder as a symlink that, until the
+// test re-points it, leads somewhere that holds no file of interest, and warms
+// the shared protected-folder cache with that answer. It returns the file inside
+// the real iTunes folder and a func that re-points the link at that folder, as an
+// operator fixing a mount would, inside the cache window.
+func repointedITunesFolder(t *testing.T, base string) (hush string, repoint func()) {
+	t.Helper()
+	resetImportPathCacheForHelper(t)
+	itunes := filepath.Join(base, "lib", "Gotham Music")
+	hush = filepath.Join(itunes, "Hush", "hush.m4b")
+	writeFile(t, hush)
+	elsewhere := filepath.Join(base, "lib", "Other Music")
+	require.NoError(t, os.MkdirAll(elsewhere, 0o755))
+	link := filepath.Join(base, "music")
+	require.NoError(t, os.Symlink(elsewhere, link))
+	setITunesPaths(t, filepath.Join(link, "Library.xml"), "")
+
+	require.False(t, isProtectedPath(nil, hush), "the link leads away from the file, and the cache now holds that")
+	return hush, func() {
+		require.NoError(t, os.Remove(link))
+		require.NoError(t, os.Symlink(itunes, link))
+	}
+}
+
+// The purge protects at least as much as a fresh look: an iTunes folder whose
+// link is re-pointed at the folder holding the file, inside the cache window,
+// is already protecting it. The cached answer (tag writes, previews) is the
+// stale one and may stay so; a deletion must not use it.
+func TestPlanPurgePathIn_ALinkRepointedInsideTheCacheWindowStillProtects(t *testing.T) {
+	svc, _, base := setupPurgeBoundary(t)
+	hush, repoint := repointedITunesFolder(t, base)
+	repoint()
+
+	v := svc.planPurgePathIn(hush, nil, nil)
+	assert.True(t, v.protected, "a fresh look protects it: %+v", v)
+	assert.Empty(t, v.remove, "and it is not scheduled for removal")
+}
+
+// The version purge decides its paths with the same function, so it keeps the
+// file too.
+func TestVersionPurgeDecider_ALinkRepointedInsideTheCacheWindowStillKeeps(t *testing.T) {
+	svc, _, base := setupPurgeBoundary(t)
+	hush, repoint := repointedITunesFolder(t, base)
+	repoint()
+
+	decision, _, err := svc.VersionPurgeGuard().NewDecider().Decide(hush)
+	require.NoError(t, err)
+	assert.Equal(t, versions.PurgeKeep, decision)
 }

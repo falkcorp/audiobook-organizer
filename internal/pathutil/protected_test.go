@@ -1,5 +1,5 @@
 // file: internal/pathutil/protected_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c0d7e92-3b84-4f1a-9a6e-2d18c4b7e063
 // last-edited: 2026-10-29
 
@@ -486,4 +486,132 @@ func TestUnderProtectedPath_ConcurrentCallsAgree(t *testing.T) {
 	for e := range errs {
 		t.Error(e)
 	}
+}
+
+// withFailureLog resets the report throttle and drives its clock and interval,
+// restoring everything afterwards. The returned func moves the clock.
+func withFailureLog(t *testing.T, interval time.Duration) (advance func(time.Duration)) {
+	t.Helper()
+	prevClock, prevInterval := clock, rootFailureRelogInterval
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	clock = func() time.Time { return now }
+	rootFailureRelogInterval = interval
+	reset := func() {
+		reportedRootFailuresMu.Lock()
+		reportedRootFailures = map[string]time.Time{}
+		reportedRootFailuresMu.Unlock()
+	}
+	reset()
+	t.Cleanup(func() { clock, rootFailureRelogInterval = prevClock, prevInterval; reset() })
+	return func(d time.Duration) { now = now.Add(d) }
+}
+
+// A link re-pointed inside the cache window: the cached answer is the stale
+// one, UnderProtectedPathUncached is the fresh one, and it keeps nothing.
+func TestUnderProtectedPathUncached_SeesALinkRepointedInsideTheCacheWindow(t *testing.T) {
+	withRootCacheTTL(t, time.Hour)
+	f := newProtectedFixture(t)
+	elsewhere := filepath.Join(f.base, "lib", "Other Music")
+	require.NoError(t, os.MkdirAll(elsewhere, 0o755))
+	root := f.link(t, elsewhere, "music") // not the folder holding hush yet
+
+	got, err := UnderProtectedPath(f.hush, []string{root})
+	require.NoError(t, err)
+	require.False(t, got, "the link points away from the file")
+
+	require.NoError(t, os.Remove(root))
+	require.NoError(t, os.Symlink(f.itunes, root)) // now it points at the folder holding hush
+
+	cached, err := UnderProtectedPath(f.hush, []string{root})
+	require.NoError(t, err)
+	assert.False(t, cached, "inside the TTL the cached resolution is stale")
+
+	fresh, err := UnderProtectedPathUncached(f.hush, []string{root})
+	require.NoError(t, err)
+	assert.True(t, fresh, "a fresh look sees the link's new target")
+
+	protectedRootCacheMu.Lock()
+	defer protectedRootCacheMu.Unlock()
+	assert.Len(t, protectedRootCache, 1, "the uncached call left nothing in the cache (only the first call's entry)")
+}
+
+// The uncached check fails closed on a folder that cannot be resolved, with the
+// same error as the cached one.
+func TestUnderProtectedPathUncached_FailsClosedOnAFolderThatCannotBeResolved(t *testing.T) {
+	withFailureLog(t, time.Hour)
+	f := newProtectedFixture(t)
+	a := filepath.Join(f.arkham, "loop-a")
+	b := filepath.Join(f.arkham, "loop-b")
+	require.NoError(t, os.Symlink(b, a))
+	require.NoError(t, os.Symlink(a, b))
+
+	got, err := UnderProtectedPathUncached(f.unrelated, []string{a})
+	assert.True(t, got)
+	require.ErrorIs(t, err, ErrProtectedFolderUnresolved)
+	assert.ErrorIs(t, err, syscall.ELOOP)
+}
+
+// A folder that keeps failing is reported again once the interval has passed,
+// and only then.
+func TestShouldLogProtectedPathError_RelogsAFolderThatKeepsFailing(t *testing.T) {
+	advance := withFailureLog(t, time.Hour)
+	err := &RootError{Root: "Gotham Music", Err: syscall.ELOOP}
+
+	assert.True(t, ShouldLogProtectedPathError(err), "first report")
+	assert.False(t, ShouldLogProtectedPathError(err))
+	advance(59 * time.Minute)
+	assert.False(t, ShouldLogProtectedPathError(err), "inside the interval")
+	advance(2 * time.Minute)
+	assert.True(t, ShouldLogProtectedPathError(err), "an hour on, still failing: reported again")
+	assert.False(t, ShouldLogProtectedPathError(err), "and the interval starts over")
+
+	other := &RootError{Root: "Arkham Music", Err: syscall.ELOOP}
+	assert.True(t, ShouldLogProtectedPathError(other), "another folder has its own throttle")
+}
+
+// A root configured relative is reported under the spelling it was configured
+// with, whichever step failed.
+func TestUnderProtectedPath_RootErrorNamesTheRootAsConfigured(t *testing.T) {
+	withRootCacheTTL(t, 0)
+	withFailureLog(t, time.Hour)
+	f := newProtectedFixture(t)
+	require.NoError(t, os.Symlink("loop-b", filepath.Join(f.arkham, "loop-a")))
+	require.NoError(t, os.Symlink("loop-a", filepath.Join(f.arkham, "loop-b")))
+	t.Chdir(f.arkham)
+
+	_, err := UnderProtectedPath(f.unrelated, []string{"loop-a"})
+	var re *RootError
+	require.ErrorAs(t, err, &re)
+	assert.Equal(t, "loop-a", re.Root)
+}
+
+// A folder that cannot be made absolute is recorded under its configured
+// spelling, and is cleared by the same spelling once it resolves, so a later
+// failure is reported at once. Under the old code the resolve step cleared the
+// absolute spelling, which the make-absolute failure never used.
+func TestUnderProtectedPath_AbsoluteFailureIsClearedWhenTheFolderResolves(t *testing.T) {
+	withRootCacheTTL(t, 0)
+	withFailureLog(t, time.Hour)
+	f := newProtectedFixture(t)
+	t.Chdir(f.base)
+	prev := absPath
+	t.Cleanup(func() { absPath = prev })
+	roots := []string{filepath.Join("lib", "Gotham Music")} // not an ancestor of f.unrelated, so the check reaches the resolve step
+
+	absPath = func(string) (string, error) { return "", errors.New("getwd: the working directory is gone") }
+	_, err := UnderProtectedPath(f.unrelated, roots)
+	var re *RootError
+	require.ErrorAs(t, err, &re)
+	assert.Equal(t, roots[0], re.Root)
+	assert.True(t, ShouldLogProtectedPathError(err), "first report")
+	assert.False(t, ShouldLogProtectedPathError(err), "throttled")
+
+	absPath = prev
+	_, err = UnderProtectedPath(f.unrelated, roots)
+	require.NoError(t, err, "the folder resolves now")
+
+	absPath = func(string) (string, error) { return "", errors.New("getwd: the working directory is gone") }
+	_, err = UnderProtectedPath(f.unrelated, roots)
+	require.ErrorAs(t, err, &re)
+	assert.True(t, ShouldLogProtectedPathError(err), "failed again after resolving: reported at once")
 }

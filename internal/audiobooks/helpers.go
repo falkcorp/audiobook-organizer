@@ -1,5 +1,5 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.13.4
+// version: 1.13.5
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
 // last-edited: 2026-10-29
 //
@@ -371,6 +371,21 @@ var errProtectedPathUnresolved = errors.New("symlinks of the path cannot be reso
 // path it is done with: held in the trash for a retry when the failure may pass,
 // purged with the file left in place when it is a link cycle.
 func protectedPathChecked(store importPathLister, filePath string) (protected bool, err error) {
+	return protectedPathCheckedWith(store, filePath, pathutil.UnderProtectedPath)
+}
+
+// protectedPathCheckedFresh is protectedPathChecked with the protected folders
+// resolved afresh for this call (pathutil.UnderProtectedPathUncached), for the
+// callers that delete. protectedPathChecked reuses folders resolved up to
+// pathutil's cache TTL ago, so a link re-pointed into a protected folder inside
+// that window still reads "not protected" there; right for tag writes, previews
+// and organize, which run in whole-library loops, wrong for a deletion, where a
+// stale "not protected" is the answer that loses a file (planPurgePathIn).
+func protectedPathCheckedFresh(store importPathLister, filePath string) (protected bool, err error) {
+	return protectedPathCheckedWith(store, filePath, pathutil.UnderProtectedPathUncached)
+}
+
+func protectedPathCheckedWith(store importPathLister, filePath string, underProtectedPath func(string, []string) (bool, error)) (protected bool, err error) {
 	var roots []string
 	if store != nil {
 		importPaths, lerr := cachedImportPathsForHelper(store)
@@ -393,7 +408,7 @@ func protectedPathChecked(store importPathLister, filePath string) (protected bo
 	// likewise): a path reached through a link into an iTunes or import folder is
 	// the same file. Until 2026-10-29 only the spelled path was tested, so such a
 	// file could be purged. A path that cannot be resolved is protected.
-	under, perr := pathutil.UnderProtectedPath(filePath, roots)
+	under, perr := underProtectedPath(filePath, roots)
 	if perr != nil {
 		if pathutil.ShouldLogProtectedPathError(perr) {
 			protectedPathLog.Warn("treating path as protected: cannot resolve its symlinks: path=%s error=%s",

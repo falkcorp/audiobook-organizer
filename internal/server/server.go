@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.114.1
+// version: 2.114.2
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-28
+// last-edited: 2026-10-29
 
 package server
 
@@ -1201,12 +1201,13 @@ func NewServer(store database.Store) *Server {
 		// refused (ErrProtectedPathWrite), never copied into RootDir.
 		deps := tagger.SafeWriteDeps{ProtectedCache: server.protectedPathCache}
 		metadata.SetSafeWriteDeps(deps)
-		// RenameFiles never moves a protected file (Deluge seeding, the
-		// iTunes library), and moves nothing while the Deluge list has not
-		// loaded: an unloaded list reports every seeding file unprotected.
-		organizer.SetRenameSourceGuard(func(p string) bool {
-			return server.isProtectedPath(p) || !tagger.ProtectedListLoaded(server.protectedChecker())
-		})
+		// RenameFiles and the in-place organize never move a protected file
+		// (Deluge seeding, the iTunes library), and move nothing while the
+		// Deluge list has not loaded: an unloaded list reports every seeding
+		// file unprotected. The two refusals are told apart, because only the
+		// first is about the file; a protected file is reported as protected
+		// even while the list is down.
+		organizer.SetRenameSourceGuard(server.renameSourceVerdict)
 		// Every package-level tag write (the book PATCH write-back, tag
 		// reverts, the organizer's rename, single-tag fixes) records the file's
 		// new hashes on its book_file row, looked up by path.

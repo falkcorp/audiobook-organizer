@@ -1,5 +1,5 @@
 // file: internal/pathutil/protected.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f82848e0-20ca-446c-b8c5-b0e2f209bd51
 // last-edited: 2026-10-29
 
@@ -131,7 +131,11 @@ var protectedRootCacheTTL = 5 * time.Second
 // RootError is an UnderProtectedPath failure in a protected folder: the folder
 // could not be resolved, so no path can be shown to be outside it. It matches
 // ErrProtectedFolderUnresolved and, through Err, the underlying cause (ELOOP for
-// a link cycle).
+// a link cycle). Root is the folder as it was configured (the spelling in the
+// list passed to UnderProtectedPath), whichever step failed: that is the only
+// spelling that exists when the folder cannot even be made absolute, and it is
+// the key reportedRootFailures uses, so a failure is cleared by the same name it
+// was recorded under.
 type RootError struct {
 	Root string
 	Err  error
@@ -143,27 +147,58 @@ func (e *RootError) Error() string {
 
 func (e *RootError) Unwrap() []error { return []error{ErrProtectedFolderUnresolved, e.Err} }
 
-// reportedRootFailures holds the folders whose failure has been reported, until
-// the folder resolves again.
-var reportedRootFailures sync.Map
+// rootFailureRelogInterval is how long a protected folder that keeps failing to
+// resolve stays unreported after a report. Not a const so tests can shrink it.
+var rootFailureRelogInterval = time.Hour
+
+// clock is the time source of the failure log throttle, replaceable by tests.
+var clock = time.Now
+
+// absPath makes a protected folder absolute; replaceable by tests, because
+// filepath.Abs fails only when the working directory is gone.
+var absPath = filepath.Abs
+
+// reportedRootFailures holds, for each folder whose failure has been reported,
+// when it was last reported. A folder that resolves again is removed.
+var (
+	reportedRootFailuresMu sync.Mutex
+	reportedRootFailures   = map[string]time.Time{}
+)
 
 // ShouldLogProtectedPathError says whether a caller of UnderProtectedPath should
 // log err. A failure in a protected folder is the same for every path asked
-// about, so it is reported once per folder until the folder resolves again, not
-// once per call; any other failure is about one path and is always reported.
+// about, so it is reported once per folder, then again at most once per
+// rootFailureRelogInterval while the folder keeps failing (a process that runs
+// for weeks must not go silent about a folder that is still broken), and at once
+// when it fails again after having resolved; any other failure is about one path
+// and is always reported.
 func ShouldLogProtectedPathError(err error) bool {
 	var re *RootError
 	if errors.As(err, &re) {
-		_, seen := reportedRootFailures.LoadOrStore(re.Root, struct{}{})
-		return !seen
+		reportedRootFailuresMu.Lock()
+		defer reportedRootFailuresMu.Unlock()
+		now := clock()
+		if last, seen := reportedRootFailures[re.Root]; seen && now.Sub(last) < rootFailureRelogInterval {
+			return false
+		}
+		reportedRootFailures[re.Root] = now
+		return true
 	}
 	return true
+}
+
+// clearRootFailure forgets that root's failure was reported.
+func clearRootFailure(root string) {
+	reportedRootFailuresMu.Lock()
+	delete(reportedRootFailures, root)
+	reportedRootFailuresMu.Unlock()
 }
 
 // protectedRoots is one list of protected folders, made absolute when it is
 // created and resolved through symlinks the first time a path needs it. It is
 // read-only after that, so any number of goroutines share it.
 type protectedRoots struct {
+	raw     []string // the folders as configured, parallel to abs
 	abs     []string
 	absErr  error // a folder that could not be made absolute
 	at      time.Time
@@ -176,6 +211,21 @@ var (
 	protectedRootCacheMu sync.Mutex
 	protectedRootCache   = map[string]*protectedRoots{}
 )
+
+// newProtectedRoots makes roots absolute. It touches no cache, so a caller that
+// needs the folders as they are on disk right now builds its own.
+func newProtectedRoots(roots []string, at time.Time) *protectedRoots {
+	pr := &protectedRoots{at: at, raw: roots}
+	for _, r := range roots {
+		ra, err := absPath(r)
+		if err != nil {
+			pr.absErr = &RootError{Root: r, Err: fmt.Errorf("make absolute: %w", err)}
+			break
+		}
+		pr.abs = append(pr.abs, ra)
+	}
+	return pr
+}
 
 // protectedRootsFor returns the shared protectedRoots for roots, creating it (and
 // dropping expired ones) when there is no fresh one.
@@ -192,15 +242,7 @@ func protectedRootsFor(roots []string) *protectedRoots {
 			delete(protectedRootCache, k)
 		}
 	}
-	pr := &protectedRoots{at: now}
-	for _, r := range roots {
-		ra, err := filepath.Abs(r)
-		if err != nil {
-			pr.absErr = &RootError{Root: r, Err: fmt.Errorf("make absolute: %w", err)}
-			break
-		}
-		pr.abs = append(pr.abs, ra)
-	}
+	pr := newProtectedRoots(slices.Clone(roots), now)
 	protectedRootCache[key] = pr
 	return pr
 }
@@ -211,13 +253,13 @@ func protectedRootsFor(roots []string) *protectedRoots {
 func (pr *protectedRoots) resolved() ([]string, error) {
 	pr.once.Do(func() {
 		out := make([]string, 0, len(pr.abs))
-		for _, r := range pr.abs {
+		for i, r := range pr.abs {
 			rr, err := ResolveExistingPrefix(r)
 			if err != nil {
-				pr.resErr = &RootError{Root: r, Err: err}
+				pr.resErr = &RootError{Root: pr.raw[i], Err: err}
 				return
 			}
-			reportedRootFailures.Delete(r)
+			clearRootFailure(pr.raw[i])
 			out = append(out, rr)
 		}
 		pr.resolve = out
@@ -230,9 +272,12 @@ func (pr *protectedRoots) resolved() ([]string, error) {
 // roots (import paths, the folders of the iTunes library files), inside an
 // "iTunes Media" folder, or inside a ".failed/" quarantine folder. It is the
 // shared test for the purge, the organizer and the metadata write-back. It is
-// NOT the only protected-path check: the Deluge seeding-folder list
-// (deluge.ProtectedPathCache) is a separate check the callers consult
-// alongside it, and it still compares paths as spelled.
+// NOT the only protected-path check: deluge.ProtectedPathCache is a separate
+// check the callers consult alongside it, and it still compares paths as
+// spelled. It holds both the Deluge seeding-folder list and
+// config.ProtectedPaths (the statically configured protected prefixes), so a
+// static prefix configured through a symlink, or a file reached through a link
+// into a Deluge or static folder, is not seen by it.
 //
 // The path is tested in the spelling it is given AND in its symlink-resolved
 // spelling, and each root likewise. A file reached through a link that points
@@ -247,7 +292,10 @@ func (pr *protectedRoots) resolved() ([]string, error) {
 // is, whatever resolution does.
 //
 // The folders are made absolute and resolved once per protectedRootCacheTTL for
-// a given list, not once per call; resolving the path itself is per call.
+// a given list, not once per call; resolving the path itself is per call. A
+// link that is re-pointed inside that window is therefore not seen until it
+// ends, which can only make this answer protect LESS than a fresh look, so a
+// caller that deletes uses UnderProtectedPathUncached instead.
 //
 // Fail closed: if the path or a root cannot be resolved for a reason other than
 // not-exist (a link cycle, a permission error), protected is true and err says
@@ -258,11 +306,26 @@ func (pr *protectedRoots) resolved() ([]string, error) {
 // the checks this replaces did, so an empty root means the working directory
 // rather than "no root"; callers skip a root that is not configured.
 func UnderProtectedPath(p string, roots []string) (protected bool, err error) {
+	return underProtectedPath(p, protectedRootsFor(roots))
+}
+
+// UnderProtectedPathUncached is UnderProtectedPath with the folders made
+// absolute and resolved afresh for this call, and nothing kept. It is for a
+// caller that deletes: UnderProtectedPath can use folders resolved up to
+// protectedRootCacheTTL ago, so a link re-pointed into (or out of) a protected
+// folder in that window changes the answer of a fresh look but not of the
+// cached one, and for a deletion a stale "not protected" is the one wrong answer
+// that loses a file. The price is a stat walk per folder per call. A failure in
+// a folder is reported and throttled exactly as in UnderProtectedPath.
+func UnderProtectedPathUncached(p string, roots []string) (protected bool, err error) {
+	return underProtectedPath(p, newProtectedRoots(slices.Clone(roots), time.Now()))
+}
+
+func underProtectedPath(p string, set *protectedRoots) (protected bool, err error) {
 	abs, aerr := filepath.Abs(p)
 	if aerr != nil {
 		return true, fmt.Errorf("make %q absolute: %w", p, aerr)
 	}
-	set := protectedRootsFor(roots)
 	if set.absErr != nil {
 		return true, set.absErr
 	}
