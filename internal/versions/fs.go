@@ -1,7 +1,7 @@
 // file: internal/versions/fs.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c2a1f8d-4b3e-4f70-a9c5-2e8d0f1b9a47
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 //
 // Filesystem primitives for the `.versions/{id}/` layout (spec 3.1).
 //
@@ -26,11 +26,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
 // VersionsDirName is the hidden directory inside a book's folder
-// where alt-version files live.
-const VersionsDirName = ".versions"
+// where alt-version files live. Declared in pathutil so internal/database,
+// which cannot import this package, recognises a slot by the same name.
+const VersionsDirName = pathutil.VersionsDirName
 
 // VersionsDir returns the absolute path to the .versions/ directory
 // for a book whose primary file lives at bookDir. Does NOT create

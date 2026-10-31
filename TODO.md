@@ -401,7 +401,7 @@ into one of the curated sections below, is a normal direct edit.
       concurrent creates of two spellings. Until then the credit census after a
       rescan is the check, and re-running the backfill finds the book again.
 
-- [ ] **TODO-VERSION-PURGE-GUARD-FOLLOWUPS** Two follow-ups to the trash-purge
+- [x] **TODO-VERSION-PURGE-GUARD-FOLLOWUPS** Two follow-ups to the trash-purge
       guard (`internal/versions/serve_guard.go`, PR #4215) that were left out of
       that PR on purpose.
       (1) Another book's symlink-strategy link. When another live book holds a

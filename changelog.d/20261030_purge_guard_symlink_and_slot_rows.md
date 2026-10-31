@@ -1,0 +1,4 @@
+### Fixed
+
+- The trash purge no longer deletes a file that another live book reaches through a symlink. The served-file guard compared a link's own path, not what it points at, so a book organized with the symlink strategy could lose the file its link played. It now indexes every other live book's rows and file paths by what they resolve to (link chains and linked folders included), keeps the version when one resolves to a file of the version, and refuses the whole purge when a path cannot be resolved.
+- A trashed or alternate version's `.versions/<id>/` rows are no longer counted in the player timeline, the ABS item view, the stored duration and size of the book, or the duration re-extract op's total. `SplitOwnFolderFiles` sets them aside as `Slots` and keeps them out of the copy matching.

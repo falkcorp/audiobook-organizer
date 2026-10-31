@@ -1,7 +1,7 @@
 // file: internal/database/book_own_folder.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 83d7e159-50f7-47e5-8303-8d8212c3bd8e
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package database
 
@@ -65,19 +65,26 @@ type OwnFolderSplit struct {
 	// Dir is the book's own folder, or "" when Book.FilePath gives none.
 	Dir string
 	// Own are the rows inside Dir (recursively: CD1/, CD2/ subfolders count),
-	// copies included.
+	// copies included, version-slot rows (Slots) excluded.
 	Own []BookFile
 	// Copies are the rows excluded from the sums: every row of a copy cluster
 	// except its keeper, inside or outside Dir.
 	Copies []BookFile
 	// Others are the rows outside Dir that are not copies. They count.
 	Others []BookFile
+	// Slots are the rows that live in a version slot, <book folder>/.versions/
+	// <version id>/: the files of a trashed or alternate version, which the
+	// player does not play. They are in none of Own, Copies and Others, they
+	// never take part in the copy clustering, and Counted drops them.
+	Slots []BookFile
 
 	// outside is how many rows lie outside Dir, copies included (0 when Dir
 	// is "").
 	outside int
 	// copyIdx are the Copies' indexes in the files slice that was split.
 	copyIdx []int
+	// slotIdx are the Slots' indexes in the files slice that was split.
+	slotIdx []int
 }
 
 // HasOutside reports whether any row lies outside the own folder.
@@ -98,14 +105,17 @@ func (s OwnFolderSplit) HasOwnBasis() bool {
 }
 
 // Counted returns the rows every sum over this book must use: files without
-// the Copies, in their original order. With no copies it returns files
-// unchanged.
+// the Copies and the Slots, in their original order. With neither it returns
+// files unchanged.
 func (s OwnFolderSplit) Counted(files []BookFile) []BookFile {
-	if len(s.Copies) == 0 {
+	if len(s.Copies) == 0 && len(s.Slots) == 0 {
 		return files
 	}
-	drop := make(map[int]bool, len(s.Copies))
+	drop := make(map[int]bool, len(s.copyIdx)+len(s.slotIdx))
 	for _, i := range s.copyIdx {
+		drop[i] = true
+	}
+	for _, i := range s.slotIdx {
 		drop[i] = true
 	}
 	out := make([]BookFile, 0, len(files)-len(drop))
@@ -117,17 +127,43 @@ func (s OwnFolderSplit) Counted(files []BookFile) []BookFile {
 	return out
 }
 
+// IsVersionSlotFile reports whether f lives in a version slot, the
+// .versions/<version id>/ folder where the files of a trashed or alternate
+// version are kept (internal/versions moves a version's files there when it
+// stops being the active one, and back when it is promoted). Such a file is not
+// part of what the book plays, wherever the book's own folder is: either it
+// lies under a .versions/ directory below dir, or its path carries the slot of
+// the very version its row belongs to. The second test does not depend on dir,
+// so a stale or empty Book.FilePath does not make a slot row look like an
+// ordinary one. dir may be "".
+func IsVersionSlotFile(f BookFile, dir string) bool {
+	if pathutil.HasSlotPair(f.FilePath, f.VersionID) {
+		return true
+	}
+	return dir != "" && pathutil.UnderVersionsDir(f.FilePath, dir)
+}
+
 // SplitOwnFolderFiles partitions files by the book's own folder and marks the
 // copies. It keeps the order of files within each part. book may be nil: the
 // copies are still found, there is only no own folder to prefer a keeper in.
+//
+// Rows in a version slot (IsVersionSlotFile) are set aside first, as Slots:
+// they are not the book's own files, they are not outside it either, and they
+// are never compared against the other rows, so a slot row can neither be the
+// keeper that makes a live row a copy nor be counted itself.
 func SplitOwnFolderFiles(book *Book, files []BookFile) OwnFolderSplit {
 	var s OwnFolderSplit
 	if book != nil {
 		s.Dir = BookOwnFolder(book.FilePath, files)
 	}
 	inside := make([]bool, len(files))
+	slot := make([]bool, len(files))
 	for i := range files {
 		switch {
+		case IsVersionSlotFile(files[i], s.Dir):
+			slot[i] = true
+			s.Slots = append(s.Slots, files[i])
+			s.slotIdx = append(s.slotIdx, i)
 		case s.Dir == "":
 		case pathutil.IsWithin(files[i].FilePath, s.Dir):
 			inside[i] = true
@@ -136,9 +172,10 @@ func SplitOwnFolderFiles(book *Book, files []BookFile) OwnFolderSplit {
 			s.outside++
 		}
 	}
-	isCopy := markBookFileCopies(files, inside, s.HasOwnBasis())
+	isCopy := markBookFileCopies(files, inside, slot, s.HasOwnBasis())
 	for i := range files {
 		switch {
+		case slot[i]:
 		case isCopy[i]:
 			s.Copies = append(s.Copies, files[i])
 			s.copyIdx = append(s.copyIdx, i)
@@ -161,18 +198,22 @@ func OwnFolderFiles(book *Book, files []BookFile) []BookFile {
 // row. Candidates come from two buckets (hash; copy-normalized name + size)
 // rather than every pair: the ABS item view runs this for every book it
 // renders, and some books hold ~1,500 rows. crossDir false restricts matches
-// to rows in the same directory.
-func markBookFileCopies(files []BookFile, inside []bool, crossDir bool) []bool {
+// to rows in the same directory. Rows with slot[i] set are left out entirely:
+// they are neither compared nor marked.
+func markBookFileCopies(files []BookFile, inside, slot []bool, crossDir bool) []bool {
 	isCopy := make([]bool, len(files))
 	if len(files) < 2 {
 		return isCopy
 	}
-	order := make([]int, len(files))
+	order := make([]int, 0, len(files))
 	// frozen is computed once here, not in the comparator: the sort compares
 	// each row O(log n) times and the predicate allocates.
 	frozen := make([]bool, len(files))
-	for i := range order {
-		order[i] = i
+	for i := range files {
+		if slot[i] {
+			continue
+		}
+		order = append(order, i)
 		frozen[i] = pathutil.UnderFrozenITunesTree(files[i].FilePath)
 	}
 	sort.SliceStable(order, func(a, b int) bool {
