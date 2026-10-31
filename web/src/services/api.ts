@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.205.0
+// version: 2.206.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -7884,6 +7884,48 @@ export async function startOptimize(): Promise<{ operation_id: string }> {
       'maintenance.library-optimize',
       {},
       'Failed to start optimize operation'
+    );
+    return { operation_id: id };
+  });
+}
+
+// ── Metadata provider throttle holds ──────────────────────────────────────────
+
+/** One active provider hold, as GET /metadata/providers/throttles serves it. */
+export interface ProviderThrottle {
+  provider_id: string;
+  reason: string;
+  detail?: string;
+  until: string;
+  set_at?: string;
+  /** Server-computed, so the UI never does clock arithmetic against `until`. */
+  seconds_remaining: number;
+}
+
+/** Lists the metadata providers currently held (quota, auth or rate-limit). */
+export async function getProviderThrottles(): Promise<ProviderThrottle[]> {
+  const response = await apiFetch(`${API_BASE}/metadata/providers/throttles`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to load provider throttles');
+  }
+  const body = await response.json();
+  const payload = body?.data ?? body;
+  return (payload?.throttles as ProviderThrottle[] | undefined) ?? [];
+}
+
+/**
+ * Starts maintenance.throttle-reset for real (dry_run=false). `provider` scopes
+ * it to one hold; omitted, it releases every active hold. The op is preview by
+ * default, so dry_run is always sent explicitly.
+ */
+export async function startThrottleReset(provider?: string): Promise<{ operation_id: string }> {
+  const params: Record<string, unknown> = { dry_run: false };
+  if (provider) params.provider = provider;
+  return wrapTrigger('maintenance.throttle-reset', async () => {
+    const { id } = await triggerOp(
+      'maintenance.throttle-reset',
+      params,
+      'Failed to start throttle reset'
     );
     return { operation_id: id };
   });

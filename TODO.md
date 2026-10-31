@@ -1080,7 +1080,7 @@ into one of the curated sections below, is a normal direct edit.
       them `ThrottleRegistry.Clear`/`ClearAll`. A quota or auth hold now ends
       on expiry or when a successful call releases it, and it survives restarts. Today the working manual exit is a single-book metadata lookup (it bypasses holds and releases any kind on success). Add a
       registered op (with a preview mode, per the owner's rule), not a route,
-      and give the planned Throttle panel a "reset now" button on top of it.
+      The Throttle panel's "reset now" button (System > Maintenance) is built on it.
 
 - [ ] **01-P81E-TAGSTORE** After 01-T1 merges, remove the whole author and series
       tag store surface: 16 methods (8 reader, 8 writer) across `AuthorTagReader`,
@@ -5133,7 +5133,7 @@ generate-on-behalf should force a short expiry / first-use rotation for safety.
 
 ## Provider throttling — follow-ups
 
-- [ ] **Throttle panel in the UI.** `GET /api/v1/metadata/providers/throttles` returns
+- [x] **Throttle panel in the UI.** (Done 2026-10-30: `ThrottlePanel` on System > Maintenance, 4h poll, per-provider Reset now and Reset all via `maintenance.throttle-reset`.) `GET /api/v1/metadata/providers/throttles` returns
   `provider_id`, `reason`, `detail`, `until` and `seconds_remaining`; the two `DELETE`
   resets (`.../throttles/{id}` and `.../throttles`) were retired behind 410 Gone in 01-P81f
   (no caller existed), so a "reset now" control needs the THROTTLE-RESET-OP op (a
