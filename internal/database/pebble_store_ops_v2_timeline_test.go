@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package database
 
@@ -772,13 +772,19 @@ func TestOpsV2Timeline_RollbackForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Missing != 2 || res.Orphans != 1 {
-		t.Fatalf("boot 3 reconcile = %+v, want missing 2 (resumed open key, waiting open key), orphans 1 (resumed stale done key)", res)
+	if res.Missing != 3 || res.Orphans != 1 || res.Waiting != 1 {
+		t.Fatalf("boot 3 reconcile = %+v, want missing 3 (resumed open key, waiting open key, waiting wait key), orphans 1 (resumed stale done key), waiting 1", res)
 	}
 	if !p3.OpsV2TimelineIndexTrusted() {
 		t.Fatal("boot 3 not trusted after its reconcile")
 	}
 	check("boot 3 after reconcile (index)")
+	if got := timelineKeys(t, p3, opv2WaitPrefix); len(got) != 1 || got[0] != string(opv2WaitKey(waiting)) {
+		t.Fatalf("wait keys after boot 3 = %v, want only %s", got, opv2WaitKey(waiting))
+	}
+	if rows, err := p3.ListWaitingDepsOps(); err != nil || len(rows) != 1 || rows[0].ID != waiting {
+		t.Fatalf("ListWaitingDepsOps after boot 3 = %v %v, want [%s]", rowIDs(rows), err, waiting)
+	}
 }
 func TestOpsV2Timeline_SweepHollowRemovesDoneKey(t *testing.T) {
 	p := newTimelineStore(t)
@@ -996,7 +1002,9 @@ var opv2OpKeyAllowlist = map[string]string{
 	"internal/database/pebble_store_ops_v2_status_lookup.go:(*PebbleStore).HasOperationV2WithStatus": "read", // 04-P6 boot check for an interrupted_ask transcode; read-only scan
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListQueuedOperationsV2":                 "read",
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListResumableOperationsV2":              "read",
-	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).ListWaitingDepsOps":                     "read",
+	"internal/database/pebble_store_ops_v2_wait.go:(*PebbleStore).listWaitingDepsOpsScan":            "read", // the full scan ListWaitingDepsOps serves until the boot reconcile; the wait index's oracle
+	"internal/database/pebble_store_ops_v2_wait.go:(*PebbleStore).listWaitingDepsOpsIndexed":         "read", // point-reads the rows the opv2:wait: keys name, from one snapshot
+	"internal/database/pebble_store_ops_v2_wait.go:(*PebbleStore).waitKeyIsStale":                    "read", // live status check behind the wait-key heal and the reconcile's orphan check
 	"internal/database/pebble_store_ops_v2.go:(*PebbleStore).RepairOpsV2MissingCompletedAt":          "read",
 	"internal/database/pebble_store_ops_v2_timeline.go:getOpV2FromSnapshot":                          "read",
 	"internal/database/pebble_store_ops_v2_timeline.go:(*PebbleStore).listOperationsV2SinceIndexed":  "read",
@@ -1523,6 +1531,7 @@ func TestRawKeyEntryPointsRefuseOpRows(t *testing.T) {
 		strings.Join([]string{"opv2", "op", "01RAW0000000000000000000000"}, ":"),
 		strings.Join([]string{"opv2", "open", "01RAW0000000000000000000000"}, ":"),
 		string(opv2DoneKey(time.Now(), "01RAW0000000000000000000000")),
+		string(opv2WaitKey("01RAW0000000000000000000000")),
 	}
 	for _, key := range refused {
 		if err := p.SetRaw(key, []byte("{}")); !errors.Is(err, errOpv2OpRawKey) {
@@ -1552,7 +1561,7 @@ func TestRawKeyEntryPointsRefuseOpRows(t *testing.T) {
 		}
 	}
 	// Exact prefixes only: neighbouring families are not refused.
-	for _, key := range []string{"opv2:opx:1", "opv2:openly:1", "opv2:doner:1", "opv2:q:1", "opv2:op"} {
+	for _, key := range []string{"opv2:opx:1", "opv2:openly:1", "opv2:doner:1", "opv2:waitx:1", "opv2:q:1", "opv2:op"} {
 		if err := p.SetRaw(key, []byte("v")); err != nil {
 			t.Fatalf("SetRaw(%q) refused, want allowed: %v", key, err)
 		}

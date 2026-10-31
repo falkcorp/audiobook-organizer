@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.34.1
+// version: 3.35.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -16,13 +16,16 @@
 //	opv2:strike:{def_id}:{ts_nano:020d}:{op_id}     → JSON(OpStrikeV2Row)
 //	opv2:open:{op_id}                               → ""      (timeline: CompletedAt == nil)
 //	opv2:done:{completed_nanos:020d}:{op_id}        → ""      (timeline: CompletedAt != nil)
+//	opv2:wait:{op_id}                               → ""      (Status == waiting_deps; pebble_store_ops_v2_wait.go)
 //	opv2:row:{op_id}:{row_id}                       → bytes   (OpRowStore: a plan row; pebble_store_op_rows.go)
 //	opv2:rowix:{op_id}:{row_id}                     → bytes   (OpRowStore: that row's small index entry)
 //
 // The open/done timeline index (pebble_store_ops_v2_timeline.go) is staged by
 // every opv2:op: writer in the row's own batch (stageOpRow), and is read by
 // ListOperationsV2Since once this boot's ReconcileOpsV2TimelineIndex has
-// completed (the index is untrusted at every boot). No raw Set of an opv2:op: key is allowed;
+// completed (the index is untrusted at every boot). The waiting-deps index is
+// staged by the same call and trusted by the same reconcile; it serves
+// ListWaitingDepsOps. No raw Set of an opv2:op: key is allowed;
 // TestOpsV2RowWritesGoThroughStageOpRow enforces it.
 
 package database
@@ -187,7 +190,7 @@ func (p *PebbleStore) InsertOperationV2(row OperationV2Row) (err error) {
 			if err != nil {
 				return err
 			}
-			staleKeys = append(doneKeys, opv2OpenKey(row.ID))
+			staleKeys = append(doneKeys, opv2OpenKey(row.ID), opv2WaitKey(row.ID))
 		}
 	} else if !errors.Is(gerr, pebble.ErrNotFound) {
 		return gerr
@@ -637,7 +640,7 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	for _, id := range hollow {
-		for _, key := range [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id)} {
+		for _, key := range [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id), opv2WaitKey(id)} {
 			if err := batch.Delete(key, nil); err != nil {
 				return 0, err
 			}
@@ -916,7 +919,7 @@ func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (st
 
 	batch := p.db.NewBatch()
 	defer batch.Close()
-	keys := [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id)}
+	keys := [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id), opv2WaitKey(id)}
 	if queueKey != nil {
 		keys = append(keys, queueKey)
 	}
@@ -1040,7 +1043,7 @@ func stageOpV2RowWrite(b *GatedBatch, prev, row *OperationV2Row) ([]byte, error)
 func stageOpV2RowDelete(b *GatedBatch, row *OperationV2Row) error {
 	id := row.ID
 	for _, key := range [][]byte{
-		opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id),
+		opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id), opv2WaitKey(id),
 		opv2QueueKey(row.Priority, row.QueuedAt, id),
 	} {
 		if err := b.Delete(key, nil); err != nil {
@@ -1310,33 +1313,6 @@ func recoverPebbleClosed(op string, errp *error) {
 			"op", op, "error", recErr)
 		*errp = fmt.Errorf("%s: %w", op, recErr)
 	}
-}
-
-// ListWaitingDepsOps returns all OperationV2Row entries whose Status is
-// "waiting_deps".  No status index exists, so this scans all opv2:op: rows.
-func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
-	defer recoverPebbleClosed("ListWaitingDepsOps", &err)
-	prefix := []byte("opv2:op:")
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: prefixEnd(prefix),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	var result []OperationV2Row
-	for iter.First(); iter.Valid(); iter.Next() {
-		var row OperationV2Row
-		if err := json.Unmarshal(iter.Value(), &row); err != nil {
-			continue
-		}
-		if row.Status == "waiting_deps" {
-			result = append(result, row)
-		}
-	}
-	return result, iter.Error()
 }
 
 // isResumableV2Status reports whether a v2 operation row in this status should be
