@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_memory_test.go
 // version: 1.2.2
 // guid: 5b0f7c1e-2d64-4f0b-9a57-3c8e1d6a9b42
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package transcribe
 

@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
 // version: 1.30.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package transcribe
 

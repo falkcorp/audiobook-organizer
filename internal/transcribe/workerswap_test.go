@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerswap_test.go
 // version: 1.2.1
 // guid: 2c80f6dd-e49e-4cf4-acef-60b49489f7aa
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package transcribe
 
