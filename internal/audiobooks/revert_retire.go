@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 070656eb-69ce-41aa-8f2b-19a5ca874882
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -189,9 +189,9 @@ func (rs *RevertService) revertBookVersionCreate(c *database.OperationChange, pl
 // one record is made per reverted row, however the revert reached it (a whole
 // operation, a scoped revert, the combine undo's retire reversal).
 //
-// The retired-versions fixer is the only production writer of these versions
-// (Writer.RetireVersion, the other, has no caller outside tests), so a version
-// create row is the fixer's retire.
+// The retired-versions fixer is the only production caller of
+// Writer.RetireVersion, the only writer of these versions, so a version create
+// row is the fixer's retire.
 //
 // The record is a label, not a veto (the shell stays plannable), so a failure
 // to write it is logged and never fails or rolls back a revert whose rows are

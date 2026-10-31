@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_test.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: 7cdf45d6-39e8-4d1b-9e70-6ed21b7ada58
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -310,6 +310,104 @@ func TestRevertRetire_VersionDeleteWaitsForItsRows(t *testing.T) {
 	v, gerr := fx.st.GetBookVersion("ver-dep")
 	require.NoError(t, gerr)
 	assert.NotNil(t, v, "nothing was deleted")
+}
+
+// changeOf returns the non-voided journal row of op with the given type (and,
+// when field is not "", that field).
+func (fx *retireRevertFx) changeOf(t *testing.T, op, changeType, field string) *database.OperationChange {
+	t.Helper()
+	changes, err := fx.st.GetOperationChanges(op)
+	require.NoError(t, err)
+	for _, c := range changes {
+		if c.ChangeType == changeType && !c.Voided && (field == "" || c.FieldName == field) {
+			return c
+		}
+	}
+	require.FailNow(t, "no journal row", "op %s type %s field %s", op, changeType, field)
+	return nil
+}
+
+// Reverting a book_version_create row is refused while any row still names the
+// version (a typed dependent-not-reverted refusal; the version survives), and
+// goes through once the rows' own retire rows are reverted, the only order that
+// leaves the version empty.
+func TestRevertRetire_VersionCreateRefusedWhileRowsRemainThenSucceeds(t *testing.T) {
+	fx := newRetireRevertFx(t)
+	fx.retire(t, fx.writer("op-order"), "ver-order")
+	rs := NewRevertService(fx.st)
+	create := fx.changeOf(t, "op-order", undo.ChangeTypeBookVersionCreate, "")
+
+	err := rs.revertChangeIn(create, nil)
+	require.Error(t, err)
+	var ref *undo.ReferentError
+	require.ErrorAs(t, err, &ref, "a typed refusal, not a bare store error")
+	assert.Equal(t, undo.ReasonDependentNotReverted, ref.Reason)
+	assert.Contains(t, ref.Detail, "ver-order")
+	v, gerr := fx.st.GetBookVersion("ver-order")
+	require.NoError(t, gerr)
+	require.NotNil(t, v, "the version survives a refused revert")
+
+	// One row back is still not enough.
+	rowID := fx.rows[0].ID
+	require.NoError(t, rs.revertChangeIn(fx.changeOf(t, "op-order", undo.ChangeTypeBookFileRetire, "book_file:"+rowID), nil))
+	err = rs.revertChangeIn(create, nil)
+	require.ErrorAs(t, err, &ref)
+	assert.Equal(t, undo.ReasonDependentNotReverted, ref.Reason, "one row still names the version")
+	v, gerr = fx.st.GetBookVersion("ver-order")
+	require.NoError(t, gerr)
+	require.NotNil(t, v)
+
+	require.NoError(t, rs.revertChangeIn(fx.changeOf(t, "op-order", undo.ChangeTypeBookFileRetire, "book_file:"+fx.rows[1].ID), nil))
+	require.NoError(t, rs.revertChangeIn(create, nil), "empty now: the create reverts")
+	v, gerr = fx.st.GetBookVersion("ver-order")
+	require.NoError(t, gerr)
+	assert.Nil(t, v)
+}
+
+// A row journaled by ANOTHER op keeps the version alive: reverting the op that
+// created the version restores that op's own rows, refuses the create (typed,
+// reported in the result as a failure, the rest of the op still reverted), and
+// leaves the other op's row retired under the version it still names. Once that
+// op is reverted too, a repeat of the first revert deletes the empty version.
+func TestRevertRetire_VersionCreateRefusedWhileAnotherOpsRowRemains(t *testing.T) {
+	fx := newRetireRevertFx(t)
+	const version = "ver-two-ops"
+	// Op A creates the version and retires the first row into it.
+	require.NoError(t, fx.writer("op-a").RetireVersion(repairs.RetireSpec{
+		Shell: fx.shell.ID, Holder: fx.holder.ID, VersionID: version, FileIDs: []string{fx.rows[0].ID},
+		Format: "mp3", Source: "retired_book", Now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC),
+	}))
+	// Op B retires the second row into the same version: it finds the version,
+	// journals no create for it, and is not part of op A.
+	require.NoError(t, fx.writer("op-b").RetireVersion(repairs.RetireSpec{
+		Shell: fx.shell.ID, Holder: fx.holder.ID, VersionID: version, FileIDs: []string{fx.rows[1].ID},
+		Format: "mp3", Source: "retired_book",
+	}))
+
+	res, err := NewRevertService(fx.st).RevertOperation("op-a")
+	require.ErrorContains(t, err, "partially reverted")
+	require.NotNil(t, res)
+	assert.Equal(t, 1, res.Failed, "the create is refused: %+v", res)
+	assert.Equal(t, 1, res.RestoredTypes[undo.ChangeTypeBookFileRetire], "the rest of the op went on: %+v", res)
+	v, gerr := fx.st.GetBookVersion(version)
+	require.NoError(t, gerr)
+	require.NotNil(t, v, "the version survives while op B's row sits under it")
+	opB, gerr := fx.st.GetBookFileByID(fx.holder.ID, fx.rows[1].ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, opB)
+	assert.True(t, opB.Retired, "op B's row is untouched")
+	assert.Equal(t, version, opB.VersionID)
+	opA, gerr := fx.st.GetBookFileByID(fx.shell.ID, fx.rows[0].ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, opA, "op A's own row is back on the shell")
+
+	_, err = NewRevertService(fx.st).RevertOperation("op-b")
+	require.NoError(t, err)
+	res, err = NewRevertService(fx.st).RevertOperation("op-a")
+	require.NoError(t, err, "%+v", res)
+	v, gerr = fx.st.GetBookVersion(version)
+	require.NoError(t, gerr)
+	assert.Nil(t, v, "empty now: the repeat deletes it")
 }
 
 func TestRevertRetire_RehomeIsReversedBeforeTheRetireRows(t *testing.T) {
