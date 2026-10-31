@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_per_user_values_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d8f4a67-b1c3-4e90-85a6-7c0e3d9f1b52
 // last-edited: 2026-10-30
 
@@ -93,8 +93,9 @@ func TestHasRelativeDateFilter_SeesAnAlternationOfRelativeDates(t *testing.T) {
 // NIT 8 (S-D): "every caller of the search" includes the two substring fallbacks
 // that take over while the index is nil or rebuilding. They do not evaluate
 // per-user terms, but a query the index path would refuse is refused there too,
-// not answered as plain text. (An OR with a sibling, or a NOT over a group, is no
-// longer one of them: the index path evaluates it.)
+// not answered as plain text. An OR with a sibling, or a NOT over a group, over a
+// per-user term is evaluated by the index path, which the fallbacks cannot do, so
+// they refuse it too: it would otherwise be answered as text, silently.
 func TestSubstringFallbacksRefuseAPerUserTermTheIndexPathRefuses(t *testing.T) {
 	store := mocks.NewMockStore(t) // nothing may be searched for a refused query
 	svc := NewAudiobookService(store)
@@ -102,6 +103,8 @@ func TestSubstringFallbacksRefuseAPerUserTermTheIndexPathRefuses(t *testing.T) {
 		"read_status:completed OR title:Hush",
 		"read_status:completed",
 		"READ_STATUS:finished",
+		"title:Hush OR read_status:finished",
+		"-(read_status:finished title:Hush)",
 	} {
 		got, err := svc.GetAudiobooks(context.Background(), 20, 0, q, nil, nil, ListFilters{UserID: "alice"})
 		require.Error(t, err, "unscoped %q", q)

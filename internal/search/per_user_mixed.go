@@ -1,5 +1,5 @@
 // file: internal/search/per_user_mixed.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c0d40cc-1952-436b-8cb3-57af681bbbff
 // last-edited: 2026-10-30
 
@@ -21,6 +21,22 @@ import (
 // the viewer's rows translate with TranslateQuery, which returns a MixedQuery.
 var errPerUserNeedsRows = errors.New(
 	"search: per-user terms under an OR or a NOT over a group need the viewer's rows; translate with TranslateQuery")
+
+// CheckPerUserNeedsIndex refuses a query whose per-user terms need MixedQuery (see
+// perUserNeedsTree) for a caller that has no search index to evaluate it with: the
+// substring fallbacks that take over while the index is nil or rebuilding. They match
+// text and never evaluate a per-user term, so answering title:Hush OR read_status:finished
+// from them would be a silent wrong answer, the one this package exists to prevent.
+// The error is a *PerUserValueError, so every handler that answers a refused per-user
+// term with a 400 answers this one the same way. A query that needs no tree is nil.
+func CheckPerUserNeedsIndex(n Node) error {
+	if !perUserNeedsTree(n) {
+		return nil
+	}
+	return &PerUserValueError{Reason: "this search puts a read_status, progress_pct or last_played term under an OR " +
+		"or a NOT over a group, which needs the search index; the index is starting up or rebuilding, " +
+		"so try again in a moment"}
+}
 
 // MixedQuery is a query whose per-user terms (read_status, progress_pct,
 // last_played) sit under an OR with a sibling, or under a NOT over a group, so the

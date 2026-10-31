@@ -1,5 +1,5 @@
 // file: internal/search/per_user_shape_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: c7a2e5f8-31d6-4b94-8e07-6f1b3a9d5c42
 // last-edited: 2026-10-30
 
@@ -119,5 +119,36 @@ func TestTranslateQuery_TreeRouteRefusesAMalformedDateUpFront(t *testing.T) {
 	}
 	if _, err := TranslateQuery(ast, time.Now()); err == nil {
 		t.Error("TranslateQuery accepted last_played:>30d under an OR")
+	}
+}
+
+// The substring fallbacks have no index to evaluate a tree shape with, so they ask
+// CheckPerUserNeedsIndex, which refuses exactly the shapes that need the tree with an
+// error every handler answers as a 400.
+func TestCheckPerUserNeedsIndex_RefusesOnlyTheTreeShapes(t *testing.T) {
+	for q, refused := range map[string]bool{
+		"title:Hush OR read_status:finished":       true,
+		"read_status:finished OR title:Hush":       true,
+		"-(read_status:finished title:Hush)":       true,
+		"NOT (read_status:finished OR title:Hush)": true,
+		"read_status:finished title:Hush":          false,
+		"-read_status:finished":                    false,
+		"read_status:(finished|in_progress)":       false,
+		"title:Hush OR title:Knightfall":           false,
+		"-(title:Hush title:Knightfall)":           false,
+		"progress_pct:>10 AND last_played:*":       false,
+		"title:Hush":                               false,
+	} {
+		ast, err := ParseQuery(q)
+		if err != nil {
+			t.Fatalf("fixture %q does not parse: %v", q, err)
+		}
+		err = CheckPerUserNeedsIndex(ast)
+		if (err != nil) != refused {
+			t.Errorf("CheckPerUserNeedsIndex(%q) = %v, want refused=%v", q, err, refused)
+		}
+		if err != nil && (!IsPerUserQueryError(err) || !IsQueryTermError(err)) {
+			t.Errorf("CheckPerUserNeedsIndex(%q) = %v, want an error the handlers answer as a 400", q, err)
+		}
 	}
 }

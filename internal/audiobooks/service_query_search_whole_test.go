@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query_search_whole_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: 8b4e1f27-3a96-4c05-b7d2-6e0a9c5f1d38
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -430,6 +430,8 @@ func TestSearchHasPerUserFilters_IsDecidedByTheFieldNamesNotByTranslation(t *tes
 		"read_status:finished tag:noir":                 true,
 		"read_status:finished (title:Hush OR tag:noir)": true, // refused by the search, still per-user
 		"read_status:finished OR tag:noir":              true,
+		"title:Hush OR read_status:finished":            true, // evaluated per viewer, so never cached
+		"-(read_status:finished title:Hush)":            true,
 		"-read_status:finished":                         true,
 		"Read_Status:finished":                          true, // the search refuses a capitalised name; it is still per-user
 		"READ_STATUS:(finished|in_progress)":            true,
