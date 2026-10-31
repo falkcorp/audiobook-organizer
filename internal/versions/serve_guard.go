@@ -1,7 +1,7 @@
 // file: internal/versions/serve_guard.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: b3e71d58-2a94-4c06-8f1e-5d9a07c4e621
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package versions
 
@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -35,7 +35,10 @@ import (
 //     FilePath names, or any non-retired row of it whose version is not
 //     trashed or purged (alt versions included, because the player streams rows
 //     regardless of version): deluge and import folders are shared between
-//     books.
+//     books;
+//   - or ANOTHER live book reaches it through a symlink: a row or FilePath of
+//     it that is a link resolving to the file (or, for a FilePath, to a folder
+//     above it), found by the link index in serve_guard_links.go.
 //
 // When the version's own book is itself trashed, or no longer exists, it serves
 // nothing, so only the ANOTHER-live-book rules apply.
@@ -71,6 +74,12 @@ type servedGuard struct {
 	// others caches, per other book, whether it is live and which of its
 	// versions are dead (trashed or purged).
 	others map[string]*otherBook
+
+	// link is the index of the paths other live books reach through a symlink
+	// (serve_guard_links.go), built on first use.
+	linkOnce sync.Once
+	link     linkIndex
+	linkErr  error
 }
 
 type otherBook struct {
@@ -274,15 +283,9 @@ func (g *servedGuard) serves(p string) (bool, error) {
 }
 
 // hasSlotPair reports whether p has the consecutive path parts
-// .versions/{verID}.
+// .versions/{verID} (pathutil.HasSlotPair, shared with internal/database).
 func hasSlotPair(p, verID string) bool {
-	parts := strings.Split(filepath.ToSlash(filepath.Clean(p)), "/")
-	for i := 0; i+1 < len(parts); i++ {
-		if parts[i] == VersionsDirName && parts[i+1] == verID {
-			return true
-		}
-	}
-	return false
+	return pathutil.HasSlotPair(p, verID)
 }
 
 // inVersionSlot reports whether p lies inside the version's own slot,
@@ -312,17 +315,8 @@ func (g *servedGuard) ownBookServes(p string) bool {
 	if _, ok := g.exact[c]; ok {
 		return true
 	}
-	if g.folder != "" && pathutil.IsWithin(c, g.folder) {
-		rest := strings.TrimPrefix(c, g.folder)
-		inSlot := false
-		for _, part := range strings.Split(rest, string(filepath.Separator)) {
-			if part == VersionsDirName {
-				inSlot = true
-			}
-		}
-		if !inSlot {
-			return true
-		}
+	if g.folder != "" && pathutil.IsWithin(c, g.folder) && !pathutil.UnderVersionsDir(c, g.folder) {
+		return true
 	}
 	// Same file under another name (hard link, or a symlink the resolution
 	// above could not follow).
@@ -373,7 +367,9 @@ func (g *servedGuard) otherBookServes(p string) (bool, error) {
 			}
 		}
 	}
-	return false, nil
+	// Last, and only for a file nothing above vouches for: a row or FilePath of
+	// another live book that is a symlink to it (serve_guard_links.go).
+	return g.reachedByOtherBookLink(p)
 }
 
 func (g *servedGuard) other(bookID string) (*otherBook, error) {
