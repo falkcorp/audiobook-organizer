@@ -1,7 +1,7 @@
 // file: internal/server/service_layer_test.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -42,16 +42,16 @@ func TestConfigUpdateService_MaskSecrets(t *testing.T) {
 				OpenAIAPIKey: "sk-1234567890abcdef",
 			},
 			expected: config.Config{
-				OpenAIAPIKey: "sk-****cdef",
+				OpenAIAPIKey: "********ef",
 			},
 		},
 		{
-			name: "short secrets get masked to ****",
+			name: "short secrets get masked to eight asterisks",
 			config: config.Config{
 				OpenAIAPIKey: "short",
 			},
 			expected: config.Config{
-				OpenAIAPIKey: "****",
+				OpenAIAPIKey: "********",
 			},
 		},
 		{

@@ -1,7 +1,7 @@
 // file: internal/config/mask_remaining_secrets_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6d1730c3-5896-4dab-8d11-e541faca253f
-// last-edited: 2026-10-17
+// last-edited: 2026-10-30
 
 package config
 
@@ -17,12 +17,12 @@ import (
 
 // The four secrets GET /api/v1/config used to return in full cleartext.
 //
-// Every fixture is obviously fake and at least 8 characters, so
-// database.MaskSecret keeps a 3-char prefix and a 4-char suffix instead of
-// collapsing to "****". That matters: a short fixture masks to "****" for
-// EVERY field, and a restore test would then pass while proving nothing about
-// which field got which value back. These four produce four distinct sentinels
-// ("ghs****0001", "goo****0002", ...), so a restore that puts a neighbour's
+// Every fixture is obviously fake and at least 16 characters, so
+// database.MaskSecret shows the last two characters instead of collapsing to
+// "********". That matters: a short fixture masks identically for EVERY field,
+// and a restore test would then pass while proving nothing about which field
+// got which value back. These four produce four distinct sentinels
+// ("********01", "********02", ...), so a restore that puts a neighbour's
 // value back fails.
 const (
 	fakeGithubClientSecret = "ghs-test-secret-github-0001"
