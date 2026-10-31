@@ -1532,11 +1532,11 @@ type opStatusLookup interface {
 // in its producer's select, and the reconcile checks it every 64 rows of the
 // check and per 2,000-row reindex chunk.
 //
-// Restart mid-run (04-P6): external-id-backfill, movement-atom-cleanup and
-// malformed-m4b-remux are ResumeRestart. Each checkpoints a cursor and yields
-// before its deadline (registry.ErrContinueInPlace), so a restart, or a run too
-// big for its Timeout, continues from the cursor under the same operation
-// instead of starting over. The opchange rebuild, the atpath backfill and the
+// Restart mid-run (04-P6, 04-P7): external-id-backfill, movement-atom-cleanup,
+// malformed-m4b-remux and the opchange ensure are ResumeRestart. Each keeps a
+// cursor and yields before its deadline (registry.ErrContinueInPlace), so a
+// restart, or a run too big for its Timeout, continues from the cursor under
+// the same operation instead of starting over. The atpath backfill and the
 // hash-index repair are ResumeDrop: they are dropped and the next boot enqueues
 // them again. The activity reconcile is
 // ResumeRestart: an interrupted run resumes with the same params, and since a
