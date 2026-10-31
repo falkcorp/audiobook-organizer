@@ -1,11 +1,14 @@
 // file: internal/decisions/reasons.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c2a65f18-d907-4e34-8b7a-3f10e6d95a82
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package decisions
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Reason is one entry of the reject-reason taxonomy. The API serves the list
 // so no client hard-codes it. (A Predicate for the rule-suggestion loop is a
@@ -69,6 +72,17 @@ var rewriteReasons = []Reason{
 	{"proposed_value_wrong", "The proposed value is wrong"},
 }
 
+// retiredVersionsReasons are the codes of a reject of the retired-versions
+// fixer's proposal (OpKindRetiredVersions): "retire this trashed shell's file
+// rows onto the live book that already holds the same files". The reject is
+// about the shell, not a field value, so it has its own list on top of the
+// common and `repairs:` ones. `other` is already common and is not repeated.
+var retiredVersionsReasons = []Reason{
+	{"shell_is_distinct_edition", "The shell is a distinct edition, not a duplicate"},
+	{"keep_both", "Keep both books"},
+	{"wrong_holder", "Wrong book to hold these files"},
+}
+
 // mergeShapedRepairs are the repairs fixers that propose merging books, so
 // they take the split-books taxonomy rather than the field-rewrite one.
 var mergeShapedRepairs = map[string]bool{
@@ -89,6 +103,11 @@ func Reasons(opKind string) []Reason {
 	switch {
 	case mergeShapedRepairs[opKind]:
 		extra = splitReasons
+	case opKind == OpKindRetiredVersions:
+		// Before the repairs: prefix case, which it also belongs to: the
+		// field-rewrite codes ("the current value is correct") still apply to a
+		// proposal that rewrites where a book's files live.
+		extra = append(slices.Clone(rewriteReasons), retiredVersionsReasons...)
 	case strings.HasPrefix(opKind, "repairs:"):
 		extra = rewriteReasons
 	case strings.HasPrefix(opKind, "authors:"):
