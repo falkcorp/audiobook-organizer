@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -1056,22 +1056,50 @@ func (mfs *Service) CommitCandidateApply(id string, before, book *database.Book,
 //
 // batchID fixes the history batch id (ApplyOptions.BatchID); "" draws one.
 func (mfs *Service) commitApply(id string, before, book *database.Book, credits *AuthorCredits, source, batchID string, guard func(fresh *database.Book) error) (committed *database.Book, err error) {
+	return mfs.commitApplyUnderStripe(id, before, book, credits, source, batchID, guard, nil)
+}
+
+// commitApplyUnderStripe is commitApply with an optional underStripe step that
+// runs on the committed row while the book's field-state stripe
+// (database.LockMetadataState) is still held. The stripe is taken BEFORE the
+// book write and released straight after underStripe returns -- field-state
+// stripe first, then the book write stripe, the lock order the operation
+// revert uses -- so a concurrent revert of a repair either runs wholly before
+// this apply or wholly after the lock work underStripe does. The hand-picked
+// apply uses it to claim the repair locks of the fields it changed
+// (database.ClaimRepairLocksLocked): claimed after the commit with the stripe
+// released in between, a revert's lock lift landed in the gap and the claim
+// found nothing to claim (TODO CLAIM-LOCK-RACE). History is recorded after
+// the release: its writes are not part of the lock decision and nothing slow
+// runs under the stripe. underStripe must not take a field-state stripe
+// itself (not reentrant) and must do quick store work only. A nil underStripe
+// takes no stripe at all, so the other callers pay nothing.
+func (mfs *Service) commitApplyUnderStripe(id string, before, book *database.Book, credits *AuthorCredits, source, batchID string, guard func(fresh *database.Book) error, underStripe func(committed *database.Book)) (committed *database.Book, err error) {
 	defer func() {
 		if committed == nil {
 			mfs.revertAuthorCredits(id, credits, err)
 		}
 	}()
 	var mergedFields []string
-	updated, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
-		if guard != nil {
-			if gErr := guard(fresh); gErr != nil {
-				return gErr
-			}
+	updated, err := func() (*database.Book, error) {
+		if underStripe != nil {
+			defer database.LockMetadataState(id)()
 		}
-		var mErr error
-		mergedFields, mErr = database.MergeBookChanges(fresh, before, book)
-		return mErr
-	})
+		u, mErr := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
+			if guard != nil {
+				if gErr := guard(fresh); gErr != nil {
+					return gErr
+				}
+			}
+			var mergeErr error
+			mergedFields, mergeErr = database.MergeBookChanges(fresh, before, book)
+			return mergeErr
+		})
+		if mErr == nil && u != nil && underStripe != nil {
+			underStripe(u)
+		}
+		return u, mErr
+	}()
 	if err != nil {
 		return nil, fmt.Errorf("failed to update book: %w", err)
 	}

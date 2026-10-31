@@ -1,7 +1,7 @@
 // file: internal/metafetch/state_snapshot.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3a682c02-4109-4286-bcd5-ad66eecac28e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -24,7 +24,8 @@ import (
 // all go through WithStateSnapshot, which holds the book's field-state
 // stripe (database.LockMetadataState) from the read through the save. Every
 // other writer of the rows takes the same stripe: LockFields,
-// database.RecordUserOverrides, database.ClaimRepairLocks and the revert's
+// database.RecordUserOverrides, database.ClaimRepairLocksLocked (called by the
+// hand-picked apply inside its commit's hold) and the revert's
 // lock lift.
 
 // StateFromRows turns a book's field-state rows into the snapshot map. For
