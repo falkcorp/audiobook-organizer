@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useAuthorsLane.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: c9e4a1d7-5b83-4f26-a0d9-3e7b61f48a25
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 /**
  * The Authors & series lane's data layer: the Authors sub-view and the Series
@@ -1093,6 +1093,22 @@ export function useAuthorsLane(
     []
   );
 
+  /**
+   * Reclassifies one author as a narrator and waits for it. The route queues
+   * entities.author-reclassify (202 + op id) instead of moving the credits in the
+   * request, so the move can be undone; every caller goes on to a merge or a list
+   * edit that assumes it finished, so this resolves only when the op completed and
+   * throws when it failed. A thrown AbortError is the lane being left (see `abandoned`).
+   */
+  const reclassifyOne = useCallback(
+    async (id: number, life: AbortSignal): Promise<void> => {
+      const op = await withDeadline(api.reclassifyAuthorAsNarrator(id));
+      const done = await waitFor(op, life);
+      if (!done.ok) throw new Error(done.message);
+    },
+    [waitFor]
+  );
+
   const reload = useCallback(() => {
     setReloadToken((t) => t + 1);
   }, []);
@@ -1177,7 +1193,7 @@ export function useAuthorsLane(
       for (const id of narratorIds) {
         throwIfLeft(life);
         try {
-          await withDeadline(api.reclassifyAuthorAsNarrator(id));
+          await reclassifyOne(id, life);
           reclassified.push(id);
         } catch (e) {
           if (abandoned(e)) throw e;
@@ -1234,7 +1250,7 @@ export function useAuthorsLane(
       commitGroups((gs) => gs.filter((g) => g.key !== key));
       return outcome('merged', `Merged author(s) into "${name}"${suffix}`, name, reclassifyFailures);
     },
-    [abandoned, commitGroups, waitFor]
+    [abandoned, commitGroups, reclassifyOne, waitFor]
   );
 
   /**
@@ -1324,7 +1340,7 @@ export function useAuthorsLane(
           continue;
         }
         try {
-          await withDeadline(api.reclassifyAuthorAsNarrator(id));
+          await reclassifyOne(id, life);
           reclassified.push(id);
         } catch (e) {
           if (!abandoned(e)) {
@@ -1350,7 +1366,7 @@ export function useAuthorsLane(
           : '';
       return outcome('merged', `Merged ${folded.size} series into "${keepName}"${suffix}`, name, notDone.length);
     },
-    [abandoned, commitSeries, commitSeriesChoices, waitFor]
+    [abandoned, commitSeries, commitSeriesChoices, reclassifyOne, waitFor]
   );
 
   /** One group's merge, queued. Which list it edits depends on the sub-view that asked. */
@@ -1656,7 +1672,7 @@ export function useAuthorsLane(
               }
               try {
                 throwIfLeft(life);
-                await withDeadline(api.reclassifyAuthorAsNarrator(match.id));
+                await reclassifyOne(match.id, life);
               } catch (e) {
                 if (abandoned(e)) throw e;
                 failed += 1;
@@ -1685,7 +1701,7 @@ export function useAuthorsLane(
         () => markPending(key, false)
       );
     },
-    [abandoned, commitGroups, enqueue, markPending, timedOut, toast]
+    [abandoned, commitGroups, enqueue, markPending, reclassifyOne, timedOut, toast]
   );
 
   const resolveProduction = useCallback(

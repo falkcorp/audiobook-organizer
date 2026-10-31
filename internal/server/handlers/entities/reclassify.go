@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.4.1
+// version: 1.5.1
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
 // last-edited: 2026-10-30
 
@@ -76,8 +76,9 @@ type ReclassifyJournalStore interface {
 
 // ReclassifyJournal makes a reclassify undoable: each write is journaled under
 // OperationID BEFORE it is made (undo/author_merge.go), and voided when it is
-// refused. A book whose row cannot be journaled is not moved. The HTTP route has no
-// operation to journal under and passes none.
+// refused. A book whose row cannot be journaled is not moved. Both callers pass
+// one: entities.author-reclassify (the Authors view's button) and
+// ai.author-scan-apply each journal under their own operation id.
 type ReclassifyJournal struct {
 	OperationID string
 	Store       ReclassifyJournalStore
@@ -107,10 +108,20 @@ type ReclassifyOptions struct {
 	// SkipBook, when set, is asked about each book before its author credit is
 	// removed; a true answer leaves that book credited to the author (and the
 	// reason is reported in ReclassifyOutcome.Skipped). An error leaves the book
-	// alone too. The AI scan apply passes the author_name lock check; the
-	// handler, a person's explicit action, passes none.
+	// alone too. The AI scan apply passes the author_name lock check;
+	// entities.author-reclassify, a person's explicit action, passes none.
 	SkipBook func(bookID string) (skip bool, reason string, err error)
+	// Lease, when set, is called before each book's writes and must return true to
+	// proceed: it renews the scan stand-down the caller holds. False means the
+	// lease is gone and the scanner may be running, so the loop stops writing and
+	// the call returns ErrReclassifyLeaseLost WITHOUT deleting the author; what
+	// moved before stays moved and journaled.
+	Lease func() bool
 }
+
+// ErrReclassifyLeaseLost: ReclassifyOptions.Lease reported the scan stand-down
+// lost part way through, so the reclassify stopped before the author was deleted.
+var ErrReclassifyLeaseLost = errors.New("scan stand-down lease lost; reclassify stopped before the author was deleted")
 
 // ReclassifyOutcome is what a reclassify did. Skipped lists the books SkipBook
 // left alone; it is filled in on the error return too.
@@ -123,8 +134,9 @@ type ReclassifyOutcome struct {
 // ReclassifyAuthorAsNarrator turns an author into a narrator: every book credited
 // to the author (the trash included) loses that credit and gains a narrator credit
 // to a narrator of the same name, and the author row is deleted. It is the body of
-// POST /authors/:id/reclassify-as-narrator, and the AI scan apply runs the same
-// code for a narrator the suggestion flagged, so the two cannot diverge.
+// POST /authors/:id/reclassify-as-narrator (through the entities.author-reclassify
+// op it queues), and the AI scan apply runs the same code for a narrator the
+// suggestion flagged, so the two cannot diverge.
 //
 // A book the loop could not move is skipped; the delete is then refused with
 // database.ErrAuthorStillLinked rather than erasing the only credit it has.
@@ -157,6 +169,9 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 	var skipped []string
 	var unknown *database.Author // resolved at most once, on first need
 	for _, book := range books {
+		if opts.Lease != nil && !opts.Lease() {
+			return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped}, ErrReclassifyLeaseLost
+		}
 		if opts.SkipBook != nil {
 			skip, why, serr := opts.SkipBook(book.ID)
 			if serr != nil {
