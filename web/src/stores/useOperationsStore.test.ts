@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.test.ts
-// version: 2.7.0
+// version: 2.8.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-11
+// last-edited: 2026-10-30
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useOperationsStore } from './useOperationsStore';
@@ -72,6 +72,43 @@ describe('useOperationsStore', () => {
     expect(ops[0].id).toBe('op-1');
     expect(ops[0].message).toBe('Almost done');
     expect(ops[0].progress).toBe(75);
+  });
+
+  it('maps the server-computed can_finish flag to canFinish, false when absent', async () => {
+    const base: api.OperationV2 = {
+      id: 'op-asking',
+      def_id: 'dedup.full-scan',
+      plugin: 'dedup',
+      display_name: 'Dedup full scan',
+      status: 'interrupted_ask',
+      priority: 10,
+      notify_level: 1,
+      progress_current: 20,
+      progress_total: 40,
+      progress_message: null,
+      current_phase: null,
+      current_item: null,
+      actor_user_id: null,
+      parent_id: null,
+      queued_at: '2026-10-30T09:00:00Z',
+      started_at: '2026-10-30T09:01:00Z',
+      completed_at: null,
+      error_message: null,
+      resume_count: 0,
+      trace_id: null,
+      span_id: null,
+    };
+    vi.mocked(api.getOperationTimeline).mockResolvedValue([
+      { ...base, can_finish: true },
+      { ...base, id: 'op-asking-v2', def_id: 'library.scan' },
+    ]);
+
+    await useOperationsStore.getState().loadFromServer();
+
+    const byId = Object.fromEntries(
+      useOperationsStore.getState().activeOperations.map((o) => [o.id, o.canFinish])
+    );
+    expect(byId).toEqual({ 'op-asking': true, 'op-asking-v2': false });
   });
 
   it('stores parent_id and v2 fields from v2 operations', async () => {
