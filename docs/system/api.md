@@ -66,7 +66,7 @@ To obtain an API key:
 | `GET` | `/api/v1/authors` | List authors |
 | `GET` | `/api/v1/authors/:id` | Get author (`/books`, `/aliases`) |
 | `PUT` | `/api/v1/authors/:id/name` | Rename author |
-| `POST` | `/api/v1/authors/:id/split` · `/reclassify-as-narrator` · `/resolve-production` | Author repairs |
+| `POST` | `/api/v1/authors/:id/split` · `/reclassify-as-narrator` (202, queues `entities.author-reclassify`) · `/resolve-production` | Author repairs |
 | `POST` | `/api/v1/authors/merge` | Merge authors |
 | `DELETE` | `/api/v1/authors/:id` | Delete author (`POST /authors/bulk-delete` for many) |
 | `GET` | `/api/v1/series` | List series |
