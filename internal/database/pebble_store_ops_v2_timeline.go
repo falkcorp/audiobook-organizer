@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline.go
-// version: 1.5.5
+// version: 1.6.0
 // guid: f45601a9-ba63-4626-ad91-75720525f1be
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 // Timeline indexes for opv2 operation rows.
 //
@@ -36,6 +36,10 @@
 // set-based passes: steady 50k 0.49 -> 0.12 s, 200k 1.96 -> 0.51 s; first
 // boot 50k 1.01 -> 1.11 s, 200k 5.42 -> 4.29 s (first boot is dominated by
 // pass 3's locked per-candidate re-check, which correctness requires).
+//
+// The opv2:wait: waiting-deps index (pebble_store_ops_v2_wait.go) shares this
+// file's staging (stageOpRow), its raw-write refusal, its per-boot trust and
+// its reconcile: the same passes build and repair it, and trust vouches for it.
 
 package database
 
@@ -69,6 +73,8 @@ const (
 	opv2OpPrefix   = "opv2:op:"
 	opv2OpenPrefix = "opv2:open:"
 	opv2DonePrefix = "opv2:done:"
+	// opv2WaitPrefix (the waiting-deps index) is declared in
+	// pebble_store_ops_v2_wait.go.
 
 	// opsV2TimelineReconcileChunk is how many fixes one locked pass-3 batch
 	// holds. opsMu is released between chunks so live writers are never
@@ -107,13 +113,14 @@ var (
 )
 
 // errOpv2OpRawKey is returned by the raw-key entry points for an opv2:op:
-// row key or an opv2:open: / opv2:done: timeline index key.
+// row key, an opv2:open: / opv2:done: timeline index key or an opv2:wait:
+// waiting-deps index key.
 var errOpv2OpRawKey = errors.New("opv2: raw write refused")
 
 // opv2RawRefusedPrefixes are the families the raw entry points refuse: the
-// operation rows and both timeline index families. Matched as exact key
-// prefixes ("opv2:op:" is not a prefix of "opv2:open:").
-var opv2RawRefusedPrefixes = []string{opv2OpPrefix, opv2OpenPrefix, opv2DonePrefix}
+// operation rows, both timeline index families and the waiting-deps index.
+// Matched as exact key prefixes ("opv2:op:" is not a prefix of "opv2:open:").
+var opv2RawRefusedPrefixes = []string{opv2OpPrefix, opv2OpenPrefix, opv2DonePrefix, opv2WaitPrefix}
 
 // rejectOpv2OpRawKey is the runtime half of the row-write ratchet: the raw
 // key-value entry points (SetRaw, DeleteRaw, DeleteRawBatch, ApplyRawBatch) take a key
@@ -173,11 +180,13 @@ func parseOpv2DoneKey(k []byte) (nanos int64, opID string, ok bool) {
 	return n, string(k[idStart:]), true
 }
 
-// stageOpRow stages the timeline-index delta for one opv2:op: row write into
-// b. prev is the row as stored before this write (nil: none, or unknown);
+// stageOpRow stages the index deltas for one opv2:op: row write into b: the
+// timeline index (opv2:open: / opv2:done:) and the waiting-deps index
+// (opv2:wait:, stageOpWait). prev is the row as stored before this write (nil: none, or unknown);
 // next is the row being written (nil: the row is being deleted). When the
 // row's CompletedAt does not change (the progress-tick case) it stages
-// nothing, so the index costs those writes zero extra keys.
+// nothing, so the index costs those writes zero extra keys; the wait delta is
+// likewise staged only when the row enters or leaves waiting_deps.
 //
 // Every writer of an opv2:op: row must call this in the SAME batch as the
 // row, including any future record pruner (release D), which deletes through
@@ -189,6 +198,9 @@ func stageOpRow(b *GatedBatch, prev, next *OperationV2Row) error {
 	nextOpen := next != nil && next.CompletedAt == nil
 	sameDone := prevDone && nextDone && completedNanos(*prev.CompletedAt) == completedNanos(*next.CompletedAt)
 
+	if err := stageOpWait(b, prev, next); err != nil {
+		return err
+	}
 	if prevDone && !sameDone {
 		if err := b.Delete(opv2DoneKey(*prev.CompletedAt, prev.ID), nil); err != nil {
 			return err
@@ -588,16 +600,20 @@ func getOpV2FromSnapshot(snap *GatedSnapshot, id string) (OperationV2Row, bool, 
 //     (no row, an undecodable row, the other state, another completion
 //     time, or a malformed key).
 //   - Fixed: keys set or deleted by pass 3 after re-checking under opsMu.
+//   - Waiting: decodable rows whose Status is waiting_deps (the rows the
+//     opv2:wait: index must cover). Missing and Orphans count the wait index's
+//     keys too.
 type OpsV2TimelineReconcileResult struct {
 	Rows     int           `json:"rows"`
+	Waiting  int           `json:"waiting"`
 	Missing  int           `json:"missing"`
 	Orphans  int           `json:"orphans"`
 	Fixed    int           `json:"fixed"`
 	Duration time.Duration `json:"duration"`
 }
 
-// opV2IndexFields is the narrow decode the reconcile uses: the only two
-// OperationV2Row fields the desired index key depends on, under the same
+// opV2IndexFields is the narrow decode the reconcile uses: the only
+// OperationV2Row fields the desired index keys depend on, under the same
 // JSON names (OperationV2Row has no tags and no custom marshalling, so the
 // field names are the keys). Decoding just these skips allocating every
 // other field of every row. One difference from a full decode: a row whose
@@ -606,6 +622,7 @@ type OpsV2TimelineReconcileResult struct {
 // on their point Get, so the timeline result is unchanged.
 type opV2IndexFields struct {
 	ID          string
+	Status      string
 	CompletedAt *time.Time
 }
 
@@ -649,8 +666,8 @@ func (p *PebbleStore) keyExists(key []byte) (bool, error) {
 	return true, nil
 }
 
-// opv2IndexKeyIsOrphan reports whether an open or done index key no longer
-// matches its row. Used only by pass 3, to re-check an orphan candidate
+// opv2IndexKeyIsOrphan reports whether an open, done or wait index key no
+// longer matches its row. Used only by pass 3, to re-check an orphan candidate
 // under opsMu (pass 2 finds candidates set-based, without it).
 func (p *PebbleStore) opv2IndexKeyIsOrphan(key []byte) (bool, error) {
 	switch {
@@ -671,6 +688,8 @@ func (p *PebbleStore) opv2IndexKeyIsOrphan(key []byte) (bool, error) {
 			return false, err
 		}
 		return !found || row.CompletedAt == nil || completedNanos(*row.CompletedAt) != nanos, nil
+	case bytes.HasPrefix(key, []byte(opv2WaitPrefix)):
+		return p.waitKeyIsStale(string(key[len(opv2WaitPrefix):]))
 	}
 	return false, nil
 }
@@ -731,22 +750,39 @@ func runOpsV2TimelinePool(ctx context.Context, snap *GatedSnapshot, workers int,
 	return g.Wait()
 }
 
+// opsV2IndexDrift is what passes 1 and 2 of the reconcile found.
+//   - rows: decodable opv2:op: rows.
+//   - waiting: how many of them are waiting_deps.
+//   - candidates: ids whose desired open/done key is missing.
+//   - waitMissing: waiting ids whose opv2:wait: key is missing.
+//   - orphanKeys: index keys (any family) that are not their id's desired key.
+type opsV2IndexDrift struct {
+	rows, waiting int
+	candidates    []string
+	waitMissing   []string
+	orphanKeys    [][]byte
+}
+
 // detectOpsV2TimelineDrift is passes 1 and 2 of the reconcile, on ONE
 // snapshot that it closes before returning, so the snapshot is not held
-// through pass 3's locked fixes. It returns the decodable row count, the ids
+// through pass 3's locked fixes. It reports the decodable row count, the ids
 // whose desired index key is missing, and the index keys that are not their
-// id's desired key.
-func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (rows int, candidates []string, orphanKeys [][]byte, err error) {
+// id's desired key, for the timeline families and the wait family alike.
+func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (opsV2IndexDrift, error) {
+	var d opsV2IndexDrift
 	snap := p.db.NewSnapshot()
 	defer snap.Close()
 	workers := max(1, opsV2TimelineReconcileWorkers)
 
 	// Pass 1: id -> desired index key, one map per worker (no shared lock on
-	// the hot path), merged after. Row ids are disjoint across workers.
+	// the hot path), merged after. Row ids are disjoint across workers. The
+	// waiting ids ride along: they need no second walk of the rows.
 	opPrefix := []byte(opv2OpPrefix)
 	perWorker := make([]map[string]string, workers)
+	perWorkerWaiting := make([]map[string]struct{}, workers)
 	for w := range perWorker {
 		perWorker[w] = make(map[string]string)
+		perWorkerWaiting[w] = make(map[string]struct{})
 	}
 	if err := runOpsV2TimelinePool(ctx, snap, workers, opPrefix, prefixEnd(opPrefix), true, func(w int, item opsV2TimelineKV) error {
 		var row opV2IndexFields
@@ -755,24 +791,42 @@ func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (rows int, c
 		}
 		id := string(item.k[len(opPrefix):])
 		perWorker[w][id] = string(desiredOpv2IndexKey(id, row.CompletedAt))
+		if isWaitingDepsStatus(row.Status) {
+			perWorkerWaiting[w][id] = struct{}{}
+		}
 		return nil
 	}); err != nil {
-		return 0, nil, nil, fmt.Errorf("opsv2 timeline reconcile pass 1: %w", err)
+		return d, fmt.Errorf("opsv2 timeline reconcile pass 1: %w", err)
 	}
 	desired := perWorker[0]
 	for _, m := range perWorker[1:] {
 		maps.Copy(desired, m)
 	}
-	rows = len(desired)
+	waiting := perWorkerWaiting[0]
+	for _, m := range perWorkerWaiting[1:] {
+		maps.Copy(waiting, m)
+	}
+	d.rows = len(desired)
+	d.waiting = len(waiting)
 
 	// Pass 2: one sequential key-only walk per index family.
 	found := make(map[string]struct{}, len(desired))
-	for _, fam := range []string{opv2OpenPrefix, opv2DonePrefix} {
+	foundWait := make(map[string]struct{}, len(waiting))
+	for _, fam := range []string{opv2OpenPrefix, opv2DonePrefix, opv2WaitPrefix} {
 		prefix := []byte(fam)
 		if err := ctx.Err(); err != nil {
-			return 0, nil, nil, err
+			return d, err
 		}
 		if err := forEachSnapKey(snap, prefix, prefixUpperBound(prefix), func(k, _ []byte) error {
+			if fam == opv2WaitPrefix {
+				id := string(k[len(prefix):])
+				if _, ok := waiting[id]; ok && id != "" {
+					foundWait[id] = struct{}{}
+					return nil
+				}
+				d.orphanKeys = append(d.orphanKeys, bytes.Clone(k))
+				return nil
+			}
 			var id string
 			if fam == opv2OpenPrefix {
 				id = string(k[len(prefix):])
@@ -783,25 +837,32 @@ func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (rows int, c
 				found[id] = struct{}{}
 				return nil
 			}
-			orphanKeys = append(orphanKeys, bytes.Clone(k))
+			d.orphanKeys = append(d.orphanKeys, bytes.Clone(k))
 			return nil
 		}); err != nil {
-			return 0, nil, nil, fmt.Errorf("opsv2 timeline reconcile pass 2 (%s): %w", fam, err)
+			return d, fmt.Errorf("opsv2 timeline reconcile pass 2 (%s): %w", fam, err)
 		}
 	}
 	for id := range desired {
 		if _, ok := found[id]; !ok {
-			candidates = append(candidates, id)
+			d.candidates = append(d.candidates, id)
 		}
 	}
-	sort.Strings(candidates)
+	sort.Strings(d.candidates)
+	for id := range waiting {
+		if _, ok := foundWait[id]; !ok {
+			d.waitMissing = append(d.waitMissing, id)
+		}
+	}
+	sort.Strings(d.waitMissing)
 
-	return rows, candidates, orphanKeys, nil
+	return d, nil
 }
 
 // ReconcileOpsV2TimelineIndex builds and repairs the opv2:open: / opv2:done:
-// timeline index, then marks it trusted for this process so
-// ListOperationsV2Since starts reading it. The server runs it in the
+// timeline index and the opv2:wait: waiting-deps index, then marks them
+// trusted for this process so ListOperationsV2Since and ListWaitingDepsOps
+// start reading them. The server runs it in the
 // background after memdb warmup on EVERY boot (see the trust model above).
 //
 //   - Pass 1 (no lock, set-based): one walk of every opv2:op: row, decoded
@@ -834,21 +895,25 @@ func (p *PebbleStore) ReconcileOpsV2TimelineIndex(ctx context.Context) (res OpsV
 	start := time.Now()
 	defer func() { res.Duration = time.Since(start) }()
 
-	rows, candidates, orphanKeys, err := p.detectOpsV2TimelineDrift(ctx)
+	drift, err := p.detectOpsV2TimelineDrift(ctx)
 	if err != nil {
 		return res, err
 	}
-	res.Rows = rows
-	res.Missing = len(candidates)
-	res.Orphans = len(orphanKeys)
+	res.Rows = drift.rows
+	res.Waiting = drift.waiting
+	res.Missing = len(drift.candidates) + len(drift.waitMissing)
+	res.Orphans = len(drift.orphanKeys)
 
 	// Pass 3: fix under the lock, chunked. Candidates and orphans share one
 	// work list; each item is either an id (missing) or a key (orphan).
-	work := make([]opsV2TimelineFix, 0, len(candidates)+len(orphanKeys))
-	for _, id := range candidates {
+	work := make([]opsV2TimelineFix, 0, res.Missing+len(drift.orphanKeys))
+	for _, id := range drift.candidates {
 		work = append(work, opsV2TimelineFix{id: id})
 	}
-	for _, k := range orphanKeys {
+	for _, id := range drift.waitMissing {
+		work = append(work, opsV2TimelineFix{id: id, wait: true})
+	}
+	for _, k := range drift.orphanKeys {
 		work = append(work, opsV2TimelineFix{key: k})
 	}
 	for startIdx := 0; startIdx < len(work); startIdx += opsV2TimelineReconcileChunk {
@@ -870,16 +935,18 @@ func (p *PebbleStore) ReconcileOpsV2TimelineIndex(ctx context.Context) (res OpsV
 		return res, fmt.Errorf("opsv2 timeline reconcile: %w", pebble.ErrClosed)
 	}
 	res.Duration = time.Since(start)
-	opsV2TimelineLog.Info("opsv2-timeline-reconcile: index trusted for this boot: rows=%d missing=%d orphans=%d fixed=%d duration_ms=%d",
-		res.Rows, res.Missing, res.Orphans, res.Fixed, res.Duration.Milliseconds())
+	opsV2TimelineLog.Info("opsv2-timeline-reconcile: index trusted for this boot: rows=%d waiting=%d missing=%d orphans=%d fixed=%d duration_ms=%d",
+		res.Rows, res.Waiting, res.Missing, res.Orphans, res.Fixed, res.Duration.Milliseconds())
 	return res, nil
 }
 
 // opsV2TimelineFix is one pass-3 work item: an op id whose desired index key
 // was missing (key == nil), or an index key that looked orphaned (id == "").
+// wait marks a missing id as the opv2:wait: key's, not the timeline key's.
 type opsV2TimelineFix struct {
-	id  string
-	key []byte
+	id   string
+	key  []byte
+	wait bool
 }
 
 // reconcileOpsV2TimelineChunk re-checks and fixes one chunk under opsMu, in
@@ -893,6 +960,27 @@ func (p *PebbleStore) reconcileOpsV2TimelineChunk(items []opsV2TimelineFix) (int
 	fixed := 0
 	for _, it := range items {
 		id, key := it.id, it.key
+		if key == nil && it.wait {
+			row, ok, err := p.readOpV2Raw(id)
+			if err != nil {
+				return 0, err
+			}
+			if !ok || !isWaitingDepsStatus(row.Status) {
+				continue // deleted, broken or moved on since pass 1
+			}
+			have, err := p.keyExists(opv2WaitKey(id))
+			if err != nil {
+				return 0, err
+			}
+			if have {
+				continue // a live writer fixed it since pass 1
+			}
+			if err := b.Set(opv2WaitKey(id), nil, nil); err != nil {
+				return 0, err
+			}
+			fixed++
+			continue
+		}
 		if key == nil {
 			row, ok, err := p.readOpV2Raw(id)
 			if err != nil {
