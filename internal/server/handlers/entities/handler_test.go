@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
 // last-edited: 2026-10-30
 
@@ -1245,6 +1245,31 @@ func TestReclassifyAuthorAsNarrator_ALostLeaseStopsBeforeAnyWriteOrTheDelete(t *
 		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil)
 	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{Lease: func() bool { return false }})
 	assert.ErrorIs(t, err, entities.ErrReclassifyLeaseLost)
+}
+
+// An author with no books never reaches the per-book lease check, so the
+// post-loop check is the only thing between a lost lease and DeleteAuthor.
+func TestReclassifyAuthorAsNarrator_ALostLeaseStopsTheDeleteOfABooklessAuthor(t *testing.T) {
+	_, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil)
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{Lease: func() bool { return false }})
+	assert.ErrorIs(t, err, entities.ErrReclassifyLeaseLost)
+}
+
+// The lease held through the loop but is gone right before the delete: the
+// verify ran, the delete did not (no DeleteAuthor expectation on the mock).
+func TestReclassifyAuthorAsNarrator_ALeaseLostAfterVerifyStopsTheDelete(t *testing.T) {
+	_, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil).Twice()
+	calls := 0
+	lease := func() bool { calls++; return calls < 2 } // true before verify, false before delete
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{Lease: lease})
+	assert.ErrorIs(t, err, entities.ErrReclassifyLeaseLost)
+	assert.Equal(t, 2, calls)
 }
 
 // Same gate on the reclassify body (the op surfaces it as a failed run).
