@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.98.0
+// version: 1.98.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -1077,6 +1077,10 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertBookFileReassign(c, plan)
 	case database.ChangeTypeBookFileRepoint:
 		return rs.revertBookFileRepoint(c)
+	case database.ChangeTypeBookFileModify:
+		return rs.revertBookFileModify(c)
+	case database.ChangeTypeBookAuthorsModify:
+		return rs.revertBookAuthorsModify(c)
 	case undo.ChangeTypeBookFileTrack:
 		return rs.revertBookFileTrack(c)
 	case undo.ChangeTypeBookPathUpdate:
