@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -1683,7 +1683,7 @@ into one of the curated sections below, is a normal direct edit.
       `sort_indexed_path_test.go`) to move together, and is a user-visible change to every
       descending sort on the web and ABS Library tabs.
 
-- [ ] **RESET-TO-DEFAULTS-MISSING-LEAVES** `ResetToDefaults` (internal/config/config.go)
+- [x] **RESET-TO-DEFAULTS-MISSING-LEAVES** `ResetToDefaults` (internal/config/config.go)
       is a second hand-written `Config{...}` literal and the #3952 review found 131
       leaves missing from it; FactoryReset persists the result, so the stored blob
       gets zero/null for, among others, `search.result_cache.*`,

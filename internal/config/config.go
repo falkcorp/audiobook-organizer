@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.175.2
+// version: 1.176.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package config
 
@@ -554,8 +554,8 @@ type MetadataScoringConfig struct {
 // shapes defensively. Any other shape (missing key, wrong type) returns nil
 // — the metafetch-side resolver treats nil/mismatched-length as "unset" and
 // falls back to the built-in duration tier table.
-func getFloat64Slice(key string) []float64 {
-	switch v := viper.Get(key).(type) {
+func getFloat64Slice(vp *viper.Viper, key string) []float64 {
+	switch v := vp.Get(key).(type) {
 	case []float64:
 		return v
 	case []any:
@@ -2504,7 +2504,7 @@ func applyEnvAuthoritativeConfig(c *Config) {
 		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
 	}
 	// Invitation email and guest access: environment-only, never in the blob.
-	applyInviteEnv(c)
+	applyInviteEnv(c, viper.GetViper())
 	// Activity-log backend name. Env-authoritative for the same reason as the
 	// ABS keys: LoadConfigFromDatabase replaces the whole struct with the persisted
 	// blob. The registered SetDefault keeps IsSet permanently true, so with the
@@ -2589,8 +2589,39 @@ func InitConfig() {
 	// a stale key must not stop the server starting.
 	warnRemovedViperKeys()
 
+	v := viper.GetViper()
+	registerConfigDefaults(v)
+
+	// WHY Mutate: whole-struct init; correct even if tests call InitConfig concurrently.
+	cfg := configFromViper(v)
+	Mutate(func(c *Config) { *c = cfg })
+}
+
+// defaultRegistrar is the part of *viper.Viper that declaring the shipped
+// defaults needs. InitConfig passes the process-wide viper; factoryDefaultConfig
+// passes a registrar whose BindEnv does nothing, so one list of keys and
+// defaults feeds both and neither can drift from the other.
+type defaultRegistrar interface {
+	SetDefault(key string, value any)
+	BindEnv(input ...string) error
+}
+
+// noEnvRegistrar registers every default on a private viper and ignores the
+// environment bindings, so a value read back from it is the shipped default
+// whatever the process environment holds.
+type noEnvRegistrar struct{ v *viper.Viper }
+
+func (n noEnvRegistrar) SetDefault(key string, value any) { n.v.SetDefault(key, value) }
+func (noEnvRegistrar) BindEnv(...string) error            { return nil }
+
+// registerConfigDefaults declares every shipped default (and environment
+// binding) for the Config. It is the single source of truth for defaults: the
+// Config that boot builds and the one a factory reset restores both read these
+// keys, so a default added here reaches both.
+func registerConfigDefaults(r defaultRegistrar) {
+
 	// Set core defaults
-	viper.SetDefault("database_type", "pebble")
+	r.SetDefault("database_type", "pebble")
 	// Sort indexes for the ABS library browser.
 	//
 	// Without one of these the handler maps sort=media.metadata.publishedYear
@@ -2619,223 +2650,227 @@ func InitConfig() {
 	// name from the authors table on the materialise-and-sort path instead.
 	// Leaving it here would print an "unknown entry ignored" warning on every
 	// startup, for a value the application itself shipped.
-	viper.SetDefault("enabled_sort_indexes", []string{"year", "created_at"})
-	viper.SetDefault("search.result_cache.enabled", true)
-	viper.SetDefault("search.result_cache.max_bytes", int64(128<<20))
-	viper.SetDefault("search.result_cache.wait_seconds", 20)
-	viper.SetDefault("setup_complete", false)
+	r.SetDefault("enabled_sort_indexes", []string{"year", "created_at"})
+	r.SetDefault("search.result_cache.enabled", true)
+	r.SetDefault("search.result_cache.max_bytes", int64(128<<20))
+	r.SetDefault("search.result_cache.wait_seconds", 20)
+	r.SetDefault("setup_complete", false)
 
 	// Set library organization defaults
-	viper.SetDefault("organization_strategy", "auto")
-	viper.SetDefault("scan_on_startup", false)
-	viper.SetDefault("auto_organize", true)
-	viper.SetDefault("auto_scan_enabled", false)
-	viper.SetDefault("auto_scan_debounce_seconds", 30)
-	viper.SetDefault("folder_naming_pattern", DefaultFolderNamingPattern)
-	viper.SetDefault("file_naming_pattern", DefaultFileNamingPattern)
-	viper.SetDefault("create_backups", true)
+	r.SetDefault("organization_strategy", "auto")
+	r.SetDefault("scan_on_startup", false)
+	r.SetDefault("auto_organize", true)
+	r.SetDefault("auto_scan_enabled", false)
+	r.SetDefault("auto_scan_debounce_seconds", 30)
+	r.SetDefault("folder_naming_pattern", DefaultFolderNamingPattern)
+	r.SetDefault("file_naming_pattern", DefaultFileNamingPattern)
+	r.SetDefault("create_backups", true)
 	// gzip, not zstd: this default also applies to every existing install on
 	// upgrade, and changing the archive format underneath someone silently is
 	// not a default's job. zstd is opt-in.
-	viper.SetDefault("backup_compression", "gzip")
+	r.SetDefault("backup_compression", "gzip")
 
 	// Set storage quota defaults
-	viper.SetDefault("enable_disk_quota", false)
-	viper.SetDefault("disk_quota_percent", 80)
-	viper.SetDefault("enable_user_quotas", false)
+	r.SetDefault("enable_disk_quota", false)
+	r.SetDefault("disk_quota_percent", 80)
+	r.SetDefault("enable_user_quotas", false)
 
 	// Set metadata defaults
-	viper.SetDefault("write_back_metadata", false)
-	viper.SetDefault("embed_cover_art", true)
+	r.SetDefault("write_back_metadata", false)
+	r.SetDefault("embed_cover_art", true)
 
 	// Managed external-tool lifecycle (tools.*). Until 2026-10-11 InitConfig
 	// assigned these as constants and never consulted viper; the defaults are
 	// those same constants, so nothing changes unless a config file sets them.
-	viper.SetDefault("tools.managed_dir", "/var/lib/audiobook-organizer/tools")
-	viper.SetDefault("tools.ollama.mode", string(tools.ToolModeSystem))
-	viper.SetDefault("tools.fpcalc.mode", string(tools.ToolModeSystem))
-	viper.SetDefault("tools.allow_periodic_ollama", false)
-	viper.SetDefault("tools.ollama_debounce_min", 10)
+	r.SetDefault("tools.managed_dir", "/var/lib/audiobook-organizer/tools")
+	r.SetDefault("tools.ollama.mode", string(tools.ToolModeSystem))
+	r.SetDefault("tools.fpcalc.mode", string(tools.ToolModeSystem))
+	r.SetDefault("tools.allow_periodic_ollama", false)
+	r.SetDefault("tools.ollama_debounce_min", 10)
 
 	// Open Library dump defaults
-	viper.SetDefault("openlibrary_dump_enabled", false)
-	viper.SetDefault("openlibrary_dump_dir", "")
+	r.SetDefault("openlibrary_dump_enabled", false)
+	r.SetDefault("openlibrary_dump_dir", "")
 
 	// Hardcover.app defaults
-	viper.SetDefault("hardcover_api_token", "")
+	r.SetDefault("hardcover_api_token", "")
 
 	// Set AI parsing defaults
-	viper.SetDefault("enable_ai_parsing", true)
-	viper.SetDefault("openai_api_key", "")
-	viper.SetDefault("acoustid_api_key", "")
-	viper.BindEnv("acoustid_api_key", "ACOUSTID_API_KEY") //nolint:errcheck
+	r.SetDefault("enable_ai_parsing", true)
+	r.SetDefault("openai_api_key", "")
+	r.SetDefault("acoustid_api_key", "")
+	r.BindEnv("acoustid_api_key", "ACOUSTID_API_KEY") //nolint:errcheck
 
 	// 2026-08-20 os.Getenv-to-viper consolidation: previously ad-hoc
 	// os.Getenv() reads scattered across their respective packages.
-	viper.SetDefault("fp_parallel_workers", 4)
-	viper.SetDefault("fingerprint_remote_workers_enabled", false)
-	viper.SetDefault("fingerprint_window_reference_tools", "")
-	viper.SetDefault("fingerprint_length_sec", 120)
-	viper.SetDefault("whisper_clip_cache_dir", "")
-	viper.SetDefault("whisper_batch_sleep_ms", 8000)
-	viper.SetDefault("whisper_batch_size", 16)
-	viper.SetDefault("whisper_max_in_flight", 0)
-	viper.SetDefault("openai_base_url", "")
-	viper.SetDefault("abs_auth_probe_enabled", false)
-	viper.SetDefault("authority_evidence_enabled", false)
-	viper.SetDefault("retire_versions_apply_enabled", false)
-	viper.SetDefault("kept_sweep_apply_enabled", false)
-	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
-	viper.SetDefault("otel_exporter_otlp_endpoint", "")
-	viper.SetDefault("otel_metrics_otlp_endpoint", "")
-	viper.SetDefault("otel_metrics_otlp_interval", "60s")
-	viper.SetDefault("otel_metrics_otlp_insecure", false)
-	viper.SetDefault("telemetry_environment", "prod")
-	viper.SetDefault("list_warmer_heap_delta_mb", 4096)
-	viper.SetDefault("list_warmer_trickle_interval_ms", 10000)
-	viper.SetDefault("library_counts_cache_min_interval_seconds", 600)
-	viper.SetDefault("bleve_description_max_chars", 500)
+	r.SetDefault("fp_parallel_workers", 4)
+	r.SetDefault("fingerprint_remote_workers_enabled", false)
+	r.SetDefault("fingerprint_window_reference_tools", "")
+	r.SetDefault("fingerprint_length_sec", 120)
+	r.SetDefault("whisper_clip_cache_dir", "")
+	r.SetDefault("whisper_batch_sleep_ms", 8000)
+	r.SetDefault("whisper_batch_size", 16)
+	r.SetDefault("whisper_max_in_flight", 0)
+	r.SetDefault("openai_base_url", "")
+	r.SetDefault("abs_auth_probe_enabled", false)
+	r.SetDefault("authority_evidence_enabled", false)
+	r.SetDefault("retire_versions_apply_enabled", false)
+	r.SetDefault("kept_sweep_apply_enabled", false)
+	r.SetDefault("abs_itunes_position_backfill_user_id", "")
+	r.SetDefault("otel_exporter_otlp_endpoint", "")
+	r.SetDefault("otel_metrics_otlp_endpoint", "")
+	r.SetDefault("otel_metrics_otlp_interval", "60s")
+	r.SetDefault("otel_metrics_otlp_insecure", false)
+	r.SetDefault("telemetry_environment", "prod")
+	r.SetDefault("list_warmer_heap_delta_mb", 4096)
+	r.SetDefault("list_warmer_trickle_interval_ms", 10000)
+	r.SetDefault("library_counts_cache_min_interval_seconds", 600)
+	r.SetDefault("bleve_description_max_chars", 500)
 	// Metadata-provider base URL overrides, backfilled onto MetadataSources[i].BaseURL
 	// below (viper.BindEnv doesn't address slice elements directly).
-	viper.SetDefault("audible_base_url", "")
-	viper.SetDefault("openlibrary_base_url", "")
-	viper.SetDefault("audnexus_base_url", "")
-	viper.SetDefault("google_books_base_url", "")
-	viper.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
-	viper.BindEnv("fingerprint_length_sec", "FP_LENGTH_SEC")                                      //nolint:errcheck
-	viper.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
-	viper.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
-	viper.BindEnv("whisper_batch_size", "WHISPER_BATCH_SIZE")                                     //nolint:errcheck
-	viper.BindEnv("whisper_max_in_flight", "WHISPER_MAX_IN_FLIGHT")                               //nolint:errcheck
-	viper.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
-	viper.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
-	viper.BindEnv("retire_versions_apply_enabled", "RETIRE_VERSIONS_APPLY_ENABLED")               //nolint:errcheck
-	viper.BindEnv("kept_sweep_apply_enabled", "KEPT_SWEEP_APPLY_ENABLED")                         //nolint:errcheck
-	viper.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
-	viper.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
-	viper.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
-	viper.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
-	viper.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
+	r.SetDefault("audible_base_url", "")
+	r.SetDefault("openlibrary_base_url", "")
+	r.SetDefault("audnexus_base_url", "")
+	r.SetDefault("google_books_base_url", "")
+	r.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
+	r.BindEnv("fingerprint_length_sec", "FP_LENGTH_SEC")                                      //nolint:errcheck
+	r.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
+	r.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
+	r.BindEnv("whisper_batch_size", "WHISPER_BATCH_SIZE")                                     //nolint:errcheck
+	r.BindEnv("whisper_max_in_flight", "WHISPER_MAX_IN_FLIGHT")                               //nolint:errcheck
+	r.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
+	r.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
+	r.BindEnv("retire_versions_apply_enabled", "RETIRE_VERSIONS_APPLY_ENABLED")               //nolint:errcheck
+	r.BindEnv("kept_sweep_apply_enabled", "KEPT_SWEEP_APPLY_ENABLED")                         //nolint:errcheck
+	r.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
+	r.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
+	r.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
+	r.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
+	r.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
 	// Deluge: bound explicitly so the environment reaches viper where AutomaticEnv
 	// is off. The names are the ones SettingLocks reports (envLockedSettings).
-	viper.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
-	viper.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
-	viper.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck
-	viper.BindEnv("deluge_discovery_enabled", "DELUGE_DISCOVERY_ENABLED") //nolint:errcheck
-	viper.BindEnv("deluge_move_enabled", "DELUGE_MOVE_ENABLED")           //nolint:errcheck
+	r.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
+	r.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
+	r.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck
+	r.BindEnv("deluge_discovery_enabled", "DELUGE_DISCOVERY_ENABLED") //nolint:errcheck
+	r.BindEnv("deluge_move_enabled", "DELUGE_MOVE_ENABLED")           //nolint:errcheck
 	// LIST_WARMER_MAX_HEAP_MB is a legacy alias for the same setting — viper
 	// checks env var names in the order given, so the current name wins when
 	// both are set.
-	viper.BindEnv("list_warmer_heap_delta_mb", "LIST_WARMER_HEAP_DELTA_MB", "LIST_WARMER_MAX_HEAP_MB")      //nolint:errcheck
-	viper.BindEnv("list_warmer_trickle_interval_ms", "LIST_WARMER_TRICKLE_INTERVAL_MS")                     //nolint:errcheck
-	viper.BindEnv("library_counts_cache_min_interval_seconds", "LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS") //nolint:errcheck
-	viper.BindEnv("bleve_description_max_chars", "BLEVE_DESCRIPTION_MAX_CHARS")                             //nolint:errcheck
-	viper.BindEnv("audible_base_url", "AUDIBLE_BASE_URL")                                                   //nolint:errcheck
-	viper.BindEnv("openlibrary_base_url", "OPENLIBRARY_BASE_URL")                                           //nolint:errcheck
-	viper.BindEnv("audnexus_base_url", "AUDNEXUS_BASE_URL")                                                 //nolint:errcheck
-	viper.BindEnv("google_books_base_url", "GOOGLE_BOOKS_BASE_URL")                                         //nolint:errcheck
+	r.BindEnv("list_warmer_heap_delta_mb", "LIST_WARMER_HEAP_DELTA_MB", "LIST_WARMER_MAX_HEAP_MB")      //nolint:errcheck
+	r.BindEnv("list_warmer_trickle_interval_ms", "LIST_WARMER_TRICKLE_INTERVAL_MS")                     //nolint:errcheck
+	r.BindEnv("library_counts_cache_min_interval_seconds", "LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS") //nolint:errcheck
+	r.BindEnv("bleve_description_max_chars", "BLEVE_DESCRIPTION_MAX_CHARS")                             //nolint:errcheck
+	r.BindEnv("audible_base_url", "AUDIBLE_BASE_URL")                                                   //nolint:errcheck
+	r.BindEnv("openlibrary_base_url", "OPENLIBRARY_BASE_URL")                                           //nolint:errcheck
+	r.BindEnv("audnexus_base_url", "AUDNEXUS_BASE_URL")                                                 //nolint:errcheck
+	r.BindEnv("google_books_base_url", "GOOGLE_BOOKS_BASE_URL")                                         //nolint:errcheck
 
 	// Per-feature model defaults — gpt-5-mini preserves historical behavior.
 	// dedup_review_model has moved to dedup.review_model (nested DedupConfig).
-	viper.SetDefault("dedup.review_model", "gpt-5-mini")
-	viper.SetDefault("metadata_review_model", "gpt-5-mini")
-	viper.SetDefault("filename_parse_model", "gpt-5-mini")
-	viper.SetDefault("cover_art_model", "gpt-5-mini")
+	r.SetDefault("dedup.review_model", "gpt-5-mini")
+	r.SetDefault("metadata_review_model", "gpt-5-mini")
+	r.SetDefault("filename_parse_model", "gpt-5-mini")
+	r.SetDefault("cover_art_model", "gpt-5-mini")
 
 	// Set performance defaults — scale with available CPUs
 	defaultWorkers := max(runtime.NumCPU(), 4)
-	viper.SetDefault("concurrent_scans", defaultWorkers)
-	viper.SetDefault("scan_standdown_grace_seconds", 45)
-	viper.SetDefault("chapter_consolidation_threshold_min", DefaultChapterConsolidationThresholdMin)
-	viper.SetDefault("repair_chapter_max_min", 120)
-	viper.SetDefault("fragment_window_containment_min", DefaultFragmentWindowContainmentMin)
-	viper.SetDefault("operation_timeout_minutes", 30)
-	viper.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
-	viper.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
-	viper.SetDefault("log_retention_days", DefaultLogRetentionDays)
+	r.SetDefault("concurrent_scans", defaultWorkers)
+	r.SetDefault("scan_standdown_grace_seconds", 45)
+	r.SetDefault("chapter_consolidation_threshold_min", DefaultChapterConsolidationThresholdMin)
+	r.SetDefault("repair_chapter_max_min", 120)
+	r.SetDefault("fragment_window_containment_min", DefaultFragmentWindowContainmentMin)
+	r.SetDefault("operation_timeout_minutes", 30)
+	r.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
+	r.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
+	r.SetDefault("log_retention_days", DefaultLogRetentionDays)
 	// operation_log_retention_days, activity_log_compaction_days and
 	// activity_log_retention_{change,debug}_days have NO viper default on
 	// purpose: each consumer maps 0 (or less) to its effective default
 	// (90 / 14 / 90 / 30), so 0 is "use the default" and changes nothing.
 	// InitConfig reads them so a config file or environment value reaches them.
-	viper.SetDefault("activity_log_nightly_compaction_enabled", true)
-	viper.SetDefault("activity_log_full_detail_days", 0)
-	viper.SetDefault("ai_journal_retention_days", 30)
+	r.SetDefault("activity_log_nightly_compaction_enabled", true)
+	r.SetDefault("activity_log_full_detail_days", 0)
+	r.SetDefault("ai_journal_retention_days", 30)
 
 	// API security/runtime limits
-	viper.SetDefault("api_rate_limit_per_minute", 100)
-	viper.SetDefault("json_body_limit_mb", 1)
-	viper.SetDefault("upload_body_limit_mb", 10)
-	viper.SetDefault("master_list_retention", 10)
-	viper.SetDefault("enable_auth", true)
-	viper.SetDefault("enable_rate_limit", true)
+	r.SetDefault("api_rate_limit_per_minute", 100)
+	r.SetDefault("json_body_limit_mb", 1)
+	r.SetDefault("upload_body_limit_mb", 10)
+	r.SetDefault("master_list_retention", 10)
+	r.SetDefault("enable_auth", true)
+	r.SetDefault("enable_rate_limit", true)
 	// Fail-safe ceiling for one bulk apply; see Config.BulkApplyMaxItems.
-	viper.SetDefault("bulk_apply_max_items", 5000)
-	viper.SetDefault("basic_auth_enabled", false)
-	viper.SetDefault("basic_auth_username", "")
-	viper.SetDefault("basic_auth_password", "")
+	r.SetDefault("bulk_apply_max_items", 5000)
+	r.SetDefault("basic_auth_enabled", false)
+	r.SetDefault("basic_auth_username", "")
+	r.SetDefault("basic_auth_password", "")
 
 	// OAuth / OIDC + Cloudflare Access defaults (all off / empty unless configured).
-	viper.SetDefault("oauth_enabled", false)
-	viper.SetDefault("oauth_github_client_id", "")
-	viper.SetDefault("oauth_github_client_secret", "")
-	viper.SetDefault("oauth_google_client_id", "")
-	viper.SetDefault("oauth_google_client_secret", "")
-	viper.SetDefault("oauth_redirect_base_url", "")
-	viper.SetDefault("oauth_allowed_emails", "")
-	viper.SetDefault("oauth_default_role", "viewer")
-	viper.SetDefault("cf_access_team_domain", "")
-	viper.SetDefault("cf_access_aud", "")
-	viper.SetDefault("owner_email", "")
-	viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                           //nolint:errcheck
-	viper.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")         //nolint:errcheck
-	viper.BindEnv("oauth_github_client_secret", "OAUTH_GITHUB_CLIENT_SECRET") //nolint:errcheck
-	viper.BindEnv("oauth_google_client_id", "OAUTH_GOOGLE_CLIENT_ID")         //nolint:errcheck
-	viper.BindEnv("oauth_google_client_secret", "OAUTH_GOOGLE_CLIENT_SECRET") //nolint:errcheck
-	viper.BindEnv("oauth_redirect_base_url", "OAUTH_REDIRECT_BASE_URL")       //nolint:errcheck
-	viper.BindEnv("oauth_allowed_emails", "OAUTH_ALLOWED_EMAILS")             //nolint:errcheck
-	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
-	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
-	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
-	viper.BindEnv("owner_email", "OWNER_EMAIL")                               //nolint:errcheck
+	r.SetDefault("oauth_enabled", false)
+	r.SetDefault("oauth_github_client_id", "")
+	r.SetDefault("oauth_github_client_secret", "")
+	r.SetDefault("oauth_google_client_id", "")
+	r.SetDefault("oauth_google_client_secret", "")
+	r.SetDefault("oauth_redirect_base_url", "")
+	r.SetDefault("oauth_allowed_emails", "")
+	r.SetDefault("oauth_default_role", "viewer")
+	r.SetDefault("cf_access_team_domain", "")
+	r.SetDefault("cf_access_aud", "")
+	r.SetDefault("owner_email", "")
+	r.BindEnv("oauth_enabled", "OAUTH_ENABLED")                           //nolint:errcheck
+	r.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")         //nolint:errcheck
+	r.BindEnv("oauth_github_client_secret", "OAUTH_GITHUB_CLIENT_SECRET") //nolint:errcheck
+	r.BindEnv("oauth_google_client_id", "OAUTH_GOOGLE_CLIENT_ID")         //nolint:errcheck
+	r.BindEnv("oauth_google_client_secret", "OAUTH_GOOGLE_CLIENT_SECRET") //nolint:errcheck
+	r.BindEnv("oauth_redirect_base_url", "OAUTH_REDIRECT_BASE_URL")       //nolint:errcheck
+	r.BindEnv("oauth_allowed_emails", "OAUTH_ALLOWED_EMAILS")             //nolint:errcheck
+	r.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
+	r.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
+	r.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
+	r.BindEnv("owner_email", "OWNER_EMAIL")                               //nolint:errcheck
 
-	registerABSDefaults()
-	registerInviteDefaults()
+	registerABSDefaults(r)
+	registerInviteDefaults(r)
 
 	// Transcription: remote faster-whisper server URL (env-authoritative).
-	viper.SetDefault("whisper_remote_url", "")
-	viper.BindEnv("whisper_remote_url", "WHISPER_REMOTE_URL") //nolint:errcheck
+	r.SetDefault("whisper_remote_url", "")
+	r.BindEnv("whisper_remote_url", "WHISPER_REMOTE_URL") //nolint:errcheck
 	// Multi-endpoint pool, JSON array string (env-authoritative; wins over
 	// whisper_remote_url when non-empty).
-	viper.SetDefault("whisper_endpoints", "")
-	viper.BindEnv("whisper_endpoints", "WHISPER_ENDPOINTS") //nolint:errcheck
-	viper.BindEnv("whisper_requires", "WHISPER_REQUIRES")   //nolint:errcheck
+	r.SetDefault("whisper_endpoints", "")
+	r.BindEnv("whisper_endpoints", "WHISPER_ENDPOINTS") //nolint:errcheck
+	r.BindEnv("whisper_requires", "WHISPER_REQUIRES")   //nolint:errcheck
 
 	// Set memory management defaults
-	viper.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
-	viper.SetDefault("metadata_fetch.shared_cache", true)
-	viper.SetDefault("identification_advance_enabled", false)
-	viper.SetDefault("metadata_fetch.catalog_stage", false)
-	viper.SetDefault("metadata_fetch.folder_parse_person_title", true)
-	viper.SetDefault("metadata_fetch.negative_ttl_days.audible", DefaultNegativeTTLDaysAudible)
-	viper.SetDefault("metadata_fetch.negative_ttl_days.audnexus", DefaultNegativeTTLDaysAudnexus)
-	viper.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", DefaultNegativeTTLDaysOpenLibrary)
-	viper.SetDefault("metadata_fetch.negative_ttl_days.google", DefaultNegativeTTLDaysGoogle)
+	r.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
+	// The metadata_fetch.* defaults come from DefaultMetadataFetchConfig, the
+	// one place the shipped block is written down (tests and the cache-TTL
+	// reset use it directly).
+	mf := DefaultMetadataFetchConfig()
+	r.SetDefault("metadata_fetch.shared_cache", mf.SharedCache)
+	r.SetDefault("identification_advance_enabled", false)
+	r.SetDefault("metadata_fetch.catalog_stage", mf.CatalogStage)
+	r.SetDefault("metadata_fetch.folder_parse_person_title", mf.FolderParsePersonTitle)
+	r.SetDefault("metadata_fetch.negative_ttl_days.audible", mf.NegativeTTLDays.Audible)
+	r.SetDefault("metadata_fetch.negative_ttl_days.audnexus", mf.NegativeTTLDays.Audnexus)
+	r.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", mf.NegativeTTLDays.OpenLibrary)
+	r.SetDefault("metadata_fetch.negative_ttl_days.google", mf.NegativeTTLDays.Google)
 	// No defaults for bootstrap_key_ttl / bootstrap_key_ttl_days: an empty
 	// bootstrap_key_ttl resolves to DefaultBootstrapKeyTTL in code, and a
 	// default for the legacy days key would make it look set on every boot
 	// (see ResolveBootstrapKeyTTL). Bound explicitly so BOOTSTRAP_KEY_TTL /
 	// BOOTSTRAP_KEY_TTL_DAYS reach them even where AutomaticEnv is not on.
-	viper.BindEnv("bootstrap_key_ttl", "BOOTSTRAP_KEY_TTL")           //nolint:errcheck
-	viper.BindEnv("bootstrap_key_ttl_days", "BOOTSTRAP_KEY_TTL_DAYS") //nolint:errcheck
+	r.BindEnv("bootstrap_key_ttl", "BOOTSTRAP_KEY_TTL")           //nolint:errcheck
+	r.BindEnv("bootstrap_key_ttl_days", "BOOTSTRAP_KEY_TTL_DAYS") //nolint:errcheck
 
 	// Lifecycle / retention defaults
-	viper.SetDefault("purge_soft_deleted_after_days", 30)
-	viper.SetDefault("backup_retention_days", 0)
-	viper.SetDefault("purge_soft_deleted_delete_files", false)
+	r.SetDefault("purge_soft_deleted_after_days", 30)
+	r.SetDefault("backup_retention_days", 0)
+	r.SetDefault("purge_soft_deleted_delete_files", false)
 
 	// Set logging defaults
-	viper.SetDefault("log_level", "info")
+	r.SetDefault("log_level", "info")
 
 	// Scheduled task defaults (nested under "scheduled.*.*")
 	// library_scan ships ENABLED at a 6-hour interval. Every other member of
@@ -2848,179 +2883,179 @@ func InitConfig() {
 	// (the scan is incremental — unchanged files are skipped via the scan
 	// cache). auto_scan_enabled's fsnotify watchers are the low-latency path
 	// on top of this, not a replacement for it.
-	viper.SetDefault("scheduled.library_scan.enabled", true)
-	viper.SetDefault("scheduled.library_scan.interval", 360)
-	viper.SetDefault("scheduled.library_scan.on_startup", false)
+	r.SetDefault("scheduled.library_scan.enabled", true)
+	r.SetDefault("scheduled.library_scan.interval", 360)
+	r.SetDefault("scheduled.library_scan.on_startup", false)
 	// The full sweep ships ENABLED but does NOT run on first boot: with no
 	// stored timestamp the scheduler seeds one and waits a full period, so
 	// deploying this never kicks off an unannounced multi-hour re-hash.
-	viper.SetDefault("scheduled.library_scan_full.enabled", true)
-	viper.SetDefault("scheduled.library_scan_full.interval", 60)
-	viper.SetDefault("scheduled.library_scan_full.period_hours", 168)
-	viper.SetDefault("scheduled.dedup_refresh.enabled", false)
-	viper.SetDefault("scheduled.dedup_refresh.interval", 360)
-	viper.SetDefault("scheduled.dedup_refresh.on_startup", false)
-	viper.SetDefault("scheduled.acoustid_backfill.enabled", false)
-	viper.SetDefault("scheduled.acoustid_backfill.interval", 1440)
-	viper.SetDefault("scheduled.acoustid_backfill.on_startup", false)
+	r.SetDefault("scheduled.library_scan_full.enabled", true)
+	r.SetDefault("scheduled.library_scan_full.interval", 60)
+	r.SetDefault("scheduled.library_scan_full.period_hours", 168)
+	r.SetDefault("scheduled.dedup_refresh.enabled", false)
+	r.SetDefault("scheduled.dedup_refresh.interval", 360)
+	r.SetDefault("scheduled.dedup_refresh.on_startup", false)
+	r.SetDefault("scheduled.acoustid_backfill.enabled", false)
+	r.SetDefault("scheduled.acoustid_backfill.interval", 1440)
+	r.SetDefault("scheduled.acoustid_backfill.on_startup", false)
 	// metadata_upgrade: scheduled whenever interval > 0 (Enabled is not read,
 	// see ScheduledTasksConfig.MetadataUpgrade). Ships off.
-	viper.SetDefault("scheduled.metadata_upgrade.interval", 0)
-	viper.SetDefault("scheduled.metadata_upgrade.on_startup", false)
+	r.SetDefault("scheduled.metadata_upgrade.interval", 0)
+	r.SetDefault("scheduled.metadata_upgrade.on_startup", false)
 	// asin_backfill: scheduled whenever interval > 0 (minutes; see
 	// ScheduledTasksConfig.ASINBackfill). Ships ON at 6h.
-	viper.SetDefault("scheduled.asin_backfill.interval", 360)
+	r.SetDefault("scheduled.asin_backfill.interval", 360)
 	// candidate_fetch: scheduled whenever interval > 0 (minutes; see
 	// ScheduledTasksConfig.CandidateFetch). Ships ON at 6h.
-	viper.SetDefault("scheduled.candidate_fetch.interval", 360)
+	r.SetDefault("scheduled.candidate_fetch.interval", 360)
 	// catalog_harvest: scheduled whenever interval > 0 and catalog.enabled
 	// (minutes; see ScheduledTasksConfig.CatalogHarvest). Ships ON at 6h.
-	viper.SetDefault("scheduled.catalog_harvest.interval", 360)
+	r.SetDefault("scheduled.catalog_harvest.interval", 360)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
-	viper.SetDefault("scheduled.label_refinement.enabled", false)
-	viper.SetDefault("scheduled.label_refinement.interval", 10080)
-	viper.SetDefault("scheduled.label_refinement.on_startup", false)
-	viper.SetDefault("scheduled.author_split.enabled", false)
-	viper.SetDefault("scheduled.author_split.interval", 0)
-	viper.SetDefault("scheduled.author_split.on_startup", false)
-	viper.SetDefault("scheduled.db_optimize.enabled", false)
-	viper.SetDefault("scheduled.db_optimize.interval", 1440)
-	viper.SetDefault("scheduled.db_optimize.on_startup", false)
-	viper.SetDefault("scheduled.metadata_refresh.enabled", false)
-	viper.SetDefault("scheduled.metadata_refresh.interval", 0)
-	viper.SetDefault("scheduled.metadata_refresh.on_startup", false)
-	viper.SetDefault("scheduled.resolve_production_authors.enabled", false)
-	viper.SetDefault("scheduled.resolve_production_authors.interval", 0)
-	viper.SetDefault("scheduled.series_prune.enabled", false)
-	viper.SetDefault("scheduled.series_prune.interval", 0)
-	viper.SetDefault("scheduled.series_prune.on_startup", false)
-	viper.SetDefault("scheduled.ai_dedup_batch.enabled", false)
-	viper.SetDefault("scheduled.ai_dedup_batch.interval", 1440)
-	viper.SetDefault("scheduled.ai_dedup_batch.on_startup", false)
-	viper.SetDefault("scheduled.reconcile.enabled", false)
-	viper.SetDefault("scheduled.reconcile.interval", 0)
-	viper.SetDefault("scheduled.reconcile.on_startup", false)
+	r.SetDefault("scheduled.label_refinement.enabled", false)
+	r.SetDefault("scheduled.label_refinement.interval", 10080)
+	r.SetDefault("scheduled.label_refinement.on_startup", false)
+	r.SetDefault("scheduled.author_split.enabled", false)
+	r.SetDefault("scheduled.author_split.interval", 0)
+	r.SetDefault("scheduled.author_split.on_startup", false)
+	r.SetDefault("scheduled.db_optimize.enabled", false)
+	r.SetDefault("scheduled.db_optimize.interval", 1440)
+	r.SetDefault("scheduled.db_optimize.on_startup", false)
+	r.SetDefault("scheduled.metadata_refresh.enabled", false)
+	r.SetDefault("scheduled.metadata_refresh.interval", 0)
+	r.SetDefault("scheduled.metadata_refresh.on_startup", false)
+	r.SetDefault("scheduled.resolve_production_authors.enabled", false)
+	r.SetDefault("scheduled.resolve_production_authors.interval", 0)
+	r.SetDefault("scheduled.series_prune.enabled", false)
+	r.SetDefault("scheduled.series_prune.interval", 0)
+	r.SetDefault("scheduled.series_prune.on_startup", false)
+	r.SetDefault("scheduled.ai_dedup_batch.enabled", false)
+	r.SetDefault("scheduled.ai_dedup_batch.interval", 1440)
+	r.SetDefault("scheduled.ai_dedup_batch.on_startup", false)
+	r.SetDefault("scheduled.reconcile.enabled", false)
+	r.SetDefault("scheduled.reconcile.interval", 0)
+	r.SetDefault("scheduled.reconcile.on_startup", false)
 	// BindEnv maps env vars so SCHEDULED_* overrides work even without AutomaticEnv.
-	viper.BindEnv("scheduled.library_scan.enabled", "SCHEDULED_LIBRARY_SCAN_ENABLED")                               //nolint:errcheck
-	viper.BindEnv("scheduled.library_scan.interval", "SCHEDULED_LIBRARY_SCAN_INTERVAL")                             //nolint:errcheck
-	viper.BindEnv("scheduled.library_scan.on_startup", "SCHEDULED_LIBRARY_SCAN_ON_STARTUP")                         //nolint:errcheck
-	viper.BindEnv("scheduled.library_scan_full.enabled", "SCHEDULED_LIBRARY_SCAN_FULL_ENABLED")                     //nolint:errcheck
-	viper.BindEnv("scheduled.library_scan_full.interval", "SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL")                   //nolint:errcheck
-	viper.BindEnv("scheduled.library_scan_full.period_hours", "SCHEDULED_LIBRARY_SCAN_FULL_PERIOD_HOURS")           //nolint:errcheck
-	viper.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
-	viper.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
-	viper.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
-	viper.BindEnv("scheduled.acoustid_backfill.enabled", "SCHEDULED_ACOUSTID_BACKFILL_ENABLED")                     //nolint:errcheck
-	viper.BindEnv("scheduled.acoustid_backfill.interval", "SCHEDULED_ACOUSTID_BACKFILL_INTERVAL")                   //nolint:errcheck
-	viper.BindEnv("scheduled.acoustid_backfill.on_startup", "SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP")               //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_upgrade.interval", "SCHEDULED_METADATA_UPGRADE_INTERVAL")                     //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_upgrade.on_startup", "SCHEDULED_METADATA_UPGRADE_ON_STARTUP")                 //nolint:errcheck
-	viper.BindEnv("scheduled.asin_backfill.interval", "SCHEDULED_ASIN_BACKFILL_INTERVAL")                           //nolint:errcheck
-	viper.BindEnv("scheduled.catalog_harvest.interval", "SCHEDULED_CATALOG_HARVEST_INTERVAL")                       //nolint:errcheck
-	viper.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
-	viper.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
-	viper.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
-	viper.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                               //nolint:errcheck
-	viper.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                             //nolint:errcheck
-	viper.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                         //nolint:errcheck
-	viper.BindEnv("scheduled.db_optimize.enabled", "SCHEDULED_DB_OPTIMIZE_ENABLED")                                 //nolint:errcheck
-	viper.BindEnv("scheduled.db_optimize.interval", "SCHEDULED_DB_OPTIMIZE_INTERVAL")                               //nolint:errcheck
-	viper.BindEnv("scheduled.db_optimize.on_startup", "SCHEDULED_DB_OPTIMIZE_ON_STARTUP")                           //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_refresh.enabled", "SCHEDULED_METADATA_REFRESH_ENABLED")                       //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_refresh.interval", "SCHEDULED_METADATA_REFRESH_INTERVAL")                     //nolint:errcheck
-	viper.BindEnv("scheduled.metadata_refresh.on_startup", "SCHEDULED_METADATA_REFRESH_ON_STARTUP")                 //nolint:errcheck
-	viper.BindEnv("scheduled.resolve_production_authors.enabled", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED")   //nolint:errcheck
-	viper.BindEnv("scheduled.resolve_production_authors.interval", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL") //nolint:errcheck
-	viper.BindEnv("scheduled.series_prune.enabled", "SCHEDULED_SERIES_PRUNE_ENABLED")                               //nolint:errcheck
-	viper.BindEnv("scheduled.series_prune.interval", "SCHEDULED_SERIES_PRUNE_INTERVAL")                             //nolint:errcheck
-	viper.BindEnv("scheduled.series_prune.on_startup", "SCHEDULED_SERIES_PRUNE_ON_STARTUP")                         //nolint:errcheck
-	viper.BindEnv("scheduled.ai_dedup_batch.enabled", "SCHEDULED_AI_DEDUP_BATCH_ENABLED")                           //nolint:errcheck
-	viper.BindEnv("scheduled.ai_dedup_batch.interval", "SCHEDULED_AI_DEDUP_BATCH_INTERVAL")                         //nolint:errcheck
-	viper.BindEnv("scheduled.ai_dedup_batch.on_startup", "SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP")                     //nolint:errcheck
-	viper.BindEnv("scheduled.reconcile.enabled", "SCHEDULED_RECONCILE_ENABLED")                                     //nolint:errcheck
-	viper.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                   //nolint:errcheck
-	viper.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                               //nolint:errcheck
+	r.BindEnv("scheduled.library_scan.enabled", "SCHEDULED_LIBRARY_SCAN_ENABLED")                               //nolint:errcheck
+	r.BindEnv("scheduled.library_scan.interval", "SCHEDULED_LIBRARY_SCAN_INTERVAL")                             //nolint:errcheck
+	r.BindEnv("scheduled.library_scan.on_startup", "SCHEDULED_LIBRARY_SCAN_ON_STARTUP")                         //nolint:errcheck
+	r.BindEnv("scheduled.library_scan_full.enabled", "SCHEDULED_LIBRARY_SCAN_FULL_ENABLED")                     //nolint:errcheck
+	r.BindEnv("scheduled.library_scan_full.interval", "SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL")                   //nolint:errcheck
+	r.BindEnv("scheduled.library_scan_full.period_hours", "SCHEDULED_LIBRARY_SCAN_FULL_PERIOD_HOURS")           //nolint:errcheck
+	r.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
+	r.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
+	r.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
+	r.BindEnv("scheduled.acoustid_backfill.enabled", "SCHEDULED_ACOUSTID_BACKFILL_ENABLED")                     //nolint:errcheck
+	r.BindEnv("scheduled.acoustid_backfill.interval", "SCHEDULED_ACOUSTID_BACKFILL_INTERVAL")                   //nolint:errcheck
+	r.BindEnv("scheduled.acoustid_backfill.on_startup", "SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP")               //nolint:errcheck
+	r.BindEnv("scheduled.metadata_upgrade.interval", "SCHEDULED_METADATA_UPGRADE_INTERVAL")                     //nolint:errcheck
+	r.BindEnv("scheduled.metadata_upgrade.on_startup", "SCHEDULED_METADATA_UPGRADE_ON_STARTUP")                 //nolint:errcheck
+	r.BindEnv("scheduled.asin_backfill.interval", "SCHEDULED_ASIN_BACKFILL_INTERVAL")                           //nolint:errcheck
+	r.BindEnv("scheduled.catalog_harvest.interval", "SCHEDULED_CATALOG_HARVEST_INTERVAL")                       //nolint:errcheck
+	r.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
+	r.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
+	r.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
+	r.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                               //nolint:errcheck
+	r.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                             //nolint:errcheck
+	r.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                         //nolint:errcheck
+	r.BindEnv("scheduled.db_optimize.enabled", "SCHEDULED_DB_OPTIMIZE_ENABLED")                                 //nolint:errcheck
+	r.BindEnv("scheduled.db_optimize.interval", "SCHEDULED_DB_OPTIMIZE_INTERVAL")                               //nolint:errcheck
+	r.BindEnv("scheduled.db_optimize.on_startup", "SCHEDULED_DB_OPTIMIZE_ON_STARTUP")                           //nolint:errcheck
+	r.BindEnv("scheduled.metadata_refresh.enabled", "SCHEDULED_METADATA_REFRESH_ENABLED")                       //nolint:errcheck
+	r.BindEnv("scheduled.metadata_refresh.interval", "SCHEDULED_METADATA_REFRESH_INTERVAL")                     //nolint:errcheck
+	r.BindEnv("scheduled.metadata_refresh.on_startup", "SCHEDULED_METADATA_REFRESH_ON_STARTUP")                 //nolint:errcheck
+	r.BindEnv("scheduled.resolve_production_authors.enabled", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED")   //nolint:errcheck
+	r.BindEnv("scheduled.resolve_production_authors.interval", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL") //nolint:errcheck
+	r.BindEnv("scheduled.series_prune.enabled", "SCHEDULED_SERIES_PRUNE_ENABLED")                               //nolint:errcheck
+	r.BindEnv("scheduled.series_prune.interval", "SCHEDULED_SERIES_PRUNE_INTERVAL")                             //nolint:errcheck
+	r.BindEnv("scheduled.series_prune.on_startup", "SCHEDULED_SERIES_PRUNE_ON_STARTUP")                         //nolint:errcheck
+	r.BindEnv("scheduled.ai_dedup_batch.enabled", "SCHEDULED_AI_DEDUP_BATCH_ENABLED")                           //nolint:errcheck
+	r.BindEnv("scheduled.ai_dedup_batch.interval", "SCHEDULED_AI_DEDUP_BATCH_INTERVAL")                         //nolint:errcheck
+	r.BindEnv("scheduled.ai_dedup_batch.on_startup", "SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP")                     //nolint:errcheck
+	r.BindEnv("scheduled.reconcile.enabled", "SCHEDULED_RECONCILE_ENABLED")                                     //nolint:errcheck
+	r.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                   //nolint:errcheck
+	r.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                               //nolint:errcheck
 
 	// iTunes import defaults (nested under "itunes.*"). The sync keys
 	// (itunes.sync_enabled / sync_interval and their env vars) were removed
 	// on 2026-10-08 with the incremental sync; a stored value is ignored.
-	viper.SetDefault("itunes.library_write_path", "")
-	viper.SetDefault("itunes.library_read_path", "")
-	viper.SetDefault("itunes.path_trim_enabled", false)
-	viper.SetDefault("itunes.windows_root_path", "")
-	viper.SetDefault("itunes.media_root", "")
+	r.SetDefault("itunes.library_write_path", "")
+	r.SetDefault("itunes.library_read_path", "")
+	r.SetDefault("itunes.path_trim_enabled", false)
+	r.SetDefault("itunes.windows_root_path", "")
+	r.SetDefault("itunes.media_root", "")
 
 	// Auto-update defaults
-	viper.SetDefault("auto_update.enabled", false)
-	viper.SetDefault("auto_update.channel", "stable")
-	viper.SetDefault("auto_update.check_minutes", 60)
-	viper.SetDefault("auto_update.window_start", 2)
-	viper.SetDefault("auto_update.window_end", 5)
-	viper.BindEnv("auto_update.enabled", "AUTO_UPDATE_ENABLED")             //nolint:errcheck
-	viper.BindEnv("auto_update.channel", "AUTO_UPDATE_CHANNEL")             //nolint:errcheck
-	viper.BindEnv("auto_update.check_minutes", "AUTO_UPDATE_CHECK_MINUTES") //nolint:errcheck
-	viper.BindEnv("auto_update.window_start", "AUTO_UPDATE_WINDOW_START")   //nolint:errcheck
-	viper.BindEnv("auto_update.window_end", "AUTO_UPDATE_WINDOW_END")       //nolint:errcheck
+	r.SetDefault("auto_update.enabled", false)
+	r.SetDefault("auto_update.channel", "stable")
+	r.SetDefault("auto_update.check_minutes", 60)
+	r.SetDefault("auto_update.window_start", 2)
+	r.SetDefault("auto_update.window_end", 5)
+	r.BindEnv("auto_update.enabled", "AUTO_UPDATE_ENABLED")             //nolint:errcheck
+	r.BindEnv("auto_update.channel", "AUTO_UPDATE_CHANNEL")             //nolint:errcheck
+	r.BindEnv("auto_update.check_minutes", "AUTO_UPDATE_CHECK_MINUTES") //nolint:errcheck
+	r.BindEnv("auto_update.window_start", "AUTO_UPDATE_WINDOW_START")   //nolint:errcheck
+	r.BindEnv("auto_update.window_end", "AUTO_UPDATE_WINDOW_END")       //nolint:errcheck
 
 	// Maintenance window defaults
-	viper.SetDefault("maintenance.enabled", true)
-	viper.SetDefault("maintenance.window_start", 1)
-	viper.SetDefault("maintenance.window_end", 4)
+	r.SetDefault("maintenance.enabled", true)
+	r.SetDefault("maintenance.window_start", 1)
+	r.SetDefault("maintenance.window_end", 4)
 	// Per-task defaults — most maintenance tasks default true
-	viper.SetDefault("maintenance.dedup_refresh", true)
-	viper.SetDefault("maintenance.series_prune", true)
-	viper.SetDefault("maintenance.author_split", true)
-	viper.SetDefault("maintenance.tombstone_cleanup", true)
-	viper.SetDefault("maintenance.reconcile", true)
-	viper.SetDefault("maintenance.purge_deleted", true)
-	viper.SetDefault("maintenance.purge_old_logs", true)
-	viper.SetDefault("maintenance.db_optimize", true)
+	r.SetDefault("maintenance.dedup_refresh", true)
+	r.SetDefault("maintenance.series_prune", true)
+	r.SetDefault("maintenance.author_split", true)
+	r.SetDefault("maintenance.tombstone_cleanup", true)
+	r.SetDefault("maintenance.reconcile", true)
+	r.SetDefault("maintenance.purge_deleted", true)
+	r.SetDefault("maintenance.purge_old_logs", true)
+	r.SetDefault("maintenance.db_optimize", true)
 	// Non-maintenance tasks default false
-	viper.SetDefault("maintenance.library_scan", false)
-	viper.SetDefault("maintenance.library_organize", false)
-	viper.SetDefault("maintenance.metadata_refresh", false)
+	r.SetDefault("maintenance.library_scan", false)
+	r.SetDefault("maintenance.library_organize", false)
+	r.SetDefault("maintenance.metadata_refresh", false)
 	// FS-walk-based on-disk size refresh — true by default (cheap, runs nightly,
 	// keeps the FS-side cache fresh for any caller that queries physical sizes).
-	viper.SetDefault("maintenance.library_size_refresh", true)
+	r.SetDefault("maintenance.library_size_refresh", true)
 	// AcoustID online lookup is OFF by default — uses third-party quota
-	viper.SetDefault("maintenance.acoustid_online_lookup", false)
-	viper.SetDefault("maintenance.acoustid_nightly_limit", 5000)
+	r.SetDefault("maintenance.acoustid_online_lookup", false)
+	r.SetDefault("maintenance.acoustid_nightly_limit", 5000)
 	// AcoustID (local) fingerprint backfill is OFF by default as of 2026-08-11.
 	// The nightly op spawns fpcalc/ffmpeg per book file and loads the entire
 	// book table into memory before it can start; in production it held ~862 MB
 	// of live heap and was implicated in three OOM kills in one night. Opt in
 	// deliberately once the memory profile of the load phase is fixed.
-	viper.SetDefault("maintenance.acoustid_backfill", false)
+	r.SetDefault("maintenance.acoustid_backfill", false)
 	// BindEnv maps env vars so MAINTENANCE_ENABLED etc. override even without AutomaticEnv.
-	viper.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                               //nolint:errcheck
-	viper.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                     //nolint:errcheck
-	viper.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                         //nolint:errcheck
-	viper.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP") //nolint:errcheck
-	viper.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT") //nolint:errcheck
-	viper.BindEnv("maintenance.acoustid_backfill", "MAINTENANCE_ACOUSTID_BACKFILL")           //nolint:errcheck
+	r.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                               //nolint:errcheck
+	r.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                     //nolint:errcheck
+	r.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                         //nolint:errcheck
+	r.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP") //nolint:errcheck
+	r.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT") //nolint:errcheck
+	r.BindEnv("maintenance.acoustid_backfill", "MAINTENANCE_ACOUSTID_BACKFILL")           //nolint:errcheck
 
 	// Download client defaults
-	viper.SetDefault("download_client.torrent.type", "")
-	viper.SetDefault("download_client.torrent.deluge.host", "")
-	viper.SetDefault("download_client.torrent.deluge.port", 0)
-	viper.SetDefault("download_client.torrent.deluge.username", "")
-	viper.SetDefault("download_client.torrent.deluge.password", "")
+	r.SetDefault("download_client.torrent.type", "")
+	r.SetDefault("download_client.torrent.deluge.host", "")
+	r.SetDefault("download_client.torrent.deluge.port", 0)
+	r.SetDefault("download_client.torrent.deluge.username", "")
+	r.SetDefault("download_client.torrent.deluge.password", "")
 	// Path formatting & apply pipeline defaults
-	viper.SetDefault("auto_rename_on_apply", true)
-	viper.SetDefault("auto_write_tags_on_apply", true)
-	viper.SetDefault("verify_after_write", true)
-	viper.SetDefault("write_startup_readonly_key", true) // SEC-2: opt-out to disable file write
+	r.SetDefault("auto_rename_on_apply", true)
+	r.SetDefault("auto_write_tags_on_apply", true)
+	r.SetDefault("verify_after_write", true)
+	r.SetDefault("write_startup_readonly_key", true) // SEC-2: opt-out to disable file write
 
 	// Embedding + vector index defaults (nested under "embedding.*").
 	// BindEnv maps each dot-notation key to its uppercase env var name so that
 	// EMBEDDING_ENABLED, EMBEDDING_MODEL, etc. override the defaults even when
 	// AutomaticEnv() is not active (e.g. in unit tests that call InitConfig directly).
-	viper.SetDefault("embedding.enabled", true)
-	viper.SetDefault("embedding.model", "text-embedding-3-large")
-	viper.SetDefault("embedding.dimensions", 3072)
-	viper.SetDefault("embedding.base_url", "")
+	r.SetDefault("embedding.enabled", true)
+	r.SetDefault("embedding.model", "text-embedding-3-large")
+	r.SetDefault("embedding.dimensions", 3072)
+	r.SetDefault("embedding.base_url", "")
 	// "hnsw" (coder/hnsw graph, sub-linear) is the default: "chromem" is a
 	// brute-force O(n·d) cosine scan whose per-query cost grows linearly with
 	// the corpus. Measured at 1024 dims with the is_primary_version filter:
@@ -3028,76 +3063,76 @@ func InitConfig() {
 	// At ~61K books and roughly one query per book, dedup.full-scan is the
 	// difference between ~32s and ~1.9 CPU-hours. chromem stays selectable as
 	// the simple fallback; it is no longer the silent default.
-	viper.SetDefault("embedding.vector_backend", "hnsw")
+	r.SetDefault("embedding.vector_backend", "hnsw")
 	// 0, not 30: ResolveEmbeddingRequestTimeout owns the fallback, so an unset
 	// key stays distinguishable from an explicit 30 in the persisted blob.
-	viper.SetDefault("embedding.request_timeout_seconds", 0)
-	viper.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")                                 //nolint:errcheck
-	viper.BindEnv("embedding.model", "EMBEDDING_MODEL")                                     //nolint:errcheck
-	viper.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")                           //nolint:errcheck
-	viper.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")                               //nolint:errcheck
-	viper.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND")                       //nolint:errcheck
-	viper.BindEnv("embedding.request_timeout_seconds", "EMBEDDING_REQUEST_TIMEOUT_SECONDS") //nolint:errcheck
+	r.SetDefault("embedding.request_timeout_seconds", 0)
+	r.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")                                 //nolint:errcheck
+	r.BindEnv("embedding.model", "EMBEDDING_MODEL")                                     //nolint:errcheck
+	r.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")                           //nolint:errcheck
+	r.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")                               //nolint:errcheck
+	r.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND")                       //nolint:errcheck
+	r.BindEnv("embedding.request_timeout_seconds", "EMBEDDING_REQUEST_TIMEOUT_SECONDS") //nolint:errcheck
 
 	// Dedup threshold + behaviour defaults (nested under "dedup.*").
-	viper.SetDefault("dedup.book_high_threshold", 0.95)
-	viper.SetDefault("dedup.book_low_threshold", 0.85)
-	viper.SetDefault("dedup.author_high_threshold", 0.92)
-	viper.SetDefault("dedup.author_low_threshold", 0.80)
-	viper.SetDefault("dedup.auto_merge_enabled", true)
-	viper.SetDefault("dedup.embeddings_enabled", true)              // opt-out: set false on no-internet boxes
-	viper.SetDefault("dedup.llm_auto_merge_high_confidence", false) // opt-in
-	viper.SetDefault("dedup.on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
-	viper.SetDefault("dedup.chromem_lazy", false)
-	viper.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
+	r.SetDefault("dedup.book_high_threshold", 0.95)
+	r.SetDefault("dedup.book_low_threshold", 0.85)
+	r.SetDefault("dedup.author_high_threshold", 0.92)
+	r.SetDefault("dedup.author_low_threshold", 0.80)
+	r.SetDefault("dedup.auto_merge_enabled", true)
+	r.SetDefault("dedup.embeddings_enabled", true)              // opt-out: set false on no-internet boxes
+	r.SetDefault("dedup.llm_auto_merge_high_confidence", false) // opt-in
+	r.SetDefault("dedup.on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
+	r.SetDefault("dedup.chromem_lazy", false)
+	r.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
 
 	// Activity-log store backend name. Bound explicitly to ACTIVITY_BACKEND (set
 	// to pebble in production's unit file). cmd's initConfig also calls
 	// viper.AutomaticEnv(), but the explicit bind keeps the lookup working
 	// where InitConfig runs without it (tests, other entry points). Pebble is the only backend; any other value is refused by
 	// Validate (ValidateActivityBackend).
-	viper.SetDefault("activity_backend", "pebble")
-	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck
+	r.SetDefault("activity_backend", "pebble")
+	r.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck
 
 	// Author catalog (nested under "catalog.*"). Off by default.
-	viper.SetDefault("catalog.enabled", false)
-	viper.SetDefault("catalog.language", "english")
-	viper.SetDefault("catalog.marketplace", "us")
-	viper.SetDefault("catalog.harvest_rate_fraction", 0.5)
-	viper.SetDefault("catalog.max_products_per_author", 2000)
+	r.SetDefault("catalog.enabled", false)
+	r.SetDefault("catalog.language", "english")
+	r.SetDefault("catalog.marketplace", "us")
+	r.SetDefault("catalog.harvest_rate_fraction", 0.5)
+	r.SetDefault("catalog.max_products_per_author", 2000)
 
 	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
 	// INIT-4 T5). Empty by default — the compiled-in blocklist in
 	// internal/dedup/boilerplate.go is always active regardless.
-	viper.SetDefault("dedup_boilerplate.extra_title_patterns", []string{})
-	viper.SetDefault("dedup_boilerplate.extra_prefix_patterns", []string{})
+	r.SetDefault("dedup_boilerplate.extra_title_patterns", []string{})
+	r.SetDefault("dedup_boilerplate.extra_prefix_patterns", []string{})
 
 	// Metadata candidate scoring defaults (nested under "metadata_scoring.*").
 	// BindEnv maps env vars so METADATA_SCORING_* overrides even without AutomaticEnv.
-	viper.SetDefault("metadata_scoring.embedding_enabled", false)
-	viper.SetDefault("metadata_scoring.embedding_min_score", 0.82)
-	viper.SetDefault("metadata_scoring.embedding_best_match", 0.88)
-	viper.SetDefault("metadata_scoring.llm_enabled", false)
-	viper.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
-	viper.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
+	r.SetDefault("metadata_scoring.embedding_enabled", false)
+	r.SetDefault("metadata_scoring.embedding_min_score", 0.82)
+	r.SetDefault("metadata_scoring.embedding_best_match", 0.88)
+	r.SetDefault("metadata_scoring.llm_enabled", false)
+	r.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
+	r.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
 	// Scoring literals extracted into config (INIT-3-T1) — defaults equal
 	// today's hardcoded literals so behavior is bit-identical until an
 	// operator tunes a knob. See MetadataScoringConfig for field docs.
-	viper.SetDefault("metadata_scoring.transcription_title_exact_boost", 2.0)
-	viper.SetDefault("metadata_scoring.transcription_title_substr_boost", 1.4)
-	viper.SetDefault("metadata_scoring.transcription_author_boost", 1.6)
-	viper.SetDefault("metadata_scoring.transcription_narrator_boost", 1.4)
-	viper.SetDefault("metadata_scoring.compilation_penalty", 0.15)
-	viper.SetDefault("metadata_scoring.rich_metadata_field_bonus", 0.05)
-	viper.SetDefault("metadata_scoring.rich_metadata_bonus_cap", 0.15)
-	viper.SetDefault("metadata_scoring.f1_min_score", 0.35)
-	viper.SetDefault("metadata_scoring.series_name_match_boost", 1.4)
-	viper.SetDefault("metadata_scoring.series_number_exact_boost", 2.0)
-	viper.SetDefault("metadata_scoring.series_number_wrong_penalty", 0.5)
-	viper.SetDefault("metadata_scoring.duration_tier_multipliers", []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50})
-	viper.SetDefault("metadata_scoring.duration_tier_scores", []float64{20, 15, 10, 0, -10, -20})
-	viper.SetDefault("metadata_scoring.bulk_fetch_workers", 4)
-	viper.SetDefault("metadata_scoring.write_back_workers", 4)
+	r.SetDefault("metadata_scoring.transcription_title_exact_boost", 2.0)
+	r.SetDefault("metadata_scoring.transcription_title_substr_boost", 1.4)
+	r.SetDefault("metadata_scoring.transcription_author_boost", 1.6)
+	r.SetDefault("metadata_scoring.transcription_narrator_boost", 1.4)
+	r.SetDefault("metadata_scoring.compilation_penalty", 0.15)
+	r.SetDefault("metadata_scoring.rich_metadata_field_bonus", 0.05)
+	r.SetDefault("metadata_scoring.rich_metadata_bonus_cap", 0.15)
+	r.SetDefault("metadata_scoring.f1_min_score", 0.35)
+	r.SetDefault("metadata_scoring.series_name_match_boost", 1.4)
+	r.SetDefault("metadata_scoring.series_number_exact_boost", 2.0)
+	r.SetDefault("metadata_scoring.series_number_wrong_penalty", 0.5)
+	r.SetDefault("metadata_scoring.duration_tier_multipliers", []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50})
+	r.SetDefault("metadata_scoring.duration_tier_scores", []float64{20, 15, 10, 0, -10, -20})
+	r.SetDefault("metadata_scoring.bulk_fetch_workers", 4)
+	r.SetDefault("metadata_scoring.write_back_workers", 4)
 
 	// AI backend-mode toggle. Modes default empty (resolved from legacy fields
 	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL defaults to
@@ -3110,47 +3145,47 @@ func InitConfig() {
 	// EffectiveLLMMode/EffectiveEmbeddingMode. Must never be reinstated as a
 	// shipped default; a real local endpoint belongs in gitignored local
 	// config or an explicit env var (AI_BACKEND_LOCAL_BASE_URL below).
-	viper.SetDefault("ai_backend.embedding_mode", "")
-	viper.SetDefault("ai_backend.llm_mode", "")
-	viper.SetDefault("ai_backend.local_base_url", "")
-	viper.SetDefault("ai_backend.local_embedding_model", "bge-m3")
-	viper.SetDefault("ai_backend.local_llm_model", "qwen2.5:7b-instruct")
+	r.SetDefault("ai_backend.embedding_mode", "")
+	r.SetDefault("ai_backend.llm_mode", "")
+	r.SetDefault("ai_backend.local_base_url", "")
+	r.SetDefault("ai_backend.local_embedding_model", "bge-m3")
+	r.SetDefault("ai_backend.local_llm_model", "qwen2.5:7b-instruct")
 	// 0, not the real defaults: ResolveAIParseBatch owns the fallback, so there
 	// is exactly one place that decides what "unset" means. Seeding 20/30 here
 	// too would make an operator setting 0 (a plausible "use the default") land
 	// on a different path than an operator omitting the key entirely.
-	viper.SetDefault("ai_backend.parse_batch_size", 0)
-	viper.SetDefault("ai_backend.parse_batch_timeout_seconds", 0)
-	viper.SetDefault("ai_backend.parse_batch_workers", 0)
-	viper.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
-	viper.BindEnv("ai_backend.llm_mode", "AI_BACKEND_LLM_MODE")                           //nolint:errcheck
-	viper.BindEnv("ai_backend.local_base_url", "AI_BACKEND_LOCAL_BASE_URL")               //nolint:errcheck
-	viper.BindEnv("ai_backend.local_embedding_model", "AI_BACKEND_LOCAL_EMBEDDING_MODEL") //nolint:errcheck
-	viper.BindEnv("ai_backend.local_llm_model", "AI_BACKEND_LOCAL_LLM_MODEL")             //nolint:errcheck
-	viper.BindEnv("ai_backend.parse_batch_size", "AI_BACKEND_PARSE_BATCH_SIZE")           //nolint:errcheck
-	viper.BindEnv("ai_backend.parse_batch_timeout_seconds",                               //nolint:errcheck
+	r.SetDefault("ai_backend.parse_batch_size", 0)
+	r.SetDefault("ai_backend.parse_batch_timeout_seconds", 0)
+	r.SetDefault("ai_backend.parse_batch_workers", 0)
+	r.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
+	r.BindEnv("ai_backend.llm_mode", "AI_BACKEND_LLM_MODE")                           //nolint:errcheck
+	r.BindEnv("ai_backend.local_base_url", "AI_BACKEND_LOCAL_BASE_URL")               //nolint:errcheck
+	r.BindEnv("ai_backend.local_embedding_model", "AI_BACKEND_LOCAL_EMBEDDING_MODEL") //nolint:errcheck
+	r.BindEnv("ai_backend.local_llm_model", "AI_BACKEND_LOCAL_LLM_MODEL")             //nolint:errcheck
+	r.BindEnv("ai_backend.parse_batch_size", "AI_BACKEND_PARSE_BATCH_SIZE")           //nolint:errcheck
+	r.BindEnv("ai_backend.parse_batch_timeout_seconds",                               //nolint:errcheck
 		"AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS")
-	viper.BindEnv("ai_backend.parse_batch_workers", "AI_BACKEND_PARSE_BATCH_WORKERS") //nolint:errcheck
+	r.BindEnv("ai_backend.parse_batch_workers", "AI_BACKEND_PARSE_BATCH_WORKERS") //nolint:errcheck
 
-	viper.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")                               //nolint:errcheck
-	viper.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")                           //nolint:errcheck
-	viper.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH")                         //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                                           //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")                             //nolint:errcheck
-	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")                                 //nolint:errcheck
-	viper.BindEnv("metadata_scoring.transcription_title_exact_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST")   //nolint:errcheck
-	viper.BindEnv("metadata_scoring.transcription_title_substr_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST") //nolint:errcheck
-	viper.BindEnv("metadata_scoring.transcription_author_boost", "METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST")             //nolint:errcheck
-	viper.BindEnv("metadata_scoring.transcription_narrator_boost", "METADATA_SCORING_TRANSCRIPTION_NARRATOR_BOOST")         //nolint:errcheck
-	viper.BindEnv("metadata_scoring.compilation_penalty", "METADATA_SCORING_COMPILATION_PENALTY")                           //nolint:errcheck
-	viper.BindEnv("metadata_scoring.rich_metadata_field_bonus", "METADATA_SCORING_RICH_METADATA_FIELD_BONUS")               //nolint:errcheck
-	viper.BindEnv("metadata_scoring.rich_metadata_bonus_cap", "METADATA_SCORING_RICH_METADATA_BONUS_CAP")                   //nolint:errcheck
-	viper.BindEnv("metadata_scoring.f1_min_score", "METADATA_SCORING_F1_MIN_SCORE")                                         //nolint:errcheck
-	viper.BindEnv("metadata_scoring.series_name_match_boost", "METADATA_SCORING_SERIES_NAME_MATCH_BOOST")                   //nolint:errcheck
-	viper.BindEnv("metadata_scoring.series_number_exact_boost", "METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST")               //nolint:errcheck
-	viper.BindEnv("metadata_scoring.series_number_wrong_penalty", "METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY")           //nolint:errcheck
-	viper.BindEnv("metadata_scoring.bulk_fetch_workers", "METADATA_SCORING_BULK_FETCH_WORKERS")                             //nolint:errcheck
-	viper.BindEnv("metadata_scoring.write_back_workers", "METADATA_SCORING_WRITE_BACK_WORKERS")                             //nolint:errcheck
+	r.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")                               //nolint:errcheck
+	r.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")                           //nolint:errcheck
+	r.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH")                         //nolint:errcheck
+	r.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                                           //nolint:errcheck
+	r.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")                             //nolint:errcheck
+	r.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")                                 //nolint:errcheck
+	r.BindEnv("metadata_scoring.transcription_title_exact_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST")   //nolint:errcheck
+	r.BindEnv("metadata_scoring.transcription_title_substr_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST") //nolint:errcheck
+	r.BindEnv("metadata_scoring.transcription_author_boost", "METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST")             //nolint:errcheck
+	r.BindEnv("metadata_scoring.transcription_narrator_boost", "METADATA_SCORING_TRANSCRIPTION_NARRATOR_BOOST")         //nolint:errcheck
+	r.BindEnv("metadata_scoring.compilation_penalty", "METADATA_SCORING_COMPILATION_PENALTY")                           //nolint:errcheck
+	r.BindEnv("metadata_scoring.rich_metadata_field_bonus", "METADATA_SCORING_RICH_METADATA_FIELD_BONUS")               //nolint:errcheck
+	r.BindEnv("metadata_scoring.rich_metadata_bonus_cap", "METADATA_SCORING_RICH_METADATA_BONUS_CAP")                   //nolint:errcheck
+	r.BindEnv("metadata_scoring.f1_min_score", "METADATA_SCORING_F1_MIN_SCORE")                                         //nolint:errcheck
+	r.BindEnv("metadata_scoring.series_name_match_boost", "METADATA_SCORING_SERIES_NAME_MATCH_BOOST")                   //nolint:errcheck
+	r.BindEnv("metadata_scoring.series_number_exact_boost", "METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST")               //nolint:errcheck
+	r.BindEnv("metadata_scoring.series_number_wrong_penalty", "METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY")           //nolint:errcheck
+	r.BindEnv("metadata_scoring.bulk_fetch_workers", "METADATA_SCORING_BULK_FETCH_WORKERS")                             //nolint:errcheck
+	r.BindEnv("metadata_scoring.write_back_workers", "METADATA_SCORING_WRITE_BACK_WORKERS")                             //nolint:errcheck
 
 	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
 	// Read by internal/dedup/unified.LoadScoreConfig via Viper as the layer
@@ -3159,18 +3194,27 @@ func InitConfig() {
 	// (registry_wire.go at startup; the UpdateService dedup-score sink on
 	// PUT /api/v1/config and dedup.calibrate-composite apply at runtime).
 	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
-	viper.SetDefault("dedup.signals.band_certain_min", 97.0)
-	viper.SetDefault("dedup.signals.band_high_min", 90.0)
-	viper.SetDefault("dedup.signals.band_medium_min", 75.0)
-	viper.SetDefault("dedup.signals.band_review_min", 60.0)
+	r.SetDefault("dedup.signals.band_certain_min", 97.0)
+	r.SetDefault("dedup.signals.band_high_min", 90.0)
+	r.SetDefault("dedup.signals.band_medium_min", 75.0)
+	r.SetDefault("dedup.signals.band_review_min", 60.0)
 	// Per-kind boost defaults for supporting signals.
-	viper.SetDefault("dedup.signals.duration.boost", 4.0)
-	viper.SetDefault("dedup.signals.folder_path.boost", 3.0)
+	r.SetDefault("dedup.signals.duration.boost", 4.0)
+	r.SetDefault("dedup.signals.folder_path.boost", 3.0)
 
 	// Sourced from internal/audioext so the shipped default and every
 	// downstream predicate cannot drift apart. See that package's doc comment.
-	viper.SetDefault("supported_extensions", audioext.Default())
-	viper.SetDefault("exclude_patterns", []string{})
+	r.SetDefault("supported_extensions", audioext.Default())
+	r.SetDefault("exclude_patterns", []string{})
+}
+
+// configFromViper builds a Config from every key v holds: the one place a viper
+// value (shipped default, config file, environment) becomes a Config field.
+// InitConfig calls it on the process-wide viper; factoryDefaultConfig on a
+// private viper holding only the defaults.
+func configFromViper(v *viper.Viper) Config {
+	var cfg Config
+	c := &cfg
 
 	// 🔴 len > 0, NOT viper.IsSet. IsSet is true for `supported_extensions: []`
 	// in config.yaml, so the old guard let a user's empty list through and
@@ -3179,625 +3223,624 @@ func InitConfig() {
 	// internal/config/persistence.go already guards its own load with len > 0;
 	// this path had simply never been given the same treatment.
 	supportedExtensions := audioext.Default()
-	if configured := viper.GetStringSlice("supported_extensions"); len(configured) > 0 {
+	if configured := v.GetStringSlice("supported_extensions"); len(configured) > 0 {
 		supportedExtensions = configured
 	}
-	excludePatterns := viper.GetStringSlice("exclude_patterns")
+	excludePatterns := v.GetStringSlice("exclude_patterns")
 
 	// WHY Mutate: whole-struct init; correct even if tests call InitConfig concurrently.
-	Mutate(func(c *Config) {
-		*c = Config{
-			// Core paths
-			RootDir:       viper.GetString("root_dir"),
-			DatabasePath:  viper.GetString("database_path"),
-			DatabaseType:  viper.GetString("database_type"),
-			PlaylistDir:   viper.GetString("playlist_dir"),
-			SetupComplete: viper.GetBool("setup_complete"),
+	*c = Config{
+		// Core paths
+		RootDir:       v.GetString("root_dir"),
+		DatabasePath:  v.GetString("database_path"),
+		DatabaseType:  v.GetString("database_type"),
+		PlaylistDir:   v.GetString("playlist_dir"),
+		SetupComplete: v.GetBool("setup_complete"),
 
-			// Library organization
-			OrganizationStrategy:    viper.GetString("organization_strategy"),
-			ScanOnStartup:           viper.GetBool("scan_on_startup"),
-			AutoOrganize:            viper.GetBool("auto_organize"),
-			AutoScanEnabled:         viper.GetBool("auto_scan_enabled"),
-			AutoScanDebounceSeconds: viper.GetInt("auto_scan_debounce_seconds"),
-			FolderNamingPattern:     viper.GetString("folder_naming_pattern"),
-			FileNamingPattern:       viper.GetString("file_naming_pattern"),
-			CreateBackups:           viper.GetBool("create_backups"),
-			BackupDir:               viper.GetString("backup_dir"),
-			BackupMaxTotalBytes:     viper.GetInt64("backup_max_total_bytes"),
-			BackupCompression:       viper.GetString("backup_compression"),
-			BackupCompressionLevel:  viper.GetInt("backup_compression_level"),
+		// Library organization
+		OrganizationStrategy:    v.GetString("organization_strategy"),
+		ScanOnStartup:           v.GetBool("scan_on_startup"),
+		AutoOrganize:            v.GetBool("auto_organize"),
+		AutoScanEnabled:         v.GetBool("auto_scan_enabled"),
+		AutoScanDebounceSeconds: v.GetInt("auto_scan_debounce_seconds"),
+		FolderNamingPattern:     v.GetString("folder_naming_pattern"),
+		FileNamingPattern:       v.GetString("file_naming_pattern"),
+		CreateBackups:           v.GetBool("create_backups"),
+		BackupDir:               v.GetString("backup_dir"),
+		BackupMaxTotalBytes:     v.GetInt64("backup_max_total_bytes"),
+		BackupCompression:       v.GetString("backup_compression"),
+		BackupCompressionLevel:  v.GetInt("backup_compression_level"),
 
-			// Storage quotas
-			EnableDiskQuota:  viper.GetBool("enable_disk_quota"),
-			DiskQuotaPercent: viper.GetInt("disk_quota_percent"),
-			EnableUserQuotas: viper.GetBool("enable_user_quotas"),
+		// Storage quotas
+		EnableDiskQuota:  v.GetBool("enable_disk_quota"),
+		DiskQuotaPercent: v.GetInt("disk_quota_percent"),
+		EnableUserQuotas: v.GetBool("enable_user_quotas"),
 
-			// Metadata
-			WriteBackMetadata: viper.GetBool("write_back_metadata"),
-			EmbedCoverArt:     viper.GetBool("embed_cover_art"),
+		// Metadata
+		WriteBackMetadata: v.GetBool("write_back_metadata"),
+		EmbedCoverArt:     v.GetBool("embed_cover_art"),
 
-			// Open Library dumps
-			OpenLibraryDumpEnabled: viper.GetBool("openlibrary_dump_enabled"),
-			OpenLibraryDumpDir:     viper.GetString("openlibrary_dump_dir"),
+		// Open Library dumps
+		OpenLibraryDumpEnabled: v.GetBool("openlibrary_dump_enabled"),
+		OpenLibraryDumpDir:     v.GetString("openlibrary_dump_dir"),
 
-			// Hardcover.app
-			HardcoverAPIToken: viper.GetString("hardcover_api_token"),
+		// Hardcover.app
+		HardcoverAPIToken: v.GetString("hardcover_api_token"),
 
-			// Google Books
-			GoogleBooksAPIKey: viper.GetString("google_books_api_key"),
+		// Google Books
+		GoogleBooksAPIKey: v.GetString("google_books_api_key"),
 
-			// Read explicitly: this literal is the ONLY place viper values reach
-			// AppConfig, and omitting the key left it nil even on an install
-			// with no stored blob, so the shipped default never took effect.
-			EnabledSortIndexes: viper.GetStringSlice("enabled_sort_indexes"),
+		// Read explicitly: this literal is the ONLY place viper values reach
+		// AppConfig, and omitting the key left it nil even on an install
+		// with no stored blob, so the shipped default never took effect.
+		EnabledSortIndexes: v.GetStringSlice("enabled_sort_indexes"),
 
-			// AI parsing
-			EnableAIParsing:    viper.GetBool("enable_ai_parsing"),
-			AIEndpointsRouting: viper.GetBool("ai_endpoints_routing"),
+		// AI parsing
+		EnableAIParsing:    v.GetBool("enable_ai_parsing"),
+		AIEndpointsRouting: v.GetBool("ai_endpoints_routing"),
+		// Usually UI-managed through the stored blob, which wins on load;
+		// read here so a config-file list is not silently dropped.
+		AIEndpoints:    viperDecodeJSON[[]AIEndpoint](v, "ai_endpoints"),
+		OpenAIAPIKey:   v.GetString("openai_api_key"),
+		AcoustIDAPIKey: v.GetString("acoustid_api_key"),
+
+		// Activity-log store backend. Read from viper here so config.yaml's
+		// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
+		// the field, and a leftover "sqlite" is refused by Validate rather
+		// than dropped — the mapstructure tag is inert because this config is
+		// built by explicit GetString calls, not viper.Unmarshal. Also
+		// re-applied in applyEnvAuthoritativeConfig so the env value survives
+		// the DB-blob config overlay (see the ABS keys there).
+		ActivityBackend: v.GetString("activity_backend"),
+
+		FPParallelWorkers:                    v.GetInt("fp_parallel_workers"),
+		FingerprintRemoteWorkersEnabled:      v.GetBool("fingerprint_remote_workers_enabled"),
+		FingerprintWorkerToolVersions:        v.GetStringSlice("fingerprint_worker_tool_versions"),
+		FingerprintWindowReferenceTools:      v.GetString("fingerprint_window_reference_tools"),
+		FingerprintLengthSec:                 v.GetInt("fingerprint_length_sec"),
+		WhisperClipCacheDir:                  v.GetString("whisper_clip_cache_dir"),
+		WhisperBatchSleepMS:                  v.GetInt("whisper_batch_sleep_ms"),
+		WhisperBatchSize:                     v.GetInt("whisper_batch_size"),
+		WhisperMaxInFlight:                   v.GetInt("whisper_max_in_flight"),
+		OpenAIBaseURL:                        v.GetString("openai_base_url"),
+		ABSAuthProbeEnabled:                  v.GetBool("abs_auth_probe_enabled"),
+		AuthorityEvidenceEnabled:             v.GetBool("authority_evidence_enabled"),
+		RetireVersionsApplyEnabled:           v.GetBool("retire_versions_apply_enabled"),
+		KeptSweepApplyEnabled:                v.GetBool("kept_sweep_apply_enabled"),
+		ABSItunesPositionBackfillUserID:      v.GetString("abs_itunes_position_backfill_user_id"),
+		OTelExporterOTLPEndpoint:             v.GetString("otel_exporter_otlp_endpoint"),
+		OTelMetricsOTLPEndpoint:              v.GetString("otel_metrics_otlp_endpoint"),
+		OTelMetricsOTLPInterval:              v.GetString("otel_metrics_otlp_interval"),
+		OTelMetricsOTLPInsecure:              v.GetBool("otel_metrics_otlp_insecure"),
+		TelemetryEnvironment:                 v.GetString("telemetry_environment"),
+		ListWarmerHeapDeltaMB:                v.GetInt("list_warmer_heap_delta_mb"),
+		ListWarmerTrickleIntervalMS:          v.GetInt("list_warmer_trickle_interval_ms"),
+		LibraryCountsCacheMinIntervalSeconds: v.GetInt("library_counts_cache_min_interval_seconds"),
+		BleveDescriptionMaxChars:             v.GetInt("bleve_description_max_chars"),
+		MetadataReviewModel:                  v.GetString("metadata_review_model"),
+		FilenameParseModel:                   v.GetString("filename_parse_model"),
+		CoverArtModel:                        v.GetString("cover_art_model"),
+
+		// Performance
+		ConcurrentScans:                     v.GetInt("concurrent_scans"),
+		ScanProgressEvery:                   v.GetInt("scan_progress_every"),
+		ScanStandDownGraceSeconds:           v.GetInt("scan_standdown_grace_seconds"),
+		ChapterConsolidationThresholdMin:    v.GetInt("chapter_consolidation_threshold_min"),
+		RepairChapterMaxMin:                 v.GetInt("repair_chapter_max_min"),
+		FragmentWindowContainmentMin:        v.GetFloat64("fragment_window_containment_min"),
+		MetadataCandidateFetchWorkers:       v.GetInt("metadata_candidate_fetch_workers"),
+		IdentificationAdvanceEnabled:        v.GetBool("identification_advance_enabled"),
+		GoogleBooksFallbackDailyLimit:       v.GetInt("google_books_fallback_daily_limit"),
+		GoogleBooksDailyLimit:               v.GetInt("google_books_daily_limit"),
+		GoogleBooksBackgroundDailyLimit:     v.GetInt("google_books_background_daily_limit"),
+		CoalesceShatteredSiblings:           v.GetBool("coalesce_shattered_siblings"),
+		OperationTimeoutMinutes:             v.GetInt("operation_timeout_minutes"),
+		DBCensusExactReadMBPerSec:           v.GetInt("db_census_exact_read_mb_per_sec"),
+		DBCensusExactCooldownHours:          v.GetInt("db_census_exact_cooldown_hours"),
+		MinBookSizeBytes:                    v.GetInt64("min_book_size_bytes"),
+		MinRescanAgeHours:                   v.GetInt("min_rescan_age_hours"),
+		APIRateLimitPerMinute:               v.GetInt("api_rate_limit_per_minute"),
+		JSONBodyLimitMB:                     v.GetInt("json_body_limit_mb"),
+		UploadBodyLimitMB:                   v.GetInt("upload_body_limit_mb"),
+		MasterListRetention:                 v.GetInt("master_list_retention"),
+		EnableAuth:                          v.GetBool("enable_auth"),
+		ActivityLogNightlyCompactionEnabled: v.GetBool("activity_log_nightly_compaction_enabled"),
+		ActivityLogFullDetailDays:           v.GetInt("activity_log_full_detail_days"),
+		ActivityLogCompactionDays:           v.GetInt("activity_log_compaction_days"),
+		ActivityLogRetentionChangeDays:      v.GetInt("activity_log_retention_change_days"),
+		ActivityLogRetentionDebugDays:       v.GetInt("activity_log_retention_debug_days"),
+		LogRetentionDays:                    v.GetInt("log_retention_days"),
+		OperationLogRetentionDays:           v.GetInt("operation_log_retention_days"),
+		AIJournalRetentionDays:              v.GetInt("ai_journal_retention_days"),
+		EnableRateLimit:                     v.GetBool("enable_rate_limit"),
+		ReviewApplyEnabled:                  v.GetBool("review_apply_enabled"),
+		BulkApplyMaxItems:                   v.GetInt("bulk_apply_max_items"),
+		BasicAuthEnabled:                    v.GetBool("basic_auth_enabled"),
+		BasicAuthUsername:                   v.GetString("basic_auth_username"),
+		BasicAuthPassword:                   v.GetString("basic_auth_password"),
+
+		// OAuth / Cloudflare Access. These are environment-authoritative in prod
+		// (systemd Environment= drop-in) but read here via viper like everything
+		// else — the BindEnv bindings above make viper.GetX honor the env. The DB
+		// config-blob load later overwrites this whole struct, so the env values are
+		// re-applied on top of the blob by applyEnvAuthoritativeConfig (persistence.go).
+		OAuthEnabled:            v.GetBool("oauth_enabled"),
+		OAuthGithubClientID:     v.GetString("oauth_github_client_id"),
+		OAuthGithubClientSecret: v.GetString("oauth_github_client_secret"),
+		OAuthGoogleClientID:     v.GetString("oauth_google_client_id"),
+		OAuthGoogleClientSecret: v.GetString("oauth_google_client_secret"),
+		OAuthRedirectBaseURL:    v.GetString("oauth_redirect_base_url"),
+		OAuthAllowedEmails:      v.GetString("oauth_allowed_emails"),
+		OAuthDefaultRole:        v.GetString("oauth_default_role"),
+		CFAccessTeamDomain:      v.GetString("cf_access_team_domain"),
+		CFAccessAUD:             v.GetString("cf_access_aud"),
+		OwnerEmail:              v.GetString("owner_email"),
+		WhisperRemoteURL:        v.GetString("whisper_remote_url"),
+		WhisperEndpoints:        ParseWhisperEndpoints(v.GetString("whisper_endpoints")),
+		WhisperRequires:         ParseLabelList(v.GetString("whisper_requires")),
+
+		// Audiobookshelf sync API (feature-flagged OFF by default).
+		ABSAPIEnabled:       v.GetBool("abs_api_enabled"),
+		ABSAuthModes:        v.GetString("abs_auth_modes"),
+		ABSJWTSecret:        v.GetString("abs_jwt_secret"),
+		ABSAccessTokenTTL:   v.GetString("abs_access_token_ttl"),
+		ABSRefreshTokenTTL:  v.GetString("abs_refresh_token_ttl"),
+		ABSRefreshGrace:     v.GetString("abs_refresh_grace"),
+		ABSSessionMaxTTL:    v.GetString("abs_session_max_ttl"),
+		ABSServerVersion:    v.GetString("abs_server_version"),
+		ABSDefaultLibraryID: v.GetString("abs_default_library_id"),
+
+		// Memory management
+		CacheInvalidateOnBookUpdate: v.GetBool("cache_invalidate_on_book_update"),
+		MetadataFetchCacheTTLDays:   v.GetInt("metadata_fetch_cache_ttl_days"),
+		BootstrapKeyTTL:             v.GetString("bootstrap_key_ttl"),
+		BootstrapKeyTTLDays:         v.GetInt("bootstrap_key_ttl_days"),
+
+		// Shared provider-answer cache (metadata_fetch.*)
+		MetadataFetch: MetadataFetchConfig{
+			SharedCache:            v.GetBool("metadata_fetch.shared_cache"),
+			CatalogStage:           v.GetBool("metadata_fetch.catalog_stage"),
+			FolderParsePersonTitle: v.GetBool("metadata_fetch.folder_parse_person_title"),
+			NegativeTTLDays: MetadataFetchNegativeTTLDays{
+				Audible:     v.GetInt("metadata_fetch.negative_ttl_days.audible"),
+				Audnexus:    v.GetInt("metadata_fetch.negative_ttl_days.audnexus"),
+				OpenLibrary: v.GetInt("metadata_fetch.negative_ttl_days.openlibrary"),
+				Google:      v.GetInt("metadata_fetch.negative_ttl_days.google"),
+			},
+		},
+
+		// Lifecycle / retention
+		PurgeSoftDeletedAfterDays:   v.GetInt("purge_soft_deleted_after_days"),
+		PurgeSoftDeletedDeleteFiles: v.GetBool("purge_soft_deleted_delete_files"),
+		BackupRetentionDays:         v.GetInt("backup_retention_days"),
+
+		// Logging
+		LogLevel: v.GetString("log_level"),
+
+		// Auto-update
+		AutoUpdate: AutoUpdateConfig{
+			Enabled:      v.GetBool("auto_update.enabled"),
+			Channel:      v.GetString("auto_update.channel"),
+			CheckMinutes: v.GetInt("auto_update.check_minutes"),
+			WindowStart:  v.GetInt("auto_update.window_start"),
+			WindowEnd:    v.GetInt("auto_update.window_end"),
+		},
+
+		// Maintenance window (nested sub-struct)
+		Maintenance: MaintenanceConfig{
+			Enabled:              v.GetBool("maintenance.enabled"),
+			WindowStart:          v.GetInt("maintenance.window_start"),
+			WindowEnd:            v.GetInt("maintenance.window_end"),
+			DedupRefresh:         v.GetBool("maintenance.dedup_refresh"),
+			SeriesPrune:          v.GetBool("maintenance.series_prune"),
+			AuthorSplit:          v.GetBool("maintenance.author_split"),
+			TombstoneCleanup:     v.GetBool("maintenance.tombstone_cleanup"),
+			Reconcile:            v.GetBool("maintenance.reconcile"),
+			PurgeDeleted:         v.GetBool("maintenance.purge_deleted"),
+			PurgeOldLogs:         v.GetBool("maintenance.purge_old_logs"),
+			DbOptimize:           v.GetBool("maintenance.db_optimize"),
+			LibraryScan:          v.GetBool("maintenance.library_scan"),
+			LibraryOrganize:      v.GetBool("maintenance.library_organize"),
+			MetadataRefresh:      v.GetBool("maintenance.metadata_refresh"),
+			LibrarySizeRefresh:   v.GetBool("maintenance.library_size_refresh"),
+			AcoustIDOnlineLookup: v.GetBool("maintenance.acoustid_online_lookup"),
+			AcoustIDNightlyLimit: v.GetInt("maintenance.acoustid_nightly_limit"),
+			AcoustIDBackfill:     v.GetBool("maintenance.acoustid_backfill"),
+		},
+
+		// iTunes import (nested sub-struct)
+		ITunes: ITunesConfig{
+			LibraryITLPath:  v.GetString("itunes.library_write_path"),
+			LibraryReadPath: v.GetString("itunes.library_read_path"),
+			PathTrimEnabled: v.GetBool("itunes.path_trim_enabled"),
+			WindowsRootPath: v.GetString("itunes.windows_root_path"),
+			MediaRoot:       v.GetString("itunes.media_root"),
 			// Usually UI-managed through the stored blob, which wins on load;
 			// read here so a config-file list is not silently dropped.
-			AIEndpoints:    viperDecodeJSON[[]AIEndpoint]("ai_endpoints"),
-			OpenAIAPIKey:   viper.GetString("openai_api_key"),
-			AcoustIDAPIKey: viper.GetString("acoustid_api_key"),
+			PathMappings: viperDecodeJSON[[]ITunesPathMap](v, "itunes.path_mappings"),
+			Libraries: LibrarySet{
+				Original: LibraryRef{
+					ITLPath: v.GetString("itunes.libraries.original.itl_path"),
+					XMLPath: v.GetString("itunes.libraries.original.xml_path"),
+					Frozen:  v.GetBool("itunes.libraries.original.frozen"),
+				},
+				AO: LibraryRef{
+					ITLPath: v.GetString("itunes.libraries.ao.itl_path"),
+					XMLPath: v.GetString("itunes.libraries.ao.xml_path"),
+					Frozen:  v.GetBool("itunes.libraries.ao.frozen"),
+				},
+				PointedAt:    v.GetString("itunes.libraries.pointed_at"),
+				ImportSource: v.GetString("itunes.libraries.import_source"),
+			},
+		},
 
-			// Activity-log store backend. Read from viper here so config.yaml's
-			// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
-			// the field, and a leftover "sqlite" is refused by Validate rather
-			// than dropped — the mapstructure tag is inert because this config is
-			// built by explicit GetString calls, not viper.Unmarshal. Also
-			// re-applied in applyEnvAuthoritativeConfig so the env value survives
-			// the DB-blob config overlay (see the ABS keys there).
-			ActivityBackend: viper.GetString("activity_backend"),
-
-			FPParallelWorkers:                    viper.GetInt("fp_parallel_workers"),
-			FingerprintRemoteWorkersEnabled:      viper.GetBool("fingerprint_remote_workers_enabled"),
-			FingerprintWorkerToolVersions:        viper.GetStringSlice("fingerprint_worker_tool_versions"),
-			FingerprintWindowReferenceTools:      viper.GetString("fingerprint_window_reference_tools"),
-			FingerprintLengthSec:                 viper.GetInt("fingerprint_length_sec"),
-			WhisperClipCacheDir:                  viper.GetString("whisper_clip_cache_dir"),
-			WhisperBatchSleepMS:                  viper.GetInt("whisper_batch_sleep_ms"),
-			WhisperBatchSize:                     viper.GetInt("whisper_batch_size"),
-			WhisperMaxInFlight:                   viper.GetInt("whisper_max_in_flight"),
-			OpenAIBaseURL:                        viper.GetString("openai_base_url"),
-			ABSAuthProbeEnabled:                  viper.GetBool("abs_auth_probe_enabled"),
-			AuthorityEvidenceEnabled:             viper.GetBool("authority_evidence_enabled"),
-			RetireVersionsApplyEnabled:           viper.GetBool("retire_versions_apply_enabled"),
-			KeptSweepApplyEnabled:                viper.GetBool("kept_sweep_apply_enabled"),
-			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
-			OTelExporterOTLPEndpoint:             viper.GetString("otel_exporter_otlp_endpoint"),
-			OTelMetricsOTLPEndpoint:              viper.GetString("otel_metrics_otlp_endpoint"),
-			OTelMetricsOTLPInterval:              viper.GetString("otel_metrics_otlp_interval"),
-			OTelMetricsOTLPInsecure:              viper.GetBool("otel_metrics_otlp_insecure"),
-			TelemetryEnvironment:                 viper.GetString("telemetry_environment"),
-			ListWarmerHeapDeltaMB:                viper.GetInt("list_warmer_heap_delta_mb"),
-			ListWarmerTrickleIntervalMS:          viper.GetInt("list_warmer_trickle_interval_ms"),
-			LibraryCountsCacheMinIntervalSeconds: viper.GetInt("library_counts_cache_min_interval_seconds"),
-			BleveDescriptionMaxChars:             viper.GetInt("bleve_description_max_chars"),
-			MetadataReviewModel:                  viper.GetString("metadata_review_model"),
-			FilenameParseModel:                   viper.GetString("filename_parse_model"),
-			CoverArtModel:                        viper.GetString("cover_art_model"),
-
-			// Performance
-			ConcurrentScans:                     viper.GetInt("concurrent_scans"),
-			ScanProgressEvery:                   viper.GetInt("scan_progress_every"),
-			ScanStandDownGraceSeconds:           viper.GetInt("scan_standdown_grace_seconds"),
-			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
-			RepairChapterMaxMin:                 viper.GetInt("repair_chapter_max_min"),
-			FragmentWindowContainmentMin:        viper.GetFloat64("fragment_window_containment_min"),
-			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
-			IdentificationAdvanceEnabled:        viper.GetBool("identification_advance_enabled"),
-			GoogleBooksFallbackDailyLimit:       viper.GetInt("google_books_fallback_daily_limit"),
-			GoogleBooksDailyLimit:               viper.GetInt("google_books_daily_limit"),
-			GoogleBooksBackgroundDailyLimit:     viper.GetInt("google_books_background_daily_limit"),
-			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
-			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
-			DBCensusExactReadMBPerSec:           viper.GetInt("db_census_exact_read_mb_per_sec"),
-			DBCensusExactCooldownHours:          viper.GetInt("db_census_exact_cooldown_hours"),
-			MinBookSizeBytes:                    viper.GetInt64("min_book_size_bytes"),
-			MinRescanAgeHours:                   viper.GetInt("min_rescan_age_hours"),
-			APIRateLimitPerMinute:               viper.GetInt("api_rate_limit_per_minute"),
-			JSONBodyLimitMB:                     viper.GetInt("json_body_limit_mb"),
-			UploadBodyLimitMB:                   viper.GetInt("upload_body_limit_mb"),
-			MasterListRetention:                 viper.GetInt("master_list_retention"),
-			EnableAuth:                          viper.GetBool("enable_auth"),
-			ActivityLogNightlyCompactionEnabled: viper.GetBool("activity_log_nightly_compaction_enabled"),
-			ActivityLogFullDetailDays:           viper.GetInt("activity_log_full_detail_days"),
-			ActivityLogCompactionDays:           viper.GetInt("activity_log_compaction_days"),
-			ActivityLogRetentionChangeDays:      viper.GetInt("activity_log_retention_change_days"),
-			ActivityLogRetentionDebugDays:       viper.GetInt("activity_log_retention_debug_days"),
-			LogRetentionDays:                    viper.GetInt("log_retention_days"),
-			OperationLogRetentionDays:           viper.GetInt("operation_log_retention_days"),
-			AIJournalRetentionDays:              viper.GetInt("ai_journal_retention_days"),
-			EnableRateLimit:                     viper.GetBool("enable_rate_limit"),
-			ReviewApplyEnabled:                  viper.GetBool("review_apply_enabled"),
-			BulkApplyMaxItems:                   viper.GetInt("bulk_apply_max_items"),
-			BasicAuthEnabled:                    viper.GetBool("basic_auth_enabled"),
-			BasicAuthUsername:                   viper.GetString("basic_auth_username"),
-			BasicAuthPassword:                   viper.GetString("basic_auth_password"),
-
-			// OAuth / Cloudflare Access. These are environment-authoritative in prod
-			// (systemd Environment= drop-in) but read here via viper like everything
-			// else — the BindEnv bindings above make viper.GetX honor the env. The DB
-			// config-blob load later overwrites this whole struct, so the env values are
-			// re-applied on top of the blob by applyEnvAuthoritativeConfig (persistence.go).
-			OAuthEnabled:            viper.GetBool("oauth_enabled"),
-			OAuthGithubClientID:     viper.GetString("oauth_github_client_id"),
-			OAuthGithubClientSecret: viper.GetString("oauth_github_client_secret"),
-			OAuthGoogleClientID:     viper.GetString("oauth_google_client_id"),
-			OAuthGoogleClientSecret: viper.GetString("oauth_google_client_secret"),
-			OAuthRedirectBaseURL:    viper.GetString("oauth_redirect_base_url"),
-			OAuthAllowedEmails:      viper.GetString("oauth_allowed_emails"),
-			OAuthDefaultRole:        viper.GetString("oauth_default_role"),
-			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
-			CFAccessAUD:             viper.GetString("cf_access_aud"),
-			OwnerEmail:              viper.GetString("owner_email"),
-			WhisperRemoteURL:        viper.GetString("whisper_remote_url"),
-			WhisperEndpoints:        ParseWhisperEndpoints(viper.GetString("whisper_endpoints")),
-			WhisperRequires:         ParseLabelList(viper.GetString("whisper_requires")),
-
-			// Audiobookshelf sync API (feature-flagged OFF by default).
-			ABSAPIEnabled:       viper.GetBool("abs_api_enabled"),
-			ABSAuthModes:        viper.GetString("abs_auth_modes"),
-			ABSJWTSecret:        viper.GetString("abs_jwt_secret"),
-			ABSAccessTokenTTL:   viper.GetString("abs_access_token_ttl"),
-			ABSRefreshTokenTTL:  viper.GetString("abs_refresh_token_ttl"),
-			ABSRefreshGrace:     viper.GetString("abs_refresh_grace"),
-			ABSSessionMaxTTL:    viper.GetString("abs_session_max_ttl"),
-			ABSServerVersion:    viper.GetString("abs_server_version"),
-			ABSDefaultLibraryID: viper.GetString("abs_default_library_id"),
-
-			// Memory management
-			CacheInvalidateOnBookUpdate: viper.GetBool("cache_invalidate_on_book_update"),
-			MetadataFetchCacheTTLDays:   viper.GetInt("metadata_fetch_cache_ttl_days"),
-			BootstrapKeyTTL:             viper.GetString("bootstrap_key_ttl"),
-			BootstrapKeyTTLDays:         viper.GetInt("bootstrap_key_ttl_days"),
-
-			// Shared provider-answer cache (metadata_fetch.*)
-			MetadataFetch: MetadataFetchConfig{
-				SharedCache:            viper.GetBool("metadata_fetch.shared_cache"),
-				CatalogStage:           viper.GetBool("metadata_fetch.catalog_stage"),
-				FolderParsePersonTitle: viper.GetBool("metadata_fetch.folder_parse_person_title"),
-				NegativeTTLDays: MetadataFetchNegativeTTLDays{
-					Audible:     viper.GetInt("metadata_fetch.negative_ttl_days.audible"),
-					Audnexus:    viper.GetInt("metadata_fetch.negative_ttl_days.audnexus"),
-					OpenLibrary: viper.GetInt("metadata_fetch.negative_ttl_days.openlibrary"),
-					Google:      viper.GetInt("metadata_fetch.negative_ttl_days.google"),
+		// Download client integration
+		DownloadClient: DownloadClientConfig{
+			Torrent: TorrentClientConfig{
+				Type: v.GetString("download_client.torrent.type"),
+				Deluge: DelugeConfig{
+					Host:     v.GetString("download_client.torrent.deluge.host"),
+					Port:     v.GetInt("download_client.torrent.deluge.port"),
+					Username: v.GetString("download_client.torrent.deluge.username"),
+					Password: v.GetString("download_client.torrent.deluge.password"),
 				},
 			},
+		},
 
-			// Lifecycle / retention
-			PurgeSoftDeletedAfterDays:   viper.GetInt("purge_soft_deleted_after_days"),
-			PurgeSoftDeletedDeleteFiles: viper.GetBool("purge_soft_deleted_delete_files"),
-			BackupRetentionDays:         viper.GetInt("backup_retention_days"),
+		// Path formatting & apply pipeline
+		AutoRenameOnApply:       v.GetBool("auto_rename_on_apply"),
+		AutoWriteTagsOnApply:    v.GetBool("auto_write_tags_on_apply"),
+		VerifyAfterWrite:        v.GetBool("verify_after_write"),
+		WriteStartupReadOnlyKey: v.GetBool("write_startup_readonly_key"),
 
-			// Logging
-			LogLevel: viper.GetString("log_level"),
+		SupportedExtensions: supportedExtensions,
+		ExcludePatterns:     excludePatterns,
 
-			// Auto-update
-			AutoUpdate: AutoUpdateConfig{
-				Enabled:      viper.GetBool("auto_update.enabled"),
-				Channel:      viper.GetString("auto_update.channel"),
-				CheckMinutes: viper.GetInt("auto_update.check_minutes"),
-				WindowStart:  viper.GetInt("auto_update.window_start"),
-				WindowEnd:    viper.GetInt("auto_update.window_end"),
+		// Deluge integration. Read here so the config file and environment
+		// reach it. A value they supply is locked and beats the stored blob
+		// on load (applyEnvAuthoritativeConfig); with neither set the blob
+		// wins, like every other UI-managed key.
+		DelugeWebURL:           v.GetString("deluge_web_url"),
+		DelugeWebPassword:      v.GetString("deluge_web_password"),
+		DelugeDiscoveryLabel:   v.GetString("deluge_discovery_label"),
+		DelugeDiscoveryEnabled: v.GetBool("deluge_discovery_enabled"),
+		DelugeMoveEnabled:      v.GetBool("deluge_move_enabled"),
+		ProtectedPaths:         viperPathList(v, "protected_paths"),
+
+		// Usually UI-managed through the stored blob, which wins on load;
+		// read here so a config-file value is not silently dropped.
+		PathAliases: viperDecodeJSON[[]PathAlias](v, "path_aliases"),
+		Plugins:     viperDecodeJSON[map[string]PluginConfig](v, "plugins"),
+
+		DisablePerUserSearchFilters: v.GetBool("disable_per_user_search_filters"),
+
+		// Embedding pipeline (nested sub-struct)
+		Embedding: EmbeddingConfig{
+			Enabled:               v.GetBool("embedding.enabled"),
+			Model:                 v.GetString("embedding.model"),
+			Dimensions:            v.GetInt("embedding.dimensions"),
+			BaseURL:               v.GetString("embedding.base_url"),
+			VectorBackend:         v.GetString("embedding.vector_backend"),
+			RequestTimeoutSeconds: v.GetInt("embedding.request_timeout_seconds"),
+		},
+
+		// Dedup thresholds + behaviour (nested sub-struct)
+		Dedup: DedupConfig{
+			BookHighThreshold:          v.GetFloat64("dedup.book_high_threshold"),
+			BookLowThreshold:           v.GetFloat64("dedup.book_low_threshold"),
+			AuthorHighThreshold:        v.GetFloat64("dedup.author_high_threshold"),
+			AuthorLowThreshold:         v.GetFloat64("dedup.author_low_threshold"),
+			AutoMergeEnabled:           v.GetBool("dedup.auto_merge_enabled"),
+			EmbeddingsEnabled:          v.GetBool("dedup.embeddings_enabled"),
+			LLMAutoMergeHighConfidence: v.GetBool("dedup.llm_auto_merge_high_confidence"),
+			AutoResolveEnabled:         v.GetBool("dedup.auto_resolve_enabled"),
+			OnImportViaScheduler:       v.GetBool("dedup.on_import_via_scheduler"),
+			ReviewModel:                v.GetString("dedup.review_model"),
+			ChromemLazy:                v.GetBool("dedup.chromem_lazy"),
+			EmbeddingThresholdsByModel: viperDecodeJSON[map[string]EmbeddingModelThresholds](v, "dedup.embedding_thresholds_by_model"),
+			Signals: DedupSignalConfig{
+				BandCertainMin: v.GetFloat64("dedup.signals.band_certain_min"),
+				BandHighMin:    v.GetFloat64("dedup.signals.band_high_min"),
+				BandMediumMin:  v.GetFloat64("dedup.signals.band_medium_min"),
+				BandReviewMin:  v.GetFloat64("dedup.signals.band_review_min"),
+				// Keyed by signal kind, a lower-case identifier (not a
+				// name whose case matters), so the keys are folded the
+				// way viper folds every other dedup.signals.* key: a
+				// config-file "Exact_File:" still names exact_file.
+				Confidence: lowerMapKeys(viperDecodeJSON[map[string]DedupKindConfidence](v, "dedup.signals.confidence")),
 			},
+		},
 
-			// Maintenance window (nested sub-struct)
-			Maintenance: MaintenanceConfig{
-				Enabled:              viper.GetBool("maintenance.enabled"),
-				WindowStart:          viper.GetInt("maintenance.window_start"),
-				WindowEnd:            viper.GetInt("maintenance.window_end"),
-				DedupRefresh:         viper.GetBool("maintenance.dedup_refresh"),
-				SeriesPrune:          viper.GetBool("maintenance.series_prune"),
-				AuthorSplit:          viper.GetBool("maintenance.author_split"),
-				TombstoneCleanup:     viper.GetBool("maintenance.tombstone_cleanup"),
-				Reconcile:            viper.GetBool("maintenance.reconcile"),
-				PurgeDeleted:         viper.GetBool("maintenance.purge_deleted"),
-				PurgeOldLogs:         viper.GetBool("maintenance.purge_old_logs"),
-				DbOptimize:           viper.GetBool("maintenance.db_optimize"),
-				LibraryScan:          viper.GetBool("maintenance.library_scan"),
-				LibraryOrganize:      viper.GetBool("maintenance.library_organize"),
-				MetadataRefresh:      viper.GetBool("maintenance.metadata_refresh"),
-				LibrarySizeRefresh:   viper.GetBool("maintenance.library_size_refresh"),
-				AcoustIDOnlineLookup: viper.GetBool("maintenance.acoustid_online_lookup"),
-				AcoustIDNightlyLimit: viper.GetInt("maintenance.acoustid_nightly_limit"),
-				AcoustIDBackfill:     viper.GetBool("maintenance.acoustid_backfill"),
+		// Author catalog (feature flag + harvest settings).
+		Catalog: CatalogConfig{
+			Enabled:              v.GetBool("catalog.enabled"),
+			Language:             v.GetString("catalog.language"),
+			Marketplace:          v.GetString("catalog.marketplace"),
+			HarvestRateFraction:  v.GetFloat64("catalog.harvest_rate_fraction"),
+			MaxProductsPerAuthor: v.GetInt("catalog.max_products_per_author"),
+		},
+
+		// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
+		// Empty by default — see DedupBoilerplateConfig.
+		DedupBoilerplate: DedupBoilerplateConfig{
+			ExtraTitlePatterns:  v.GetStringSlice("dedup_boilerplate.extra_title_patterns"),
+			ExtraPrefixPatterns: v.GetStringSlice("dedup_boilerplate.extra_prefix_patterns"),
+		},
+
+		// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
+		MetadataScoring: MetadataScoringConfig{
+			EmbeddingEnabled:   v.GetBool("metadata_scoring.embedding_enabled"),
+			EmbeddingMinScore:  v.GetFloat64("metadata_scoring.embedding_min_score"),
+			EmbeddingBestMatch: v.GetFloat64("metadata_scoring.embedding_best_match"),
+			LLMEnabled:         v.GetBool("metadata_scoring.llm_enabled"),
+			LLMRerankEpsilon:   v.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
+			LLMRerankTopK:      v.GetInt("metadata_scoring.llm_rerank_top_k"),
+
+			TranscriptionTitleExactBoost:  v.GetFloat64("metadata_scoring.transcription_title_exact_boost"),
+			TranscriptionTitleSubstrBoost: v.GetFloat64("metadata_scoring.transcription_title_substr_boost"),
+			TranscriptionAuthorBoost:      v.GetFloat64("metadata_scoring.transcription_author_boost"),
+			TranscriptionNarratorBoost:    v.GetFloat64("metadata_scoring.transcription_narrator_boost"),
+
+			CompilationPenalty:     new(v.GetFloat64("metadata_scoring.compilation_penalty")),
+			RichMetadataFieldBonus: v.GetFloat64("metadata_scoring.rich_metadata_field_bonus"),
+			RichMetadataBonusCap:   new(v.GetFloat64("metadata_scoring.rich_metadata_bonus_cap")),
+			F1MinScore:             new(v.GetFloat64("metadata_scoring.f1_min_score")),
+
+			SeriesNameMatchBoost:     v.GetFloat64("metadata_scoring.series_name_match_boost"),
+			SeriesNumberExactBoost:   v.GetFloat64("metadata_scoring.series_number_exact_boost"),
+			SeriesNumberWrongPenalty: v.GetFloat64("metadata_scoring.series_number_wrong_penalty"),
+
+			DurationTierMultipliers: getFloat64Slice(v, "metadata_scoring.duration_tier_multipliers"),
+			DurationTierScores:      getFloat64Slice(v, "metadata_scoring.duration_tier_scores"),
+
+			BulkFetchWorkers:    v.GetInt("metadata_scoring.bulk_fetch_workers"),
+			SourceFanoutWorkers: v.GetInt("metadata_scoring.source_fanout_workers"),
+			WriteBackWorkers:    v.GetInt("metadata_scoring.write_back_workers"),
+		},
+
+		// AI backend-mode toggle (nested sub-struct). Modes default empty
+		// (resolved by EffectiveEmbeddingMode / EffectiveLLMMode); local
+		// endpoint coordinates carry Ollama-style defaults.
+		AIBackend: AIBackendConfig{
+			EmbeddingMode:            v.GetString("ai_backend.embedding_mode"),
+			LLMMode:                  v.GetString("ai_backend.llm_mode"),
+			LocalBaseURL:             v.GetString("ai_backend.local_base_url"),
+			LocalEmbeddingModel:      v.GetString("ai_backend.local_embedding_model"),
+			LocalLLMModel:            v.GetString("ai_backend.local_llm_model"),
+			ParseBatchSize:           v.GetInt("ai_backend.parse_batch_size"),
+			ParseBatchTimeoutSeconds: v.GetInt("ai_backend.parse_batch_timeout_seconds"),
+			ParseBatchWorkers:        v.GetInt("ai_backend.parse_batch_workers"),
+		},
+
+		Search: SearchConfig{
+			ResultCache: SearchResultCacheConfig{
+				Enabled:     v.GetBool("search.result_cache.enabled"),
+				MaxBytes:    v.GetInt64("search.result_cache.max_bytes"),
+				WaitSeconds: v.GetInt("search.result_cache.wait_seconds"),
 			},
+		},
 
-			// iTunes import (nested sub-struct)
-			ITunes: ITunesConfig{
-				LibraryITLPath:  viper.GetString("itunes.library_write_path"),
-				LibraryReadPath: viper.GetString("itunes.library_read_path"),
-				PathTrimEnabled: viper.GetBool("itunes.path_trim_enabled"),
-				WindowsRootPath: viper.GetString("itunes.windows_root_path"),
-				MediaRoot:       viper.GetString("itunes.media_root"),
-				// Usually UI-managed through the stored blob, which wins on load;
-				// read here so a config-file list is not silently dropped.
-				PathMappings: viperDecodeJSON[[]ITunesPathMap]("itunes.path_mappings"),
-				Libraries: LibrarySet{
-					Original: LibraryRef{
-						ITLPath: viper.GetString("itunes.libraries.original.itl_path"),
-						XMLPath: viper.GetString("itunes.libraries.original.xml_path"),
-						Frozen:  viper.GetBool("itunes.libraries.original.frozen"),
-					},
-					AO: LibraryRef{
-						ITLPath: viper.GetString("itunes.libraries.ao.itl_path"),
-						XMLPath: viper.GetString("itunes.libraries.ao.xml_path"),
-						Frozen:  viper.GetBool("itunes.libraries.ao.frozen"),
-					},
-					PointedAt:    viper.GetString("itunes.libraries.pointed_at"),
-					ImportSource: viper.GetString("itunes.libraries.import_source"),
+		// Scheduled background tasks (nested sub-struct)
+		Scheduled: ScheduledTasksConfig{
+			LibraryScan: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.library_scan.enabled"),
+				Interval:  v.GetInt("scheduled.library_scan.interval"),
+				OnStartup: v.GetBool("scheduled.library_scan.on_startup"),
+			},
+			LibraryScanFull: LibraryScanFullConfig{
+				Enabled:     v.GetBool("scheduled.library_scan_full.enabled"),
+				Interval:    v.GetInt("scheduled.library_scan_full.interval"),
+				PeriodHours: v.GetInt("scheduled.library_scan_full.period_hours"),
+			},
+			DedupRefresh: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.dedup_refresh.enabled"),
+				Interval:  v.GetInt("scheduled.dedup_refresh.interval"),
+				OnStartup: v.GetBool("scheduled.dedup_refresh.on_startup"),
+			},
+			AcoustIDBackfill: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.acoustid_backfill.enabled"),
+				Interval:  v.GetInt("scheduled.acoustid_backfill.interval"),
+				OnStartup: v.GetBool("scheduled.acoustid_backfill.on_startup"),
+			},
+			// For these four only Interval gates the task (0 turns it off);
+			// Enabled/OnStartup are read so the struct is uniform and a
+			// config-file value reaches GET, not because a consumer reads them.
+			MetadataUpgrade: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.metadata_upgrade.enabled"),
+				Interval:  v.GetInt("scheduled.metadata_upgrade.interval"),
+				OnStartup: v.GetBool("scheduled.metadata_upgrade.on_startup"),
+			},
+			ASINBackfill: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.asin_backfill.enabled"),
+				Interval:  v.GetInt("scheduled.asin_backfill.interval"),
+				OnStartup: v.GetBool("scheduled.asin_backfill.on_startup"),
+			},
+			CandidateFetch: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.candidate_fetch.enabled"),
+				Interval:  v.GetInt("scheduled.candidate_fetch.interval"),
+				OnStartup: v.GetBool("scheduled.candidate_fetch.on_startup"),
+			},
+			CatalogHarvest: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.catalog_harvest.enabled"),
+				Interval:  v.GetInt("scheduled.catalog_harvest.interval"),
+				OnStartup: v.GetBool("scheduled.catalog_harvest.on_startup"),
+			},
+			LabelRefinement: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.label_refinement.enabled"),
+				Interval:  v.GetInt("scheduled.label_refinement.interval"),
+				OnStartup: v.GetBool("scheduled.label_refinement.on_startup"),
+			},
+			AuthorSplit: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.author_split.enabled"),
+				Interval:  v.GetInt("scheduled.author_split.interval"),
+				OnStartup: v.GetBool("scheduled.author_split.on_startup"),
+			},
+			DbOptimize: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.db_optimize.enabled"),
+				Interval:  v.GetInt("scheduled.db_optimize.interval"),
+				OnStartup: v.GetBool("scheduled.db_optimize.on_startup"),
+			},
+			MetadataRefresh: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.metadata_refresh.enabled"),
+				Interval:  v.GetInt("scheduled.metadata_refresh.interval"),
+				OnStartup: v.GetBool("scheduled.metadata_refresh.on_startup"),
+			},
+			ResolveProductionAuthors: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.resolve_production_authors.enabled"),
+				Interval:  v.GetInt("scheduled.resolve_production_authors.interval"),
+				OnStartup: v.GetBool("scheduled.resolve_production_authors.on_startup"),
+			},
+			SeriesPrune: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.series_prune.enabled"),
+				Interval:  v.GetInt("scheduled.series_prune.interval"),
+				OnStartup: v.GetBool("scheduled.series_prune.on_startup"),
+			},
+			AIDedupBatch: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.ai_dedup_batch.enabled"),
+				Interval:  v.GetInt("scheduled.ai_dedup_batch.interval"),
+				OnStartup: v.GetBool("scheduled.ai_dedup_batch.on_startup"),
+			},
+			Reconcile: ScheduledTaskConfig{
+				Enabled:   v.GetBool("scheduled.reconcile.enabled"),
+				Interval:  v.GetInt("scheduled.reconcile.interval"),
+				OnStartup: v.GetBool("scheduled.reconcile.on_startup"),
+			},
+		},
+	}
+
+	// Invitation email and guest access (environment-only, json:"-").
+	applyInviteEnv(c, v)
+
+	// Managed external-tool lifecycle. These were hard-coded constants, so a
+	// config-file tools: section was ignored; they are now viper keys whose
+	// defaults are the same constants (see the tools.* SetDefault calls).
+	c.Tools = tools.ToolsConfig{
+		ManagedDir: v.GetString("tools.managed_dir"),
+		Ollama: tools.ToolConfig{
+			Mode:       tools.ToolMode(v.GetString("tools.ollama.mode")),
+			CustomPath: v.GetString("tools.ollama.custom_path"),
+		},
+		Fpcalc: tools.ToolConfig{
+			Mode:       tools.ToolMode(v.GetString("tools.fpcalc.mode")),
+			CustomPath: v.GetString("tools.fpcalc.custom_path"),
+		},
+		AllowPeriodicOllama: v.GetBool("tools.allow_periodic_ollama"),
+		OllamaDebounceMin:   v.GetInt("tools.ollama_debounce_min"),
+	}
+
+	// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
+	if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
+		c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
+	}
+
+	// API Keys (Goodreads deprecated Dec 2020, removed)
+
+	// Load metadata sources from config or use defaults
+	if v.IsSet("metadata_sources") {
+		v.UnmarshalKey("metadata_sources", &c.MetadataSources)
+	} else {
+		// Set default metadata sources
+		c.MetadataSources = []MetadataSource{
+			{
+				ID:           "audible",
+				Name:         "Audible",
+				Enabled:      true,
+				Priority:     1,
+				RequiresAuth: false,
+				Credentials:  make(map[string]string),
+			},
+			{
+				ID:           "openlibrary",
+				Name:         "Open Library",
+				Enabled:      true,
+				Priority:     2,
+				RequiresAuth: false,
+				Credentials:  make(map[string]string),
+			},
+			{
+				ID:           "audnexus",
+				Name:         "Audnexus",
+				Enabled:      true,
+				Priority:     3,
+				RequiresAuth: false,
+				Credentials:  make(map[string]string),
+			},
+			{
+				ID:           "google-books",
+				Name:         "Google Books",
+				Enabled:      false,
+				Priority:     4,
+				RequiresAuth: true,
+				Credentials: map[string]string{
+					"apiKey": "",
 				},
 			},
-
-			// Download client integration
-			DownloadClient: DownloadClientConfig{
-				Torrent: TorrentClientConfig{
-					Type: viper.GetString("download_client.torrent.type"),
-					Deluge: DelugeConfig{
-						Host:     viper.GetString("download_client.torrent.deluge.host"),
-						Port:     viper.GetInt("download_client.torrent.deluge.port"),
-						Username: viper.GetString("download_client.torrent.deluge.username"),
-						Password: viper.GetString("download_client.torrent.deluge.password"),
-					},
-				},
+			{
+				ID:           "hardcover",
+				Name:         "Hardcover",
+				Enabled:      false,
+				Priority:     5,
+				RequiresAuth: true,
+				Credentials:  make(map[string]string),
 			},
-
-			// Path formatting & apply pipeline
-			AutoRenameOnApply:       viper.GetBool("auto_rename_on_apply"),
-			AutoWriteTagsOnApply:    viper.GetBool("auto_write_tags_on_apply"),
-			VerifyAfterWrite:        viper.GetBool("verify_after_write"),
-			WriteStartupReadOnlyKey: viper.GetBool("write_startup_readonly_key"),
-
-			SupportedExtensions: supportedExtensions,
-			ExcludePatterns:     excludePatterns,
-
-			// Deluge integration. Read here so the config file and environment
-			// reach it. A value they supply is locked and beats the stored blob
-			// on load (applyEnvAuthoritativeConfig); with neither set the blob
-			// wins, like every other UI-managed key.
-			DelugeWebURL:           viper.GetString("deluge_web_url"),
-			DelugeWebPassword:      viper.GetString("deluge_web_password"),
-			DelugeDiscoveryLabel:   viper.GetString("deluge_discovery_label"),
-			DelugeDiscoveryEnabled: viper.GetBool("deluge_discovery_enabled"),
-			DelugeMoveEnabled:      viper.GetBool("deluge_move_enabled"),
-			ProtectedPaths:         viperPathList("protected_paths"),
-
-			// Usually UI-managed through the stored blob, which wins on load;
-			// read here so a config-file value is not silently dropped.
-			PathAliases: viperDecodeJSON[[]PathAlias]("path_aliases"),
-			Plugins:     viperDecodeJSON[map[string]PluginConfig]("plugins"),
-
-			DisablePerUserSearchFilters: viper.GetBool("disable_per_user_search_filters"),
-
-			// Embedding pipeline (nested sub-struct)
-			Embedding: EmbeddingConfig{
-				Enabled:               viper.GetBool("embedding.enabled"),
-				Model:                 viper.GetString("embedding.model"),
-				Dimensions:            viper.GetInt("embedding.dimensions"),
-				BaseURL:               viper.GetString("embedding.base_url"),
-				VectorBackend:         viper.GetString("embedding.vector_backend"),
-				RequestTimeoutSeconds: viper.GetInt("embedding.request_timeout_seconds"),
-			},
-
-			// Dedup thresholds + behaviour (nested sub-struct)
-			Dedup: DedupConfig{
-				BookHighThreshold:          viper.GetFloat64("dedup.book_high_threshold"),
-				BookLowThreshold:           viper.GetFloat64("dedup.book_low_threshold"),
-				AuthorHighThreshold:        viper.GetFloat64("dedup.author_high_threshold"),
-				AuthorLowThreshold:         viper.GetFloat64("dedup.author_low_threshold"),
-				AutoMergeEnabled:           viper.GetBool("dedup.auto_merge_enabled"),
-				EmbeddingsEnabled:          viper.GetBool("dedup.embeddings_enabled"),
-				LLMAutoMergeHighConfidence: viper.GetBool("dedup.llm_auto_merge_high_confidence"),
-				AutoResolveEnabled:         viper.GetBool("dedup.auto_resolve_enabled"),
-				OnImportViaScheduler:       viper.GetBool("dedup.on_import_via_scheduler"),
-				ReviewModel:                viper.GetString("dedup.review_model"),
-				ChromemLazy:                viper.GetBool("dedup.chromem_lazy"),
-				EmbeddingThresholdsByModel: viperDecodeJSON[map[string]EmbeddingModelThresholds]("dedup.embedding_thresholds_by_model"),
-				Signals: DedupSignalConfig{
-					BandCertainMin: viper.GetFloat64("dedup.signals.band_certain_min"),
-					BandHighMin:    viper.GetFloat64("dedup.signals.band_high_min"),
-					BandMediumMin:  viper.GetFloat64("dedup.signals.band_medium_min"),
-					BandReviewMin:  viper.GetFloat64("dedup.signals.band_review_min"),
-					// Keyed by signal kind, a lower-case identifier (not a
-					// name whose case matters), so the keys are folded the
-					// way viper folds every other dedup.signals.* key: a
-					// config-file "Exact_File:" still names exact_file.
-					Confidence: lowerMapKeys(viperDecodeJSON[map[string]DedupKindConfidence]("dedup.signals.confidence")),
-				},
-			},
-
-			// Author catalog (feature flag + harvest settings).
-			Catalog: CatalogConfig{
-				Enabled:              viper.GetBool("catalog.enabled"),
-				Language:             viper.GetString("catalog.language"),
-				Marketplace:          viper.GetString("catalog.marketplace"),
-				HarvestRateFraction:  viper.GetFloat64("catalog.harvest_rate_fraction"),
-				MaxProductsPerAuthor: viper.GetInt("catalog.max_products_per_author"),
-			},
-
-			// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
-			// Empty by default — see DedupBoilerplateConfig.
-			DedupBoilerplate: DedupBoilerplateConfig{
-				ExtraTitlePatterns:  viper.GetStringSlice("dedup_boilerplate.extra_title_patterns"),
-				ExtraPrefixPatterns: viper.GetStringSlice("dedup_boilerplate.extra_prefix_patterns"),
-			},
-
-			// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
-			MetadataScoring: MetadataScoringConfig{
-				EmbeddingEnabled:   viper.GetBool("metadata_scoring.embedding_enabled"),
-				EmbeddingMinScore:  viper.GetFloat64("metadata_scoring.embedding_min_score"),
-				EmbeddingBestMatch: viper.GetFloat64("metadata_scoring.embedding_best_match"),
-				LLMEnabled:         viper.GetBool("metadata_scoring.llm_enabled"),
-				LLMRerankEpsilon:   viper.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
-				LLMRerankTopK:      viper.GetInt("metadata_scoring.llm_rerank_top_k"),
-
-				TranscriptionTitleExactBoost:  viper.GetFloat64("metadata_scoring.transcription_title_exact_boost"),
-				TranscriptionTitleSubstrBoost: viper.GetFloat64("metadata_scoring.transcription_title_substr_boost"),
-				TranscriptionAuthorBoost:      viper.GetFloat64("metadata_scoring.transcription_author_boost"),
-				TranscriptionNarratorBoost:    viper.GetFloat64("metadata_scoring.transcription_narrator_boost"),
-
-				CompilationPenalty:     new(viper.GetFloat64("metadata_scoring.compilation_penalty")),
-				RichMetadataFieldBonus: viper.GetFloat64("metadata_scoring.rich_metadata_field_bonus"),
-				RichMetadataBonusCap:   new(viper.GetFloat64("metadata_scoring.rich_metadata_bonus_cap")),
-				F1MinScore:             new(viper.GetFloat64("metadata_scoring.f1_min_score")),
-
-				SeriesNameMatchBoost:     viper.GetFloat64("metadata_scoring.series_name_match_boost"),
-				SeriesNumberExactBoost:   viper.GetFloat64("metadata_scoring.series_number_exact_boost"),
-				SeriesNumberWrongPenalty: viper.GetFloat64("metadata_scoring.series_number_wrong_penalty"),
-
-				DurationTierMultipliers: getFloat64Slice("metadata_scoring.duration_tier_multipliers"),
-				DurationTierScores:      getFloat64Slice("metadata_scoring.duration_tier_scores"),
-
-				BulkFetchWorkers:    viper.GetInt("metadata_scoring.bulk_fetch_workers"),
-				SourceFanoutWorkers: viper.GetInt("metadata_scoring.source_fanout_workers"),
-				WriteBackWorkers:    viper.GetInt("metadata_scoring.write_back_workers"),
-			},
-
-			// AI backend-mode toggle (nested sub-struct). Modes default empty
-			// (resolved by EffectiveEmbeddingMode / EffectiveLLMMode); local
-			// endpoint coordinates carry Ollama-style defaults.
-			AIBackend: AIBackendConfig{
-				EmbeddingMode:            viper.GetString("ai_backend.embedding_mode"),
-				LLMMode:                  viper.GetString("ai_backend.llm_mode"),
-				LocalBaseURL:             viper.GetString("ai_backend.local_base_url"),
-				LocalEmbeddingModel:      viper.GetString("ai_backend.local_embedding_model"),
-				LocalLLMModel:            viper.GetString("ai_backend.local_llm_model"),
-				ParseBatchSize:           viper.GetInt("ai_backend.parse_batch_size"),
-				ParseBatchTimeoutSeconds: viper.GetInt("ai_backend.parse_batch_timeout_seconds"),
-				ParseBatchWorkers:        viper.GetInt("ai_backend.parse_batch_workers"),
-			},
-
-			Search: SearchConfig{
-				ResultCache: SearchResultCacheConfig{
-					Enabled:     viper.GetBool("search.result_cache.enabled"),
-					MaxBytes:    viper.GetInt64("search.result_cache.max_bytes"),
-					WaitSeconds: viper.GetInt("search.result_cache.wait_seconds"),
-				},
-			},
-
-			// Scheduled background tasks (nested sub-struct)
-			Scheduled: ScheduledTasksConfig{
-				LibraryScan: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.library_scan.enabled"),
-					Interval:  viper.GetInt("scheduled.library_scan.interval"),
-					OnStartup: viper.GetBool("scheduled.library_scan.on_startup"),
-				},
-				LibraryScanFull: LibraryScanFullConfig{
-					Enabled:     viper.GetBool("scheduled.library_scan_full.enabled"),
-					Interval:    viper.GetInt("scheduled.library_scan_full.interval"),
-					PeriodHours: viper.GetInt("scheduled.library_scan_full.period_hours"),
-				},
-				DedupRefresh: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.dedup_refresh.enabled"),
-					Interval:  viper.GetInt("scheduled.dedup_refresh.interval"),
-					OnStartup: viper.GetBool("scheduled.dedup_refresh.on_startup"),
-				},
-				AcoustIDBackfill: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.acoustid_backfill.enabled"),
-					Interval:  viper.GetInt("scheduled.acoustid_backfill.interval"),
-					OnStartup: viper.GetBool("scheduled.acoustid_backfill.on_startup"),
-				},
-				// For these four only Interval gates the task (0 turns it off);
-				// Enabled/OnStartup are read so the struct is uniform and a
-				// config-file value reaches GET, not because a consumer reads them.
-				MetadataUpgrade: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.metadata_upgrade.enabled"),
-					Interval:  viper.GetInt("scheduled.metadata_upgrade.interval"),
-					OnStartup: viper.GetBool("scheduled.metadata_upgrade.on_startup"),
-				},
-				ASINBackfill: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.asin_backfill.enabled"),
-					Interval:  viper.GetInt("scheduled.asin_backfill.interval"),
-					OnStartup: viper.GetBool("scheduled.asin_backfill.on_startup"),
-				},
-				CandidateFetch: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.candidate_fetch.enabled"),
-					Interval:  viper.GetInt("scheduled.candidate_fetch.interval"),
-					OnStartup: viper.GetBool("scheduled.candidate_fetch.on_startup"),
-				},
-				CatalogHarvest: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.catalog_harvest.enabled"),
-					Interval:  viper.GetInt("scheduled.catalog_harvest.interval"),
-					OnStartup: viper.GetBool("scheduled.catalog_harvest.on_startup"),
-				},
-				LabelRefinement: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
-					Interval:  viper.GetInt("scheduled.label_refinement.interval"),
-					OnStartup: viper.GetBool("scheduled.label_refinement.on_startup"),
-				},
-				AuthorSplit: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.author_split.enabled"),
-					Interval:  viper.GetInt("scheduled.author_split.interval"),
-					OnStartup: viper.GetBool("scheduled.author_split.on_startup"),
-				},
-				DbOptimize: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.db_optimize.enabled"),
-					Interval:  viper.GetInt("scheduled.db_optimize.interval"),
-					OnStartup: viper.GetBool("scheduled.db_optimize.on_startup"),
-				},
-				MetadataRefresh: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.metadata_refresh.enabled"),
-					Interval:  viper.GetInt("scheduled.metadata_refresh.interval"),
-					OnStartup: viper.GetBool("scheduled.metadata_refresh.on_startup"),
-				},
-				ResolveProductionAuthors: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.resolve_production_authors.enabled"),
-					Interval:  viper.GetInt("scheduled.resolve_production_authors.interval"),
-					OnStartup: viper.GetBool("scheduled.resolve_production_authors.on_startup"),
-				},
-				SeriesPrune: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.series_prune.enabled"),
-					Interval:  viper.GetInt("scheduled.series_prune.interval"),
-					OnStartup: viper.GetBool("scheduled.series_prune.on_startup"),
-				},
-				AIDedupBatch: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.ai_dedup_batch.enabled"),
-					Interval:  viper.GetInt("scheduled.ai_dedup_batch.interval"),
-					OnStartup: viper.GetBool("scheduled.ai_dedup_batch.on_startup"),
-				},
-				Reconcile: ScheduledTaskConfig{
-					Enabled:   viper.GetBool("scheduled.reconcile.enabled"),
-					Interval:  viper.GetInt("scheduled.reconcile.interval"),
-					OnStartup: viper.GetBool("scheduled.reconcile.on_startup"),
-				},
+			{
+				ID:           "wikipedia",
+				Name:         "Wikipedia",
+				Enabled:      false, // Disabled by default — Wikipedia API returns 403
+				Priority:     6,
+				RequiresAuth: false,
+				Credentials:  make(map[string]string),
 			},
 		}
+	}
 
-		// Invitation email and guest access (environment-only, json:"-").
-		applyInviteEnv(c)
+	// Provider *_BASE_URL env vars (viper.BindEnv above) backfill BaseURL for
+	// any source that doesn't already have one set — whether c.MetadataSources
+	// came from the hardcoded defaults above or from a persisted/config-file
+	// value that predates the BaseURL field. A source with an explicit BaseURL
+	// already set (e.g. from the config blob) is left untouched.
+	providerBaseURLEnv := map[string]string{
+		"audible":      v.GetString("audible_base_url"),
+		"openlibrary":  v.GetString("openlibrary_base_url"),
+		"audnexus":     v.GetString("audnexus_base_url"),
+		"google-books": v.GetString("google_books_base_url"),
+	}
+	for i := range c.MetadataSources {
+		if c.MetadataSources[i].BaseURL != "" {
+			continue
+		}
+		if v := providerBaseURLEnv[c.MetadataSources[i].ID]; v != "" {
+			c.MetadataSources[i].BaseURL = v
+		}
+	}
 
-		// Managed external-tool lifecycle. These were hard-coded constants, so a
-		// config-file tools: section was ignored; they are now viper keys whose
-		// defaults are the same constants (see the tools.* SetDefault calls).
-		c.Tools = tools.ToolsConfig{
-			ManagedDir: viper.GetString("tools.managed_dir"),
-			Ollama: tools.ToolConfig{
-				Mode:       tools.ToolMode(viper.GetString("tools.ollama.mode")),
-				CustomPath: viper.GetString("tools.ollama.custom_path"),
-			},
-			Fpcalc: tools.ToolConfig{
-				Mode:       tools.ToolMode(viper.GetString("tools.fpcalc.mode")),
-				CustomPath: viper.GetString("tools.fpcalc.custom_path"),
-			},
-			AllowPeriodicOllama: viper.GetBool("tools.allow_periodic_ollama"),
-			OllamaDebounceMin:   viper.GetInt("tools.ollama_debounce_min"),
+	// Backward compatibility: map old flat viper key names to the nested struct.
+	// These keys were set directly (e.g. via viper.Set in tests or old config files)
+	// using the pre-Wave-4 flat names, which are no longer read in the struct literal.
+	if c.ITunes.LibraryITLPath == "" {
+		if v := v.GetString("itunes_library_write_path"); v != "" {
+			c.ITunes.LibraryITLPath = v
 		}
-
-		// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
-		if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
-			c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
+	}
+	if c.ITunes.LibraryITLPath == "" {
+		c.ITunes.LibraryITLPath = v.GetString("itunes_library_itl_path")
+	}
+	if c.ITunes.LibraryReadPath == "" {
+		if v := v.GetString("itunes_library_read_path"); v != "" {
+			c.ITunes.LibraryReadPath = v
 		}
-
-		// API Keys (Goodreads deprecated Dec 2020, removed)
-
-		// Load metadata sources from config or use defaults
-		if viper.IsSet("metadata_sources") {
-			viper.UnmarshalKey("metadata_sources", &c.MetadataSources)
-		} else {
-			// Set default metadata sources
-			c.MetadataSources = []MetadataSource{
-				{
-					ID:           "audible",
-					Name:         "Audible",
-					Enabled:      true,
-					Priority:     1,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "openlibrary",
-					Name:         "Open Library",
-					Enabled:      true,
-					Priority:     2,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "audnexus",
-					Name:         "Audnexus",
-					Enabled:      true,
-					Priority:     3,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "google-books",
-					Name:         "Google Books",
-					Enabled:      false,
-					Priority:     4,
-					RequiresAuth: true,
-					Credentials: map[string]string{
-						"apiKey": "",
-					},
-				},
-				{
-					ID:           "hardcover",
-					Name:         "Hardcover",
-					Enabled:      false,
-					Priority:     5,
-					RequiresAuth: true,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "wikipedia",
-					Name:         "Wikipedia",
-					Enabled:      false, // Disabled by default — Wikipedia API returns 403
-					Priority:     6,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-			}
-		}
-
-		// Provider *_BASE_URL env vars (viper.BindEnv above) backfill BaseURL for
-		// any source that doesn't already have one set — whether c.MetadataSources
-		// came from the hardcoded defaults above or from a persisted/config-file
-		// value that predates the BaseURL field. A source with an explicit BaseURL
-		// already set (e.g. from the config blob) is left untouched.
-		providerBaseURLEnv := map[string]string{
-			"audible":      viper.GetString("audible_base_url"),
-			"openlibrary":  viper.GetString("openlibrary_base_url"),
-			"audnexus":     viper.GetString("audnexus_base_url"),
-			"google-books": viper.GetString("google_books_base_url"),
-		}
-		for i := range c.MetadataSources {
-			if c.MetadataSources[i].BaseURL != "" {
-				continue
-			}
-			if v := providerBaseURLEnv[c.MetadataSources[i].ID]; v != "" {
-				c.MetadataSources[i].BaseURL = v
-			}
-		}
-
-		// Backward compatibility: map old flat viper key names to the nested struct.
-		// These keys were set directly (e.g. via viper.Set in tests or old config files)
-		// using the pre-Wave-4 flat names, which are no longer read in the struct literal.
-		if c.ITunes.LibraryITLPath == "" {
-			if v := viper.GetString("itunes_library_write_path"); v != "" {
-				c.ITunes.LibraryITLPath = v
-			}
-		}
-		if c.ITunes.LibraryITLPath == "" {
-			c.ITunes.LibraryITLPath = viper.GetString("itunes_library_itl_path")
-		}
-		if c.ITunes.LibraryReadPath == "" {
-			if v := viper.GetString("itunes_library_read_path"); v != "" {
-				c.ITunes.LibraryReadPath = v
-			}
-		}
-		if c.ITunes.LibraryReadPath == "" {
-			c.ITunes.LibraryReadPath = viper.GetString("itunes_library_xml_path")
-		}
-		// Normalize database type
-		if c.DatabaseType == "sqlite3" {
-			c.DatabaseType = "sqlite"
-		}
-		if c.DatabaseType == "" {
-			c.DatabaseType = "pebble"
-		}
-	}) // end Mutate
+	}
+	if c.ITunes.LibraryReadPath == "" {
+		c.ITunes.LibraryReadPath = v.GetString("itunes_library_xml_path")
+	}
+	// Normalize database type
+	if c.DatabaseType == "sqlite3" {
+		c.DatabaseType = "sqlite"
+	}
+	if c.DatabaseType == "" {
+		c.DatabaseType = "pebble"
+	}
+	return cfg
 }
 
 // validPatternPlaceholder accepts a naming-pattern placeholder, optionally
@@ -4065,367 +4108,43 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// factoryDefaultConfig is the Config a fresh install gets from the shipped
+// defaults alone: the same registerConfigDefaults and configFromViper that
+// InitConfig runs, on a private viper with no config file and no environment
+// binding. Deriving it from them (instead of a second hand-written literal)
+// is the point: a key given a default there is restored here by construction.
+func factoryDefaultConfig() Config {
+	v := viper.New()
+	registerConfigDefaults(noEnvRegistrar{v})
+	return configFromViper(v)
+}
+
 // ResetToDefaults resets the AppConfig to factory defaults.
+//
+// The defaults are the shipped viper defaults only (see factoryDefaultConfig):
+// not the config file, and not the process environment. The few settings the
+// host owns through the environment are put back afterwards by
+// applyEnvAuthoritativeConfig, exactly as at database load. The library paths
+// and the boot-only sort indexes are carried over from the running config.
+//
 // WHY Mutate: whole-struct reset; concurrent readers must not see a torn state.
 func ResetToDefaults() {
 	// Snapshot current paths before acquiring the write lock to avoid a
 	// deadlock (Mutate is not re-entrant).
 	cur := Snapshot()
+	defaults := factoryDefaultConfig()
 	Mutate(func(c *Config) {
-		*c = Config{
-			// Core paths — preserve existing paths; reset everything else
-			RootDir:       cur.RootDir,
-			DatabasePath:  cur.DatabasePath,
-			DatabaseType:  "pebble",
-			PlaylistDir:   cur.PlaylistDir,
-			SetupComplete: false,
+		*c = defaults
 
-			// Boot-only: the indexes the store built at open stay built until
-			// restart, so GET must keep reporting them (pinBootOnlySettings).
-			EnabledSortIndexes: slices.Clone(cur.EnabledSortIndexes),
+		// Core paths: preserve the existing ones; everything else resets.
+		c.RootDir = cur.RootDir
+		c.DatabasePath = cur.DatabasePath
+		c.PlaylistDir = cur.PlaylistDir
 
-			// Library organization
-			OrganizationStrategy:    "auto",
-			ScanOnStartup:           false,
-			AutoOrganize:            true,
-			AutoScanEnabled:         false,
-			AutoScanDebounceSeconds: 30,
-			FolderNamingPattern:     DefaultFolderNamingPattern,
-			FileNamingPattern:       DefaultFileNamingPattern,
-			CreateBackups:           true,
+		// Boot-only: the indexes the store built at open stay built until
+		// restart, so GET must keep reporting them (pinBootOnlySettings).
+		c.EnabledSortIndexes = slices.Clone(cur.EnabledSortIndexes)
 
-			// Storage quotas
-			EnableDiskQuota:  false,
-			DiskQuotaPercent: 80,
-			EnableUserQuotas: false,
-
-			// Metadata
-			EmbedCoverArt: true,
-
-			// Open Library dumps
-			OpenLibraryDumpEnabled: false,
-			OpenLibraryDumpDir:     "",
-
-			// AI parsing
-			EnableAIParsing:     true,
-			OpenAIAPIKey:        "",
-			AcoustIDAPIKey:      "",
-			MetadataReviewModel: "gpt-5-mini",
-			FilenameParseModel:  "gpt-5-mini",
-			CoverArtModel:       "gpt-5-mini",
-
-			// Performance
-			ConcurrentScans:                  max(runtime.NumCPU(), 4),
-			ScanProgressEvery:                20,
-			ScanStandDownGraceSeconds:        45,
-			ChapterConsolidationThresholdMin: DefaultChapterConsolidationThresholdMin,
-			RepairChapterMaxMin:              DefaultRepairChapterMaxMin,
-			FragmentWindowContainmentMin:     DefaultFragmentWindowContainmentMin,
-			OperationTimeoutMinutes:          30,
-			DBCensusExactReadMBPerSec:        DefaultDBCensusExactReadMBPerSec,
-			DBCensusExactCooldownHours:       DefaultDBCensusExactCooldownHours,
-			MinBookSizeBytes:                 5 * 1024 * 1024,
-			MinRescanAgeHours:                144,
-			APIRateLimitPerMinute:            100,
-			JSONBodyLimitMB:                  1,
-			UploadBodyLimitMB:                10,
-			MasterListRetention:              10,
-			EnableAuth:                       true,
-			EnableRateLimit:                  true,
-			ReviewApplyEnabled:               false, // OFF by default — review-only until explicitly enabled
-			RetireVersionsApplyEnabled:       false, // OFF by default — the retired-versions fixer only previews until enabled
-			KeptSweepApplyEnabled:            false, // OFF by default — the kept-file sweep only reports what it would remove until enabled
-			FingerprintRemoteWorkersEnabled:  false, // OFF by default — worker routes 404 until enabled
-			FingerprintWindowReferenceTools:  "",    // unset — remote-only window backfill refuses to start
-			BulkApplyMaxItems:                5000,
-			BasicAuthEnabled:                 false,
-			BasicAuthUsername:                "",
-			BasicAuthPassword:                "",
-
-			// The shared provider-answer cache stays on through a reset:
-			// shared_cache is its rollback switch, and a reset that zeroed it
-			// would silently turn the cache off. The fetch-cache TTL is reset
-			// to its default too: 0 means "never expire", so a reset that
-			// zeroed it would make every cached answer live forever.
-			MetadataFetch:             DefaultMetadataFetchConfig(),
-			MetadataFetchCacheTTLDays: DefaultMetadataFetchCacheTTLDays,
-
-			// Lifecycle / retention
-			PurgeSoftDeletedAfterDays:           30,
-			PurgeSoftDeletedDeleteFiles:         false,
-			BackupRetentionDays:                 0,
-			ActivityLogRetentionChangeDays:      90,
-			ActivityLogRetentionDebugDays:       30,
-			ActivityLogCompactionDays:           14,
-			ActivityLogNightlyCompactionEnabled: true,
-			ActivityLogFullDetailDays:           0,
-			AIJournalRetentionDays:              30,
-
-			// Embedding pipeline
-			Embedding: EmbeddingConfig{
-				Enabled:               true,
-				Model:                 "text-embedding-3-large",
-				Dimensions:            3072,
-				BaseURL:               "",
-				VectorBackend:         "hnsw",
-				RequestTimeoutSeconds: 0, // 0 = DefaultEmbeddingRequestTimeout (30 s); see ResolveEmbeddingRequestTimeout
-			},
-
-			// Dedup thresholds + behaviour (nested sub-struct)
-			Dedup: DedupConfig{
-				BookHighThreshold:          0.95,
-				BookLowThreshold:           0.85,
-				AuthorHighThreshold:        0.92,
-				AuthorLowThreshold:         0.80,
-				AutoMergeEnabled:           true,
-				EmbeddingsEnabled:          true, // opt-out: set false on no-internet boxes
-				LLMAutoMergeHighConfidence: false,
-				AutoResolveEnabled:         false, // owner-greenlight kill switch; never defaulted true
-				OnImportViaScheduler:       false, // opt-in
-				ReviewModel:                "gpt-5-mini",
-				Signals: DedupSignalConfig{
-					BandCertainMin: 97.0,
-					BandHighMin:    90.0,
-					BandMediumMin:  75.0,
-					BandReviewMin:  60.0,
-				},
-			},
-
-			// Author catalog: off by default.
-			Catalog: CatalogConfig{
-				Enabled:              false,
-				Language:             "english",
-				Marketplace:          "us",
-				HarvestRateFraction:  0.5,
-				MaxProductsPerAuthor: 2000,
-			},
-
-			// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
-			// Empty by default — the compiled-in blocklist in
-			// internal/dedup/boilerplate.go is always active regardless.
-			DedupBoilerplate: DedupBoilerplateConfig{
-				ExtraTitlePatterns:  nil,
-				ExtraPrefixPatterns: nil,
-			},
-
-			// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
-			MetadataScoring: MetadataScoringConfig{
-				EmbeddingEnabled:   false,
-				EmbeddingMinScore:  0.82,
-				EmbeddingBestMatch: 0.88,
-				LLMEnabled:         false,
-				LLMRerankEpsilon:   0.05,
-				LLMRerankTopK:      5,
-
-				TranscriptionTitleExactBoost:  2.0,
-				TranscriptionTitleSubstrBoost: 1.4,
-				TranscriptionAuthorBoost:      1.6,
-				TranscriptionNarratorBoost:    1.4,
-
-				CompilationPenalty:     new(0.15),
-				RichMetadataFieldBonus: 0.05,
-				RichMetadataBonusCap:   new(0.15),
-				F1MinScore:             new(0.35),
-
-				SeriesNameMatchBoost:     1.4,
-				SeriesNumberExactBoost:   2.0,
-				SeriesNumberWrongPenalty: 0.5,
-
-				DurationTierMultipliers: []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50},
-				DurationTierScores:      []float64{20, 15, 10, 0, -10, -20},
-
-				BulkFetchWorkers:    4,
-				SourceFanoutWorkers: 4,
-				WriteBackWorkers:    4,
-			},
-
-			// AI backend-mode toggle. Modes empty at rest (derived from legacy
-			// fields by EffectiveEmbeddingMode / EffectiveLLMMode); local
-			// endpoint coordinates carry Ollama model-name defaults, but
-			// LocalBaseURL itself defaults to empty, NOT a real endpoint: it
-			// previously hardcoded one developer's own LAN Ollama host
-			// (http://192.168.0.20:11434/v1) here too. An empty LocalBaseURL
-			// falls through cleanly to the next mode (OpenAI if configured,
-			// else disabled) rather than selecting local mode against an
-			// unreachable address. Must never be reinstated as a shipped
-			// default.
-			AIBackend: AIBackendConfig{
-				EmbeddingMode:       "",
-				LLMMode:             "",
-				LocalBaseURL:        "",
-				LocalEmbeddingModel: "bge-m3",
-				LocalLLMModel:       "qwen2.5:7b-instruct",
-			},
-
-			// Logging
-			LogLevel: "info",
-
-			// Auto-update
-			AutoUpdate: AutoUpdateConfig{
-				Enabled:      false,
-				Channel:      "stable",
-				CheckMinutes: 60,
-				WindowStart:  2,
-				WindowEnd:    5,
-			},
-
-			// Maintenance window
-			Maintenance: MaintenanceConfig{
-				Enabled:            true,
-				WindowStart:        1,
-				WindowEnd:          4,
-				DedupRefresh:       true,
-				SeriesPrune:        true,
-				AuthorSplit:        true,
-				TombstoneCleanup:   true,
-				Reconcile:          true,
-				PurgeDeleted:       true,
-				PurgeOldLogs:       true,
-				DbOptimize:         true,
-				LibraryScan:        false,
-				LibraryOrganize:    false,
-				MetadataRefresh:    false,
-				LibrarySizeRefresh: true,
-				// AcoustID online lookup is OFF by default — uses third-party
-				// quota and only helps users who set ACOUSTID_API_KEY. Opt-in
-				// via setting + env key.
-				AcoustIDOnlineLookup: false,
-				AcoustIDNightlyLimit: 5000,
-			},
-
-			// Scheduled background tasks. Only library_scan is listed: it is
-			// the one member of the family that defaults ON, so leaving the
-			// whole sub-struct at its zero value here would silently turn the
-			// periodic scan OFF on a factory reset while viper's defaults say
-			// it is on. The other scheduled tasks all default enabled=false,
-			// so their zero value is inert here and they stay omitted (this
-			// literal has never carried their intervals either).
-			Scheduled: ScheduledTasksConfig{
-				LibraryScan: ScheduledTaskConfig{
-					Enabled:   true,
-					Interval:  360,
-					OnStartup: false,
-				},
-				// NOTE: this literal is a SECOND source of truth for defaults,
-				// parallel to the viper.SetDefault calls. A field added there
-				// but not here is silently ZERO after a factory reset, and for
-				// a scheduled task the zero value fails two different ways
-				// depending on which field is missed: a missing Interval leaves
-				// it "enabled with no ticker", a missing Enabled turns it off
-				// outright. Both are the never-runs-and-never-says-so shape the
-				// scheduler's own comments were written about.
-				LibraryScanFull: LibraryScanFullConfig{
-					Enabled:     true,
-					Interval:    60,
-					PeriodHours: 168,
-				},
-				// Disabled, but its Interval is carried anyway: an owner who
-				// enables it after a factory reset would otherwise get an
-				// enabled task with a zero interval and no ticker (see NOTE).
-				AcoustIDBackfill: ScheduledTaskConfig{
-					Enabled:  false,
-					Interval: 1440,
-				},
-				// asin_backfill defaults ON (interval alone gates it), so a
-				// missing Interval here would turn it off on a factory reset.
-				ASINBackfill: ScheduledTaskConfig{
-					Interval: 360,
-				},
-				// candidate_fetch defaults ON the same way.
-				CandidateFetch: ScheduledTaskConfig{
-					Interval: 360,
-				},
-				// catalog_harvest defaults ON (6h) the same way.
-				CatalogHarvest: ScheduledTaskConfig{
-					Interval: 360,
-				},
-			},
-
-			// Download client integration
-			DownloadClient: DownloadClientConfig{
-				Torrent: TorrentClientConfig{
-					Type: "",
-					Deluge: DelugeConfig{
-						Host:     "",
-						Port:     0,
-						Username: "",
-						Password: "",
-					},
-				},
-			},
-
-			// Apply pipeline
-			AutoRenameOnApply:       true,
-			AutoWriteTagsOnApply:    true,
-			VerifyAfterWrite:        true,
-			WriteStartupReadOnlyKey: true,
-
-			SupportedExtensions: audioext.Default(),
-			ExcludePatterns:     []string{},
-
-			// Default metadata sources
-			MetadataSources: []MetadataSource{
-				{
-					ID:           "audible",
-					Name:         "Audible",
-					Enabled:      true,
-					Priority:     1,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "openlibrary",
-					Name:         "Open Library",
-					Enabled:      true,
-					Priority:     2,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "audnexus",
-					Name:         "Audnexus",
-					Enabled:      true,
-					Priority:     3,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "google-books",
-					Name:         "Google Books",
-					Enabled:      false,
-					Priority:     4,
-					RequiresAuth: true,
-					Credentials: map[string]string{
-						"apiKey": "",
-					},
-				},
-				{
-					ID:           "hardcover",
-					Name:         "Hardcover",
-					Enabled:      false,
-					Priority:     5,
-					RequiresAuth: true,
-					Credentials:  make(map[string]string),
-				},
-				{
-					ID:           "wikipedia",
-					Name:         "Wikipedia",
-					Enabled:      false, // Disabled by default — Wikipedia API returns 403
-					Priority:     6,
-					RequiresAuth: false,
-					Credentials:  make(map[string]string),
-				},
-			},
-
-			// Managed external-tool lifecycle
-			Tools: tools.ToolsConfig{
-				ManagedDir:          "/var/lib/audiobook-organizer/tools",
-				Ollama:              tools.ToolConfig{Mode: tools.ToolModeSystem},
-				Fpcalc:              tools.ToolConfig{Mode: tools.ToolModeSystem},
-				AllowPeriodicOllama: false,
-				OllamaDebounceMin:   10,
-			},
-		}
 		// Host-set values win over a reset exactly as they win over the
 		// database at load: without this a system/factory reset cleared a
 		// host-set OWNER_EMAIL / CF_ACCESS_* (and every other

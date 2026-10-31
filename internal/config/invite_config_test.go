@@ -1,7 +1,7 @@
 // file: internal/config/invite_config_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package config
 
@@ -39,9 +39,9 @@ func setInviteEnv(t *testing.T) {
 
 func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 	resetViper(t)
-	registerInviteDefaults()
+	registerInviteDefaults(viper.GetViper())
 	var c Config
-	applyInviteEnv(&c)
+	applyInviteEnv(&c, viper.GetViper())
 	if c.InviteMailConfigured() || c.GuestPolicySyncConfigured() {
 		t.Fatalf("an unconfigured server must have every invite feature off: %+v", c)
 	}
@@ -58,7 +58,7 @@ func TestInviteConfig_DefaultsAreInert(t *testing.T) {
 
 func TestInviteConfig_EnvReachesConfigAndSurvivesBlobOverlay(t *testing.T) {
 	resetViper(t)
-	registerInviteDefaults()
+	registerInviteDefaults(viper.GetViper())
 	setInviteEnv(t)
 
 	// applyEnvAuthoritativeConfig runs after the blob load replaced the struct.
@@ -108,10 +108,10 @@ func TestInviteConfig_BaseURLFallbacks(t *testing.T) {
 // GET /config response (which marshals Config, then masks), not the blob.
 func TestInviteConfig_NeverSerialized(t *testing.T) {
 	resetViper(t)
-	registerInviteDefaults()
+	registerInviteDefaults(viper.GetViper())
 	setInviteEnv(t)
 	c := Config{}
-	applyInviteEnv(&c)
+	applyInviteEnv(&c, viper.GetViper())
 	us := &UpdateService{}
 	for name, v := range map[string]Config{"raw": c, "masked": us.MaskSecrets(c)} {
 		b, err := json.Marshal(v)
@@ -217,9 +217,9 @@ func TestInitConfig_StaleGuestServiceTokenEnvWarns(t *testing.T) {
 
 func TestLoginSaturatedLimits_DefaultsAndEnv(t *testing.T) {
 	resetViper(t)
-	registerInviteDefaults()
+	registerInviteDefaults(viper.GetViper())
 	var c Config
-	applyInviteEnv(&c)
+	applyInviteEnv(&c, viper.GetViper())
 	rate, burst, err := parseLoginSaturatedLimits(c.LoginSaturatedRate, c.LoginSaturatedBurst)
 	if err != nil || rate != DefaultLoginSaturatedRate || burst != DefaultLoginSaturatedBurst {
 		t.Fatalf("unset keys: rate=%v burst=%d err=%v, want the defaults %v/%d", rate, burst, err, DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
@@ -231,10 +231,10 @@ func TestLoginSaturatedLimits_DefaultsAndEnv(t *testing.T) {
 	t.Setenv("LOGIN_SATURATED_RATE", " 0.5 ")
 	t.Setenv("LOGIN_SATURATED_BURST", " 3 ")
 	resetViper(t)
-	registerInviteDefaults()
+	registerInviteDefaults(viper.GetViper())
 	restoreAppConfig(t)
 	var c2 Config
-	applyInviteEnv(&c2)
+	applyInviteEnv(&c2, viper.GetViper())
 	Mutate(func(cfg *Config) {
 		cfg.LoginSaturatedRate, cfg.LoginSaturatedBurst = c2.LoginSaturatedRate, c2.LoginSaturatedBurst
 	})
@@ -327,16 +327,16 @@ func TestGuestServiceTokens_FlagAndSettings(t *testing.T) {
 
 func TestGuestServiceTokens_EnvBindingsDefaultOff(t *testing.T) {
 	resetViper(t)
-	registerInviteDefaults()
+	registerInviteDefaults(viper.GetViper())
 	c := Config{}
-	applyInviteEnv(&c)
+	applyInviteEnv(&c, viper.GetViper())
 	if c.CFGuestServiceTokens || c.InviteEmailServiceToken || c.CFServiceAuthPolicyID != "" {
 		t.Fatalf("defaults must be off/empty: %+v", c)
 	}
 	t.Setenv("CF_GUEST_SERVICE_TOKENS", "true")
 	t.Setenv("CF_SERVICE_AUTH_POLICY_ID", " pol-id ")
 	t.Setenv("INVITE_EMAIL_SERVICE_TOKEN", "true")
-	applyInviteEnv(&c)
+	applyInviteEnv(&c, viper.GetViper())
 	if !c.CFGuestServiceTokens || !c.InviteEmailServiceToken || c.CFServiceAuthPolicyID != "pol-id" {
 		t.Fatalf("env not applied: %+v", c)
 	}
