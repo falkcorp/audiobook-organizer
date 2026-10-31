@@ -1,7 +1,7 @@
 // file: internal/database/search_rank.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: a46bc2cf-3cc2-4402-b32f-c2fba2c7c95c
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Relevance tiers for the SearchBooks substring predicate, best first.
@@ -60,11 +62,14 @@ func (r SearchRank) Less(o SearchRank) bool {
 // decide "does this book match" identically. ok is false when the book does not
 // match.
 //
-// authorNames maps author id to util.NormalizeAuthor(name) (lower + TrimSpace);
-// lowerQuery is strings.ToLower(query). Title and narrator compare against a
-// bare strings.ToLower. That asymmetry is pre-existing and kept on purpose --
-// see the quirk list on SearchBookIDs. Ranking never changes WHICH books match,
-// only their order.
+// authorNames maps author id to util.NormalizeAuthor(name) (lower + whitespace
+// collapse); lowerQuery is strings.ToLower(query). The author branch matches the
+// query in either form: as typed (lower-cased) OR run through the same
+// util.NormalizeAuthor the stored side used, so a query carrying a tab or NBSP
+// finds "bruce wayne" and a query typed in the stored form still hits. Title and
+// narrator compare against a bare strings.ToLower. That asymmetry is
+// pre-existing and kept on purpose -- see the quirk list on SearchBookIDs.
+// Ranking never changes WHICH books match, only their order.
 //
 // An empty query matches every book (strings.Contains(x, "") is true). It gets
 // one tier and a zero title length so those results stay in plain ID order, as
@@ -92,7 +97,7 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 		return r, true
 	}
 	if authorID != nil {
-		if name, ok := authorNames[*authorID]; ok && strings.Contains(searchFold(name), lowerQuery) {
+		if name, ok := authorNames[*authorID]; ok && authorMatchesQuery(searchFold(name), lowerQuery) {
 			r.Tier = SearchTierAuthor
 			return r, true
 		}
@@ -102,6 +107,23 @@ func SubstringSearchRank(id, title string, narrator *string, authorID *int, auth
 		return r, true
 	}
 	return SearchRank{}, false
+}
+
+// authorMatchesQuery reports whether the stored, already-normalized author name
+// contains the query. It tries the query as typed (the lower-cased fallback),
+// then the query normalized by util.NormalizeAuthor -- the function that built
+// the stored side -- so the two sides are compared in the same form. The
+// normalized form differs from the as-typed one only for queries with
+// non-ASCII-space whitespace or edge spaces, and it is trimmed: an author's
+// stored name has no edge spaces, so "wayne " now finds "bruce wayne" (the
+// title branch still keeps a trailing space meaningful). A query that
+// normalizes to empty matches nothing. Matches only ever widen.
+func authorMatchesQuery(foldedName, foldedQuery string) bool {
+	if strings.Contains(foldedName, foldedQuery) {
+		return true
+	}
+	nq := searchFold(util.NormalizeAuthor(foldedQuery))
+	return nq != foldedQuery && nq != "" && strings.Contains(foldedName, nq)
 }
 
 // searchFold is the one normalization the search predicate applies to the
