@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 import type * as api from '../services/api';
 
@@ -19,9 +19,26 @@ import type * as api from '../services/api';
 // activity_db_resolved_path from before the SQLite activity backend was
 // removed (2026-10-19); the server now refuses the first two, so they are
 // dropped here like any other unknown key.
+// True for any value carrying a run of four or more asterisks: the signature
+// of a masked secret of any shape (the server's current mask, or an older
+// one). Such a value is never a real secret, so an import drops it rather than
+// sending it back to overwrite the stored secret.
+export const looksLikeMask = (value: string): boolean => /\*{4,}/.test(value);
+
+export interface SanitizeReport {
+  cleaned: Partial<api.Config>;
+  // Dotted names of the secret fields dropped because they were mask-shaped.
+  skipped: string[];
+}
+
 export const sanitizeSettingsImport = (
   payload: Partial<api.Config>
-): Partial<api.Config> => {
+): Partial<api.Config> => sanitizeSettingsImportWithReport(payload).cleaned;
+
+export const sanitizeSettingsImportWithReport = (
+  payload: Partial<api.Config>
+): SanitizeReport => {
+  const skipped: string[] = [];
   const allowed = new Set([
     'root_dir', 'playlist_dir', 'organization_strategy', 'scan_on_startup', 'auto_organize',
     'folder_naming_pattern', 'file_naming_pattern', 'create_backups', 'supported_extensions',
@@ -37,7 +54,7 @@ export const sanitizeSettingsImport = (
   ]);
 
   const cleaned: Partial<api.Config> = {};
-  if (!payload || typeof payload !== 'object') return cleaned;
+  if (!payload || typeof payload !== 'object') return { cleaned, skipped };
 
   for (const key of Object.keys(payload)) {
     if (!allowed.has(key)) continue;
@@ -84,7 +101,12 @@ export const sanitizeSettingsImport = (
             if ((s as any).credentials && typeof (s as any).credentials === 'object') {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               for (const [ck, cv] of Object.entries((s as any).credentials)) {
-                if (typeof cv === 'string') src.credentials[ck] = cv;
+                if (typeof cv !== 'string') continue;
+                if (looksLikeMask(cv)) {
+                  skipped.push(`metadata_sources[${src.id ?? '?'}].credentials.${ck}`);
+                  continue;
+                }
+                src.credentials[ck] = cv;
               }
             }
             return src;
@@ -96,8 +118,9 @@ export const sanitizeSettingsImport = (
 
       case 'openai_api_key':
         if (typeof val === 'string') {
+          if (looksLikeMask(val)) skipped.push('openai_api_key');
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (!val.includes('***')) (cleaned as any).openai_api_key = val;
+          else (cleaned as any).openai_api_key = val;
         }
         break;
 
@@ -189,5 +212,5 @@ export const sanitizeSettingsImport = (
     if (maintenance) cleaned.maintenance = maintenance as api.Config['maintenance'];
   }
 
-  return cleaned;
+  return { cleaned, skipped };
 };

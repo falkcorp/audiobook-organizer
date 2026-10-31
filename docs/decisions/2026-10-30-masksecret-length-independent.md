@@ -28,3 +28,11 @@ longer idempotent for secrets of 16+ characters. `unmaskAIEndpointAuthRefs`
 matches `auth_ref` names by their mask; with one known name
 (`openai_api_key`) this is still unambiguous, but adding a second name under 16
 characters would make it ambiguous. Not changed here (out of scope).
+
+No backward compatibility for the old mask: `database.IsEchoedMask` recognises
+only the current shape, and `database.LooksLikeMask` (a run of 4+ asterisks)
+makes the update path reject any other mask-shaped secret with a 400, so a
+stale tab or exported config cannot store a mask as the secret during the
+deploy window. Rejected alternative: also accepting the legacy shape as an echo.
+The settings import drops mask-shaped credentials and reports them as skipped.
+Side effect: a genuine new secret containing `****` is refused.

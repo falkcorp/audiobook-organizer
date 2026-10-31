@@ -1,5 +1,5 @@
 // file: internal/config/mask_length_independent_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0c9a52-7d1e-4b8a-9c64-5a2e81d7b0f3
 // last-edited: 2026-10-30
 
@@ -8,6 +8,7 @@ package config
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -161,5 +162,93 @@ func TestUpdateConfig_ShortSecretsDoNotCrossRestore(t *testing.T) {
 	got := Snapshot()
 	if got.OAuthGithubClientSecret != "robin-gh-01" || got.OAuthGoogleClientSecret != "joker-go-02" || got.DelugeWebPassword != "batman-dw-03" {
 		t.Fatalf("secrets crossed or were destroyed: %q %q %q", got.OAuthGithubClientSecret, got.OAuthGoogleClientSecret, got.DelugeWebPassword)
+	}
+}
+
+// legacyMasks are the shapes older builds handed out. They must never be
+// accepted as an echo: a stale tab or exported config holding one would
+// otherwise be stored as the literal secret.
+func legacyMaskFor(secret string) string {
+	if len(secret) < 8 {
+		return "****"
+	}
+	return secret[:3] + "****" + secret[len(secret)-4:]
+}
+
+// TestUpdateConfig_LegacyMaskEchoIsRejected: a legacy-shaped mask is refused
+// with a 400 telling the operator to re-enter the secret, and nothing stored
+// changes. The new-shape echo keeps the secret, and a real value replaces it.
+func TestUpdateConfig_LegacyMaskEchoIsRejected(t *testing.T) {
+	const secret = "WayneManorGate-Alfred-0042"
+	for _, fc := range maskedFieldCases() {
+		t.Run(fc.name+"/legacy", func(t *testing.T) {
+			var base Config
+			base.RootDir = t.TempDir()
+			fc.seed(&base, secret)
+			withAppConfig(t, base)
+			us := NewUpdateService(newMockSettingsStore())
+
+			status, resp := us.UpdateConfig(context.Background(), fc.payload(legacyMaskFor(secret)))
+			if status != http.StatusBadRequest {
+				t.Fatalf("legacy mask: status %d, want 400: %v", status, resp)
+			}
+			if msg, _ := resp["error"].(string); !strings.Contains(msg, "re-enter the secret") {
+				t.Fatalf("error %q does not tell the operator to re-enter the secret", msg)
+			}
+			if got := fc.get(Snapshot()); got != secret {
+				t.Fatalf("rejected legacy mask changed the stored secret: %q", got)
+			}
+		})
+		t.Run(fc.name+"/short-legacy", func(t *testing.T) {
+			var base Config
+			base.RootDir = t.TempDir()
+			fc.seed(&base, secret)
+			withAppConfig(t, base)
+			us := NewUpdateService(newMockSettingsStore())
+			if status, _ := us.UpdateConfig(context.Background(), fc.payload("****")); status != http.StatusBadRequest {
+				t.Fatalf("\"****\": status %d, want 400", status)
+			}
+			if got := fc.get(Snapshot()); got != secret {
+				t.Fatalf("stored secret changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestUpdateConfig_LegacyMaskCredentialInMetadataSourceIsRejected(t *testing.T) {
+	const secret = "GothamBooksKey-Batgirl-77"
+	withAppConfig(t, Config{RootDir: t.TempDir(), MetadataSources: sourcesWithKey(secret)})
+	us := NewUpdateService(newMockSettingsStore())
+
+	payload := map[string]any{"metadata_sources": []any{map[string]any{
+		"id": "google-books", "credentials": map[string]any{"apiKey": legacyMaskFor(secret)},
+	}}}
+	if status, resp := us.UpdateConfig(context.Background(), payload); status != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %v", status, resp)
+	}
+	if got := Snapshot().MetadataSources[0].Credentials["apiKey"]; got != secret {
+		t.Fatalf("stored credential changed: %q", got)
+	}
+
+	payload["metadata_sources"].([]any)[0].(map[string]any)["credentials"] = map[string]any{"apiKey": database.MaskSecret(secret)}
+	if status, resp := us.UpdateConfig(context.Background(), payload); status != http.StatusOK {
+		t.Fatalf("current-shape echo: status %d: %v", status, resp)
+	}
+	if got := Snapshot().MetadataSources[0].Credentials["apiKey"]; got != secret {
+		t.Fatalf("current-shape echo destroyed the credential: %q", got)
+	}
+}
+
+func TestLooksLikeMaskAndIsEchoedMask(t *testing.T) {
+	for in, want := range map[string]bool{"": false, "***": false, "****": true, "ab****cd": true, "********ab": true, "plain": false} {
+		if got := database.LooksLikeMask(in); got != want {
+			t.Errorf("LooksLikeMask(%q) = %v, want %v", in, got, want)
+		}
+	}
+	if database.IsEchoedMask("********", "") {
+		t.Error("an empty stored secret has no mask to echo")
+	}
+	if !database.IsEchoedMask("********", "short") || database.IsEchoedMask("****", "short") {
+		t.Error("IsEchoedMask must accept only the current shape")
 	}
 }
