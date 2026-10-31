@@ -1,7 +1,7 @@
 // file: internal/operations/state/v3_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e23135cd-0f05-456d-b2f0-dbe4bdefb9c1
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 package state
 
@@ -37,6 +37,7 @@ func allowedTransitions() map[transitionKey]V3 {
 		{V3Canceled, EvDecideRetry, ""}:                 V3Queued,
 		{V3TimedOut, EvDecideRetry, ""}:                 V3Queued,
 		{V3Dropped, EvDecideRetry, ""}:                  V3Queued,
+		{V3AwaitingDecision, EvDecideFinish, ""}:        V3Queued,
 		{V3AwaitingDecision, EvDecideDrop, ""}:          V3Dropped,
 		{V3Interrupted, EvDecideDrop, ""}:               V3Dropped,
 		{V3Stopping, EvGoroutineReturned, StopUser}:     V3Canceled,
@@ -273,5 +274,27 @@ func TestInferEvent(t *testing.T) {
 		if ev, _, ok := InferEvent(pair[0], pair[1]); ok {
 			t.Errorf("InferEvent(%q, %q) = %s; no single listed event connects them", pair[0], pair[1], ev)
 		}
+	}
+}
+
+// TestDecideFinishIsOnlyForAwaitingDecision pins the third decision: it takes
+// an awaiting_decision run back to queued and nothing else, and the v2
+// façade still names that move decide_retry (a v2 Retry write must not be
+// recorded as a finish-only dispatch).
+func TestDecideFinishIsOnlyForAwaitingDecision(t *testing.T) {
+	for _, from := range AllV3() {
+		got, err := Next(from, EvDecideFinish, "")
+		if from == V3AwaitingDecision {
+			if err != nil || got != V3Queued {
+				t.Errorf("Next(awaiting_decision, decide_finish) = (%q, %v), want queued", got, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("Next(%q, decide_finish) = %q, want an error", from, got)
+		}
+	}
+	if ev, _, ok := InferEvent(V3AwaitingDecision, V3Queued); !ok || ev != EvDecideRetry {
+		t.Errorf("InferEvent(awaiting_decision, queued) = (%s, %v), want decide_retry", ev, ok)
 	}
 }

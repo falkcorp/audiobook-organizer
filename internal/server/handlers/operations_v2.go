@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.22.1
+// version: 1.23.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-30
 
@@ -32,19 +32,41 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// opsV2Log routes the log lines of the finish decision through internal/logger,
+// which strips control characters from values; the slog guard forbids new
+// direct calls in this file.
+var opsV2Log = logger.New("handlers.operations_v2")
+
+// OperationsDecisions is the part of OperationsRegistry that decides what
+// becomes of an interrupted run: Retry and Finish without resuming. (Discard,
+// the third decision, is on OperationsRegistry beside Cancel.) Split out so
+// OperationsRegistry stays within the interface-width limit.
+type OperationsDecisions interface {
+	// RetryInterrupted re-queues an interrupted run in place (same id). Errors:
+	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive and
+	// opsregistry.ErrOpNotRetryable (409).
+	RetryInterrupted(ctx context.Context, opID, actor string) error
+	// FinishWithoutResuming is the third decision on an interrupted_ask run,
+	// next to RetryInterrupted and Discard: run the def's Finish over the rows
+	// already applied, without leasing any more work. Errors:
+	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive and
+	// opsregistry.ErrOpNotFinishable (409).
+	FinishWithoutResuming(ctx context.Context, opID, actor string) error
+	// CanFinishWithoutResuming reports whether a run of defID can take that
+	// decision (a native Batch or Fixer); the timeline offers the button from it.
+	CanFinishWithoutResuming(defID string) bool
+}
+
 // OperationsRegistry is the narrow interface OperationsV2Handler requires from
 // the operations registry. It lists only the methods the handlers call.
 type OperationsRegistry interface {
+	OperationsDecisions
 	GetCurrentItem(opID string) string
 	Cancel(opID string) error
 	// Discard deletes a persisted, no-longer-executing run. Errors:
 	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive (409).
 	Discard(opID string) error
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
-	// RetryInterrupted re-queues an interrupted run in place (same id). Errors:
-	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive and
-	// opsregistry.ErrOpNotRetryable (409).
-	RetryInterrupted(ctx context.Context, opID, actor string) error
 	ActiveDefs() []opsregistry.OperationDef
 	// Def looks up a single registered def. Used by TriggerOperationV2 to read
 	// the def's declared Permissions before enqueueing.
@@ -370,6 +392,7 @@ func (h *OperationsV2Handler) GetOperationTimeline(c *gin.Context) {
 			continue
 		}
 		item := rowToResponse(r, h.displayNameFor(r.DefID), h.notifyLevelFor(r.DefID), repairsReader.UserText)
+		item.CanFinish = h.canFinishWithoutResuming(r.Status, r.DefID)
 		if r.Status == "running" && h.registry != nil {
 			if ci := h.registry.GetCurrentItem(r.ID); ci != "" {
 				ci = repairsReader.UserText(ci)
@@ -451,6 +474,7 @@ func (h *OperationsV2Handler) GetOperationV2(c *gin.Context) {
 	}
 
 	opResp := rowToResponse(*row, h.displayNameFor(row.DefID), h.notifyLevelFor(row.DefID), h.repairsAccess.For(c).UserText)
+	opResp.CanFinish = h.canFinishWithoutResuming(row.Status, row.DefID)
 	if row.Status == "running" && h.registry != nil {
 		if ci := h.registry.GetCurrentItem(id); ci != "" {
 			ci = h.repairsAccess.For(c).UserText(ci)
@@ -916,6 +940,89 @@ func (h *OperationsV2Handler) retryInterruptedInPlace(c *gin.Context, row *datab
 		"def_id": row.DefID,
 		"status": "queued",
 		"mode":   retryModeResumedInPlace,
+	})
+}
+
+// canFinishWithoutResuming reports whether the Activity page should offer
+// "Finish without resuming" on a row: it is waiting for a decision
+// (interrupted_ask) and its def is a native v3 Batch or Fixer, the only kinds
+// with a ledger and a Finish to run over it. Computed here, not in the web, so
+// the button and the POST .../finish refusal cannot disagree.
+func (h *OperationsV2Handler) canFinishWithoutResuming(status, defID string) bool {
+	return h.registry != nil && status == "interrupted_ask" && h.registry.CanFinishWithoutResuming(defID)
+}
+
+// finishModeFinishOnly is the mode POST .../finish answers with: the same row
+// re-queued to run only its Finish (compare retryModeResumedInPlace).
+const finishModeFinishOnly = "finish_only"
+
+// FinishOperationV2 implements POST /api/v1/operations/v2/:id/finish, the third
+// decision on an interrupted_ask run next to Retry and Discard: "finish without
+// resuming". The row is re-queued in place (same id) through
+// registry.FinishWithoutResuming; the attempt that follows leases no work and
+// runs only the def's Finish over the rows the stored ledger records as
+// applied, so a fixer's AfterApply sees what it applied and the run ends
+// succeeded. Discard would delete that record instead, and Retry would apply
+// the rest.
+//
+// Gated like Retry: the def's declared permissions, and the Repairs start
+// check (a Repairs run is finished only by a caller who may start its fixer).
+// 404 for an unknown id; 409 when the row is not interrupted_ask, still has a
+// live run handle, or its def cannot take the decision (a v2 def has no Finish
+// to run, so "finish" would be a full Run: that is Retry).
+func (h *OperationsV2Handler) FinishOperationV2(c *gin.Context) {
+	id := c.Param("id")
+	if h.registry == nil {
+		httputil.RespondWithInternalError(c, "operations registry not initialized")
+		return
+	}
+	if h.opsStore == nil {
+		httputil.RespondWithNotFound(c, "operation", id)
+		return
+	}
+
+	row, err := h.opsStore.GetOperationV2(id)
+	if err != nil || row == nil || row.ID == "" {
+		httputil.RespondWithNotFound(c, "operation", id)
+		return
+	}
+	if row.Status != "interrupted_ask" {
+		httputil.RespondWithConflict(c, fmt.Sprintf(
+			"operation %s is %s; only an operation waiting for a decision (interrupted_ask) can be finished without resuming",
+			id, row.Status))
+		return
+	}
+	if !h.defPermissionsHeld(c, row.DefID) {
+		return
+	}
+	if !h.repairsStartAllowed(c, row.DefID, []byte(row.Params)) {
+		return
+	}
+
+	actor := "an unauthenticated request"
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok && u.Username != "" {
+		actor = u.Username
+	}
+	err = h.registry.FinishWithoutResuming(c.Request.Context(), row.ID, actor)
+	switch {
+	case err == nil:
+	case errors.Is(err, opsregistry.ErrOpNotFound):
+		httputil.RespondWithNotFound(c, "operation", row.ID)
+		return
+	case errors.Is(err, opsregistry.ErrOpActive), errors.Is(err, opsregistry.ErrOpNotFinishable):
+		httputil.RespondWithConflict(c, err.Error())
+		return
+	default:
+		httputil.InternalError(c, "finish failed", err)
+		return
+	}
+	opsV2Log.Info("finish: queued interrupted operation to finish without resuming: op_id=%s def_id=%s actor=%s",
+		logger.SanitizeLogValue(row.ID), logger.SanitizeLogValue(row.DefID), logger.SanitizeLogValue(actor))
+	httputil.RespondWithSuccess(c, http.StatusAccepted, gin.H{
+		"id":     row.ID,
+		"def_id": row.DefID,
+		"status": "queued",
+		"mode":   finishModeFinishOnly,
 	})
 }
 

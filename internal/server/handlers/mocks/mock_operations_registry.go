@@ -93,6 +93,57 @@ func (_c *MockOperationsRegistry_ActiveDefs_Call) RunAndReturn(run func() []regi
 	return _c
 }
 
+// CanFinishWithoutResuming provides a mock function for the type MockOperationsRegistry
+func (_mock *MockOperationsRegistry) CanFinishWithoutResuming(defID string) bool {
+	ret := _mock.Called(defID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CanFinishWithoutResuming")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func(string) bool); ok {
+		r0 = returnFunc(defID)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
+}
+
+// MockOperationsRegistry_CanFinishWithoutResuming_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CanFinishWithoutResuming'
+type MockOperationsRegistry_CanFinishWithoutResuming_Call struct {
+	*mock.Call
+}
+
+// CanFinishWithoutResuming is a helper method to define mock.On call
+//   - defID string
+func (_e *MockOperationsRegistry_Expecter) CanFinishWithoutResuming(defID any) *MockOperationsRegistry_CanFinishWithoutResuming_Call {
+	return &MockOperationsRegistry_CanFinishWithoutResuming_Call{Call: _e.mock.On("CanFinishWithoutResuming", defID)}
+}
+
+func (_c *MockOperationsRegistry_CanFinishWithoutResuming_Call) Run(run func(defID string)) *MockOperationsRegistry_CanFinishWithoutResuming_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsRegistry_CanFinishWithoutResuming_Call) Return(b bool) *MockOperationsRegistry_CanFinishWithoutResuming_Call {
+	_c.Call.Return(b)
+	return _c
+}
+
+func (_c *MockOperationsRegistry_CanFinishWithoutResuming_Call) RunAndReturn(run func(defID string) bool) *MockOperationsRegistry_CanFinishWithoutResuming_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Cancel provides a mock function for the type MockOperationsRegistry
 func (_mock *MockOperationsRegistry) Cancel(opID string) error {
 	ret := _mock.Called(opID)
@@ -338,6 +389,69 @@ func (_c *MockOperationsRegistry_EnqueueOp_Call) Return(s string, err error) *Mo
 }
 
 func (_c *MockOperationsRegistry_EnqueueOp_Call) RunAndReturn(run func(ctx context.Context, defID string, params any, opts ...registry.EnqueueOption) (string, error)) *MockOperationsRegistry_EnqueueOp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// FinishWithoutResuming provides a mock function for the type MockOperationsRegistry
+func (_mock *MockOperationsRegistry) FinishWithoutResuming(ctx context.Context, opID string, actor string) error {
+	ret := _mock.Called(ctx, opID, actor)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FinishWithoutResuming")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = returnFunc(ctx, opID, actor)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockOperationsRegistry_FinishWithoutResuming_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FinishWithoutResuming'
+type MockOperationsRegistry_FinishWithoutResuming_Call struct {
+	*mock.Call
+}
+
+// FinishWithoutResuming is a helper method to define mock.On call
+//   - ctx context.Context
+//   - opID string
+//   - actor string
+func (_e *MockOperationsRegistry_Expecter) FinishWithoutResuming(ctx any, opID any, actor any) *MockOperationsRegistry_FinishWithoutResuming_Call {
+	return &MockOperationsRegistry_FinishWithoutResuming_Call{Call: _e.mock.On("FinishWithoutResuming", ctx, opID, actor)}
+}
+
+func (_c *MockOperationsRegistry_FinishWithoutResuming_Call) Run(run func(ctx context.Context, opID string, actor string)) *MockOperationsRegistry_FinishWithoutResuming_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsRegistry_FinishWithoutResuming_Call) Return(err error) *MockOperationsRegistry_FinishWithoutResuming_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockOperationsRegistry_FinishWithoutResuming_Call) RunAndReturn(run func(ctx context.Context, opID string, actor string) error) *MockOperationsRegistry_FinishWithoutResuming_Call {
 	_c.Call.Return(run)
 	return _c
 }

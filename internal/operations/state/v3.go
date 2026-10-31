@@ -1,7 +1,7 @@
 // file: internal/operations/state/v3.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f4b44f29-abd2-405d-9167-2beac6c9d083
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 package state
 
@@ -79,6 +79,14 @@ const (
 	EvAsk               Event = "ask"
 	EvDecideRetry       Event = "decide_retry"
 	EvDecideDrop        Event = "decide_drop"
+	// EvDecideFinish is the third decision on an awaiting_decision run,
+	// "Finish without resuming" (05-PR5-FINISH-ON-DECLINE): the run goes back
+	// to queued carrying RunRecord.FinishOnly, and its next attempt leases no
+	// chunks and runs only the def's Finish over the stored ledger. Only
+	// awaiting_decision takes it: a failed, canceled or timed-out run ended
+	// with its Finish already run (or deliberately not), so there is nothing
+	// left to run.
+	EvDecideFinish Event = "decide_finish"
 	// EvMigrate is the synthetic event migration 065 records once per run it
 	// builds from an opv2: row. No runtime transition produces it.
 	EvMigrate Event = "migrate"
@@ -99,7 +107,7 @@ const (
 var AllEvents = []Event{
 	EvEnqueue, EvWaitCleared, EvDispatch, EvReturnNil, EvReturnErr,
 	EvStopRequested, EvGoroutineReturned, EvBootSweep, EvResume, EvAsk,
-	EvDecideRetry, EvDecideDrop,
+	EvDecideRetry, EvDecideDrop, EvDecideFinish,
 }
 
 // StopReasons are the reasons a run can enter stopping with.
@@ -236,6 +244,10 @@ func Next(from V3, ev Event, stopReason string) (V3, error) {
 	case EvDecideDrop:
 		if from == V3AwaitingDecision || from == V3Interrupted {
 			return V3Dropped, nil
+		}
+	case EvDecideFinish:
+		if from == V3AwaitingDecision {
+			return V3Queued, nil
 		}
 	}
 	return bad()
