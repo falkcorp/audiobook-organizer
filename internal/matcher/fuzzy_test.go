@@ -1,7 +1,7 @@
 // file: internal/matcher/fuzzy_test.go
-// version: 1.2.4
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 package matcher
 
@@ -10,8 +10,10 @@ import (
 	"testing"
 )
 
-// scoreMatchGoldenRow captures a (query, target) pair and the ScoreMatch value
-// it produced BEFORE the TokenSetRatio raise-only blend was introduced. The
+// scoreMatchGoldenRow captures a (query, target) pair and the directional
+// string-API ScoreMatch value it produced BEFORE the token-set raise-only blend
+// was introduced (ScoreMatch itself was replaced by SymmetricScore, which is
+// the larger of its two directions, so these stay valid as floors). The
 // blend must never DECREASE any pair's score, so golden is treated as a
 // MINIMUM floor (see TestScoreMatchGolden). Rows expected to RISE from the
 // order-insensitive token-set signal are annotated in the note.
@@ -44,6 +46,30 @@ var scoreMatchGolden = []scoreMatchGoldenRow{
 	{"Brandon Sanderson Mistborn", "Mistborn Brandon Sanderson", 24, "reordered tokens -> rises to token-set floor"},
 	{"A Game of Thrones", "Game of Thrones A", 38, "reordered tokens -> rises to token-set floor"},
 	{"Snow Crash", "Cryptonomicon", 5, "unrelated"},
+}
+
+// scoreMatch scores a pair through the shipped Prepare + SymmetricScore path,
+// the only scorer left in the package. It is symmetric, and at least as large
+// as the directional score the old ScoreMatch gave either way round, so the
+// golden floors and ranges below carry over unchanged.
+func scoreMatch(query, target string) int {
+	pa, pb := Prepare(query), Prepare(target)
+	var sc Scratch
+	return SymmetricScore(&pa, &pb, &sc)
+}
+
+// tokenSetRatio runs the shipped token-set ratio over freshly prepared inputs.
+func tokenSetRatio(a, b string) float64 {
+	pa, pb := Prepare(a), Prepare(b)
+	var sc Scratch
+	return tokenSetRatioPrepared(&pa, &pb, &sc)
+}
+
+// tokenSimilarity runs the shipped rune-level similarity over lower-cased
+// decodings of a and b.
+func tokenSimilarity(a, b string) float64 {
+	var ls levScratch
+	return tokenSimilarityRunes(appendLowerRunes(nil, a), appendLowerRunes(nil, b), &ls)
 }
 
 func TestLevenshteinDistance(t *testing.T) {
@@ -96,9 +122,9 @@ func TestScoreMatch(t *testing.T) {
 		{"Zola", "Émile Zola", 60, 90},
 	}
 	for _, tt := range tests {
-		score := ScoreMatch(tt.query, tt.target)
+		score := scoreMatch(tt.query, tt.target)
 		if score < tt.minExpected || score > tt.maxExpected {
-			t.Errorf("ScoreMatch(%q, %q) = %d, want [%d, %d]",
+			t.Errorf("scoreMatch(%q, %q) = %d, want [%d, %d]",
 				tt.query, tt.target, score, tt.minExpected, tt.maxExpected)
 		}
 	}
@@ -107,9 +133,9 @@ func TestScoreMatch(t *testing.T) {
 func TestScoreMatch_Ranking(t *testing.T) {
 	query := "dune"
 	// Exact should beat substring which should beat fuzzy
-	exact := ScoreMatch(query, "Dune")
-	substring := ScoreMatch(query, "Dune Messiah")
-	fuzzy := ScoreMatch(query, "June")
+	exact := scoreMatch(query, "Dune")
+	substring := scoreMatch(query, "Dune Messiah")
+	fuzzy := scoreMatch(query, "June")
 
 	if exact <= substring {
 		t.Errorf("exact (%d) should beat substring (%d)", exact, substring)
@@ -123,16 +149,16 @@ func TestScoreMatch_Ranking(t *testing.T) {
 // unrelated text, and only the exact match clears a 90 floor.
 func TestScoreMatchRanksExactFirst(t *testing.T) {
 	query := "Lamp of the Rivers"
-	exact := ScoreMatch(query, "The Lamp of the Rivers")
+	exact := scoreMatch(query, "The Lamp of the Rivers")
 	for _, other := range []string{"Lamp of the Fires", "Lump of the Rivers", "Something Completely Different"} {
-		if got := ScoreMatch(query, other); got > exact {
-			t.Errorf("ScoreMatch(%q, %q)=%d outranks the exact match (%d)", query, other, got, exact)
+		if got := scoreMatch(query, other); got > exact {
+			t.Errorf("scoreMatch(%q, %q)=%d outranks the exact match (%d)", query, other, got, exact)
 		}
 	}
-	if got := ScoreMatch("Exact Match", "Exact Match"); got < 90 {
+	if got := scoreMatch("Exact Match", "Exact Match"); got < 90 {
 		t.Errorf("exact match scored %d, want >= 90", got)
 	}
-	if got := ScoreMatch("Exact Match", "something else entirely"); got >= 90 {
+	if got := scoreMatch("Exact Match", "something else entirely"); got >= 90 {
 		t.Errorf("unrelated text scored %d, want < 90", got)
 	}
 }
@@ -143,9 +169,9 @@ func TestScoreMatchRanksExactFirst(t *testing.T) {
 // expected to rise; that is allowed and annotated in each row's note.
 func TestScoreMatchGolden(t *testing.T) {
 	for _, r := range scoreMatchGolden {
-		got := ScoreMatch(r.query, r.target)
+		got := scoreMatch(r.query, r.target)
 		if got < r.golden {
-			t.Errorf("ScoreMatch(%q, %q) = %d regressed below golden floor %d (%s)",
+			t.Errorf("scoreMatch(%q, %q) = %d regressed below golden floor %d (%s)",
 				r.query, r.target, got, r.golden, r.note)
 		}
 	}
@@ -170,8 +196,8 @@ func TestTokenSetRatioNoRegression(t *testing.T) {
 		{"Brandon Sanderson Mistborn", "Mistborn Brandon Sanderson", 50},
 	}
 	for _, m := range goodMatches {
-		if got := ScoreMatch(m.query, m.target); got < m.minScore {
-			t.Errorf("ScoreMatch(%q, %q)=%d fell below the known-good floor %d",
+		if got := scoreMatch(m.query, m.target); got < m.minScore {
+			t.Errorf("scoreMatch(%q, %q)=%d fell below the known-good floor %d",
 				m.query, m.target, got, m.minScore)
 		}
 	}
@@ -180,7 +206,7 @@ func TestTokenSetRatioNoRegression(t *testing.T) {
 // TestTokenSetRatio covers symmetry, order-insensitivity, empty/whitespace input,
 // and single-token degradation.
 func TestTokenSetRatio(t *testing.T) {
-	// Symmetry: TokenSetRatio(a,b) == TokenSetRatio(b,a).
+	// Symmetry: tokenSetRatio(a,b) == tokenSetRatio(b,a).
 	symPairs := [][2]string{
 		{"The Hobbit - Tolkien", "Tolkien: The Hobbit"},
 		{"Dune", "Dune Messiah"},
@@ -188,8 +214,8 @@ func TestTokenSetRatio(t *testing.T) {
 		{"totally different", "unrelated words here"},
 	}
 	for _, p := range symPairs {
-		ab := TokenSetRatio(p[0], p[1])
-		ba := TokenSetRatio(p[1], p[0])
+		ab := tokenSetRatio(p[0], p[1])
+		ba := tokenSetRatio(p[1], p[0])
 		if ab != ba {
 			t.Errorf("TokenSetRatio not symmetric: (%q,%q)=%g vs (%q,%q)=%g", p[0], p[1], ab, p[1], p[0], ba)
 		}
@@ -204,22 +230,22 @@ func TestTokenSetRatio(t *testing.T) {
 		{"", ""},
 	}
 	for _, p := range empties {
-		if got := TokenSetRatio(p[0], p[1]); got != 0 {
-			t.Errorf("TokenSetRatio(%q, %q) = %g, want 0 for empty input", p[0], p[1], got)
+		if got := tokenSetRatio(p[0], p[1]); got != 0 {
+			t.Errorf("tokenSetRatio(%q, %q) = %g, want 0 for empty input", p[0], p[1], got)
 		}
 	}
 
 	// Order-insensitivity: identical token sets in different order -> 1.0.
-	if got := TokenSetRatio("The Hobbit Tolkien", "Tolkien The Hobbit"); got != 1.0 {
+	if got := tokenSetRatio("The Hobbit Tolkien", "Tolkien The Hobbit"); got != 1.0 {
 		t.Errorf("TokenSetRatio for reordered identical tokens = %g, want 1.0", got)
 	}
 
 	// Single-token exact -> 1.0; single-token mismatch degrades gracefully to (0,1).
-	if got := TokenSetRatio("dune", "Dune"); got != 1.0 {
-		t.Errorf("TokenSetRatio(dune, Dune) = %g, want 1.0", got)
+	if got := tokenSetRatio("dune", "Dune"); got != 1.0 {
+		t.Errorf("tokenSetRatio(dune, Dune) = %g, want 1.0", got)
 	}
-	if got := TokenSetRatio("dune", "june"); got <= 0 || got >= 1 {
-		t.Errorf("TokenSetRatio(dune, june) = %g, want in (0,1)", got)
+	if got := tokenSetRatio("dune", "june"); got <= 0 || got >= 1 {
+		t.Errorf("tokenSetRatio(dune, june) = %g, want in (0,1)", got)
 	}
 }
 

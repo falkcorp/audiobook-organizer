@@ -1,19 +1,20 @@
 // file: internal/dedup/author.go
-// version: 1.26.5
+// version: 1.27.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package dedup
 
 import (
 	"fmt"
-	"math"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -130,36 +131,64 @@ func isInitialMatch(a, b string) bool {
 	return true
 }
 
+// jwScratch is the working memory of one Jaro-Winkler comparison: the two
+// lower-cased rune slices and the two match bitmaps. Everything in it is
+// reused, so a warm comparison allocates nothing. A scratch belongs to one
+// goroutine at a time: the phase-3 scan workers each hold their own for the
+// life of the worker, and every other caller borrows one from jwScratchPool.
+type jwScratch struct {
+	r1, r2 []rune
+	m1, m2 []bool
+}
+
+// jwScratchPool lends jwScratch values to jaroWinklerSimilarity. It holds
+// pointers: putting a struct or slice value in a sync.Pool boxes it and
+// allocates on every Put.
+var jwScratchPool = sync.Pool{New: func() any { return new(jwScratch) }}
+
 // jaroWinklerSimilarity computes the Jaro-Winkler similarity between two strings.
 func jaroWinklerSimilarity(s1, s2 string) float64 {
-	s1 = strings.ToLower(s1)
-	s2 = strings.ToLower(s2)
+	s := jwScratchPool.Get().(*jwScratch)
+	sim := s.similarity(s1, s2)
+	jwScratchPool.Put(s)
+	return sim
+}
 
-	if s1 == s2 {
+// similarity is jaroWinklerSimilarity using s's buffers.
+//
+// Both strings are decoded straight into s's rune buffers with each rune
+// lower-cased (unicode.ToLower, which is what strings.ToLower applies to
+// non-ASCII text and agrees with rune for rune on ASCII), instead of calling
+// strings.ToLower and then []rune. Ranging over a string yields U+FFFD for each
+// invalid byte, as []rune(s) does. The match bitmaps are cleared on every call:
+// a buffer reused from a longer comparison would otherwise carry its trues into
+// this one and silently change the score.
+func (s *jwScratch) similarity(s1, s2 string) float64 {
+	s.r1 = appendLowerRunes(s.r1[:0], s1)
+	s.r2 = appendLowerRunes(s.r2[:0], s2)
+	r1, r2 := s.r1, s.r2
+
+	if slices.Equal(r1, r2) {
 		return 1.0
 	}
 
-	len1 := utf8.RuneCountInString(s1)
-	len2 := utf8.RuneCountInString(s2)
-
+	len1, len2 := len(r1), len(r2)
 	if len1 == 0 || len2 == 0 {
 		return 0.0
 	}
 
-	r1 := []rune(s1)
-	r2 := []rune(s2)
+	matchDistance := max(max(len1, len2)/2-1, 0)
 
-	matchDistance := max(int(math.Max(float64(len1), float64(len2)))/2-1, 0)
-
-	s1Matches := make([]bool, len1)
-	s2Matches := make([]bool, len2)
+	s.m1 = resetBools(s.m1, len1)
+	s.m2 = resetBools(s.m2, len2)
+	s1Matches, s2Matches := s.m1, s.m2
 
 	matches := 0
 	transpositions := 0
 
 	for i := range len1 {
-		start := int(math.Max(0, float64(i-matchDistance)))
-		end := int(math.Min(float64(len2-1), float64(i+matchDistance)))
+		start := max(0, i-matchDistance)
+		end := min(len2-1, i+matchDistance)
 
 		for j := start; j <= end; j++ {
 			if s2Matches[j] || r1[i] != r2[j] {
@@ -196,7 +225,7 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 
 	// Winkler modification: boost for common prefix (up to 4 chars)
 	prefixLen := 0
-	for i := 0; i < int(math.Min(4, math.Min(float64(len1), float64(len2)))); i++ {
+	for i := 0; i < min(4, len1, len2); i++ {
 		if r1[i] == r2[i] {
 			prefixLen++
 		} else {
@@ -205,6 +234,25 @@ func jaroWinklerSimilarity(s1, s2 string) float64 {
 	}
 
 	return jaro + float64(prefixLen)*0.1*(1-jaro)
+}
+
+// appendLowerRunes appends the lower-cased runes of str to dst.
+func appendLowerRunes(dst []rune, str string) []rune {
+	for _, r := range str {
+		dst = append(dst, unicode.ToLower(r))
+	}
+	return dst
+}
+
+// resetBools returns b resized to n elements, all false, reusing its backing
+// array when it is large enough.
+func resetBools(b []bool, n int) []bool {
+	if cap(b) < n {
+		return make([]bool, n)
+	}
+	b = b[:n]
+	clear(b)
+	return b
 }
 
 // authorLastNameSimilarity is the Jaro-Winkler score two DIFFERENT last names
@@ -626,6 +674,10 @@ func FindDuplicateAuthors(authors []database.Author, threshold float64, bookCoun
 	var scanWG sync.WaitGroup
 	for range workers {
 		scanWG.Go(func() {
+			// One scratch per worker for the life of the worker: the scan makes
+			// millions of comparisons, so borrowing from the pool for each would
+			// pay a Get/Put apiece for nothing.
+			var jw jwScratch
 			for {
 				li := int(atomic.AddInt64(&nextLi, 1))
 				if li >= len(lastNames) {
@@ -634,15 +686,15 @@ func FindDuplicateAuthors(authors []database.Author, threshold float64, bookCoun
 				var matches []int
 				for lj := li + 1; lj < len(lastNames); lj++ {
 					// Screen on length before paying for the real
-					// comparison. jaroWinklerSimilarity allocates two rune
-					// slices and two match bitmaps per call. The length test
+					// comparison; before the scratch buffers a comparison
+					// allocated two rune slices and two match bitmaps. The length test
 					// is provably conservative (see jaroWinklerMinLengthRatio's
 					// doc comment), so this changes only the cost, not the
 					// outcome; it discards ~61% of pairs on the real corpus.
 					if lengthRatioBelowThreshold(lastNameRunes[li], lastNameRunes[lj], minRatio) {
 						continue
 					}
-					if jaroWinklerSimilarity(lastNames[li], lastNames[lj]) < authorLastNameSimilarity {
+					if jw.similarity(lastNames[li], lastNames[lj]) < authorLastNameSimilarity {
 						continue
 					}
 					matches = append(matches, lj)

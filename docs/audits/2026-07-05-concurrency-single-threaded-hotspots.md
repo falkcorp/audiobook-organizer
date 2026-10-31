@@ -1,7 +1,7 @@
 <!-- file: docs/audits/2026-07-05-concurrency-single-threaded-hotspots.md -->
-<!-- version: 2.1.1 -->
+<!-- version: 2.1.2 -->
 <!-- guid: 4f8b2d6e-9c1a-4e3f-b7d5-2a6c8e0f1b3d -->
-<!-- last-edited: 2026-10-17 -->
+<!-- last-edited: 2026-10-30 -->
 
 # Concurrency Audit — Single-Threaded Hotspots
 
@@ -60,6 +60,15 @@
 > - `internal/database/pebble_store.go` `groupMetadataBucket` — quadratic, but the
 >   caller skips any bucket over `metadataFuzzyBucketCap = 200` with a warning, so
 >   work is bounded at ~20K comparisons per bucket. The cap is real; verified.
+>
+>   **Update 2026-10-30:** the cap bounds the work per bucket, not the library
+>   total, and each comparison was ~27 microseconds (about 80 allocations: two
+>   `ScoreMatch` calls normalizing both strings from scratch). A synthetic
+>   2,000-item set took about 3 seconds on one core. Fixed in the STARTUP-GC-DEDUP-CPU
+>   change: buckets are scored on a bounded pool (they are disjoint, results merged
+>   in first-seen order), titles are prepared once per bucket and each pair is
+>   scored once, and Levenshtein / Jaro-Winkler allocate nothing. Numbers in
+>   `docs/decisions/2026-10-30-dedup-cpu-parallel-buckets.md`.
 > - `internal/dedup/author.go` phase 2 — pairwise *within* exact-last-name buckets.
 >   Cost is `Σ k_b² ≤ (max bucket) · n`, single-digit millions of cheap precomputed
 >   compares at library scale. Not worth the concurrency risk.
