@@ -1,7 +1,7 @@
 // file: internal/database/iface_retired.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 4d6b0c1e-8f3a-4b57-9e21-6a7c52d9f0b3
-// last-edited: 2026-10-28
+// last-edited: 2026-10-31
 
 package database
 
@@ -23,7 +23,8 @@ package database
 //     row means: GetBookFileByID (an explicit identity), BookFilesAtPath and
 //     BookFilesWithHash (the complete "every row" claim lookups), and the
 //     ID-only LookupAcoustIDCandidates and LSHProbe (their callers read the row
-//     and must skip a Retired one; the fpidx: value still names the shell).
+//     and must skip a Retired one; the fpidx: value names the holder, since the
+//     retire batch rewrites it with the row).
 //
 // THE ONE RULE for what a retired row means to a caller. Two different questions
 // get two different answers, and a caller must know which one it is asking:

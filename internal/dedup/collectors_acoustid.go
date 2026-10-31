@@ -1,7 +1,7 @@
 // file: internal/dedup/collectors_acoustid.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a7b3c841-d9e2-4f15-88a0-5bc12e347f6d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-31
 
 // Package dedup — acoustic-ID collector family (fable5 T013).
 //
@@ -316,7 +316,7 @@ func CollectLSHAcoustID(
 			continue
 		}
 		// LSHProbe resolves an fpidx: entry by file id and returns retired rows
-		// too (the entry still names the shell the row was retired out of); a
+		// too (the index keeps a retired row, now valued with its holder); a
 		// retired row is not a candidate source, and its BookID is the holder.
 		if candFile.Retired {
 			continue
