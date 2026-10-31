@@ -1,0 +1,4 @@
+### Fixed
+
+- Transcribe: a lone whisper endpoint whose op was cancelled between the start gate and the dispatch no longer sends the work on. `dispatchSingle` skipped its remembered-machine canary check when the context was already cancelled and then went on to send, so the dispatch could end with no error (`TestSingle_ACancelDuringTheCooldownWaitReturnsTheCancellation` failed in CI with `err = <nil>`). It now returns the cancellation before asking or sending anything. The test cancels from the gate (`poolOptions.extraRefusal`) instead of 50 ms in, and a new test covers a cancel landing right after the gate.
+- Tests: `TestJournalVerify_AnUnreadableProbeAfterVerifiedPathChunksKeepsThem` (and its upload-send twin) narrowed `healthProbeTimeout` to 10 ms before their own setup probe, so a slow first connection on a loaded runner failed the test with `setup: health` before the send under test began. The narrowing now happens after the setup probe.

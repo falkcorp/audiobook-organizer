@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-10-30
 
@@ -2256,11 +2256,18 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 	// lone endpoint has nowhere else to send them.
 	holdKills := false
 	results := make(map[string]BatchResult, len(jobs))
+	if ctx.Err() != nil {
+		// Cancelled between the gate and here (the gate's probe answered, then
+		// the op was stopped): nothing may be asked or sent. Without this the
+		// remembered-machine check below was skipped by its own ctx.Err() guard
+		// and the work went out anyway, on a context that was already dead.
+		return results, classifyTransport([]string{url}, ctx.Err())
+	}
 	// key is the identity the gate resolved (D55), kept for every memory call below: a
 	// re-probe after a wait can replace g (its health is what the canary and the
 	// work should use) but must not give the dispatch a second identity.
 	key, capable := g.identityKey(), g.idCapable()
-	if endpointRemembered(key, url) && ctx.Err() == nil {
+	if endpointRemembered(key, url) {
 		// It failed the canary clip in an earlier dispatch and has not answered
 		// one since: ask it before sending it any work (see preflight in
 		// dispatchPool). Like the pool path, only once the endpoint is out of

@@ -1,5 +1,5 @@
 // file: internal/transcribe/workerswap_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c80f6dd-e49e-4cf4-acef-60b49489f7aa
 // last-edited: 2026-10-30
 
@@ -534,13 +534,25 @@ func healthDownDuringSecondPost(t *testing.T, srv *httptest.Server, post string,
 // (never the three that would end it as an outage), and the confirmation chunk 1
 // left is older than livenessInterval+healthProbeTimeout (210 ms) when chunk 2
 // is answered.
+//
+// The 10 ms probe timeout that makes that window is only for the send under
+// test, so it is not set here: the caller sets it by narrowProbeTimeout once its
+// own setup probes have answered. A setup probe that waited only 10 ms for a
+// fresh httptest server to accept and answer failed ("setup: health") on a
+// loaded runner, before the send under test had begun.
 func unverifiedWindow(t *testing.T) time.Duration {
 	t.Helper()
 	shortLiveness(t, 200*time.Millisecond)
+	return 300 * time.Millisecond
+}
+
+// narrowProbeTimeout makes a /health probe give up after 10 ms until the test
+// ends (the window unverifiedWindow describes). Call it after the setup probes.
+func narrowProbeTimeout(t *testing.T) {
+	t.Helper()
 	old := healthProbeTimeout
 	healthProbeTimeout = 10 * time.Millisecond
 	t.Cleanup(func() { healthProbeTimeout = old })
-	return 300 * time.Millisecond
 }
 
 // An upload send: chunk 1 is answered and verified, chunk 2 is answered but
@@ -558,6 +570,7 @@ func TestJournalVerify_AnUnreadableProbeAfterVerifiedChunksKeepsThemAndTheirJour
 	if !ok {
 		t.Fatal("setup: health")
 	}
+	narrowProbeTimeout(t)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
 	j := newMapJournal()
 
@@ -605,6 +618,7 @@ func TestJournalVerify_AnUnreadableProbeAfterVerifiedPathChunksKeepsThem(t *test
 	if !ok {
 		t.Fatal("setup: health")
 	}
+	narrowProbeTimeout(t)
 	g := gatedEndpoint{Endpoint: Endpoint{URL: w.srv.URL, Concurrency: 1}, Health: h, Probed: true, resolved: batKey}
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
 	j := newMapJournal()

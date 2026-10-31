@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_memory_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b0f7c1e-2d64-4f0b-9a57-3c8e1d6a9b42
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -845,21 +845,77 @@ func TestSingle_AWedgedLoneEndpointAfterTheWaitIsAStuckPool(t *testing.T) {
 	}
 }
 
-// N-f: a cancelled op returns the cancellation from the wait.
+// cancelAtGate is poolOptions for a dispatch of p whose context is cancelled by
+// the dispatch's own gate: extraRefusal runs on each probed port as the gate
+// judges it, i.e. after the probe has answered and before the dispatch has seen
+// its result, so cancel lands at an exact point in the dispatch and not "about
+// 50 ms in", which a loaded runner can place before the gate or after the wait.
+// delay is how long after the gate cancel runs (0: inside it). The first judged
+// port starts it, once.
+func cancelAtGate(t *testing.T, p *faultPool, canary canaryFunc, cancel context.CancelFunc, delay time.Duration) poolOptions {
+	t.Helper()
+	opts := p.opts(canary)
+	var once sync.Once
+	opts.extraRefusal = func(gatedEndpoint) string {
+		once.Do(func() {
+			if delay == 0 {
+				cancel()
+				return
+			}
+			after(t, delay, cancel)
+		})
+		return ""
+	}
+	return opts
+}
+
+// N-f: a cancelled op returns the cancellation from the wait. The port is
+// benched for CooldownBase (30 s), so the dispatch can only leave the wait by
+// the cancellation; where in the wait it lands does not change that.
 func TestSingle_ACancelDuringTheCooldownWaitReturnsTheCancellation(t *testing.T) {
 	shortenPacing(t, 10*time.Millisecond, time.Minute)
 	p := rememberedMachine(t, 1)
 	markEndpointFailure(p.h.eps[0].URL)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	after(t, 50*time.Millisecond, cancel)
 	rec := &canaryRecorder{}
-	_, err := dispatchWith(ctx, p, rec.fn, 8)
+	_, err := dispatchWithOpts(ctx, p, cancelAtGate(t, p, rec.fn, cancel, 50*time.Millisecond), 8)
 	if !errors.Is(err, context.Canceled) || IsPoolUnavailable(err) {
 		t.Fatalf("err = %v, want the cancellation", err)
 	}
-	if rec.count() != 0 {
-		t.Errorf("canaries = %v, want none", rec.asked)
+	if rec.count() != 0 || len(p.sendLog()) != 0 {
+		t.Errorf("canaries = %v, sends = %d, want none", rec.asked, len(p.sendLog()))
+	}
+}
+
+// A cancel that lands between the gate and the lone port's canary check (a
+// loaded runner can put it anywhere in the 50 ms the test above allows) is the
+// cancellation too. It used to skip the check for a remembered machine and send
+// the jobs on; a sender that does not watch the context answered them, and the
+// dispatch ended with no error at all.
+func TestSingle_ACancelAfterTheGateReturnsTheCancellationAndSendsNothing(t *testing.T) {
+	shortenPacing(t, 10*time.Millisecond, time.Minute)
+	for _, remembered := range []bool{true, false} {
+		t.Run(map[bool]string{true: "remembered", false: "forgotten"}[remembered], func(t *testing.T) {
+			var p *faultPool
+			if remembered {
+				p = rememberedMachine(t, 1)
+				markEndpointFailure(p.h.eps[0].URL)
+			} else {
+				p = poolOf(t, batMachine)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rec := &canaryRecorder{}
+			res, err := dispatchWithOpts(ctx, p, cancelAtGate(t, p, rec.fn, cancel, 0), 8)
+			if !errors.Is(err, context.Canceled) || IsPoolUnavailable(err) {
+				t.Fatalf("err = %v, want the cancellation", err)
+			}
+			if rec.count() != 0 || len(p.sendLog()) != 0 {
+				t.Errorf("canaries = %v, sends = %d: a cancelled op asks and sends nothing", rec.asked, len(p.sendLog()))
+			}
+			requireNoStrikes(t, res)
+		})
 	}
 }
 
