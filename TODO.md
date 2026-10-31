@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-30 -->
+<!-- last-edited: 2026-10-31 -->
 
 # Project TODO — live items only
 
@@ -297,7 +297,7 @@ into one of the curated sections below, is a normal direct edit.
       a shared file. Writers that take no stripe are already ordered against the
       apply by the index mutex, so only the stage-to-apply window is left to close.
 
-- [ ] **TODO-BF-HASH-WRITERS-RECOMPUTE** `SetBookFileHash` and `UpdateBookFileHashes`
+- [x] **TODO-BF-HASH-WRITERS-RECOMPUTE** `SetBookFileHash` and `UpdateBookFileHashes`
       skip the per-book `RecomputeBookAggregates` because their comment says
       "Hashes feed no book aggregate" (`internal/database/pebble_store_bookfiles.go`,
       both `updateBookFileOver(..., false)` calls). That is no longer true:
@@ -310,6 +310,12 @@ into one of the curated sections below, is a normal direct edit.
       else recomputes the book. Decide per caller: recompute in the store, or keep
       the skip and have the batch caller recompute once (the backfill job's
       pattern). Found in the review of #4190; pre-existing on main, not changed there.
+      Done 2026-10-31: both methods recompute the owning book when a hash they moved
+      is shared with a sibling row (`hashWriteMovesAggregate`,
+      `internal/database/bookfile_hash_aggregates.go`); an unrelated hash costs no recompute,
+      and backfill-file-hashes (`ModifyBookFileDeferAggregates` plus one recompute per
+      book) never came through these methods. Decision log:
+      `docs/decisions/2026-10-31-bookfile-hash-writers-recompute.md`.
 
 - [ ] **TODO-BF-REPOINT-ORPHAN-JOURNAL** A crash between `maintenance.repoint-book-file-rows`
       journaling a repoint (`rbfApplyOne` in `internal/plugins/maintenance/repoint_book_file_rows.go`,
