@@ -2269,7 +2269,7 @@ into one of the curated sections below, is a normal direct edit.
       (null top-level and override, applied as a nil year), with a Go test and
       a Vitest.
 
-- [ ] **EDIT-JOIN-WRITE-STRIPE** Run the book edit endpoint's post-commit
+- [x] **EDIT-JOIN-WRITE-STRIPE** Run the book edit endpoint's post-commit
       join writes (book_authors from SetBookAuthors, book_narrators from
       SetBookNarrators, in audiobooks.UpdateAudiobook) under the book's write
       stripe. They now run after ModifyBook commits but outside the stripe,

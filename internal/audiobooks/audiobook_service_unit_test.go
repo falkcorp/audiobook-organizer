@@ -1,12 +1,13 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -948,9 +949,34 @@ func TestAudiobookService_UpdateAudiobook_GetByIDError(t *testing.T) {
 	assert.ErrorIs(t, err, storeErr)
 }
 
+// creditsModifyStore gives a mockery store the ModifyBookCredits capability the
+// edit's save goes through. The stub hands fn a FRESH row and empty credit
+// lists, and returns the row fn left.
+type creditsModifyStore struct {
+	*mocks.MockStore
+	fresh   *database.Book
+	written *database.Book
+}
+
+func (c *creditsModifyStore) ModifyBookCredits(_ string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	edit := database.BookCreditsEdit{}
+	if err := fn(c.fresh, &edit); err != nil {
+		return nil, database.BookCreditsEdit{}, err
+	}
+	c.written = c.fresh
+	return c.fresh, edit, nil
+}
+
+func (c *creditsModifyStore) ModifyBookNarrators(string, func([]database.BookNarrator) ([]database.BookNarrator, error)) ([]database.BookNarrator, error) {
+	return nil, errors.New("not used by the edit")
+}
+
 func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
+	concurrentPublisher := "set by a concurrent writer"
+	credits := &creditsModifyStore{MockStore: mockStore,
+		fresh: &database.Book{ID: "id1", Title: "Old Title", Publisher: &concurrentPublisher}}
+	svc := NewAudiobookService(credits)
 
 	original := &database.Book{ID: "id1", Title: "Old Title"}
 
@@ -962,20 +988,9 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	// saveMetadataState retires the pre-migration blob once the rows are
 	// authoritative (database.DeleteLegacyMetadataState).
 	mockStore.EXPECT().DeleteUserPreference(mock.Anything).Return(nil).Maybe()
-	// The save is ModifyBook: the stub hands the callback a FRESH row that a
-	// concurrent writer changed (Publisher) after UpdateAudiobook's read. The
-	// merge must write this edit's Title and keep that Publisher.
-	concurrentPublisher := "set by a concurrent writer"
-	var written *database.Book
-	mockStore.EXPECT().ModifyBook("id1", mock.Anything).RunAndReturn(
-		func(id string, fn func(*database.Book) error) (*database.Book, error) {
-			fresh := &database.Book{ID: "id1", Title: "Old Title", Publisher: &concurrentPublisher}
-			if err := fn(fresh); err != nil {
-				return nil, err
-			}
-			written = fresh
-			return fresh, nil
-		})
+	// The save is ModifyBookCredits: the stub hands the callback a FRESH row
+	// that a concurrent writer changed (Publisher) after UpdateAudiobook's
+	// read. The merge must write this edit's Title and keep that Publisher.
 	// The edit's history: exactly one "manual" row, for the title it
 	// changed. The concurrent writer's Publisher is not this edit's change,
 	// so a row for it would be an unexpected call.
@@ -995,6 +1010,7 @@ func TestAudiobookService_UpdateAudiobook_TitleUpdate(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, "New Title", result.Title)
+	written := credits.written
 	if assert.NotNil(t, written) && assert.NotNil(t, written.Publisher) {
 		assert.Equal(t, concurrentPublisher, *written.Publisher,
 			"the book-page save reverted a field a concurrent writer committed after its read")
