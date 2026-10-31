@@ -1,7 +1,7 @@
 // file: internal/config/invite_config.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 3e9b1c74-5a2d-4f86-b0e7-c41d8a6f2b93
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package config
 
@@ -122,37 +122,37 @@ const DefaultSMTPPort = 587
 // environment variable. Called from InitConfig. Every default is empty (port:
 // DefaultSMTPPort), so an unconfigured server sends no mail, shows no headers
 // and never calls Cloudflare.
-func registerInviteDefaults() {
+func registerInviteDefaults(r defaultRegistrar) {
 	for _, s := range inviteEnvOnlySettings {
 		if s.key == "smtp_port" {
-			viper.SetDefault(s.key, DefaultSMTPPort)
+			r.SetDefault(s.key, DefaultSMTPPort)
 		} else {
-			viper.SetDefault(s.key, "")
+			r.SetDefault(s.key, "")
 		}
-		viper.BindEnv(s.key, s.envVar) //nolint:errcheck
+		r.BindEnv(s.key, s.envVar) //nolint:errcheck
 	}
 }
 
 // applyInviteEnv copies the invitation keys from viper onto c. It runs both when
 // the config is first built from viper and from applyEnvAuthoritativeConfig after
 // the blob load, which replaces the whole struct (and the blob never holds these).
-func applyInviteEnv(c *Config) {
-	c.SMTPHost = strings.TrimSpace(viper.GetString("smtp_host"))
-	c.SMTPPort = viper.GetInt("smtp_port")
-	c.SMTPUsername = strings.TrimSpace(viper.GetString("smtp_username"))
-	c.SMTPPassword = viper.GetString("smtp_password")
-	c.SMTPFrom = strings.TrimSpace(viper.GetString("smtp_from"))
-	c.PublicBaseURL = strings.TrimSpace(viper.GetString("public_base_url"))
-	c.CFAccountID = strings.TrimSpace(viper.GetString("cf_account_id"))
-	c.CFGuestsPolicyID = strings.TrimSpace(viper.GetString("cf_guests_policy_id"))
-	c.CFPolicyAPIToken = strings.TrimSpace(viper.GetString("cf_policy_api_token"))
-	c.CFGuestServiceTokens = parseEnvBool(viper.GetString("cf_guest_service_tokens"))
-	c.CFServiceAuthPolicyID = strings.TrimSpace(viper.GetString("cf_service_auth_policy_id"))
-	c.InviteEmailServiceToken = parseEnvBool(viper.GetString("invite_email_service_token"))
-	c.TunnelConnectorAddrs = strings.TrimSpace(viper.GetString("tunnel_connector_addrs"))
-	c.AllowedPeerCIDRs = strings.TrimSpace(viper.GetString("allowed_peer_cidrs"))
-	c.LoginSaturatedRate = strings.TrimSpace(viper.GetString("login_saturated_rate"))
-	c.LoginSaturatedBurst = strings.TrimSpace(viper.GetString("login_saturated_burst"))
+func applyInviteEnv(c *Config, v *viper.Viper) {
+	c.SMTPHost = strings.TrimSpace(v.GetString("smtp_host"))
+	c.SMTPPort = v.GetInt("smtp_port")
+	c.SMTPUsername = strings.TrimSpace(v.GetString("smtp_username"))
+	c.SMTPPassword = v.GetString("smtp_password")
+	c.SMTPFrom = strings.TrimSpace(v.GetString("smtp_from"))
+	c.PublicBaseURL = strings.TrimSpace(v.GetString("public_base_url"))
+	c.CFAccountID = strings.TrimSpace(v.GetString("cf_account_id"))
+	c.CFGuestsPolicyID = strings.TrimSpace(v.GetString("cf_guests_policy_id"))
+	c.CFPolicyAPIToken = strings.TrimSpace(v.GetString("cf_policy_api_token"))
+	c.CFGuestServiceTokens = parseEnvBool(v.GetString("cf_guest_service_tokens"))
+	c.CFServiceAuthPolicyID = strings.TrimSpace(v.GetString("cf_service_auth_policy_id"))
+	c.InviteEmailServiceToken = parseEnvBool(v.GetString("invite_email_service_token"))
+	c.TunnelConnectorAddrs = strings.TrimSpace(v.GetString("tunnel_connector_addrs"))
+	c.AllowedPeerCIDRs = strings.TrimSpace(v.GetString("allowed_peer_cidrs"))
+	c.LoginSaturatedRate = strings.TrimSpace(v.GetString("login_saturated_rate"))
+	c.LoginSaturatedBurst = strings.TrimSpace(v.GetString("login_saturated_burst"))
 }
 
 // inviteEnvOnlyKeyInUpdate returns the refusal for a PUT /config payload that

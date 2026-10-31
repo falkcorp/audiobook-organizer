@@ -1,7 +1,7 @@
 // file: internal/config/abs_config_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 71c4e830-6b29-4d5f-8a03-92e7b1c6df45
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package config
 
@@ -27,7 +27,7 @@ func resetViper(t *testing.T) {
 // route and behaves exactly as before.
 func TestABSConfig_DefaultsAreOffAndSafe(t *testing.T) {
 	resetViper(t)
-	registerABSDefaults()
+	registerABSDefaults(viper.GetViper())
 
 	if viper.GetBool("abs_api_enabled") {
 		t.Fatal("ABS_API_ENABLED must default to false")
@@ -73,7 +73,7 @@ func TestABSConfig_EnvBindings(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.env, func(t *testing.T) {
 			resetViper(t)
-			registerABSDefaults()
+			registerABSDefaults(viper.GetViper())
 			t.Setenv(tc.env, tc.value)
 			if got := viper.GetString(tc.key); got != tc.value {
 				t.Fatalf("%s=%q did not reach viper key %q (got %q) — check viper.BindEnv", tc.env, tc.value, tc.key, got)
@@ -88,7 +88,7 @@ func TestABSConfig_EnvBindings(t *testing.T) {
 // value is silently lost.
 func TestABSConfig_EnvIsAuthoritativeOverBlob(t *testing.T) {
 	resetViper(t)
-	registerABSDefaults()
+	registerABSDefaults(viper.GetViper())
 	t.Setenv("ABS_API_ENABLED", "true")
 	t.Setenv("ABS_JWT_SECRET", "0123456789abcdef0123456789abcdef")
 	t.Setenv("ABS_AUTH_MODES", "cf")
@@ -125,7 +125,7 @@ func TestABSConfig_EnvIsAuthoritativeOverBlob(t *testing.T) {
 // serialized into the blob in the first place).
 func TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI(t *testing.T) {
 	resetViper(t)
-	registerABSDefaults()
+	registerABSDefaults(viper.GetViper())
 
 	c := &Config{ABSAPIEnabled: true, ABSJWTSecret: "from-blob", ABSAuthModes: "jwt"}
 	applyEnvAuthoritativeConfig(c)
