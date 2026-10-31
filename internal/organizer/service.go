@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.64.1
+// version: 1.65.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package organizer
 
@@ -2541,6 +2541,13 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 			return nil, fmt.Errorf("copy book files for %s: %w", book.ID, err)
 		}
 	}
+
+	// The copy now exists with its book_file rows, which is the last point a
+	// failure rolls it back; the source is about to be demoted and hidden. Move
+	// the listener's identity and progress onto the copy NOW, before the
+	// demotion (and never before the rollback point: an identity repointed to a
+	// copy that is then deleted would be stranded on a deleted row).
+	orgSvc.followListenerIdentity(book.ID, createdBook.ID, bookFiles, newFiles, log)
 
 	// Update original book: set version group, mark as non-primary, update state.
 	// `book` here is a page-derived (GetAllBooksCore→ToBook, heavy-field-nil)

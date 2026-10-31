@@ -1,7 +1,7 @@
 // file: internal/database/user_state_lock.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package database
 
@@ -55,7 +55,9 @@ var userStateLocks [userStateStripes]sync.Mutex
 //     until the loser is drained. Reached under merge.LockMergeRMW (merges,
 //     the pending-repair sweep, the stranded-state repair) or under merge's
 //     syncRepointMu (FollowBookIDChange, the scanner's version-link path,
-//     which holds no merge lock);
+//     which holds no merge lock), and the same entry from the organizer's copy
+//     (merge.FollowVersionHandover, from Service.CreateOrganizedVersion, which
+//     holds the version-group key and the versionprimary membership locks);
 //   - the JOURNALED follows (merge.CombineBooks and
 //     merge.FollowAbsorbedJournaled: sibling moves, split-book and chapter
 //     merges, retire-into, carry-before-delete), inside merge.LockMergeRMW:
@@ -76,10 +78,16 @@ var userStateLocks [userStateStripes]sync.Mutex
 //
 // LOCK ORDER: merge.LockMergeRMW (or merge's syncRepointMu), then this
 // stripe, then anything else (session.mu, a book's write stripe -- the
-// follow's carryPlayCountMark runs ModifyBook under it). Nothing takes this
-// stripe and then the merge lock or syncRepointMu, nothing takes it inside a
-// ModifyBook/UpdateBook callback, and no holder takes a metadata field-state
-// stripe (database.LockMetadataState) under it.
+// follow's carryPlayCountMark runs ModifyBook under it). Version-group
+// membership locks (versionprimary.Lock*) and the file-work vg: key may be held
+// BEFORE syncRepointMu or this stripe (CreateOrganizedVersion's handover; the
+// merge paths take the merge lock, then group locks, then stripes); nothing
+// takes a version-group lock, EnsureSinglePrimary or a vg: key while holding
+// this stripe or syncRepointMu (checked 2026-10-30 over every
+// LockUserBookState* holder). Nothing takes this stripe and then the merge
+// lock or syncRepointMu, nothing takes it inside a ModifyBook/UpdateBook
+// callback, and no holder takes a metadata field-state stripe
+// (database.LockMetadataState) under it.
 //
 // Striped, not per key: two keys can share a stripe. A holder of one stripe
 // never takes a second user-state lock while holding it; a path that needs
