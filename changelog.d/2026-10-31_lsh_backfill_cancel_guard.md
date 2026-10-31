@@ -1,0 +1,4 @@
+### Fixed
+
+- `acoustid.lsh-backfill` no longer keeps rewriting book files after the operation is cancelled. The pool only checked for cancellation while handing out work, and picks at random between "cancelled" and "worker free", so rows already handed to a worker, plus a few dispatched after the cancel, still hydrated and re-saved. Each item now checks the context before it touches the library, and a run that skipped items because of a cancel returns the cancel instead of reporting completion.
+- `TestLSHBackfill_CancelMidRun` (flaky under `-race`, seen as "expected updates < total after cancel, got 100/100" on shard 1/4 on 2026-10-31) now asserts a bound the op guarantees, at most the cancel point plus the pool size minus one, instead of a scheduling outcome. A new `TestLSHBackfill_AlreadyCancelledWritesNothing` pins the per-item guard.
