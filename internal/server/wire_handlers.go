@@ -648,9 +648,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	})
 
 	// ── Metadata domain (handlers/metadata) ──────────────────────────────────
-	// The 19 metadata HTTP handlers (batch-update / validate / export / import,
+	// The 18 metadata HTTP handlers (batch-update / validate / export / import,
 	// external search, per-book fetch / search / apply / mark-no-match / revert,
-	// metadata-rejections, cow-versions(+prune), write-back, bulk fetch + bulk
+	// metadata-rejections, cow-versions(+prune), write-back, bulk
 	// write-back enqueue, batch write-back enqueue, fields, rating PATCH).
 	// "write-back" here is the audio-tag write-back, not iTunes.
 	//
@@ -658,8 +658,8 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// interface snapshots, each typed-nil guarded so the in-method `!= nil` /
 	// `== nil` checks hold. enrichBook wraps the server-private
 	// enrichBookForResponseSingle (return type private → any).
-	// updateFetchedMetadataState / isProtectedPath / publishEvent wrap helpers
-	// that STAY in package server (server_metadata.go / server_middleware.go).
+	// isProtectedPath / publishEvent wrap helpers that STAY in package server
+	// (server_middleware.go / the plugin event bus).
 	var mdMetaFetch metadatahandler.MetadataFetchService
 	if s.metadataFetchService != nil {
 		mdMetaFetch = s.metadataFetchService
@@ -680,7 +680,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.listCache,
 		func(b *database.Book) any { return s.enrichBookForResponseSingle(b) },
 		s.isProtectedPath,
-		s.updateFetchedMetadataState,
 		s.publishEvent,
 	)
 	// A single-book apply the library scan holds past the request's wait

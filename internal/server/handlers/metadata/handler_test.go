@@ -1,16 +1,16 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
 // mocks; the injected helper funcs (enrichBook, isProtectedPath,
-// updateFetchedMetadataState, publishEvent) are stub closures that record their
+// publishEvent) are stub closures that record their
 // invocations or return canned payloads. Field locks are read from the store
 // mock through database.LockedUserFields (GetMetadataFieldStates +
 // GetUserPreference), the same guard every apply path uses. There is at least one
-// test per public method (19 methods) covering happy paths and key branches.
+// test per public method (18 methods) covering happy paths and key branches.
 
 package metadatahandler_test
 
@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,11 +45,9 @@ func init() { gin.SetMode(gin.TestMode) }
 // recorders captures the side effects of the injected helper closures so tests
 // can assert they fired.
 type recorders struct {
-	enrichCalls          int
-	protectedPaths       map[string]bool
-	updatedFetchedValues map[string]any
-	updateFetchedErr     error
-	publishedEvents      []plugin.Event
+	enrichCalls     int
+	protectedPaths  map[string]bool
+	publishedEvents []plugin.Event
 }
 
 type testDeps struct {
@@ -85,7 +82,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 	reg := metadatamocks.NewMockOperationsRegistry(t)
 	pool := metadatamocks.NewMockFileIOPool(t)
 	lc := cache.New[gin.H]("meta-test", time.Minute)
-	rec := &recorders{protectedPaths: map[string]bool{}, updatedFetchedValues: map[string]any{}}
+	rec := &recorders{protectedPaths: map[string]bool{}}
 
 	var mfsArg metadatahandler.MetadataFetchService
 	if cf.hasMFS {
@@ -111,10 +108,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 			return gin.H{"id": b.ID, "title": b.Title}
 		},
 		func(p string) bool { return rec.protectedPaths[p] },
-		func(bookID string, values map[string]any) error {
-			rec.updatedFetchedValues = values
-			return rec.updateFetchedErr
-		},
 		func(ctx context.Context, e plugin.Event) { rec.publishedEvents = append(rec.publishedEvents, e) },
 	)
 	return h, testDeps{store: store, mfs: mfs, reg: reg, pool: pool, cache: lc, rec: rec}
@@ -590,319 +583,6 @@ func TestWriteBackAudiobookMetadata_MissingID(t *testing.T) {
 	}
 }
 
-// ── bulk fetch ───────────────────────────────────────────────────────────────
-
-func TestBulkFetchMetadata_MissingBookIDs(t *testing.T) {
-	h, _ := newHandler(t)
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{}}, nil)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-// expectNoLocks answers the lock guard's two store reads with "no state": no
-// per-field rows and no legacy blob, so nothing is locked.
-func expectNoLocks(store *metadatamocks.MockMetadataStore) {
-	store.EXPECT().GetMetadataFieldStates(mock.Anything).Return(nil, nil).Maybe()
-	store.EXPECT().GetUserPreference(mock.Anything).Return(nil, nil).Maybe()
-}
-
-func TestBulkFetchMetadata_Updates(t *testing.T) {
-	h, d := newHandler(t)
-	expectNoLocks(d.store)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-			{Title: "New Title", Source: "audible", Publisher: "Pub"},
-		}}, nil)
-	// onlyMissing defaults true; title has a value so it's only fetched (not applied),
-	// publisher is missing so it gets applied → didUpdate true.
-	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("audible")).Return(&database.Book{ID: "b1"}, nil)
-	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "audible", "").Return()
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{"b1"}}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-// A print-year source's candidate through bulk fetch (Hardcover; it was a
-// Google Books one until Google Books became review-only, 2026-10-06): its
-// print year lands in PrintYear (it used to overwrite AudiobookReleaseYear),
-// both ISBN columns are filled, and genre / subtitle / page count are
-// written -- the fields the hand-written BookMetadata literal used to drop.
-func TestBulkFetchMetadata_PrintYearCandidateFields(t *testing.T) {
-	h, d := newHandler(t)
-	expectNoLocks(d.store)
-	release := 2019
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old", AudiobookReleaseYear: &release}, nil)
-	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{{
-			Title: "New", Source: "Hardcover", Year: 1937,
-			ISBN10: "0261103342", ISBN13: "9780261103344",
-			Narrator: "Rob Inglis", Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
-		}}}, nil)
-	var saved *database.Book
-	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("Hardcover")).
-		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ *metafetch.MetadataCandidate) {
-			saved = b
-		}).
-		Return(&database.Book{ID: "b1"}, nil)
-	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Hardcover", "").Return()
-
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{"b1"}}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if saved == nil {
-		t.Fatal("book not saved")
-	}
-	if saved.AudiobookReleaseYear == nil || *saved.AudiobookReleaseYear != 2019 {
-		t.Errorf("AudiobookReleaseYear = %v, want untouched 2019", saved.AudiobookReleaseYear)
-	}
-	if saved.PrintYear == nil || *saved.PrintYear != 1937 {
-		t.Errorf("PrintYear = %v, want 1937", saved.PrintYear)
-	}
-	if saved.ISBN10 == nil || *saved.ISBN10 != "0261103342" || saved.ISBN13 == nil || *saved.ISBN13 != "9780261103344" {
-		t.Errorf("ISBN10/13 = %v/%v, want both", saved.ISBN10, saved.ISBN13)
-	}
-	if saved.Genre == nil || *saved.Genre != "Fiction" {
-		t.Errorf("Genre = %v", saved.Genre)
-	}
-	if saved.Subtitle == nil || *saved.Subtitle != "There and Back Again" {
-		t.Errorf("Subtitle = %v", saved.Subtitle)
-	}
-	if saved.Narrator == nil || *saved.Narrator != "Rob Inglis" {
-		t.Errorf("Narrator = %v, want Rob Inglis (bulk must write narrator)", saved.Narrator)
-	}
-	if saved.PageCount == nil || *saved.PageCount != 310 {
-		t.Errorf("PageCount = %v", saved.PageCount)
-	}
-}
-
-// A user-locked field is fetched (recorded as provenance) but NOT applied, even
-// when the book is missing it and onlyMissing would otherwise apply it. The lock
-// key is the writer's spelling ("publisher"); the guard is the shared
-// database.LockedUserFields, so this pins the handler onto the same vocabulary
-// as the scanner and metafetch.
-func TestBulkFetchMetadata_LockedFieldIsFetchedNotApplied(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetMetadataFieldStates("b1").Return([]database.MetadataFieldState{
-		{BookID: "b1", Field: database.FieldKeyPublisher, OverrideLocked: true},
-	}, nil)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-			{Title: "New Title", Source: "audible", Publisher: "Pub"},
-		}}, nil)
-	// No RecordApplyHistory, no UpdateBook, no ApplyMetadataSystemTags: with the
-	// only applicable field locked there is nothing to write. mockery fails the
-	// test on any unexpected call, so their absence here IS the assertion.
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{"b1"}}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Data struct {
-			Results []struct {
-				Status        string   `json:"status"`
-				AppliedFields []string `json:"applied_fields"`
-				FetchedFields []string `json:"fetched_fields"`
-			} `json:"results"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Data.Results) != 1 {
-		t.Fatalf("bad response %s: %v", w.Body.String(), err)
-	}
-	r := resp.Data.Results[0]
-	if r.Status != "fetched" {
-		t.Errorf("status = %q, want fetched (locked field must not count as an update)", r.Status)
-	}
-	if len(r.AppliedFields) != 0 {
-		t.Errorf("applied_fields = %v, want none: publisher is user-locked", r.AppliedFields)
-	}
-	if got := d.rec.updatedFetchedValues; got == nil || got[database.FieldKeyPublisher] != "Pub" {
-		t.Errorf("fetched publisher not recorded as provenance: %v", got)
-	}
-}
-
-// FAIL CLOSED: when the locks cannot be read the book is not written at all.
-func TestBulkFetchMetadata_LockReadErrorRefusesToApply(t *testing.T) {
-	h, d := newHandler(t)
-	d.store.EXPECT().GetMetadataFieldStates("b1").Return(nil, errors.New("pebble: closed"))
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-	// No search, no UpdateBook: refused before any provider call.
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{"b1"}}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Data struct {
-			Results []struct {
-				Status  string `json:"status"`
-				Message string `json:"message"`
-			} `json:"results"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Data.Results) != 1 {
-		t.Fatalf("bad response %s: %v", w.Body.String(), err)
-	}
-	if resp.Data.Results[0].Status != "error" {
-		t.Errorf("status = %q, want error: an unreadable lock set must not be treated as unlocked", resp.Data.Results[0].Status)
-	}
-}
-
-// TestBulkFetchMetadata_ParallelPreservesOrderAndCounts exercises
-// bulkFetchMetadataImpl's registry.RunItems-based parallel pass (CONC-12)
-// with 6 book IDs against a concurrency of 4 (bulkFetchMetadataConcurrency),
-// so multiple workers are guaranteed to run at once. It asserts the response
-// is byte-for-byte what the old serial `for` loop would have produced:
-// results in the exact input order (written via results[i], not append) with
-// the expected per-book status, and the correct aggregate updated_count. Run
-// under `go test -race`, this also exercises the mutex guarding the shared
-// results slice / updatedCount (the "shared mutable state" named in the
-// CONC-12 brief) — the store/service mocks are testify mocks, which are
-// internally mutex-guarded and safe to call concurrently.
-//
-// The Handler here is built directly (not via the shared newHandler/recorders
-// helper used by the rest of this file) because recorders.updatedFetchedValues
-// is a plain unguarded field write — fine for the existing single-book,
-// strictly-sequential tests, but multiple of the book IDs below have
-// non-empty fetched values, so concurrent workers would race on that shared
-// field. The remaining closure (updateFetchedMetadataState) is mutex-guarded
-// instead, and the lock reads go to the testify store mock, which is safe to
-// call concurrently.
-func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
-	store := metadatamocks.NewMockMetadataStore(t)
-	// No owner rejections unless a test says otherwise (applygate.ReasonOwnerRejected).
-	store.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
-	mfs := metadatamocks.NewMockMetadataFetchService(t)
-	expectNoLocks(store)
-
-	// b0: book not found.
-	store.EXPECT().GetBookByID("b0").Return(nil, nil)
-
-	// b1: found but title is blank/whitespace-only → "missing title", status
-	// stays the zero-value "skipped".
-	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "  "}, nil)
-
-	// b2: search errors out.
-	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", Title: "T2"}, nil)
-	mfs.EXPECT().SearchMetadataForBookWithOptions("b2", "", "", "", "", mock.Anything).
-		Return(nil, errors.New("boom"))
-
-	// b3: search returns no candidates.
-	store.EXPECT().GetBookByID("b3").Return(&database.Book{ID: "b3", Title: "T3"}, nil)
-	mfs.EXPECT().SearchMetadataForBookWithOptions("b3", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: nil}, nil)
-
-	// b4: candidate title fetched but not applied (book already has a title
-	// and onlyMissing defaults true) → status "fetched", no write-back.
-	store.EXPECT().GetBookByID("b4").Return(&database.Book{ID: "b4", Title: "Old4"}, nil)
-	mfs.EXPECT().SearchMetadataForBookWithOptions("b4", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-			{Title: "New4", Source: "google"},
-		}}, nil)
-
-	// b5: publisher is missing on the book, so the fetched publisher gets
-	// applied → didUpdate → status "updated" (the only one counted in
-	// updated_count).
-	store.EXPECT().GetBookByID("b5").Return(&database.Book{ID: "b5", Title: "Old5"}, nil)
-	store.EXPECT().GetBookAuthors(mock.Anything).Return(nil, nil).Maybe()
-	mfs.EXPECT().SearchMetadataForBookWithOptions("b5", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-			{Title: "Old5", Source: "audible", Publisher: "Pub5"},
-		}}, nil)
-	mfs.EXPECT().CommitCandidateApply("b5", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("audible")).Return(&database.Book{ID: "b5"}, nil)
-	mfs.EXPECT().ApplyMetadataSystemTags("b5", "audible", "").Return()
-
-	var utMu sync.Mutex
-	utValues := map[string]map[string]any{}
-
-	h := metadatahandler.New(
-		store,
-		mfs,
-		nil, // opRegistry: unused by bulkFetchMetadataImpl
-		nil, // fileIOPool: unused by bulkFetchMetadataImpl
-		cache.New[gin.H]("meta-test-parallel", time.Minute),
-		func(b *database.Book) any { return gin.H{"id": b.ID} },
-		func(p string) bool { return false },
-		func(bookID string, values map[string]any) error {
-			utMu.Lock()
-			defer utMu.Unlock()
-			utValues[bookID] = values
-			return nil
-		},
-		func(ctx context.Context, e plugin.Event) {},
-	)
-
-	bookIDs := []string{"b0", "b1", "b2", "b3", "b4", "b5"}
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": bookIDs}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var envelope struct {
-		Data struct {
-			UpdatedCount int `json:"updated_count"`
-			TotalCount   int `json:"total_count"`
-			Results      []struct {
-				BookID string `json:"book_id"`
-				Status string `json:"status"`
-			} `json:"results"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("decode response: %v: %s", err, w.Body.String())
-	}
-	resp := envelope.Data
-
-	if resp.TotalCount != len(bookIDs) {
-		t.Fatalf("total_count = %d, want %d", resp.TotalCount, len(bookIDs))
-	}
-	if resp.UpdatedCount != 1 {
-		t.Fatalf("updated_count = %d, want 1", resp.UpdatedCount)
-	}
-	if len(resp.Results) != len(bookIDs) {
-		t.Fatalf("len(results) = %d, want %d", len(resp.Results), len(bookIDs))
-	}
-
-	wantStatus := map[string]string{
-		"b0": "not_found",
-		"b1": "skipped",
-		"b2": "error",
-		"b3": "not_found",
-		"b4": "fetched",
-		"b5": "updated",
-	}
-	for i, id := range bookIDs {
-		if resp.Results[i].BookID != id {
-			t.Fatalf("results[%d].book_id = %q, want %q (order not preserved)", i, resp.Results[i].BookID, id)
-		}
-		if want := wantStatus[id]; resp.Results[i].Status != want {
-			t.Fatalf("results[%d] (%s).status = %q, want %q", i, id, resp.Results[i].Status, want)
-		}
-	}
-
-	utMu.Lock()
-	if len(utValues["b4"]) == 0 {
-		t.Fatalf("expected fetched-metadata-state write for b4 (title fetched but not applied)")
-	}
-	if len(utValues["b5"]) == 0 {
-		t.Fatalf("expected fetched-metadata-state write for b5")
-	}
-	utMu.Unlock()
-}
-
 // ── bulk / batch write-back enqueue ──────────────────────────────────────────
 
 func TestHandleBulkWriteBack_DryRun(t *testing.T) {
@@ -1050,107 +730,3 @@ type stringError string
 func (e stringError) Error() string { return string(e) }
 
 func assertErr(s string) error { return stringError(s) }
-
-// Owner decision 2026-10-06, "fetch but don't apply": bulk fetch picks the
-// candidate with nobody looking, so a review-only (Open Library / Google
-// Books) candidate is never applied -- the best other candidate is, even when
-// the review-only one ranks first.
-func TestBulkFetchMetadata_SkipsReviewOnlyTopCandidate(t *testing.T) {
-	h, d := newHandler(t)
-	expectNoLocks(d.store)
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-			{Title: "Review Only Title", Source: "Google Books", Publisher: "Google Pub", Score: 0.99},
-			{Title: "Chain Title", Source: "Audible", Publisher: "Audible Pub", Score: 0.9},
-		}}, nil)
-	var saved *database.Book
-	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("Audible")).
-		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ *metafetch.MetadataCandidate) {
-			saved = b
-		}).
-		Return(&database.Book{ID: "b1"}, nil)
-	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Audible", "").Return()
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{"b1"}}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if saved == nil || saved.Publisher == nil || *saved.Publisher != "Audible Pub" {
-		t.Fatalf("saved %+v, want the Audible candidate's publisher", saved)
-	}
-}
-
-// candidateFromSource matches the candidate a bulk fetch commits by its
-// source.
-func candidateFromSource(source string) any {
-	return mock.MatchedBy(func(c *metafetch.MetadataCandidate) bool { return c != nil && c.Source == source })
-}
-
-// Review round 4, S1: the bulk fetch picks with the owner's rejections as
-// read after the search (none here), and the owner rejects the picked
-// candidate before its commit. The commit (CommitCandidateApply) re-reads
-// the rejections under the book's write stripe and refuses; the handler
-// reports owner_rejected, writes no system tags and counts nothing
-// updated. An unreadable list at the commit is an error. The refusal itself
-// is metafetch's TestCommitCandidateApply_RefusesRejectionMadeAfterThePick.
-func TestBulkFetchMetadata_RejectionAtCommitIsRefused(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		commitErr  error
-		wantStatus string
-	}{
-		{"rejected since the pick", fmt.Errorf("book b1: %w", &metafetch.OwnerRejectedNotAppliedError{Title: "Chain Title", Sources: []string{"Audible"}}), "owner_rejected"},
-		{"rejections unreadable at the commit", fmt.Errorf("book b1: %w", metafetch.ErrOwnerRejectionCheckFailed), "error"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h, d := newHandler(t)
-			expectNoLocks(d.store)
-			d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-			d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-			d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-				Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-					{Title: "Chain Title", Source: "Audible", ASIN: "B0SYNBLK01", Publisher: "Audible Pub", Score: 0.9},
-				}}, nil)
-			d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything,
-				mock.MatchedBy(func(c *metafetch.MetadataCandidate) bool { return c != nil && c.ASIN == "B0SYNBLK01" })).
-				Return(nil, tc.commitErr)
-			// No ApplyMetadataSystemTags expectation: the mock fails the test
-			// if a refused book is tagged.
-			w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-				map[string]any{"book_ids": []string{"b1"}}, nil)
-			if w.Code != http.StatusOK {
-				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-			}
-			body := w.Body.String()
-			if !strings.Contains(body, `"status":"`+tc.wantStatus+`"`) || !strings.Contains(body, `"updated_count":0`) {
-				t.Fatalf("body %s, want status %s and nothing updated", body, tc.wantStatus)
-			}
-		})
-	}
-}
-
-func TestBulkFetchMetadata_OnlyReviewOnlyAppliesNothing(t *testing.T) {
-	for _, source := range []string{"Open Library", "Google Books"} {
-		t.Run(source, func(t *testing.T) {
-			h, d := newHandler(t)
-			expectNoLocks(d.store)
-			d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-			d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-			d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-				Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
-					{Title: "Review Only Title", Source: source, Publisher: "Pub", Score: 0.99},
-				}}, nil)
-			// No CommitCandidateApply expectation: the mock fails the test on any write.
-			w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-				map[string]any{"book_ids": []string{"b1"}}, nil)
-			if w.Code != http.StatusOK {
-				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-			}
-			if !strings.Contains(w.Body.String(), `"status":"review_only"`) || !strings.Contains(w.Body.String(), `"updated_count":0`) {
-				t.Fatalf("body %s, want status review_only and nothing updated", w.Body.String())
-			}
-		})
-	}
-}

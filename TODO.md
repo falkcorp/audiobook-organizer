@@ -1933,7 +1933,7 @@ into one of the curated sections below, is a normal direct edit.
       `docs/architecture/identification-pipeline.md` "Stage 4" documents the
       factors; say there that `rank_score` leaves them out.
 
-- [ ] **BULK-FETCH-NO-GATE** `POST /metadata/bulk-fetch`
+- [x] **BULK-FETCH-NO-GATE** `POST /metadata/bulk-fetch`
       (`internal/server/handlers/metadata/handler.go`, the loop around the
       `IndexFunc` pick of the first non-review-only `searchResp.Results` row)
       applies the search's top candidate to each book with no `applygate`, no

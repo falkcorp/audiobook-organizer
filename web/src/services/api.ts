@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.206.0
+// version: 2.206.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-30
 
@@ -4439,38 +4439,6 @@ export async function relocateBookFiles(
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to relocate files');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-// Bulk Metadata Fetching
-export interface BulkFetchMetadataResult {
-  book_id: string;
-  status: string;
-  message?: string;
-  applied_fields?: string[];
-  fetched_fields?: string[];
-}
-
-export interface BulkFetchMetadataResponse {
-  updated_count: number;
-  total_count: number;
-  results: BulkFetchMetadataResult[];
-  source: string;
-}
-
-export async function bulkFetchMetadata(
-  bookIds: string[],
-  onlyMissing = true
-): Promise<BulkFetchMetadataResponse> {
-  const response = await apiFetch(`${API_BASE}/metadata/bulk-fetch`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ book_ids: bookIds, only_missing: onlyMissing }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to bulk fetch metadata');
   }
   const body = await response.json();
   return body.data;
