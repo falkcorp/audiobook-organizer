@@ -1,5 +1,5 @@
 // file: internal/metadata/detail_redact_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c23eadf0-b924-43fd-86a4-fea8ab6291c9
 // last-edited: 2026-10-30
 
@@ -36,10 +36,16 @@ func TestRedactProviderDetail(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"userinfo dropped", "Get https://robin:hunter2@host.example.test/p?a=1", "Get https://***@host.example.test/p?***"},
 		{"password with slash", "https://robin:pa/ss@host.example.test/p", "https://***@host.example.test/p"},
-		{"password with question mark", "https://robin:pa?ss@host.example.test/p", "https://***@host.example.test/p"},
-		{"password with hash", "https://robin:pa#ss@host.example.test/p", "https://***@host.example.test/p"},
+		{"password with question mark", "https://robin:pa?ss@host.example.test/p", "https://***"},
+		{"password with hash", "https://robin:pa#ss@host.example.test/p", "https://***"},
 		{"password with at", "https://robin:p@ss@host.example.test/p", "https://***@host.example.test/p"},
-		{"password with all four", "https://robin:a/b?c#d@e@host.example.test/p?k=v", "https://***@host.example.test/p?***"},
+		{"password with all four", "https://robin:a/b?c#d@e@host.example.test/p?k=v", "https://***"},
+		{"at in query collapses token", "https://h/p?key=abc@x&t=secret", "https://***"},
+		{"userinfo then query", "https://u:p@h/p?x=1", "https://***@h/p?***"},
+		{"at in fragment after query", "https://h/p?x=1#f@g", "https://***"},
+		{"at after hash", "https://h/p#f@g", "https://***"},
+		{"at after hash then query", "https://h/p#f@g?k=v", "https://***"},
+		{"bare pairs without a URL", "retry later ?token=abc&key=def&q=batman", "retry later ?token=***&key=***&q=batman"},
 		{"fragment dropped", "see https://host.example.test/p#access_token=zzz", "see https://host.example.test/p"},
 		{"fragment before query dropped", "https://host.example.test/p#frag?key=zzz", "https://host.example.test/p"},
 		{"query replaced wholesale", "https://host.example.test/a/b/c?key=abc&q=batman&odd;x", "https://host.example.test/a/b/c?***"},

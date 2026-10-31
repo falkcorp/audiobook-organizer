@@ -1,5 +1,5 @@
 // file: internal/metadata/detail_redact.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dbc8ca7a-f131-48c1-91b6-ca76eb082dde
 // last-edited: 2026-10-30
 
@@ -51,29 +51,38 @@ func RedactProviderDetail(s string) string {
 // redactURL reduces a URL token to scheme://host/path[?***]. It works on the
 // raw string rather than through url.Parse so a malformed URL (a bad escape, a
 // password containing "/" or "?") is still scrubbed instead of being returned
-// verbatim because parsing failed. It fails closed:
+// verbatim because parsing failed. It fails closed. With q the index of the
+// first "?" or "#" after "://" and a the index of the last "@":
 //
-//   - If an "@" appears anywhere after "://", everything between "://" and the
-//     LAST "@" is replaced by "***@". This runs first, before any splitting, so
-//     a password containing "/", "?" or "#" cannot hide from it. The cost is
-//     that an "@" in a query is also read as userinfo, which only over-redacts.
-//   - From the first "?", the rest of the token is replaced by "?***".
-//   - From a "#" that comes before any "?", the rest is dropped.
+//   - q before a (an "@" after the query or fragment starts): the "@" cannot be
+//     told apart from userinfo, and cutting at it would leave the query's tail
+//     unmasked, so the whole token collapses to scheme://***.
+//   - otherwise, everything up to and including a becomes "***@" (so a password
+//     containing "/" is covered), then from q the rest is replaced by "?***", or
+//     dropped when q is a "#".
 func redactURL(raw string) string {
 	scheme, rest, found := strings.Cut(raw, "://")
 	if !found {
 		return raw
 	}
-	if i := strings.LastIndexByte(rest, '@'); i >= 0 {
-		rest = redactedValue + rest[i:]
+	q := strings.IndexAny(rest, "?#")
+	a := strings.LastIndexByte(rest, '@')
+	if a >= 0 && q >= 0 && q < a {
+		return scheme + "://" + redactedValue
 	}
-	if i := strings.IndexAny(rest, "?#"); i >= 0 {
-		if rest[i] == '?' {
-			return scheme + "://" + rest[:i] + "?" + redactedValue
+	prefix := ""
+	if a >= 0 {
+		prefix = redactedValue + "@"
+		rest = rest[a+1:]
+		q = strings.IndexAny(rest, "?#")
+	}
+	if q >= 0 {
+		if rest[q] == '?' {
+			return scheme + "://" + prefix + rest[:q] + "?" + redactedValue
 		}
-		return scheme + "://" + rest[:i]
+		return scheme + "://" + prefix + rest[:q]
 	}
-	return scheme + "://" + rest
+	return scheme + "://" + prefix + rest
 }
 
 // redactedError carries a redacted message while keeping the original error on
