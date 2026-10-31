@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.31.3
+// version: 1.32.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -62,17 +62,19 @@ func authorOverrideClears(o OverridePayload) bool {
 // rewrote the narrator junction, collapsed co-authors and rewrote the raw
 // series position.
 //
-// Nothing outside the book row is written until the row commits: override
-// history, the book_authors join and the book_narrators junction all follow
-// the successful ModifyBook, so a refused or failed edit leaves no trace.
+// Nothing but the book row and its credits is written until they commit:
+// override history follows the successful ModifyBookCredits, which writes the
+// row, the book_authors join and the book_narrators junction as one, so a
+// refused or failed edit leaves no trace.
 func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req *UpdateAudiobookRequest) (*database.Book, error) {
 	return svc.updateAudiobook(ctx, id, req, nil)
 }
 
 // UpdateAudiobookWithWarnings is UpdateAudiobook that also returns the
 // warnings of an edit that committed only in part: the book row was written,
-// but its field locks and overrides, its change history or its book_authors
-// join was not. Each is logged as well. The edit has landed, so these are not
+// and its credit lists were written with it, but its field locks and
+// overrides or its change history were not (a narrator that could not be
+// created is also reported here). Each is logged as well. The edit has landed, so these are not
 // errors (a 500 would make the user retry an edit that then changes nothing);
 // the PUT handler returns them beside the book, so the user is told the
 // partial save happened instead of seeing a plain success.
@@ -820,19 +822,52 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	// Save to database: this edit's changed fields only, onto the fresh row.
-	// pre is the stored row this save merged onto, taken under the book's
-	// write lock, so the history below credits this edit only with what it
-	// changed -- not with a concurrent apply's fields.
+	// The narrator cast is resolved BEFORE the commit and decided inside it:
+	// resolving creates narrator records, which takes the narrator name-index
+	// and ID-counter locks and so cannot run under the book's stripe.
+	var narratorPlan *editedNarrators
+	if narratorSent && !blankNoop[database.FieldKeyNarrator] {
+		var planWarnings []string
+		narratorPlan, planWarnings = svc.planEditedNarrators(id, before, payload.Book, pendingAuthors, narratorClear)
+		for _, w := range planWarnings {
+			warn(w)
+		}
+	}
+
+	// Save to database: this edit's changed fields only, onto the fresh row,
+	// together with the book_authors and book_narrators joins it changes --
+	// ONE write under the book's write stripe and both credit stripes
+	// (ModifyBookCredits), in one batch. The row and its credits can neither
+	// disagree after a crash nor be interleaved with a concurrent apply or
+	// narrator sync of the same book. A join that cannot be written fails the
+	// edit; there is no second, post-commit write path.
+	// pre is the stored row this save merged onto, taken under the stripe, so
+	// the history below credits this edit only with what it changed -- not
+	// with a concurrent apply's fields.
+	modifier, ok := database.AsCapability[database.BookCreditsModifier](svc.store)
+	if !ok {
+		return nil, fmt.Errorf("this store cannot write a book and its credits together (ModifyBookCredits)")
+	}
 	var pre *database.Book
-	updatedBook, err := svc.store.ModifyBook(id, func(fresh *database.Book) error {
+	updatedBook, _, err := modifier.ModifyBookCredits(id, func(fresh *database.Book, credits *database.BookCreditsEdit) error {
 		snap, sErr := database.SnapshotBook(fresh)
 		if sErr != nil {
 			return sErr
 		}
 		pre = snap
-		_, mErr := database.MergeBookChanges(fresh, before, payload.Book)
-		return mErr
+		if _, mErr := database.MergeBookChanges(fresh, before, payload.Book); mErr != nil {
+			return mErr
+		}
+		// The book_authors join resolved above.
+		if pendingAuthors != nil {
+			credits.Authors = append([]database.BookAuthor(nil), pendingAuthors...)
+		}
+		if narratorPlan != nil {
+			if rows, write := narratorPlan.rowsFor(snap, fresh, id); write {
+				credits.Narrators = rows
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -841,15 +876,9 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 		return nil, fmt.Errorf("audiobook not found")
 	}
 
-	// The edit has committed. Everything below is written only now, and a
-	// failure in it is logged, not returned: the edit itself landed.
-	//
-	// Known race: these join writes run outside the book's write stripe.
-	// The store's per-book lock (PebbleStore.lockBook) is not exported, and
-	// ModifyBook's callback cannot call the store's join writers (they would
-	// re-enter the stripe). A concurrent writer that changes the same join
-	// between the commit and these writes can be overwritten by them, or
-	// overwrite them. Tracked in todo.d (EDIT-JOIN-WRITE-STRIPE).
+	// The edit has committed, joins included. Everything below is written
+	// only now, and a failure in it is logged, not returned: the edit itself
+	// landed.
 
 	// The planned case-only series rename, now that the book has committed
 	// (a failed commit must not leave the series renamed with no history).
@@ -911,23 +940,6 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 				}
 			}
 			pendingHistory = kept
-		}
-	}
-
-	// The book_authors join resolved above.
-	if pendingAuthors != nil {
-		if err := svc.store.SetBookAuthors(id, pendingAuthors); err != nil {
-			singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_authors was not updated: %v",
-				logger.SanitizeLogValue(id), err)
-			warn("the edit was saved but its author credits (book_authors) were not updated: " + err.Error())
-		}
-	}
-
-	// The narrator junction: only when the client sent the narrator and the
-	// edit changed it (or cleared a junction-only cast).
-	if narratorSent && !blankNoop[database.FieldKeyNarrator] && pre != nil {
-		for _, w := range svc.syncEditedNarratorJunction(id, pre, updatedBook, narratorClear) {
-			warn(w)
 		}
 	}
 
@@ -1016,63 +1028,107 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 	return updatedBook, nil
 }
 
-// syncEditedNarratorJunction brings book_narrators in step with a narrator
-// edit that has committed. pre is the row the edit merged onto, written is
-// the row it wrote.
+// editedNarrators is a narrator edit's cast, resolved before the commit.
 //
-//   - A clear (cleared=true) empties the junction: the store's own sync runs
-//     only for a non-empty credit, and ABS prefers the junction.
-//   - An unchanged credit leaves the junction alone. Re-sending the same
-//     narrator (the editor does it on every save) used to rewrite the
-//     junction from a raw split, undoing the store's cleaned cast and
-//     creating junk narrators such as "Narrated by X".
-//   - A changed credit gets the cast util.CleanNarratorCredit reads from it,
+//   - cleared: the edit empties the junction (the store's own sync runs only
+//     for a non-empty credit, and ABS prefers the junction).
+//   - otherwise rows is the cast util.CleanNarratorCredit reads from credit,
 //     the same cast the store's sync writes ("Narrated by" stripped, the
 //     book's own authors dropped when a real narrator remains). A credit
 //     naming only the book's authors is a self-read: those names go in as
-//     narrators. A credit that is not a list of people empties the junction,
-//     so the old cast does not outlive the edit.
-//
-// Narrator entities are created here, after the commit, and only for names
-// that go into the junction.
-//
-// It returns a warning for each part of the junction it could not write; each
-// is logged as well. The book edit has already committed.
-func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written *database.Book, cleared bool) []string {
-	var warnings []string
-	credit := ""
-	if written.Narrator != nil {
-		credit = *written.Narrator
+//     narrators. A credit that is not a list of people leaves rows empty, so
+//     the old cast does not outlive the edit.
+type editedNarrators struct {
+	cleared bool
+	credit  string
+	rows    []database.BookNarrator
+}
+
+func narratorCredit(b *database.Book) string {
+	if b == nil || b.Narrator == nil {
+		return ""
 	}
-	preCredit := ""
-	if pre.Narrator != nil {
-		preCredit = *pre.Narrator
+	return *b.Narrator
+}
+
+// rowsFor decides, under the book's stripes, whether the junction is written:
+// pre is the row the edit merged onto, written the row it will write. A clear
+// empties the junction. An unchanged credit leaves it alone: re-sending the
+// same narrator (the editor does it on every save) used to rewrite the
+// junction from a raw split, undoing the store's cleaned cast and creating
+// junk narrators such as "Narrated by X". A credit that is not the one the
+// cast was resolved for (a concurrent writer's) is not this edit's to sync.
+func (n *editedNarrators) rowsFor(pre, written *database.Book, bookID string) ([]database.BookNarrator, bool) {
+	if n.cleared {
+		return nil, true
+	}
+	credit := narratorCredit(written)
+	if credit == narratorCredit(pre) || credit != n.credit {
+		return nil, false
+	}
+	rows := make([]database.BookNarrator, len(n.rows))
+	for i, r := range n.rows {
+		r.BookID = bookID
+		rows[i] = r
+	}
+	return rows, true
+}
+
+// editAuthorView is the book_authors join as the edit will leave it: the
+// pending rows when the edit replaces the join, the stored ones otherwise.
+type editAuthorView struct {
+	audiobookStore
+	bookID string
+	rows   []database.BookAuthor
+}
+
+func (v editAuthorView) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	if v.rows != nil && bookID == v.bookID {
+		return v.rows, nil
+	}
+	return v.audiobookStore.GetBookAuthors(bookID)
+}
+
+// planEditedNarrators resolves the cast of a narrator edit (see
+// editedNarrators). before is the row the edit read, written the row it will
+// write, pendingAuthors the join rows it replaces (nil: the join is kept).
+// Narrator records are created here, outside any stripe, and only for names
+// that go into the junction; one created for an edit that then fails to
+// commit stays behind (an unreferenced narrator, as maintenance
+// purge-empty-narrators removes).
+//
+// It returns a warning for each name it could not add; each is logged as well.
+// A nil plan means the credit is unchanged and the junction is left alone.
+func (svc *AudiobookService) planEditedNarrators(id string, before, written *database.Book, pendingAuthors []database.BookAuthor, cleared bool) (*editedNarrators, []string) {
+	if cleared {
+		return &editedNarrators{cleared: true}, nil
+	}
+	credit := narratorCredit(written)
+	if credit == narratorCredit(before) {
+		return nil, nil
+	}
+	plan := &editedNarrators{credit: credit}
+	view := editAuthorView{audiobookStore: svc.store, bookID: id, rows: pendingAuthors}
+	authors, aErr := database.LiveBookAuthorNames(view, &database.Book{ID: id, AuthorID: written.AuthorID})
+	if aErr != nil {
+		singleLog.Warn("UpdateAudiobook %s: narrator junction not updated, book authors unreadable: %v",
+			logger.SanitizeLogValue(id), aErr)
+		// Nothing resolved: the junction is left as it is.
+		return nil, []string{"the edit was saved but its narrator list (book_narrators) was not updated: the " +
+			"book's authors could not be read: " + aErr.Error()}
 	}
 	var names []string
-	switch {
-	case cleared:
-	case credit == preCredit:
-		return nil
-	default:
-		authors, aErr := database.LiveBookAuthorNames(svc.store, written)
-		if aErr != nil {
-			singleLog.Warn("UpdateAudiobook %s: narrator junction not updated, book authors unreadable: %v",
-				logger.SanitizeLogValue(id), aErr)
-			return []string{"the edit was saved but its narrator list (book_narrators) was not updated: the " +
-				"book's authors could not be read: " + aErr.Error()}
-		}
-		people, verdict := util.CleanNarratorCredit(credit, authors)
-		switch verdict {
-		case util.NarratorCreditPeople:
-			names = people
-		case util.NarratorCreditAllAuthors:
-			// A self-read. The same cleaning with no authors to drop keeps
-			// the author names and still strips "Narrated by" and the like,
-			// so no junk narrator is created from the raw credit.
-			names, _ = util.CleanNarratorCredit(credit, nil)
-		}
+	people, verdict := util.CleanNarratorCredit(credit, authors)
+	switch verdict {
+	case util.NarratorCreditPeople:
+		names = people
+	case util.NarratorCreditAllAuthors:
+		// A self-read. The same cleaning with no authors to drop keeps
+		// the author names and still strips "Narrated by" and the like,
+		// so no junk narrator is created from the raw credit.
+		names, _ = util.CleanNarratorCredit(credit, nil)
 	}
-	var rows []database.BookNarrator
+	var warnings []string
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -1093,17 +1149,12 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 			}
 		}
 		role := "narrator"
-		if len(rows) > 0 {
+		if len(plan.rows) > 0 {
 			role = "co-narrator"
 		}
-		rows = append(rows, database.BookNarrator{BookID: id, NarratorID: narrator.ID, Role: role, Position: len(rows)})
+		plan.rows = append(plan.rows, database.BookNarrator{BookID: id, NarratorID: narrator.ID, Role: role, Position: len(plan.rows)})
 	}
-	if err := svc.store.SetBookNarrators(id, rows); err != nil {
-		singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_narrators was not updated: %v",
-			logger.SanitizeLogValue(id), err)
-		warnings = append(warnings, "the edit was saved but its narrator list (book_narrators) was not updated: "+err.Error())
-	}
-	return warnings
+	return plan, warnings
 }
 
 // seriesEditPlan is UpdateAudiobook's decision for a sent series name,
