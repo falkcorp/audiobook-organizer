@@ -196,7 +196,7 @@ func TestRevertTagWrite_RealFile_AlbumArtistChangedSinceIsKeptArtistRestored(t *
 	assert.Equal(t, rows, res.Restored, "the artist row is restored in part, not refused: %+v", res)
 	assert.Equal(t, 1, res.PartiallyRestored, "result %+v", res)
 	require.Len(t, res.Kept, 1)
-	assert.Contains(t, res.Kept[0], "kept ALBUMARTIST")
+	assert.Contains(t, res.Kept[0].Text, "kept ALBUMARTIST")
 	tags := diskTags(t, path)
 	assert.Equal(t, []string{"Orig Artist"}, tags["ARTIST"])
 	assert.Equal(t, []string{"Later AA"}, tags["ALBUMARTIST"], "the later ALBUMARTIST is kept")

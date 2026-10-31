@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_orphan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a1e8c34-7d92-4f06-b3a8-0e6d29c4f175
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -92,7 +92,7 @@ func TestRetireCarry_AnOrphanMarkerNeverKeepsTheSurvivorListed(t *testing.T) {
 				require.NoError(t, err, "voidedRow=%v order=%v %s", voidedRow, order, op)
 				require.Zero(t, rr.Failed, "voidedRow=%v order=%v %s", voidedRow, order, op)
 				named += rr.OrphanMarkers
-				kept = append(kept, rr.Kept...)
+				kept = append(kept, keptTexts(rr)...)
 				// Who names it. The orphan is reported by whichever revert meets it
 				// standing: op1's (it changes the list's decisions: the row of B
 				// reads the list's journal) when op1 goes first, op2's own (its
@@ -101,7 +101,7 @@ func TestRetireCarry_AnOrphanMarkerNeverKeepsTheSurvivorListed(t *testing.T) {
 				switch {
 				case op == "op1" && order[0] == "op1", op == "op2":
 					require.Equal(t, 1, rr.OrphanMarkers, "voidedRow=%v order=%v %s must name the standing orphan once: %v", voidedRow, order, op, rr.Kept)
-					require.Contains(t, strings.Join(rr.Kept, "\n"), marker.ID)
+					require.Contains(t, strings.Join(keptTexts(rr), "\n"), marker.ID)
 				default:
 					require.Zero(t, rr.OrphanMarkers, "voidedRow=%v order=%v %s: a stamped orphan is not named again: %v", voidedRow, order, op, rr.Kept)
 				}
@@ -114,4 +114,13 @@ func TestRetireCarry_AnOrphanMarkerNeverKeepsTheSurvivorListed(t *testing.T) {
 			require.True(t, strings.Contains(strings.Join(kept, "\n"), marker.ID), "voidedRow=%v order=%v: Kept names the marker; kept=%v", voidedRow, order, kept)
 		}
 	}
+}
+
+// keptTexts is the text of each line of a revert's Kept list.
+func keptTexts(rr *audiobooks.RevertResult) []string {
+	out := make([]string, len(rr.Kept))
+	for i, n := range rr.Kept {
+		out[i] = n.Text
+	}
+	return out
 }

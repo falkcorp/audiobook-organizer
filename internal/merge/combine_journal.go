@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.36.1
+// version: 1.36.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package merge
 
@@ -357,7 +357,10 @@ type CombineUndoResult struct {
 	SurvivorID    string   `json:"survivor_id"`
 	RestoredBooks []string `json:"restored_books"`
 	FilesMoved    int      `json:"files_moved"`
-	Warnings      []string `json:"warnings,omitempty"`
+	// Warnings are what the undo left as it is. Each carries the accounts its
+	// text names (Warning.UserIDs), so a caller withholds by that and not by
+	// the words in the text.
+	Warnings []Warning `json:"warnings,omitempty"`
 }
 
 // ErrCombineJournalNotFound is returned when no journal has the given id.
@@ -850,7 +853,7 @@ func combineUndoAppliedKey(journalID string) string { return combineUndoAppliedP
 // undo finished and what it left as it is.
 type combineUndoApplied struct {
 	UndoneAt time.Time `json:"undone_at"`
-	Warnings []string  `json:"warnings,omitempty"`
+	Warnings []Warning `json:"warnings,omitempty"`
 }
 
 func writeCombineUndoApplied(db CombineJournalWriter, journalID string, a combineUndoApplied) error {
@@ -888,7 +891,7 @@ func (ms *Service) markCombineUndone(j *CombineJournal, a combineUndoApplied) er
 	j.Status = CombineJournalUndone
 	j.UndoneAt = &undoneAt
 	j.LastError = ""
-	j.Warnings = append(j.Warnings, a.Warnings...)
+	j.Warnings = append(j.Warnings, WarningTexts(a.Warnings)...)
 	if err := ms.putCombineJournal(j); err != nil {
 		return err
 	}
@@ -1663,11 +1666,11 @@ func intPtrEqual(a, b *int) bool {
 // is there, newer kept, instead of written over it.
 //
 // Shared by UndoCombine and the operation revert of a user_state_follow row.
-func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID string, syncRedirected bool, progress []CombineUserProgress) ([]string, error) {
-	var warnings []string
+func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID string, syncRedirected bool, progress []CombineUserProgress) ([]Warning, error) {
+	var warnings []Warning
 	if syncRedirected && database.AsSyncIdentityStore(db) != nil {
 		if clearer, _ := database.AsCapability[syncMergeClearer](db); clearer == nil {
-			warnings = append(warnings, fmt.Sprintf("store cannot clear sync redirects; %s still redirects to the survivor for ABS clients", absorbedID))
+			warnings = append(warnings, PlainWarning(fmt.Sprintf("store cannot clear sync redirects; %s still redirects to the survivor for ABS clients", absorbedID)))
 		} else if err := clearer.ClearSyncMerge(absorbedID, survivorID); err != nil {
 			return warnings, fmt.Errorf("clear sync redirect %s -> %s: %w", absorbedID, survivorID, err)
 		}
@@ -1684,11 +1687,11 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 		if err != nil {
 			return warnings, err
 		}
-		if w != "" {
+		if w.Text != "" {
 			warnings = append(warnings, w)
 		}
 		w, err = restoreSurvivorSide(db, p, survivorID, absorbedID)
-		if w != "" {
+		if w.Text != "" {
 			warnings = append(warnings, w)
 		}
 		if err != nil {
@@ -1720,19 +1723,19 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 // Until round 6 of the #4064 review the reads came before the stripe; each
 // writer took it, re-read and compared, and a change sent the whole decision
 // round again (up to three attempts).
-func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string) (string, error) {
+func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string) (Warning, error) {
 	defer database.LockUserBookState(p.dataUser(), survivorID)()
 	cur, err := db.GetUserBookState(p.dataUser(), survivorID)
 	if err != nil {
-		return "", fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
+		return Warning{}, fmt.Errorf("read progress user=%s book=%s: %w", p.UserID, survivorID, err)
 	}
 	curPos, err := db.ListUserPositionsForBook(p.dataUser(), survivorID)
 	if err != nil {
-		return "", fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
+		return Warning{}, fmt.Errorf("read positions user=%s book=%s: %w", p.UserID, survivorID, err)
 	}
 	if sameProgress(cur, p.SurvivorStateBefore, curPos, p.SurvivorPosBefore) {
 		// Already restored (an earlier run of this undo got here).
-		return "", nil
+		return Warning{}, nil
 	}
 	hasAfter := p.SurvivorStateAfter != nil || len(p.SurvivorPosAfter) > 0
 	var key string
@@ -1741,7 +1744,7 @@ func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorI
 		key = survivorReconcileKey(survivorID, absorbedID, p)
 		marker, err = readSurvivorReconcileMarker(db, key)
 		if err != nil {
-			return "", err
+			return Warning{}, err
 		}
 		if marker != nil && !marker.PostUpdatedAt.IsZero() {
 			// An earlier run of this put-back (the put-back below, or the
@@ -1754,7 +1757,7 @@ func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorI
 			// it is. Until round 6 of the #4064 review this warned, so a
 			// re-run after a later step failed reported a complete undo as
 			// done in part.
-			return "", nil
+			return Warning{}, nil
 		}
 		if marker != nil && cur != nil && !cur.UpdatedAt.Equal(marker.PreUpdatedAt) {
 			// The marker says an earlier run of this put-back was about to
@@ -1770,8 +1773,8 @@ func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorI
 			// both books.
 			mlog.Warn("merge: survivor put-back of user=%s on %s from %s already landed per its marker; left as is",
 				logger.SanitizeLogValue(p.UserID), logger.SanitizeLogValue(survivorID), logger.SanitizeLogValue(absorbedID))
-			return fmt.Sprintf(
-				"user %s progress on survivor %s was put back by an earlier run of this undo and listened to since; left as is", p.UserID, survivorID), nil
+			return UserWarning(fmt.Sprintf(
+				"user %s progress on survivor %s was put back by an earlier run of this undo and listened to since; left as is", p.UserID, survivorID), p.UserID), nil
 		}
 	}
 	if !sameProgress(cur, p.SurvivorStateAfter, curPos, p.SurvivorPosAfter) {
@@ -1779,18 +1782,18 @@ func restoreSurvivorSide(db UserProgressMerger, p CombineUserProgress, survivorI
 			// No after-snapshot (the follow failed, or its re-read did):
 			// what the follow wrote cannot be told from the user's own
 			// listening, so nothing is taken off the survivor.
-			return fmt.Sprintf(
-				"user %s progress on survivor %s changed after the merge and no after-merge record exists to separate it; left as is", p.UserID, survivorID), nil
+			return UserWarning(fmt.Sprintf(
+				"user %s progress on survivor %s changed after the merge and no after-merge record exists to separate it; left as is", p.UserID, survivorID), p.UserID), nil
 		}
 		// The user has listened to the survivor since. Take back only
 		// what the follow brought, keep what they did there since.
 		if err := reconcileTouchedSurvivorOnce(db, p, survivorID, key, marker, cur, curPos); err != nil {
-			return "", err
+			return Warning{}, err
 		}
-		return fmt.Sprintf(
-			"user %s progress on survivor %s changed after the merge; the carried state was taken back off it and their listening there since was kept", p.UserID, survivorID), nil
+		return UserWarning(fmt.Sprintf(
+			"user %s progress on survivor %s changed after the merge; the carried state was taken back off it and their listening there since was kept", p.UserID, survivorID), p.UserID), nil
 	}
-	return "", putBackSurvivor(db, p, survivorID, key, cur)
+	return Warning{}, putBackSurvivor(db, p, survivorID, key, cur)
 }
 
 // putBackSurvivor writes one user's survivor progress back to its
@@ -2206,21 +2209,21 @@ func timePtrEqual(a, b *time.Time) bool {
 // stripe, and none does: RestoreFollowedProgress holds none when it calls
 // this, and takes the survivor's (restoreSurvivorSide) only after this has
 // returned and released the absorbed book's.
-func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt *database.UserBookState, snapPos []database.UserPosition) (string, error) {
+func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt *database.UserBookState, snapPos []database.UserPosition) (Warning, error) {
 	defer database.LockUserBookState(userID, absorbedID)()
 	cur, err := db.GetUserBookState(userID, absorbedID)
 	if err != nil {
-		return "", fmt.Errorf("read progress user=%s book=%s: %w", userID, absorbedID, err)
+		return Warning{}, fmt.Errorf("read progress user=%s book=%s: %w", userID, absorbedID, err)
 	}
 	curPos, err := db.ListUserPositionsForBook(userID, absorbedID)
 	if err != nil {
-		return "", fmt.Errorf("read positions user=%s book=%s: %w", userID, absorbedID, err)
+		return Warning{}, fmt.Errorf("read positions user=%s book=%s: %w", userID, absorbedID, err)
 	}
 	if sameProgress(cur, snapSt, curPos, snapPos) {
-		return "", nil
+		return Warning{}, nil
 	}
 	if !hasCarryableState(cur, curPos) {
-		return "", writeProgress(db, userID, absorbedID, snapSt, snapPos, cur)
+		return Warning{}, writeProgress(db, userID, absorbedID, snapSt, snapPos, cur)
 	}
 	snap := userStateSide{state: snapSt, positions: snapPos}
 	now := userStateSide{state: cur, positions: curPos}
@@ -2231,20 +2234,20 @@ func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt
 		// listening that already covers it). Nothing is written, and nothing
 		// is reported: the message below is for a put-back that changed the
 		// book.
-		return "", nil
+		return Warning{}, nil
 	}
 	if err := writePositionsDiff(db, userID, absorbedID, curPos, positions); err != nil {
-		return "", err
+		return Warning{}, err
 	}
 	if st != nil {
 		if err := db.SetUserBookState(st); err != nil {
-			return "", fmt.Errorf("restore state user=%s book=%s: %w", userID, absorbedID, err)
+			return Warning{}, fmt.Errorf("restore state user=%s book=%s: %w", userID, absorbedID, err)
 		}
 	}
 	if lastUpdate(cur, curPos).After(lastUpdate(snapSt, snapPos)) {
-		return fmt.Sprintf("user %s progress on %s was written after the follow; combined with the put-back state, newer position kept", userID, absorbedID), nil
+		return UserWarning(fmt.Sprintf("user %s progress on %s was written after the follow; combined with the put-back state, newer position kept", userID, absorbedID), userID), nil
 	}
-	return "", nil
+	return Warning{}, nil
 }
 
 // writePositionsDiff makes bookID's position rows for userID equal want,
@@ -2630,7 +2633,7 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 	for _, a := range j.Absorbed {
 		restored, warning, err := ms.restoreAbsorbedRow(a)
 		if warning != "" {
-			res.Warnings = append(res.Warnings, warning)
+			res.Warnings = append(res.Warnings, PlainWarning(warning))
 		}
 		if err != nil {
 			return res, err
@@ -2697,9 +2700,9 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 			if fm.Created && !absorbedIDs[fm.FromBookID] {
 				// No book of this combine to give it to: it stays on the
 				// survivor, which owns the audio now, and the undo says so.
-				res.Warnings = append(res.Warnings, fmt.Sprintf(
+				res.Warnings = append(res.Warnings, PlainWarning(fmt.Sprintf(
 					"file row %s (created by the combine for book %s) has no book to go back to; left on survivor %s",
-					fm.FileID, fm.FromBookID, j.SurvivorID))
+					fm.FileID, fm.FromBookID, j.SurvivorID)))
 				continue
 			}
 			if !fm.Created && fm.FromBookID != j.SurvivorID && !absorbedIDs[fm.FromBookID] {
@@ -2719,14 +2722,14 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 				}
 				if owner == nil {
 					if listOwner == "" {
-						res.Warnings = append(res.Warnings, fmt.Sprintf(
+						res.Warnings = append(res.Warnings, PlainWarning(fmt.Sprintf(
 							"file row %s (%s) came from book %s, which no longer exists; left on survivor %s",
-							fm.FileID, fm.FilePath, fm.FromBookID, j.SurvivorID))
+							fm.FileID, fm.FilePath, fm.FromBookID, j.SurvivorID)))
 						continue
 					}
-					res.Warnings = append(res.Warnings, fmt.Sprintf(
+					res.Warnings = append(res.Warnings, PlainWarning(fmt.Sprintf(
 						"file row %s (%s) came from book %s, which no longer exists; returned to absorbed book %s, whose file it is",
-						fm.FileID, fm.FilePath, fm.FromBookID, listOwner))
+						fm.FileID, fm.FilePath, fm.FromBookID, listOwner)))
 					fm.FromBookID = listOwner
 				}
 			}
@@ -2853,16 +2856,16 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 			if err := ms.db.SetBookAuthors(j.SurvivorID, restore); err != nil {
 				return res, fmt.Errorf("restore survivor authors: %w", err)
 			}
-			res.Warnings = append(res.Warnings, warns...)
+			res.Warnings = append(res.Warnings, PlainWarnings(warns...)...)
 			// The author the combine created is never deleted here (see
 			// createdAuthorNote): when nothing credits it any more, the undo
 			// says so and leaves it for maintenance.purge-empty-authors.
 			if o.AuthorCreated {
-				res.Warnings = append(res.Warnings, ms.createdAuthorNote(*o.AuthorIDAfter, o.Applied.Author)...)
+				res.Warnings = append(res.Warnings, PlainWarnings(ms.createdAuthorNote(*o.AuthorIDAfter, o.Applied.Author)...)...)
 			}
 		}
 		warns, err := ms.restoreOverrideLocks(j.SurvivorID, o)
-		res.Warnings = append(res.Warnings, warns...)
+		res.Warnings = append(res.Warnings, PlainWarnings(warns...)...)
 		if err != nil {
 			return res, err
 		}
@@ -2897,14 +2900,14 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 				if b.ASIN != nil && *b.ASIN == *f.ASIN {
 					b.ASIN, changed = nil, true
 				} else {
-					res.Warnings = append(res.Warnings, "survivor ASIN changed after the merge; left as is")
+					res.Warnings = append(res.Warnings, PlainWarning("survivor ASIN changed after the merge; left as is"))
 				}
 			}
 			if f.Narrator != nil {
 				if b.Narrator != nil && *b.Narrator == *f.Narrator {
 					b.Narrator, changed = nil, true
 				} else {
-					res.Warnings = append(res.Warnings, "survivor narrator changed after the merge; left as is")
+					res.Warnings = append(res.Warnings, PlainWarning("survivor narrator changed after the merge; left as is"))
 				}
 			}
 			if f.SeriesID != nil {
@@ -2914,7 +2917,7 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 						b.SeriesSequence = nil
 					}
 				} else {
-					res.Warnings = append(res.Warnings, "survivor series changed after the merge; left as is")
+					res.Warnings = append(res.Warnings, PlainWarning("survivor series changed after the merge; left as is"))
 				}
 			}
 			if f.AuthorID != nil {
@@ -2922,7 +2925,7 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 					b.AuthorID, changed, authorsCleared = nil, true, true
 					b.AuthorID = primaryAuthorOf(remaining)
 				} else {
-					res.Warnings = append(res.Warnings, "survivor author changed after the merge; left as is")
+					res.Warnings = append(res.Warnings, PlainWarning("survivor author changed after the merge; left as is"))
 				}
 			}
 			if !changed {
@@ -2949,7 +2952,7 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 	//    them.
 	for _, id := range append([]string{j.SurvivorID}, res.RestoredBooks...) {
 		if err := ms.db.RecomputeBookAggregates(id); err != nil {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("recompute aggregates of %s: %v", id, err))
+			res.Warnings = append(res.Warnings, PlainWarning(fmt.Sprintf("recompute aggregates of %s: %v", id, err)))
 		}
 	}
 	return res, nil

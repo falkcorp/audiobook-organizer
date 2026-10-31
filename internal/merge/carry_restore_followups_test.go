@@ -1,7 +1,7 @@
 // file: internal/merge/carry_restore_followups_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: beba4668-6a7b-4db7-b6b6-636dd756c5e7
-// last-edited: 2026-10-05
+// last-edited: 2026-10-30
 
 package merge
 
@@ -167,7 +167,8 @@ func TestRestoreFollowedProgress_TouchedSurvivorIsReconciled(t *testing.T) {
 	warnings, err := RestoreFollowedProgress(s, keep, dup, redirected, progress)
 	require.NoError(t, err)
 	require.Len(t, warnings, 1)
-	require.True(t, strings.Contains(warnings[0], "taken back"), warnings[0])
+	require.True(t, strings.Contains(warnings[0].Text, "taken back"), warnings[0].Text)
+	require.Equal(t, []string{u.ID}, warnings[0].UserIDs, "the note carries the account its text names, for the caller who may not read it")
 
 	dst, err := s.GetUserBookState(u.ID, dup)
 	require.NoError(t, err)
