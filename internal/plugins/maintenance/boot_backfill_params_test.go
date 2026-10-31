@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/boot_backfill_params_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8c1e4d27-5b3a-4f69-9e02-7a6d3b8f1c45
 // last-edited: 2026-10-30
 
@@ -294,9 +294,10 @@ func TestBootOps_ReturnPromptlyWhenCancelledMidRun(t *testing.T) {
 // store at boot. Their policies are pinned too. 04-P6 made the three that can
 // resume ResumeRestart (they checkpoint a cursor and yield before their
 // deadline); the transcode stays ResumeAsk, an owner decision (it re-encodes
-// audio in place), and the opchange rebuild stays ResumeDrop. Every Timeout is
-// pinned unchanged: the yield, not a longer timeout, is what lets a big first
-// run finish.
+// audio in place). The opchange rebuild is ResumeRestart (04-P7) because its
+// verify yields with ErrContinueInPlace, which the registry honours only for a
+// def that resumes in place. Every Timeout is pinned unchanged: the yield, not
+// a longer timeout, is what lets a big first run finish.
 func TestBootOpDefs_WaitForWarmupAndKeepTheirPolicies(t *testing.T) {
 	p := New(fakeDeps{})
 	for _, tc := range []struct {
@@ -311,7 +312,7 @@ func TestBootOpDefs_WaitForWarmupAndKeepTheirPolicies(t *testing.T) {
 		// 04-P7: boot enqueues it with {"ensure": true}. Its warmup wait
 		// lives here, in the dispatcher, since the goroutine's own wait was
 		// deleted.
-		{p.opChangeBookIndexRebuildDef(), sdk.ResumeDrop, 60 * time.Minute},
+		{p.opChangeBookIndexRebuildDef(), sdk.ResumeRestart, 60 * time.Minute},
 	} {
 		if tc.def.NoWarmupWait {
 			t.Errorf("%s: NoWarmupWait must be false so the dispatcher holds it until warmup", tc.def.ID)

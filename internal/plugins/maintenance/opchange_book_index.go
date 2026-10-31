@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -33,10 +34,19 @@ import (
 //   - `{"ensure": true}`: EnsureOpChangeByBookIndex, the boot path. Boot
 //     enqueues it on EVERY start (Server.startBackfills, bootOps; 04-P7
 //     replaced the opchange-index-backfill goroutine): the resumable backfill,
-//     then the verify, then a rebuild if the verify is not clean. The index is
-//     trusted only at the end of a clean verify or a successful rebuild. An
-//     explicit write opt-in like dry_run=false; it must not be combined with
-//     dry_run.
+//     then the resumable verify, then a rebuild if the verify is not clean. The
+//     index is trusted only at the end of a clean verify pass that reached the
+//     end of the journal, or a successful rebuild. An explicit write opt-in like
+//     dry_run=false; it must not be combined with dry_run.
+//
+//     The verify keeps its cursor in the store (not in the registry's
+//     checkpoint), so the next boot's NEW operation continues from it, and a
+//     journal too big to verify inside one Timeout is finished across runs:
+//     once less than opChangeVerifyYieldMargin of the deadline is left, the run
+//     stops at a durable cursor and returns registry.ErrContinueInPlace; the
+//     registry re-queues the SAME operation (ResumeRestart) with a fresh
+//     Timeout. Once a pass has covered the journal, later boots verify only the
+//     rows after the cursor (pebble_store_opchange_verify.go).
 //   - `{"dry_run": false}`: the forced rebuild. It clears trust and the
 //     sentinel (GetBookChanges falls back to the full scan at once),
 //     re-indexes every row from the start, sets the sentinel again and trusts
@@ -67,8 +77,16 @@ import (
 type opChangeIndexRebuilder interface {
 	VerifyOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookIndexReport, error)
 	RebuildOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookBackfillResult, error)
-	EnsureOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookEnsureResult, error)
+	EnsureOpChangeByBookIndexWith(ctx context.Context, opts database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error)
 }
+
+// opChangeVerifyYieldMargin is the least time left before the run's deadline at
+// which the ensure's verify stops at a durable cursor and hands the operation
+// back (registry.ErrContinueInPlace). The store uses the larger of this and
+// twice the slowest gap between its checkpoints, so a window that starts just
+// before the line still finishes well inside the deadline. The same margin
+// backfill-file-hashes and the 04-P6 boot ops use.
+const opChangeVerifyYieldMargin = 5 * time.Minute
 
 // opChangeBookIndexParams: dry_run/dryRun as every preview-default op, plus
 // ensure (the boot mode).
@@ -108,11 +126,20 @@ func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 		Description: "Checks and repairs the opchange_by_book: index that GetBookChanges reads. " +
 			"Preview by default: reports journal rows with no index entry, writes nothing. With " +
 			"ensure=true (boot enqueues this on every start) it builds or resumes the index, verifies " +
-			"every journal row against it, rebuilds if any row lacks an entry (e.g. after a rollback) " +
-			"and only then lets GetBookChanges read it. With dry_run=false it rebuilds from scratch; " +
+			"the journal against it (resuming from a saved cursor, so a journal too big for one run is " +
+			"finished across runs, and checking only the rows added since once a pass has covered it), " +
+			"rebuilds if any row lacks an entry (e.g. after a rollback) and only then lets GetBookChanges read it. With dry_run=false it rebuilds from scratch; " +
 			"GetBookChanges uses the full journal scan while it runs and trusts the index again only " +
 			"if it succeeds. Writes index keys only, never journal rows.",
-		ResumePolicy:    sdk.ResumeDrop,
+		// ResumeRestart, not ResumeDrop: the registry honours
+		// ErrContinueInPlace only for a def that resumes in place, and the ensure
+		// yields with one (a verify too big for one Timeout). Every mode is
+		// idempotent and keeps its resume point in the STORE (the backfill and
+		// verify cursors), so a restart or a yield needs no registry checkpoint.
+		// A forced rebuild (dry_run=false) interrupted by a restart starts over
+		// from the first row, as an operator's re-run would; the boot ensure
+		// resumes the cursor it left.
+		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.opchange-book-index",
 		Cancellable:     true,
@@ -182,6 +209,24 @@ func opChangeIndexProgressTo(reporter sdk.Reporter) database.OpChangeIndexProgre
 	}
 }
 
+// opChangeEnsureProgress is opChangeIndexProgressTo for the ensure: the verify
+// phase reports a determinate (rows, total) once the store has sized the pass,
+// because the registry counts progress toward a yield only against a total
+// (an indeterminate report advances nothing), and rows is absolute across the
+// runs of one verify. The other phases stay indeterminate.
+func opChangeEnsureProgress(reporter sdk.Reporter) (database.OpChangeIndexProgress, func(total int)) {
+	var total atomic.Int64
+	progress := func(phase string, rows int) {
+		if phase != "verify" {
+			opChangeIndexProgressTo(reporter)(phase, rows)
+			return
+		}
+		t := max(int(total.Load()), rows)
+		_ = reporter.UpdateProgress(rows, t, fmt.Sprintf("opchange_by_book index verify: %d of %d journal rows checked", rows, t))
+	}
+	return progress, func(n int) { total.Store(int64(n)) }
+}
+
 // previewOpChangeBookIndex is the read-only mode: it reports what a rebuild
 // would fix and writes nothing.
 func previewOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
@@ -246,7 +291,10 @@ func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, rep
 func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
 	_ = reporter.Log(slog.LevelDebug, "Starting opchange_by_book index ensure (backfill if needed, verify, rebuild if dirty)")
 	_ = reporter.UpdateProgress(0, 1, "checking opchange_by_book: index")
-	res, err := r.EnsureOpChangeByBookIndex(ctx, opChangeIndexProgressTo(reporter))
+	progress, setTotal := opChangeEnsureProgress(reporter)
+	res, err := r.EnsureOpChangeByBookIndexWith(ctx, database.OpChangeEnsureOptions{
+		Progress: progress, VerifyTotal: setTotal, YieldMargin: opChangeVerifyYieldMargin,
+	})
 	if err != nil {
 		// Only a cancel is an interruption (shutdown, an operator, or the
 		// watchdog, which logs its own kill). The def's Timeout ends ctx with
@@ -268,6 +316,15 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 			"full journal scan until a later ensure or rebuild succeeds", slog.String("error", err.Error()))
 		return fmt.Errorf("ensure opchange_by_book index: %w", err)
 	}
+	if res.Yielded {
+		// The verify reached its time budget at a durable cursor. Nothing is
+		// trusted yet; the registry re-queues this operation and the next
+		// attempt continues from the cursor with a fresh Timeout.
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("opchange_by_book index verify pausing at its time budget: "+
+			"%d journal rows verified (%d this run); the operation continues from its cursor",
+			res.Verify.VerifiedRows, res.Verify.Rows))
+		return fmt.Errorf("opchange_by_book index verify: %w", opsregistry.ErrContinueInPlace)
+	}
 	if !res.Trusted {
 		msg := fmt.Sprintf("opchange_by_book index not trusted after ensure (rebuilt=%t sentinel_set=%t "+
 			"missing_entries=%d unmarked_undecodable=%d); GetBookChanges stays on the full journal scan",
@@ -280,9 +337,10 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 		undecodable = res.Rebuild.Undecodable
 	}
 	summary := fmt.Sprintf("opchange_by_book index trusted: backfill scanned=%d indexed=%d skipped=%t; "+
-		"verify rows=%d missing_entries=%d undecodable=%d; rebuilt=%t",
+		"verify rows=%d (journal position %d, prior_coverage=%t) missing_entries=%d undecodable=%d; rebuilt=%t",
 		res.Backfill.Scanned, res.Backfill.Indexed, res.Backfill.Skipped,
-		res.Verify.Rows, res.Verify.MissingEntries, res.Verify.Undecodable, res.Rebuilt)
+		res.Verify.Rows, res.Verify.VerifiedRows, res.Verify.PriorCoverage,
+		res.Verify.MissingEntries, res.Verify.Undecodable, res.Rebuilt)
 	if res.Rebuilt {
 		summary += fmt.Sprintf(" (rebuild scanned=%d indexed=%d)", res.Rebuild.Scanned, res.Rebuild.Indexed)
 	}
