@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.92.0
+// version: 1.92.1
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-26
+// last-edited: 2026-10-31
 
 package maintenance
 
@@ -310,7 +310,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 
 		// --- reconcile ---
 		// The scan itself is reconcile.scan (internal/server/reconcile_ops.go);
-		// maintenance.reconcile-scan was merged into it (04-P14c).
+		// maintenance.reconcile-scan was merged into it (04-P14c; alias dropped
+		// 2026-10-31).
 		// relink-unlinked-books is reconcile.scan's COMPLEMENT: that op flags a
 		// book only when os.Stat on its path FAILS, this one flags books whose
 		// path resolves fine but which own zero book_file rows (17,149 of 44,886
