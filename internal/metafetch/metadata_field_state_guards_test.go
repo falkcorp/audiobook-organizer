@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_field_state_guards_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4673e12e-5c70-456a-a4c6-11a63dd02ed2
-// last-edited: 2026-09-01
+// last-edited: 2026-10-31
 
 package metafetch
 
@@ -15,7 +15,7 @@ import (
 
 // database.MetadataFieldState and metafetch.MetadataFieldState are two views of
 // one stored row, and the provenance guards read BOTH: the maintenance repair
-// jobs hold the database view, the bulk-fetch handler holds the metafetch view.
+// jobs hold the database view, the metadata apply paths hold the metafetch view.
 // The types are not interchangeable -- database stores *string, metafetch stores
 // the metastate.Decode output as any -- so "x != nil" is not the same question
 // on the two sides, and a shared method NAME does not by itself make it one.
