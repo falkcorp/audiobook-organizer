@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.30.3
+// version: 1.30.4
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -43,7 +43,7 @@ import (
 
 // MetadataEntityResolver resolves author and series names to rows, creating them if absent.
 type MetadataEntityResolver interface {
-	// Author/series resolution (bulkFetchMetadata + metadata.BatchUpdateMetadata's
+	// Author/series resolution (metadata.BatchUpdateMetadata's
 	// author/series name → ID resolution, INIT-3-T4). The series/history methods
 	// were added so this type satisfies metadata.BatchUpdateMetadata's widened
 	// store parameter without a cast (the doc above notes it is passed straight in).
@@ -149,9 +149,6 @@ type MetadataStore interface {
 	MetadataBookQueryStore
 	BookRatingWriter
 	MetadataBookStore
-	// The field-lock guard's surface: bulkFetchMetadata consults
-	// database.LockedUserFields so a user-locked field is never overwritten.
-	database.MetadataFieldStateReader
 }
 
 // MetadataFetcher fetches and searches metadata for a book.

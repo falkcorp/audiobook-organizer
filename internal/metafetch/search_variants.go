@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-20
+// last-edited: 2026-10-31
 
 package metafetch
 
@@ -551,8 +551,8 @@ type queryVariant struct {
 	Author string
 	// filter, when set, is applied to the answers (live or cached) before
 	// they join the pool: every derived (non-literal) title is anchored,
-	// because POST /api/v1/metadata/bulk-fetch applies the top candidate with
-	// no score floor and must never be handed a sibling of this book.
+	// because the bulk walk caches and ledgers a hit unseen and must never
+	// be handed a sibling of this book.
 	filter *titleVariant
 	// slotSeries/slotPosition, when set, keep only answers in that series at
 	// that position (keepSeriesSlot).
