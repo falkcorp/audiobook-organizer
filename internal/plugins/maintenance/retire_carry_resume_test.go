@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_resume_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0c7d4e2a-91b3-4f68-a5d0-3e8f1b72c946
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -106,8 +106,8 @@ func TestRetireCarry_AResumedCarryWithTwoPairsRestoresOnceAndKeepsTheOwnersSurvi
 			require.Zero(t, rr.SurvivorsReleased, "the owner's survivor is not released: %+v", rr)
 			require.Zero(t, rr.Superseded, "%+v", rr)
 			require.Equal(t, 1, rr.OrphanMarkers, "the older pair's marker is named, not silent: %+v", rr)
-			require.Contains(t, strings.Join(rr.Kept, "\n"), m1.ID)
-			require.Contains(t, strings.Join(rr.Kept, "\n"), "a later marker names the same retire")
+			require.Contains(t, strings.Join(keptTexts(rr), "\n"), m1.ID)
+			require.Contains(t, strings.Join(keptTexts(rr), "\n"), "a later marker names the same retire")
 
 			// Both rows end reverted, so a second revert has nothing to do.
 			after, err := c.f.s.GetOperationChanges("op1")

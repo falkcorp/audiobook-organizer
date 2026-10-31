@@ -1,7 +1,7 @@
 // file: internal/undo/user_data.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: b7545a0f-8cbd-4cda-b35c-382ea405714b
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package undo
 
@@ -139,13 +139,19 @@ func IsUserDataChangeType(changeType string) bool {
 	return changeTypeHoldsUserData[changeType]
 }
 
-// NamesUser reports whether s, a free-text note a journal or an undo carries
-// (a merge undo's warnings, a repair's error), mentions a user. The merge
-// writes a user's id only into its progress warnings ("user <id> progress on
-// ...", "user=<id>"), and the refusals on a user's state name the account, so a
-// note that says "user" is withheld from a caller who may not manage users. It
-// is a deny-list on purpose: it errs towards withholding, and a note that says
-// "user" for another reason goes too.
+// NamesUser reports whether s, a free-text note a journal carries (a combine or
+// sibling-move journal's persisted warnings and last error), mentions a user.
+// The merge writes a user's id only into its progress warnings ("user <id>
+// progress on ...", "user=<id>"), and the refusals on a user's state name the
+// account, so a journal note that says "user" is withheld from a caller who may
+// not manage users. It is a deny-list on purpose: it errs towards withholding,
+// and a note that says "user" for another reason goes too.
+//
+// It is only for text that has no structured field to read: the journals store
+// their warnings as bare strings. A merge undo's own warnings (merge.Warning)
+// and the operation revert's report (audiobooks.RevertNote) carry the accounts
+// they name as a field, set where the note is produced, and are withheld by
+// it, never by this function.
 func NamesUser(s string) bool {
 	return strings.Contains(strings.ToLower(s), "user")
 }

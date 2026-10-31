@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_retry_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9d2f4b61-8a3e-4c07-b5d1-6e9a0c7f2b48
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -136,7 +136,7 @@ func TestCombineUndo_RetryAfterMidwayFailure(t *testing.T) {
 
 			undo, err := ms.UndoCombine(res.JournalID)
 			require.NoError(t, err, "a failed undo must be retriable")
-			requireOnlyCreatedAuthorNote(t, undo.Warnings, "Jane Undo") // what a clean undo reports
+			requireOnlyCreatedAuthorNote(t, WarningTexts(undo.Warnings), "Jane Undo") // what a clean undo reports
 
 			for _, id := range all {
 				assert.Equal(t, preBooks[id], viewBook(t, store, id), "book %s restored exactly", id)

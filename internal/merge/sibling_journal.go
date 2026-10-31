@@ -1,7 +1,7 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package merge
 
@@ -276,8 +276,8 @@ func (ms *Service) followUnjournaled(loser, holderID string) error {
 // RevertResult.Kept). No pending repair is written for it, so nothing is ever
 // queued to move state onto a purged book. It returns the warnings and the
 // first error.
-func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateFollow) bool, refollow bool) ([]string, error) {
-	var warnings []string
+func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateFollow) bool, refollow bool) ([]Warning, error) {
+	var warnings []Warning
 	// Fixed bound: the refollow appends to j.StateFollows, and those new
 	// entries are not this undo's to reverse.
 	n := len(j.StateFollows)
@@ -291,7 +291,7 @@ func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateF
 			return warnings, err
 		}
 		if !ok {
-			warnings = append(warnings, why)
+			warnings = append(warnings, PlainWarning(why))
 			continue
 		}
 		w, err := RestoreFollowedProgress(ms.db, f.HolderID, f.LoserID, f.SyncRedirected, f.Progress)
@@ -301,7 +301,7 @@ func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(int, StateF
 		}
 		if refollow {
 			w, err := ms.refollowOntoSurvivor(j, f.LoserID, i)
-			warnings = append(warnings, w...)
+			warnings = append(warnings, PlainWarnings(w...)...)
 			if err != nil {
 				return warnings, err
 			}
@@ -533,7 +533,7 @@ type SiblingUndoResult struct {
 	// Warnings are what this undo left as it is: a sibling moved to a third
 	// group since (also in MovedOn), listening state kept on its holder for
 	// want of a live destination, a survivor reconciled instead of restored.
-	Warnings []string `json:"warnings,omitempty"`
+	Warnings []Warning `json:"warnings,omitempty"`
 }
 
 func siblingJournalKey(id string) string { return siblingJournalPrefix + id }
@@ -718,7 +718,7 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 		undoneBefore[i] = f.Undone
 	}
 	followWarnings, followErr := ms.undoStateFollows(j, pickFollow, loserID == "")
-	j.Warnings = append(j.Warnings, followWarnings...)
+	j.Warnings = append(j.Warnings, WarningTexts(followWarnings)...)
 	if followErr != nil {
 		j.LastError = followErr.Error()
 		if err := ms.putSiblingJournal(j); err != nil {
@@ -729,12 +729,12 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 	res, restoreErr := ms.restoreMovedSiblings(j.IntoGroupID, todo)
 	j.UndoneSiblings = append(j.UndoneSiblings, res.Restored...)
 	j.UndoneSiblings = append(j.UndoneSiblings, res.AlreadyBack...)
-	callWarnings := append([]string(nil), followWarnings...)
+	callWarnings := append([]Warning(nil), followWarnings...)
 	for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
 		j.UndoneSiblings = append(j.UndoneSiblings, id)
 		w := fmt.Sprintf("book %s moved to version group %s since the merge; left there", id, res.MovedOn[id])
 		j.Warnings = append(j.Warnings, w)
-		callWarnings = append(callWarnings, w)
+		callWarnings = append(callWarnings, PlainWarning(w))
 	}
 	// A group every one of whose siblings is back is no longer one the merge
 	// emptied; drop its trash-restore redirect (group_redirect.go).

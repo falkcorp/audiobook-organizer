@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_rev5_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 5c1e8f47-2a9d-4b63-9e07-d84f3a6b21c9
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -249,7 +249,7 @@ func TestRev5_StuckMarkerIsNamedInTheErrorAndTheSkipIsReported(t *testing.T) {
 
 	re, err := NewService(store).UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.Contains(t, strings.Join(re.Warnings, "\n"), "was put back by an earlier run of this undo and listened to since; left as is")
+	require.Contains(t, strings.Join(WarningTexts(re.Warnings), "\n"), "was put back by an earlier run of this undo and listened to since; left as is")
 }
 
 // A put-back whose state write fails (the marker delete works) is finished

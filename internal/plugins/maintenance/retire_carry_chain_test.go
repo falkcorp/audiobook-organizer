@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_chain_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: f3db16f2-7f5a-4c3e-a348-dea96c5942d4
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -96,7 +96,7 @@ func TestRetireCarry_ARetiredSurvivorDoesNotReturnToAListItNeverBelongedTo(t *te
 	rr := c.revert("op3")
 	require.Equal(t, 1, rr.BooksLeftOut, "S1 was not put back: %+v", rr)
 	require.Len(t, rr.Kept, 1, "%+v", rr)
-	require.Contains(t, rr.Kept[0], "not put back")
+	require.Contains(t, rr.Kept[0].Text, "not put back")
 	require.Contains(t, rr.Summary(), "1 book(s) not put back")
 	c.revert("op1")
 	require.Equal(t, l0, c.members())

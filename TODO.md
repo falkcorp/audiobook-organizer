@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -246,7 +246,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **TODO-REPAIRS-OPERATIONS-PAUSE-SOURCES** `GET /operations/pause` (definition ids), `GET /operations/stale` and the other overview lists still list Repairs operations without the visibility check.
 - [ ] **TODO-ACTIVITY-SOURCES-COUNTS** `GET /activity/sources` counts entries per source through `GetDistinctSources`, which does not honour `ActivityFilter.ExcludeEntry`, so its counts include hidden Repairs runs and user-data lines. Give the store call the exclusion, or compute the counts from the filtered page.
 - [ ] **TODO-SYSTEM-LOGS-OPERATION-ID** `GET /system/logs?operation_id=` hands `OperationsV2Handler.GetOperationLogs` an empty `c.Param("id")`, so the branch returns nothing for every caller. It is not a leak (it fails closed), but the filter never works; pass the query value, keeping `mayReadLogsOf`.
-- [ ] **TODO-REVERT-RESULT-WORD-MATCH** `RevertResult.WithoutUserData` withholds a note when it contains the word "user" (`undo.NamesUser`), a deny-list that also hides notes that use the word for another reason. Carry the user ids as structured fields on the warnings and withhold by field.
+- [x] **TODO-REVERT-RESULT-WORD-MATCH** `RevertResult.WithoutUserData` withholds a note when it contains the word "user" (`undo.NamesUser`), a deny-list that also hides notes that use the word for another reason. Carry the user ids as structured fields on the warnings and withhold by field.
 - [ ] **TODO-ACTIVITY-USER-DATA-TAG-HEURISTIC** The activity writer tags a log line as user data by matching its text (`activity.NamesUserText`), so a line that names a user in a way the pattern misses is served to everyone. Tag at the call site that knows (the merge, the ABS and Audible importers) instead of from the string.
 - [ ] **TODO-ACTIVITY-WRITER-BATCH-BRANCH** `Writer.sendEntry` has its own batch branch that is unreachable, because the entry type is always "system"; only the `LogBatch` path batches. Remove the dead branch or route the batching through one path.
 - [ ] **TODO-OPSV3-CENSUS-CORRUPT-RECORD** A corrupt run record in the counts census (`hiddenFor`) still answers 500 on `/api/v3/ops/runs/counts`; the list path now skips and logs it (`RunQuery.OnUndecodable`), the census does not.

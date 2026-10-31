@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_rev6_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e0dd46d-1455-44fc-94b7-899dc9c35055
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -178,7 +178,7 @@ func TestRev6_LandedMarkerWriteFailureFallsBackToTheWarning(t *testing.T) {
 
 	re, err := NewService(store).UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.Contains(t, strings.Join(re.Warnings, "\n"), "was put back by an earlier run of this undo and listened to since; left as is")
+	require.Contains(t, strings.Join(WarningTexts(re.Warnings), "\n"), "was put back by an earlier run of this undo and listened to since; left as is")
 	require.Equal(t, float64(600), rev5Listened(t, store, user, gone))
 	require.Equal(t, float64(0), rev5Listened(t, store, user, keep))
 }
