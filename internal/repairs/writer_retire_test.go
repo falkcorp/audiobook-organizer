@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_retire_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d4146810-528b-4b28-ab80-cf4d4aa0bdf1
 // last-edited: 2026-10-30
 
@@ -136,8 +136,8 @@ func TestRetireVersion_CarriesProvenanceIntoTheVersion(t *testing.T) {
 // store that cannot retire is refused, one over the real store is not.
 func TestCheckRetireSupport(t *testing.T) {
 	fx := newRetireFx(t)
-	require.NoError(t, NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, "op-cs").CheckRetireSupport())
-	require.Error(t, NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").CheckRetireSupport(), "no book_file store wired")
+	require.NoError(t, CheckRetireSupport(NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, "op-cs")))
+	require.Error(t, CheckRetireSupport(NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-")), "no book_file store wired")
 	rows, err := fx.st.GetOperationChanges("op-cs")
 	require.NoError(t, err)
 	require.Empty(t, rows, "the check journals nothing")

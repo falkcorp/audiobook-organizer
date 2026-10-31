@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_retire.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: a82a965b-b258-4d39-b08b-abd352a891e7
 // last-edited: 2026-10-30
 
@@ -170,12 +170,16 @@ func (w *Writer) retireStores() (database.RetiredBookFileWriter, retireVersionSt
 	return retirer, versions, nil
 }
 
-// CheckRetireSupport reports whether the Writer's store can run RetireVersion
-// and RehomeRetiredVersion, and writes nothing. A caller that journals
-// something before it retires (the retired-versions fixer's plan record) asks
-// first, so a store that cannot retire is refused before the first journal row
-// rather than after it.
-func (w *Writer) CheckRetireSupport() error {
+// CheckRetireSupport reports whether w's store can run RetireVersion and
+// RehomeRetiredVersion, and writes nothing. A caller that journals something
+// before it retires (the retired-versions fixer's plan record) asks first, so a
+// store that cannot retire is refused before the first journal row rather than
+// after it.
+//
+// It is a function, not a Writer method: the Writer's method set is pinned
+// (TestWriterMethodSetPinned) so a fixer sees exactly the write primitives the
+// framework offers, and a capability probe is not one of them.
+func CheckRetireSupport(w *Writer) error {
 	if err := w.denyTagsOnly("RetireVersion"); err != nil {
 		return err
 	}

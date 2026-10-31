@@ -1,5 +1,5 @@
 <!-- file: docs/decisions/2026-10-30-retired-versions-apply-preconditions.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 4d1c7a9e-2b53-4f86-a0e7-6c9b13d58f24 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -24,7 +24,8 @@ the retire time, as `IngestDate` did for the Writer before). Without them the re
 would have lost the provenance the fixer wrote into `MetadataJSON` and the shell's creation
 time as `IngestDate`.
 
-`Writer.CheckRetireSupport` is new and is called when the fixer builds its writer: the old
+`repairs.CheckRetireSupport(w)` is new (a package function, not a Writer method, because
+`TestWriterMethodSetPinned` pins the Writer's method set to the write primitives) and is called when the fixer builds its writer: the old
 adapter checked for `RetiredBookFileWriter` up front, before the plan record was journaled, and
 the Writer only discovers a missing capability inside `RetireVersion`, after the plan record.
 The check keeps the order and runs against the Writer's own store.
