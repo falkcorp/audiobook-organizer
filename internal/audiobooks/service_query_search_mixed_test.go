@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query_search_mixed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b4d7e2a9-6f13-4c58-9e0b-2a5c8d1f7e34
 // last-edited: 2026-10-30
 
@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,4 +155,69 @@ func TestSearchWithBleve_PerUserOrFailsWhenTheViewersRowsCannotBeRead(t *testing
 	})
 	_, _, err := svc.searchWithBleve(context.Background(), "title:Hush OR read_status:finished", 50, 0, "alice", nil, hydratePage)
 	require.Error(t, err)
+}
+
+// perViewerStatesStore serves each viewer their own rows, as the Pebble store does:
+// statuses is user id -> book id -> status. It can list a viewer's rows in one read.
+type perViewerStatesStore struct {
+	database.Store
+	statuses map[string]map[string]string
+}
+
+func (p perViewerStatesStore) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
+	if s, ok := p.statuses[userID][bookID]; ok {
+		return &database.UserBookState{Status: s}, nil
+	}
+	return nil, nil
+}
+
+func (p perViewerStatesStore) ListUserBookStates(_ context.Context, userID string) (map[string]*database.UserBookState, error) {
+	rows := map[string]*database.UserBookState{}
+	for id, s := range p.statuses[userID] {
+		rows[id] = &database.UserBookState{Status: s}
+	}
+	return rows, nil
+}
+
+// A search result cache is not keyed by user, so a per-user query must never reach
+// it: the first viewer's list would be served to the second. A mixed query reaches
+// the cache gate with no per-user filter list (Translation.PerUser is empty), so the
+// gate has to see it from the field names. Two viewers run the same query back to
+// back through the real service with the cache wired and each gets their own list.
+func TestGetAudiobooks_PerUserOrIsNeverServedFromTheSharedCacheToAnotherViewer(t *testing.T) {
+	statuses := map[string]map[string]string{
+		"alice": {"b1": database.UserBookStatusFinished, "b3": database.UserBookStatusFinished, "b5": database.UserBookStatusFinished},
+		"bob":   {"b2": database.UserBookStatusFinished, "b4": database.UserBookStatusFinished},
+	}
+	svc := wholeSendServiceOver(t, func(st database.Store) database.Store {
+		return perViewerStatesStore{Store: st, statuses: statuses}
+	})
+	svc.SetSearchResultCache(searchcache.New(searchcache.NewChangeLog(16), searchcache.Config{}))
+
+	for _, q := range []string{
+		"title:Hush OR read_status:finished",
+		"-(read_status:finished author:kyle)",
+	} {
+		_, cacheable := svc.searchCacheKey(q, nil, nil, ListFilters{UserID: "alice"})
+		assert.False(t, cacheable, "%q must not be cacheable", q)
+	}
+
+	run := func(user, q string) []string {
+		got, err := svc.GetAudiobooks(context.Background(), 50, 0, q, nil, nil, ListFilters{UserID: user})
+		require.NoError(t, err)
+		ids := []string{}
+		for _, b := range got {
+			ids = append(ids, b.ID)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+	const q = "title:Hush OR read_status:finished"
+	assert.Equal(t, []string{"b1", "b3", "b5"}, run("alice", q))
+	assert.Equal(t, []string{"b1", "b2", "b4"}, run("bob", q), "bob must not be served alice's list")
+	assert.Equal(t, []string{"b1", "b3", "b5"}, run("alice", q))
+
+	const n = "-(read_status:finished author:kyle)"
+	assert.Equal(t, []string{"b2", "b4", "b6"}, run("alice", n))
+	assert.Equal(t, []string{"b1", "b3", "b5", "b6"}, run("bob", n))
 }

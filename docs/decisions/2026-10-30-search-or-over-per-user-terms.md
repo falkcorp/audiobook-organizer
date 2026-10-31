@@ -1,5 +1,5 @@
 <!-- file: docs/decisions/2026-10-30-search-or-over-per-user-terms.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 932e5775-5fc6-4cea-881e-77138eb9ab56 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -54,7 +54,18 @@ TODO-PERUSER-BOOLEAN.
 - Chosen: `ErrPerUserBoolean` and `CheckPerUserBoolean` are deleted (cut over, no compatibility).
   The value checks (`CheckPerUserValues`) stay and apply under an OR too. `tag:` under an OR is
   still refused (separate rule, unchanged).
-- Not changed: the substring fallbacks used while the index is nil or rebuilding never evaluated
-  per-user terms, even flat ones. Noted as a follow-up.
+- Chosen: the two substring fallbacks (index nil or rebuilding) refuse a query that needs the tree
+  (`search.CheckPerUserNeedsIndex`, a `*PerUserValueError`, so a 400 like every other refused
+  per-user term). On main they refused it through the shape check; narrowing that check to values
+  would have turned the 400 into a silent substring answer, so this restores the refusal where, and
+  only where, it is still correct. `SearchPerUserProblem` (also run by the HTTP handler before any
+  engine is chosen) does not refuse it, so the index path is not affected.
+- Not changed: the fallbacks still never evaluate a flat per-user term (`read_status:finished`
+  alone is not applied while the index is down). Pre-existing, not touched here.
+- Checked: every non-test consumer of `TranslateQuery`/`TranslateAt` (the playlist evaluator,
+  `searchWithBleve`, `validateCollectionQuery`, which only needs the error). The search result
+  cache, the list cache and the tag-facet cache are gated by `SearchHasPerUserFilters`, which reads
+  field names from the AST, so a mixed query (empty `PerUser` list) is still never cached; a
+  two-viewer test through the real service with the cache wired pins it.
 - Ordering note: relevance for a mixed query is the index's; DocID leaves score a constant, so a
   per-user-only OR side does not influence ranking beyond matching.

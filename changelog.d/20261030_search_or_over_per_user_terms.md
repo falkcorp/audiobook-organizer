@@ -12,3 +12,5 @@ whole expression, so scoring, paging and the match count are unchanged. Plain co
 term negated on its own and one field's alternation keep their existing path. The value checks
 (unknown status, pattern, bad number or date) still apply, and `tag:` under an `OR` is still
 refused. `search.CheckPerUserBoolean` and `search.ErrPerUserBoolean` are removed.
+While the search index is starting up or rebuilding, the text-only fallback cannot evaluate
+such a query and refuses it with a 400 rather than answering it as plain text.

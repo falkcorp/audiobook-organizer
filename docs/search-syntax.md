@@ -1,5 +1,5 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -181,7 +181,9 @@ configuration) judges a per-user term as the state of a book nobody has opened:
 checks stay: a `read_status` that is not one of the four statuses, a pattern, a number or
 date that does not parse is refused with a 400 wherever it sits, under an `OR` too. A
 `tag:` term still cannot sit under an `OR` (see below). The web search box sends a query
-with boolean structure whole as `search=`, which the server now reads.
+with boolean structure whole as `search=`, which the server now reads. While the search
+index is starting up or rebuilding, the text-only fallback cannot evaluate such a query, so
+it is refused with a 400 instead of being answered as plain text.
 
 `tag:` is an exact tag filter: it finds the books that carry that whole tag, ignoring
 case, exactly as the tag chips and the `tags[]` parameter do (`tag:"to-read"` does not find

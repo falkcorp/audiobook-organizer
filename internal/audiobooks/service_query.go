@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.39.0
+// version: 1.39.1
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
 // last-edited: 2026-10-30
 
@@ -349,7 +349,7 @@ func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit 
 			// tokenise, so a multi-word query like "jobs classes" matches
 			// nothing rather than ANDing the terms. That is a large, silent
 			// behaviour change from the Bleve path, so say it happened.
-			if perr := SearchPerUserProblem(search); perr != nil {
+			if perr := substringFallbackProblem(search); perr != nil {
 				return nil, 0, fmt.Errorf("search: %w", perr)
 			}
 			slog.Warn("search: search index is nil or rebuilding; falling back to substring SearchBooks",
@@ -892,7 +892,7 @@ func (svc *AudiobookService) searchWithinIDs(ctx context.Context, query string, 
 	}
 	sort.Strings(ids)
 	if !svc.bleveSearchable() {
-		if perr := SearchPerUserProblem(query); perr != nil {
+		if perr := substringFallbackProblem(query); perr != nil {
 			return nil, 0, fmt.Errorf("search: %w", perr)
 		}
 		slog.Warn("search: search index is nil or rebuilding; scoped search falling back to the substring predicate",
@@ -1542,10 +1542,22 @@ func searchTextFieldIsKnown(name string) bool {
 //
 // It is the one check every entry to the search runs, the index path
 // (searchWithBleve) and the two substring fallbacks that take over while the
-// index is nil or rebuilding. A string with no field term at all is not a problem;
+// index is nil or rebuilding (which add substringFallbackProblem's shape refusal). A string with no field term at all is not a problem;
 // one the DSL parser rejects is a problem only when it writes a per-user term
 // (search.UnparsablePerUserQuery), and otherwise keeps the substring fallback.
 func SearchPerUserProblem(q string) error {
+	return searchPerUserProblem(q, false)
+}
+
+// substringFallbackProblem is SearchPerUserProblem for the two substring fallbacks.
+// They have no index to evaluate a per-user term under an OR or a NOT over a group
+// with, and never evaluate a per-user term at all, so they refuse that shape
+// (search.CheckPerUserNeedsIndex) instead of answering it as plain text.
+func substringFallbackProblem(q string) error {
+	return searchPerUserProblem(q, true)
+}
+
+func searchPerUserProblem(q string, noIndex bool) error {
 	if strings.TrimSpace(q) == "" || !strings.Contains(q, ":") {
 		return nil
 	}
@@ -1560,7 +1572,13 @@ func SearchPerUserProblem(q string) error {
 		}
 		return search.UnparsablePerUserQuery(q, err)
 	}
-	return search.CheckQueryTerms(ast, time.Now())
+	if err := search.CheckQueryTerms(ast, time.Now()); err != nil {
+		return err
+	}
+	if noIndex {
+		return search.CheckPerUserNeedsIndex(ast)
+	}
+	return nil
 }
 
 // intersectSortedIDs returns the ids of a that are also in b, in a's order. It is
