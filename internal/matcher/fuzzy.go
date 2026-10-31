@@ -1,31 +1,31 @@
 // file: internal/matcher/fuzzy.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 package matcher
 
 import (
-	"sort"
 	"strings"
+	"sync"
 	"unicode"
 )
 
-// tokenSetScale maps a TokenSetRatio (0..1) onto the int ScoreMatch scale. It
-// mirrors the strongest existing Levenshtein-based term (the per-word match at
-// *70, see ScoreMatch) so the order-insensitive signal stays a strong hint
+// tokenSetScale maps a token-set ratio (0..1) onto the 0..100 SymmetricScore
+// scale. It mirrors the strongest Levenshtein-based term (the per-word match at
+// *70, see SymmetricScore) so the order-insensitive signal stays a strong hint
 // while remaining below the exact/prefix heuristic tier (90-100). Because the
 // blend is raise-only, this constant only bounds how much a score can RISE.
 const tokenSetScale = 70
 
 // LevenshteinDistance computes the case-insensitive edit distance between two
-// strings, in RUNES. It lowercases both sides and defers to
-// LevenshteinDistanceCaseSensitive.
+// strings, in RUNES. It lower-cases both sides as it decodes them and otherwise
+// computes exactly what LevenshteinDistanceCaseSensitive does.
 //
 // Callers that must NOT fold case want that function directly — see its doc
 // comment for why the two are separate.
 func LevenshteinDistance(a, b string) int {
-	return LevenshteinDistanceCaseSensitive(strings.ToLower(a), strings.ToLower(b))
+	return levenshteinPooled(a, b, true)
 }
 
 // LevenshteinDistanceCaseSensitive computes the edit distance between two
@@ -53,8 +53,72 @@ func LevenshteinDistance(a, b string) int {
 // Hence a case-preserving core with a folding wrapper, rather than one
 // function with an opinion.
 func LevenshteinDistanceCaseSensitive(a, b string) int {
-	ra := []rune(a)
-	rb := []rune(b)
+	return levenshteinPooled(a, b, false)
+}
+
+// levScratch is the working memory of one edit-distance computation: the two
+// decoded rune slices and the two DP rows. Everything in it is reused, so a
+// warm call allocates nothing.
+type levScratch struct {
+	a, b       []rune
+	prev, curr []int
+}
+
+// levScratchPool lends levScratch values to the string-typed entry points. The
+// pool holds pointers: putting a slice or struct value into a sync.Pool boxes
+// it into an interface and allocates on every Put.
+var levScratchPool = sync.Pool{New: func() any { return new(levScratch) }}
+
+// levenshteinPooled is the shared body of LevenshteinDistance (fold=true) and
+// LevenshteinDistanceCaseSensitive (fold=false). It decodes both strings into
+// pooled rune buffers (one pass each, no []rune(s) conversion and no
+// strings.ToLower copy) and runs the DP on the pooled rows.
+//
+// Folding per rune with unicode.ToLower is what strings.ToLower does for
+// non-ASCII input (it is strings.Map(unicode.ToLower, s)), and its ASCII fast
+// path agrees rune for rune. Ranging over a string yields U+FFFD for each
+// invalid byte, exactly as []rune(s) and as strings.Map's replacement do, so
+// invalid UTF-8 compares the same either way. The property test in
+// fuzzy_equivalence_test.go checks all of that against the previous implementation.
+func levenshteinPooled(a, b string, fold bool) int {
+	s := levScratchPool.Get().(*levScratch)
+	if fold {
+		s.a = appendLowerRunes(s.a[:0], a)
+		s.b = appendLowerRunes(s.b[:0], b)
+	} else {
+		s.a = appendRunes(s.a[:0], a)
+		s.b = appendRunes(s.b[:0], b)
+	}
+	d := levenshteinRunes(s.a, s.b, s)
+	levScratchPool.Put(s)
+	return d
+}
+
+// appendRunes appends the runes of str to dst, with U+FFFD for invalid bytes.
+func appendRunes(dst []rune, str string) []rune {
+	for _, r := range str {
+		dst = append(dst, r)
+	}
+	return dst
+}
+
+// appendLowerRunes is appendRunes with each rune lower-cased.
+func appendLowerRunes(dst []rune, str string) []rune {
+	for _, r := range str {
+		dst = append(dst, unicode.ToLower(r))
+	}
+	return dst
+}
+
+// levenshteinRunes is the edit-distance DP over already-decoded runes, using
+// (and growing) the DP rows in s. It is the one implementation behind every
+// Levenshtein entry point and the prepared scorer.
+//
+// Two-row DP with the rows SWAPPED rather than reallocated per outer
+// iteration: this runs pairwise over title/author forms inside full-library
+// dedup scans, so an allocation per row of the matrix is an allocation per
+// candidate pair per form pair.
+func levenshteinRunes(ra, rb []rune, s *levScratch) int {
 	la, lb := len(ra), len(rb)
 	if la == 0 {
 		return lb
@@ -63,12 +127,11 @@ func LevenshteinDistanceCaseSensitive(a, b string) int {
 		return la
 	}
 
-	// Two-row DP with the rows SWAPPED rather than reallocated per outer
-	// iteration: this runs pairwise over title/author forms inside
-	// full-library dedup scans, so an allocation per row of the matrix is an
-	// allocation per candidate pair per form pair.
-	prev := make([]int, lb+1)
-	curr := make([]int, lb+1)
+	if cap(s.prev) < lb+1 {
+		s.prev = make([]int, lb+1)
+		s.curr = make([]int, lb+1)
+	}
+	prev, curr := s.prev[:lb+1], s.curr[:lb+1]
 	for j := 0; j <= lb; j++ {
 		prev[j] = j
 	}
@@ -84,147 +147,6 @@ func LevenshteinDistanceCaseSensitive(a, b string) int {
 		prev, curr = curr, prev
 	}
 	return prev[lb]
-}
-
-// ScoreMatch scores how well query matches target. Returns 0-100.
-func ScoreMatch(query, target string) int {
-	if query == "" || target == "" {
-		return 0
-	}
-	q := normalize(query)
-	t := normalize(target)
-
-	if q == "" || t == "" {
-		return 0
-	}
-
-	// Exact match
-	if q == t {
-		return 100
-	}
-
-	score := 0
-
-	// Prefix match: target starts with query
-	if strings.HasPrefix(t, q) {
-		score = max(score, 90)
-	}
-
-	// Substring match
-	if strings.Contains(t, q) {
-		// Score higher for shorter targets (more specific match)
-		ratio := float64(len([]rune(q))) / float64(len([]rune(t)))
-		substringScore := 60 + int(ratio*25)
-		score = max(score, substringScore)
-	}
-
-	// Word-start match: query matches start of any word in target
-	words := strings.Fields(t)
-	for _, w := range words {
-		if strings.HasPrefix(w, q) {
-			score = max(score, 80)
-			break
-		}
-	}
-
-	// Fuzzy distance on the whole string
-	dist := LevenshteinDistance(q, t)
-	maxLen := max(len([]rune(q)), len([]rune(t)))
-	if maxLen > 0 {
-		similarity := 1.0 - float64(dist)/float64(maxLen)
-		fuzzyScore := max(int(similarity*50), 0)
-		score = max(score, fuzzyScore)
-	}
-
-	// Fuzzy distance on individual words (find best matching word)
-	for _, w := range words {
-		dist := LevenshteinDistance(q, w)
-		wLen := max(len([]rune(q)), len([]rune(w)))
-		if wLen > 0 {
-			similarity := 1.0 - float64(dist)/float64(wLen)
-			wordScore := max(int(similarity*70), 0)
-			score = max(score, wordScore)
-		}
-	}
-
-	// Order-insensitive token-set signal, blended RAISE-ONLY: it can lift a
-	// score (e.g. "Author: Title" vs "Title - Author", which the lexical terms
-	// above punish) but never lower one, so no caller threshold can newly
-	// reject a previously-accepted match.
-	if tokenScore := int(TokenSetRatio(query, target) * tokenSetScale); tokenScore > score {
-		score = tokenScore
-	}
-
-	return score
-}
-
-// TokenSetRatio computes an order-insensitive similarity in [0,1] between two
-// strings, following fuzzywuzzy's token_set_ratio construction. It tokenizes
-// with the shared normalize helper (so punctuation/case are ignored), then
-// compares the sorted intersection against the sorted intersection-plus-remainder
-// of each side and returns the best Levenshtein-based similarity of those three
-// comparisons. The result is symmetric (TokenSetRatio(a,b) == TokenSetRatio(b,a));
-// empty or whitespace-only input on either side returns 0 (unknown, not a match).
-func TokenSetRatio(a, b string) float64 {
-	fieldsA := strings.Fields(normalize(a))
-	fieldsB := strings.Fields(normalize(b))
-	if len(fieldsA) == 0 || len(fieldsB) == 0 {
-		return 0
-	}
-
-	setA := make(map[string]struct{}, len(fieldsA))
-	for _, tok := range fieldsA {
-		setA[tok] = struct{}{}
-	}
-	setB := make(map[string]struct{}, len(fieldsB))
-	for _, tok := range fieldsB {
-		setB[tok] = struct{}{}
-	}
-
-	var inter, onlyA, onlyB []string
-	for tok := range setA {
-		if _, ok := setB[tok]; ok {
-			inter = append(inter, tok)
-		} else {
-			onlyA = append(onlyA, tok)
-		}
-	}
-	for tok := range setB {
-		if _, ok := setA[tok]; !ok {
-			onlyB = append(onlyB, tok)
-		}
-	}
-	sort.Strings(inter)
-	sort.Strings(onlyA)
-	sort.Strings(onlyB)
-
-	t0 := strings.Join(inter, " ")                               // shared tokens
-	t1 := strings.TrimSpace(t0 + " " + strings.Join(onlyA, " ")) // shared + a-only
-	t2 := strings.TrimSpace(t0 + " " + strings.Join(onlyB, " ")) // shared + b-only
-
-	return max(tokenSimilarity(t0, t1), tokenSimilarity(t0, t2), tokenSimilarity(t1, t2))
-}
-
-// tokenSimilarity returns a Levenshtein-based similarity in [0,1] for two
-// already-normalized token strings (1.0 == identical). Two empty strings are
-// treated as identical; anything vs empty is 0.
-func tokenSimilarity(a, b string) float64 {
-	if a == "" && b == "" {
-		return 1.0
-	}
-	maxLen := max(len([]rune(a)), len([]rune(b)))
-	if maxLen == 0 {
-		return 0
-	}
-	// No `if sim < 0` clamp, for the same reason it was removed from
-	// internal/dedup: the only way this goes negative is the numerator and
-	// denominator disagreeing on their unit, and flooring that to 0 turns a
-	// detectable defect into a plausible-looking score. Both are runes here.
-	// LevenshteinDistance lowercases internally while maxLen is taken from the
-	// originals, which is safe because Go's strings.ToLower maps rune-by-rune:
-	// verified across all 1,112,064 valid code points that ToLower never
-	// changes a string's rune count.
-	return 1.0 - float64(LevenshteinDistance(a, b))/float64(maxLen)
 }
 
 // normalize lowercases and strips non-alphanumeric characters except spaces.

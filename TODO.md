@@ -1325,7 +1325,7 @@ into one of the curated sections below, is a normal direct edit.
       presence only), replace the 2.1 KB `BookFile` shallow copies (670 MB) with a
       narrow row type, and review the 7 `book_file` indexes (radix nodes are 55
       percent of the live objects). Needs an owner decision first.
-- [ ] **STARTUP-GC-DEDUP-CPU** 06-P13 follow-up: dedup CPU. Parallelize
+- [x] **STARTUP-GC-DEDUP-CPU** 06-P13 follow-up: dedup CPU. Parallelize
       `groupMetadataBucket` over disjoint buckets, score each pair once with
       precomputed normalized forms instead of twice from scratch, and make
       Jaro-Winkler and Levenshtein allocation-free (`matcher/fuzzy.go`,
