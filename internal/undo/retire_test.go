@@ -1,18 +1,18 @@
 // file: internal/undo/retire_test.go
-// version: 1.2.2
+// version: 1.2.4
 // guid: 54f67c90-9235-45fd-b826-66a6f3be19d9
-// last-edited: 2026-10-28
+// last-edited: 2026-10-31
 
 package undo
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/database/dbtest"
 )
 
 func retireRow(id, op, file, shell, holder, version string) *database.OperationChange {
@@ -170,12 +170,10 @@ func (s recreatingShells) RecreatePurgedBook(id string) error {
 
 func newRetireStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	st, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
-	if err != nil {
-		t.Fatalf("pebble: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
+	// dbtest.NewStore returns only once memdb is serving. A raw NewPebbleStore
+	// starts the warmup asynchronously, and on a loaded CI agent the test body
+	// ran first: RetireBookFiles fails closed with "memdb is not serving".
+	return dbtest.NewStore(t)
 }
 
 func TestShellCheckAndEnsureShellPresent(t *testing.T) {
@@ -438,4 +436,16 @@ func TestRetireScopeRefusals_ShellPurgedWithoutSnapshotRefuses(t *testing.T) {
 // refusedRows counts the rows a preflight report files as not restorable.
 func refusedRows(r *UndoConflictReport) int {
 	return len(r.BookMissing) + len(r.CheckFailed) + len(r.SeriesDeleted) + len(r.SeriesRenamedSince) + len(r.SeriesNameTaken)
+}
+
+// newRetireStore must hand back a store whose memdb is serving even when the
+// async warmup starts late (a loaded CI agent), or RetireBookFiles' ownership
+// check fails closed mid-test. Not parallel: the warmup hook is process-global.
+func TestNewRetireStore_ServesUnderSlowWarmup(t *testing.T) {
+	restore := database.SetWarmupStartHookForTest(func() { time.Sleep(300 * time.Millisecond) })
+	defer restore()
+	st := newRetireStore(t)
+	if _, err := database.BookFileRowsAtPathStrict(st, "/lib/syn/shell/01.mp3"); err != nil {
+		t.Fatalf("ownership lookup on a fresh fixture store: %v", err)
+	}
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a9d3f1c7-6b40-4e28-8f95-2c1e7b0a4d63
-// last-edited: 2026-09-13
+// last-edited: 2026-10-31
 
 package maintenance
 
@@ -22,10 +22,11 @@ import (
 
 func newApplyTestStore(t *testing.T) database.Store {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	// dbtest.NewStore returns only once memdb is serving. A raw NewPebbleStore
+	// starts the warmup asynchronously; on a loaded CI agent the apply ran
+	// first and the combine's ownership lookup failed closed with "memdb is
+	// not serving".
+	return dbtest.NewStore(t)
 }
 
 // minID mirrors pickPrimary — the smallest ID is the survivor CombineBooks keeps.
@@ -888,4 +889,15 @@ func TestApplyMultidisc_AnthologyPayload_CombinesToOneBook(t *testing.T) {
 		assert.Equal(t, fpByPath[f.FilePath], f.AcoustIDFingerprint, "fingerprint survives (%s)", f.FilePath)
 	}
 	dbtest.AssertStoreInvariants(t, store)
+}
+
+// newApplyTestStore must hand back a store whose memdb is serving even when the
+// async warmup starts late (a loaded CI agent), or the combine's ownership
+// lookup fails closed mid-test. Not parallel: the warmup hook is process-global.
+func TestNewApplyTestStore_ServesUnderSlowWarmup(t *testing.T) {
+	restore := database.SetWarmupStartHookForTest(func() { time.Sleep(300 * time.Millisecond) })
+	defer restore()
+	store := newApplyTestStore(t)
+	_, err := database.BookFileRowsAtPathStrict(store, "/lib/Gotham/held.mp3")
+	require.NoError(t, err, "the complete ownership lookup must be available on a fresh fixture store")
 }

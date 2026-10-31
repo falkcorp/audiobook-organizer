@@ -1,15 +1,18 @@
 // file: internal/database/dbtest/newstore_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4a9d1e6-72b3-4f58-8e0a-1b6d3f9a2c57
-// last-edited: 2026-10-11
+// last-edited: 2026-10-31
 
 package dbtest
 
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 func TestNewStore_DefaultIsUsableAndWarm(t *testing.T) {
@@ -89,4 +92,34 @@ func TestNewStore_CleanupClosesOnce(t *testing.T) {
 	// Running the cleanup again must be harmless: the Once guard means the
 	// store is closed exactly once.
 	rec.cleanups[0]()
+}
+
+// A loaded CI agent runs the test body before the async warmup has published.
+// The hook models that agent: warmup starts late. A raw constructor then hands
+// back a store whose fail-closed lookups refuse ("memdb is not serving"), and
+// NewStore must not. Not parallel: the hook is process-global.
+func TestNewStore_ServesEvenWhenWarmupStartsLate(t *testing.T) {
+	restore := database.SetWarmupStartHookForTest(func() { time.Sleep(300 * time.Millisecond) })
+	defer restore()
+
+	// The control: the raw constructor really is in the not-serving window.
+	raw, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatalf("open raw store: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	if _, err := raw.BookFilesAtPath("/lib/Gotham/held.mp3"); !errors.Is(err, database.ErrBookFilesAtPathUnavailable) {
+		t.Fatalf("raw store BookFilesAtPath err = %v, want ErrBookFilesAtPathUnavailable: the hook no longer reproduces the race", err)
+	}
+
+	s := NewStore(t)
+	if !s.IsMemReady() {
+		t.Fatal("NewStore returned before memdb was serving")
+	}
+	if _, err := s.BookFilesAtPath("/lib/Gotham/held.mp3"); err != nil {
+		t.Fatalf("BookFilesAtPath on a NewStore store: %v", err)
+	}
+	if _, err := database.BookFileRowsAtPathStrict(s, "/lib/Gotham/held.mp3"); err != nil {
+		t.Fatalf("BookFileRowsAtPathStrict on a NewStore store: %v", err)
+	}
 }
