@@ -1,12 +1,13 @@
 // file: internal/plugins/acoustid/lsh_backfill_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3d5e7f91-4c6b-5a0d-ac2e-8f9a1b3c5d7e
-// last-edited: 2026-10-13
+// last-edited: 2026-10-31
 
 package acoustid
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -263,35 +264,54 @@ func TestLSHBackfill_PartialIndex(t *testing.T) {
 	}
 }
 
+// lshCancelFiles builds n fingerprinted rows with unique IDs plus the matching
+// hydrate rows, so every item takes the full hydrate-then-UpdateBookFile path.
+func lshCancelFiles(n int) ([]database.BookFileCore, []database.BookFile) {
+	files := make([]database.BookFileCore, n)
+	hydrateFiles := make([]database.BookFile, n)
+	for i := range files {
+		id := fmt.Sprintf("f-%d", i)
+		files[i] = database.BookFileCore{ID: id, AcoustIDFingerprintDurationSec: 1800}
+		hydrateFiles[i] = database.BookFile{ID: id, AcoustIDFingerprint: []byte{byte(i)}}
+	}
+	return files, hydrateFiles
+}
+
 // TestLSHBackfill_CancelMidRun verifies that cancelling the context part-way
 // returns ctx.Err() and stops further updates.
+//
+// The assertion is a bound the op guarantees, not a scheduling outcome. The
+// previous version cancelled inside the fifth UpdateBookFile and asserted
+// "fewer than all 100 updated", which failed under -race (100/100) whenever the
+// goroutine that counted the fifth update was descheduled before it called
+// cancel(): the other workers and the dispatcher ran the rest of the library
+// meanwhile. Here the count-and-cancel step is one critical section, so no
+// update is counted after the fifth until ctx is already done. Every update
+// past the fifth then comes from a worker that passed the op's per-item ctx
+// check before the cancel, and each worker holds one item at a time, so at
+// most Concurrency-1 can exist.
 func TestLSHBackfill_CancelMidRun(t *testing.T) {
-	files := make([]database.BookFileCore, 100)
-	hydrateFiles := make([]database.BookFile, 100)
-	for i := range files {
-		id := string(rune('a'+i%26)) + "-" + string(rune('0'+i%10))
-		files[i] = database.BookFileCore{
-			ID:                             id,
-			AcoustIDFingerprintDurationSec: 1800,
-		}
-		hydrateFiles[i] = database.BookFile{
-			ID:                  id,
-			AcoustIDFingerprint: []byte{byte(i)},
-		}
-	}
+	const cancelAt = 5
+	workers := lshBackfillConcurrency()
+	// Enough rows that the bound is meaningful on any core count.
+	files, hydrateFiles := lshCancelFiles(cancelAt + 4*workers + 20)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Atomic: the op runs UpdateBookFile from a worker pool, and several
-	// workers can be past the cancel check when the fifth update fires.
-	var updates atomic.Int64
+	var (
+		cancelMu sync.Mutex
+		updates  atomic.Int64
+	)
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
 		// None of the files set BookID, so every hydrate call shares the
 		// same full slice; the op matches by file ID within it.
 		GetBookFileByIDFunc: hydrateFromSlice(hydrateFiles),
-		UpdateBookFileFunc: func(id string, _ *database.BookFile) error {
-			if updates.Add(1) == 5 {
+		UpdateBookFileFunc: func(string, *database.BookFile) error {
+			cancelMu.Lock()
+			defer cancelMu.Unlock()
+			if updates.Add(1) == cancelAt {
 				cancel()
 			}
 			return nil
@@ -305,11 +325,50 @@ func TestLSHBackfill_CancelMidRun(t *testing.T) {
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-	if got := updates.Load(); got < 5 {
-		t.Errorf("expected at least 5 updates before cancel, got %d", got)
+	got := updates.Load()
+	if got < cancelAt {
+		t.Errorf("expected at least %d updates before cancel, got %d", cancelAt, got)
 	}
-	if got := updates.Load(); got >= int64(len(files)) {
-		t.Errorf("expected updates < total after cancel, got %d/%d", got, len(files))
+	// The fifth update's worker is done; the other workers-1 may each have
+	// passed the ctx check just before the cancel and still write one row.
+	if maxUpdates := int64(cancelAt + workers - 1); got > maxUpdates {
+		t.Errorf("updates after cancel exceed the in-flight bound: got %d, want <= %d (cancel at %d, %d workers, %d rows)",
+			got, maxUpdates, cancelAt, workers, len(files))
+	}
+}
+
+// TestLSHBackfill_AlreadyCancelledWritesNothing pins the per-item ctx guard
+// directly. With ctx done before the run starts there is no in-flight work to
+// excuse a write, so any hydrate or UpdateBookFile call is a cancelled op
+// still touching the library. RunItems alone does not prevent it: its
+// dispatcher chooses at random between "ctx done" and "worker slot free", so
+// without the guard a share of the rows still reaches the write path.
+func TestLSHBackfill_AlreadyCancelledWritesNothing(t *testing.T) {
+	files, hydrateFiles := lshCancelFiles(200)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var hydrates, updates atomic.Int64
+	hydrate := hydrateFromSlice(hydrateFiles)
+	store := &database.MockStore{
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return files, nil },
+		GetBookFileByIDFunc: func(bookID, fileID string) (*database.BookFile, error) {
+			hydrates.Add(1)
+			return hydrate(bookID, fileID)
+		},
+		UpdateBookFileFunc: func(string, *database.BookFile) error {
+			updates.Add(1)
+			return nil
+		},
+	}
+
+	p := &Plugin{store: store}
+	if err := p.runLSHBackfill(ctx, nil, &lshTestReporter{}); err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if h, u := hydrates.Load(), updates.Load(); h != 0 || u != 0 {
+		t.Errorf("cancelled op touched the library: %d hydrates, %d updates (want 0, 0)", h, u)
 	}
 }
 
