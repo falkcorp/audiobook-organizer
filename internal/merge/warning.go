@@ -1,7 +1,7 @@
 // file: internal/merge/warning.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f6b1c52-9a47-4e08-b2d5-6c81e0a47d93
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package merge
 
@@ -77,7 +77,7 @@ func (w Warning) MarshalJSON() ([]byte, error) {
 	if len(w.UserIDs) == 0 {
 		return json.Marshal(w.Text)
 	}
-	return json.Marshal(warningWire{Text: w.Text, UserIDs: w.UserIDs})
+	return json.Marshal(warningWire(w))
 }
 
 // UnmarshalJSON reads either form. A bare string (every record written before
@@ -96,6 +96,6 @@ func (w *Warning) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return fmt.Errorf("decode warning: %w", err)
 	}
-	*w = Warning{Text: wire.Text, UserIDs: wire.UserIDs}
+	*w = Warning(wire)
 	return nil
 }
