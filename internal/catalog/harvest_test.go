@@ -1,7 +1,7 @@
 // file: internal/catalog/harvest_test.go
-// version: 1.7.6
+// version: 1.7.7
 // guid: 6a2f8c14-3b9d-4e70-a1c5-9d4e2b7f0c68
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package catalog
 
@@ -1454,6 +1454,19 @@ func TestSettleZero_SkipsAStateChangedSinceItsHold(t *testing.T) {
 // tally of each run.
 func emptyRuns(t *testing.T, withCatalog, empty int, advance []time.Duration) (*database.CatalogStore, []ScopeAuthor, []ScopeAuthor, []*Tally) {
 	t.Helper()
+	st, full, empties, tallies, _ := emptyRunsAt(t, withCatalog, empty, advance)
+	return st, full, empties, tallies
+}
+
+// emptyRunsAt is emptyRuns plus the clock the runs advanced, so a caller
+// judging "due" after the runs can judge it at the runs' own time instead of
+// the wall clock. The runs start on 2026-10-01 and end around 2026-10-10; a
+// harvester built without that clock asks SelectDue against time.Now(), and
+// once the default ReharvestInterval had elapsed since the last run (which
+// happened on the night of 2026-10-30) every author read as due again and
+// the test failed on every branch cut after that moment.
+func emptyRunsAt(t *testing.T, withCatalog, empty int, advance []time.Duration) (*database.CatalogStore, []ScopeAuthor, []ScopeAuthor, []*Tally, *clock) {
+	t.Helper()
 	st, _ := openCatalog(t)
 	full, by := breakerAuthors(withCatalog)
 	var empties []ScopeAuthor
@@ -1478,7 +1491,7 @@ func emptyRuns(t *testing.T, withCatalog, empty int, advance []time.Duration) (*
 		}
 		tallies = append(tallies, tally)
 	}
-	return st, full, empties, tallies
+	return st, full, empties, tallies, c
 }
 
 func states(t *testing.T, st *database.CatalogStore, authors []ScopeAuthor) []string {
@@ -1507,13 +1520,15 @@ func TestRun_EmptyNeverHarvestedAuthorsCompleteAfterTheWindow(t *testing.T) {
 			t.Fatalf("empties before the window: %v; want all partial", states(t, st, empties))
 		}
 	}
-	st, full, empties, tallies := emptyRuns(t, 4, 6, []time.Duration{0, time.Hour, 4 * 24 * time.Hour, 4 * 24 * time.Hour})
+	st, full, empties, tallies, c := emptyRunsAt(t, 4, 6, []time.Duration{0, time.Hour, 4 * 24 * time.Hour, 4 * 24 * time.Hour})
 	for _, s := range append(states(t, st, full), states(t, st, empties)...) {
 		if s != database.CatalogHarvestComplete {
 			t.Fatalf("after the window: catalog %v empty %v; want all complete", states(t, st, full), states(t, st, empties))
 		}
 	}
-	h := NewHarvester(nil, st, Settings{})
+	// Judge "due" at the runs' own clock: against time.Now() the catalog
+	// authors fall due again once ReharvestInterval has passed since 2026-10-10.
+	h := NewHarvester(nil, st, Settings{Now: c.Now})
 	if due, _ := h.SelectDue(append(slices.Clone(full), empties...), nil); len(due) != 0 {
 		t.Errorf("%d authors still due after the empties were accepted", len(due))
 	}
