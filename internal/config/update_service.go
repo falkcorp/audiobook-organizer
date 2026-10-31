@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.33.1
+// version: 3.33.2
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-10-30
 
@@ -232,10 +232,7 @@ func restoreMaskedCredentials(srcs []MetadataSource, prior map[string]map[string
 			if prev == "" {
 				continue
 			}
-			switch srcs[i].Credentials[k] {
-			case prev:
-				// unchanged
-			case "", database.MaskSecret(prev):
+			if got := srcs[i].Credentials[k]; got == "" || database.IsEchoedMask(got, prev) {
 				srcs[i].Credentials[k] = prev
 			}
 		}
@@ -269,7 +266,7 @@ func acceptSecretUpdate(incoming, current string) bool {
 	if current == "" || incoming == "" {
 		return true
 	}
-	return incoming != database.MaskSecret(current)
+	return !database.IsEchoedMask(incoming, current)
 }
 
 // roundTripSecrets holds the four secret fields that MaskSecrets masks but that
@@ -353,10 +350,86 @@ func restoreNestedSecret(field *string, prev string) {
 	if prev == "" {
 		return
 	}
-	switch *field {
-	case "", database.MaskSecret(prev):
+	if *field == "" || database.IsEchoedMask(*field, prev) {
 		*field = prev
 	}
+}
+
+// errMaskShapedSecret is returned (as a 400) when a secret field carries a
+// value that looks like a mask but is not the current echo of the stored
+// secret, e.g. a stale browser tab or exported config holding an older mask
+// shape. Storing it would replace the real secret with the mask text.
+func errMaskShapedSecret(field string) error {
+	return fmt.Errorf("%s looks like a masked value (it contains \"****\") and does not match the stored secret; re-enter the secret", field)
+}
+
+// checkMaskShapedSecrets rejects any secret field in payload whose value looks
+// like a mask (database.LooksLikeMask) unless it is exactly the current mask of
+// the stored secret (database.IsEchoedMask). Legacy mask shapes are NOT
+// accepted as echoes. It runs under the write lock against the live config, so
+// a rejection leaves the stored secrets untouched.
+func checkMaskShapedSecrets(cfg *Config, payload map[string]any) error {
+	check := func(field, incoming, stored string) error {
+		if database.LooksLikeMask(incoming) && !database.IsEchoedMask(incoming, stored) {
+			return errMaskShapedSecret(field)
+		}
+		return nil
+	}
+	top := []struct {
+		key    string
+		stored string
+	}{
+		{"openai_api_key", cfg.OpenAIAPIKey},
+		{"acoustid_api_key", cfg.AcoustIDAPIKey},
+		{"google_books_api_key", cfg.GoogleBooksAPIKey},
+		{"hardcover_api_token", cfg.HardcoverAPIToken},
+		{"basic_auth_password", cfg.BasicAuthPassword},
+		{"oauth_github_client_secret", cfg.OAuthGithubClientSecret},
+		{"oauth_google_client_secret", cfg.OAuthGoogleClientSecret},
+		{"deluge_web_password", cfg.DelugeWebPassword},
+	}
+	for _, f := range top {
+		if val, ok := payloadString(payload, f.key); ok {
+			if err := check(f.key, val, f.stored); err != nil {
+				return err
+			}
+		}
+	}
+	if dc, ok := payload["download_client"].(map[string]any); ok {
+		if tc, ok := dc["torrent"].(map[string]any); ok {
+			if dl, ok := tc["deluge"].(map[string]any); ok {
+				if val, ok := payloadString(dl, "password"); ok {
+					if err := check("download_client.torrent.deluge.password", val, cfg.DownloadClient.Torrent.Deluge.Password); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	if srcs, ok := payload["metadata_sources"].([]any); ok {
+		stored := snapshotSourceCredentials(cfg.MetadataSources)
+		for _, raw := range srcs {
+			src, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := src["id"].(string)
+			creds, ok := src["credentials"].(map[string]any)
+			if !ok {
+				continue
+			}
+			for k, v := range creds {
+				val, ok := v.(string)
+				if !ok {
+					continue
+				}
+				if err := check("metadata_sources["+id+"].credentials."+k, val, stored[id][k]); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // secretFieldKeys are extracted and applied explicitly, then removed before the
@@ -543,6 +616,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	_, hasEndpoints := filtered["ai_endpoints"]
 	var (
 		unmarshalErr error
+		maskedErr    error
 		bootOnlyErr  error
 		endpointsErr error
 		ladderErr    error
@@ -589,6 +663,13 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// that passes is assigned over *c, so a rejected PUT leaves no trace —
 		// not in a scalar field and not as a stray key in a shared map.
 		candidate := c.Clone()
+
+		// Refuse a mask-shaped secret that is not the current echo before
+		// anything is applied; the live config is untouched on rejection.
+		if err := checkMaskShapedSecrets(c, payload); err != nil {
+			maskedErr = err
+			return
+		}
 
 		// Secrets first, on the candidate — same order as before (they used to
 		// be applied to the live config immediately above this Mutate), and the
@@ -716,6 +797,10 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		}
 		*c = *candidate
 	})
+	if maskedErr != nil {
+		updateServiceLog.Warn("config update rejected: mask-shaped secret; nothing persisted: %v", maskedErr)
+		return http.StatusBadRequest, map[string]any{"error": maskedErr.Error() + " — nothing was saved"}
+	}
 	if unmarshalErr != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
 	}

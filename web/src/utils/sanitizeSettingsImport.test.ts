@@ -1,10 +1,10 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
-// last-edited: 2026-10-17
+// last-edited: 2026-10-30
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeSettingsImport } from './sanitizeSettingsImport';
+import { sanitizeSettingsImport, sanitizeSettingsImportWithReport } from './sanitizeSettingsImport';
 import type * as api from '../services/api';
 
 // Legacy settings files carry keys that are no longer on api.Config, so the
@@ -119,5 +119,32 @@ describe('sanitizeSettingsImport', () => {
       concurrent_scans: 4,
       cache_invalidate_on_book_update: true,
     });
+  });
+
+  it('skips mask-shaped credentials and reports them', () => {
+    const { cleaned, skipped } = sanitizeSettingsImportWithReport({
+      openai_api_key: 'sk-****cdef',
+      metadata_sources: [
+        {
+          id: 'gotham-books',
+          name: 'Gotham Books',
+          enabled: true,
+          priority: 1,
+          requires_auth: true,
+          credentials: { apiKey: '********ab', user: 'bruce.wayne' },
+        },
+      ],
+    } as unknown as Partial<api.Config>);
+    expect(cleaned.openai_api_key).toBeUndefined();
+    expect(cleaned.metadata_sources?.[0].credentials).toEqual({ user: 'bruce.wayne' });
+    expect(skipped).toEqual(['openai_api_key', 'metadata_sources[gotham-books].credentials.apiKey']);
+  });
+
+  it('keeps a real credential with no asterisk run', () => {
+    const { cleaned, skipped } = sanitizeSettingsImportWithReport({
+      openai_api_key: 'sk-batman-0001',
+    } as unknown as Partial<api.Config>);
+    expect(cleaned.openai_api_key).toBe('sk-batman-0001');
+    expect(skipped).toEqual([]);
   });
 });

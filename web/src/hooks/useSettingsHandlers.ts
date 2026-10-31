@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.14.0
+// version: 1.14.1
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -10,7 +10,7 @@ import type { SettingsState } from '../pages/Settings';
 import { useImportFolderHandlers } from './useImportFolderHandlers';
 import { useBackupHandlers } from './useBackupHandlers';
 import { useMetadataSourceHandlers } from './useMetadataSourceHandlers';
-import { sanitizeSettingsImport } from '../utils/sanitizeSettingsImport';
+import { sanitizeSettingsImportWithReport } from '../utils/sanitizeSettingsImport';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -704,10 +704,15 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as Partial<api.Config>;
-      const cleaned = sanitizeSettingsImport(parsed);
+      const { cleaned, skipped } = sanitizeSettingsImportWithReport(parsed);
       setImportFileName(file.name);
       setImportPayload(cleaned);
       setImportDialogOpen(true);
+      if (skipped.length > 0) {
+        setImportNotice(
+          `Skipped masked secret(s) in the file: ${skipped.join(', ')}. Re-enter them manually.`
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Import failed.';

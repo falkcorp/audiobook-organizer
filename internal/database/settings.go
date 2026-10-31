@@ -1,5 +1,5 @@
 // file: internal/database/settings.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
 // last-edited: 2026-10-30
 
@@ -274,6 +274,24 @@ func MaskSecret(secret string) string {
 		return secretMask
 	}
 	return secretMask + string(runes[len(runes)-secretMaskRevealChars:])
+}
+
+// IsEchoedMask reports whether incoming is exactly the mask MaskSecret
+// produces for the stored secret, i.e. a client handed the masked value back
+// unchanged. Only the current mask shape is recognised; earlier shapes
+// (first 3 + "****" + last 4, or "****") are deliberately not, so a stale
+// client's echo is never mistaken for "unchanged". An empty stored secret has
+// no mask to echo.
+func IsEchoedMask(incoming, stored string) bool {
+	return stored != "" && incoming == MaskSecret(stored)
+}
+
+// LooksLikeMask reports whether s contains a run of four or more asterisks,
+// the signature of a masked value of any shape. Such a value is never a real
+// secret to store; the update path rejects it unless IsEchoedMask says it is
+// the current echo of the stored secret.
+func LooksLikeMask(s string) bool {
+	return strings.Contains(s, "****")
 }
 
 // PebbleDB implementation
