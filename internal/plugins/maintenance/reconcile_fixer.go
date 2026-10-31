@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.9.0
+// version: 2.9.1
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
-// last-edited: 2026-10-15
+// last-edited: 2026-10-31
 
 package maintenance
 
@@ -95,8 +95,7 @@ const (
 // /operations/reconcile/scan/latest uses (ServerDeps.LatestReconcileScan,
 // served by the server's pickLatestReconcileScan over recentReconcileScans):
 // the newest reconcile.scan run that completed with a result that decodes,
-// read on the canonical def id so the nightly runs recorded under the retired
-// maintenance.reconcile-scan id count (04-P14c, D27). A newer run that has not
+// read on the registry's canonical def id. A newer run that has not
 // completed is named in the plan log but does not hide the scan. With no
 // usable scan the plan fails with a message to run "Match missing files"
 // first, rather than listing nothing, which would read as "no file is

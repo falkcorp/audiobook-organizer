@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-10-18
+// last-edited: 2026-10-31
 
 package maintenance
 
@@ -25,8 +25,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// maintenance.author-dedup-scan was retired into dedup.author-scan (04-P14a); it
-// resolves there as a FormerID. See the survivor in internal/server/duplicates_ops.go.
+// maintenance.author-dedup-scan was retired into dedup.author-scan (04-P14a); its
+// alias was dropped 2026-10-31 after the soak. See the survivor in
+// internal/server/duplicates_ops.go.
 
 // author-split-scan and resolve-production-authors take only a mode. Both
 // ignored their params until 2026-09-25 and wrote on every run, including the

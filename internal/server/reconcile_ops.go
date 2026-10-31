@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_ops.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 5c2d8f41-a3e7-4b19-8d60-9f1e2c3a4b5d
-// last-edited: 2026-10-14
+// last-edited: 2026-10-31
 
 // reconcile_ops registers the v2 OperationDefs for the reconcile scan and
 // reconcile apply operations. The HTTP handlers in reconcile.go enqueue these
@@ -42,10 +42,9 @@ func (s *Server) RegisterReconcileScanOpV2(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID: "reconcile.scan",
 		// Merged 2026-10-14 (04-P14c, D27): the nightly maintenance op of the other
-		// name did the same scan and is gone; its id resolves here. Rows recorded
-		// under it are read back through the registry's canonical id (see
-		// recentReconcileScans).
-		FormerIDs:       []string{"maintenance.reconcile-scan"},
+		// name did the same scan and is gone. Its alias was dropped 2026-10-31
+		// after a soak in which nothing used it and prod stored no run under it
+		// (P14C-SOAK).
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "reconcile",
 		DisplayName:     "Reconcile Scan",
