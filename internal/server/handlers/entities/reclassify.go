@@ -1,5 +1,5 @@
 // file: internal/server/handlers/entities/reclassify.go
-// version: 1.5.1
+// version: 1.6.1
 // guid: 8a3f6d12-4c97-4e50-b2a8-1d70e5c93b46
 // last-edited: 2026-10-30
 
@@ -111,11 +111,14 @@ type ReclassifyOptions struct {
 	// alone too. The AI scan apply passes the author_name lock check;
 	// entities.author-reclassify, a person's explicit action, passes none.
 	SkipBook func(bookID string) (skip bool, reason string, err error)
-	// Lease, when set, is called before each book's writes and must return true to
-	// proceed: it renews the scan stand-down the caller holds. False means the
-	// lease is gone and the scanner may be running, so the loop stops writing and
-	// the call returns ErrReclassifyLeaseLost WITHOUT deleting the author; what
-	// moved before stays moved and journaled.
+	// Lease, when set, is called before each book's writes, again after the loop
+	// before the author's links are re-checked, and once more right before the
+	// delete; each call must return true to proceed: it renews the scan
+	// stand-down the caller holds. False means the lease is gone and the scanner
+	// may be running, so the call stops writing and returns
+	// ErrReclassifyLeaseLost WITHOUT deleting the author; what moved before stays
+	// moved and journaled. The post-loop checks fence the verify-to-delete window
+	// and cover an author with no books, which the loop never checks.
 	Lease func() bool
 }
 
@@ -308,7 +311,12 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 	}
 
 	// Delete the author record, unless a book the loop above skipped still
-	// credits it.
+	// credits it. Re-take the lease first: the loop's per-book check does not run
+	// for an author with no books, and a scanner that resumed after the last book
+	// could re-link the author between the verify and the delete.
+	if opts.Lease != nil && !opts.Lease() {
+		return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped}, ErrReclassifyLeaseLost
+	}
 	if err := database.VerifyAuthorUnlinked(store, authorID); err != nil {
 		if errors.Is(err, database.ErrAuthorStillLinked) {
 			return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped}, err
@@ -344,6 +352,14 @@ func ReclassifyAuthorAsNarrator(store ReclassifyStore, authorID int, opts Reclas
 			return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped},
 				&ReclassifyError{Msg: "author not deleted: undo row not recorded", Err: rerr}
 		}
+	}
+	// Last lease check before the destructive step. The undo row recorded above
+	// is voided: nothing was deleted, so nothing should be restorable.
+	if opts.Lease != nil && !opts.Lease() {
+		if voidDelete != nil {
+			_ = voidDelete()
+		}
+		return ReclassifyOutcome{BooksUpdated: booksUpdated, Skipped: skipped}, ErrReclassifyLeaseLost
 	}
 	if err := store.DeleteAuthor(authorID); err != nil {
 		if voidDelete != nil {
