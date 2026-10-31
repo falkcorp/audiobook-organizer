@@ -2850,7 +2850,11 @@ func (s *PebbleStore) moveBookFilesToBookBulkAttempt(rows *bookFileRowCache, mov
 			f.BookID = targetBookID
 			f.UpdatedAt = time.Now()
 
-			data, err := json.Marshal(f)
+			// Stored form (T020), like every other row write: the secondary
+			// indexes below are derived from it (bookFileStoredForm), so a row
+			// that kept the legacy segments here would keep them with no
+			// book_file_acoustid: key.
+			data, err := marshalBookFileDropSegs(f)
 			if err != nil {
 				batch.Close()
 				return err
