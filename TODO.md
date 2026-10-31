@@ -1713,7 +1713,7 @@ into one of the curated sections below, is a normal direct edit.
       Found reviewing the `enabled_sort_indexes` boot-only change (2026-10-11);
       not fixed there.
 
-- [ ] **COPY-ORGANIZE-DROPS-SYNC-IDENTITY** The copy-organize path does not carry the
+- [x] **COPY-ORGANIZE-DROPS-SYNC-IDENTITY** (done 2026-10-30: reachable by every caller but a first organize of an untouched import; `CreateOrganizedVersion` now calls `merge.FollowVersionHandover`, evidence and decisions in `docs/decisions/2026-10-30-copy-organize-sync-identity.md`) The copy-organize path does not carry the
       user's ABS sync identity or listening progress to the new primary book.
       `Service.CreateOrganizedVersion` (`internal/organizer/service.go:2239`) creates the
       organized copy with `CreateBook` (`:2467`), which mints a new book id, and then demotes

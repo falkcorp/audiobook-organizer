@@ -1,7 +1,7 @@
 // file: internal/merge/sync_follow.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 50421381-9def-4b19-bd23-6fa1a03c24d3
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 // Package merge: sync-identity follow hooks.
 //
@@ -51,10 +51,13 @@ type SyncFollower interface {
 	RecordSyncMerge(loserBookID, winnerBookID string) error
 }
 
-// syncRepointMu serializes FollowBookIDChange's read-then-repoint. Unlike the
-// merge paths (which run inside mergeSerializeMu already), the scanner's
-// version-link path is NOT under any merge lock and runs on parallel scan
-// workers, and RepointSyncItem's own GetSyncIDForBook -> batch-commit is not
+// syncRepointMu serializes FollowBookIDChange's (and FollowVersionHandover's)
+// read-then-repoint. Unlike the merge paths (which run inside mergeSerializeMu
+// already), the scanner's version-link path and the organizer's copy handover
+// are NOT under any merge lock and run on parallel workers (the organizer's
+// with the version-group locks held, which is safe: nothing under this mutex
+// takes one -- see LockUserBookState's lock-order note), and
+// RepointSyncItem's own GetSyncIDForBook -> batch-commit is not
 // atomic. Without this, two workers version-linking against the SAME
 // predecessor book could both read its syncID and both write a reverse index,
 // leaving two live books pointing at one syncID. Deliberately NOT
@@ -283,10 +286,23 @@ func FollowFileMove(db syncCapabilityStore, oldBookID, newBookID string, fileIDs
 // changes), so the enumerated fileIDs are exactly the ones that need to
 // move.
 //
+// fileIDs is for the caller whose new book has NEW BookFile ids: the
+// organizer's copy gives every row a fresh ULID. After a sync_file moves
+// across books under its old file id, it is re-pointed at the file row that
+// replaces it (fileIDs[old file id] -> new file id) -- RepointSyncFile's
+// "same logical track, new physical BookFile row" case -- so the ino the
+// client cached resolves to a row the new book actually has. Without the
+// remap the entry would sit on the new book under an id no row of it
+// carries. A file id absent from the map keeps its id (the scanner's case,
+// where ids are stable); a destination that already minted its own entry for
+// the new file id keeps it (the same rule RepointSyncFileToBook applies to a
+// colliding destination), and the carried entry is left under the old id.
+// nil means ids are stable.
+//
 // Debug, not warn, when the store lacks the capability: both rows survive a
 // version-link (this is not a hard-delete path), matching
 // FollowBookIDChange's own severity choice for the identity/progress carry.
-func followSyncFilesForBookChange(db syncCapabilityStore, oldBookID, newBookID string) {
+func followSyncFilesForBookChange(db syncCapabilityStore, oldBookID, newBookID string, fileIDs map[string]string) {
 	sf := database.AsSyncFileStore(db)
 	if sf == nil {
 		slog.Debug("sync-identity follow: store does not implement SyncFileStore; skipping file ino carry-forward",
@@ -303,6 +319,27 @@ func followSyncFilesForBookChange(db syncCapabilityStore, oldBookID, newBookID s
 		if err := sf.RepointSyncFileToBook(oldBookID, newBookID, f.CurrentFileID); err != nil {
 			slog.Error("sync-identity follow: file repoint FAILED; a cached download URL for this file will go stale",
 				"old_book", oldBookID, "new_book", newBookID, "file_id", f.CurrentFileID, "sync_file_id", f.SyncFileID, "err", err)
+			continue
+		}
+		replacement := fileIDs[f.CurrentFileID]
+		if replacement == "" || replacement == f.CurrentFileID {
+			continue
+		}
+		if _, has, err := sf.GetSyncFileID(newBookID, replacement); err != nil {
+			mlog.Error("sync-identity follow: could not check the new file row %s of %s for its own sync_file; ino of %s (book %s) left under the old file id: %s",
+				logger.SanitizeLogValue(replacement), logger.SanitizeLogValue(newBookID), logger.SanitizeLogValue(f.CurrentFileID),
+				logger.SanitizeLogValue(oldBookID), logger.SanitizeLogValue(fmt.Sprint(err)))
+			continue
+		} else if has {
+			mlog.Warn("sync-identity follow: the new file row %s of %s already has its own sync_file; keeping it, carried ino of %s (book %s) left under the old file id",
+				logger.SanitizeLogValue(replacement), logger.SanitizeLogValue(newBookID), logger.SanitizeLogValue(f.CurrentFileID),
+				logger.SanitizeLogValue(oldBookID))
+			continue
+		}
+		if err := sf.RepointSyncFile(newBookID, f.CurrentFileID, replacement); err != nil {
+			mlog.Error("sync-identity follow: re-pointing ino %s of file %s onto the replacement file row %s of %s (old book %s) FAILED; a cached download URL for this file will go stale: %s",
+				logger.SanitizeLogValue(f.SyncFileID), logger.SanitizeLogValue(f.CurrentFileID), logger.SanitizeLogValue(replacement),
+				logger.SanitizeLogValue(newBookID), logger.SanitizeLogValue(oldBookID), logger.SanitizeLogValue(fmt.Sprint(err)))
 		}
 	}
 }
@@ -322,11 +359,45 @@ func followSyncFilesForBookChange(db syncCapabilityStore, oldBookID, newBookID s
 // Idempotent: a second call finds no syncID on oldBookID (the reverse index
 // moved) and returns without touching anything.
 func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
+	followBookIDChange(db, oldBookID, newBookID, nil, false)
+}
+
+// FollowVersionHandover is FollowBookIDChange for the organizer's copy: a
+// new book row, with NEW book_file ids, takes over from the row it was copied
+// from (organizer.Service.CreateOrganizedVersion), which stays live as the
+// demoted organized_source. It differs from the scanner's version-link in two
+// ways, both because the copy is the book the user will be shown from now on:
+//
+//   - fileIDs maps each of oldBookID's book_file ids to the id of the row that
+//     replaces it on newBookID, so a sync_file `ino` follows its track onto
+//     the copy's row instead of landing under an id the copy does not have
+//     (see followSyncFilesForBookChange).
+//   - Listening progress (each user's book state, positions and bookmarks)
+//     moves even when oldBookID has no sync id. The scanner's early return
+//     exists for installs that never use the sync layer, and for a version-
+//     link of a second copy; here the source is being hidden, so progress
+//     left on it is progress the user loses. A source with no sync id is
+//     reachable with progress: backfill-itunes-positions writes upos/ubs for
+//     every iTunes-bookmarked book and mints no sync id.
+//
+// Same durability and failure handling as FollowBookIDChange: nothing is
+// returned, a failure is logged at ERROR with both ids, and a failed progress
+// move leaves the pending-repair record the repair ticker completes. A failed
+// identity repoint leaves identity AND progress on oldBookID, which is
+// consistent (the sync id still resolves to the book that holds the state).
+func FollowVersionHandover(db UserProgressMerger, oldBookID, newBookID string, fileIDs map[string]string) {
+	followBookIDChange(db, oldBookID, newBookID, fileIDs, true)
+}
+
+// followBookIDChange is the body of FollowBookIDChange and
+// FollowVersionHandover. progressWithoutSyncID selects the handover's rule
+// that progress moves even when the old book has no sync id.
+func followBookIDChange(db UserProgressMerger, oldBookID, newBookID string, fileIDs map[string]string, progressWithoutSyncID bool) {
 	if db == nil || oldBookID == "" || newBookID == "" || oldBookID == newBookID {
 		return
 	}
 	ids := database.AsSyncIdentityStore(db)
-	if ids == nil {
+	if ids == nil && !progressWithoutSyncID {
 		// Debug, not warn: both rows survive a version-link, so a skipped
 		// follow here is recoverable by repointing later, and this runs on
 		// every hash-duplicate import.
@@ -335,30 +406,62 @@ func FollowBookIDChange(db UserProgressMerger, oldBookID, newBookID string) {
 		return
 	}
 
+	// A handover runs for every copy-organized book, nearly all of which
+	// nobody has listened to. Decide that BEFORE taking the process-wide
+	// mutex, so a library-wide organize does not serialize every idle book on
+	// it: no sync id and nothing to carry returns here. State that lands after
+	// this check stays on the old book, the same outcome as state landing
+	// after the follow.
+	if progressWithoutSyncID && ids != nil {
+		if _, has, err := ids.GetSyncIDForBook(oldBookID); err == nil && !has {
+			if left, perr := BookHasCarryableUserState(db, oldBookID); perr == nil && !left {
+				return
+			}
+		}
+	}
+
 	syncRepointMu.Lock()
 	defer syncRepointMu.Unlock()
 
-	syncID, has, err := ids.GetSyncIDForBook(oldBookID)
-	if err != nil {
-		slog.Error("sync-identity follow: could not read the old book's syncID; identity NOT carried forward",
-			"old_book", oldBookID, "new_book", newBookID, "err", err)
+	syncID, has := "", false
+	if ids != nil {
+		var err error
+		syncID, has, err = ids.GetSyncIDForBook(oldBookID)
+		if err != nil {
+			slog.Error("sync-identity follow: could not read the old book's syncID; identity NOT carried forward",
+				"old_book", oldBookID, "new_book", newBookID, "err", err)
+			return
+		}
+	}
+	if !has && !progressWithoutSyncID {
 		return
 	}
 	if !has {
-		return
+		// A handover runs for every copy-organized book, nearly all of which
+		// nobody has listened to: skip the pending record and the user walk
+		// when there is nothing to carry. A probe that cannot be made falls
+		// through to the carry, which reports its own failures.
+		if left, err := BookHasCarryableUserState(db, oldBookID); err == nil && !left {
+			return
+		} else if err != nil {
+			mlog.Warn("sync-identity follow: could not probe %s for listening state; attempting the carry onto %s: %s",
+				logger.SanitizeLogValue(oldBookID), logger.SanitizeLogValue(newBookID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
 	}
 
-	if err := ids.RepointSyncItem(oldBookID, newBookID); err != nil {
-		slog.Error("sync-identity follow: repoint FAILED; clients still resolve to the retired book id",
-			"sync_id", syncID, "old_book", oldBookID, "new_book", newBookID, "err", err)
-		return
-	}
+	if has {
+		if err := ids.RepointSyncItem(oldBookID, newBookID); err != nil {
+			slog.Error("sync-identity follow: repoint FAILED; clients still resolve to the retired book id",
+				"sync_id", syncID, "old_book", oldBookID, "new_book", newBookID, "err", err)
+			return
+		}
 
-	// Carry each registered file's ino forward too. Independent of progress
-	// below (a file-repoint failure must not block a progress carry or vice
-	// versa), so this runs unconditionally once identity itself is repointed
-	// rather than being gated behind the progress-merge outcome.
-	followSyncFilesForBookChange(db, oldBookID, newBookID)
+		// Carry each registered file's ino forward too. Independent of progress
+		// below (a file-repoint failure must not block a progress carry or vice
+		// versa), so this runs unconditionally once identity itself is repointed
+		// rather than being gated behind the progress-merge outcome.
+		followSyncFilesForBookChange(db, oldBookID, newBookID, fileIDs)
+	}
 
 	// The identity now resolves to newBookID, so progress keyed to oldBookID
 	// would look lost to a client. Same durability as a merge: the pending

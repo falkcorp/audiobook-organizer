@@ -1,0 +1,43 @@
+<!-- file: docs/decisions/2026-10-30-copy-organize-sync-identity.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: d0b199d2-7f37-4783-a6be-d621cae563c4 -->
+<!-- last-edited: 2026-10-30 -->
+
+# Copy-organize carries the listener's sync identity and progress
+
+TODO entry: COPY-ORGANIZE-DROPS-SYNC-IDENTITY.
+
+## Step 1: can copy-organize reach a book that already has a sync id or progress?
+
+Yes, for every caller that is not a first organize of an imported book. Evidence:
+
+- Sync ids are minted for every book, not only served ones. `internal/maintenance/jobs/backfill_sync_ids.go` (Run, the `ListBookIDs` walk and `MintOrGetSyncID` at about lines 62-90) mints one for each row, imported and protected books included.
+- Audiobookshelf lists the primary, `organized` rows with no root-directory condition (`internal/database/abs_library_filter.go:18-25`, `ABSLibraryFilter`) and mints a sync id for each one it serves (`internal/server/handlers/abs/browse.go:1388`, `abs/mapper.go:223`). Progress sent by a client mints one too if it is missing (`abs/userdata.go:779`, `syncIDFor`), so progress implies a sync id on the ABS path.
+- Progress can also exist with NO sync id: `internal/maintenance/jobs/backfill_itunes_positions.go` (`migrateOne`, `SetUserPosition` at about line 367) writes a position and a book state for every iTunes-bookmarked book and mints nothing.
+- The callers, by what they start from:
+  - `internal/server/server_library_clone.go:134` (the itunes-clone-into-library op). Its source is "a live `organized` member whose files are outside the library root" (`internal/plugins/maintenance/itunes_clone_into_library.go:37-40`, selection at about lines 715-723). These are the iTunes-linked books the position backfill writes to, and the op's own comment on `icRunner.userState` (about line 252) already assumes users play the clone.
+  - `internal/metafetch/service_apply.go:603` (`ensureLibraryCopy`, the library copy of a protected iTunes/import book). Same population: organized rows under a protected path.
+  - `internal/organizer/service.go:1441` (`CommitLanding`, reached by Organize Library and the post-scan hook) and `internal/server/handlers/organize.go:335` (single-book organize). Both create a version for any out-of-root landing, including a book that was imported, served by ABS and listened to before it was organized.
+- Only a first organize of an untouched imported book is guaranteed to have neither. That is the common case, and it must stay free (see the last Known limits entries).
+
+## Decision log
+
+- Chosen: call a new `merge.FollowVersionHandover` from `CreateOrganizedVersion` right after `BatchCreateBookFiles` succeeds and before the `ModifyBook` demotion of the source. That is the last rollback point, so the identity is never repointed to a copy that is then deleted, and it is before the source is hidden. The store has no batch shared with the merge keyspace, so "same write batch" is not available.
+- Chosen: follow UNCONDITIONALLY, not behind the scanner's "is the predecessor's file gone" check (`scanner.followSyncIdentityOnVersionLink`). There the old row may be a genuine second copy that stays visible; here the source is always demoted to `organized_source` and non-primary one step later, and its files always still exist (it is a COPY), so that check would never fire. When an incumbent keeps the group's primary the source was already hidden and its identity is dormant; moving it to the copy changes nothing visible and keeps the identity with the copy if the hand-off later crowns it. Rejected: gating on the new copy being created primary (misses the hand-off crowning it); rejected: reusing the scanner helper (unexported, wrong gate).
+- Chosen: resolve the store inside the organizer with `database.AsCapability[merge.UserProgressMerger](orgSvc.db)`, the pattern `reconcile.go` uses. Rejected: widening `organizer.Store` (about 20 methods, trips the interface-width ratchet); rejected: a `Service` hook field wired by the server (organizer.NewService is built in the server and in metafetch, and an unwired construction would silently drop the identity). An unresolvable store (a test double) logs a Warn and moves nothing.
+- Chosen: a separate merge entry point, `FollowVersionHandover`, sharing a body with `FollowBookIDChange`, so the scanner's behaviour is byte-for-byte unchanged. It differs in two ways:
+  - Progress moves even when the source has no sync id. `FollowBookIDChange` returns early there and leaves positions behind on purpose (installs that never use the sync layer; a second copy). The handover hides the source, and the no-sync-id case is reachable (iTunes position backfill, above), so leaving positions would leave the bug half-fixed. A cheap probe (`BookHasCarryableUserState`) skips the pending record and the user walk when there is nothing to carry.
+  - A file-id map re-points each `ino` from the source's book_file id to the copy's. `CreateOrganizedVersion` gives every copied row a NEW id (`newBF.ID = ulid.Make()`), while `followSyncFilesForBookChange` assumed ids are stable and would have left the ino on the copy under an id none of its rows carry. A destination that already minted its own ino for the new row keeps it (the rule `RepointSyncFileToBook` applies to a colliding destination).
+- Chosen failure policy: log and continue, matching the scanner. The files are copied and the rows written by then; failing the organize would orphan both, and the move is recoverable: `merge` writes a durable pending-repair record before moving progress (the repair ticker completes it), and a failed identity repoint leaves identity and progress together on the source (consistent, nothing lost). Because `merge` reports through slog only, the organizer re-reads the source's sync id afterwards and logs one Error into the organize operation's own log if it did not move.
+- Locks: the follow runs with the version-group key and the `LockPlannedGroups` membership locks held. `merge` takes `syncRepointMu`, then a user-state stripe pair, then the copy's book write stripe. Nothing holding `syncRepointMu` or a user-state stripe takes a version-group lock (merge's own paths take the merge lock, then the group locks, then the stripes), so no cycle exists.
+
+## Known limits (not fixed here)
+
+- Window: the copy is created primary and `organized`, so ABS can serve it and mint a fresh sync id for it between `CreateBook` and the follow. `RepointSyncItem` then overwrites that reverse index entry and the fresh item is orphaned. The window is the duration of the book_file batch write; the store has no shared batch to close it. The scanner's version-link has the same window.
+- `versionprimary.EnsureSinglePrimary` crowning a different member than the source does not move any identity. That is a separate gap in the hand-off, not in copy-organize.
+- Organize undo does not revert the created copy (no `book_create` / `organized_version` handler in `internal/undo`), so there is no reverse path to teach. The itunes-clone rollback already carries listening state back from the clone with `merge.CarryStateBeforeHardDelete` (it was written expecting users to play the clone); it does not carry sync_file inos back.
+- If the `ModifyBook` demotion of the source fails afterwards (it is warn-only and falls back to a direct write), the source stays visible while its identity and progress are already on the copy. The pre-existing handling of that failure is unchanged.
+- Production store: the server hands every service the one store object it was given (`server.NewServer`, "exactly one store object"), the same object `audiobooks/service_single.go:598` and `trash_progress.go:753` already resolve `merge.UserProgressMerger` from. A compile-time assertion in `internal/organizer/listener_identity.go` proves `*database.PebbleStore` satisfies it.
+- A first organize of a book nobody has listened to costs one sync-id read and one user listing OUTSIDE the process-wide `syncRepointMu`; no sync id is invented and no record is written. Only a book with something to carry takes the mutex.
+- Lock registry: `internal/database/user_state_lock.go` now lists this entry and states that version-group locks and the vg: key may be held before `syncRepointMu`/a stripe, and that nothing takes one under them (checked over every `LockUserBookState*` holder, 2026-10-30).
+- Executive summary: `docs/executive-summaries/2026-10-executive-summary.md` says a combined month gets no new per-day files; the brief asked for a dated file (as 2026-10-29 has), so the coordinator should fold `2026-10-30-copy-organize-sync-identity-executive-summary.md` into the monthly file.
