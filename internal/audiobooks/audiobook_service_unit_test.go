@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.27.1
+// version: 1.27.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-30
 
@@ -925,7 +925,8 @@ func TestAudiobookService_UpdateAudiobook_NilStore(t *testing.T) {
 
 func TestAudiobookService_UpdateAudiobook_NotFound(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
+	// The store must offer ModifyBookCredits before the edit reads anything.
+	svc := NewAudiobookService(&creditsModifyStore{MockStore: mockStore})
 
 	mockStore.EXPECT().GetBookByID("missing").Return(nil, nil)
 
@@ -938,7 +939,7 @@ func TestAudiobookService_UpdateAudiobook_NotFound(t *testing.T) {
 
 func TestAudiobookService_UpdateAudiobook_GetByIDError(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
+	svc := NewAudiobookService(&creditsModifyStore{MockStore: mockStore})
 
 	storeErr := fmt.Errorf("db failure")
 	mockStore.EXPECT().GetBookByID("id1").Return(nil, storeErr)
@@ -951,7 +952,8 @@ func TestAudiobookService_UpdateAudiobook_GetByIDError(t *testing.T) {
 
 // creditsModifyStore gives a mockery store the ModifyBookCredits capability the
 // edit's save goes through. The stub hands fn a FRESH row and empty credit
-// lists, and returns the row fn left.
+// lists, and returns the row fn left. An edit that changes no credit list
+// saves through ModifyBook instead; the stub does the same there.
 type creditsModifyStore struct {
 	*mocks.MockStore
 	fresh   *database.Book
@@ -965,6 +967,14 @@ func (c *creditsModifyStore) ModifyBookCredits(_ string, fn func(*database.Book,
 	}
 	c.written = c.fresh
 	return c.fresh, edit, nil
+}
+
+func (c *creditsModifyStore) ModifyBook(_ string, fn func(*database.Book) error) (*database.Book, error) {
+	if err := fn(c.fresh); err != nil {
+		return nil, err
+	}
+	c.written = c.fresh
+	return c.fresh, nil
 }
 
 func (c *creditsModifyStore) ModifyBookNarrators(string, func([]database.BookNarrator) ([]database.BookNarrator, error)) ([]database.BookNarrator, error) {
