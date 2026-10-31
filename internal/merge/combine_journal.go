@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.36.1
+// version: 1.36.2
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package merge
 
@@ -1510,6 +1510,9 @@ func (ms *Service) restoreOverrideLocks(survivorID string, o *CombineOverrideUnd
 	}
 	slices.Sort(fields)
 	var warns []string
+	// repairChanges is the book's change journal, read once and only when a
+	// row about to be restored carries a repair lock (dropRevertedRepairLock).
+	var repairChanges repairChangeCache
 	for _, field := range fields {
 		prior, cur := o.FieldStates[field], current[field]
 		if sameLock(cur, prior) {
@@ -1530,6 +1533,7 @@ func (ms *Service) restoreOverrideLocks(survivorID string, o *CombineOverrideUnd
 			}
 		case prior != nil && strPtrEqual(cur.FetchedValue, priorFetched):
 			restored := *prior
+			warns = append(warns, ms.dropRevertedRepairLock(survivorID, &restored, &repairChanges)...)
 			if err := ms.db.UpsertMetadataFieldState(&restored); err != nil {
 				return warns, fmt.Errorf("restore override lock %s: %w", field, err)
 			}
@@ -1539,6 +1543,7 @@ func (ms *Service) restoreOverrideLocks(survivorID string, o *CombineOverrideUnd
 			if prior != nil {
 				restored.OverrideValue, restored.OverrideLocked, restored.LockSource = prior.OverrideValue, prior.OverrideLocked, prior.LockSource
 			}
+			warns = append(warns, ms.dropRevertedRepairLock(survivorID, &restored, &repairChanges)...)
 			restored.UpdatedAt = time.Now()
 			if err := ms.db.UpsertMetadataFieldState(&restored); err != nil {
 				return warns, fmt.Errorf("restore override lock %s: %w", field, err)
@@ -1546,6 +1551,60 @@ func (ms *Service) restoreOverrideLocks(survivorID string, o *CombineOverrideUnd
 		}
 	}
 	return warns, nil
+}
+
+// fieldLockChangeType is undo.ChangeTypeFieldLock. internal/undo imports this
+// package, so the constant cannot be imported here.
+const fieldLockChangeType = "field_lock"
+
+// repairChangeCache is a book's operation-change journal, read lazily once.
+type repairChangeCache struct {
+	rows []*database.OperationChange
+	err  error
+	read bool
+}
+
+// dropRevertedRepairLock lifts the lock on a row about to be restored when it
+// is a repair's bare lock (LockSource "repair:<op id>") whose operation has
+// since been reverted, and returns the warning that says so (nil otherwise).
+// Re-installing it would put back a lock that nothing owns: the revert lifted
+// the lock the repair set, and the lock source is the only thing that says
+// the lock is the repair's, so a lock written back with the source would
+// never be lifted by anyone, and one written back without it would pass for a
+// person's. The lock is therefore dropped (locked and source both cleared),
+// not just the source.
+//
+// A repair's lock is reverted when its operation's ChangeTypeFieldLock row
+// for this book and field carries RevertedAt (the revert marks each row it
+// restores; undo.CheckFieldLockCurrent / audiobooks.revertFieldLock is the
+// lift). A row that is voided, or no journal row for it, says nothing about a
+// revert, so the lock is kept as recorded; a journal that cannot be read
+// keeps the lock too, with a warning. Called under the book's metadata-state
+// lock (restoreOverrideLocks): Pebble reads only.
+func (ms *Service) dropRevertedRepairLock(bookID string, restored *database.MetadataFieldState, cache *repairChangeCache) []string {
+	if !restored.IsRepairLock() {
+		return nil
+	}
+	op, ok := database.RepairLockOp(restored.LockSource)
+	if !ok {
+		return nil
+	}
+	if !cache.read {
+		cache.rows, cache.err = ms.db.GetBookChanges(bookID)
+		cache.read = true
+	}
+	if cache.err != nil {
+		return []string{fmt.Sprintf("the %s lock on book %s names repair operation %s, whose revert state could not be read (%v); the lock is restored as it was", restored.Field, bookID, op, cache.err)}
+	}
+	for _, c := range cache.rows {
+		if c == nil || c.Voided || c.RevertedAt == nil || c.ChangeType != fieldLockChangeType ||
+			c.OperationID != op || c.BookID != bookID || c.FieldName != restored.Field {
+			continue
+		}
+		restored.OverrideLocked, restored.LockSource = false, ""
+		return []string{fmt.Sprintf("the %s lock on book %s was a repair lock from operation %s, which has since been reverted; it is not put back", restored.Field, bookID, op)}
+	}
+	return nil
 }
 
 // retiredByJournal reports whether b is still the shell this combine retired:

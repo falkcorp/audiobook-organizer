@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -2253,7 +2253,7 @@ into one of the curated sections below, is a normal direct edit.
       `RecordBookEditHistory` uses it, and a test proves partial failure
       records nothing.
 
-- [ ] **MERGE-UNDO-STRIPE** The merge undo (`internal/merge/combine_journal.go` ~994-1003) restores field-state rows without `database.LockMetadataState`, so a restore can race `repairs.Writer.LockFields` / `database.ClaimRepairLocks` (which upsert the copy they read), and it can restore a repair lock (`LockSource` "repair:<op>") whose operation has since been reverted. Take the stripe around the restore and drop a repair lock source whose operation is reverted. Manual and rare. (PR #3699 third review, NIT 5.)
+- [x] **MERGE-UNDO-STRIPE** The merge undo (`internal/merge/combine_journal.go` ~994-1003) restores field-state rows without `database.LockMetadataState`, so a restore can race `repairs.Writer.LockFields` / `database.ClaimRepairLocks` (which upsert the copy they read), and it can restore a repair lock (`LockSource` "repair:<op>") whose operation has since been reverted. Take the stripe around the restore and drop a repair lock source whose operation is reverted. Manual and rare. (PR #3699 third review, NIT 5.)
 
 - [ ] **OPCHANGE-INDEX-FOLLOWUPS** Two gaps left in the `opchange_by_book:`
       index (PR #3704). (1) `PruneOperationChanges` and
