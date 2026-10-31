@@ -1,7 +1,7 @@
 // file: internal/merge/state_follow_followups_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 1056ccb5-89ca-4487-9ff7-533be24d6942
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -308,8 +308,8 @@ func TestUndoSiblingMove_NoLiveDestinationAfterFailedRefollowNamesTheLoser(t *te
 	require.NoError(t, err)
 	require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.l), "the state is left on the loser, not moved")
 	require.Len(t, ur.Warnings, 1)
-	require.Contains(t, ur.Warnings[0], "or on loser "+m.l+" itself")
-	require.NotContains(t, ur.Warnings[0], "stays on "+m.ls)
+	require.Contains(t, ur.Warnings[0].Text, "or on loser "+m.l+" itself")
+	require.NotContains(t, ur.Warnings[0].Text, "stays on "+m.ls)
 }
 
 // NIT 2: a survivor merged away since the merge. The refollow goes to the
@@ -384,7 +384,7 @@ func TestUndoSiblingMove_NoLiveDestination_StateStaysOnHolder(t *testing.T) {
 			require.Equal(t, "G", m.f.GroupOf(t, m.ls), "the sibling is still put back")
 			require.Equal(t, 60, sfProgress(t, m.f.S, m.user.ID, m.ls), "the state stays on the holder, where it is still seen")
 			require.Len(t, ur.Warnings, 1)
-			require.Contains(t, ur.Warnings[0], "stays on "+m.ls)
+			require.Contains(t, ur.Warnings[0].Text, "stays on "+m.ls)
 			for _, k := range pendingKeys(t, m.f.S) {
 				require.NotContains(t, k, m.k, "no repair is queued onto the dead survivor")
 			}

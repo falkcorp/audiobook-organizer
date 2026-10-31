@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_sibling.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c4e1a96-2b83-4d50-9f17-a6e3d0b85c21
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -90,7 +90,8 @@ func (rs *RevertService) revertMergeSiblingJournal(c *database.OperationChange) 
 		// state kept on a flag holder because its loser has no live book
 		// left. Reported on the revert (RevertResult.Kept), not only logged.
 		return &partialTagRestore{detail: fmt.Sprintf("book %s: sibling move %s undone; left as is: %s",
-			c.BookID, c.NewValue, strings.Join(res.Warnings, "; "))}
+			c.BookID, c.NewValue, strings.Join(merge.WarningTexts(res.Warnings), "; ")),
+			userIDs: warningUserIDs(res.Warnings)}
 	}
 	return nil
 }

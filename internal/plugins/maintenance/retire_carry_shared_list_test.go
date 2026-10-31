@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_shared_list_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8d2f6b19-4c07-4e53-a1d8-7b95e03c6f42
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -264,7 +264,7 @@ func TestRetireCarry_ARetiredBookReAddedByHandReleasesTheSurvivor(t *testing.T) 
 	require.Equal(t, 1, rr.AlreadyRestored, "%+v", rr)
 	require.Equal(t, 1, rr.SurvivorsReleased, "%+v", rr)
 	require.Len(t, rr.Kept, 1, "the survivor's release is named: %+v", rr)
-	require.Contains(t, rr.Kept[0], "taken out of the list")
+	require.Contains(t, rr.Kept[0].Text, "taken out of the list")
 	require.Contains(t, rr.Summary(), "1 survivor(s) taken out of a list they were left in")
 	require.Equal(t, []string{"x", k0, k1}, f.rcMembers(t, col), "the survivor leaves with the last borrower")
 	require.Zero(t, f.markersStanding(t, "op0")+f.markersStanding(t, "op1"))

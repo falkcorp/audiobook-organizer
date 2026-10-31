@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.98.0
+// version: 1.98.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -330,12 +330,12 @@ type RevertResult struct {
 	// from PartiallyRestored, whose wording is about tags.
 	CombinesUndoneInPart int `json:"combines_undone_in_part,omitempty"`
 	// combineKept is what those combine undos left, for Summary.
-	combineKept []string
+	combineKept []RevertNote
 	// Kept lists, per partially restored row, what was left as it is: the
 	// tags (or metadata fields) that changed since the operation, or what a
 	// combine's undo could not put back (a created file row with no book to
 	// return to, a survivor field changed since).
-	Kept []string `json:"kept,omitempty"`
+	Kept []RevertNote `json:"kept,omitempty"`
 	// ChangedSince counts the Failed rows the compare-and-set refused because
 	// their target no longer holds what the operation wrote
 	// (undo.ReasonChangedSince, or undo.ReasonSeriesRenamedSince for a
@@ -437,7 +437,7 @@ func (r *RevertResult) Summary() string {
 		fmt.Fprintf(&b, "; %d restored in part (tags changed since the operation were left as they are)", r.PartiallyRestored)
 	}
 	if r.CombinesUndoneInPart > 0 {
-		fmt.Fprintf(&b, "; %d combine(s) undone with some things left as they are: %s", r.CombinesUndoneInPart, joinSampled(r.combineKept, combineNotesShown))
+		fmt.Fprintf(&b, "; %d combine(s) undone with some things left as they are: %s", r.CombinesUndoneInPart, joinSampled(noteTexts(r.combineKept), combineNotesShown))
 	}
 	if r.Markers > 0 {
 		fmt.Fprintf(&b, "; %d marker row(s) cleared (nothing to restore)", r.Markers)
@@ -478,6 +478,71 @@ func (r *RevertResult) Summary() string {
 	return b.String()
 }
 
+// RevertNote is one line of RevertResult.Kept (or of the combine notes
+// Summary lists): what a revert left as it is. UserIDs names the accounts whose
+// own data the line carries (a user's listening progress), set by the code that
+// built the line from the merge undo's warnings (merge.Warning.UserIDs); empty
+// means the line is library data. WithoutUserData withholds by this field and
+// never by what the text says: a line can use the word "user" for another
+// reason, and can name an account without it.
+//
+// It serves as the bare string it always was; the account ids stay server
+// side.
+type RevertNote struct {
+	Text    string
+	UserIDs []string
+}
+
+// NamesUser reports whether the line carries a user's data.
+func (n RevertNote) NamesUser() bool { return len(n.UserIDs) > 0 }
+
+// MarshalJSON writes the note's text alone, the shape Kept has always had.
+func (n RevertNote) MarshalJSON() ([]byte, error) { return json.Marshal(n.Text) }
+
+// UnmarshalJSON reads the text form; a note read back names no user, since
+// the ids are never written.
+func (n *RevertNote) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	*n = RevertNote{Text: s}
+	return nil
+}
+
+// noteTexts is the text of each note, in order.
+func noteTexts(ns []RevertNote) []string {
+	out := make([]string, len(ns))
+	for i, n := range ns {
+		out[i] = n.Text
+	}
+	return out
+}
+
+// revertNotesFromWarnings carries each merge warning, with the accounts it
+// names, into a revert note.
+func revertNotesFromWarnings(ws []merge.Warning) []RevertNote {
+	out := make([]RevertNote, len(ws))
+	for i, w := range ws {
+		out[i] = RevertNote{Text: w.Text, UserIDs: w.UserIDs}
+	}
+	return out
+}
+
+// warningUserIDs is the accounts the warnings name, each once, in first-seen
+// order.
+func warningUserIDs(ws []merge.Warning) []string {
+	var out []string
+	for _, w := range ws {
+		for _, id := range w.UserIDs {
+			if !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
 // userNotesWithheld is the line WithoutUserData leaves where it dropped notes,
 // so a list that had entries does not read as one that never did (and Summary
 // does not end in an empty list).
@@ -486,35 +551,34 @@ const userNotesWithheld = "%d note(s) that name a user withheld (users.manage sh
 // WithoutUserData is r as a caller who may not manage users may read it. The
 // merge undo's warnings (Kept, and the combine notes Summary lists) carry a
 // user's id and what they were listening to ("user <id> progress on ...");
-// every free-text list is stripped of the notes that name a user
-// (undo.NamesUser), each list that lost some ends with a count so it is not
-// silently shorter, and Summary, built from the same lists, follows. The counts
-// and types stay. r is not modified.
+// every note that names a user (RevertNote.UserIDs, set where the note is
+// produced) is dropped, each list that lost some ends with a count so it is not
+// silently shorter, and Summary, built from the same lists, follows. The other
+// lists (SupersededDetail, HandOffFailed, SettleSkipped) are version-group and
+// primary-flag notes no producer attaches a user to, and stay. The counts and
+// types stay. r is not modified.
 func (r *RevertResult) WithoutUserData() *RevertResult {
 	if r == nil {
 		return nil
 	}
-	strip := func(in []string) []string {
-		var out []string
+	strip := func(in []RevertNote) []RevertNote {
+		var out []RevertNote
 		dropped := 0
 		for _, n := range in {
-			if undo.NamesUser(n) {
+			if n.NamesUser() {
 				dropped++
 				continue
 			}
 			out = append(out, n)
 		}
 		if dropped > 0 {
-			out = append(out, fmt.Sprintf(userNotesWithheld, dropped))
+			out = append(out, RevertNote{Text: fmt.Sprintf(userNotesWithheld, dropped)})
 		}
 		return out
 	}
 	out := *r
 	out.Kept = strip(r.Kept)
 	out.combineKept = strip(r.combineKept)
-	out.SupersededDetail = strip(r.SupersededDetail)
-	out.HandOffFailed = strip(r.HandOffFailed)
-	out.SettleSkipped = strip(r.SettleSkipped)
 	return &out
 }
 
@@ -747,7 +811,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 		}
 		orphansSeen[id] = true
 		result.OrphanMarkers++
-		result.Kept = append(result.Kept, detail)
+		result.Kept = append(result.Kept, RevertNote{Text: detail})
 		revertLog.Warn("revert: %s", detail)
 	}
 	// Recreate every purged shell the retire rows write back to before any
@@ -810,7 +874,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			// The book was already back; what an interrupted earlier revert of
 			// this row left behind (the survivor still listed) was repaired.
 			result.SurvivorsReleased++
-			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, released.detail))
+			result.Kept = append(result.Kept, RevertNote{Text: fmt.Sprintf("change %s: %s", c.ID, released.detail)})
 			revertLog.Warn("revert of change %s: %s", c.ID, released.detail)
 			already, err = true, nil
 		}
@@ -818,7 +882,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			// The row is done: the book belongs in the list only for retires
 			// that no longer stand, so it stays out. Said so, never silently.
 			result.BooksLeftOut++
-			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, left.detail))
+			result.Kept = append(result.Kept, RevertNote{Text: fmt.Sprintf("change %s: %s", c.ID, left.detail)})
 			revertLog.Warn("revert of change %s: %s", c.ID, left.detail)
 			err = nil
 		}
@@ -826,7 +890,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			// The row is restored: the book is back in its list, at the
 			// slot its recorded index names. Said so, never silently.
 			result.RestoredByIndex++
-			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, byIndex.detail))
+			result.Kept = append(result.Kept, RevertNote{Text: fmt.Sprintf("change %s: %s", c.ID, byIndex.detail)})
 			revertLog.Warn("revert of change %s restored by index: %s", c.ID, byIndex.detail)
 			err = nil
 		}
@@ -834,7 +898,7 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			// The row is restored, beside books arranged by hand since. Said
 			// so, never silently.
 			result.ListsEditedByHand++
-			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, edited.detail))
+			result.Kept = append(result.Kept, RevertNote{Text: fmt.Sprintf("change %s: %s", c.ID, edited.detail)})
 			revertLog.Warn("revert of change %s restored beside hand-arranged books: %s", c.ID, edited.detail)
 			err = nil
 		}
@@ -845,11 +909,11 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			// row is counted on its own, with its own wording.
 			if partial.combineNotes != nil {
 				result.CombinesUndoneInPart++
-				result.combineKept = append(result.combineKept, partial.combineNotes...)
+				result.combineKept = append(result.combineKept, revertNotesFromWarnings(partial.combineNotes)...)
 			} else {
 				result.PartiallyRestored++
 			}
-			result.Kept = append(result.Kept, fmt.Sprintf("change %s: %s", c.ID, partial.detail))
+			result.Kept = append(result.Kept, RevertNote{Text: fmt.Sprintf("change %s: %s", c.ID, partial.detail), UserIDs: partial.userIDs})
 			revertLog.Warn("revert of change %s restored in part: %s", c.ID, partial.detail)
 			err = nil
 		}
@@ -1970,8 +2034,14 @@ func retiredBefore(b *database.Book, c *database.OperationChange) bool {
 // it in CombinesUndoneInPart, not PartiallyRestored, and Summary lists the
 // notes.
 type partialTagRestore struct {
-	detail       string
-	combineNotes []string
+	detail string
+	// combineNotes is set (to the undo's warnings) only for a combine row.
+	combineNotes []merge.Warning
+	// userIDs are the accounts detail names: the union of the accounts the
+	// warnings it was built from name (merge.Warning.UserIDs). Set by whoever
+	// builds detail from warnings; RevertResult.WithoutUserData withholds the
+	// Kept line by it.
+	userIDs []string
 }
 
 // supersededRestore is a row's revert that wrote nothing because what it
@@ -2323,7 +2393,7 @@ func (rs *RevertService) revertUserStateFollow(c *database.OperationChange) erro
 	defer rs.lockMerge()()
 	warns, err := merge.RestoreFollowedProgress(db, survivor, c.BookID, rec.SyncRedirected, progress)
 	for _, w := range warns {
-		revertLog.Warn("revert of change %s: %s", c.ID, logger.SanitizeLogValue(w))
+		revertLog.Warn("revert of change %s: %s", c.ID, logger.SanitizeLogValue(w.Text))
 	}
 	return err
 }

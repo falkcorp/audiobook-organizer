@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_merge_combine_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: a6c29e41-8f07-4b3d-9e15-d2b84f7c0a63
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -27,7 +27,7 @@ type fakeCombineUndoer struct {
 	journals map[string]*merge.CombineJournal
 	refuse   bool
 	// warnings are returned on a successful undo's result.
-	warnings []string
+	warnings []merge.Warning
 	// undoneByRival: the journal is undone by someone else after the revert
 	// read it, so this undo is refused against a journal that is done.
 	undoneByRival bool
@@ -86,7 +86,7 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 	t.Run("what the undo left as is is reported on the revert", func(t *testing.T) {
 		s := &ledgerStub{book: keep, changes: rows()}
 		u := newFake(merge.CombineJournalApplied)
-		u.warnings = []string{"file row f9 (created by the combine for book gone) has no book to go back to; left on survivor keep"}
+		u.warnings = merge.PlainWarnings("file row f9 (created by the combine for book gone) has no book to go back to; left on survivor keep")
 		rs := NewRevertService(s)
 		rs.combineUndo = u
 		res, err := rs.RevertOperation("op")
@@ -95,13 +95,33 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 		assert.Equal(t, 1, res.CombinesUndoneInPart, "counted as a combine, not as tags")
 		assert.Zero(t, res.PartiallyRestored)
 		require.Len(t, res.Kept, 1)
-		assert.Contains(t, res.Kept[0], "file row f9")
+		assert.Contains(t, res.Kept[0].Text, "file row f9")
 		// Round-4 N7: the summary (the toast's message) uses combine wording
 		// and carries what was left, not "tags changed since".
 		assert.False(t, res.Partial(), "the combine is undone; nothing to retry")
 		assert.Contains(t, res.Summary(), "1 combine(s) undone with some things left as they are: file row f9")
 		assert.NotContains(t, res.Summary(), "tags")
 		assert.ElementsMatch(t, []string{"ptr", "dec"}, s.marked)
+	})
+	t.Run("the account a warning names is carried onto the revert's lines and withheld by it", func(t *testing.T) {
+		s := &ledgerStub{book: keep, changes: rows()}
+		u := newFake(merge.CombineJournalApplied)
+		u.warnings = []merge.Warning{
+			merge.UserWarning("user 01INVENTEDUSER0000000000A progress on survivor keep changed after the merge; left as is", "01INVENTEDUSER0000000000A"),
+			merge.PlainWarning("a credit added since was left as it is"),
+		}
+		rs := NewRevertService(s)
+		rs.combineUndo = u
+		res, err := rs.RevertOperation("op")
+		require.NoError(t, err)
+		require.Len(t, res.Kept, 1)
+		assert.Equal(t, []string{"01INVENTEDUSER0000000000A"}, res.Kept[0].UserIDs)
+		require.Len(t, res.combineKept, 2)
+		assert.True(t, res.combineKept[0].NamesUser())
+		assert.False(t, res.combineKept[1].NamesUser())
+		served := res.WithoutUserData()
+		assert.NotContains(t, served.Summary(), "01INVENTEDUSER0000000000A")
+		assert.Contains(t, served.Summary(), "a credit added since was left as it is")
 	})
 	t.Run("a journal already undone is already restored", func(t *testing.T) {
 		s := &ledgerStub{book: keep, changes: rows()}
@@ -165,7 +185,7 @@ func TestRevertOperation_MergeCombineJournal(t *testing.T) {
 func TestRevertResultSummary_CapsCombineNotes(t *testing.T) {
 	r := &RevertResult{Total: 1, Restored: 1, CombinesUndoneInPart: 1}
 	for i := range combineNotesShown + 3 {
-		r.combineKept = append(r.combineKept, fmt.Sprintf("note %d", i))
+		r.combineKept = append(r.combineKept, RevertNote{Text: fmt.Sprintf("note %d", i)})
 	}
 	sum := r.Summary()
 	assert.Contains(t, sum, "note 0; note 1; note 2; note 3; note 4; and 3 more")

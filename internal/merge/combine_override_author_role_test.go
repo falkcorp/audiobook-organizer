@@ -1,7 +1,7 @@
 // file: internal/merge/combine_override_author_role_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c81e0d7-2b5a-4f93-8e16-a07d3c9b52f4
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -41,7 +41,7 @@ func TestUndoCombine_KeepsLaterLinkToTheOverrideAuthorInAnotherRole(t *testing.T
 			require.Equal(t, a.ID, links[0].AuthorID)
 			require.Equal(t, role, links[0].Role)
 
-			joined := strings.Join(undo.Warnings, "\n")
+			joined := strings.Join(WarningTexts(undo.Warnings), "\n")
 			require.Contains(t, joined, fmt.Sprintf("author %d (%s) was linked to book %s after the combine; kept", a.ID, role, keep))
 			require.NotContains(t, joined, "purge-empty-authors", "the survivor still credits the author, so no purge note")
 			requireAuthorLive(t, store, a.ID)
