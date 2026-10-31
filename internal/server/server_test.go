@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.16.0
+// version: 2.16.1
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -28,7 +28,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
@@ -821,121 +820,6 @@ func TestExportMetadata(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestBulkFetchMetadataRespectsOverridesAndMissingFields(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	tempDir := t.TempDir()
-	tempFile := filepath.Join(tempDir, "book.m4b")
-	otherFile := filepath.Join(tempDir, "other.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	require.NoError(t, os.WriteFile(otherFile, []byte("audio"), 0o644))
-
-	// Arrange: book with a locked publisher override and missing language/author.
-	created, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "The Hobbit",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	err = server.saveMetadataState(created.ID, map[string]metafetch.MetadataFieldState{
-		"publisher": {
-			OverrideValue:  "Manual Publisher",
-			OverrideLocked: true,
-			UpdatedAt:      time.Now(),
-		},
-	})
-	require.NoError(t, err)
-
-	other, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Unknown Title",
-		FilePath: otherFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Audible: Open Library and Google Books are review-only and never
-	// applied by the bulk fetch (owner decision 2026-10-06).
-	mockServer := testutil.MockAudibleServer(t, audibleAnswersTitle(testutil.AudibleTestProduct{
-		ASIN: "B0TESTHOB2", Title: "The Hobbit", Authors: []string{"J.R.R. Tolkien"},
-		Publisher: "Test Publisher", Language: "eng", ReleaseDate: "1937-01-01",
-	}, "The Hobbit"))
-	useOnlyAudible(t, mockServer.URL)
-
-	// Act: bulk fetch metadata for both books.
-	payload := map[string]any{
-		"book_ids": []string{created.ID, other.ID},
-	}
-	body, err := json.Marshal(payload)
-	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/metadata/bulk-fetch", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	server.router.ServeHTTP(w, req)
-
-	// Assert: first book updates missing fields but does not override locked publisher.
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response struct {
-		Data struct {
-			UpdatedCount int `json:"updated_count"`
-			TotalCount   int `json:"total_count"`
-			Results      []struct {
-				BookID        string   `json:"book_id"`
-				Status        string   `json:"status"`
-				AppliedFields []string `json:"applied_fields"`
-				FetchedFields []string `json:"fetched_fields"`
-			} `json:"results"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-	assert.Equal(t, 2, response.Data.TotalCount)
-	assert.Equal(t, 1, response.Data.UpdatedCount)
-
-	var primaryResult, missingResult *struct {
-		BookID        string   `json:"book_id"`
-		Status        string   `json:"status"`
-		AppliedFields []string `json:"applied_fields"`
-		FetchedFields []string `json:"fetched_fields"`
-	}
-	for i := range response.Data.Results {
-		if response.Data.Results[i].BookID == created.ID {
-			primaryResult = &response.Data.Results[i]
-		}
-		if response.Data.Results[i].BookID == other.ID {
-			missingResult = &response.Data.Results[i]
-		}
-	}
-	require.NotNil(t, primaryResult)
-	require.NotNil(t, missingResult)
-
-	assert.Equal(t, "updated", primaryResult.Status)
-	assert.Contains(t, primaryResult.AppliedFields, "author_name")
-	assert.Contains(t, primaryResult.AppliedFields, "language")
-	assert.NotContains(t, primaryResult.AppliedFields, "publisher")
-	assert.Contains(t, primaryResult.FetchedFields, "publisher")
-
-	assert.Equal(t, "not_found", missingResult.Status)
-
-	updatedBook, err := database.GetGlobalStore().GetBookByID(created.ID)
-	require.NoError(t, err)
-	require.NotNil(t, updatedBook)
-	assert.Nil(t, updatedBook.Publisher)
-	require.NotNil(t, updatedBook.Language)
-	assert.Equal(t, "eng", *updatedBook.Language)
-	assert.NotNil(t, updatedBook.AuthorID)
-
-	state, err := metafetch.LoadStateSnapshot(server.Ops(), created.ID)
-	require.NoError(t, err)
-	require.NotNil(t, state)
-	entry := state["publisher"]
-	assert.Equal(t, "Test Publisher", entry.FetchedValue)
-	assert.Equal(t, "Manual Publisher", entry.OverrideValue)
-	assert.True(t, entry.OverrideLocked)
 }
 
 // TestCORSMiddleware tests CORS headers

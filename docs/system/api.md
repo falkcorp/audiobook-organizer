@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.23.0 -->
+<!-- version: 1.23.1 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -80,7 +80,7 @@ To obtain an API key:
 | `POST` | `/api/v1/audiobooks/:id/fetch-metadata` | Trigger metadata fetch for a book |
 | `POST` | `/api/v1/audiobooks/:id/apply-metadata` | Apply fetched metadata |
 | `GET` | `/api/v1/audiobooks/:id/metadata-rejections` | Candidates a human rejected for this book |
-| `POST` | `/api/v1/metadata/bulk-fetch` | Queue bulk metadata fetch |
+| `POST` | `/api/v1/metadata/bulk-fetch` | Retired (BULK-FETCH-NO-GATE): answers `410 Gone` for one release. It applied each book's top candidate with no apply gate. Fetch candidates with `POST /api/v1/operations/v2` `{"def_id":"library.bulk-metadata-fetch"}` and apply them with `{"def_id":"metadata.batch-apply-cached"}`, which runs every candidate through the apply gate |
 | `GET` | `/api/v1/metadata/search` · `/fields` | Provider search; known metadata fields |
 | `GET` | `/api/v1/metadata/providers/throttles` | Provider throttle state (read-only). The `DELETE /metadata/providers/throttles` and `/throttles/:id` resets were retired (01-P81f) and answer 410 Gone for one release |
 

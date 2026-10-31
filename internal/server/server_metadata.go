@@ -1,41 +1,15 @@
 // file: internal/server/server_metadata.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
 import (
-	"fmt"
 	"os"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
-
-// These helpers are methods on *Server so they use the server's resolved
-// store (SERVER-GLOBAL-STORE-AUDIT phase 3b). A read is
-// metafetch.LoadStateSnapshot; a change goes through
-// metafetch.WithStateSnapshot, which holds the book's field-state stripe from
-// the read through the save.
-
-func (s *Server) updateFetchedMetadataState(bookID string, values map[string]any) error {
-	store := s.Ops()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	return metafetch.WithStateSnapshot(store, bookID, func(state map[string]metafetch.MetadataFieldState) error {
-		now := time.Now()
-		for field, value := range values {
-			entry := state[field]
-			entry.FetchedValue = value
-			entry.UpdatedAt = now
-			state[field] = entry
-		}
-		return nil
-	})
-}
 
 func (s *Server) resolveAuthorAndSeriesNames(book *database.Book) (string, string) {
 	authorName := ""

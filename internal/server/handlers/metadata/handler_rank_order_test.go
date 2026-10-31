@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_rank_order_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a628796c-ecbd-4442-8944-e88a2628321a
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package metadatahandler_test
 
@@ -130,38 +130,5 @@ func TestApplyAudiobookMetadata_AppliesTheClickedRowOfTheReorderedList(t *testin
 	}
 	if applied.Title != "Sample Saga 2" || applied.Publisher != "Pub X" || applied.Score != 1.05 {
 		t.Fatalf("applied %+v, want the clicked Sample Saga 2 candidate unchanged", applied)
-	}
-}
-
-// Bulk fetch applies the first non-review-only Result of the search, in the
-// order the search returned them. RankScore does not enter: Y outranks X for the
-// dialog, but the pick is X, as at HEAD. (It also applies with no score floor;
-// that is todo BULK-FETCH-NO-GATE.)
-func TestBulkFetchMetadata_PickIgnoresRankScore(t *testing.T) {
-	h, d := newHandler(t)
-	expectNoLocks(d.store)
-	x, y := rankPair()
-	// Author and narrator rows make the apply read people this test does not mock.
-	x.Narrator, x.Author, y.Author = "", "", ""
-	review := metafetch.MetadataCandidate{Title: "Sample Saga 1", Source: "Open Library", Score: 2, RankScore: 2.5}
-	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
-	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
-	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
-		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{review, x, y}}, nil)
-	var saved *database.Book
-	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("Audible")).
-		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ *metafetch.MetadataCandidate) {
-			saved = b
-		}).
-		Return(&database.Book{ID: "b1"}, nil)
-	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Audible", "").Return()
-
-	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
-		map[string]any{"book_ids": []string{"b1"}}, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if saved == nil || saved.Publisher == nil || *saved.Publisher != "Pub X" {
-		t.Fatalf("bulk fetch applied %+v, want the first non-review-only result (Pub X)", saved)
 	}
 }

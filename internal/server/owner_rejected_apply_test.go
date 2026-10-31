@@ -1,7 +1,7 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package server
 
@@ -150,46 +150,6 @@ func TestTranscription_RefusesOwnerRejectedTop(t *testing.T) {
 	err = s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author)
 	require.ErrorIs(t, err, errTranscriptionOwnerRejected)
 	require.Empty(t, *updateCalls, "owner-rejected candidate was written")
-}
-
-// POST /metadata/bulk-fetch skips a candidate the owner rejected.
-func TestBulkFetch_SkipsOwnerRejected(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-	aud := testutil.MockAudibleServer(t, func(title string) []testutil.AudibleTestProduct {
-		return []testutil.AudibleTestProduct{{
-			ASIN: "B0TESTREJ1", Title: title, Authors: []string{"Meta Author"},
-			Publisher: "Synthetic Rejected Pub", Language: "eng", ReleaseDate: "2020-01-01",
-		}}
-	})
-	useOnlyAudible(t, aud.URL)
-
-	tempFile := filepath.Join(t.TempDir(), "rej.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	store := database.GetGlobalStore()
-	book, err := store.CreateBook(&database.Book{Title: "Book One", FilePath: tempFile, Format: "m4b"})
-	require.NoError(t, err)
-	// The owner has rejected every candidate this search returns.
-	pre, serr := server.metadataFetchService.SearchMetadataForBookWithOptions(book.ID, "", "", "", "", metafetch.SearchOptions{})
-	require.NoError(t, serr)
-	require.NotEmpty(t, pre.Results)
-	for _, c := range pre.Results {
-		require.NoError(t, store.SetRaw("rejected_candidate:"+book.ID+":"+c.Source+"|"+c.Title, []byte("1")))
-	}
-
-	body, _ := json.Marshal(map[string]any{"book_ids": []string{book.ID}})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/metadata/bulk-fetch", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), `"status":"owner_rejected"`, "refused for the rejection, not for another reason")
-
-	got, err := store.GetBookByID(book.ID)
-	require.NoError(t, err)
-	if got.Publisher != nil {
-		require.NotEqual(t, "Synthetic Rejected Pub", *got.Publisher, "owner-rejected candidate was applied")
-	}
 }
 
 // candidateTitles decodes a cache row's candidate titles in order.

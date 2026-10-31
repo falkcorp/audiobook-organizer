@@ -1,17 +1,17 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.30.2
+// version: 1.30.3
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
 // metadata_handlers.go: batch-update / validate / export / import, external
 // search, per-book fetch / search / apply / mark-no-match / revert,
 // metadata-rejections, copy-on-write version list / prune, write-back, bulk
-// fetch + bulk write-back enqueue, batch write-back enqueue, the field
+// write-back enqueue, batch write-back enqueue, the field
 // enumeration endpoint, and the rating PATCH).
 //
-// Each interface lists only what the 19 handlers actually call so package
+// Each interface lists only what the 18 handlers actually call so package
 // metadatahandler stays decoupled from the concrete store / service / registry
 // implementations and never imports package server (which would create an
 // import cycle).
@@ -28,7 +28,7 @@
 // server_maintenance_deps.go / metadata_batch_candidates.go /
 // library_writeback_op.go / duplicates_ops.go), so it was relocated verbatim to
 // internal/server/metadata_ops.go (package server) and stays on the *Server
-// receiver. None of it is reachable from the 19 handlers.
+// receiver. None of it is reachable from the 18 handlers.
 
 package metadatahandler
 
@@ -80,8 +80,8 @@ type MetadataRejectionStore interface {
 	// Metadata rejections (markAudiobookNoMatch / handleGetMetadataRejections).
 	AddMetadataRejection(r database.MetadataRejection) error
 	GetMetadataRejections(bookID string) ([]database.MetadataRejection, error)
-	// The owner's candidate rejections: the bulk fetch never applies one,
-	// and the search dialog's fetch ranks them last in the cached row
+	// The owner's candidate rejections: the search dialog's fetch ranks them
+	// last in the cached row
 	// (metabatch.MergeRanker).
 	metafetch.RejectedCandidateReader
 }
@@ -197,7 +197,6 @@ type MetadataApplier interface {
 	// anything, that the rename is known to fail (wrapping
 	// metafetch.ErrApplyFileWorkWouldFail).
 	RenameOnlyPreflight(id string) error
-	ApplyMetadataSystemTags(bookID, sourceName, language string)
 }
 
 // MetadataWriteBacker writes metadata back to the files on disk.
@@ -216,22 +215,9 @@ type MetadataMatchMarker interface {
 	InvalidateFetchCacheForBook(bookID string) error
 }
 
-// MetadataHistoryRecorder records applied metadata in the change history.
-type MetadataHistoryRecorder interface {
-	// CommitCandidateApply writes the fields an apply of candidate changed
-	// onto the row as it stands (ModifyBook) and records history from the
-	// committed row, under one batch id. Under the book's write stripe it
-	// re-reads the owner's rejections and refuses a candidate the owner
-	// rejected (metafetch.ErrOwnerRejectedNotApplied) or when they cannot be
-	// read (metafetch.ErrOwnerRejectionCheckFailed). A nil book means
-	// nothing was written; a book with an error means the write committed
-	// and its history did not, so undo refuses that apply.
-	CommitCandidateApply(id string, before, book *database.Book, credits *metafetch.AuthorCredits, candidate *metafetch.MetadataCandidate) (*database.Book, error)
-}
-
 // MetadataFetchService is the narrow *metafetch.Service subset the metadata
 // handlers call. The concrete *metafetch.Service satisfies it. Only the methods
-// reached from the 19 HTTP handlers are listed — BuildSourceChain is used
+// reached from the 18 HTTP handlers are listed — BuildSourceChain is used
 // exclusively by the relocated async-op machinery
 // (metadata_ops.go), so they are intentionally absent here.
 //
@@ -249,7 +235,6 @@ type MetadataFetchService interface {
 	QueuedApplyHistory
 	MetadataWriteBacker
 	MetadataMatchMarker
-	MetadataHistoryRecorder
 }
 
 // OperationsRegistry is the narrow operations-registry subset the
