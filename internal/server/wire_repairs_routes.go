@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
@@ -162,8 +162,14 @@ func (s *Server) sessionStillStands() func(c *gin.Context) bool {
 			}
 		}
 		if sess, ok := servermiddleware.CurrentSession(c); ok {
-			fresh, err := store.GetSession(sess.ID)
-			if err != nil || fresh == nil || fresh.Revoked || time.Now().After(fresh.ExpiresAt) {
+			freshSess, err := store.GetSession(sess.ID)
+			if err != nil || freshSess == nil || freshSess.Revoked || time.Now().After(freshSess.ExpiresAt) {
+				return false
+			}
+			// An open stream outlives the request that authenticated it, so a
+			// password change or reset after it opened must end it too: the
+			// session's stamp against the user's epoch, both freshly read.
+			if !freshSess.CredentialsCurrent(fresh) {
 				return false
 			}
 		}

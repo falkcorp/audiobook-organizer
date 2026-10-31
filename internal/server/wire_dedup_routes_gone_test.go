@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c6e41aa4-3cd4-4771-b556-56d39cb542d4
-// last-edited: 2026-10-17
+// last-edited: 2026-10-30
 
 package server
 
@@ -61,7 +61,7 @@ func TestRetiredBookDuplicatesRoutes_AuthRunsFirst(t *testing.T) {
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	for _, r := range retiredBookDuplicatesRoutes {

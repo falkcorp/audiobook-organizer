@@ -1,7 +1,7 @@
 // file: internal/server/wire_lifecycle_gone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2d9b6e84-1a3c-4f57-8e20-b7c5a41d9f63
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -97,13 +97,13 @@ func TestRetiredLifecycleRoutes_PermissionRunsBeforeGone(t *testing.T) {
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 	_, err = f.store.CreateRole(&database.Role{ID: "synthetic-scan-only", Name: "synthetic-scan-only", Permissions: []string{string(auth.PermScanTrigger)}})
 	require.NoError(t, err)
 	scanOnly, err := f.store.CreateUser("synthetic-scan-only", "scanonly@example.test", "bcrypt", "x", []string{"synthetic-scan-only"}, "active")
 	require.NoError(t, err)
-	scanSess, err := f.store.CreateSessionWithOrigin(scanOnly.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	scanSess, err := f.store.CreateSessionWithOrigin(scanOnly.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	for _, r := range retiredLifecycleRoutes {

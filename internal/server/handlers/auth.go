@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 3.2.0
+// version: 3.2.1
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -64,8 +64,8 @@ type AuthRoleReader interface {
 
 // AuthSessionStore issues, reads, lists and revokes sessions.
 type AuthSessionStore interface {
-	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
-	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*database.Session, error)
+	CreateSession(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*database.Session, error)
+	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*database.Session, error)
 	GetSession(id string) (*database.Session, error)
 	ListUserSessions(userID string) ([]database.Session, error)
 	RevokeSession(id string) error
@@ -403,6 +403,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		strings.TrimSpace(c.Request.UserAgent()),
 		ttl,
 		database.SessionOriginPassword,
+		// The epoch of the record the password was just verified against, not a
+		// fresh read: a password change landing between the check above and this
+		// write leaves the session with the old stamp, refused on first use.
+		user.CredentialEpoch,
 	)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to create session")
@@ -631,11 +635,22 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "password changes are not supported by this store")
 		return
 	}
-	expected := ""
+	// Web sessions die the same way: each is stamped with the epoch it was
+	// signed in under and the auth middleware refuses a mismatch. On a
+	// self-service change the caller's own session is passed as keepSessionID, so
+	// the store re-stamps it with the new epoch in the same batch as the password
+	// and the person who just changed their password stays signed in (every
+	// other web and ABS session of the account dies). An admin reset keeps
+	// nothing: the admin's session is another user's.
+	expected, keepSessionID := "", ""
 	if !isAdminReset {
 		expected = target.PasswordHash
+		if sess, ok := servermiddleware.CurrentSession(c); ok && sess != nil {
+			keepSessionID = sess.ID
+		}
 	}
-	if _, err := h.creds.SetUserPassword(target.ID, expected, newAlgo, newHash); err != nil {
+	updated, err := h.creds.SetUserPassword(target.ID, expected, newAlgo, newHash, keepSessionID)
+	if err != nil {
 		switch {
 		case errors.Is(err, database.ErrUserStale):
 			httputil.RespondWithConflict(c, "the password changed while this request was in flight; nothing was changed, try again")
@@ -651,5 +666,6 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		reason = "admin-password-reset"
 	}
 	RevokeAllABSSessions(h.absSessions, target.ID, reason)
+	RevokeStaleWebSessions(h.store, target.ID, updated.CredentialEpoch, reason)
 	httputil.RespondWithNoContent(c)
 }

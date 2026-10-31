@@ -1,7 +1,7 @@
 // file: internal/database/ulid_order_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 31364789-bcf5-4d20-bf45-120283862710
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package database
 
@@ -164,7 +164,7 @@ func TestCreateSession_IDsAreNotLinkedToEachOther(t *testing.T) {
 	for range 20 {
 		before, err := newULID()
 		require.NoError(t, err)
-		sess, err := store.CreateSession("user-1", "192.0.2.1", "test", time.Hour)
+		sess, err := store.CreateSession("user-1", "192.0.2.1", "test", time.Hour, 0)
 		require.NoError(t, err)
 		b, err := ulid.ParseStrict(before)
 		require.NoError(t, err)

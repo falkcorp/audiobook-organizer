@@ -1,7 +1,7 @@
 // file: internal/decisions/retention_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c8e5b17-94d0-4f63-a1b2-7e03d6c58a49
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package decisions_test
 
@@ -319,7 +319,7 @@ func otherSweepEntries(ctx context.Context) []retentionEntry {
 		{
 			name: "PebbleStore.DeleteExpiredSessions", wantDeleted: true,
 			seed: func(t *testing.T, kv *database.PebbleStore) {
-				_, err := kv.CreateSession("u-expired", "192.0.2.1", "ua", -time.Hour)
+				_, err := kv.CreateSession("u-expired", "192.0.2.1", "ua", -time.Hour, 0)
 				require.NoError(t, err)
 			},
 			run: func(t *testing.T, kv *database.PebbleStore) (int, error) { return kv.DeleteExpiredSessions(time.Now()) },

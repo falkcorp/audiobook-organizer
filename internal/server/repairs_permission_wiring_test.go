@@ -1,7 +1,7 @@
 // file: internal/server/repairs_permission_wiring_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 888ff2ac-f8df-4f70-919b-262570c6492b
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 // The Repairs lane's per-fixer permission check as the server wires it
 // (wireRepairsRoutes + permHolds): the same semantics as s.perm, driven
@@ -56,9 +56,9 @@ func repairsPermServer(t *testing.T, enableAuth, withUsers bool) (srv *Server, e
 		require.NoError(t, err)
 		admin, err := store.CreateUser("admin", "admin@x.test", "bcrypt", "hash", []string{auth.SeedRoleAdmin}, "active")
 		require.NoError(t, err)
-		es, err := store.CreateSession(editor.ID, "127.0.0.1", "test", time.Hour)
+		es, err := store.CreateSession(editor.ID, "127.0.0.1", "test", time.Hour, 0)
 		require.NoError(t, err)
-		as, err := store.CreateSession(admin.ID, "127.0.0.1", "test", time.Hour)
+		as, err := store.CreateSession(admin.ID, "127.0.0.1", "test", time.Hour, 0)
 		require.NoError(t, err)
 		editorToken, adminToken = es.ID, as.ID
 	}
@@ -178,7 +178,7 @@ func TestRepairsRoutes_PlanRowsNeedTheFixersPermission(t *testing.T) {
 	store := srv.storeForWiring()
 	guest, err := store.CreateUser("guest", "guest@x.test", "bcrypt", "hash", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	gs, err := store.CreateSession(guest.ID, "127.0.0.1", "test", time.Hour)
+	gs, err := store.CreateSession(guest.ID, "127.0.0.1", "test", time.Hour, 0)
 	require.NoError(t, err)
 
 	for name, token := range map[string]string{"viewer": gs.ID, "editor": editor} {

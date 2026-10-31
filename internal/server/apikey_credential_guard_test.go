@@ -1,5 +1,5 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
 // last-edited: 2026-10-30
 
@@ -94,7 +94,7 @@ func setupCredGuardServerOpts(t *testing.T, cfg func(*config.Config), startRegis
 
 	// CreateSession records no origin, which RequireAuth treats as delegated;
 	// a password-origin session is the user's own sign-in.
-	sess, err := store.CreateSessionWithOrigin(admin.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := store.CreateSessionWithOrigin(admin.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	raw, hash, err := database.GenerateAPIKeyToken()

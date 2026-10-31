@@ -1,7 +1,7 @@
 // file: internal/database/mock_store_coverage_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 9f8e7d6c-5b4a-3c2d-1e0f-a9b8c7d6e5f4
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
@@ -110,7 +110,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	mock.UpdateUserFunc = func(*User) error { return nil }
 
 	// Sessions
-	mock.CreateSessionFunc = func(string, string, string, time.Duration) (*Session, error) { return nil, nil }
+	mock.CreateSessionFunc = func(string, string, string, time.Duration, int64) (*Session, error) { return nil, nil }
 	mock.GetSessionFunc = func(string) (*Session, error) { return nil, nil }
 	mock.RevokeSessionFunc = func(string) error { return nil }
 	mock.ListUserSessionsFunc = func(string) ([]Session, error) { return nil, nil }
@@ -213,7 +213,7 @@ func TestMockStore_CustomFuncPaths(t *testing.T) {
 	_, _ = mock.GetUserByUsername("username")
 	_, _ = mock.GetUserByVerifiedEmail("email")
 	_ = mock.UpdateUser(&User{})
-	_, _ = mock.CreateSession("user-1", "127.0.0.1", "agent", 24*time.Hour)
+	_, _ = mock.CreateSession("user-1", "127.0.0.1", "agent", 24*time.Hour, 0)
 	_, _ = mock.GetSession("session-1")
 	_ = mock.RevokeSession("session-1")
 	_, _ = mock.ListUserSessions("user-1")

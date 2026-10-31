@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.24.2
+// version: 1.24.3
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package server
 
@@ -331,10 +331,12 @@ type serverUserStore interface {
 // serverCredentialStore: Sessions and API keys.
 type serverCredentialStore interface {
 	CreateAPIKey(key *database.APIKey) (*database.APIKey, error)
-	CreateSession(userID string, ip string, userAgent string, ttl time.Duration) (*database.Session, error)
+	CreateSession(userID string, ip string, userAgent string, ttl time.Duration, credentialEpoch int64) (*database.Session, error)
 	DeleteExpiredABSSessions(now time.Time) (int, error)
 	DeleteExpiredSessions(now time.Time) (int, error)
 	ListAllAPIKeys() ([]database.APIKey, error)
+	ListUserSessions(userID string) ([]database.Session, error)
+	RevokeSession(id string) error
 }
 
 // serverMetadataStateStore: Per-field metadata provenance state.

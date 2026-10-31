@@ -1,6 +1,7 @@
 // file: internal/server/middleware/auth_permission_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f8d2c1a-5e9b-4f70-b7c6-2d8e0f1b9a47
+// last-edited: 2026-10-30
 
 package middleware
 
@@ -39,11 +40,11 @@ func setupAuthTestStore(t *testing.T) (database.Store, string, string) {
 		t.Fatalf("create viewer: %v", err)
 	}
 
-	adminSession, err := store.CreateSession(admin.ID, "127.0.0.1", "test", time.Hour)
+	adminSession, err := store.CreateSession(admin.ID, "127.0.0.1", "test", time.Hour, 0)
 	if err != nil {
 		t.Fatalf("create admin session: %v", err)
 	}
-	viewerSession, err := store.CreateSession(viewer.ID, "127.0.0.1", "test", time.Hour)
+	viewerSession, err := store.CreateSession(viewer.ID, "127.0.0.1", "test", time.Hour, 0)
 	if err != nil {
 		t.Fatalf("create viewer session: %v", err)
 	}

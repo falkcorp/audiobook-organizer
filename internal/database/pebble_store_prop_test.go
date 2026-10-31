@@ -1,11 +1,11 @@
 // file: internal/database/pebble_store_prop_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 15afe4d2-3a00-4326-be15-1e3f0b11a10e
 
 // Black-box test package: internal/testutil/rapidgen imports the database
 // package, so these property tests live in database_test (not database) to
 // avoid an import cycle.
-// last-edited: 2026-10-03
+// last-edited: 2026-10-30
 
 package database_test
 
@@ -321,7 +321,7 @@ func TestProp_Session_CreateRevoke(t *testing.T) {
 		ua := "rapid-agent"
 		ttl := time.Duration(rapid.IntRange(1, 3600).Draw(t, "ttl_sec")) * time.Second
 
-		sess, err := store.CreateSession(u.ID, ip, ua, ttl)
+		sess, err := store.CreateSession(u.ID, ip, ua, ttl, 0)
 		if err != nil {
 			t.Fatalf("CreateSession: %v", err)
 		}

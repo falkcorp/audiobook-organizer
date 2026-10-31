@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -43,12 +43,12 @@ func (r *absRevokeRecorder) RevokeAllABSSessionsForUser(userID string) (int, err
 
 // credsFake is the database.UserCredentialWriter capability.
 type credsFake struct {
-	setPassword func(userID, expectedHash, algo, hash string) (*database.User, error)
+	setPassword func(userID, expectedHash, algo, hash, keepSessionID string) (*database.User, error)
 	setStatus   func(userID, status string) (*database.User, error)
 }
 
-func (f *credsFake) SetUserPassword(userID, expectedHash, algo, hash string) (*database.User, error) {
-	return f.setPassword(userID, expectedHash, algo, hash)
+func (f *credsFake) SetUserPassword(userID, expectedHash, algo, hash, keepSessionID string) (*database.User, error) {
+	return f.setPassword(userID, expectedHash, algo, hash, keepSessionID)
 }
 
 func (f *credsFake) SetUserStatus(userID, status string) (*database.User, error) {
@@ -73,7 +73,7 @@ type userStoreWithABS struct {
 
 // passwordSetter records SetUserPassword calls and answers with ret, err.
 func passwordSetter(t *testing.T, wantID, wantExpected string, events *[]string, ret *database.User, err error) *credsFake {
-	return &credsFake{setPassword: func(userID, expectedHash, algo, hash string) (*database.User, error) {
+	return &credsFake{setPassword: func(userID, expectedHash, algo, hash, keepSessionID string) (*database.User, error) {
 		require.Equal(t, wantID, userID)
 		require.Equal(t, wantExpected, expectedHash, "self-service passes the verified hash, admin reset passes \"\"")
 		require.Equal(t, absauth.AlgoArgon2id, algo, "every password writer hashes with absauth.HashPassword")
@@ -107,6 +107,7 @@ func TestChangePassword_GoesThroughSetUserPasswordThenRevokes(t *testing.T) {
 			target := passwordUser(t, "u-target", "old-password")
 			oldHash := target.PasswordHash
 			mockStore.EXPECT().GetUserByID("u-target").Return(target, nil)
+			mockStore.EXPECT().ListUserSessions("u-target").Return(nil, nil) // the web-session cleanup after the write
 			wantExpected := oldHash
 			if tc.admin {
 				wantExpected = ""
@@ -139,6 +140,7 @@ func TestChangePassword_RevokeFailureStillReportsTheChange(t *testing.T) {
 	rec := &absRevokeRecorder{err: errors.New("pebble: partial revoke")}
 	target := passwordUser(t, "u1", "old-password")
 	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
+	mockStore.EXPECT().ListUserSessions("u1").Return(nil, nil) // the web-session cleanup after the write
 	h := handlers.NewAuthHandler(authStoreWithABS{mockStore, rec, passwordSetter(t, "u1", target.PasswordHash, nil, target, nil)}, true)
 
 	c, w := newAuthCtx(http.MethodPut, "/api/v1/auth/me/password",
@@ -174,6 +176,7 @@ func TestChangePassword_NoABSKeyspaceStillChangesPassword(t *testing.T) {
 	mockStore := handlersmocks.NewMockAuthStore(t)
 	target := passwordUser(t, "u1", "old-password")
 	mockStore.EXPECT().GetUserByID("u1").Return(target, nil)
+	mockStore.EXPECT().ListUserSessions("u1").Return(nil, nil) // the web-session cleanup after the write
 	h := handlers.NewAuthHandler(struct {
 		*handlersmocks.MockAuthStore
 		*credsFake
@@ -218,6 +221,7 @@ func TestUserStatusChanges_GoThroughSetUserStatusThenRevoke(t *testing.T) {
 		mockStore := handlersmocks.NewMockUserStore(t)
 		rec := &absRevokeRecorder{events: &events, err: tc.revokeErr}
 		mockStore.EXPECT().GetUserByID("u-123").Return(sampleUser(), nil)
+		mockStore.EXPECT().ListUserSessions("u-123").Return(nil, nil) // the web-session cleanup after the write
 		creds := &credsFake{setStatus: func(id, status string) (*database.User, error) {
 			require.Equal(t, "u-123", id)
 			require.Equal(t, tc.status, status)

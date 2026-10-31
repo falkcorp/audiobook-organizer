@@ -415,10 +415,10 @@ type MockStore struct {
 	ListUsersFunc              func() ([]User, error)
 
 	// Sessions
-	CreateSessionFunc func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
+	CreateSessionFunc func(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*Session, error)
 	// CreateSessionWithOriginFunc; when nil, CreateSessionWithOrigin falls
 	// back to CreateSessionFunc and stamps the origin on its result.
-	CreateSessionWithOriginFunc func(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error)
+	CreateSessionWithOriginFunc func(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*Session, error)
 	GetSessionFunc              func(id string) (*Session, error)
 	RevokeSessionFunc           func(id string) error
 	ListUserSessionsFunc        func(userID string) ([]Session, error)
@@ -2085,18 +2085,18 @@ func (m *MockStore) ListUsers() ([]User, error) {
 	return nil, nil
 }
 
-func (m *MockStore) CreateSession(userID, ip, userAgent string, ttl time.Duration) (*Session, error) {
+func (m *MockStore) CreateSession(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*Session, error) {
 	if m.CreateSessionFunc != nil {
-		return m.CreateSessionFunc(userID, ip, userAgent, ttl)
+		return m.CreateSessionFunc(userID, ip, userAgent, ttl, credentialEpoch)
 	}
 	return nil, nil
 }
 
-func (m *MockStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error) {
+func (m *MockStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*Session, error) {
 	if m.CreateSessionWithOriginFunc != nil {
-		return m.CreateSessionWithOriginFunc(userID, ip, userAgent, ttl, origin)
+		return m.CreateSessionWithOriginFunc(userID, ip, userAgent, ttl, origin, credentialEpoch)
 	}
-	s, err := m.CreateSession(userID, ip, userAgent, ttl)
+	s, err := m.CreateSession(userID, ip, userAgent, ttl, credentialEpoch)
 	if s != nil {
 		s.Origin = origin
 	}
