@@ -1,7 +1,7 @@
 // file: internal/database/memdb_summaries.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000008
-// last-edited: 2026-09-02
+// last-edited: 2026-10-30
 
 package database
 
@@ -147,7 +147,31 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 	// GetAudiobooks. Do NOT move this back up the stack — see
 	// docs/audits/2026-08-25-author-series-sort-degenerate.md.
 	materialise := sortIdx == "" && CanSortBooksBy(f.SortBy)
-	var matches []Book
+
+	// Two ways to hold the match set, chosen by whether the sort writes to the
+	// rows (sortHydratesRows; the reasoning is on that function):
+	//
+	//   - copyMatches: author/series. Every match is copied into matches,
+	//     hydrated, sorted whole, and the page cut from the sorted copy.
+	//   - topK: every other sort key. Matches are offered as *Book pointers
+	//     (memdb objects are read-only) to a bounded top-(offset+limit) heap;
+	//     no row is copied and only the final page is projected.
+	//
+	// Both produce the same page for every key, ties included, because both
+	// rank with bookSortLess (TestMemdbSummariesTopKMatchesCopyPath).
+	copyMatches := materialise && sortHydratesRows(f.SortBy)
+	var (
+		matches []Book
+		topK    *bookTopK
+	)
+	if materialise && !copyMatches {
+		var ok bool
+		topK, ok = newBookTopK(f.SortBy, f.SortAscending, topKWindow(offset, limit))
+		if !ok {
+			// CanSortBooksBy said yes a moment ago; both read the same map.
+			return nil, fmt.Errorf("memdb book_summaries: no comparator for sort %q", f.SortBy)
+		}
+	}
 
 	switch {
 	case sortIdx != "":
@@ -263,8 +287,13 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		}
 
 		// Materialising: take every match, unpaginated. The sort below
-		// decides which rows the page holds.
-		if materialise {
+		// decides which rows the page holds. topK keeps pointers and only the
+		// best offset+limit of them; copyMatches copies the lot.
+		if topK != nil {
+			topK.add(b)
+			continue
+		}
+		if copyMatches {
 			matches = append(matches, *b)
 			continue
 		}
@@ -308,7 +337,16 @@ func (m *MemStore) GetBookSummaries(limit, offset int, f BookSummaryFilter) ([]B
 		}
 	}
 
-	if materialise {
+	if topK != nil {
+		page := topK.page(offset, limit)
+		res := make([]BookSummary, len(page))
+		for i, b := range page {
+			res[i] = bookToSummary(b)
+		}
+		return res, nil
+	}
+
+	if copyMatches {
 		// author/series sort on a name the row does not carry: memdb strips
 		// both pointers (stripBookForMemdb) so every book would compare as "".
 		// Resolve them from the same txn before sorting.

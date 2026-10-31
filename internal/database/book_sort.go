@@ -1,7 +1,7 @@
 // file: internal/database/book_sort.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c1f7a52-9d84-4e6b-b0a7-2f5c8e1d4a93
-// last-edited: 2026-09-28
+// last-edited: 2026-10-30
 //
 // The single ordering authority for a []Book.
 //
@@ -213,20 +213,39 @@ func SortableBookFields() []string {
 // primary-key tiebreak. Sorting missing-last in both directions would look
 // tidier and would not match what the index does.
 func SortBooks(books []Book, field string, ascending bool) {
-	cmp, ok := bookSortComparators[field]
+	less, ok := bookSortLess(field, ascending)
 	if !ok {
 		return
 	}
 	sort.SliceStable(books, func(i, j int) bool {
-		r := cmp(&books[i], &books[j])
+		return less(&books[i], &books[j])
+	})
+}
+
+// bookSortLess is the strict ordering SortBooks applies, as a predicate over
+// two rows: field's comparator, ties broken by book ID, the whole result
+// negated for descending. ok is false for a field with no comparator.
+//
+// It exists so that every consumer of "the order a sort produces" shares one
+// body. SortBooks sorts a []Book with it; the bounded top-k page selection in
+// GetBookSummaries (bookTopK) ranks *Book pointers with it. Because the ID
+// tiebreak makes the order total over distinct IDs, a stable sort of all rows
+// and a top-k selection pick exactly the same rows in exactly the same order.
+func bookSortLess(field string, ascending bool) (less func(a, b *Book) bool, ok bool) {
+	cmp, ok := bookSortComparators[field]
+	if !ok {
+		return nil, false
+	}
+	return func(a, b *Book) bool {
+		r := cmp(a, b)
 		if r == 0 {
 			// memdb appends the primary key to a non-unique index entry, so
 			// ties break by book ID there; match that.
-			r = strings.Compare(books[i].ID, books[j].ID)
+			r = strings.Compare(a.ID, b.ID)
 		}
 		if !ascending {
 			return r > 0
 		}
 		return r < 0
-	})
+	}, true
 }

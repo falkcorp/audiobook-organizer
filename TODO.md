@@ -1602,11 +1602,14 @@ into one of the curated sections below, is a normal direct edit.
       the index, a reverse walk to the 40 newest visible rows measured ~7 us and ~10 KB.
       Cost: roughly 19 MB of memory per indexed key and slower inserts. The change is
       configuration only (no code), but it trades memory and write speed for read speed, so
-      it is the owner's call. A store-side alternative that needs no index: collect `*Book`
-      pointers (memdb objects are read-only) or keep a bounded top-(offset+limit) heap
-      instead of copying every match (976 B each), which would cut the unindexed sort from
-      ~78 MB to ~130 KB; the author and series sorts mutate rows in `hydrateSortNames`, so
-      they would need to stay on the copying path.
+      it is the owner's call.
+      **Store-side half DONE 2026-10-30** (`perf/memdb-sort-bounded-topk`,
+      `docs/decisions/2026-10-30-memdb-sort-bounded-topk.md`): the unindexed sort now keeps a
+      bounded top-(offset+limit) heap of `*Book` pointers instead of copying every match
+      (author and series stay on the copying path). Measured on 60k rows, created_at desc,
+      limit 40: 78.5 MB / 57 ms per call down to 20 KB / 3.2 ms. **Remaining: only the
+      owner's decision whether to enable the `created_at` index** (that would take the 3.2
+      ms to ~7 us for ~19 MB of memory and slower inserts).
 
 - [ ] **ABS-JUNK-AUTHOR-NAMES** Owner review: trial and apply the junk-author repair for the
       tag-shrapnel author rows the ABS Newest Authors shelf exposed on 2026-10-10 (an HTML
