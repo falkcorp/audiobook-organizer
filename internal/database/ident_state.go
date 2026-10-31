@@ -1,7 +1,7 @@
 // file: internal/database/ident_state.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
@@ -1689,16 +1689,7 @@ func (p *PebbleStore) MarkIdentDirty(bookID string) (uint64, error) {
 	if err := ValidateBookID(bookID); err != nil || bookID == "" {
 		return 0, fmt.Errorf("MarkIdentDirty: invalid book id %q", bookID)
 	}
-	mu := p.metadataCacheLock(bookID)
-	mu.Lock()
-	defer mu.Unlock()
-	epoch := p.nextIdentEpoch()
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], epoch)
-	if err := p.db.Set(identDirtyKey(bookID), b[:], pebble.Sync); err != nil {
-		return 0, fmt.Errorf("mark ident:dirty:%s: %w", bookID, err)
-	}
-	return epoch, nil
+	return p.MarkDirty(identDirtyPrefix, bookID)
 }
 
 // IdentDirtyPage returns up to limit marks in book-id key order, starting
@@ -1736,24 +1727,7 @@ func (p *PebbleStore) IdentDirtyPage(after string, limit int) ([]IdentDirtyEntry
 // reports whether it did. A mark re-set after the caller read it carries a
 // newer epoch and survives.
 func (p *PebbleStore) ClearIdentDirty(bookID string, epoch uint64) (bool, error) {
-	mu := p.metadataCacheLock(bookID)
-	mu.Lock()
-	defer mu.Unlock()
-	key := identDirtyKey(bookID)
-	val, closer, err := p.db.Get(key)
-	if errors.Is(err, pebble.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read ident:dirty:%s: %w", bookID, err)
-	}
-	same := len(val) == 8 && binary.BigEndian.Uint64(val) == epoch
-	closer.Close()
-	if !same {
-		return false, nil
-	}
-	if err := p.db.Delete(key, pebble.Sync); err != nil {
-		return false, fmt.Errorf("clear ident:dirty:%s: %w", bookID, err)
-	}
-	return true, nil
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], epoch)
+	return p.CompareAndDeleteRaw(string(identDirtyKey(bookID)), b[:])
 }

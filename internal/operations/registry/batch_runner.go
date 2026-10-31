@@ -1,7 +1,7 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
-// last-edited: 2026-10-14
+// last-edited: 2026-10-30
 
 package registry
 
@@ -62,7 +62,9 @@ const progressRefreshEvery = 10 * time.Second
 const maxItemRowsPerRun = 10_001
 
 // ErrDirtySetUnsupported is returned when a DirtySet source runs on a store
-// without the compare-and-delete primitive (02 PR 14 adds it with the marker).
+// without the compare-and-delete primitive. *database.PebbleStore has it
+// (CompareAndDeleteRaw, with the MarkDirty marker); the refusal remains for
+// any other store, since AsCapability finds nothing to drain a set with.
 var ErrDirtySetUnsupported = errors.New("registry: the store has no compare-and-delete for DirtySet sources")
 
 // batchStore is the chunk-ledger surface the runner persists through.
