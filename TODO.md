@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -2218,7 +2218,7 @@ into one of the curated sections below, is a normal direct edit.
       (null top-level and override, applied as a nil year), with a Go test and
       a Vitest.
 
-- [ ] **EDIT-JOIN-WRITE-STRIPE** Run the book edit endpoint's post-commit
+- [x] **EDIT-JOIN-WRITE-STRIPE** Run the book edit endpoint's post-commit
       join writes (book_authors from SetBookAuthors, book_narrators from
       SetBookNarrators, in audiobooks.UpdateAudiobook) under the book's write
       stripe. They now run after ModifyBook commits but outside the stripe,

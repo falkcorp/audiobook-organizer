@@ -1,13 +1,14 @@
 // file: internal/audiobooks/author_name_gate_test.go
-// version: 1.3.0
+// version: 1.3.2
 // guid: 706fca22-946e-4028-b4d1-f6d7c0bbcbb7
-// last-edited: 2026-10-04
+// last-edited: 2026-10-30
 
 package audiobooks
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -39,7 +40,10 @@ func gateTestService(created *[]string, written *[]database.Book) *AudiobookServ
 func TestUpdateAudiobook_AllAuthorNamesRejectedReturnsError(t *testing.T) {
 	var created []string
 	var written []database.Book
-	svc := gateTestService(&created, &written)
+	base := gateTestService(&created, &written)
+	// The store must offer ModifyBookCredits before the edit resolves anything.
+	var credited []database.BookAuthor
+	svc := NewAudiobookService(&creditsRecordingStore{MockStore: base.store.(*database.MockStore), credited: &credited})
 
 	name := "Track 01"
 	_, err := svc.UpdateAudiobook(context.Background(), "bk1", &UpdateAudiobookRequest{
@@ -69,6 +73,31 @@ func TestUpdateAudiobook_AllAuthorNamesRejectedReturnsError(t *testing.T) {
 // and dedup.CleanAuthorNameForCreation carries its own tests for which names
 // survive.
 
+// creditsRecordingStore is a MockStore with the ModifyBookCredits capability
+// the edit saves through: it hands fn the stored row and empty lists, and
+// records the author list fn leaves.
+type creditsRecordingStore struct {
+	*database.MockStore
+	credited *[]database.BookAuthor
+}
+
+func (c *creditsRecordingStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	book, err := c.MockStore.GetBookByID(id)
+	if err != nil || book == nil {
+		return nil, database.BookCreditsEdit{}, err
+	}
+	edit := database.BookCreditsEdit{}
+	if err := fn(book, &edit); err != nil {
+		return nil, database.BookCreditsEdit{}, err
+	}
+	*c.credited = edit.Authors
+	return book, edit, nil
+}
+
+func (c *creditsRecordingStore) ModifyBookNarrators(string, func([]database.BookNarrator) ([]database.BookNarrator, error)) ([]database.BookNarrator, error) {
+	return nil, errors.New("not used by the edit")
+}
+
 // A name the credit splitter leaves whole ("Travis Deverell, Shirtaloon" reads as
 // "Surname, First") whose parts are both existing authors is never created as
 // one combined author row.
@@ -82,14 +111,14 @@ func TestUpdateAudiobook_CombinedNameOfExistingAuthorsIsNotCreated(t *testing.T)
 	var written []database.Book
 	base := gateTestService(&created, &written)
 	store := base.store.(*database.MockStore)
-	svc := NewAudiobookService(store)
+	// The edit saves the row and its credits through ModifyBookCredits.
+	var credited []database.BookAuthor
+	svc := NewAudiobookService(&creditsRecordingStore{MockStore: store, credited: &credited})
 	existing := map[string]*database.Author{
 		"Travis Deverell": {ID: 1, Name: "Travis Deverell"},
 		"Shirtaloon":      {ID: 2, Name: "Shirtaloon"},
 	}
 	store.GetAuthorByNameFunc = func(n string) (*database.Author, error) { return existing[n], nil }
-	var credited []database.BookAuthor
-	store.SetBookAuthorsFunc = func(_ string, cs []database.BookAuthor) error { credited = cs; return nil }
 
 	name := "Travis Deverell, Shirtaloon"
 	_, err := svc.UpdateAudiobook(context.Background(), "bk1", &UpdateAudiobookRequest{
