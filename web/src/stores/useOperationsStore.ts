@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.13.1
+// version: 3.14.0
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-11
+// last-edited: 2026-10-30
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -45,6 +45,10 @@ export interface ActiveOperation {
   current_item?: string | null;
   /** 0 = alert (shows in bell badge), 1 = activity-only (no bell badge) */
   notify_level?: number;
+  /** True when the row is waiting for a decision (interrupted_ask) and its
+   *  definition can take "Finish without resuming". Server-computed
+   *  (OperationV2.can_finish); the Activity page offers the button from it. */
+  canFinish?: boolean;
   /** Set ONLY on the synthetic rows groupOperations builds. Its presence means
    *  this row stands for several real operations and its id names no record on
    *  the server — anything that fetches, cancels or refreshes by id must check
@@ -159,6 +163,7 @@ function fromV2(op: api.OperationV2): ActiveOperation {
     current_phase: op.current_phase,
     current_item: op.current_item,
     notify_level: op.notify_level ?? 0,
+    canFinish: op.can_finish ?? false,
   };
 }
 

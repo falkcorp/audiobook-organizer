@@ -594,6 +594,10 @@ export interface OperationV2 {
   resume_count: number;
   trace_id: string | null;
   span_id: string | null;
+  /** True on an interrupted_ask row whose definition can take the third
+   *  decision, "Finish without resuming" (finishOperation). The server computes
+   *  it so the button and the refusal agree; absent means false. */
+  can_finish?: boolean;
 }
 
 export interface OperationTimelineResponse {
@@ -3074,6 +3078,37 @@ export async function retryOperation(id: string): Promise<RetryResult> {
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to retry operation');
+  }
+  const body = await response.json();
+  return body.data;
+}
+
+/**
+ * FinishResult is the 202 body of POST /operations/v2/:id/finish: the same row,
+ * re-queued (mode 'finish_only') to run only its Finish over the rows it
+ * already applied.
+ */
+export interface FinishResult {
+  id: string;
+  def_id?: string;
+  status?: string;
+  mode?: 'finish_only';
+}
+
+/**
+ * finishOperation is the third decision on an interrupted operation that is
+ * waiting for one (status interrupted_ask), next to Retry and Discard: run the
+ * operation's follow-up step over the rows it already applied, without
+ * resuming the rest. Discard would throw that record away and Retry would apply
+ * the remaining rows. The server answers 409 for a row that is not waiting for
+ * a decision or whose definition has no follow-up step to run.
+ */
+export async function finishOperation(id: string): Promise<FinishResult> {
+  const response = await apiFetch(`${API_BASE}/operations/v2/${encodeURIComponent(id)}/finish`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to finish operation');
   }
   const body = await response.json();
   return body.data;

@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/state-and-persistence.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0acb837b-8274-4594-b101-9a6a064ff2dc -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-30 -->
 
 # Operations v3 — run state machine and persisted state
 
@@ -65,6 +65,7 @@ resume             interrupted → queued        same op id, attempt carries on
 ask                interrupted → awaiting_decision (policy Ask)
 decide retry       awaiting_decision|failed|canceled|timed_out|dropped → queued
 decide drop        awaiting_decision|interrupted → dropped
+decide finish      awaiting_decision → queued{finish_only}   same op id; the next attempt runs only Finish
 (migration only)   v2 requeued rows → dropped{successor_id}; no v3 event produces it
 ```
 

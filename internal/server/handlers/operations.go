@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e5f6a7b8-c9d0-1234-efab-234567890123
-// last-edited: 2026-06-01
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -38,6 +38,10 @@ type OperationV2Response struct {
 	ResumeCount     int        `json:"resume_count"`
 	TraceID         string     `json:"trace_id"`
 	SpanID          string     `json:"span_id"`
+	// CanFinish is true on an interrupted_ask row whose def can take the third
+	// decision, "Finish without resuming" (POST .../finish). The Activity page
+	// shows the button from it.
+	CanFinish bool `json:"can_finish,omitempty"`
 }
 
 // OpLogV2Response is the JSON shape for a single operation log line.

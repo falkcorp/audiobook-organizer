@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.test.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3f7a1c58-9b2e-4d16-8c40-7e5a2b9d61c3
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 /**
  * Regression tests for the Activity Log outage of 2026-08-11.
@@ -29,6 +29,7 @@ import type { ActivityEntry } from '../services/activityApi';
 import {
   cancelOperation,
   discardOperation,
+  finishOperation,
   getOperationResult,
   retryOperation,
   revertOperation,
@@ -61,6 +62,11 @@ vi.mock('../services/api', () => ({
   getOperationResult: vi.fn(),
   cancelOperation: vi.fn().mockResolvedValue(undefined),
   discardOperation: vi.fn().mockResolvedValue(undefined),
+  finishOperation: vi.fn().mockResolvedValue({
+    id: 'op-asking',
+    status: 'queued',
+    mode: 'finish_only',
+  }),
   retryOperation: vi
     .fn()
     .mockResolvedValue({ id: 'op-requeued-1234', status: 'queued', mode: 'requeued_new' }),
@@ -77,6 +83,7 @@ const mockedRevertOperation = vi.mocked(revertOperation);
 const mockedGetUndoPreflight = vi.mocked(getUndoPreflight);
 const mockedDiscardOperation = vi.mocked(discardOperation);
 const mockedRetryOperation = vi.mocked(retryOperation);
+const mockedFinishOperation = vi.mocked(finishOperation);
 
 vi.mock('../hooks/usePendingFileOps', () => ({
   usePendingFileOps: () => ({ operations: [], count: 0, loading: false }),
@@ -826,6 +833,109 @@ describe('Active Operations retry and discard controls', () => {
     expect(within(row).getByRole('button', { name: /cancel/i })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument();
+  });
+});
+
+// "Finish without resuming" is the third decision on a run waiting for one
+// (interrupted_ask), next to Retry and Discard. The server says whether a row can
+// take it (canFinish); the page never infers that from the status alone.
+describe('Active Operations finish-without-resuming control', () => {
+  const op = (
+    id: string,
+    status: string,
+    displayName: string,
+    index: number,
+    canFinish?: boolean
+  ) => ({
+    id,
+    type: `fixer-${index}`,
+    displayName,
+    status,
+    progress: 20,
+    total: 40,
+    message: '',
+    parent_id: null,
+    ...(canFinish === undefined ? {} : { canFinish }),
+  });
+
+  const rowOf = (name: string) => {
+    const row = screen.getByText(name).closest('.MuiPaper-root') as HTMLElement;
+    expect(row).not.toBeNull();
+    return row;
+  };
+
+  beforeEach(() => {
+    mockedFetchActivity.mockResolvedValue({ entries: [], total: 0 });
+    operationsStoreState.activeOperations = [
+      op('op-asking', 'interrupted_ask', 'Dark Knight Returns Fixer', 0, true),
+      op('op-asking-v2', 'interrupted_ask', 'Year One Importer', 1, false),
+      op('op-quiesced', 'interrupted_quiesced', 'Long Halloween Backfill', 2, true),
+      op('op-failed', 'failed', 'Killing Joke Fetch', 3, true),
+    ];
+  });
+
+  afterEach(() => {
+    operationsStoreState.activeOperations = [];
+  });
+
+  it('is offered only on an interrupted_ask row the server marks canFinish', async () => {
+    await renderPageExpanded(userEvent.setup());
+    await screen.findByText('Dark Knight Returns Fixer');
+
+    const finish = { name: 'Finish without resuming' };
+    expect(
+      within(rowOf('Dark Knight Returns Fixer')).getByRole('button', finish)
+    ).toBeInTheDocument();
+    // interrupted_ask but the definition has nothing to finish: Retry and Discard only.
+    const v2Row = rowOf('Year One Importer');
+    expect(within(v2Row).queryByRole('button', finish)).not.toBeInTheDocument();
+    expect(within(v2Row).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(v2Row).getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+    // canFinish on a row that is not waiting for a decision is ignored.
+    expect(
+      within(rowOf('Long Halloween Backfill')).queryByRole('button', finish)
+    ).not.toBeInTheDocument();
+    expect(
+      within(rowOf('Killing Joke Fetch')).queryByRole('button', finish)
+    ).not.toBeInTheDocument();
+  });
+
+  it('finishes the run by id, reloads the list and says so', async () => {
+    const user = userEvent.setup();
+    await renderPageExpanded(user);
+    await screen.findByText('Dark Knight Returns Fixer');
+    loadActiveOpsFromServer.mockClear();
+
+    await user.click(
+      within(rowOf('Dark Knight Returns Fixer')).getByRole('button', {
+        name: 'Finish without resuming',
+      })
+    );
+
+    expect(mockedFinishOperation).toHaveBeenCalledWith('op-asking');
+    expect(mockedRetryOperation).not.toHaveBeenCalled();
+    expect(mockedDiscardOperation).not.toHaveBeenCalled();
+    await waitFor(() => expect(loadActiveOpsFromServer).toHaveBeenCalled());
+    expect(await screen.findByText(/Finishing op-aski.* without resuming/)).toBeInTheDocument();
+  });
+
+  it('shows the server reason when the decision is refused', async () => {
+    const user = userEvent.setup();
+    mockedFinishOperation.mockRejectedValueOnce(
+      new Error('operation op-asking changed while the decision was being made')
+    );
+    await renderPageExpanded(user);
+    await screen.findByText('Dark Knight Returns Fixer');
+
+    await user.click(
+      within(rowOf('Dark Knight Returns Fixer')).getByRole('button', {
+        name: 'Finish without resuming',
+      })
+    );
+
+    expect(
+      await screen.findByText(/changed while the decision was being made/)
+    ).toBeInTheDocument();
   });
 });
 

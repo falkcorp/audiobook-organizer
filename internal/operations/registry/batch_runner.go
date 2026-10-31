@@ -1,5 +1,5 @@
 // file: internal/operations/registry/batch_runner.go
-// version: 1.7.2
+// version: 1.8.1
 // guid: d5558a83-b2da-485c-bb5c-dba9bddea8eb
 // last-edited: 2026-10-30
 
@@ -106,24 +106,29 @@ type batchConfig struct {
 	// resumed, or a Finish here and again on the resume. nil: never resumes.
 	//
 	// Two later decisions can still keep a run recorded as resumable from
-	// ever resuming, and its Finish then never runs (todo.d
-	// 05-PR5-FINISH-ON-DECLINE):
+	// ever resuming, and its Finish then never runs as part of a resume:
 	//   - the restart-strike guard (checkInfiniteRestart) force-drops a
 	//     ResumeRestart run only when high_water_progress is still 0, i.e.
 	//     no chunk ever completed, so the ledger holds no counts and no
 	//     marks: a Finish there would get an empty Summary and a Fixer's
 	//     AfterApply nothing to follow up on. Running it buys nothing.
 	//   - a ResumeAsk run (the Fixer default) waits in awaiting_decision for
-	//     a person, whose only choices today are Retry (the run resumes and
-	//     Finish runs once, at its end) or Discard (DeleteRunV3 deletes the
-	//     record, ledger and marks). After a Discard, rows applied before the
-	//     shutdown keep their writes but never get AfterApply. Running op
-	//     code from Discard would make a generic delete run a def's writes
-	//     outside any attempt (no fence, no reporter). The owner chose
-	//     (2026-10-13) a third decision, "Finish without resuming": an
-	//     attempt under a fresh lease and fence that leases nothing and runs
-	//     only Finish/AfterApply over the ledger. It is a follow-up to 05-PR5.
+	//     a person, who has three choices. Retry resumes the run, and Finish
+	//     runs once, at its end. Discard (DeleteRunV3) deletes the record,
+	//     ledger and marks; rows applied before the shutdown keep their
+	//     writes but never get AfterApply, and running op code from Discard
+	//     would make a generic delete run a def's writes outside any attempt
+	//     (no fence, no reporter). "Finish without resuming"
+	//     (Registry.FinishWithoutResuming, owner decision 2026-10-13) queues
+	//     an attempt under the same op id with RunRecord.FinishOnly set; it
+	//     gets a fresh lease and fence like any attempt, leases no chunks
+	//     (finishOnly below) and runs only Finish/AfterApply over the stored
+	//     ledger and marks, then the run ends.
 	resumes func() bool
+	// finishOnly makes this attempt a "Finish without resuming" one: it
+	// reads the stored ledger and marks, leases no chunk, reads no source and
+	// runs only the job's Finish over them (RunRecord.FinishOnly).
+	finishOnly bool
 	// stuckAfter is the heartbeat age at which a worker is reported stuck
 	// when the job has no ItemTimeout (the def Timeout/6).
 	stuckAfter  time.Duration
@@ -274,6 +279,24 @@ func runBatch(ctx context.Context, cfg batchConfig) (ops.Summary, json.RawMessag
 	if err := b.plan(); err != nil {
 		return ops.Summary{}, nil, err
 	}
+	if cfg.finishOnly {
+		// No workers, producer or ledger goroutine: nothing is leased, so
+		// nothing is committed either (the stored ledger is read-only here).
+		// Finish is still skipped when a shutdown or stand-down is stopping
+		// this very attempt: the run then returns to awaiting_decision and the
+		// person chooses again, so Finish runs once, in the attempt that ends
+		// the run.
+		if cfg.rep != nil {
+			TouchLiveness(cfg.rep)
+		}
+		b.settleStop()
+		sum := b.summary()
+		if b.stoppedForResume() {
+			return sum, nil, context.Cause(ctx)
+		}
+		result, ferr := b.finish(sum)
+		return sum, result, ferr
+	}
 
 	ledgerDone := make(chan struct{})
 	go func() {
@@ -370,6 +393,49 @@ func (b *batchRun) chunkTotal() int {
 // ── plan ───────────────────────────────────────────────────────────────────
 
 func (b *batchRun) plan() error {
+	if b.cfg.finishOnly {
+		// Finish-only attempt: the ledger and marks as the earlier attempts
+		// left them, whatever the job's Resume says (a FromZero job's resume
+		// would ignore them, but the rows they record were applied all the
+		// same), and nothing else. The snapshot is read back for its size
+		// alone, so the Summary's Total and ChunksTotal match the earlier
+		// attempts'; the source itself is never read. No ledger (the store is
+		// absent, or no chunk ever completed) is an empty Summary.
+		b.ledger = newChunkLedger(b.size, 0)
+		if b.cfg.store == nil {
+			return nil
+		}
+		stored, err := b.cfg.store.GetLedgerV3(b.cfg.opID)
+		if err != nil {
+			return fmt.Errorf("%s: read the chunk ledger: %w", b.cfg.opID, err)
+		}
+		if stored == nil {
+			return nil
+		}
+		marks, err := b.cfg.store.ListMarksV3(b.cfg.opID)
+		if err != nil {
+			return fmt.Errorf("%s: read the run's marks: %w", b.cfg.opID, err)
+		}
+		b.ledger = loadChunkLedger(stored, marks)
+		b.size = max(stored.ChunkSize, 1)
+		switch b.job.Order {
+		case ops.Snapshot:
+			t, ok, err := b.loadSnapshot(stored)
+			if err != nil {
+				return err
+			}
+			if ok {
+				b.table = t
+				if b.total == nil {
+					n := int64(len(t.keys))
+					b.total = &n
+				}
+			}
+		case ops.AppendOnly:
+			b.priorChunks = b.ledger.chunksDone
+		}
+		return nil
+	}
 	var stored *database.Ledger
 	if b.cfg.store != nil && b.job.Resume == ops.ResumeContinue {
 		l, err := b.cfg.store.GetLedgerV3(b.cfg.opID)

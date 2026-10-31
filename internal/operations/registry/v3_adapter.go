@@ -1,7 +1,7 @@
 // file: internal/operations/registry/v3_adapter.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 28d66eb5-7481-4feb-aaa5-ca3f49cc9838
-// last-edited: 2026-10-14
+// last-edited: 2026-10-30
 
 package registry
 
@@ -251,8 +251,15 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 	}
 	// Attempt counts every move into running; above 1, an earlier attempt of
 	// this op id ran (a resume or a retry), so writes under it may exist.
+	// FinishOnly is the "Finish without resuming" attempt: no chunk is leased,
+	// only Finish runs over the stored ledger (Registry.FinishWithoutResuming).
+	finishOnly := false
 	if rec, err := r.getRunV3(opID); err == nil && rec != nil {
 		env.Resumed = rec.Attempt > 1
+		finishOnly = rec.FinishOnly
+	}
+	if finishOnly && c.OpenBatch == nil {
+		return fmt.Errorf("registry: run %s of %s is marked finish-only, but the def is not a Batch or Fixer", opID, c.ID)
 	}
 	hooks := r.runnerHooksFor(opID) // nil in production
 	var w *opswriter.Writer
@@ -283,8 +290,9 @@ func (r *Registry) runV3(ctx context.Context, c ops.Compiled, od OperationDef, p
 		var sum ops.Summary
 		sum, result, err = runBatch(ctx, batchConfig{opID: opID, job: job, rc: rc, store: bs, dirty: ds, rep: rep,
 			log: env.Log, stuckAfter: effectiveProgressTimeout(od),
-			resumes: func() bool { return r.stopResumes(ctx, opID, od.ResumePolicy) },
-			now:     hooks.clockForTest(), hooks: hooks})
+			resumes:    func() bool { return r.stopResumes(ctx, opID, od.ResumePolicy) },
+			finishOnly: finishOnly,
+			now:        hooks.clockForTest(), hooks: hooks})
 		hooks.summaryForTest(sum)
 	case c.RunTask != nil:
 		result, err = c.RunTask(rc, params)

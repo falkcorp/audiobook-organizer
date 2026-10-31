@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3.go
-// version: 1.14.1
+// version: 1.15.1
 // guid: e48755db-c26d-42a2-a232-49daf9732335
 // last-edited: 2026-10-30
 
@@ -646,6 +646,11 @@ func projectRunFromV2(cur *RunRecord, curHasLedger bool, row *OperationV2Row, no
 		next.Attempt++
 		next.FenceEpoch++
 	}
+	// A v2 write into queued is a Retry or a resume, never decide_finish
+	// (that is a native transition): the next attempt is a full one.
+	if target == state.V3Queued && from != state.V3Queued {
+		next.FinishOnly = false
+	}
 	if target != state.V3Dropped {
 		next.SuccessorID = ""
 	}
@@ -1072,6 +1077,12 @@ func (p *PebbleStore) TransitionRunV3(req TransitionRequest) (out *RunRecord, er
 		next.Error = ""
 		next.InterruptedWhy, next.StopReason, next.SuccessorID = "", "", ""
 		next.Zombie = false
+		// FinishOnly belongs to the decide_finish entry alone: wait_cleared
+		// (queued -> queued) keeps it, every other way into queued (a Retry,
+		// a resume) clears it so the attempt that follows is a full one.
+		if req.Event != state.EvWaitCleared {
+			next.FinishOnly = req.Event == state.EvDecideFinish
+		}
 	case state.V3Running:
 		next.WaitReason = ""
 		next.Attempt++

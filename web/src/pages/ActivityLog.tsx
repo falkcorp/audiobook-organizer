@@ -1,7 +1,7 @@
 // file: web/src/pages/ActivityLog.tsx
-// version: 2.38.1
+// version: 2.39.0
 // guid:b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { describeRevertResult, describeUndoPreflight, isUndoRefused } from '../utils/revertResult';
 import { getUndoPreflight } from '../services/versionApi';
@@ -47,6 +47,7 @@ import UndoIcon from '@mui/icons-material/Undo';
 import CancelIcon from '@mui/icons-material/Cancel';
 import ReplayIcon from '@mui/icons-material/Replay';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
+import DoneAllIcon from '@mui/icons-material/DoneAll';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -266,6 +267,7 @@ export default function ActivityLog() {
   // running-row Cancel button reads that set to label itself "Cancelling...",
   // and a discard is not a cancel.
   const [discarding, setDiscarding] = useState<Set<string>>(new Set());
+  const [finishing, setFinishing] = useState<Set<string>>(new Set());
   const [expandedOpId, setExpandedOpId] = useState<string | null>(searchParams.get('op'));
   // pausedByExpand: true when auto-refresh was auto-paused because a row is
   // expanded. Cleared when the row collapses or the user clicks "Follow log".
@@ -941,6 +943,39 @@ export default function ActivityLog() {
       console.error('Failed to retry operation', err);
       setToast(describeError(err));
     }
+  };
+
+  // Per-op "Finish without resuming", the third decision on a run waiting for
+  // one (interrupted_ask) next to Retry and Discard. The server re-queues the
+  // SAME row to run only its follow-up step over the rows it already applied;
+  // nothing more is processed, and the run then ends. Like Retry, the Pending
+  // and Active sections are opened so the row does not vanish, and an open log
+  // is reloaded to show the boundary line. The failure toast carries the
+  // server's reason (the run changed, its definition has no follow-up step...).
+  const handleFinishOp = async (opId: string) => {
+    setFinishing((prev) => new Set(prev).add(opId));
+    try {
+      await api.finishOperation(opId);
+      await loadActiveOpsFromServer();
+      setCollapsedSections((prev) => {
+        const next = new Set(prev);
+        next.delete('pending');
+        next.delete('active');
+        return next;
+      });
+      if (expandedOpId === opId) {
+        await loadOperationLogs(opId);
+      }
+      setToast(`Finishing ${opId.slice(0, 8)} without resuming`);
+    } catch (err) {
+      console.error('Failed to finish operation', err);
+      setToast(describeError(err));
+    }
+    setFinishing((prev) => {
+      const next = new Set(prev);
+      next.delete(opId);
+      return next;
+    });
   };
 
   // Per-op copy: plain-text summary suitable for pasting into a bug report
@@ -2244,6 +2279,27 @@ export default function ActivityLog() {
                                 aria-label="Retry"
                               >
                                 <ReplayIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {/* The third decision, only on a run that is
+                              waiting for one and whose definition has a
+                              follow-up step to run (op.canFinish, computed by
+                              the server). It runs that step over the rows
+                              already applied and ends the run, without
+                              processing any more. */}
+                          {!group && op.status === 'interrupted_ask' && op.canFinish && (
+                            <Tooltip title="Finish without resuming — run the follow-up step over what was already applied, then end this run">
+                              <IconButton
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleFinishOp(op.id);
+                                }}
+                                aria-label="Finish without resuming"
+                                disabled={finishing.has(op.id)}
+                              >
+                                <DoneAllIcon fontSize="small" />
                               </IconButton>
                             </Tooltip>
                           )}

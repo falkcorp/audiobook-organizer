@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_ops_v3_test.go
-// version: 1.11.1
+// version: 1.12.1
 // guid: 721ba5ca-742e-43be-9064-b4c8bcba0578
 // last-edited: 2026-10-30
 
@@ -1423,4 +1423,92 @@ func TestListRunsTotalLeavesOutUndecodable(t *testing.T) {
 			t.Errorf("%s: reported %v, want [%s]", name, reported, bad)
 		}
 	}
+}
+
+// TestDecideFinishSetsFinishOnlyAndEveryOtherWayIntoQueuedClearsIt: the third
+// decision re-queues an awaiting_decision run with FinishOnly set (mirrored as
+// a queued v2 row, live again); the flag survives the dispatch that follows and
+// a wait_cleared on a queued run, and is cleared by a Retry (decide_retry) and
+// by a v2-side move into queued, so only decide_finish ever makes a finish-only
+// attempt.
+func TestDecideFinishSetsFinishOnlyAndEveryOtherWayIntoQueuedClearsIt(t *testing.T) {
+	p := newTimelineStore(t)
+	ask := func(id string) {
+		transition(t, p, id, state.EvDispatch, nil)
+		transition(t, p, id, state.EvBootSweep, nil)
+		transition(t, p, id, state.EvAsk, nil)
+	}
+
+	id := insertV3(t, p, "test.finish-decision", "")
+	ask(id)
+	asked := mustRun(t, p, id)
+	if asked.FinishOnly {
+		t.Fatal("a run awaiting a decision is not finish-only yet")
+	}
+	queued := transition(t, p, id, state.EvDecideFinish, nil)
+	if queued.State != state.V3Queued || !queued.FinishOnly {
+		t.Fatalf("decide_finish gave state %s finish_only %v, want queued and finish-only", queued.State, queued.FinishOnly)
+	}
+	row, err := p.GetOperationV2(id)
+	if err != nil || row == nil || row.Status != "queued" || row.CompletedAt != nil {
+		t.Fatalf("v2 mirror of decide_finish = %+v (%v), want a live queued row", row, err)
+	}
+	if reread := mustRun(t, p, id); !reread.FinishOnly {
+		t.Fatal("finish_only did not round-trip through the stored record")
+	}
+	running := transition(t, p, id, state.EvDispatch, nil)
+	if running.State != state.V3Running || !running.FinishOnly || running.Attempt != asked.Attempt+1 || running.FenceEpoch <= asked.FenceEpoch {
+		t.Fatalf("dispatch of the finish-only run = %+v, want running, still finish-only, a new attempt and a fresh fence", running)
+	}
+
+	// decide_retry from awaiting_decision is a full resume.
+	retried := insertV3(t, p, "test.finish-decision", "")
+	ask(retried)
+	if r := transition(t, p, retried, state.EvDecideRetry, nil); r.State != state.V3Queued || r.FinishOnly {
+		t.Fatalf("decide_retry = state %s finish_only %v, want queued and a full resume", r.State, r.FinishOnly)
+	}
+
+	// An interrupted finish-only attempt asks again with the flag still set;
+	// a Retry from there clears it.
+	again := insertV3(t, p, "test.finish-decision", "")
+	ask(again)
+	transition(t, p, again, state.EvDecideFinish, nil)
+	transition(t, p, again, state.EvDispatch, nil)
+	transition(t, p, again, state.EvBootSweep, nil)
+	transition(t, p, again, state.EvAsk, nil)
+	if r := mustRun(t, p, again); !r.FinishOnly {
+		t.Fatal("an interrupted finish-only attempt must still be finish-only when it asks again")
+	}
+	if r := transition(t, p, again, state.EvDecideRetry, nil); r.FinishOnly {
+		t.Fatal("a Retry after an interrupted finish-only attempt must resume in full")
+	}
+
+	// wait_cleared on a queued run keeps whatever the flag is.
+	waiting := newRunID()
+	if err := p.InsertRunV3(RunRecord{ID: waiting, DefID: "test.finish-decision", WaitReason: state.WaitDeps, Priority: 5, FinishOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r := transition(t, p, waiting, state.EvWaitCleared, nil); r.State != state.V3Queued || !r.FinishOnly {
+		t.Fatalf("wait_cleared = state %s finish_only %v, want queued and the flag kept", r.State, r.FinishOnly)
+	}
+
+	// A v2-side write of a decided run back to queued (the registry's own
+	// Retry facade) is a full resume.
+	facade := insertV3(t, p, "test.finish-decision", "")
+	ask(facade)
+	transition(t, p, facade, state.EvDecideFinish, nil)
+	transition(t, p, facade, state.EvDispatch, nil)
+	transition(t, p, facade, state.EvBootSweep, nil)
+	transition(t, p, facade, state.EvAsk, nil)
+	frow, err := p.GetOperationV2(facade)
+	if err != nil || frow == nil || frow.Status != "interrupted_ask" {
+		t.Fatalf("setup: v2 row %+v (%v)", frow, err)
+	}
+	if err := p.ResetOperationV2ForResume(facade); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustRun(t, p, facade); r.State != state.V3Queued || r.FinishOnly {
+		t.Fatalf("v2 requeue = state %s finish_only %v, want queued and a full resume", r.State, r.FinishOnly)
+	}
+	checkV3Consistency(t, p)
 }
