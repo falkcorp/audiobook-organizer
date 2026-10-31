@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -1274,6 +1274,13 @@ func (f *faultStore) ModifyBook(id string, fn func(*database.Book) error) (*data
 		return nil, errors.New("forced commit failure")
 	}
 	return f.PebbleStore.ModifyBook(id, fn)
+}
+
+func (f *faultStore) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	if f.failModify {
+		return nil, database.BookCreditsEdit{}, errors.New("forced commit failure")
+	}
+	return f.PebbleStore.ModifyBookCredits(id, fn)
 }
 
 func (f *faultStore) RenameSeriesIf(id int, expectCurrent, newName string) error {
