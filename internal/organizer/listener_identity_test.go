@@ -1,5 +1,5 @@
 // file: internal/organizer/listener_identity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 237f021f-dc2b-4f70-98e1-5a6cd60ed033
 // last-edited: 2026-10-30
 
@@ -41,7 +41,7 @@ func newListenerFixture(t *testing.T) *listenerFixture {
 	config.AppConfig = config.Config{RootDir: rootDir}
 	t.Cleanup(func() { config.AppConfig = prev })
 
-	user, err := store.CreateUser("bruce_wayne", "bruce@wayne.example", "argon2id", "x", []string{"user"}, "active")
+	user, err := store.CreateUser("bruce_wayne", "bruce@example.com", "argon2id", "x", []string{"user"}, "active")
 	require.NoError(t, err)
 
 	srcPath := "/srv/library/imports/Batman Year One/year-one.m4b"
