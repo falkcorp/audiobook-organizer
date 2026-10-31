@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator.go
-// version: 1.7.6
+// version: 1.8.0
 // guid: 9c2d5f1e-6b4a-4a70-b8c5-3d7e0f1b9a68
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 //
 // Smart playlist query evaluator (spec 3.4 task 2).
 //
@@ -237,10 +237,9 @@ func evaluate(
 			}
 			return nil, &definitionError{fmt.Errorf("parse query: %w", err)}
 		}
-		// A per-user term the per-user pass cannot evaluate as written (an OR
-		// with a sibling, a NOT over a group, a value that is not a status, a
-		// number or a date, a pattern) is refused rather than answered as
-		// something else. Creates and updates refuse it up front; this is the same
+		// A per-user term the per-user pass cannot evaluate as written (a value
+		// that is not a status, a number or a date, a pattern) is refused rather
+		// than answered as something else. Creates and updates refuse it up front; this is the same
 		// check for a stored row that predates it, so it reads as unavailable
 		// instead of wrong. It runs before the index is looked at: the query is
 		// what is wrong, and "try again shortly" would be the wrong advice.
@@ -263,6 +262,30 @@ func evaluate(
 		return nil, &definitionError{fmt.Errorf("translate query: %w", err)}
 	}
 	bleveQ, perUserFilters := tr.Query, tr.PerUser
+	if tr.Mixed != nil {
+		// A per-user term under an OR with a sibling, or under a NOT over a group:
+		// the flat list below would AND it. The viewer's rows turn each per-user
+		// term into an index query (search.MixedQuery), so the index answers the
+		// whole expression and no per-user pass follows. Like the flat path, no
+		// viewer means no match: a system caller is never answered with some other
+		// user's state, and the zero-state a missing viewer would be judged as
+		// satisfies unstarted and every negated term.
+		if userID == "" {
+			return []string{}, nil
+		}
+		if viewer == nil || viewer.userID != userID {
+			if viewer, err = LoadViewerStates(ctx, store, userID); err != nil {
+				return nil, err
+			}
+		}
+		rows, rerr := viewerRows(ctx, idx, viewer, evalWorkers())
+		if rerr != nil {
+			return nil, rerr
+		}
+		if bleveQ, err = tr.Mixed.Query(rows); err != nil {
+			return nil, &definitionError{fmt.Errorf("translate query: %w", err)}
+		}
+	}
 	// tag: terms are exact tag filters, resolved with GetBooksByTag (the lookup the
 	// tags[] parameter uses) and ANDed with the rest. The index holds a tag as
 	// words, so it cannot answer one exactly; see search.SplitTagTerms. A store that
@@ -385,9 +408,10 @@ const searchAllIDsMaxPasses = 4
 // matchViewerStates answers a query with per-user filters for one viewer: the
 // books that satisfy the indexed part AND every per-user filter, judged against
 // the viewer's own state. Per-user terms always apply as AND post-filters (a
-// term negated on its own, or an alternation of one field, is one filter);
-// evaluate has already refused, through search.CheckPerUserBoolean, every query
-// where that is not what the boolean tree says.
+// term negated on its own, or an alternation of one field, is one filter). A query
+// where that is not what the boolean tree says (a per-user term under an OR with a
+// sibling, or under a NOT over a group) never reaches here: evaluate answers it
+// from the index alone through search.MixedQuery.
 //
 // Two strategies, chosen by whether a book the viewer has NO row for can match:
 //
@@ -443,6 +467,49 @@ func matchViewerStates(
 		return kept, nil
 	}
 	return judgeByPointReads(ctx, viewer, ids, filters, now, evalWorkers())
+}
+
+// viewerRows returns every state row the viewer has, keyed by book id: what
+// search.MixedQuery needs to turn a per-user term into an index query. With a store
+// that can list the rows (the Pebble store) it is the rows ViewerStates already
+// holds. A store that cannot has no way to enumerate them, so every book in the
+// index is read by id (a point read each, spread over workers) and the ones that
+// have a row are kept: the same answer, library-scale cost, and never taken by the
+// Pebble store. A read error fails the evaluation, as in judgeByPointReads.
+func viewerRows(ctx context.Context, idx *search.BleveIndex, viewer *ViewerStates, workers int) (map[string]*database.UserBookState, error) {
+	if viewer.rows != nil {
+		return viewer.rows, nil
+	}
+	ids, err := searchAllIDs(ctx, idx, bleve.NewMatchAllQuery(), 0)
+	if err != nil {
+		return nil, err
+	}
+	found := make([]*database.UserBookState, len(ids))
+	err = parallelRanges(len(ids), workers, perUserFilterChunk, func(lo, hi int) error {
+		for i := lo; i < hi; i++ {
+			if (i-lo)%ctxCheckEvery == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			state, err := viewer.lookup(ids[i])
+			if err != nil {
+				return &viewerStateReadError{fmt.Errorf("read user state for book %s: %w", ids[i], err)}
+			}
+			found[i] = state
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	rows := make(map[string]*database.UserBookState)
+	for i, id := range ids {
+		if found[i] != nil {
+			rows[id] = found[i]
+		}
+	}
+	return rows, nil
 }
 
 // judgeByPointReads keeps the candidates whose state satisfies every filter,

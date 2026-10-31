@@ -1,7 +1,7 @@
 // file: internal/search/tag_terms_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7a3d9c52-1e84-4b06-8f27-c5d0e9b4a361
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
@@ -215,8 +215,11 @@ func TestCheckQueryTerms_RunsBothChecks(t *testing.T) {
 	if err := CheckQueryTerms(mustParse(t, "read_status:finished tag:noir"), now); err != nil {
 		t.Fatalf("plain: %v", err)
 	}
-	if err := CheckQueryTerms(mustParse(t, "read_status:finished OR title:Hush"), now); !IsPerUserQueryError(err) || !IsQueryTermError(err) {
+	if err := CheckQueryTerms(mustParse(t, "read_status:completed"), now); !IsPerUserQueryError(err) || !IsQueryTermError(err) {
 		t.Fatalf("per-user: %v", err)
+	}
+	if err := CheckQueryTerms(mustParse(t, "read_status:finished OR title:Hush"), now); err != nil {
+		t.Fatalf("per-user OR is evaluated, not refused: %v", err)
 	}
 	if err := CheckQueryTerms(mustParse(t, "title:Hush OR tag:noir"), now); !IsTagTermError(err) || IsPerUserQueryError(err) {
 		t.Fatalf("tag: %v", err)

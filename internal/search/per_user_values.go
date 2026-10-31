@@ -1,7 +1,7 @@
 // file: internal/search/per_user_values.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 5b7d2c1e-84a3-4f60-9e1d-2a6c0b9f3d47
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
@@ -27,11 +27,12 @@ type PerUserValueError struct {
 func (e *PerUserValueError) Error() string { return e.Reason }
 
 // IsPerUserQueryError reports whether err says that a query's per-user terms
-// are the problem and why (a shape from CheckPerUserBoolean or a value from
-// CheckPerUserValues). Its text is safe to show to the person who owns the query.
+// are the problem and why (a value from CheckPerUserValues, or text the parser
+// rejected, UnparsablePerUserQuery). Its text is safe to show to the person who
+// owns the query.
 func IsPerUserQueryError(err error) bool {
 	var ve *PerUserValueError
-	return errors.Is(err, ErrPerUserBoolean) || errors.As(err, &ve)
+	return errors.As(err, &ve)
 }
 
 // UnparsablePerUserQuery is the refusal for query text the parser rejected that
@@ -59,9 +60,6 @@ func PerUserQueryReason(err error) string {
 	if errors.As(err, &ve) {
 		return ve.Reason
 	}
-	if errors.Is(err, ErrPerUserBoolean) {
-		return ErrPerUserBoolean.Error()
-	}
 	return err.Error()
 }
 
@@ -75,12 +73,10 @@ var perUserReadStatuses = []string{
 }
 
 // CheckPerUserTerms is the whole per-user check for a query that is about to be
-// saved or evaluated: the boolean shape (CheckPerUserBoolean) and the values
-// (CheckPerUserValues). now is the instant relative dates resolve against.
+// saved or evaluated: the values (CheckPerUserValues). now is the instant relative
+// dates resolve against. The boolean shape is no longer checked: an OR or a NOT
+// over a group that holds a per-user term is evaluated (MixedQuery), not refused.
 func CheckPerUserTerms(n Node, now time.Time) error {
-	if err := CheckPerUserBoolean(n); err != nil {
-		return err
-	}
 	return CheckPerUserValues(n, now)
 }
 

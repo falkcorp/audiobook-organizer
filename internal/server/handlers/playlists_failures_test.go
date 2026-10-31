@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists_failures_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a3c5e91-4d27-4b60-9f18-e2b7d0c6a453
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -176,6 +176,41 @@ func TestPlaylists_ACutSnapshotReportsItsTotalUntilItIsEdited(t *testing.T) {
 			require.Equal(t, http.StatusOK, code, raw)
 			assert.Equal(t, tc.want, body.Data.BookIDsTotal)
 			assert.Len(t, body.Data.BookIDs, len(tc.list))
+		})
+	}
+}
+
+// A smart playlist whose query ORs an indexed term with a per-user term is
+// answered from the index and the caller's own state: the books the title names
+// plus the books THIS caller finished. It was evaluated as an AND, then refused.
+func TestPlaylists_ASmartPlaylistWithAPerUserOrIsEvaluatedForTheCaller(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{`title:"Synthetic 1" OR read_status:finished`, []string{"s00001", "s00002"}},
+		{`Synthetic -(title:"Synthetic 1" OR read_status:finished)`, []string{"s00000"}},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			pl := &database.UserPlaylist{ID: "pl-1", Name: "Hush", Type: database.UserPlaylistTypeSmart,
+				Query: tc.query, CreatedByUserID: "alice"}
+			store := handlersmocks.NewMockPlaylistStore(t)
+			store.EXPECT().GetUserPlaylist("pl-1").Return(pl, nil)
+			// The read refreshes the cached list the ABS surface serves.
+			store.EXPECT().UpdateUserPlaylist(pl).Return(nil)
+			// alice finished s00002 and has no row for the other two.
+			store.EXPECT().GetUserBookState("alice", mock.Anything).RunAndReturn(
+				func(_, bookID string) (*database.UserBookState, error) {
+					if bookID == "s00002" {
+						return &database.UserBookState{UserID: "alice", BookID: bookID, Status: database.UserBookStatusFinished}, nil
+					}
+					return nil, nil
+				})
+			h := handlers.NewPlaylistHandler(store, indexedPlaylistDocs(t, 3))
+			body, code, raw := getPlaylist(t, h)
+			require.Equal(t, http.StatusOK, code, raw)
+			assert.False(t, body.Data.Unavailable, raw)
+			assert.ElementsMatch(t, tc.want, body.Data.BookIDs, raw)
 		})
 	}
 }

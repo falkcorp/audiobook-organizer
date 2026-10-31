@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.38.11
+// version: 1.39.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -1251,13 +1251,11 @@ func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, 
 	// One instant for this whole search: relative date terms in the Bleve query
 	// and in the per-user pass below resolve against the same now.
 	now := time.Now()
-	// A per-user term the flat post-filter below cannot evaluate as written (an OR
-	// with a sibling, a NOT over a group, a value that is no status/number/date,
-	// a pattern) is refused, never answered as something else: read_status:finished
-	// OR author:kyle used to return the kyle books the viewer had finished. The
-	// HTTP list refuses it up front; this is the same check for every other caller
-	// (a scoped search), and its error is a search.PerUserValueError or
-	// search.ErrPerUserBoolean, which the handler answers with a 400.
+	// A per-user term the per-user pass cannot evaluate as written (a value that is
+	// no status/number/date, a pattern) is refused, never answered as something
+	// else. The HTTP list refuses it up front; this is the same check for every
+	// other caller (a scoped search), and its error is a search.PerUserValueError,
+	// which the handler answers with a 400.
 	//
 	// A tag: term is refused the same way where it cannot be applied exactly (under
 	// an OR, an alternation or a NOT; search.CheckTagTerms).
@@ -1279,6 +1277,20 @@ func (svc *AudiobookService) searchWithBleve(ctx context.Context, query string, 
 	}
 
 	bleveQ, perUser := tr.Query, tr.PerUser
+	if tr.Mixed != nil {
+		// A per-user term under an OR with a sibling, or under a NOT over a group:
+		// the flat post-filter below would AND it. The viewer's rows turn each
+		// per-user term into an index query (search.MixedQuery), so the index
+		// answers the whole expression, with its own ranking, paging and match
+		// count, and perUser stays empty.
+		rows, rerr := svc.viewerRowsForMixedQuery(ctx, userID)
+		if rerr != nil {
+			return nil, 0, rerr
+		}
+		if bleveQ, err = tr.Mixed.Query(rows); err != nil {
+			return nil, 0, fmt.Errorf("search: %w", err)
+		}
+	}
 
 	// tag: terms are EXACT tag filters, not index terms: the index holds a tag as
 	// words ("to-read" would match every book tagged "read"), so each is resolved

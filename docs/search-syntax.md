@@ -1,7 +1,7 @@
 <!-- file: docs/search-syntax.md -->
-<!-- version: 1.7.8 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 9e7d007e-cca4-43e3-b1d5-777054e59d29 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-30 -->
 
 # Search syntax
 
@@ -159,28 +159,29 @@ is edited. A smart playlist also drops the member list its last evaluation cache
 the Audiobookshelf app stops serving the old answer too. A rename that sends the stored
 query back unchanged is not refused for a query it did not touch.
 
-A per-user term is always required together with the rest of the query: the index
-answers the other terms and the per-user part is applied afterwards to the books it
-returned. That is right for a plain search, for a term negated on its own
-(`-read_status:finished`) and for several states of one field
-(`read_status:(finished|in_progress)`), which is one term that matches any of them.
-It cannot express an `OR` between a per-user term and another term
-(`title:Alpha OR read_status:finished`), or a `NOT` over a group that holds one
-(`-(read_status:finished title:Alpha)`). Those used to be evaluated as an `AND`
-without a word, so a collection or smart playlist showed far fewer books than its
-query says. They are now refused with a 400 when a dynamic collection or a smart
-playlist is created or its query is changed, with a message that points at the
-`read_status:(finished|in_progress)` spelling, and a stored query of that shape
-shows no members, with a message saying its query can no longer be evaluated, until
-it is edited. The same shapes over indexed terms only (`title:Alpha OR title:Bravo`)
-are unaffected. The library search refuses them too: a search with one of these shapes
-answers 400 `invalid search: ...` with the same message, instead of the `AND` answer it
-used to give. The search box cannot write such a shape into its `field:value` filters, so
-when the text names a per-user field and has an `OR`, an explicit `AND`, a group or a `NOT` over a
-group the web sends it as typed and shows that message; a per-user value the filters carry (a
-status that is not one of the four, a pattern) is refused the same way with
-`invalid filter value: ...`. Supporting `OR` and `NOT` over per-user terms properly, in
-the library search and in the collection evaluator, is tracked in `todo.d`.
+A per-user term is judged against the signed-in person's own listening state, and it
+combines with the rest of the query like any other term, `OR` and `NOT` included:
+
+- `title:Alpha OR read_status:finished` finds the books titled Alpha plus the books you
+  finished;
+- `(title:Alpha OR read_status:finished) AND author:Wayne` narrows that to one author;
+- `-(read_status:finished author:Wayne)` finds every book except the ones you finished
+  that Wayne wrote ("not both").
+
+A query that only ANDs its per-user terms (a plain search, a term negated on its own such as
+`-read_status:finished`, or several states of one field such as
+`read_status:(finished|in_progress)`) is answered exactly as before. Before 2026-10-30 an
+`OR` or a `NOT` over a group that held a per-user term was evaluated as an `AND` without a
+word, and then refused with a 400; neither happens now. A dynamic collection or smart
+playlist with such a query is a per-viewer collection like any other per-user query: its
+members follow whoever is looking, and with no viewer (a background job) it matches nothing.
+A library search with no signed-in user (or with per-user filtering switched off in the
+configuration) judges a per-user term as the state of a book nobody has opened:
+`read_status:finished` finds nothing and `read_status:unstarted` every book. The value
+checks stay: a `read_status` that is not one of the four statuses, a pattern, a number or
+date that does not parse is refused with a 400 wherever it sits, under an `OR` too. A
+`tag:` term still cannot sit under an `OR` (see below). The web search box sends a query
+with boolean structure whole as `search=`, which the server now reads.
 
 `tag:` is an exact tag filter: it finds the books that carry that whole tag, ignoring
 case, exactly as the tag chips and the `tags[]` parameter do (`tag:"to-read"` does not find

@@ -1,7 +1,7 @@
 // file: internal/search/per_user_values_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3e8a1d4-6f27-4b95-8d0a-71b2e4f9a6c3
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
@@ -95,15 +95,21 @@ func TestCheckPerUserValues_AcceptsTheFormsTheMatcherEvaluates(t *testing.T) {
 	}
 }
 
-func TestCheckPerUserTerms_RunsTheShapeAndTheValueCheck(t *testing.T) {
+func TestCheckPerUserTerms_ChecksTheValuesAndAcceptsEveryBooleanShape(t *testing.T) {
 	now := time.Now()
+	// An OR with a sibling is evaluated (MixedQuery), no longer refused.
 	shape, _ := ParseQuery("read_status:finished OR title:Hush")
-	if err := CheckPerUserTerms(shape, now); !errors.Is(err, ErrPerUserBoolean) {
+	if err := CheckPerUserTerms(shape, now); err != nil {
 		t.Errorf("shape: %v", err)
 	}
 	value, _ := ParseQuery("read_status:completed")
-	if err := CheckPerUserTerms(value, now); !IsPerUserQueryError(err) || errors.Is(err, ErrPerUserBoolean) {
+	if err := CheckPerUserTerms(value, now); !IsPerUserQueryError(err) {
 		t.Errorf("value: %v", err)
+	}
+	// ... and the value check reaches inside an OR.
+	both, _ := ParseQuery("title:Hush OR read_status:completed")
+	if err := CheckPerUserTerms(both, now); !IsPerUserQueryError(err) {
+		t.Errorf("value under an OR: %v", err)
 	}
 	ok, _ := ParseQuery("read_status:finished title:Hush")
 	if err := CheckPerUserTerms(ok, now); err != nil {

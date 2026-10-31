@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/collections_values_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2b9d84-1c73-4a06-8f95-d0b3a7e61c42
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package abs_test
 
@@ -27,7 +27,7 @@ func TestLibraryPlaylists_ASmartPlaylistWithARefusedQueryServesNoBooks(t *testin
 		{ID: "01REFUSED00000000000000000", Name: "No Man's Land", Type: database.UserPlaylistTypeSmart,
 			Query: "-read_status:completed", MaterializedBookIDs: cached, CreatedByUserID: "u1"},
 		{ID: "01REFUSEDOR000000000000000", Name: "Knightfall", Type: database.UserPlaylistTypeSmart,
-			Query: "read_status:finished OR title:Alpha", MaterializedBookIDs: cached, CreatedByUserID: "u1"},
+			Query: "read_status:completed OR title:Alpha", MaterializedBookIDs: cached, CreatedByUserID: "u1"},
 		{ID: "01GOOD00000000000000000000", Name: "Hush", Type: database.UserPlaylistTypeSmart,
 			Query: "read_status:finished", MaterializedBookIDs: cached, CreatedByUserID: "u1"},
 	}
@@ -42,7 +42,7 @@ func TestLibraryPlaylists_ASmartPlaylistWithARefusedQueryServesNoBooks(t *testin
 		t.Errorf("a refused value served %d items from the stale cache, want 0", items["No Man's Land"])
 	}
 	if items["Knightfall"] != 0 {
-		t.Errorf("a refused boolean served %d items from the stale cache, want 0", items["Knightfall"])
+		t.Errorf("a refused value under an OR served %d items from the stale cache, want 0", items["Knightfall"])
 	}
 	if items["Hush"] != 1 {
 		t.Errorf("a query that is fine served %d items, want its cached 1", items["Hush"])

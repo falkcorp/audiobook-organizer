@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_bounds_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b4e1f73-2a96-4c05-9d38-e6a1c7f50b24
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -28,9 +29,9 @@ import (
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 )
 
-// perUserBooleanQueries are queries whose per-user term the evaluator cannot give
-// its boolean meaning (under an OR with a sibling, or under a NOT over a group).
-// They used to be evaluated as an AND, silently.
+// perUserBooleanQueries are queries whose per-user term sits under an OR with a
+// sibling, or under a NOT over a group. They were evaluated as an AND, silently,
+// then refused with a 400; they are evaluated as written now (search.MixedQuery).
 var perUserBooleanQueries = []string{
 	"read_status:finished OR title:Alpha",
 	"title:Alpha OR progress_pct:>10",
@@ -39,18 +40,18 @@ var perUserBooleanQueries = []string{
 	"NOT (last_played:* OR title:Bravo)",
 }
 
-// B-1: creating or updating a dynamic collection with such a query is refused with a
-// 400 that says what to write instead, and nothing is saved.
-func TestCollections_RefuseAPerUserTermTheEvaluatorCannotEvaluateAsWritten(t *testing.T) {
+// Creating or updating a dynamic collection with such a query is accepted: it is a
+// per-viewer collection, evaluated for whoever reads it.
+func TestCollections_AcceptAPerUserTermUnderAnOrOrAGroupedNot(t *testing.T) {
 	for _, q := range perUserBooleanQueries {
 		t.Run("create "+q, func(t *testing.T) {
 			store := &colFakeStore{}
 			rig := newViewerRig(t, store, viewerStates())
 			w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
 				map[string]any{"name": "The Long Halloween", "type": "dynamic", "query": q})
-			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "read_status:(finished|in_progress)", "the message names the working spelling")
-			assert.Nil(t, store.created, "nothing is saved")
+			assert.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+			require.NotNil(t, store.created)
+			assert.Equal(t, q, store.created.Query)
 		})
 		t.Run("update "+q, func(t *testing.T) {
 			store := &colFakeStore{cols: []database.Collection{{
@@ -59,26 +60,56 @@ func TestCollections_RefuseAPerUserTermTheEvaluatorCannotEvaluateAsWritten(t *te
 			}}}
 			rig := newViewerRig(t, store, viewerStates())
 			w := rig.send(t, http.MethodPut, "/api/v1/collections/c1", "alice", map[string]any{"query": q})
-			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Equal(t, "title:Alpha", store.cols[0].Query, "the stored query is untouched")
-			assert.Zero(t, store.updates)
+			assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Equal(t, q, store.cols[0].Query)
 		})
 	}
-	t.Run("the working spellings are accepted", func(t *testing.T) {
-		for _, q := range []string{"read_status:(finished|in_progress)", "-read_status:finished title:Alpha", "title:Alpha OR title:Bravo"} {
-			rig := newViewerRig(t, &colFakeStore{}, viewerStates())
-			w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
-				map[string]any{"name": "Year One", "type": "dynamic", "query": q})
-			assert.Equal(t, http.StatusCreated, w.Code, "%s: %s", q, w.Body.String())
-		}
+	// A value the evaluator cannot judge is still refused, under an OR too.
+	t.Run("a bad value under an OR is still refused", func(t *testing.T) {
+		store := &colFakeStore{}
+		rig := newViewerRig(t, store, viewerStates())
+		w := rig.send(t, http.MethodPost, "/api/v1/collections", "alice",
+			map[string]any{"name": "Year One", "type": "dynamic", "query": "read_status:completed OR title:Alpha"})
+		assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "read_status must be one of")
+		assert.Nil(t, store.created, "nothing is saved")
 	})
 }
 
+// A dynamic collection whose query ORs an indexed term with a per-user term is
+// answered per viewer: the books the title names plus the books THAT viewer
+// finished. alice finished b1 and has b2 in progress; bob finished b2; carol has no
+// state (viewerStates). Read through GET, which is the path every native screen uses.
+func TestCollections_APerUserOrIsEvaluatedForTheViewer(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  map[string][]string
+	}{
+		{"title:Charlie OR read_status:finished", map[string][]string{
+			"alice": {"b1", "b3"}, "bob": {"b2", "b3"}, "carol": {"b3"},
+		}},
+		{"(title:Alpha OR read_status:in_progress) AND title:Bravo", map[string][]string{
+			"alice": {"b2"}, "bob": {}, "carol": {},
+		}},
+		{"-(read_status:finished title:Alpha)", map[string][]string{
+			"alice": {"b2", "b3"}, "bob": {"b1", "b2", "b3"}, "carol": {"b1", "b2", "b3"},
+		}},
+	} {
+		for viewer, members := range tc.want {
+			t.Run(tc.query+" as "+viewer, func(t *testing.T) {
+				rig := newViewerRig(t, aliceFinishedCollection(tc.query), viewerStates())
+				got := decodeMaterialized(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", viewer))
+				assert.ElementsMatch(t, members, got)
+			})
+		}
+	}
+}
+
 // B-1: a row that was saved before the check reads as unavailable with its own kind,
-// not as a collection holding the AND answer.
+// not as a collection holding a wrong answer.
 func TestCollections_AStoredQueryTheEvaluatorRefusesReadsAsUnavailable(t *testing.T) {
 	store := &colFakeStore{cols: []database.Collection{
-		perViewerRow("c1", "read_status:finished OR title:Alpha", "b1"),
+		perViewerRow("c1", "read_status:completed OR title:Alpha", "b1"),
 	}}
 	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
 
@@ -90,37 +121,37 @@ func TestCollections_AStoredQueryTheEvaluatorRefusesReadsAsUnavailable(t *testin
 	assert.True(t, list["c1"].MembersUnavailable)
 	require.NotEmpty(t, rig.warns())
 	assert.Contains(t, rig.warns()[0], "query-invalid")
-	assert.Contains(t, rig.warns()[0], "OR", "the cause names the shape, not the query text")
+	assert.Contains(t, rig.warns()[0], "read_status", "the cause names the term, not the query text")
 }
 
-func TestPlaylists_RefuseAPerUserTermTheEvaluatorCannotEvaluateAsWritten(t *testing.T) {
+// A smart playlist with such a query is accepted on save (create and update share
+// validatePlaylistQuery), and a value the evaluator cannot judge is refused under an
+// OR as it is anywhere else.
+func TestPlaylists_AcceptAPerUserTermUnderAnOrOrAGroupedNot(t *testing.T) {
+	create := func(h *handlers.PlaylistHandler, q string) *httptest.ResponseRecorder {
+		c, w := newPlaylistCtxAs(http.MethodPost, "/playlists", "alice")
+		body, _ := json.Marshal(map[string]any{"name": "Hush", "type": "smart", "query": q})
+		c.Request = httptest.NewRequest(http.MethodPost, "/playlists", bytes.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.CreatePlaylist(c)
+		return w
+	}
 	for _, q := range perUserBooleanQueries {
 		t.Run("create "+q, func(t *testing.T) {
-			store := handlersmocks.NewMockPlaylistStore(t) // no call may reach the store
-			h := handlers.NewPlaylistHandler(store, noSearchIndex)
-			c, w := newPlaylistCtxAs(http.MethodPost, "/playlists", "alice")
-			body, _ := json.Marshal(map[string]any{"name": "Hush", "type": "smart", "query": q})
-			c.Request = httptest.NewRequest(http.MethodPost, "/playlists", bytes.NewReader(body))
-			c.Request.Header.Set("Content-Type", "application/json")
-			h.CreatePlaylist(c)
-			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "read_status:(finished|in_progress)")
-		})
-		t.Run("update "+q, func(t *testing.T) {
-			store := handlersmocks.NewMockPlaylistStore(t) // the row is read, never written
-			store.EXPECT().GetUserPlaylist("pl-1").Return(&database.UserPlaylist{
-				ID: "pl-1", Name: "Hush", Type: database.UserPlaylistTypeSmart, Query: "title:Alpha", CreatedByUserID: "alice",
-			}, nil)
-			h := handlers.NewPlaylistHandler(store, noSearchIndex)
-			c, w := newPlaylistCtxAs(http.MethodPut, "/playlists/pl-1", "alice")
-			body, _ := json.Marshal(map[string]any{"query": q})
-			c.Request = httptest.NewRequest(http.MethodPut, "/playlists/pl-1", bytes.NewReader(body))
-			c.Request.Header.Set("Content-Type", "application/json")
-			c.Params = gin.Params{{Key: "id", Value: "pl-1"}}
-			h.UpdatePlaylist(c)
-			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			store := handlersmocks.NewMockPlaylistStore(t)
+			store.EXPECT().CreateUserPlaylist(mock.MatchedBy(func(p *database.UserPlaylist) bool {
+				return p.Query == q && p.CreatedByUserID == "alice"
+			})).RunAndReturn(func(p *database.UserPlaylist) (*database.UserPlaylist, error) { return p, nil })
+			w := create(handlers.NewPlaylistHandler(store, noSearchIndex), q)
+			assert.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 		})
 	}
+	t.Run("a bad value under an OR is still refused", func(t *testing.T) {
+		store := handlersmocks.NewMockPlaylistStore(t) // no call may reach the store
+		w := create(handlers.NewPlaylistHandler(store, noSearchIndex), "read_status:completed OR title:Alpha")
+		assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "read_status must be one of")
+	})
 }
 
 // synthetic documents: ids s00000.., titles "Synthetic N".

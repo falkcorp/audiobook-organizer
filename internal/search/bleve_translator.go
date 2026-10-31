@@ -1,7 +1,7 @@
 // file: internal/search/bleve_translator.go
-// version: 1.9.3
+// version: 1.10.0
 // guid: 9c2a4f1d-5b3e-4f70-a7d6-2e8c0f1b9a47
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 //
 // AST → Bleve query translator (spec DES-1 v1.1). Walks the AST
 // produced by ParseQuery and emits a bleve/v2 query.Query suitable
@@ -62,9 +62,17 @@ var perUserFieldSet = map[string]struct{}{
 // now is the instant relative date terms (date_added:>-7d) resolve against. A
 // caller that also runs the per-user filters (MatchPerUserFilters) passes the
 // same now to both, so one evaluation sees one instant.
+//
+// A query whose per-user terms sit under an OR with a sibling, or under a NOT over
+// a group, cannot be expressed as the flat list this returns (the list is ANDed);
+// TranslateAt refuses it with errPerUserNeedsRows rather than hand back a list that
+// would be applied as the wrong boolean. TranslateQuery routes those to MixedQuery.
 func TranslateAt(node Node, now time.Time) (query.Query, []PerUserFilter, error) {
 	if node == nil {
 		return bleve.NewMatchAllQuery(), nil, nil
+	}
+	if perUserNeedsTree(node) {
+		return nil, nil, errPerUserNeedsRows
 	}
 	tc := &translateCtx{now: now}
 	q, err := translateNode(node, tc, false)
@@ -84,6 +92,11 @@ func TranslateAt(node Node, now time.Time) (query.Query, []PerUserFilter, error)
 type translateCtx struct {
 	perUser []PerUserFilter
 	now     time.Time
+	// leaf, when set, replaces the flat list: a per-user term is translated into the
+	// index query it stands for (see MixedQuery) and returned in place, so the
+	// surrounding AND, OR and NOT give it its boolean meaning. perUser stays empty.
+	// The filter it receives is never Negated; a NOT is the translator's own.
+	leaf func(PerUserFilter) query.Query
 }
 
 func translateNode(n Node, tc *translateCtx, negated bool) (query.Query, error) {
@@ -252,6 +265,9 @@ func translateField(n *FieldNode, tc *translateCtx, negated bool) (query.Query, 
 			if err := CheckDateNode(n, tc.now); err != nil {
 				return nil, err
 			}
+		}
+		if tc.leaf != nil {
+			return tc.leaf(PerUserFilter{Node: n}), nil
 		}
 		tc.perUser = append(tc.perUser, PerUserFilter{Node: n, Negated: negated})
 		return nil, nil
@@ -444,6 +460,12 @@ func translateValueAlt(n *ValueAltNode, tc *translateCtx, negated bool) (query.Q
 					return nil, err
 				}
 			}
+		}
+		if tc.leaf != nil {
+			if f, ok := perUserAltFilter(n, false); ok {
+				return tc.leaf(f), nil
+			}
+			return nil, nil
 		}
 		if f, ok := perUserAltFilter(n, negated); ok {
 			tc.perUser = append(tc.perUser, f)
