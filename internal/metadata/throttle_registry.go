@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle_registry.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 0317e94d-7c76-4a4b-97a3-3cdfbf327945
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package metadata
 
@@ -118,6 +118,8 @@ func (r *ThrottleRegistry) AttachStore(store ThrottleStore) (int, error) {
 		if t.ProviderID == "" {
 			t.ProviderID = id
 		}
+		// Rows written before RecordFailure redacted may carry a credential.
+		t.Detail = RedactProviderDetail(t.Detail)
 		if !t.Active(now) {
 			// Expired while we were down. Drop it rather than leave a row that
 			// every load has to filter forever.
@@ -217,9 +219,11 @@ func (r *ThrottleRegistry) RecordFailure(providerID string, err error) (Provider
 	t := ProviderThrottle{
 		ProviderID: providerID,
 		Reason:     reason,
-		Detail:     truncateDetail(err.Error()),
-		Until:      now.Add(hold),
-		SetAt:      now,
+		// Redact FIRST, then truncate: a cut made before redaction can leave
+		// half a secret that no pattern recognises.
+		Detail: truncateDetail(DetailForError(err)),
+		Until:  now.Add(hold),
+		SetAt:  now,
 	}
 
 	r.persistMu.Lock()

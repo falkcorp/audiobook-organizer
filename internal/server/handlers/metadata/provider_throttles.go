@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/provider_throttles.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9631cf4b-f3a1-4989-ba56-688854cbe69e
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package metadatahandler
 
@@ -33,7 +33,7 @@ func toThrottleView(t metadatapkg.ProviderThrottle, now time.Time) providerThrot
 	return providerThrottleView{
 		ProviderID:       t.ProviderID,
 		Reason:           string(t.Reason),
-		Detail:           t.Detail,
+		Detail:           metadatapkg.RedactProviderDetail(t.Detail),
 		Until:            t.Until.UTC().Format(time.RFC3339),
 		SetAt:            t.SetAt.UTC().Format(time.RFC3339),
 		SecondsRemaining: int64(t.Remaining(now).Seconds()),
