@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.103.0
+// version: 1.103.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -1039,8 +1039,7 @@ type CandidateRefetchResult struct {
 // ReconcileScan is the latest saved reconcile scan, chosen by the rule GET
 // /operations/reconcile/scan/latest answers with (server
 // pickLatestReconcileScan): the newest reconcile.scan run that COMPLETED and
-// whose saved result decodes, read on the registry's canonical def id so the
-// runs recorded under the retired maintenance.reconcile-scan id count.
+// whose saved result decodes, read on the registry's canonical def id.
 type ReconcileScan struct {
 	// OpID and CompletedAt name the scan Preview came from. Preview is nil
 	// when no run is usable: none has completed, or none decodes.

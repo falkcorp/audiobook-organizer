@@ -1,7 +1,7 @@
 // file: internal/server/reconcile_scan_merge_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2e4f61-9d03-4a75-b6c8-1e7f3a5d9c02
-// last-edited: 2026-10-14
+// last-edited: 2026-10-31
 
 package server
 
@@ -31,10 +31,10 @@ import (
 )
 
 // 04-P14c merged maintenance.reconcile-scan (the nightly run) into reconcile.scan.
-// The /latest endpoint used to match rows on the literal "reconcile.scan", so
-// every nightly row stored under the other id would have vanished from it.
+// Its alias was dropped 2026-10-31 (P14C-SOAK): nothing used it during the soak
+// and prod stored no run under it, so a row under that id is not a scan.
 
-// formerReconcileScanID is the retired nightly op's id, as stored in old rows.
+// formerReconcileScanID is the retired nightly op's id, whose alias is gone.
 const formerReconcileScanID = "maintenance.reconcile-scan"
 
 // scanPayload returns a ReconcilePreviewResult JSON with one unmatched record,
@@ -82,34 +82,19 @@ func opID(t *testing.T, body map[string]any) string {
 	return id
 }
 
-func TestLatestReconcileScan_FindsNightlyRunStoredUnderFormerID(t *testing.T) {
-	now := time.Now()
-	payload := scanPayload(t, "book-nightly")
-	body := latestScanBody(t, []database.OperationV2Row{
-		{ID: "nightly-run", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now, ResultData: &payload},
-	})
-
-	assert.Equal(t, "nightly-run", opID(t, body),
-		"a row recorded under the retired def id must still be the latest scan")
-	preview, ok := body["preview"].(map[string]any)
-	require.True(t, ok, "the saved ResultData must decode into a preview, got %v", body["preview"])
-	broken, _ := preview["broken_records"].([]any)
-	assert.Len(t, broken, 1)
-}
-
-func TestLatestReconcileScan_NewestWinsAcrossFormerAndCurrentID(t *testing.T) {
+func TestLatestReconcileScan_NewestScanWinsAndApplyRowsNeverCount(t *testing.T) {
 	now := time.Now()
 	old := scanPayload(t, "book-old")
 	fresh := scanPayload(t, "book-fresh")
 	rows := []database.OperationV2Row{
 		{ID: "manual-old", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-2 * time.Hour), ResultData: &old},
-		{ID: "nightly-new", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now, ResultData: &fresh},
+		{ID: "nightly-new", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now, ResultData: &fresh},
 		{ID: "apply-newer", DefID: reconcileApplyDefIDV2, Status: "completed", QueuedAt: now.Add(time.Hour)},
 	}
 	body := latestScanBody(t, rows)
-	assert.Equal(t, "nightly-new", opID(t, body), "newest scan wins whichever def id it was stored under; apply rows never count")
+	assert.Equal(t, "nightly-new", opID(t, body), "the newest scan wins; apply rows never count")
 
-	// And the reverse: a newer manual run beats an older nightly row.
+	// And the reverse: the other run, made newer, wins.
 	rows[0].QueuedAt, rows[1].QueuedAt = now, now.Add(-2*time.Hour)
 	assert.Equal(t, "manual-old", opID(t, latestScanBody(t, rows)))
 }
@@ -140,7 +125,7 @@ func TestLatestReconcileScan_NewerCanceledRunDoesNotHideTheLastGoodScan(t *testi
 	good := scanPayload(t, "book-good")
 	body := latestScanBody(t, []database.OperationV2Row{
 		{ID: "manual-good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-20 * time.Hour), ResultData: &good},
-		{ID: "nightly-canceled", DefID: formerReconcileScanID, Status: "canceled", QueuedAt: now},
+		{ID: "nightly-canceled", DefID: reconcileScanDefIDV2, Status: "canceled", QueuedAt: now},
 	})
 
 	assert.Equal(t, "manual-good", opID(t, body), "operation is the scan whose preview is returned")
@@ -205,7 +190,7 @@ func TestLatestReconcileScan_NewestGoodScanHasNoAttempt(t *testing.T) {
 	older, newest := scanPayload(t, "book-old"), scanPayload(t, "book-new")
 	body := latestScanBody(t, []database.OperationV2Row{
 		{ID: "older", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour), ResultData: &older},
-		{ID: "newest", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now, ResultData: &newest},
+		{ID: "newest", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now, ResultData: &newest},
 	})
 	assert.Equal(t, "newest", opID(t, body))
 	assert.Nil(t, body["latest_attempt"], "nothing is newer than the scan being shown")
@@ -250,21 +235,20 @@ func TestReconcilePreview_StopsWhenTheRequestIsCanceled(t *testing.T) {
 func TestRecentReconcileScans_MatchesOnCanonicalID(t *testing.T) {
 	now := time.Now()
 	store := &reconcileIndexStore{v2: []database.OperationV2Row{
+		{ID: "scan", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now},
 		{ID: "nightly", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now},
 		{ID: "unrelated", DefID: "library.scan", Status: "completed", QueuedAt: now},
 	}}
 	srv, _, _ := bootRegisteredOpIDs(t)
 
 	got := recentReconcileScans(store, 50, srv.opRegistry.CanonicalDefID)
-	require.Len(t, got, 1)
-	assert.Equal(t, "nightly", got[0].ID)
-
-	// nil canonicalizer: ids compare as stored, so the former id is not a scan.
-	assert.Empty(t, recentReconcileScans(store, 50, nil))
+	require.Len(t, got, 1, "the retired id's alias is gone, so its row is not a scan")
+	assert.Equal(t, "scan", got[0].ID)
 }
 
 // The survivor must keep what the retired op declared: the larger timeout and the
-// file-read capability (the scan stats and hashes files), plus the alias itself.
+// file-read capability (the scan stats and hashes files). The alias went with the
+// soak (P14C-SOAK).
 func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	srv, _, aliases := bootRegisteredOpIDs(t)
 
@@ -273,7 +257,7 @@ func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	assert.GreaterOrEqual(t, def.Timeout, 3*time.Hour, "the retired op's 180 minutes is the larger budget")
 	assert.Contains(t, def.Capabilities, opsregistry.CapFilesRead)
 	assert.Contains(t, def.Capabilities, opsregistry.CapLibraryRead)
-	assert.Equal(t, reconcileScanDefIDV2, aliases[formerReconcileScanID])
+	assert.NotContains(t, aliases, formerReconcileScanID)
 	assert.True(t, def.Cancellable, "Cancel is honored: the body checks ctx at every phase")
 	// A reconcile scan interrupted by a deploy is dropped, never resumed: the def
 	// says so, and (since the registry's old "reconcile_scan" special case was
@@ -281,12 +265,6 @@ func TestReconcileScanOp_CarriesLoserBehaviour(t *testing.T) {
 	assert.Equal(t, opsregistry.ResumeDrop, def.ResumePolicy)
 	assert.Equal(t, opsregistry.LivenessManual, def.Liveness)
 
-	// The former id resolves to the same def, so a script or stored row that
-	// names it reaches the survivor.
-	viaAlias, ok := srv.opRegistry.Def(formerReconcileScanID)
-	require.True(t, ok)
-	assert.Equal(t, reconcileScanDefIDV2, viaAlias.ID)
-	assert.Equal(t, opsregistry.ResumeDrop, viaAlias.ResumePolicy, "a row stored under the former id resumes through the same def")
 }
 
 // touchCountingReporter counts liveness stamps separately from progress frames.
@@ -387,7 +365,7 @@ func TestReconcileScanOp_RunReturnsAFailureWithASinglePrefix(t *testing.T) {
 
 // The Repairs fixer reconcile.missing-files reads the latest scan through
 // Server.LatestReconcileScan (03-PR9b). It must pick the scan the endpoint
-// shows, by the same rule over the same rows: the former-id nightly row, the
+// shows, by the same rule over the same rows: one completed scan, the
 // newest good scan beside a newer attempt, and no usable scan at all.
 func TestLatestReconcileScan_FixerDepPicksTheEndpointsScan(t *testing.T) {
 	now := time.Now()
@@ -400,12 +378,12 @@ func TestLatestReconcileScan_FixerDepPicksTheEndpointsScan(t *testing.T) {
 		wantTryStatus     string
 		wantPreviewBookID string
 	}{
-		{"nightly row under the former id", []database.OperationV2Row{
-			{ID: "nightly-run", DefID: formerReconcileScanID, Status: "completed", QueuedAt: now, ResultData: &nightly},
+		{"one completed scan", []database.OperationV2Row{
+			{ID: "nightly-run", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now, ResultData: &nightly},
 		}, "nightly-run", "", "", "book-nightly"},
 		{"newer canceled run beside the good scan", []database.OperationV2Row{
 			{ID: "good", DefID: reconcileScanDefIDV2, Status: "completed", QueuedAt: now.Add(-time.Hour), ResultData: &good},
-			{ID: "canceled", DefID: formerReconcileScanID, Status: "canceled", QueuedAt: now},
+			{ID: "canceled", DefID: reconcileScanDefIDV2, Status: "canceled", QueuedAt: now},
 		}, "good", "canceled", "canceled", "book-good"},
 		{"only a running scan", []database.OperationV2Row{
 			{ID: "live", DefID: reconcileScanDefIDV2, Status: "running", QueuedAt: now},
