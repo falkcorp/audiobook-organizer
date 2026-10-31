@@ -74,6 +74,7 @@ deluge.protected-paths-sync
 diagnostics.ai-analyze
 diagnostics.export
 entities.author-merge
+entities.author-reclassify
 entities.resolve-production-author
 entities.series-rename
 itunes.clone-into-library
