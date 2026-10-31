@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
 // last-edited: 2026-10-30
 
@@ -437,7 +437,7 @@ func (f *retiredVersionsFixer) newJournaledRetireWriter(w *repairs.Writer) (reti
 	}
 	// Before the plan record: a store the Writer cannot retire through is
 	// refused with nothing journaled.
-	if err := w.CheckRetireSupport(); err != nil {
+	if err := repairs.CheckRetireSupport(w); err != nil {
 		return nil, err
 	}
 	return &journaledRetireWriter{w: w, books: ops, ext: ops}, nil
