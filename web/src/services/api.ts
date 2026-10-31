@@ -5852,9 +5852,13 @@ export async function renameAuthor(
   return body.data;
 }
 
-export async function reclassifyAuthorAsNarrator(
-  authorId: number
-): Promise<{ narrator_id: number; books_updated: number }> {
+/**
+ * Queues entities.author-reclassify for the author (POST answers 202 with the
+ * operation). Follow the returned id with pollOperationV2: the credits move, and
+ * the author is deleted, in that op, which journals them so an undo can restore
+ * the author.
+ */
+export async function reclassifyAuthorAsNarrator(authorId: number): Promise<Operation> {
   const response = await apiFetch(`${API_BASE}/authors/${authorId}/reclassify-as-narrator`, {
     method: 'POST',
   });

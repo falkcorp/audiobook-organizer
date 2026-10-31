@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.25 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -1116,7 +1117,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **AUTHOR-MERGE-SCAN-STANDDOWN** `entities.author-merge` and `ai.author-scan-apply` share one merge loop (`mergeAuthorsInto` in `internal/server/entities_ops.go`) and neither holds the library-scan stand-down, unlike `dedup.series-merge` (`MergeSeriesOptions.Scan`, commit 9ff2f2995) and `dedup.series-dedup`. A `library.scan` running at the same time rewrites `book_authors` on the same rows this loop repoints. Add the stand-down the way the series merge does: acquire it before the first write (refusing without an op id), renew it per merged author, abort on a lost lease, and invalidate the caches on that exit. Decide whether an Authors-view merge should hold it too (it should: one loop). The AI apply was written without it because the brief for 03-PR8 said to hold it only if `entities.author-merge` did, and it does not.
 
-- [ ] **AUTHOR-RECLASSIFY-ROUTE-UNDO** `POST /authors/:id/reclassify-as-narrator` (the Authors view's button) still deletes the author and moves its credits with no undo journal, because it has no operation to journal under. The AI apply's reclassify is journaled and undoable (`entities.ReclassifyJournal`, change types `author_reclassify_credits` / `author_reclassify_delete`). Run the route as an operation (or pass it an operation id) and hand `ReclassifyOptions.Journal` the same way `ai.author-scan-apply` does. Related, left as it was: a scan result whose keep author cannot be chosen (every author in it is gone) is re-evaluated on each read of the scan instead of being remembered, which costs one author lookup per id per read and no book-count load.
+- [x] **AUTHOR-RECLASSIFY-ROUTE-UNDO** `POST /authors/:id/reclassify-as-narrator` now queues `entities.author-reclassify` (202 + op id), which journals the credits and the author delete under its own op id (`entities.ReclassifyJournal`, `author_reclassify_credits` / `author_reclassify_delete`) so a revert restores the author; it holds the scan stand-down and the Authors view waits for the op. Done 2026-10-30; decision: `docs/decisions/2026-10-30-author-reclassify-route-undo.md`. Follow-up: after PR #4302 lands, swap `holdReclassifyStandDown` for its `holdAuthorMergeStandDown`.
 
 - [ ] **03-PR11-MOVE-DEDUP-E2E** (remaining half) The "Scheduler Tasks for Dedup" block that 03-PR10 moved into `web/tests/e2e/operation-monitoring.spec.ts` (line ~334) still only asserts mocked `fetch` responses from `/api/v1/system/tasks`, not any UI: rewrite it against a real surface (System page scheduler list) or drop it there.
 

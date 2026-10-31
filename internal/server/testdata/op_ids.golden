@@ -1,5 +1,5 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.20.1
+# version: 1.21.1
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
 # last-edited: 2026-10-30
 #
@@ -74,6 +74,7 @@ deluge.protected-paths-sync
 diagnostics.ai-analyze
 diagnostics.export
 entities.author-merge
+entities.author-reclassify
 entities.resolve-production-author
 entities.series-rename
 itunes.clone-into-library
