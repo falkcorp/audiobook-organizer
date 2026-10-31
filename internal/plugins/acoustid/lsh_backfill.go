@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/lsh_backfill.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2c4d6e80-3b5a-4f9c-9b1d-7e8f0a2b4c6d
-// last-edited: 2026-10-13
+// last-edited: 2026-10-31
 
 package acoustid
 
@@ -75,6 +75,13 @@ func (p *Plugin) lshBackfillDef() sdk.OperationDef {
 	}
 }
 
+// lshBackfillConcurrency is the size of the worker pool runLSHBackfill hands to
+// registry.RunItems. One row per item and the work is a DB read plus a DB write
+// (CPU for the index hook), so the pool is sized to the cores. It is a function,
+// not an inline expression, so the cancel test can derive its guaranteed bound
+// (cancel point + in-flight workers) from the same value the op uses.
+func lshBackfillConcurrency() int { return runtime.NumCPU() }
+
 func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	if p.store == nil {
 		return fmt.Errorf("database store not available")
@@ -112,6 +119,16 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 	var indexed, skippedNoFP, skippedAlreadyIndexed, failed atomic.Int64
 
 	if err := registry.RunItems(ctx, reporter, files, func(ctx context.Context, f database.BookFileCore) error {
+		// A cancelled op must not start another write. RunItems only checks
+		// ctx while dispatching, and its dispatcher picks at random when a
+		// worker slot is free AND ctx is done, so items already handed to a
+		// worker (and a few dispatched after the cancel) reach this function
+		// with a dead ctx. Without this guard each of them still hydrates and
+		// rewrites its row. The skipped item is not a failure and is not
+		// counted; the cancel is reported once, after RunItems returns.
+		if ctx.Err() != nil {
+			return nil
+		}
 		// Proxy gate: AcoustIDFingerprintDurationSec > 0 means a whole-file
 		// fingerprint was computed, even though BookFileCore never carries
 		// the AcoustIDFingerprint bytes themselves. See the doc comment
@@ -154,12 +171,18 @@ func (p *Plugin) runLSHBackfill(ctx context.Context, _ json.RawMessage, reporter
 		// re-save changes no path, Duration or FileSize, so every snapshot
 		// sums to the same totals and whichever recompute commits last
 		// writes the same value.
-		Concurrency: runtime.NumCPU(),
+		Concurrency: lshBackfillConcurrency(),
 		Label: func(i, t int) string {
 			return fmt.Sprintf("LSH backfill %d/%d (indexed=%d skip-no-fp=%d skip-existing=%d fail=%d)",
 				i+1, t, indexed.Load(), skippedNoFP.Load(), skippedAlreadyIndexed.Load(), failed.Load())
 		},
 	}); err != nil {
+		return err
+	}
+	// Items skipped by the per-item guard return nil, and a sequential
+	// RunItems (one core) can finish its last item without re-checking ctx,
+	// so surface the cancel here rather than report a partial run complete.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
