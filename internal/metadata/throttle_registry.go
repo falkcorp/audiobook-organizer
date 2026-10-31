@@ -1,5 +1,5 @@
 // file: internal/metadata/throttle_registry.go
-// version: 1.3.2
+// version: 1.4.1
 // guid: 0317e94d-7c76-4a4b-97a3-3cdfbf327945
 // last-edited: 2026-10-30
 
@@ -326,9 +326,36 @@ func (r *ThrottleRegistry) RecordSuccess(providerID string, startedAt time.Time)
 		"provider", providerID, "reason", string(cur.Reason))
 }
 
+// ReleaseHold drops one provider's ACTIVE hold by hand and returns what it
+// dropped. released is false when the provider has no active hold (an expired
+// entry is swept, not reported).
+//
+// It exists for the maintenance.throttle-reset operation (THROTTLE-RESET-OP),
+// which replaced the DELETE /metadata/providers/throttles routes retired in
+// 01-P81f. Do not call it from an automatic path: a hold ends on expiry or on a
+// successful call (RecordSuccess), and a release that ignores both is an
+// operator's decision.
+func (r *ThrottleRegistry) ReleaseHold(providerID string) (ProviderThrottle, bool, error) {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	r.mu.RLock()
+	cur, held := r.entries[providerID]
+	r.mu.RUnlock()
+	if !held {
+		return ProviderThrottle{}, false, nil
+	}
+	if err := r.clearLocked(providerID); err != nil {
+		return cur, false, err
+	}
+	if !cur.Active(time.Now()) {
+		// Expired in the gap: it is gone now, but there was nothing to release.
+		return ProviderThrottle{}, false, nil
+	}
+	return cur, true, nil
+}
+
 // clearLocked removes one hold from memory and the store; the caller must hold
-// persistMu. RecordSuccess is its only caller: there is no manual reset any more
-// (the DELETE routes were retired in 01-P81f).
+// persistMu. RecordSuccess and ReleaseHold are its callers.
 func (r *ThrottleRegistry) clearLocked(providerID string) error {
 	r.mu.Lock()
 	delete(r.entries, providerID)
