@@ -1,7 +1,7 @@
 // file: web/src/components/system/MaintenanceTab.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-09-19
+// last-edited: 2026-10-30
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import {
@@ -34,6 +34,7 @@ import {
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import * as api from '../../services/api';
+import { ThrottlePanel } from './ThrottlePanel';
 import { withOptimisticOperation } from '../../utils/withOptimisticOperation';
 
 // ─── OptimizeLibraryCard ────────────────────────────────────────────────────
@@ -1768,6 +1769,8 @@ export function MaintenanceTab() {
       <MaintenanceWindowCard />
 
       <ManualFixesCard />
+
+      <ThrottlePanel />
 
       <ChapterConsolidationCard />
 
