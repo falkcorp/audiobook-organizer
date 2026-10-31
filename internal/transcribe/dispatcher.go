@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.27.0
+// version: 1.30.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -1845,7 +1845,11 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			ep := healthy[idx]
 			wg.Go(func() {
 				g := probeByURL[ep.URL]
-				r, err := send(ctx, g, sub, progressFor())
+				// The request is watched for a swap of the machine behind the port
+				// (workerswap.go): the identity the dispatch froze for it travels in
+				// the context, as the senders take none.
+				sctx := withFrozenWorker(ctx, frozenWorker{key: keyOf(ep.URL), capable: capableFor[ep.URL]})
+				r, err := send(sctx, g, sub, progressFor())
 				resCh <- epResult{idx: idx, res: r, err: err}
 			})
 		}
@@ -1887,6 +1891,33 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 
 		for _, r := range round {
 			ep := healthy[r.idx]
+			if swap, swapped := errors.AsType[*WorkerSwappedError](r.err); swapped {
+				// Another machine answered at the port during the request (the
+				// liveness poll saw it): nothing the request returned can be told from
+				// the old machine's answer, and the old one may never have seen the
+				// file. So no result of it is stored (earlier chunks included), no
+				// strike or condemnation is written, the endpoint is not benched
+				// (markEndpointFailure is process-wide and the port is not down), and
+				// nothing is recorded in lastErr, soloStuck, faultedOn or the canary
+				// memory. Its jobs stay in remaining for the other ports, and the port
+				// is dropped like one regate found changed hands; the next dispatch's
+				// gate keys it by what it reports.
+				dispatchLog.Warn("a whisper port changed hands during a request, so none of the request's results are kept and the port is dropped from this dispatch: url=%s was=%s now=%s after=%s jobs=%d withheld=%d",
+					logger.SanitizeLogValue(ep.URL), logger.SanitizeLogValue(swap.Was), logger.SanitizeLogValue(swap.Now),
+					swap.After.Round(time.Second), len(swap.Jobs), len(r.res))
+				reason := "answered as a different worker than the one the dispatch froze for it during a request (its port changed hands), so it is sent no more work in this dispatch"
+				rf := newRefusal(probeByURL[ep.URL], reason)
+				rf.ChangedHands = true
+				refused = append(refused, rf)
+				// Queued, not dropped now: dropPorts counts the machines again, which
+				// must not change soloLimit under the answers of this round that are
+				// still being judged (see holdDrops).
+				heldDrops[ep.URL] = true
+				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool { _, ok := remaining[id]; return !ok }); len(u) > 0 {
+					units = append(units, u)
+				}
+				continue
+			}
 			fault, isFault := errors.AsType[*WorkerFaultError](r.err)
 			if isFault {
 				registerFollowers(fault.Followers)
@@ -1965,6 +1996,44 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 			}
 			for id := range settledHere {
 				delete(remaining, id)
+			}
+			if unv, unverified := errors.AsType[*WorkerUnverifiedError](r.err); unverified {
+				// One response could not be attributed to its machine: its /health
+				// stayed unreadable after the response and nothing recent vouched for
+				// the worker. That is no evidence about the machine, so nothing is
+				// written against it: no strike, no bench (markEndpointFailure is
+				// process-wide), no lastErr, no ChangedHands refusal, and the port
+				// keeps its place in the dispatch. The chunks that passed a verified
+				// probe before it are kept (settledHere above, and the journal). Only
+				// the withheld chunk's jobs are re-queued, marked as faulted on this
+				// endpoint so they go to another one (or are deferred once none is
+				// left) instead of back into the same unreadable probe; the jobs this
+				// request never sent stay ordinary work.
+				registerFollowers(unv.Followers)
+				unanswered := slices.DeleteFunc(slices.Clone(unv.Jobs), func(id string) bool { _, ok := remaining[id]; return !ok })
+				dispatchLog.Warn("a whisper answer could not be attributed to its machine (/health unreadable after the response), so only that response is withheld and its jobs are re-sent elsewhere: url=%s was=%s after=%s withheld_jobs=%d kept=%d",
+					logger.SanitizeLogValue(ep.URL), logger.SanitizeLogValue(unv.Was), unv.After.Round(time.Second), len(unanswered), len(settledHere))
+				requeueFaulted(unanswered, ep.URL)
+				if faultedHere[ep.URL] {
+					requeueFaulted(distrusted, ep.URL)
+				} else {
+					requeueUnits(distrusted)
+				}
+				held := make(map[string]bool, len(unanswered)+len(distrusted)+len(killHeld))
+				for _, id := range slices.Concat(unanswered, distrusted, killHeld) {
+					held[id] = true
+					// A follower rides with its leader (followersOf), never alone.
+					for _, f := range followersOf[id] {
+						held[f] = true
+					}
+				}
+				if u := slices.DeleteFunc(slices.Clone(unitOf[r.idx]), func(id string) bool {
+					_, ok := remaining[id]
+					return !ok || held[id]
+				}); len(u) > 0 {
+					units = append(units, u)
+				}
+				continue
 			}
 			if isFault && !faultedHere[ep.URL] {
 				// A timeout-majority fault from an endpoint with no worker-level
@@ -2273,6 +2342,10 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 	}
 	total := len(jobs)
 	pending := jobs
+	// pin is the one machine a worker that gained its machine id may be for the
+	// whole dispatch (workerPin): the one it learned, or else the first strong
+	// identity a poll sees.
+	pin := newWorkerPin(g.learned)
 	// small holds the faulted jobs waiting to be sent again in requests too
 	// small to fault on timeouts.
 	var small [][]string
@@ -2282,7 +2355,21 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			base := len(results)
 			progress = func(d, _ int) { onProgress(min(base+d, total), total) }
 		}
-		res, err := send(ctx, g, pending, progress)
+		// Watched for a swap of the machine behind the port, like a pool's.
+		res, err := send(withFrozenWorker(ctx, frozenWorker{key: key, capable: capable, lone: true, pin: pin}), g, pending, progress)
+		if swap, swapped := errors.AsType[*WorkerSwappedError](err); swapped {
+			// Another machine answered at the port during the request. Nothing the
+			// request returned can be told from the old machine's answer (earlier
+			// chunks included), so it is withheld as a whole; there is no other
+			// port, so the unanswered jobs are deferred without a strike. The error
+			// is neither stuck nor an outage, and is not counted toward stopping the
+			// run (it is no recognised transport failure). Results of earlier sends
+			// of this dispatch stand.
+			dispatchLog.Warn("the only whisper port changed hands during a request, so none of the request's results are kept and the jobs are deferred: url=%s was=%s now=%s after=%s jobs=%d withheld=%d",
+				logger.SanitizeLogValue(url), logger.SanitizeLogValue(swap.Was), logger.SanitizeLogValue(swap.Now),
+				swap.After.Round(time.Second), len(swap.Jobs), len(res))
+			return results, classifyTransport([]string{url}, err)
+		}
 		fault, isFault := errors.AsType[*WorkerFaultError](err)
 		if isFault && fault.killMajority() {
 			holdKills = true // before the answers below: earlier chunks of this request too
@@ -2300,6 +2387,16 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 				br.Worker = g.answerWorker()
 			}
 			results[id] = br
+		}
+		if unv, unverified := errors.AsType[*WorkerUnverifiedError](err); unverified {
+			// One response could not be attributed to the machine (its /health stayed
+			// unreadable and nothing recent vouched for it). Only that response is
+			// withheld: the chunks above stand (they are in res and results), no
+			// strike or bench is written, and there is no other port, so the
+			// unanswered jobs are deferred through the unrecognised error below, which
+			// is not counted toward stopping the run.
+			dispatchLog.Warn("a whisper answer could not be attributed to the only port's machine (/health unreadable after the response), so only that response is withheld and its jobs are deferred: url=%s was=%s after=%s withheld_jobs=%d kept=%d",
+				logger.SanitizeLogValue(url), logger.SanitizeLogValue(unv.Was), unv.After.Round(time.Second), len(unv.Jobs), len(res))
 		}
 		if err != nil && !isFault {
 			if IsWorkerStuck(err) && ctx.Err() == nil {

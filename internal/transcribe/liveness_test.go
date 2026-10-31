@@ -1,7 +1,7 @@
 // file: internal/transcribe/liveness_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91b4c7d2-5e08-4a3f-b6d1-0f8a2c9e7413
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -19,9 +19,13 @@ import (
 
 func shortLiveness(t *testing.T, d time.Duration) {
 	t.Helper()
-	old := livenessInterval
-	livenessInterval = d
-	t.Cleanup(func() { livenessInterval = old })
+	old, oldPause := livenessInterval, verifyProbePause
+	livenessInterval, verifyProbePause = d, time.Millisecond
+	unpolledUnverified.Clear()
+	t.Cleanup(func() {
+		livenessInterval, verifyProbePause = old, oldPause
+		unpolledUnverified.Clear()
+	})
 }
 
 // healthServer answers /health from a function and counts the probes.
