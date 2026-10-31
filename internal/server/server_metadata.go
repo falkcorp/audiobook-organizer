@@ -1,7 +1,7 @@
 // file: internal/server/server_metadata.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -38,26 +38,13 @@ func (s *Server) updateFetchedMetadataState(bookID string, values map[string]any
 }
 
 func (s *Server) resolveAuthorAndSeriesNames(book *database.Book) (string, string) {
-	authorName := ""
-	store := s.Ops()
-	if book.Author != nil {
-		authorName = book.Author.Name
-	} else if book.AuthorID != nil && store != nil {
-		if author, err := store.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
-			authorName = author.Name
-		}
+	// The shared resolver treats a nil reader as "no lookups"; s.Ops() returns
+	// the database.Store interface, so a nil store is a nil interface here.
+	var reader database.BookNameReader
+	if store := s.Ops(); store != nil {
+		reader = store
 	}
-
-	seriesName := ""
-	if book.Series != nil {
-		seriesName = book.Series.Name
-	} else if book.SeriesID != nil && store != nil {
-		if series, err := store.GetSeriesByID(*book.SeriesID); err == nil && series != nil {
-			seriesName = series.Name
-		}
-	}
-
-	return authorName, seriesName
+	return database.ResolveBookNames(reader, book)
 }
 
 // batchFetchBookAuthorsAndNarrators pre-fetches author and narrator join table

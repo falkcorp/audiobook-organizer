@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.18.0
+// version: 1.18.1
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 import {
   startTransition,
@@ -618,13 +618,12 @@ export function useDupesLane(
    * Once the server HAS answered for this term it must stand down, and that is
    * a correctness requirement rather than an optimisation. The server's
    * predicate is strictly wider than this one: it matches author names, which
-   * it resolves through the author table, while the objects rendered here carry
-   * no author_name at all -- the TypeScript Book interface declares
-   * `author_name?: string`, but THIS endpoint never sets it, so the optional
-   * read yields undefined and `?? ''` swallows it. (Other endpoints do send
-   * it: the audiobooks service and `enrichedBookResponse` both populate the
-   * field, which is why the TS declaration is correct and must not be
-   * deleted on the strength of what this lane sees.) Left running, this filter
+   * it resolves through the author table, while this local predicate does not
+   * look at author_name. (Loaded rows do carry author_name now: the candidate
+   * endpoints send it, resolved the way the audiobooks endpoints resolve it.
+   * Until they did, the optional read yielded undefined and `?? ''` swallowed
+   * it. The TS declaration stays: it is how the audiobooks endpoints' field is
+   * typed.) Left running, this filter
    * would throw away every row the server matched on author: `total` says 12,
    * the list shows 0, and the row stays unfindable -- the exact defect
    * server-side search was added to fix, wearing a different hat.
@@ -634,9 +633,8 @@ export function useDupesLane(
       decidedIds.size === 0 ? rows : rows.filter((c) => !decidedIds.has(c.id));
     const q = deferredSearch.trim().toLowerCase();
     if (!q || serverAnsweredTerm(appliedSearch, q)) return decided(candidates);
-    // Only the fields actually present on a loaded row. author_name is
-    // deliberately absent -- see above; including it would look thorough while
-    // contributing an empty string for every candidate.
+    // author_name is deliberately absent -- see above: the server owns author
+    // matching, and this window is only for the fields that need no round trip.
     const hay = (c: DedupCandidate) =>
       [
         c.entity_a_id,
