@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_retire_guard_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9a2dc3c4-95fe-49aa-95aa-9d97cd9599db
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -79,6 +79,10 @@ func TestRevertRetiredRowGuards_EarlierOperationsNeverOverwriteARetiredRow(t *te
 				FieldName: "book_file:" + fx.file.ID,
 				OldValue:  database.BookFileLocation{Path: fx.path + ".old"}.Encode(),
 				NewValue:  database.BookFileLocation{Path: fx.path}.Encode()}
+		}},
+		{"book_file_modify", func(fx *guardFx) *database.OperationChange {
+			return &database.OperationChange{BookID: fx.holder.ID, ChangeType: database.ChangeTypeBookFileModify,
+				FieldName: "file.track_number:" + fx.file.ID, OldValue: "9", NewValue: "1"}
 		}},
 		{"itunes_path_clear", func(fx *guardFx) *database.OperationChange {
 			return &database.OperationChange{BookID: fx.holder.ID, ChangeType: undo.ChangeTypeITunesPathClear,

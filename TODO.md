@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -1177,7 +1177,7 @@ into one of the curated sections below, is a normal direct edit.
       to `LockFields`. Each needs the intent -> write-in-critical-section ->
       history -> clear order the other Writer methods follow.
 
-- [ ] **OPS-WRITER-REVERT** Teach the operation revert to reverse the
+- [x] **OPS-WRITER-REVERT** Teach the operation revert to reverse the
       record-only change types the v3 Writer writes: `book_file_modify`
       (`ModifyBookFile`, one row per changed field) and `book_authors_modify`
       (`ModifyBookAuthors`, the whole credit list before and after). Until then
