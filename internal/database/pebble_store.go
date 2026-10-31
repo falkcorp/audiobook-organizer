@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.235.4
+// version: 1.236.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-30
 
@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -35,6 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/errgroup"
 )
 
 // prefixEnd returns an upper-bound key for Pebble range iteration
@@ -2371,12 +2373,27 @@ func firstSignificantTitleToken(title string) string {
 	return fallback
 }
 
+// metadataBucketWorkers is how many buckets bucketMetadataDuplicates scores at
+// once. Production always gets runtime.NumCPU(); it is a variable only so tests
+// can pin 1 (the serial reference) against N and compare the two outputs.
+// Tests that set it must restore it and must not call t.Parallel.
+var metadataBucketWorkers = runtime.NumCPU()
+
 // bucketMetadataDuplicates buckets entries by (authorKey, titleToken), then
 // within each bucket (>=2 members, at/under the cap) transitively groups books
 // whose pairwise title similarity is >= threshold, emitting components of >=2
 // books as groups. Bucket and group order is first-seen-stable. A
 // threshold <= 0 means "no floor" (every in-bucket pair unions) but the bucket
 // cap still bounds the work and guarantees termination.
+//
+// Buckets are scored concurrently on a bounded pool (metadataBucketWorkers).
+// That is safe because a bucket is a disjoint partition of the entries: each
+// worker reads only its own bucket's (immutable) entries and writes only its
+// own results slot, so there is no shared mutable state to lock. Determinism
+// does not depend on scheduling either: every bucket's groups land in the slot
+// at its first-seen index and the slots are concatenated serially in that
+// order, so the output is byte-identical to a serial pass for any worker count
+// (TestBucketMetadataDuplicatesParallelMatchesSerial pins that).
 func bucketMetadataDuplicates(entries []metadataDupEntry, threshold float64) [][]BookCore {
 	buckets := make(map[string][]metadataDupEntry)
 	order := make([]string, 0, len(entries))
@@ -2388,7 +2405,9 @@ func bucketMetadataDuplicates(entries []metadataDupEntry, threshold float64) [][
 		buckets[key] = append(buckets[key], e)
 	}
 
-	var groups [][]BookCore
+	// Serial pass: pick the buckets worth scoring (and log the oversize ones in
+	// first-seen order, as the serial code always did) before any goroutine runs.
+	eligible := make([][]metadataDupEntry, 0, len(order))
 	for _, key := range order {
 		bucket := buckets[key]
 		if len(bucket) < 2 {
@@ -2399,7 +2418,23 @@ func bucketMetadataDuplicates(entries []metadataDupEntry, threshold float64) [][
 				"bucketKey", key, "size", len(bucket), "cap", metadataFuzzyBucketCap)
 			continue
 		}
-		groups = append(groups, groupMetadataBucket(bucket, threshold)...)
+		eligible = append(eligible, bucket)
+	}
+
+	perBucket := make([][][]BookCore, len(eligible))
+	var g errgroup.Group
+	g.SetLimit(max(metadataBucketWorkers, 1))
+	for i, bucket := range eligible {
+		g.Go(func() error {
+			perBucket[i] = groupMetadataBucket(bucket, threshold)
+			return nil
+		})
+	}
+	_ = g.Wait() // the tasks never return an error
+
+	var groups [][]BookCore
+	for _, bucketGroups := range perBucket {
+		groups = append(groups, bucketGroups...)
 	}
 	return groups
 }
@@ -2410,8 +2445,21 @@ func bucketMetadataDuplicates(entries []metadataDupEntry, threshold float64) [][
 // bucket (it is part of the bucket key), so scoring reduces to title
 // similarity — the coarse, grouping-only metric; downstream re-scores
 // title+author.
+//
+// Each title is normalized and decoded once (matcher.Prepare), before any
+// pairing, and each unordered pair is then scored once (matcher.SymmetricScore)
+// rather than normalizing both sides from scratch for each of the two
+// directions. A pair whose members already share a component is not scored at
+// all: unioning them again is a no-op, so the components cannot change.
 func groupMetadataBucket(bucket []metadataDupEntry, threshold float64) [][]BookCore {
 	n := len(bucket)
+	prepared := make([]matcher.Prepared, n)
+	for i := range bucket {
+		prepared[i] = matcher.Prepare(bucket[i].normTitle)
+	}
+	scratch := matcher.GetScratch()
+	defer matcher.PutScratch(scratch)
+
 	parent := make([]int, n)
 	for i := range parent {
 		parent[i] = i
@@ -2432,7 +2480,10 @@ func groupMetadataBucket(bucket []metadataDupEntry, threshold float64) [][]BookC
 
 	for i := range n {
 		for j := i + 1; j < n; j++ {
-			if metadataTitleSimilarity(bucket[i].normTitle, bucket[j].normTitle) >= threshold {
+			if find(i) == find(j) {
+				continue
+			}
+			if metadataTitleSimilarity(&prepared[i], &prepared[j], scratch) >= threshold {
 				union(i, j)
 			}
 		}
@@ -2458,19 +2509,14 @@ func groupMetadataBucket(bucket []metadataDupEntry, threshold float64) [][]BookC
 }
 
 // metadataTitleSimilarity is the coarse, grouping-only title metric: it reuses
-// internal/matcher.ScoreMatch (spec §C2 "reuse the existing fuzzy similarity
-// path", never a second metric) and symmetrizes its search-flavored,
-// asymmetric score to a 0..1 float. It is INTENTIONALLY coarse — the real
-// title+author scoring authority is book_dedup.go's metadataPairSimilarity.
-func metadataTitleSimilarity(a, b string) float64 {
-	if a == "" || b == "" {
-		return 0
-	}
-	s := matcher.ScoreMatch(a, b)
-	if r := matcher.ScoreMatch(b, a); r > s {
-		s = r
-	}
-	return float64(s) / 100.0
+// internal/matcher's fuzzy scoring (spec §C2 "reuse the existing fuzzy
+// similarity path", never a second metric) and takes its symmetric 0..100 score
+// as a 0..1 float. matcher.SymmetricScore works on the Prepared forms of the two
+// titles, so nothing is re-derived per pair; an empty title scores 0. It is
+// INTENTIONALLY coarse — the real title+author scoring authority is
+// book_dedup.go's metadataPairSimilarity.
+func metadataTitleSimilarity(a, b *matcher.Prepared, scratch *matcher.Scratch) float64 {
+	return float64(matcher.SymmetricScore(a, b, scratch)) / 100.0
 }
 
 // GetBooksBySeriesIDCore is Core-typed (STOREFID W4): the return type is
