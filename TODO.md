@@ -1,5 +1,6 @@
 <!-- file: TODO.md -->
 <!-- version: 10.78.24 -->
+<!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
 
@@ -260,6 +261,9 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **TODO-ACTIVITY-WRITER-BATCH-BRANCH** `Writer.sendEntry` has its own batch branch that is unreachable, because the entry type is always "system"; only the `LogBatch` path batches. Remove the dead branch or route the batching through one path.
 - [x] **TODO-OPSV3-CENSUS-CORRUPT-RECORD** A corrupt run record in the counts census (`hiddenFor`) still answers 500 on `/api/v3/ops/runs/counts`; the list path now skips and logs it (`RunQuery.OnUndecodable`), the census does not. Done 2026-10-30: `hiddenFor` skips and logs via `OnUndecodable` and attributes the run to its state from the state index.
 - [x] **TODO-OPSV3-TOTAL-UNDECODABLE-PAGE** `RunQuery.Total` with a nil `Keep` counts index keys, so a record that cannot be decoded still adds to the total while its row is skipped from the page. Done 2026-10-30: a set `OnUndecodable` makes the store decode every record so Total matches the page.
+- [x] **TODO-ACTIVITY-WRITER-BATCH-BRANCH** `Writer.sendEntry` has its own batch branch that is unreachable, because the entry type is always "system"; only the `LogBatch` path batches. Remove the dead branch or route the batching through one path. (Done 2026-10-30: dead branch and `isBatchable` removed; batching goes only through `LogBatch`.)
+- [ ] **TODO-OPSV3-CENSUS-CORRUPT-RECORD** A corrupt run record in the counts census (`hiddenFor`) still answers 500 on `/api/v3/ops/runs/counts`; the list path now skips and logs it (`RunQuery.OnUndecodable`), the census does not.
+- [ ] **TODO-OPSV3-TOTAL-UNDECODABLE-PAGE** `RunQuery.Total` with a nil `Keep` counts index keys, so a record that cannot be decoded still adds to the total while its row is skipped from the page.
 - [ ] **TODO-JOURNAL-DIRECT-WRITERS** `repairs.Writer` now refuses an unclassified change type, but several writers create `OperationChange` rows directly and bypass it (`repoint_book_file_rows.go` `book_file_repoint`, `author_strip_merge_relink.go`, `fs_regroup_xml.go`, `series_phantom_repair.go`, `authormerge.Step`). Route them through the Writer or give `database.CreateOperationChange` the same classification check, then add a ratchet that fails on a new direct writer.
 - [ ] **TODO-SYSTEM-LOGS-REPAIRS-READABILITY** `GET /system/logs` walks recent operations and reads their v1 operation logs without asking `opaccess.Reader.MayRead` for each operation, so it does not apply the Repairs-run visibility rule (only the user-text filter). The keyspace has no writer and is empty in production, so nothing leaks today; source the endpoint from the activity store and gate each operation when that is done.
 - [ ] **TODO-REPAIRS-RENDER-SUMMARY-FRAGMENT** `RenderSummary` can still produce a preposition fragment ("for <id>") that the user-text pattern does not catch, because book ids share the shape; this was not addressed in the R4 change.
