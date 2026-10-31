@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package metadata
 
@@ -248,7 +248,7 @@ func (ps *ProtectedSource) SearchByTitle(ctx context.Context, title string) ([]B
 	results, err := ps.source.SearchByTitle(ctx, title)
 	ps.recordOutcome(startedAt, err)
 	if err != nil {
-		return nil, err
+		return nil, RedactProviderError(err)
 	}
 	return results, nil
 }
@@ -264,7 +264,7 @@ func (ps *ProtectedSource) SearchByTitleAndAuthor(ctx context.Context, title, au
 	results, err := ps.source.SearchByTitleAndAuthor(ctx, title, author)
 	ps.recordOutcome(startedAt, err)
 	if err != nil {
-		return nil, err
+		return nil, RedactProviderError(err)
 	}
 	return results, nil
 }
@@ -307,7 +307,7 @@ func (ps *ProtectedSource) SearchByContext(ctx context.Context, sc *SearchContex
 	results, err := inner.SearchByContext(ctx, sc)
 	ps.recordOutcome(startedAt, err)
 	if err != nil {
-		return nil, err
+		return nil, RedactProviderError(err)
 	}
 	return results, nil
 }

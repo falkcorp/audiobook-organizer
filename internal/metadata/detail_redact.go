@@ -1,5 +1,5 @@
 // file: internal/metadata/detail_redact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dbc8ca7a-f131-48c1-91b6-ca76eb082dde
 // last-edited: 2026-10-30
 
@@ -13,8 +13,7 @@ import (
 	"strings"
 )
 
-// redactedValue replaces every query-parameter value and every bare secret
-// value. Values are the secret; names are kept so the message stays useful.
+// redactedValue replaces userinfo, a URL query and every bare secret value.
 const redactedValue = "***"
 
 // urlTokenRE finds URL-shaped tokens (scheme://...) in free text. Quotes,
@@ -32,11 +31,11 @@ var secretPairRE = regexp.MustCompile(
 // RedactProviderDetail scrubs credentials from provider error text before it
 // is stored, logged or served.
 //
-// Every URL-shaped token loses its userinfo and fragment and keeps its query
-// parameter NAMES with every VALUE replaced by "***". There is deliberately no
-// allow-list of harmless names: providers put the API key under whatever name
-// they like, and a list that is one name short leaks. Bare name=value pairs
-// outside any URL are redacted when the name marks a credential.
+// Every URL-shaped token keeps only scheme, host and path. Userinfo is replaced
+// by "***@", and a query is replaced WHOLESALE by "?***" -- parameter names are
+// not kept, because names are attacker- and provider-chosen and a value can sit
+// in any shape the splitter does not anticipate. A fragment is dropped. Bare
+// name=value pairs outside any URL are masked when the name marks a credential.
 func RedactProviderDetail(s string) string {
 	if s == "" {
 		return s
@@ -49,49 +48,59 @@ func RedactProviderDetail(s string) string {
 	return secretPairRE.ReplaceAllString(s, "$1="+redactedValue)
 }
 
-// redactURL rebuilds a URL as scheme://host/path?name=***&name2=***, dropping
-// userinfo and fragment. It splits the string by hand rather than through
-// url.Parse so a malformed URL (a bad escape, say) is still scrubbed instead of
-// being returned verbatim because parsing failed.
+// redactURL reduces a URL token to scheme://host/path[?***]. It works on the
+// raw string rather than through url.Parse so a malformed URL (a bad escape, a
+// password containing "/" or "?") is still scrubbed instead of being returned
+// verbatim because parsing failed. It fails closed:
+//
+//   - If an "@" appears anywhere after "://", everything between "://" and the
+//     LAST "@" is replaced by "***@". This runs first, before any splitting, so
+//     a password containing "/", "?" or "#" cannot hide from it. The cost is
+//     that an "@" in a query is also read as userinfo, which only over-redacts.
+//   - From the first "?", the rest of the token is replaced by "?***".
+//   - From a "#" that comes before any "?", the rest is dropped.
 func redactURL(raw string) string {
-	rest := raw
-	if i := strings.IndexByte(rest, '#'); i >= 0 {
-		rest = rest[:i]
-	}
-	query := ""
-	hasQuery := false
-	if i := strings.IndexByte(rest, '?'); i >= 0 {
-		rest, query, hasQuery = rest[:i], rest[i+1:], true
-	}
-	scheme, afterScheme, found := strings.Cut(rest, "://")
+	scheme, rest, found := strings.Cut(raw, "://")
 	if !found {
 		return raw
 	}
-	authority, path := afterScheme, ""
-	if i := strings.IndexByte(afterScheme, '/'); i >= 0 {
-		authority, path = afterScheme[:i], afterScheme[i:]
+	if i := strings.LastIndexByte(rest, '@'); i >= 0 {
+		rest = redactedValue + rest[i:]
 	}
-	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
-		authority = authority[i+1:]
-	}
-	out := scheme + "://" + authority + path
-	if !hasQuery {
-		return out
-	}
-	parts := strings.Split(query, "&")
-	for i, p := range parts {
-		if p == "" {
-			continue
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		if rest[i] == '?' {
+			return scheme + "://" + rest[:i] + "?" + redactedValue
 		}
-		name, _, hasEq := strings.Cut(p, "=")
-		if !hasEq {
-			// A bare token ("?SECRET") has no name to keep; its text is the value.
-			parts[i] = redactedValue
-			continue
-		}
-		parts[i] = name + "=" + redactedValue
+		return scheme + "://" + rest[:i]
 	}
-	return out + "?" + strings.Join(parts, "&")
+	return scheme + "://" + rest
+}
+
+// redactedError carries a redacted message while keeping the original error on
+// the Unwrap chain, so errors.Is / errors.As / ClassifyProviderError (which
+// uses errors.AsType, never the message) see exactly what they saw before.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// RedactProviderError returns err unchanged when its message carries nothing to
+// scrub (so identity and type assertions on ordinary errors are untouched), and
+// otherwise a wrapper whose Error() is the redacted text and whose Unwrap() is
+// the original. Use it at the boundary where a provider's error leaves the
+// provider layer.
+func RedactProviderError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := DetailForError(err)
+	if msg == err.Error() {
+		return err
+	}
+	return &redactedError{msg: msg, err: err}
 }
 
 // DetailForError renders err for storage as a throttle hold's Detail with

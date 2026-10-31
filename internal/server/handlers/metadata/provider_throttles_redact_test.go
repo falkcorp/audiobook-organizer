@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/provider_throttles_redact_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ee4330fb-fd4d-4ee7-9082-c3192500d1f6
 // last-edited: 2026-10-30
 
@@ -28,7 +28,7 @@ func TestToThrottleView_RedactsDetail(t *testing.T) {
 		Until:      now.Add(time.Hour),
 		SetAt:      now,
 	}, now)
-	if strings.Contains(view.Detail, "LEAKED") || !strings.Contains(view.Detail, "key=***") {
+	if strings.Contains(view.Detail, "LEAKED") || !strings.Contains(view.Detail, "?***") {
 		t.Fatalf("detail not redacted: %q", view.Detail)
 	}
 }
@@ -63,7 +63,7 @@ func TestListProviderThrottles_ServesRedactedDetail(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(body, "google-books") {
 		t.Fatalf("status %d body %s", w.Code, body)
 	}
-	if strings.Contains(body, "LEAKED") || !strings.Contains(body, "key=***") {
+	if strings.Contains(body, "LEAKED") || !strings.Contains(body, "?***") {
 		t.Fatalf("served body leaks or lacks redaction: %s", body)
 	}
 }

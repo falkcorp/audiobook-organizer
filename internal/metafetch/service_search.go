@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.44.3
+// version: 1.44.4
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -1282,7 +1282,9 @@ func (mfs *Service) searchMetadataForBook(
 			lastErr = ctx.Err()
 		}
 		if len(st.results) == 0 && lastErr != nil {
-			failedErr = lastErr.Error()
+			// Redacted: this string is served in sources_failed and cached, and
+			// a provider's transport error carries its request URL.
+			failedErr = metadata.DetailForError(lastErr)
 		}
 		// The pooled per-provider row the single-book fetch and the bulk
 		// fetch replay (CachedMetadataForProvider): written when this search

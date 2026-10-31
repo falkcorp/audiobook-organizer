@@ -17,3 +17,10 @@
   value replaced by `***`, bare `key=`/`token=`/`secret=`-style pairs masked),
   redacted again when a persisted hold is loaded, and redacted in
   GET /api/v1/metadata/providers/throttles, so holds saved earlier are scrubbed too.
+- The Google Books API key is now sent in the `X-Goog-Api-Key` request header
+  instead of a `key=` query parameter, so a transport error no longer carries it
+  in the request URL. Errors leaving a chain-built provider source are wrapped
+  in a redacted error (original still reachable through `errors.As`/`errors.Is`,
+  so throttle classification is unchanged), and the search `sources_failed`
+  text is redacted too. URL redaction is stricter: userinfo (even with `/`, `?`,
+  `#` or `@` in the password) becomes `***@`, and the whole query becomes `?***`.
