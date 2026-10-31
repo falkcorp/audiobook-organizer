@@ -280,6 +280,7 @@ var keyFamilies = []KeyFamily{
 	{"opv2:rowix:", "per-row index of the opv2:row: set (class, skip kind), scanned without the rows", "internal/database/pebble_store_op_rows.go"},
 	{"opv2:state:", "operations v2 resume state", "internal/database/pebble_store_ops_v2.go"},
 	{"opv2:strike:", "operations v2 failure strikes", "internal/database/pebble_store_ops_v2.go"},
+	{"opv2:wait:", "waiting-deps index: op Status == waiting_deps (STARTUP-GC-WAIT-INDEX)", "internal/database/pebble_store_ops_v2_wait.go"},
 	{"opv3:", "operations v3 (05-PR4): runs, indexes, audit trail, chunk ledger", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:ckpt:", "operations v3 run checkpoints (phase, task state, lease table, migrated opv2:state: bytes)", "internal/database/pebble_store_ops_v3.go"},
 	{"opv3:def:", "operations v3 snapshots of removed defs", "internal/database/pebble_store_ops_v3.go"},

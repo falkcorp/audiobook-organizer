@@ -1319,7 +1319,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **MISSING-FILES-BOOK-HASH-REFILL** The Missing files Repairs fixer (`reconcile.missing-files`, 03-PR9b) clears `Book.FileHash` and `Book.OrganizedFileHash` on an `original_hash` or `filename` match (journaled, revertible). Nothing refills them on its own. `backfill-file-hashes` writes only `book_file` rows (and is manual, dry-run by default). The book fields are written only when the scanner re-reads the file (`applyScannerFields`), by organize (`scanner.ApplyOrganizedFileMetadata`) or by an iTunes import, and an ordinary scan skips a file whose scan-cache entry has the same mtime and size (`classifySkipFile`, scanner.go). So the book hashes stay empty until the file misses the cache, is marked NeedsRescan, changes, is seen by a `force_update` scan, or is organized. While they are empty, dedup's exact-hash collectors do not see the book. Owner decides: (a) leave as is; (b) have the fixer mark the NewPath scan-cache entry NeedsRescan so the next scan re-reads it; (c) have the fixer compute the hash from the file at apply time and write it in the same journaled step; or (d) teach `backfill-file-hashes` to fill empty book-level hashes from the book's single file row.
 
-- [ ] **STARTUP-GC-WAIT-INDEX** 06-P13 follow-up: `ListWaitingDepsOps`
+- [x] **STARTUP-GC-WAIT-INDEX** 06-P13 follow-up: `ListWaitingDepsOps`
       (`pebble_store_ops_v2.go`) scans and decodes every `opv2:op:` row because
       there is no status index. Add an `opv2:wait:` index written by `stageOpRow`
       and read by `DepsScheduler.SweepTick`, `reevaluateSubject` and
