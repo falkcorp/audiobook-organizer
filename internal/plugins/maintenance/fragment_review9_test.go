@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
-// last-edited: 2026-10-20
+// last-edited: 2026-10-31
 
 package maintenance
 
@@ -408,22 +408,31 @@ func runActionMatrix(t *testing.T, sh [2]string, sc heldScenario, step, start in
 				acts = append(acts, act{i, n})
 			}
 		}
-		closeF()
-		for _, a := range acts {
-			f, r, closeF := newCutFixture(t, sh[0], sh[1])
-			f.cutAt(t, r, at)
-			keepOwn, _ := sc.run(t, f, r, at)
-			rows := heldOver(f.plan(t, "op-plan2"), r.BookIDs)
-			require.Greater(t, len(rows), a.row, "the replay of cut %d holds the same rows", at)
+		// The first action runs on the fixture that found the hold: its
+		// state after cutAt and sc.run is exactly what a replay rebuilds, so
+		// a replay would only repeat the seed, the cut and the scenario.
+		// Every later action replays on a fresh fixture, as before.
+		for i, a := range acts {
+			af, ar, aClose, aKeepOwn, rows := f, r, closeF, keepOwn, held
+			if i > 0 {
+				af, ar, aClose = newCutFixture(t, sh[0], sh[1])
+				af.cutAt(t, ar, at)
+				aKeepOwn, _ = sc.run(t, af, ar, at)
+				rows = heldOver(af.plan(t, "op-plan2"), ar.BookIDs)
+				require.Greater(t, len(rows), a.row, "the replay of cut %d holds the same rows", at)
+			}
 			as := heldActions(rows[a.row].SkipReason)
 			require.Greater(t, len(as), a.n, "the replay of cut %d offers the same actions", at)
 			tl.actions++
 			tag := fmt.Sprintf("at %d action %q", at, as[a.n])
-			if e := f.doHeldAction(t, rows[a.row], as[a.n]); e != "" {
+			if e := af.doHeldAction(t, rows[a.row], as[a.n]); e != "" {
 				tl.actErr++
 				tl.note("ACTION FAILED %s: %s", tag, e)
 			}
-			f.settle(t, r, keepOwn, tag, tl)
+			af.settle(t, ar, aKeepOwn, tag, tl)
+			aClose()
+		}
+		if len(acts) == 0 {
 			closeF()
 		}
 	}

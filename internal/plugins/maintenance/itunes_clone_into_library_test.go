@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2e8b5d10-7c4a-4f93-8a61-d9f3b7c2e045
-// last-edited: 2026-10-03
+// last-edited: 2026-10-31
 
 package maintenance
 
@@ -92,7 +92,14 @@ func newICFixture(t *testing.T) *icFixture {
 	prev := config.AppConfig.RootDir
 	config.AppConfig.RootDir = root
 	t.Cleanup(func() { config.AppConfig.RootDir = prev })
-	s := newSeriesPhantomStore(t)
+	// In-memory store: the on-disk one fsyncs every write, and the rollback
+	// matrix (20 subtests, serialised by the RootDir swap above) spent its
+	// time waiting on the disk, not computing. The book files these tests
+	// move are real files under base either way.
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	s.WaitForWarmup()
 	return &icFixture{s: s, base: base, root: root, deps: icTestDeps{fakeDeps: fakeDeps{store: s}, s: s, root: root}}
 }
 
