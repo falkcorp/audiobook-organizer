@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 91e6c0d4-3b2a-4f75-8d18-6a4f2c97e0b3
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -74,6 +74,32 @@ func (rf *retiredFixture) rejectShell(name string) {
 		OpKind: decisions.OpKindRetiredVersions, EntityType: retiredEntityBook, EntityIDs: []string{rf.ids[name]},
 		Decision: decisions.DecisionReject, Source: decisions.SourceHuman, ActorUserID: "owner-user",
 		ReasonCode: decisions.ReasonOther,
+	})
+	require.NoError(rf.t, err)
+}
+
+// unrejectShell lifts the owner's reject of a fixture shell, as the owner's
+// unreject does. Reopen is not this: a sticky reject cannot be reopened, and a
+// reopened one still holds the fixer's sticky ask.
+func (rf *retiredFixture) unrejectShell(name string) {
+	rf.t.Helper()
+	kv, ok := database.AsCapability[decisions.KV](rf.st)
+	require.True(rf.t, ok)
+	_, err := decisions.New(kv).Record(decisions.Input{
+		OpKind: decisions.OpKindRetiredVersions, EntityType: retiredEntityBook, EntityIDs: []string{rf.ids[name]},
+		Decision: decisions.DecisionUnreject, Source: decisions.SourceHuman, ActorUserID: "owner-user",
+	})
+	require.NoError(rf.t, err)
+}
+
+// recordUndone writes the `undone` record a revert of the shell's retire leaves.
+func (rf *retiredFixture) recordUndone(shell, holder, versionID string) {
+	rf.t.Helper()
+	kv, ok := database.AsCapability[decisions.KV](rf.st)
+	require.True(rf.t, ok)
+	_, err := decisions.RecordRetiredUndone(decisions.New(kv), decisions.RetiredVersionsEvent{
+		ShellID: rf.ids[shell], TargetID: rf.ids[holder], VersionID: versionID, OpID: "op-retire",
+		ActorUserID: "owner-user", ActorName: "Owner",
 	})
 	require.NoError(rf.t, err)
 }
@@ -186,6 +212,42 @@ func TestRetiredVersions_PlanHonoursAShellReject(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, retCatVetoed, again.Class)
 	require.NotEqual(t, planned.Fingerprint, again.Fingerprint, "changed_since_plan")
+}
+
+// The fixer's ask is sticky, so only an unreject releases a rejected shell, and
+// a revert's `undone` record (rows back under the shell, retired version
+// emptied) is a label that neither holds the shell nor lifts a reject. The
+// store and the fixer agree on both.
+func TestRetiredVersions_RejectIsReleasedByUnrejectAndNeverByARevert(t *testing.T) {
+	rf := newRetiredFixture(t)
+	rf.live("primary", "g", rf.file("g/primary.mp3"))
+	rf.trashed("rejected", "g", 30, rf.file("g/rejected.mp3"))
+	rf.trashed("reverted", "g", 30, rf.file("g/reverted.mp3"))
+	rf.trashed("both", "g", 30, rf.file("g/both.mp3"))
+
+	// A revert: retire, put the rows back, record undone. Nothing was rejected.
+	verID, rowID := rf.retireInto("reverted", "primary")
+	rf.unretire("reverted", "primary", verID, rowID)
+	rf.recordUndone("reverted", "primary", verID)
+	rf.rejectShell("rejected")
+	rf.rejectShell("both")
+	bothVer, bothRow := rf.retireInto("both", "primary")
+	rf.unretire("both", "primary", bothVer, bothRow)
+	rf.recordUndone("both", "primary", bothVer)
+
+	rows := rf.plan()
+	require.Equal(t, retCatVetoed, rows[rf.ids["rejected"]].Class)
+	require.Equal(t, retCatVetoed, rows[rf.ids["both"]].Class, "an undone label lifts no reject")
+	require.Equal(t, retVetoShellRejected, rows[rf.ids["both"]].Current["owner_veto_family"])
+	require.NotEqual(t, retCatVetoed, rows[rf.ids["reverted"]].Class, "undone alone is not a veto: %s", rows[rf.ids["reverted"]].Reason)
+	require.True(t, rows[rf.ids["reverted"]].Applicable(), rows[rf.ids["reverted"]].Reason)
+
+	rf.unrejectShell("rejected")
+	rf.unrejectShell("both")
+	rows = rf.plan()
+	require.Equal(t, retCatWouldRetire, rows[rf.ids["rejected"]].Class, rows[rf.ids["rejected"]].Reason)
+	require.Equal(t, retCatWouldRetire, rows[rf.ids["both"]].Class, rows[rf.ids["both"]].Reason)
+	require.Equal(t, retCatWouldRetire, rows[rf.ids["reverted"]].Class)
 }
 
 // A pair veto that names a book which was retired into the target and purged

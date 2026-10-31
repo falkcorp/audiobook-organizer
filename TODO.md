@@ -197,6 +197,15 @@ into one of the curated sections below, is a normal direct edit.
       and never a veto. Any future writer of a `decision:` key outside
       `decisions.Store.Record` would leave the `RowCache` stale;
       `TestDecisionKeysHaveOneWriter` fails if one appears.
+      Done 2026-10-30: the `repairs:retired-versions` reject-reason taxonomy
+      (`shell_is_distinct_edition`, `keep_both`, `wrong_holder`, on top of the common
+      and `repairs:` codes) and the store/fixer tests for both points above. Still
+      open: there is no Repairs reject route, unreject route or reasons endpoint to
+      extend (the Repairs routes are plan, rows, apply and owner-apply; the generic
+      route is the Universal Reject PR2). That route must write a sticky reject for
+      this kind (a sticky reject cannot be reopened), offer unreject as the release,
+      and serve `decisions.Reasons`. See
+      `docs/decisions/2026-10-30-retired-reject-route.md`.
 
 - [ ] **TODO-SWAP-ADOPT-FILES** Let `versions.RunVersionSwap` take a version whose files are
       not in its `.versions/{id}/` slot, and support folder (multi-file) books. The swap now
