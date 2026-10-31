@@ -1,5 +1,5 @@
 // file: internal/server/author_reclassify_op_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 23b520a4-9079-4e61-acf1-e2caab81d462
 // last-edited: 2026-10-30
 
@@ -151,7 +151,7 @@ func TestAuthorReclassifyOp_HoldsTheStandDownAroundTheWritesAndRenewsPerBook(t *
 			renews++
 		}
 	}
-	require.Equal(t, 3, renews, "one renew per book (3 books credit the author)")
+	require.Equal(t, 5, renews, "one renew per book (3 books credit the author), one before the unlink verify, one before the delete")
 }
 
 func TestAuthorReclassifyOp_AScanThatWillNotParkRefusesTheRunBeforeAnyWrite(t *testing.T) {
