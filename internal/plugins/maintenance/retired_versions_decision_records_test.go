@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_decision_records_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e7d92b1-5a38-4c06-b2f9-8d1a63c0e745
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -131,17 +131,17 @@ func TestRetiredApply_RevertWritesTheUndoneRecordAfterTheApplied(t *testing.T) {
 }
 
 // cutAfterRetireRows commits the retire batch and then dies, before the
-// caller's recordApplied: the cut-off between RetireRows and the record.
+// caller's recordApplied: the cut-off between RetireVersion and the record.
 type cutAfterRetireRows struct{ retireWriter }
 
-func (c cutAfterRetireRows) RetireRows(shellID, holderID, versionID string, rows []retireRow) error {
-	if err := c.retireWriter.RetireRows(shellID, holderID, versionID, rows); err != nil {
+func (c cutAfterRetireRows) RetireVersion(spec repairs.RetireSpec) error {
+	if err := c.retireWriter.RetireVersion(spec); err != nil {
 		return err
 	}
 	return errors.New("injected: the process died after the retire batch committed")
 }
 
-// A retire cut off after RetireRows and before its record committed its rows
+// A retire cut off after RetireVersion and before its record committed its rows
 // but never wrote `applied`, and nothing visits the shell again except the
 // fresh plan that finishes its tail. That finish writes the record, from the
 // version's own id and retire op (op-cut, not the finishing op), and exactly one.

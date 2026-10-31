@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_retire.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: a82a965b-b258-4d39-b08b-abd352a891e7
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 
 package repairs
 
@@ -67,6 +67,12 @@ type RetireSpec struct {
 	// Format and Source describe the retired version (BookVersion.Format and
 	// .Source); both may be empty.
 	Format, Source string
+	// SourceOriginalPath, MetadataJSON and IngestDate fill the same-named
+	// BookVersion fields: where the shell's audio came from, the provenance a
+	// reader of the retired version shows (what the shell was), and when the
+	// shell entered the library. All may be empty; a zero IngestDate is Now.
+	SourceOriginalPath, MetadataJSON string
+	IngestDate                       time.Time
 	// CombineJournalID, when set, links the retire to the combine journal that
 	// absorbed Shell (plan section 6.5), so UndoCombine reverses it first.
 	CombineJournalID string
@@ -135,19 +141,50 @@ func (w *Writer) RetireVersion(spec RetireSpec) error {
 	if len(spec.FileIDs) == 0 {
 		return nil
 	}
-	retirer, ok := database.AsCapability[database.RetiredBookFileWriter](w.files)
-	if !ok {
-		return errors.New("repairs: the store cannot retire book_file rows")
+	retirer, versions, err := w.retireStores()
+	if err != nil {
+		return err
 	}
-	versions, ok := database.AsCapability[retireVersionStore](w.files)
-	if !ok {
-		return errors.New("repairs: the store cannot create book versions")
-	}
-
 	if err := w.ensureRetiredVersion(versions, spec); err != nil {
 		return err
 	}
 	return w.retireRows(retirer, spec)
+}
+
+// retireStores resolves, from the Writer's book_file store, the two surfaces
+// RetireVersion and RehomeRetiredVersion write through. A store that lacks
+// either (a decorator that does not unwrap, say) is refused here, naming what
+// is missing, rather than half way through a retire.
+func (w *Writer) retireStores() (database.RetiredBookFileWriter, retireVersionStore, error) {
+	if w.files == nil {
+		return nil, nil, errors.New("repairs: writer has no book_file store")
+	}
+	retirer, ok := database.AsCapability[database.RetiredBookFileWriter](w.files)
+	if !ok {
+		return nil, nil, errors.New("repairs: the store cannot retire book_file rows")
+	}
+	versions, ok := database.AsCapability[retireVersionStore](w.files)
+	if !ok {
+		return nil, nil, errors.New("repairs: the store cannot read and create book versions")
+	}
+	return retirer, versions, nil
+}
+
+// CheckRetireSupport reports whether w's store can run RetireVersion and
+// RehomeRetiredVersion, and writes nothing. A caller that journals something
+// before it retires (the retired-versions fixer's plan record) asks first, so a
+// store that cannot retire is refused before the first journal row rather than
+// after it.
+//
+// It is a function, not a Writer method: the Writer's method set is pinned
+// (TestWriterMethodSetPinned) so a fixer sees exactly the write primitives the
+// framework offers, and a capability probe is not one of them.
+func CheckRetireSupport(w *Writer) error {
+	if err := w.denyTagsOnly("RetireVersion"); err != nil {
+		return err
+	}
+	_, _, err := w.retireStores()
+	return err
 }
 
 // requireShellTrashed refuses (ErrChangedSincePlan) a shell that is no longer
@@ -224,11 +261,15 @@ func (w *Writer) ensureRetiredVersion(versions retireVersionStore, spec RetireSp
 			now = time.Now()
 		}
 		now = now.UTC().Truncate(time.Microsecond)
+		ingest := now
+		if !spec.IngestDate.IsZero() {
+			ingest = spec.IngestDate.UTC()
+		}
 		v = database.BookVersion{
 			ID: spec.VersionID, BookID: spec.Holder, Status: database.BookVersionStatusRetired,
-			Format: spec.Format, Source: spec.Source,
-			RetiredFromBookID: spec.Shell, RetireOpID: w.opID, RetiredAt: &now,
-			IngestDate: now, CreatedAt: now, UpdatedAt: now, Version: 1,
+			Format: spec.Format, Source: spec.Source, SourceOriginalPath: spec.SourceOriginalPath,
+			RetiredFromBookID: spec.Shell, RetireOpID: w.opID, RetiredAt: &now, MetadataJSON: spec.MetadataJSON,
+			IngestDate: ingest, CreatedAt: now, UpdatedAt: now, Version: 1,
 		}
 	}
 	newValue, err := undo.EncodeBookVersionCreate(v)
@@ -317,13 +358,9 @@ func (w *Writer) RehomeRetiredVersion(versionID, newHolder string) error {
 	if versionID == "" || newHolder == "" {
 		return fmt.Errorf("repairs: rehome needs a version and a holder, got %q and %q", versionID, newHolder)
 	}
-	retirer, ok := database.AsCapability[database.RetiredBookFileWriter](w.files)
-	if !ok {
-		return errors.New("repairs: the store cannot rehome retired versions")
-	}
-	versions, ok := database.AsCapability[retireVersionStore](w.files)
-	if !ok {
-		return errors.New("repairs: the store cannot read book versions")
+	retirer, versions, err := w.retireStores()
+	if err != nil {
+		return err
 	}
 	cur, err := versions.GetBookVersion(versionID)
 	if err != nil {

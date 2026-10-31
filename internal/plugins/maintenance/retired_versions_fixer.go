@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.7.4
+// version: 1.8.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -70,16 +70,18 @@ const retiredMinAgeDaysDefault = 14
 // carries the flag combine_undo_aware (Current, plus an evidence line naming
 // the journal), because the owner's decision of 2026-10-22 is to make the
 // cleanup undo-aware rather than to hold those books. Retiring one is meant to
-// be reversible by undoing the combine (the apply side, a later PR, journals
-// the retire against the combine journal and UndoCombine reverses it first).
+// be reversible by undoing the combine (Apply links the retire to the combine
+// journal through RetireSpec.CombineJournalID and UndoCombine reverses it
+// first; a shell several unreversed journals name is held, see
+// retCatCombineMultiJournal).
 // The journal index is read once per run; a read that fails fails the plan,
 // because no row can be flagged without it. Only combine journals
 // ("merge:combine-journal:") are read: dedup auto-merge journals
 // ("dedup:automerge:") live in the embedding store, which the plugin's deps do
 // not expose, and carry their own undo (UnmergeAuto restores both book rows
-// from their book_ver snapshots); the apply PR must read them too, and until
-// then the minimum age is all that stands between a book they name and a
-// retire.
+// from their book_ver snapshots); they are not read yet (TODO.md
+// TODO-RETIRED-APPLY-PRECONDITIONS item 3), so the minimum age is all that
+// stands between a book they name and a retire.
 //
 //  1. trash_labelled_deleted: library_state is "deleted". Three paths write
 //     that label (a merge, a manual delete, a bulk delete), so it does not
@@ -157,10 +159,12 @@ const (
 	// only that tail (no version, no rows). A re-plan of a row the cut-off run
 	// was planned as returns it with the planned fingerprint (see Replan).
 	retCatTailPending = "retire_tail_pending"
-	// retCatCombineLinkPending is the Replan-only hold on a combine_undo_aware
-	// row while apply is on: retiring it must be reversible by undoing its
-	// combine (plan section 6.5), and that link is not built yet.
-	retCatCombineLinkPending = "combine_undo_link_pending"
+	// retCatCombineMultiJournal is the Replan-only hold on a combine_undo_aware
+	// row that MORE THAN ONE unreversed combine journal names as absorbed: the
+	// retire links to one combine (RetireSpec.CombineJournalID), and the undo of
+	// the others would not find it. It clears when all but one of those combines
+	// is undone. A shell named by exactly one journal is retired and linked.
+	retCatCombineMultiJournal = "combine_undo_multi_journal"
 	// retCatSwapUnfinished is the transient hold on a row whose shell has a
 	// version stuck in swapping_in/swapping_out (a crashed swap; see
 	// versions.RunVersionSwap; versions.ResumeVersionSwap repairs it). Its files are
@@ -335,8 +339,8 @@ func (f *retiredVersionsFixer) Description() string {
 			"overrides it, 0 turns the gate off), has listening state, files under the iTunes library on either " +
 			"side, Doctor Who / Big Finish / Torchwood on either side (the owner applies those by hand), " +
 			"labelled deleted, or an owner veto on the pair. A book that a combine journal not yet undone names " +
-			"as absorbed is flagged combine_undo_aware and is held (retry_later) at apply until its retire can be " +
-			"undone with that combine. A book already retired shows as already_retired and is not written again; one whose retire was cut off part way shows as retire_tail_pending and an Apply finishes just the unfinished steps."
+			"as absorbed is flagged combine_undo_aware and is retired linked to that combine, so undoing the combine undoes the retire first " +
+			"(held, retry_later, only if several such combines name it). A book already retired shows as already_retired and is not written again; one whose retire was cut off part way shows as retire_tail_pending and an Apply finishes just the unfinished steps."
 	}
 	return "Preview only. Classifies every book in the trash by what retiring it would do: its file records " +
 		"moved onto the live book it lost to, as a hidden retired version, never deleted. Each row names its " +
@@ -1428,7 +1432,7 @@ func (r *retiredRun) buildRow(fa *retiredFacts, cat, why string) repairs.Row {
 	if r.detail {
 		row.Detail = &retiredDetail{minAge: r.minAge, shell: sh, files: fa.files, targetID: fa.targetID,
 			targetMethod: fa.targetMethod, category: cat, sharedWith: fa.sharedWith, sharedRows: fa.sharedRows,
-			itunesRows: fa.itunesRows, groupID: fa.groupID}
+			itunesRows: fa.itunesRows, groupID: fa.groupID, combineJournals: fa.undoJournal}
 	}
 	return row
 }
@@ -1580,9 +1584,11 @@ func retiredSummary(rows []repairs.Row) string {
 //
 // Two answers are specific to an apply (flag on):
 //   - a combine_undo_aware row that would be applied comes back held
-//     (combine_undo_link_pending, retry_later) because its retire must be
-//     reversible by undoing the combine and that link is not built; nothing is
-//     written for it and the same plan can be applied again once it is;
+//     (combine_undo_multi_journal, retry_later) only when more than one
+//     unreversed combine journal names the shell: the retire links to a single
+//     combine. A shell one journal names applies, linked to that journal;
+//     nothing is written for a held row and the same plan can be applied again
+//     once all but one of those combines is undone;
 //   - a book whose rows an interrupted apply already retired, but whose
 //     external-id, merged-into or chain steps are unfinished, comes back
 //     applicable again (retire_tail_pending) carrying the unfinished steps for
@@ -1620,19 +1626,25 @@ func (f *retiredVersionsFixer) Replan(ctx context.Context, params json.RawMessag
 	case row.Class == retCatAlreadyRetired || row.Class == retCatTailPending:
 		return resumeRetired(row, planned), nil
 	case row.Applicable() && slices.Contains(row.Flags, retFlagCombineUndoAware):
-		return holdCombineLink(row), nil
+		if d, _ := row.Detail.(*retiredDetail); d != nil && len(d.combineJournals) > 1 {
+			return holdCombineMultiJournal(row, d.combineJournals), nil
+		}
 	}
 	return row, nil
 }
 
-// holdCombineLink turns an applicable combine_undo_aware row into the transient
-// hold: skipped, retry_later, with RetryFingerprint the fingerprint the row had
-// so the engine matches it to the plan. The row's Detail is dropped; nothing of
-// it may be applied.
-func holdCombineLink(row repairs.Row) repairs.Row {
-	return holdRow(row, retCatCombineLinkPending,
-		"an unreversed combine journal names this book as absorbed, and retiring it must be undone by undoing that combine; "+
-			"that link is not built yet (plan section 6.5), so the row is held, nothing written")
+// combineMultiJournalWhy says why a shell named by several unreversed combine
+// journals is held.
+func combineMultiJournalWhy(journals []string) string {
+	return fmt.Sprintf("%d unreversed combine journals name this book as absorbed (%s); a retire links to one combine, "+
+		"so the undo of the others would not find it. Undo all but one of those combines, then apply again; nothing written",
+		len(journals), retiredJoinCapped(journals, 3))
+}
+
+// holdCombineMultiJournal turns an applicable combine_undo_aware row into the
+// transient hold for a shell several combine journals name.
+func holdCombineMultiJournal(row repairs.Row, journals []string) repairs.Row {
+	return holdRow(row, retCatCombineMultiJournal, combineMultiJournalWhy(journals))
 }
 
 // holdRow turns an applicable row into a transient hold of kind: skipped,

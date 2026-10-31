@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -40,15 +40,18 @@ into one of the curated sections below, is a normal direct edit.
       fails and a file under a configured import path. Found in the review of #4258.
 
 - [ ] **TODO-RETIRED-APPLY-PRECONDITIONS** before `retire_versions_apply_enabled`
-      is turned on in production: (1) move the fixer's journaling onto PR 5's `repairs.Writer.RetireVersion`
-      and `RehomeRetiredVersion` (the rows it writes already use the undo
-      package's change types and formats, so an Apply is revertible today; the
-      swap is behind the `retireWriter` interface in
-      `internal/plugins/maintenance/retired_versions_apply.go`); (2) the combine-undo link
-      of plan section 6.5 (`combine_undo_aware` rows are held as retry_later
-      until the fixer passes `RetireSpec.CombineJournalID` to
-      `Writer.RetireVersion`, which links the retire so UndoCombine reverses it
-      first);
+      is turned on in production (items 1, 2 and 9 are DONE 2026-10-30, see
+      `docs/decisions/2026-10-30-retired-versions-apply-preconditions.md`; 3-8 remain):
+      (1) DONE 2026-10-30: the fixer's journaling is `repairs.Writer.RetireVersion`
+      and `RehomeRetiredVersion` (behind the `retireWriter` interface in
+      `internal/plugins/maintenance/retired_versions_apply.go`; the fixer-local
+      version/row journaling is deleted); (2) DONE 2026-10-30: the combine-undo link
+      of plan section 6.5 (`combine_undo_aware` rows are retired with
+      `RetireSpec.CombineJournalID`, which links the retire so UndoCombine finds it;
+      a shell named by more than one unreversed combine is still held as
+      `combine_undo_multi_journal`; UndoCombine itself still refuses a shell that
+      gained rows since the combine, linked retire or not, a merge-side decision
+      left to the owner);
       (3) the `dedup:automerge:` journals are not read (the plugin deps cannot
       reach the embedding store; the 14-day minimum age is the only guard); (4)
       a trashed book that holds only retired rows for other shells and owns no
@@ -63,12 +66,13 @@ into one of the curated sections below, is a normal direct edit.
       `RevertBookToVersion` that does not hold the merge lock still can; (7) a generic whole-row `UpdateBook` from a
       stale read can still overwrite the merged-into link; (8) decorator
       stores that do not implement `Unwrap() database.Store` cannot be read for
-      retired rows and now fail closed; (9) PR 5's revert of a
-      `book_version_create` row must refuse to delete a version that still holds
-      rows (reverting the create after the rows' own retire rows are reverted is
-      the only order that leaves it empty; a create reverted while rows remain,
-      e.g. after a partial revert or a row journaled by another op, would
-      delete the version out from under them).
+      retired rows and now fail closed; (9) DONE 2026-10-30 (the guard was already
+      in the tree: `RevertService.revertBookVersionCreate` deletes through
+      `DeleteBookVersionIf`, which refuses with `ErrRetiredVersionHasFiles` while any
+      row names the version and is reported as `dependent change not reverted`;
+      tests for a partial revert and for a row journaled by another op were added):
+      PR 5's revert of a `book_version_create` row must refuse to delete a version
+      that still holds rows.
 
 - [ ] **TODO-RETIRED-APPLY-PR8-HOOK** wire the decisions ledger into the retire
       Apply once PR 8 (#4143) and PR 7 are stacked: after a row's
