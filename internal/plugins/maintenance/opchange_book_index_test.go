@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -25,13 +26,18 @@ type fakeOpChangeRebuilder struct {
 	err     error
 	rep     database.OpChangeByBookIndexReport
 	rebuilt *bool
-	// ensure is EnsureOpChangeByBookIndex's answer; nil records the call
+	// ensure is EnsureOpChangeByBookIndexWith's answer; nil records the call
 	// in ensured and returns the zero result.
 	ensure  func(ctx context.Context) (database.OpChangeByBookEnsureResult, error)
 	ensured *bool
+	// gotOpts, when non-nil, records the options the ensure was called with.
+	gotOpts *database.OpChangeEnsureOptions
 }
 
-func (f fakeOpChangeRebuilder) EnsureOpChangeByBookIndex(ctx context.Context, _ database.OpChangeIndexProgress) (database.OpChangeByBookEnsureResult, error) {
+func (f fakeOpChangeRebuilder) EnsureOpChangeByBookIndexWith(ctx context.Context, opts database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error) {
+	if f.gotOpts != nil {
+		*f.gotOpts = opts
+	}
 	if f.ensured != nil {
 		*f.ensured = true
 	}
@@ -623,5 +629,71 @@ func TestOpchangeBookIndexOp_StoreWithoutIndex(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "has no opchange_by_book: index") {
 			t.Errorf("%s on a store with no index: err = %v, want it to fail as before", raw, err)
 		}
+	}
+}
+
+// 04-P7: a verify too big for one Timeout stops at a durable cursor and the op
+// hands itself back with registry.ErrContinueInPlace, with no "done" line.
+func TestOpchangeBookIndexEnsure_YieldContinuesInPlace(t *testing.T) {
+	rep := &p6AttrReporter{}
+	var gotOpts database.OpChangeEnsureOptions
+	r := fakeOpChangeRebuilder{ensure: func(context.Context) (database.OpChangeByBookEnsureResult, error) {
+		return database.OpChangeByBookEnsureResult{
+			Backfill: database.OpChangeByBookBackfillResult{Skipped: true},
+			Verify:   database.OpChangeByBookIndexReport{SentinelSet: true, Rows: 10_000, VerifiedRows: 30_000, Yielded: true},
+			Yielded:  true,
+		}, nil
+	}, gotOpts: &gotOpts}
+	err := ensureOpChangeBookIndex(context.Background(), r, rep)
+	if !errors.Is(err, opsregistry.ErrContinueInPlace) {
+		t.Fatalf("err = %v, want registry.ErrContinueInPlace so the registry re-queues the same operation", err)
+	}
+	if gotOpts.YieldMargin != opChangeVerifyYieldMargin || gotOpts.VerifyTotal == nil || gotOpts.Progress == nil {
+		t.Fatalf("options = %+v, want the yield margin, the total callback and progress wired", gotOpts)
+	}
+	for _, l := range rep.lines {
+		if l.level >= slog.LevelError {
+			t.Fatalf("a yield logged %q at %v; it is a pause, not a failure", l.msg, l.level)
+		}
+	}
+}
+
+// The registry counts progress toward a yield only against a total, and the
+// verify's position is absolute across the runs of one verify.
+func TestOpchangeBookIndexEnsure_VerifyProgressIsDeterminate(t *testing.T) {
+	rr := &recordedProgress{}
+	progress, setTotal := opChangeEnsureProgress(rr)
+	progress("backfill", 5)
+	setTotal(40)
+	progress("verify", 30)
+	progress("verify", 41) // the journal grew while the pass ran
+	want := [][2]int{{5, 0}, {30, 40}, {41, 41}}
+	if len(rr.calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", rr.calls, want)
+	}
+	for i, w := range want {
+		if rr.calls[i] != w {
+			t.Fatalf("calls = %v, want %v", rr.calls, want)
+		}
+	}
+}
+
+type recordedProgress struct {
+	fakeReporter
+	calls [][2]int
+}
+
+func (r *recordedProgress) UpdateProgress(cur, total int, _ string) error {
+	r.calls = append(r.calls, [2]int{cur, total})
+	return nil
+}
+
+func TestOpchangeBookIndexDef_ResumesInPlace(t *testing.T) {
+	def := (&Plugin{}).opChangeBookIndexRebuildDef()
+	if def.ResumePolicy != sdk.ResumeRestart {
+		t.Fatalf("ResumePolicy = %v: the registry honours ErrContinueInPlace only for ResumeRestart", def.ResumePolicy)
+	}
+	if def.Timeout != 60*time.Minute {
+		t.Fatalf("Timeout = %v, want it unchanged at 60m: the fix is a resumable verify, not a longer timeout", def.Timeout)
 	}
 }

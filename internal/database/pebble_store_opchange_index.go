@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 // The opchange_by_book: secondary index over the operation-change journal. Its
 // sibling opchange_by_list: indexes the user-content rows by the collection or
@@ -55,10 +55,13 @@
 // current generation, and trust is set in exactly two places:
 //
 //   - EnsureOpChangeByBookIndex, the startup path: after the backfill, a
-//     read-only VerifyOpChangeByBookIndex pass must report MissingEntries == 0
-//     and UnmarkedUndecodable == 0 with the sentinel set. Either count
-//     non-zero is logged at ERROR and answered with a rebuild, and trust
-//     follows only the rebuild's success.
+//     read-only verify pass must reach the end of the journal reporting
+//     MissingEntries == 0 and UnmarkedUndecodable == 0 with the sentinel set.
+//     The pass is resumable and, once a pass has covered the journal, later
+//     boots verify only the rows after the cursor it left
+//     (pebble_store_opchange_verify.go); a pass that stops for its run's
+//     deadline trusts nothing. Either count non-zero is logged at ERROR and
+//     answered with a rebuild, and trust follows only the rebuild's success.
 //   - RebuildOpChangeByBookIndex, which clears trust before it touches the
 //     sentinel and sets it only after its sentinel commit succeeds.
 //
@@ -472,24 +475,44 @@ type OpChangeByBookEnsureResult struct {
 	Rebuild OpChangeByBookBackfillResult `json:"rebuild"`
 	// Trusted is true when GetBookChanges may now read the index.
 	Trusted bool `json:"trusted"`
+	// Yielded is true when the verify stopped for the run's deadline with its
+	// cursor durable and the index NOT yet trusted: the caller is expected to
+	// run the ensure again (the op returns registry.ErrContinueInPlace), and
+	// that run continues from the cursor.
+	Yielded bool `json:"yielded,omitempty"`
 }
 
-// EnsureOpChangeByBookIndex is the startup path (the boot-enqueued
+// EnsureOpChangeByBookIndex is EnsureOpChangeByBookIndexWith with only a
+// progress callback: it never yields, so the verify must finish in this call.
+func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookEnsureResult, error) {
+	return p.EnsureOpChangeByBookIndexWith(ctx, OpChangeEnsureOptions{Progress: progress})
+}
+
+// EnsureOpChangeByBookIndexWith is the startup path (the boot-enqueued
 // maintenance.opchange-book-index-rebuild {"ensure": true} run): it runs (or
-// resumes, or skips) the one-time backfill, then a read-only verify, and
-// trusts the index only when the verify finds the sentinel set, no missing
-// entry and no unmarked undecodable row. Otherwise it logs at ERROR, rebuilds,
-// and trusts the index only if the rebuild succeeds. It holds the index-pass
-// slot throughout, so a rebuild op cannot interleave with it. progress (may be
-// nil) is passed to every step: the slot wait, the backfill, the verify and
-// the rebuild, so an op running it keeps its liveness clock fresh.
+// resumes, or skips) the one-time backfill, then a resumable verify, and trusts
+// the index only when a verify pass has reached the end of the journal with the
+// sentinel set, no missing entry and no unmarked undecodable row. Otherwise it
+// logs at ERROR, rebuilds, and trusts the index only if the rebuild succeeds. It
+// holds the index-pass slot throughout, so a rebuild op cannot interleave with
+// it. opts.Progress (may be nil) is passed to every step: the slot wait, the
+// backfill, the verify and the rebuild, so an op running it keeps its liveness
+// clock fresh.
+//
+// The verify is incremental (pebble_store_opchange_verify.go): it continues from
+// the cursor an earlier run left, so a journal too big to verify inside one
+// run's Timeout is finished across runs, and once a pass has covered the
+// journal a later boot checks only what was appended since. With
+// opts.YieldMargin set it stops before the deadline at a durable cursor and the
+// result reports Yielded, with Trusted false and a nil error.
 //
 // The generation is read once, under the slot, before the verify starts, and
 // trust is stored against that value: a Reset during the verify bumps the
 // generation, so the stored trust no longer matches and readers stay on the
 // scan.
-func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookEnsureResult, error) {
+func (p *PebbleStore) EnsureOpChangeByBookIndexWith(ctx context.Context, opts OpChangeEnsureOptions) (OpChangeByBookEnsureResult, error) {
 	var out OpChangeByBookEnsureResult
+	progress := opts.Progress
 	unlock, err := p.lockOpChangeIdxRun(ctx, progress)
 	if err != nil {
 		return out, err
@@ -501,7 +524,16 @@ func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context, progress Op
 		return out, err
 	}
 	gen := p.opChangeByBookGen.Load()
-	out.Verify, err = p.verifyOpChangeByBook(ctx, progress)
+	if !out.Backfill.Skipped {
+		// The index was (re)built in this call, or a cut build was resumed: a
+		// verify cursor from before it vouches for an index that no longer
+		// exists (a Reset wipes the sentinel and the journal, and a stale cursor
+		// would make the next verify skip rows it never looked at).
+		if err := p.clearOpChangeVerifyState(); err != nil {
+			return out, fmt.Errorf("clear opchange_by_book verify state: %w", err)
+		}
+	}
+	out.Verify, err = p.verifyOpChangeByBookResumable(ctx, opts, gen)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			opChangeIndexLog.Info("opchange-index-ensure: verify interrupted by shutdown; GetBookChanges reads the full scan until the next boot verifies: err=%s",
@@ -512,17 +544,22 @@ func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context, progress Op
 		return out, err
 	}
 	rep := out.Verify
-	if rep.SentinelSet && rep.MissingEntries == 0 && rep.UnmarkedUndecodable == 0 {
+	if rep.Yielded {
+		out.Yielded = true
+		logOpChangeVerifyYield(rep)
+		return out, nil
+	}
+	if rep.SentinelSet && rep.Complete && rep.MissingEntries == 0 && rep.UnmarkedUndecodable == 0 {
 		p.opChangeByBookTrustedAt.Store(gen + 1)
 		p.publishOpChangeTrust()
 		out.Trusted = p.opChangeByBookIndexTrusted()
-		opChangeIndexLog.Info("opchange-index-ensure: index verified, readers now use it: rows=%d indexable=%d undecodable=%d trusted=%t",
-			rep.Rows, rep.Indexable, rep.Undecodable, out.Trusted)
+		opChangeIndexLog.Info("opchange-index-ensure: index verified, readers now use it: rows_this_run=%d verified_rows=%d resumed_after=%s indexable=%d undecodable=%d trusted=%t",
+			rep.Rows, rep.VerifiedRows, logger.SanitizeLogValue(rep.ResumedAfter), rep.Indexable, rep.Undecodable, out.Trusted)
 		return out, nil
 	}
 	opChangeIndexLog.Error("opchange-index-ensure: index does not cover the journal (rows written without entries, "+
 		"e.g. by a binary that predates the index); rebuilding, GetBookChanges stays on the full scan until it finishes: "+
-		"sentinel_set=%t missing_entries=%d unmarked_undecodable=%d sample_missing=%s",
+		"sentinel_set=%t missing_entries=%d unmarked_undecodable=%d (a lower bound: the verify stops at the first window with one) sample_missing=%s",
 		rep.SentinelSet, rep.MissingEntries, rep.UnmarkedUndecodable,
 		logger.SanitizeLogValue(fmt.Sprintf("%v", rep.SampleMissing)))
 	out.Rebuilt = true
@@ -565,6 +602,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		mode = "rebuild"
 	}
 
+	var forceGen uint64 // the generation a rebuild bumped to; see the done batch
 	if force {
 		// Readers leave the index before the sentinel goes: the gate checks
 		// trust first.
@@ -579,6 +617,14 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 			reset.Close()
 			return res, err
 		}
+		// The verify's cursor and verified sentinel go with the index they
+		// vouched for (pebble_store_opchange_verify.go).
+		for _, k := range []string{opChangeByBookVerifyCursorKey, opChangeByBookVerifiedKey} {
+			if err := reset.Delete([]byte(k), nil); err != nil {
+				reset.Close()
+				return res, err
+			}
+		}
 		err := reset.Commit(pebble.Sync)
 		reset.Close()
 		if err != nil {
@@ -589,7 +635,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		// which this invalidates, and every later read misses the sentinel.
 		// A call already inside getBookChangesIndexed finishes on an index
 		// that is no worse than it was before the rebuild started.
-		p.opChangeByBookGen.Add(1)
+		forceGen = p.opChangeByBookGen.Add(1)
 	} else {
 		built, err := p.opChangeByBookIndexBuilt()
 		if err != nil {
@@ -623,6 +669,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	upper := []byte(opChangeScanUpperBound)
 	chunk := max(opChangeByBookBackfillChunk, 1)
 	nextLog := opChangeByBookLogEveryRows
+	var lastKey []byte // the last row any chunk of this run read
 	for {
 		if err := ctx.Err(); err != nil {
 			opChangeIndexLog.Warn("opchange-index-backfill: canceled, sentinel NOT set; resumes next run: scanned=%d commits=%d",
@@ -638,6 +685,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		if n == 0 {
 			break
 		}
+		lastKey = append(lastKey[:0], last...)
 		res.Commits++
 		if progress != nil {
 			progress(mode, res.Scanned)
@@ -665,6 +713,29 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	}
 	if err := done.Delete([]byte(opChangeByBookCursorKey), nil); err != nil {
 		return res, err
+	}
+	if force {
+		// A rebuild visited every row after clearing trust and the verify state
+		// above, so it covers the journal as a verify pass would: record the
+		// last row it read as the verify cursor, and the next boot looks only
+		// at the rows after it. The generation check is the verify's own: a
+		// Reset since the clear wiped the journal and the index with it.
+		if p.opChangeByBookGen.Load() == forceGen {
+			st := opChangeVerifyState{Rows: res.Scanned, Started: opChangeVerifyNow()}
+			if len(lastKey) > 0 {
+				st.Cursor = string(lastKey)
+			}
+			data, err := json.Marshal(st)
+			if err != nil {
+				return res, err
+			}
+			if err := done.Set([]byte(opChangeByBookVerifyCursorKey), data, nil); err != nil {
+				return res, err
+			}
+			if err := done.Set([]byte(opChangeByBookVerifiedKey), []byte("1"), nil); err != nil {
+				return res, err
+			}
+		}
 	}
 	// Every chunk committed with pebble.Sync before this, so every entry the
 	// sentinel vouches for is already durable.
@@ -767,6 +838,26 @@ type OpChangeByBookIndexReport struct {
 	UnmarkedUndecodable int `json:"unmarked_undecodable"`
 	// SampleMissing holds up to opChangeByBookSampleCap primary keys.
 	SampleMissing []string `json:"sample_missing,omitempty"`
+
+	// The fields below describe a resumable verify (the boot ensure's). The
+	// read-only VerifyOpChangeByBookIndex walks every row, so there Rows ==
+	// VerifiedRows, ResumedAfter is empty and Complete is true on success.
+	//
+	// ResumedAfter is the cursor (a primary key) the walk began after; empty
+	// when it began at the first row. Rows counts the rows THIS run read.
+	// VerifiedRows is the position: rows earlier runs checked plus Rows.
+	ResumedAfter string `json:"resumed_after,omitempty"`
+	VerifiedRows int    `json:"verified_rows"`
+	// PriorCoverage is true when an earlier pass had reached the end of the
+	// journal (the verified sentinel), so this run was a tail verify of the rows
+	// appended since.
+	PriorCoverage bool `json:"prior_coverage,omitempty"`
+	// Complete is true when the walk reached the end of the journal clean. Only
+	// a Complete verify lets the ensure trust the index.
+	Complete bool `json:"complete"`
+	// Yielded is true when the walk stopped for the run's deadline with its
+	// cursor durable (see OpChangeEnsureOptions.YieldMargin).
+	Yielded bool `json:"yielded,omitempty"`
 }
 
 // VerifyOpChangeByBookIndex checks every journal row against the index from
@@ -776,74 +867,4 @@ type OpChangeByBookIndexReport struct {
 // called every opChangeVerifyProgressRows rows.
 func (p *PebbleStore) VerifyOpChangeByBookIndex(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookIndexReport, error) {
 	return p.verifyOpChangeByBook(ctx, progress)
-}
-
-func (p *PebbleStore) verifyOpChangeByBook(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookIndexReport, error) {
-	var rep OpChangeByBookIndexReport
-	built, err := p.opChangeByBookIndexBuilt()
-	if err != nil {
-		return rep, err
-	}
-	rep.SentinelSet = built
-
-	snap := p.db.NewSnapshot()
-	defer snap.Close()
-	iter, err := snap.NewIter(&pebble.IterOptions{
-		LowerBound: []byte(opChangeKeyPrefix),
-		UpperBound: []byte(opChangeScanUpperBound),
-	})
-	if err != nil {
-		return rep, err
-	}
-	defer iter.Close()
-	present := func(key []byte) (bool, error) {
-		_, closer, err := snap.Get(key)
-		if errors.Is(err, pebble.ErrNotFound) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		closer.Close()
-		return true, nil
-	}
-	for iter.First(); iter.Valid(); iter.Next() {
-		if rep.Rows%opChangeVerifyProgressRows == 0 {
-			if err := ctx.Err(); err != nil {
-				return rep, err
-			}
-			if progress != nil && rep.Rows > 0 {
-				progress("verify", rep.Rows)
-			}
-		}
-		rep.Rows++
-		k := iter.Key()
-		var c OperationChange
-		if json.Unmarshal(iter.Value(), &c) != nil {
-			rep.Undecodable++
-			ok, err := present(opChangeUndecodableKey(k))
-			if err != nil {
-				return rep, err
-			}
-			if !ok {
-				rep.UnmarkedUndecodable++
-			}
-			continue
-		}
-		if !opChangeIndexable(c.BookID) {
-			continue
-		}
-		rep.Indexable++
-		ok, err := present(opChangeByBookKey(c.BookID, k))
-		if err != nil {
-			return rep, err
-		}
-		if !ok {
-			rep.MissingEntries++
-			if len(rep.SampleMissing) < opChangeByBookSampleCap {
-				rep.SampleMissing = append(rep.SampleMissing, string(k))
-			}
-		}
-	}
-	return rep, iter.Error()
 }
