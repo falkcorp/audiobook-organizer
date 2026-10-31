@@ -1,7 +1,7 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
-// last-edited: 2026-10-15
+// last-edited: 2026-10-31
 
 package server
 
@@ -57,10 +57,6 @@ var twinMergeRows = []struct {
 	{"scheduler.author-split-scan", "maintenance.author-split-scan", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
 	// 04-P4f: scheduler.cleanup-old-backups merged into maintenance.cleanup-old-backups.
 	{"scheduler.cleanup-old-backups", "maintenance.cleanup-old-backups", []auth.Permission{auth.PermSettingsManage}, 1 * time.Hour},
-	// 04-P14a: maintenance.author-dedup-scan merged into dedup.author-scan. The alias moves from
-	// admin-only (settings.manage fallback) to library.edit_metadata (editor); same body editors
-	// could already run as dedup.author-scan.
-	{"maintenance.author-dedup-scan", "dedup.author-scan", []auth.Permission{auth.PermLibraryEditMetadata}, 1 * time.Hour},
 	// 04-P14b: scheduler.dedup-llm-review (settings.manage) merged into dedup.llm-review (D54).
 	// The survivor declared no Permissions and fell back to settings.manage, so
 	// through the generic operations endpoint (what this test drives) the alias
@@ -68,11 +64,8 @@ var twinMergeRows = []struct {
 	// POST /dedup/scan-llm (scan.trigger) enqueues the survivor directly and is
 	// outside this table. Timeout stays 2h (120m equals the loser's 2h).
 	{"scheduler.dedup-llm-review", "dedup.llm-review", []auth.Permission{auth.PermSettingsManage}, 2 * time.Hour},
-	// 04-P14c: maintenance.reconcile-scan (no Permissions, so the settings.manage fallback;
-	// 180m) merged into reconcile.scan (settings.manage; 2h before the merge, 3h now). The
-	// alias neither widens nor narrows the gate. The survivor also takes the loser's
-	// CapFilesRead (pinned in TestReconcileScanOp_CarriesLoserBehaviour).
-	{"maintenance.reconcile-scan", "reconcile.scan", []auth.Permission{auth.PermSettingsManage}, 3 * time.Hour},
+	// 04-P14a (maintenance.author-dedup-scan) and 04-P14c (maintenance.reconcile-scan)
+	// rows were removed 2026-10-31 with their aliases, after the soak.
 }
 
 func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {
