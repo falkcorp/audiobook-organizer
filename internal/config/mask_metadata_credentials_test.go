@@ -1,5 +1,5 @@
 // file: internal/config/mask_metadata_credentials_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2c4f9a71-6b83-4d05-9e12-7a8f3b6c0d54
 // last-edited: 2026-10-30
 
@@ -15,10 +15,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// realKey is long enough that database.MaskSecret shows its last two characters
+// fixtureKey is long enough that database.MaskSecret shows its last two characters
 // rather than collapsing to "********", so a test asserting the cleartext is
 // gone is actually asserting something.
-const realKey = "AIzaSyA91r1mZKQLd1Fof18JDjNoqCeSZ-k35bE"
+const fixtureKey = "AIzaSyBATMAN-GOTHAM-FIXTURE-00000000000"
 
 func sourcesWithKey(key string) []MetadataSource {
 	return []MetadataSource{
@@ -49,14 +49,14 @@ func sourcesWithKey(key string) []MetadataSource {
 func TestMaskSecrets_MasksMetadataSourceCredentials(t *testing.T) {
 	us := &UpdateService{}
 	cfg := Config{
-		GoogleBooksAPIKey: realKey,
-		MetadataSources:   sourcesWithKey(realKey),
+		GoogleBooksAPIKey: fixtureKey,
+		MetadataSources:   sourcesWithKey(fixtureKey),
 	}
 
 	masked := us.MaskSecrets(cfg)
 
 	got := masked.MetadataSources[0].Credentials["apiKey"]
-	if got == realKey {
+	if got == fixtureKey {
 		t.Fatalf("credential returned in cleartext: %q", got)
 	}
 	if !strings.Contains(got, "****") {
@@ -69,7 +69,7 @@ func TestMaskSecrets_MasksMetadataSourceCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal masked config: %v", err)
 	}
-	if strings.Contains(string(blob), realKey) {
+	if strings.Contains(string(blob), fixtureKey) {
 		t.Fatal("serialized config still contains the cleartext key")
 	}
 }
@@ -79,22 +79,22 @@ func TestMaskSecrets_MasksMetadataSourceCredentials(t *testing.T) {
 // HEADER but shares the backing array, and each Credentials map is a reference.
 // Masking in place would overwrite the live AppConfig's real credentials with
 // the mask, after which every provider client would authenticate with
-// "********bE". A fix without a deep copy passes the test above and still
+// "********00". A fix without a deep copy passes the test above and still
 // destroys production credentials on the first GET /api/v1/config.
 func TestMaskSecrets_DoesNotMutateSourceConfig(t *testing.T) {
 	us := &UpdateService{}
-	srcs := sourcesWithKey(realKey)
-	cfg := Config{GoogleBooksAPIKey: realKey, MetadataSources: srcs}
+	srcs := sourcesWithKey(fixtureKey)
+	cfg := Config{GoogleBooksAPIKey: fixtureKey, MetadataSources: srcs}
 
 	_ = us.MaskSecrets(cfg)
 
-	if got := srcs[0].Credentials["apiKey"]; got != realKey {
+	if got := srcs[0].Credentials["apiKey"]; got != fixtureKey {
 		t.Fatalf("MaskSecrets mutated the caller's credentials: got %q, want the original key", got)
 	}
 
 	// Masking twice must be stable for the same reason.
 	_ = us.MaskSecrets(cfg)
-	if got := srcs[0].Credentials["apiKey"]; got != realKey {
+	if got := srcs[0].Credentials["apiKey"]; got != fixtureKey {
 		t.Fatalf("second MaskSecrets mutated the caller's credentials: got %q", got)
 	}
 }
@@ -106,7 +106,7 @@ func TestMaskMetadataSourceCredentials_EdgeCases(t *testing.T) {
 		t.Fatalf("nil slice should stay nil, got %#v", got)
 	}
 
-	out := maskMetadataSourceCredentials(sourcesWithKey(realKey))
+	out := maskMetadataSourceCredentials(sourcesWithKey(fixtureKey))
 
 	// An empty value stays empty so the UI can tell "not configured" from
 	// "configured but hidden"; masking it would render Hardcover as if a token
@@ -138,40 +138,40 @@ func TestMaskMetadataSourceCredentials_EdgeCases(t *testing.T) {
 
 func TestRestoreMaskedCredentials_EchoedMaskDoesNotOverwrite(t *testing.T) {
 	prior := map[string]map[string]string{
-		"google-books": {"apiKey": realKey},
+		"google-books": {"apiKey": fixtureKey},
 	}
 	// What a client sends back after GET handed it the mask.
 	srcs := []MetadataSource{
-		{ID: "google-books", Credentials: map[string]string{"apiKey": database.MaskSecret(realKey)}},
+		{ID: "google-books", Credentials: map[string]string{"apiKey": database.MaskSecret(fixtureKey)}},
 	}
 
 	restoreMaskedCredentials(srcs, prior)
 
-	if got := srcs[0].Credentials["apiKey"]; got != realKey {
+	if got := srcs[0].Credentials["apiKey"]; got != fixtureKey {
 		t.Fatalf("echoed mask overwrote the stored key: got %q, want the original", got)
 	}
 }
 
 func TestRestoreMaskedCredentials_DroppedMapDoesNotWipe(t *testing.T) {
-	prior := map[string]map[string]string{"google-books": {"apiKey": realKey}}
+	prior := map[string]map[string]string{"google-books": {"apiKey": fixtureKey}}
 	srcs := []MetadataSource{{ID: "google-books"}} // payload omitted credentials
 
 	restoreMaskedCredentials(srcs, prior)
 
-	if got := srcs[0].Credentials["apiKey"]; got != realKey {
+	if got := srcs[0].Credentials["apiKey"]; got != fixtureKey {
 		t.Fatalf("omitted credentials wiped the stored key: got %q", got)
 	}
 }
 
 func TestRestoreMaskedCredentials_EmptyValueDoesNotWipe(t *testing.T) {
-	prior := map[string]map[string]string{"google-books": {"apiKey": realKey}}
+	prior := map[string]map[string]string{"google-books": {"apiKey": fixtureKey}}
 	srcs := []MetadataSource{
 		{ID: "google-books", Credentials: map[string]string{"apiKey": ""}},
 	}
 
 	restoreMaskedCredentials(srcs, prior)
 
-	if got := srcs[0].Credentials["apiKey"]; got != realKey {
+	if got := srcs[0].Credentials["apiKey"]; got != fixtureKey {
 		t.Fatalf("empty value wiped the stored key: got %q", got)
 	}
 }
@@ -180,7 +180,7 @@ func TestRestoreMaskedCredentials_EmptyValueDoesNotWipe(t *testing.T) {
 // make the key unchangeable, which is its own bug.
 func TestRestoreMaskedCredentials_NewValueIsWrittenThrough(t *testing.T) {
 	const rotated = "AIzaBRANDNEWKEYVALUE0123456789abcdefXYZ"
-	prior := map[string]map[string]string{"google-books": {"apiKey": realKey}}
+	prior := map[string]map[string]string{"google-books": {"apiKey": fixtureKey}}
 	srcs := []MetadataSource{
 		{ID: "google-books", Credentials: map[string]string{"apiKey": rotated}},
 	}
@@ -194,7 +194,7 @@ func TestRestoreMaskedCredentials_NewValueIsWrittenThrough(t *testing.T) {
 
 // A source that did not exist before must not gain credentials from nowhere.
 func TestRestoreMaskedCredentials_UnknownSourceUntouched(t *testing.T) {
-	prior := map[string]map[string]string{"google-books": {"apiKey": realKey}}
+	prior := map[string]map[string]string{"google-books": {"apiKey": fixtureKey}}
 	srcs := []MetadataSource{
 		{ID: "hardcover", Credentials: map[string]string{"apiKey": "brand-new-token-value"}},
 	}
@@ -232,7 +232,7 @@ func withAppConfig(t *testing.T, cfg Config) {
 // -- which was populated from GET /api/v1/config, i.e. the mask. This is not a
 // rare race; it is the ordinary Save Settings path.
 func TestUpdateConfig_EchoedMaskDoesNotDestroyStoredCredential(t *testing.T) {
-	withAppConfig(t, Config{RootDir: t.TempDir(), MetadataSources: sourcesWithKey(realKey)})
+	withAppConfig(t, Config{RootDir: t.TempDir(), MetadataSources: sourcesWithKey(fixtureKey)})
 	us := NewUpdateService(newMockSettingsStore())
 
 	// Exactly what the browser sends back: the partial payload, carrying the
@@ -248,7 +248,7 @@ func TestUpdateConfig_EchoedMaskDoesNotDestroyStoredCredential(t *testing.T) {
 			},
 		},
 	}
-	if got := payload["metadata_sources"].([]any)[0].(map[string]any)["credentials"].(map[string]any)["apiKey"]; got == realKey {
+	if got := payload["metadata_sources"].([]any)[0].(map[string]any)["credentials"].(map[string]any)["apiKey"]; got == fixtureKey {
 		t.Fatalf("test is not exercising the bug: payload carries the cleartext key %q", got)
 	}
 
@@ -260,7 +260,7 @@ func TestUpdateConfig_EchoedMaskDoesNotDestroyStoredCredential(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 source after update, got %d", len(got))
 	}
-	if got[0].Credentials["apiKey"] != realKey {
+	if got[0].Credentials["apiKey"] != fixtureKey {
 		t.Fatalf("settings save destroyed the stored credential: got %q, want the original key", got[0].Credentials["apiKey"])
 	}
 }
@@ -269,7 +269,7 @@ func TestUpdateConfig_EchoedMaskDoesNotDestroyStoredCredential(t *testing.T) {
 // UpdateConfig -- restoring too eagerly would make the key unchangeable.
 func TestUpdateConfig_NewCredentialIsWrittenThrough(t *testing.T) {
 	const rotated = "AIzaBRANDNEWKEYVALUE0123456789abcdefXYZ"
-	withAppConfig(t, Config{RootDir: t.TempDir(), MetadataSources: sourcesWithKey(realKey)})
+	withAppConfig(t, Config{RootDir: t.TempDir(), MetadataSources: sourcesWithKey(fixtureKey)})
 	us := NewUpdateService(newMockSettingsStore())
 
 	payload := map[string]any{
@@ -298,15 +298,15 @@ func TestUpdateConfig_NewCredentialIsWrittenThrough(t *testing.T) {
 // client convention, not an invariant; curl and scripts hit it.
 
 func TestUpdateConfig_EchoedScalarMaskDoesNotDestroySecret(t *testing.T) {
-	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: realKey})
+	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: fixtureKey})
 	us := NewUpdateService(newMockSettingsStore())
 
-	payload := map[string]any{"google_books_api_key": database.MaskSecret(realKey)}
+	payload := map[string]any{"google_books_api_key": database.MaskSecret(fixtureKey)}
 	if status, resp := us.UpdateConfig(context.Background(), payload); status != http.StatusOK {
 		t.Fatalf("UpdateConfig returned %d: %v", status, resp)
 	}
 
-	if got := Snapshot().GoogleBooksAPIKey; got != realKey {
+	if got := Snapshot().GoogleBooksAPIKey; got != fixtureKey {
 		t.Fatalf("echoed mask destroyed the scalar secret: got %q, want the original key", got)
 	}
 }
@@ -314,7 +314,7 @@ func TestUpdateConfig_EchoedScalarMaskDoesNotDestroySecret(t *testing.T) {
 // Clearing a scalar secret with "" must keep working -- it is the only way to
 // unset one, and unlike a metadata-source credential the intent is unambiguous.
 func TestUpdateConfig_EmptyScalarStillClearsSecret(t *testing.T) {
-	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: realKey})
+	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: fixtureKey})
 	us := NewUpdateService(newMockSettingsStore())
 
 	if status, resp := us.UpdateConfig(context.Background(), map[string]any{"google_books_api_key": ""}); status != http.StatusOK {
@@ -328,7 +328,7 @@ func TestUpdateConfig_EmptyScalarStillClearsSecret(t *testing.T) {
 
 func TestUpdateConfig_NewScalarSecretIsWrittenThrough(t *testing.T) {
 	const rotated = "AIzaROTATEDSCALARKEY0123456789abcdefQ"
-	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: realKey})
+	withAppConfig(t, Config{RootDir: t.TempDir(), GoogleBooksAPIKey: fixtureKey})
 	us := NewUpdateService(newMockSettingsStore())
 
 	if status, resp := us.UpdateConfig(context.Background(), map[string]any{"google_books_api_key": rotated}); status != http.StatusOK {
