@@ -1,5 +1,5 @@
 // file: internal/audiobooks/author_name_gate_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 706fca22-946e-4028-b4d1-f6d7c0bbcbb7
 // last-edited: 2026-10-30
 
@@ -40,7 +40,10 @@ func gateTestService(created *[]string, written *[]database.Book) *AudiobookServ
 func TestUpdateAudiobook_AllAuthorNamesRejectedReturnsError(t *testing.T) {
 	var created []string
 	var written []database.Book
-	svc := gateTestService(&created, &written)
+	base := gateTestService(&created, &written)
+	// The store must offer ModifyBookCredits before the edit resolves anything.
+	var credited []database.BookAuthor
+	svc := NewAudiobookService(&creditsRecordingStore{MockStore: base.store.(*database.MockStore), credited: &credited})
 
 	name := "Track 01"
 	_, err := svc.UpdateAudiobook(context.Background(), "bk1", &UpdateAudiobookRequest{
