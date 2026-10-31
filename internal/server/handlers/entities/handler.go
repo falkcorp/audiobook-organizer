@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: b02a07d8-1806-4c86-bb72-f0688d6caff3
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // Package entities hosts the entity-domain HTTP handlers extracted from the
 // server package: works, authors, series, and narrators — CRUD plus merges,
@@ -42,6 +42,17 @@ type AuthorMergeOpParams struct {
 	// click and its request carries no such field. An explicit false restores the
 	// old "the user chose these ids" behaviour.
 	HonorLocks *bool `json:"honor_locks,omitempty"`
+}
+
+// AuthorReclassifyOpID is the op POST /authors/:id/reclassify-as-narrator enqueues.
+// It must match the id package server registers.
+const AuthorReclassifyOpID = "entities.author-reclassify"
+
+// AuthorReclassifyOpParams holds the parameters for the entities.author-reclassify
+// op. Like AuthorMergeOpParams it is the one definition of the wire shape: the
+// handler builds it and package server decodes into this same type.
+type AuthorReclassifyOpParams struct {
+	AuthorID int `json:"author_id"`
 }
 
 // entitiesLog is the package logger (the handlers here logged through slog
@@ -829,6 +840,13 @@ func (h *Handler) DeleteAuthorAlias(c *gin.Context) {
 }
 
 // ReclassifyAuthorAsNarrator implements POST /authors/:id/reclassify-as-narrator.
+//
+// It does not reclassify in the request: it checks the author exists and queues
+// entities.author-reclassify, which journals every write under its own operation
+// id so the reclassify can be undone, and answers 202 with that operation. The
+// route used to run the move inline with no operation to journal under, so a
+// button press deleted the author with no way back. The body of the move is
+// ReclassifyAuthorAsNarrator (this package), which the op calls.
 func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 	authorID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -836,25 +854,25 @@ func (h *Handler) ReclassifyAuthorAsNarrator(c *gin.Context) {
 		return
 	}
 
-	out, err := ReclassifyAuthorAsNarrator(h.store, authorID, ReclassifyOptions{})
-	if err != nil {
-		var re *ReclassifyError
-		switch {
-		case errors.Is(err, ErrAuthorNotFound):
-			httputil.RespondWithNotFound(c, "author", "")
-		case errors.Is(err, database.ErrAuthorStillLinked):
-			httputil.RespondWithConflict(c, err.Error())
-		case errors.As(err, &re):
-			httputil.InternalError(c, re.Msg, re.Err)
-		default:
-			httputil.InternalError(c, "failed to reclassify author as narrator", err)
-		}
+	// Refuse an author that is not there now rather than queue an op that fails.
+	// GetAuthorByID follows the author tombstone: a merged-away id answers with the
+	// author it became, whose ID differs, and reclassifying that answer would turn
+	// the WRONG author into a narrator.
+	author, err := h.store.GetAuthorByID(authorID)
+	if err != nil || author == nil || author.ID != authorID {
+		httputil.RespondWithNotFound(c, "author", "")
 		return
 	}
 
-	h.dedupCache.Invalidate("author-duplicates")
-	h.authorsCache.InvalidateAll()
-	httputil.RespondWithOK(c, gin.H{"narrator_id": out.NarratorID, "books_updated": out.BooksUpdated})
+	opID, ok := h.enqueueEntityOp(c, AuthorReclassifyOpID, AuthorReclassifyOpParams{AuthorID: authorID})
+	if !ok {
+		return
+	}
+	httputil.RespondWithSuccess(c, 202, entityOpResponse{
+		ID:     opID,
+		Type:   AuthorReclassifyOpID,
+		Status: "queued",
+	})
 }
 
 // ResolveProductionAuthor attempts to find real authors for books attributed to

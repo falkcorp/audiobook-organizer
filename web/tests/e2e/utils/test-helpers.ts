@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.24.0
+// version: 2.25.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 import { expect, Page } from '@playwright/test';
 
@@ -995,8 +995,12 @@ export async function setupMockApiRoutes(
         operation: { id: 'resolve-prod-1', type: 'resolve-production-author', status: 'running', progress: 0, total: 100, message: 'Resolving...' },
       }));
     }
-    if (pathname.match(/\/api\/v1\/authors\/\d+\/reclassify-as-narrator/) && method === 'POST') {
-      return route.fulfill(jsonResponse({ message: 'Reclassified', books_updated: 1 }));
+    const reclassifyAs = pathname.match(/\/api\/v1\/authors\/(\d+)\/reclassify-as-narrator/);
+    if (reclassifyAs && method === 'POST') {
+      // 202 + the queued entities.author-reclassify op, like POST /authors/merge. The
+      // lane polls GET /operations/v2/<id>, which answers an undeclared id as a
+      // completed op.
+      return route.fulfill(jsonResponse({ id: `reclassify-op-${reclassifyAs[1]}`, type: 'entities.author-reclassify', status: 'queued' }, 202));
     }
     if (pathname.match(/\/api\/v1\/operations\/[^/]+\/result/) && method === 'GET') {
       return route.fulfill(jsonResponse({
