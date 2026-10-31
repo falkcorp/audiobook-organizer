@@ -907,25 +907,29 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// refuses, commitApply also takes back the author credits
 	// guardedApplyWith wrote above (revertAuthorCredits).
 	commitGuard := composeCommitGuards(noMatchGuard, opts.Guard, rejectionGuard)
-	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
-	if updatedBook == nil {
-		return nil, updateErr
-	}
 	// A hand-picked apply that changed a repair-locked field makes the lock
 	// the person's: reverting the repair later must not lift it and let a
-	// rescan put the junk back over the person's choice. Only fields whose
-	// committed value changed: a candidate that merely agrees with the
-	// repair leaves the lock the repair's.
-	var changedLocks []string
-	for _, k := range claimedLocks {
-		if database.LockedColumnChanged(k, before, updatedBook) ||
-			(k == database.FieldKeyAuthorName && credits.Changed()) {
-			changedLocks = append(changedLocks, k)
+	// rescan put the junk back over the person's choice. The claim runs INSIDE
+	// the commit's hold of the book's field-state stripe (commitApplyUnderStripe),
+	// not after it: with the stripe released in between, a revert of that repair
+	// lifted the lock in the gap, the claim found no repair lock, and the
+	// person's new value was left unlocked (CLAIM-LOCK-RACE). Held, the revert's
+	// lift lands before the whole apply or after the claim; and a lift that
+	// landed after guardedApplyWith read the locks but before the stripe was
+	// taken is re-locked as the person by ClaimRepairLocksLocked.
+	var claimStripe func(committed *database.Book)
+	if len(claimedLocks) > 0 {
+		claimStripe = func(committed *database.Book) {
+			changedLocks := handPickedChangedLocks(claimedLocks, before, book, committed, credits)
+			if cerr := database.ClaimRepairLocksLocked(mfs.db, id, changedLocks); cerr != nil {
+				applyMarkerLog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them id=%s fields=%v error=%s",
+					logger.SanitizeLogValue(id), changedLocks, logger.SanitizeLogValue(cerr.Error()))
+			}
 		}
 	}
-	if cerr := database.ClaimRepairLocks(mfs.db, id, changedLocks); cerr != nil {
-		applyMarkerLog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them id=%s fields=%v error=%s",
-			logger.SanitizeLogValue(id), changedLocks, logger.SanitizeLogValue(cerr.Error()))
+	updatedBook, updateErr := mfs.commitApplyUnderStripe(id, before, book, credits, historySource, opts.BatchID, commitGuard, claimStripe)
+	if updatedBook == nil {
+		return nil, updateErr
 	}
 	// An owner-reviewed apply went through past legs the certainty gate
 	// refused, and its change history is the only record to audit or revert

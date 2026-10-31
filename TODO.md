@@ -2247,7 +2247,7 @@ into one of the curated sections below, is a normal direct edit.
       index lock, refusing a name another author answers to), then the same
       sole-credited rule in audiobooks.UpdateAudiobook, with tests.
 
-- [ ] **CLAIM-LOCK-RACE** A hand-picked metadata apply claims the repair locks of the fields it changed AFTER its commit (`metafetch/service_apply.go`, `database.ClaimRepairLocks`). A revert of that repair landing in between lifts the lock first; the claim then finds nothing and the person's new value is left unlocked. Tiny window; close it by claiming inside the commit's hold or re-locking as the person when the repair lock is already gone. (PR #3699 third review, NIT 6.)
+- [x] **CLAIM-LOCK-RACE** (done 2026-10-30: claim now runs under the commit's stripe hold, `ClaimRepairLocksLocked`) A hand-picked metadata apply claims the repair locks of the fields it changed AFTER its commit (`metafetch/service_apply.go`, `database.ClaimRepairLocks`). A revert of that repair landing in between lifts the lock first; the claim then finds nothing and the person's new value is left unlocked. Tiny window; close it by claiming inside the commit's hold or re-locking as the person when the repair lock is already gone. (PR #3699 third review, NIT 6.)
 
 - [ ] **EDIT-DIALOG-LOCK-TOGGLES** The lock buttons in the metadata edit
       dialog do nothing on save. MetadataEditDialog keeps them in local
