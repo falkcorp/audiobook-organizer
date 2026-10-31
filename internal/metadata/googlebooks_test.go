@@ -1,5 +1,5 @@
 // file: internal/metadata/googlebooks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-b4c5d6e7f8a9
 
 package metadata
@@ -103,10 +103,11 @@ func TestGoogleBooksClient_APIError(t *testing.T) {
 	}
 }
 
-func TestGoogleBooksClient_APIKeyAppended(t *testing.T) {
-	var receivedURL string
+func TestGoogleBooksClient_APIKeySentInHeader(t *testing.T) {
+	var receivedURL, receivedHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedURL = r.URL.String()
+		receivedHeader = r.Header.Get("X-Goog-Api-Key")
 		_, _ = w.Write([]byte(`{"totalItems": 0, "items": []}`))
 	}))
 	defer server.Close()
@@ -120,8 +121,11 @@ func TestGoogleBooksClient_APIKeyAppended(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(receivedURL, "key=test-key-123") {
-		t.Errorf("expected API key in URL, got %q", receivedURL)
+	if receivedHeader != "test-key-123" {
+		t.Errorf("expected API key in X-Goog-Api-Key, got %q", receivedHeader)
+	}
+	if strings.Contains(receivedURL, "key") {
+		t.Errorf("API key must not appear in the URL, got %q", receivedURL)
 	}
 }
 

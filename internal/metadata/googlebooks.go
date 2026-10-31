@@ -1,7 +1,7 @@
 // file: internal/metadata/googlebooks.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-f2a3b4c5d6e7
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package metadata
 
@@ -160,13 +160,16 @@ func (c *GoogleBooksClient) SearchByTitleAndAuthor(ctx context.Context, title, a
 
 func (c *GoogleBooksClient) search(ctx context.Context, escapedQuery string) ([]BookMetadata, error) {
 	searchURL := fmt.Sprintf("%s/volumes?q=%s&maxResults=5", c.baseURL, escapedQuery)
-	if c.apiKey != "" {
-		searchURL += "&key=" + url.QueryEscape(c.apiKey)
-	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	// The key travels in a header, never the URL: a transport failure's
+	// *url.Error prints the full request URL, and every sink that formats the
+	// error (logs, ops results, the throttle panel) would carry the key with it.
+	if c.apiKey != "" {
+		req.Header.Set("X-Goog-Api-Key", c.apiKey)
 	}
 
 	resp, err := c.httpClient.Do(req)
