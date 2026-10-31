@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 // The operations v3 routes (/api/v3/ops) and the activity log as the server
 // wires them, driven through the real router: a Repairs run (repairs.plan,
@@ -900,6 +900,16 @@ func TestGenericStartRoutes_ApplyTheFixersPermissions(t *testing.T) {
 	}))
 	denied(postJSONAs(f.srv, mgr, "/api/v1/operations/v2/op-ars-failed/retry", `{}`), "retry by the custom role")
 	require.Equal(t, before+1, queued(), "a refused start queued a run (only the seeded failed run is new)")
+	// "Finish without resuming" re-queues a waiting Repairs run, so it is
+	// gated by the same fixer check as the retry.
+	require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
+		ID: "op-ars-asking", DefID: repairs.ApplyOpID, Plugin: "test", Status: "interrupted_ask",
+		Params: res, QueuedAt: time.Now().UTC(),
+	}))
+	denied(postJSONAs(f.srv, mgr, "/api/v1/operations/v2/op-ars-asking/finish", `{}`), "finish by the custom role")
+	asking, err := store.GetOperationV2("op-ars-asking")
+	require.NoError(t, err)
+	require.Equal(t, "interrupted_ask", asking.Status, "a refused finish re-queued the run")
 
 	// No fixer and an unknown fixer are refused to everyone, an admin included.
 	for name, start := range routes {

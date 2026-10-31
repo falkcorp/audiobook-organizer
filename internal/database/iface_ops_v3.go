@@ -1,5 +1,5 @@
 // file: internal/database/iface_ops_v3.go
-// version: 1.11.1
+// version: 1.12.1
 // guid: 2ee5100a-fa87-4b98-9558-0a39c733c64c
 // last-edited: 2026-10-30
 
@@ -117,7 +117,13 @@ type RunRecord struct {
 	StopReason    string   `json:"stop_reason,omitempty"`
 	Zombie        bool     `json:"zombie,omitempty"`
 	// InterruptedWhy is interrupted's reason (quiesced | crash | legacy).
-	InterruptedWhy string           `json:"interrupted_why,omitempty"`
+	InterruptedWhy string `json:"interrupted_why,omitempty"`
+	// FinishOnly marks a run whose next attempt leases no chunks and runs only
+	// its def's Finish over the stored ledger and marks (the third decision on
+	// an awaiting_decision run, "Finish without resuming"). Set by decide_finish;
+	// cleared by every other entry into queued, so a Retry after a finish-only
+	// attempt that was itself interrupted resumes in full.
+	FinishOnly     bool             `json:"finish_only,omitempty"`
 	Mode           string           `json:"mode"` // preview | live
 	Trigger        string           `json:"trigger"`
 	Params         json.RawMessage  `json:"params"`
