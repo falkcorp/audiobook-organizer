@@ -1,7 +1,7 @@
 // file: internal/database/coverage_test.go
-// version: 2.4.3
+// version: 2.4.4
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // NOTE(fable5 T022): TestInitializeStoreAndClose, TestDBInterfaceWrapper,
 // and TestWebHelpers removed — they tested SQLite initialisation and global
@@ -71,7 +71,7 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 		t.Fatalf("expected decrypted value, got %q", dec)
 	}
 
-	if got := MaskSecret("12345678"); got != "123****5678" {
+	if got := MaskSecret("12345678"); got != "********" {
 		t.Fatalf("unexpected mask: %q", got)
 	}
 

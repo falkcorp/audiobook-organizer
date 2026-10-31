@@ -1,7 +1,7 @@
 // file: internal/database/settings.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
@@ -245,12 +245,35 @@ func DecryptValue(encrypted string) (string, error) {
 	return string(plaintext), nil
 }
 
-// MaskSecret returns a masked version of a secret (for display)
+// secretMask is what MaskSecret returns for every secret shorter than
+// secretMaskRevealMinLen characters, and the prefix it returns for longer ones.
+const secretMask = "********"
+
+// secretMaskRevealMinLen is the length (in characters) at which MaskSecret
+// starts showing a suffix; secretMaskRevealChars is how many it shows.
+const (
+	secretMaskRevealMinLen = 16
+	secretMaskRevealChars  = 2
+)
+
+// MaskSecret returns a masked version of a secret (for display).
+//
+// The amount revealed is independent of how short the secret is, so a short
+// password never leaks most of itself: a secret under 16 characters becomes
+// exactly "********", and a secret of 16 or more becomes "********" followed
+// by only its last 2 characters. No prefix is ever shown. Lengths are counted
+// in characters (runes), not bytes, so a multi-byte suffix is not split.
+//
+// Callers that recognise an echoed mask compare against MaskSecret(stored)
+// rather than a literal, so this is the only place the shape is defined. The
+// result is not injective by design (every short secret masks the same), which
+// is why a client echoing the mask back must be treated as "unchanged".
 func MaskSecret(secret string) string {
-	if len(secret) < 8 {
-		return "****"
+	runes := []rune(secret)
+	if len(runes) < secretMaskRevealMinLen {
+		return secretMask
 	}
-	return secret[:3] + "****" + secret[len(secret)-4:]
+	return secretMask + string(runes[len(runes)-secretMaskRevealChars:])
 }
 
 // PebbleDB implementation

@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.33.0
+// version: 3.33.1
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package config
 
@@ -135,7 +135,7 @@ func (us *UpdateService) MaskSecrets(cfg Config) Config {
 // credential value masked.
 //
 // This closed a real leak: GET /api/v1/config masked the scalar
-// GoogleBooksAPIKey ("AIz****35bE") while returning the SAME key in full
+// GoogleBooksAPIKey ("********bE") while returning the SAME key in full
 // cleartext at metadata_sources[].credentials.apiKey — two different maskings
 // of one secret in one response. Any provider credential stored here (Hardcover
 // token, a future provider's key) leaked the same way.
@@ -144,7 +144,7 @@ func (us *UpdateService) MaskSecrets(cfg Config) Config {
 // `masked := cfg`, which is a SHALLOW struct copy: the MetadataSources slice
 // header is copied but the backing array is shared with the live AppConfig, and
 // each Credentials map is a reference. Masking in place would therefore
-// overwrite the process's real credentials with "AIz****35bE" and every
+// overwrite the process's real credentials with "********bE" and every
 // provider client would start authenticating with the mask. So the slice is
 // reallocated and each map is rebuilt.
 //
@@ -199,7 +199,7 @@ func snapshotSourceCredentials(srcs []MetadataSource) map[string]map[string]stri
 // scalar back is discarded. metadata_sources is NOT in that list, and
 // json.Unmarshal REPLACES the whole slice, credentials included. So a client
 // that does the obvious GET /config -> edit -> PUT /config would write
-// "AIz****35bE" over the real key and SaveConfigToDatabase would persist it --
+// "********bE" over the real key and SaveConfigToDatabase would persist it --
 // masking the response would have converted a disclosure bug into permanent
 // credential loss.
 //
@@ -246,18 +246,18 @@ func restoreMaskedCredentials(srcs []MetadataSource, prior map[string]map[string
 // through to the stored config.
 //
 // GET /api/v1/config returns these masked, so a client that reads the config and
-// PUTs it back sends "AIz****35bE" as the value. Writing that through replaces
+// PUTs it back sends "********bE" as the value. Writing that through replaces
 // the real key with the mask. The browser avoids this deliberately -- Settings.tsx
 // loads the config with `openaiApiKey: ”` ("Clear field when loading, show
 // placeholder instead") and useSettingsHandlers.ts omits the key entirely when
 // empty -- but that is a client-side convention, not an invariant. Any other
 // client doing the obvious GET-edit-PUT destroys the key.
 //
-// The failure is silent in a nasty way: MaskSecret is idempotent
-// (MaskSecret("AIz****35bE") == "AIz****35bE"), so the response after a
-// destructive write is byte-identical to the response after a successful one.
-// The UI still displays "AIz****35bE" and nothing surfaces until the provider
-// starts returning 401.
+// The failure is easy to miss: the response after a destructive write looks
+// like a masked secret just as the response after a successful one does (a
+// secret of 16+ characters shows "********bE" before and "********" after, a
+// shorter one shows "********" both times), so the UI barely changes and nothing
+// surfaces until the provider starts returning 401.
 //
 // Only the exact mask is rejected. An empty value still clears the secret --
 // that is existing, intentional behaviour and the only way to unset one. This is

@@ -1,7 +1,7 @@
 // file: internal/config/mask_metadata_credentials_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2c4f9a71-6b83-4d05-9e12-7a8f3b6c0d54
-// last-edited: 2026-09-02
+// last-edited: 2026-10-30
 
 package config
 
@@ -15,9 +15,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
-// realKey is long enough that database.MaskSecret keeps a 3-char prefix and a
-// 4-char suffix rather than collapsing to "****", so a test asserting the
-// cleartext is gone is actually asserting something.
+// realKey is long enough that database.MaskSecret shows its last two characters
+// rather than collapsing to "********", so a test asserting the cleartext is
+// gone is actually asserting something.
 const realKey = "AIzaSyA91r1mZKQLd1Fof18JDjNoqCeSZ-k35bE"
 
 func sourcesWithKey(key string) []MetadataSource {
@@ -79,7 +79,7 @@ func TestMaskSecrets_MasksMetadataSourceCredentials(t *testing.T) {
 // HEADER but shares the backing array, and each Credentials map is a reference.
 // Masking in place would overwrite the live AppConfig's real credentials with
 // the mask, after which every provider client would authenticate with
-// "AIz****35bE". A fix without a deep copy passes the test above and still
+// "********bE". A fix without a deep copy passes the test above and still
 // destroys production credentials on the first GET /api/v1/config.
 func TestMaskSecrets_DoesNotMutateSourceConfig(t *testing.T) {
 	us := &UpdateService{}
@@ -214,9 +214,8 @@ func TestRestoreMaskedCredentials_UnknownSourceUntouched(t *testing.T) {
 // Mutation-tested -- removing that call must fail a test in this section.
 //
 // These assert on the live AppConfig, never on UpdateConfig's response.
-// MaskSecret is idempotent (MaskSecret("AIz****35bE") == "AIz****35bE"), so the
-// masked response is byte-identical whether the credential survived or was
-// destroyed. A test asserting on resp["config"] passes in both worlds.
+// The masked response is a poor witness: a destroyed credential still renders
+// as a mask. A test asserting on resp["config"] can pass in both worlds.
 
 // withAppConfig installs cfg as the global AppConfig and restores the previous
 // value when the test ends.

@@ -1361,7 +1361,7 @@ into one of the curated sections below, is a normal direct edit.
       value read) and leave them out of the next write until the wanted value
       changes. Found reviewing verify_after_write (#3968); not fixed there.
 
-- [ ] **MASKSECRET-REVEALS-TOO-MUCH** `database.MaskSecret`
+- [x] **MASKSECRET-REVEALS-TOO-MUCH** `database.MaskSecret`
       (`internal/database/settings.go:313`) masks a secret of 8 or more characters
       as its first 3 and last 4 characters around `****`, so an 8-character
       password shows 7 of its 8 characters in `GET /api/v1/config` (the Deluge web
