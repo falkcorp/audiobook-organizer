@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.96.1
+// version: 1.96.2
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-10-26
+// last-edited: 2026-10-31
 
 package dedup
 
@@ -4894,8 +4894,8 @@ func (de *Engine) AcoustIDScan(ctx context.Context, progress func(done, total in
 							continue
 						}
 						cand, _ := lshStore.GetBookFileByID("", candID)
-						// A retired row is a version that left the library: the fpidx: value
-						// still names it, and its BookID is the holder, so pairing it would
+						// A retired row is a version that left the library: the probe still
+						// returns it, and its BookID is the holder, so pairing it would
 						// propose a merge of the holder with content already merged into it.
 						if cand == nil || cand.Retired || cand.BookID == book.ID || len(cand.AcoustIDFingerprint) == 0 ||
 							!cand.HasCurrentPrint() || isBoilerplateTitle(cand.Title) {

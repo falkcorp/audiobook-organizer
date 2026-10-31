@@ -1,7 +1,7 @@
 // file: internal/database/retired_book_files.go
 // version: 1.5.3
 // guid: b2a8d3f4-5c61-4e0a-9f7d-1c3e48a6b925
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package database
 
@@ -393,6 +393,20 @@ func (c *indexCAS) wrote(key []byte) {
 	c.written = append(c.written, key)
 }
 
+// watch records key's committed value (note) and has verify re-check that it
+// is unchanged at commit, without the batch writing it. It is for a key whose
+// CONTENT decides what the batch stages (the fpidx_meta: member list that names
+// which fpidx: rows to rewrite): if another writer adds, replaces or removes it
+// between this read and the commit, the attempt re-stages. It returns the noted
+// value.
+func (c *indexCAS) watch(p *PebbleStore, key []byte) (casValue, error) {
+	if err := c.note(p, key); err != nil {
+		return casValue{}, err
+	}
+	c.written = append(c.written, key)
+	return c.expected[string(key)], nil
+}
+
 // alt records the live alternative owner a key was repointed to.
 func (c *indexCAS) alt(k singleOwnerKey, bookID, fileID string) {
 	c.alts = append(c.alts, casAlt{key: k, bookID: bookID, fileID: fileID})
@@ -760,6 +774,10 @@ func (p *PebbleStore) retireBookFilesAttempt(rows *bookFileRowCache, moves []Boo
 				batch.Close()
 				return err
 			}
+			if err := p.stageLSHOwnerRewrite(batch, cas, f.ID, holderID); err != nil {
+				batch.Close()
+				return fmt.Errorf("RetireBookFiles: %s: %w", fid, err)
+			}
 
 			f.BookID = holderID
 			f.Retired = true
@@ -787,6 +805,46 @@ func (p *PebbleStore) retireBookFilesAttempt(rows *bookFileRowCache, moves []Boo
 	}
 	p.afterRetireWrite(moved, affected, "retire_book_files")
 	return durErr
+}
+
+// stageLSHOwnerRewrite stages, into the batch that re-keys file fileID under
+// newBookID, the rewrite of the file's fpidx: rows so each one names newBookID.
+//
+// The fpidx: value is the owning BookID (writeFingerprintLSHIndexes). A retire,
+// un-retire or re-home changes the owner of the row without touching its
+// fingerprint, so without this the value keeps naming the book the row was
+// keyed under before the move (the shell, after a retire) until the index is
+// rebuilt. The member list comes from the fpidx_meta: row, the same side table
+// DeleteLSHEntries uses, so the old fingerprint need not be re-derived. A row
+// with no meta row (no fingerprint, a legacy-era print, an index not built
+// yet) has nothing to rewrite and costs one point read.
+//
+// The meta row is read from committed state and watched by cas: a writer that
+// creates, replaces or deletes the member list between this read and the commit
+// fails the verify hook and the attempt re-stages. The fpidx: rows themselves
+// are only ever written together with that meta row, and a fingerprint change
+// rewrites the book_file row, which the caller's bookFileUnchanged compare
+// already catches. The caller holds the file's stripe (lockBookFiles).
+//
+// A meta row of an older LSHIndexVersion decodes to no members and is left
+// alone: HasLSHIndex reports it stale and the index build op rewrites it with
+// the owner the file has then.
+func (p *PebbleStore) stageLSHOwnerRewrite(batch *GatedBatch, cas *indexCAS, fileID, newBookID string) error {
+	meta, err := cas.watch(p, lshMetaKey(fileID))
+	if err != nil {
+		return err
+	}
+	if !meta.found {
+		return nil
+	}
+	subs, bands := decodeLSHMeta([]byte(meta.val))
+	val := []byte(newBookID)
+	for i := range subs {
+		if err := batch.Set(lshIndexKey(bands[i], subs[i], fileID), val, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // afterRetireWrite is the post-commit derived-state refresh every book_file
@@ -923,6 +981,10 @@ func (p *PebbleStore) unretireBookFilesAttempt(rows *bookFileRowCache, moves []B
 			if err := batch.Set([]byte("book_file_id:"+f.ID), []byte("book_file:"+backToBookID+":"+f.ID), nil); err != nil {
 				batch.Close()
 				return err
+			}
+			if err := p.stageLSHOwnerRewrite(batch, cas, f.ID, backToBookID); err != nil {
+				batch.Close()
+				return fmt.Errorf("UnretireBookFiles: %s: %w", fid, err)
 			}
 
 			f.BookID = backToBookID
@@ -1119,6 +1181,10 @@ func (p *PebbleStore) rehomeRetiredVersionAttempt(versionID, newHolderID string)
 		if err := batch.Set([]byte("book_file_id:"+f.ID), []byte("book_file:"+newHolderID+":"+f.ID), nil); err != nil {
 			batch.Close()
 			return err
+		}
+		if err := p.stageLSHOwnerRewrite(batch, cas, f.ID, newHolderID); err != nil {
+			batch.Close()
+			return fmt.Errorf("RehomeRetiredVersion: %s: %w", f.ID, err)
 		}
 		f.BookID = newHolderID
 		f.UpdatedAt = now

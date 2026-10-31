@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_lsh.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e083305c-0d28-49c9-9f90-40b2c068414f
-// last-edited: 2026-06-09
+// last-edited: 2026-10-31
 
 // Package-level exported API for the LSH (locality-sensitive hashing) secondary
 // index over whole-file AcoustID fingerprints.
@@ -69,12 +69,28 @@ func (s *PebbleStore) SetLSHIndexBuilt() error {
 // without a HasLSHIndex guard — the op itself skips files that already
 // have a meta row when doing incremental runs.
 //
+// OWNER. bookID is what the caller read when it picked the file up, which can
+// be a moment before this write. A retire, un-retire or re-home re-keys the row
+// under another book and rewrites its fpidx: values in its own batch
+// (stageLSHOwnerRewrite), so a value written here from a stale bookID would put
+// the old owner back. PutLSHEntries therefore takes the file's write stripe,
+// the one those writers hold across their commit, and takes the owner from the
+// book_file_id: index when the file has a row; bookID stands only for a file
+// with no row (a caller indexing ahead of the row, or a test).
+//
 // subprints must be non-nil and non-empty; callers should check
 // fingerprint.Subprints before calling. If either is empty, PutLSHEntries
 // is a no-op (returns nil).
 func (s *PebbleStore) PutLSHEntries(fileID, bookID string, subs []fingerprint.Subprint, bands []byte) error {
 	if len(subs) == 0 || len(bands) == 0 {
 		return nil
+	}
+	unlock := s.lockBookFile(fileID)
+	defer unlock()
+	if cur, err := s.GetBookFileByFileID(fileID); err != nil {
+		return fmt.Errorf("pebble_lsh: resolve owner of %s: %w", fileID, err)
+	} else if cur != nil {
+		bookID = cur.BookID
 	}
 	batch := s.db.NewBatch()
 	val := []byte(bookID)
