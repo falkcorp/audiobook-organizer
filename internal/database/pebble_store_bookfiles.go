@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.52.4
+// version: 1.52.5
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-29
+// last-edited: 2026-10-31
 
 package database
 
@@ -763,10 +763,12 @@ const (
 // updateBookFile is UpdateBookFile's body. merge is bookFileMergeUpsert only
 // for UpsertBookFile.
 //
-// recomputeAggregates is false only for a caller that changes nothing the
-// book aggregates read (UpdateBookFileHashes). Even then the recompute runs
-// if Duration, FileSize or BookID moved, so a mislabelled caller cannot leave
-// an aggregate stale.
+// recomputeAggregates is false only for a caller that has its own rule for
+// when the aggregates are stale (writeHashesOver: a hash feeds the aggregate
+// through equality with a sibling's hash) or that recomputes once per batch
+// itself (ModifyBookFileDeferAggregates). Even then the recompute runs if
+// Duration, FileSize or BookID moved, so a mislabelled caller cannot leave an
+// aggregate stale.
 func (s *PebbleStore) updateBookFile(id string, file *BookFile, merge bookFileMerge, recomputeAggregates bool, stillMatches func(old *BookFile) bool) error {
 	unlock := s.lockBookFile(id)
 	notify := false
@@ -3001,10 +3003,8 @@ func (s *PebbleStore) updateBookFileHashesLocked(id, originalHash, postMetadataH
 		// OriginalFileHash are secondary-indexed (book_file_hash:), and the memdb
 		// projection must see the new hash too; the raw Set this replaced refreshed
 		// neither. The row is the stored row, so the replace-mode merge inside
-		// restores nothing it needs. Hashes feed no book aggregate, so the per-book
-		// recompute is skipped: a 50-chapter write-back used to recompute the book
-		// 50 times.
-		return s.updateBookFileOver(old, raw, &bf, bookFileMergeReplace, false)
+		// restores nothing it needs.
+		return s.writeHashesOver(old, raw, &bf)
 	})
 	return bookID, notify, err
 }
@@ -3052,12 +3052,28 @@ func (s *PebbleStore) SetBookFileHash(id, hash string) error {
 		// file_hash and original_file_hash are secondary-indexed (book_file_hash:,
 		// book_file_orig_hash:) and the memdb projection must see them. The raw
 		// Set this replaced refreshed neither, so GetBookBySegmentFileHash missed
-		// every hash backfill-file-hashes or extract-wav-clips recorded. Hashes
-		// feed no book aggregate, so the per-book recompute is skipped.
-		return s.updateBookFileOver(old, raw, &bf, bookFileMergeReplace, false)
+		// every hash extract-wav-clips recorded.
+		return s.writeHashesOver(old, raw, &bf)
 	})
-	notify = notify && uerr == nil
+	notify = notify && bookFileApplied(uerr) // see updateBookFile
 	return uerr
+}
+
+// writeHashesOver commits a hash-only rewrite of old (read as raw) and reports
+// whether the book's aggregates need a recompute. The generic recompute is off
+// (updateBookFileOver's recomputeAggregates false): a hash write that changes
+// Duration, FileSize or BookID still triggers it there, but a hash alone does
+// so only when it can change an equality between two of the book's rows, which
+// hashWriteMovesAggregate decides. A write-back of fresh, unrelated hashes
+// across a 50-chapter book therefore still costs no recompute, while a hash
+// that makes a missing row the repoint duplicate of a present one (or breaks
+// that pairing) leaves Book.Duration correct.
+func (s *PebbleStore) writeHashesOver(old *BookFile, raw []byte, bf *BookFile) (bool, error) {
+	notify, err := s.updateBookFileOver(old, raw, bf, bookFileMergeReplace, false)
+	if !notify && bookFileApplied(err) && s.hashWriteMovesAggregate(old, bf) {
+		notify = true
+	}
+	return notify, err
 }
 
 // ClearAllAcoustIDFingerprints wipes AcoustIDSeg0..6 on every BookFile and

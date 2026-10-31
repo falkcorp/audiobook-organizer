@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-26
+// last-edited: 2026-10-31
 
 package database
 
@@ -168,12 +168,17 @@ type BookFileHashStore interface {
 	// filehash.BookFileHash of the PRE-write bytes (the same sampled kind as
 	// file_hash) for original_file_hash; postMetadataHash is the whole-file
 	// SHA-256 after the write; fileHash, when non-empty, replaces file_hash with
-	// filehash.BookFileHash of the rewritten bytes.
+	// filehash.BookFileHash of the rewritten bytes. It recomputes the owning
+	// book's aggregates when a hash moved onto or off a value a sibling row
+	// holds (a repoint pair or a copy), since those pairings decide what
+	// Book.Duration and Book.FileSize count; unrelated hashes cost no recompute.
 	UpdateBookFileHashes(id, originalHash, postMetadataHash, fileHash string) error
 	// SetBookFileHash sets file_hash on a book_file row, mirroring what the
 	// scanner does on initial import. Also sets original_file_hash if it is
-	// currently empty. Used by the backfill handler to populate hashes for
-	// files that were imported before hash tracking was added.
+	// currently empty. Used by extract-wav-clips to record the digest of a row
+	// that has none. The aggregate rule is UpdateBookFileHashes'. A caller that
+	// stores a whole chunk of hashes and recomputes each book once afterwards
+	// (backfill-file-hashes) does not use it.
 	SetBookFileHash(id, hash string) error
 	// GetDuplicateFilesByHash returns groups of book_files that share the same
 	// original_file_hash (non-empty). Each group has ≥2 entries and represents
