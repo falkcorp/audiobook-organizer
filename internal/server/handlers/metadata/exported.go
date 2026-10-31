@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/exported.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 34fcf0d9-304d-4ce1-8020-bb03430c90a7
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 // Exported HTTP entry points for the metadata-domain Handler. Each delegates to
 // the unexported *Impl method that holds the original handler body verbatim, so
@@ -54,9 +54,6 @@ func (h *Handler) PruneBookCOWVersions(c *gin.Context) { h.pruneBookCOWVersionsI
 
 // WriteBackAudiobookMetadata handles POST /api/v1/audiobooks/:id/write-back.
 func (h *Handler) WriteBackAudiobookMetadata(c *gin.Context) { h.writeBackAudiobookMetadataImpl(c) }
-
-// BulkFetchMetadata handles POST /api/v1/metadata/bulk-fetch.
-func (h *Handler) BulkFetchMetadata(c *gin.Context) { h.bulkFetchMetadataImpl(c) }
 
 // HandleBulkWriteBack handles POST /api/v1/audiobooks/bulk-write-back.
 func (h *Handler) HandleBulkWriteBack(c *gin.Context) { h.handleBulkWriteBackImpl(c) }

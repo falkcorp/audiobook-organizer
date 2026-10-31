@@ -1,7 +1,7 @@
 // file: internal/server/server.go
 // version: 2.114.3
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package server
 
@@ -1379,10 +1379,6 @@ type seriesPrunePreviewResult struct {
 }
 
 // computeSeriesPrunePreview builds the preview of what a series prune would do.
-
-// bulkFetchMetadataRequest / bulkFetchMetadataResult moved to the
-// handlers/metadata sub-package (mirrored there) along with the bulkFetchMetadata
-// HTTP handler (ADR-003 Phase 4). They were only used by that handler.
 
 // Version Management Handlers
 

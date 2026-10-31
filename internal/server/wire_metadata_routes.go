@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_routes.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -25,7 +25,17 @@ func (s *Server) wireMetadataRoutes(
 	protected.POST("/metadata/import", s.perm(auth.PermLibraryEditMetadata), metadataH.ImportMetadata)
 	protected.GET("/metadata/search", s.perm(auth.PermLibraryView), metadataH.SearchMetadata)
 	protected.GET("/metadata/fields", s.perm(auth.PermLibraryView), metadataH.GetMetadataFields)
-	protected.POST("/metadata/bulk-fetch", s.perm(auth.PermLibraryEditMetadata), metadataH.BulkFetchMetadata)
+	// POST /metadata/bulk-fetch applied each book's top search candidate with no
+	// apply gate (no score floor, sequence guard or identity check). It had no
+	// caller in web/src and is retired: it answers 410 Gone for one release
+	// (owner decision D9) and is then removed. The gated path is the
+	// library.bulk-metadata-fetch operation, which caches candidates, and the
+	// metadata.batch-apply-cached operation, which runs every one through
+	// applygate. The stub keeps the edit permission, so an unauthenticated caller
+	// still gets 401, a read-only caller 403, and only an allowed caller learns
+	// the route is gone.
+	protected.POST("/metadata/bulk-fetch", s.perm(auth.PermLibraryEditMetadata),
+		gone("POST /api/v1/operations/v2 with def_id library.bulk-metadata-fetch to fetch candidates, then def_id metadata.batch-apply-cached to apply them through the apply gate"))
 	protected.POST("/audiobooks/:id/fetch-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.FetchAudiobookMetadata)
 	protected.POST("/audiobooks/:id/search-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.SearchAudiobookMetadata)
 	protected.POST("/audiobooks/:id/apply-metadata", s.perm(auth.PermLibraryEditMetadata), metadataH.ApplyAudiobookMetadata)

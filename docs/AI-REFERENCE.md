@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.8.1 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-26 -->
+<!-- last-edited: 2026-10-30 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -279,7 +279,6 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | POST | `/audiobooks/:id/metadata/no-match` | `markNoMatch` |
 | POST | `/audiobooks/:id/write-back` | `writeBackMetadata` |
 | POST | `/audiobooks/:id/extract-tracks` | `extractTrackInfo` |
-| POST | `/metadata/bulk-fetch` | `bulkFetchMetadata` |
 | GET | `/audiobooks/:id/metadata/history` | `getBookMetadataHistory` |
 | POST | `/audiobooks/:id/metadata/undo-apply` | `undoLastApply` |
 | POST | `/audiobooks/:id/metadata/undo/:field` | `undoMetadataChange` |

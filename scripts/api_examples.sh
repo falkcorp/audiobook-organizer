@@ -1,8 +1,8 @@
 #!/bin/bash
 # file: scripts/api_examples.sh
-# version: 1.1.0
+# version: 1.1.1
 # guid: 7e8f9a0b-1c2d-3e4f-5a6b-7c8d9e0f1011
-# last-edited: 2026-10-17
+# last-edited: 2026-10-30
 
 # Convenient API examples for quick testing
 # Source this file or run individual examples
@@ -180,12 +180,14 @@ example_import_file() {
 example_bulk_fetch_metadata() {
     local book_ids="${1:-book-001,book-002}"
     echo "Example: Bulk fetch metadata for books: $book_ids"
-    curl -X POST "$API/metadata/bulk-fetch" \
+    # POST /metadata/bulk-fetch is retired (410). Fetch candidates with the
+    # library.bulk-metadata-fetch operation; apply them with
+    # metadata.batch-apply-cached, which runs every candidate through the apply gate.
+    curl -X POST "$API/operations/v2" \
         -H "Content-Type: application/json" \
         -d "{
-            \"book_ids\": [\"$book_ids\"],
-            \"source\": \"goodreads\",
-            \"force_refresh\": false
+            \"def_id\": \"library.bulk-metadata-fetch\",
+            \"params\": {\"selection\": {\"book_ids\": [\"$book_ids\"]}, \"skip_cached\": false}
         }"
     echo ""
 }
