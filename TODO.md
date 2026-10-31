@@ -796,16 +796,17 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **ADMIN-COMPROMISED-ACCOUNT-RESET** Admin "compromised account" reset
       should invalidate the old password. Owner decision. Today the admin
       reset link (`POST /users/:id/reset-password`, `handleResetPassword`)
-      signs the user out of every ABS client (credential-epoch bump, #4081) and
+      signs the user out of every ABS client (credential-epoch bump, #4081) and,
+      since 2026-10-30, every web session
+      (WEB-SESSIONS-SURVIVE-PASSWORD-CHANGE), and
       issues a one-time login link, but the old password keeps working until
       the user picks a new one, so an attacker who has it can still sign in.
       Options: (a) a separate "compromised" action that also replaces the
       password hash with an unusable value in the same `SetUserPassword`
       write, (b) make the existing reset do that, or (c) keep the current
-      behaviour and label it as a convenience reset in the UI. Web sessions
-      have the same gap (see WEB-SESSIONS-SURVIVE-PASSWORD-CHANGE).
+      behaviour and label it as a convenience reset in the UI.
 
-- [ ] **WEB-SESSIONS-SURVIVE-PASSWORD-CHANGE** Changing a password, an admin
+- [x] **WEB-SESSIONS-SURVIVE-PASSWORD-CHANGE** (done 2026-10-30: web sessions stamped with `User.CredentialEpoch` and refused on mismatch, caller's own session re-stamped atomically on a self-service change, stale sessions revoked as cleanup) Changing a password, an admin
       password reset (direct or via reset link) and deactivating a user do not
       end the user's web-UI sessions. #4081 ended ABS (mobile) sessions on all
       four paths by bumping `User.CredentialEpoch` in the same write as the

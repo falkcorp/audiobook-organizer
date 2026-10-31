@@ -1,7 +1,7 @@
 // file: internal/server/batch_hard_delete_permission_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: e0a974ef-0780-48c3-921a-e32b2e124b6c
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package server
 
@@ -47,7 +47,7 @@ func TestBatchOperations_HardDeleteNeedsLibraryDelete(t *testing.T) {
 	session := func(name, role string) string {
 		u, err := ps.CreateUser(name, name+"@example.test", "bcrypt", "hash", []string{role}, "active")
 		require.NoError(t, err)
-		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour)
+		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour, 0)
 		require.NoError(t, err)
 		return s.ID
 	}
@@ -157,7 +157,7 @@ func TestBatchRoutes_TrashAndRestoreNeedTheSingleBookPermissions(t *testing.T) {
 	session := func(name, role string) string {
 		u, err := ps.CreateUser(name, name+"@example.test", "bcrypt", "hash", []string{role}, "active")
 		require.NoError(t, err)
-		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour)
+		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour, 0)
 		require.NoError(t, err)
 		return s.ID
 	}
@@ -292,7 +292,7 @@ func TestBatchRoutes_LibraryStateEditOnATrashedBookIsARestore(t *testing.T) {
 	session := func(name, role string) string {
 		u, err := ps.CreateUser(name, name+"@example.test", "bcrypt", "hash", []string{role}, "active")
 		require.NoError(t, err)
-		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour)
+		s, err := ps.CreateSession(u.ID, "127.0.0.1", "test", time.Hour, 0)
 		require.NoError(t, err)
 		return s.ID
 	}

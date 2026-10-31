@@ -1,5 +1,5 @@
 // file: internal/server/wire_ops_v3_routes_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f0aca62d-8230-49ce-ab21-61cbd082ce99
 // last-edited: 2026-10-30
 
@@ -619,7 +619,7 @@ func TestOpsV3Routes_ViewerCannotStartARun(t *testing.T) {
 	store := srv.storeForWiring()
 	viewerUser, err := store.CreateUser("viewer", "viewer@x.test", "bcrypt", "hash", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	vs, err := store.CreateSession(viewerUser.ID, "192.0.2.10", "test", time.Hour)
+	vs, err := store.CreateSession(viewerUser.ID, "192.0.2.10", "test", time.Hour, 0)
 	require.NoError(t, err)
 	post := func(token, path, body string) *httptest.ResponseRecorder {
 		return postRepairs(srv, token, path, body)
@@ -658,7 +658,7 @@ func TestOpsV3Routes_DeniedInHandlerAnswers403(t *testing.T) {
 		u, err := store.GetUserByUsername(username)
 		require.NoError(t, err)
 		require.NotNil(t, u)
-		sess, err := store.CreateSessionWithOrigin(u.ID, "192.0.2.10", "test", time.Hour, database.SessionOriginPassword)
+		sess, err := store.CreateSessionWithOrigin(u.ID, "192.0.2.10", "test", time.Hour, database.SessionOriginPassword, 0)
 		require.NoError(t, err)
 		return sess.ID
 	}

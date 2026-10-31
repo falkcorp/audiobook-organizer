@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_password_algo_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4f0c7a52-9d3e-4b86-a1c7-6e25b8d0f913
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -29,7 +29,7 @@ import (
 // checks the self-service compare-and-swap carries the hash that was verified
 // and records what would be stored in *saved.
 func savingCreds(t *testing.T, user *database.User, saved **database.User) *credsFake {
-	return &credsFake{setPassword: func(userID, expectedHash, algo, hash string) (*database.User, error) {
+	return &credsFake{setPassword: func(userID, expectedHash, algo, hash, keepSessionID string) (*database.User, error) {
 		require.Equal(t, user.ID, userID)
 		require.Equal(t, user.PasswordHash, expectedHash, "self-service change is a CAS on the verified hash")
 		*saved = &database.User{ID: userID, PasswordHashAlgo: algo, PasswordHash: hash}
@@ -62,7 +62,7 @@ func TestAuthHandler_Login_AcceptsArgon2idHash(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil)
 	store.EXPECT().GetRoleByID("user").Return(nil, nil)
-	store.EXPECT().CreateSessionWithOrigin(user.ID, mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).Return(session, nil)
+	store.EXPECT().CreateSessionWithOrigin(user.ID, mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).Return(session, nil)
 
 	h := handlers.NewAuthHandler(store, true)
 	c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "alice", "password": "password123"})
@@ -95,7 +95,7 @@ func TestAuthHandler_Login_AcceptsExplicitBcryptAlgo(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil)
 	store.EXPECT().GetRoleByID("user").Return(nil, nil)
-	store.EXPECT().CreateSessionWithOrigin(user.ID, mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).Return(session, nil)
+	store.EXPECT().CreateSessionWithOrigin(user.ID, mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).Return(session, nil)
 
 	h := handlers.NewAuthHandler(store, true)
 	c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "alice", "password": "password123"})
@@ -130,6 +130,7 @@ func TestAuthHandler_ChangePassword_AcceptsArgon2idCurrentPassword(t *testing.T)
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
+	store.EXPECT().ListUserSessions(user.ID).Return(nil, nil) // the web-session cleanup after the write
 	var saved *database.User
 	h := handlers.NewAuthHandler(authStoreWithABS{store, &absRevokeRecorder{}, savingCreds(t, user, &saved)}, true)
 	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{
@@ -174,6 +175,7 @@ func TestAuthHandler_ChangePassword_BcryptStillWorks(t *testing.T) {
 	}
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
+	store.EXPECT().ListUserSessions(user.ID).Return(nil, nil) // the web-session cleanup after the write
 	var saved *database.User
 	h := handlers.NewAuthHandler(authStoreWithABS{store, &absRevokeRecorder{}, savingCreds(t, user, &saved)}, true)
 	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{
@@ -195,6 +197,7 @@ func TestAuthHandler_ChangePassword_LegacyEmptyAlgoBcryptRow(t *testing.T) {
 	}
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
+	store.EXPECT().ListUserSessions(user.ID).Return(nil, nil) // the web-session cleanup after the write
 	var saved *database.User
 	h := handlers.NewAuthHandler(authStoreWithABS{store, &absRevokeRecorder{}, savingCreds(t, user, &saved)}, true)
 	c, w := newAuthCtx("PUT", "/auth/me/password", map[string]any{

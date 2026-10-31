@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -167,6 +167,10 @@ func (h *OAuthHandler) Callback(c *gin.Context) {
 		strings.TrimSpace(c.Request.UserAgent()),
 		defaultSessionTTL,
 		database.SessionOriginOAuth,
+		// The epoch of the record ResolveUser just vetted, not a fresh read: a
+		// credential change landing after it leaves this session with the old
+		// stamp, refused on first use.
+		user.CredentialEpoch,
 	)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to create session")
@@ -279,5 +283,5 @@ func sanitizeReturn(ret string) string {
 type oauthHandlerStore interface {
 	oauth.UserStore
 
-	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*database.Session, error)
+	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*database.Session, error)
 }

@@ -184,8 +184,8 @@ func (_c *MockUserStore_CreateInvite_Call) RunAndReturn(run func(invite *databas
 }
 
 // CreateSession provides a mock function for the type MockUserStore
-func (_mock *MockUserStore) CreateSession(userID string, ip string, ua string, ttl time.Duration) (*database.Session, error) {
-	ret := _mock.Called(userID, ip, ua, ttl)
+func (_mock *MockUserStore) CreateSession(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64) (*database.Session, error) {
+	ret := _mock.Called(userID, ip, ua, ttl, credentialEpoch)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateSession")
@@ -193,18 +193,18 @@ func (_mock *MockUserStore) CreateSession(userID string, ip string, ua string, t
 
 	var r0 *database.Session
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration) (*database.Session, error)); ok {
-		return returnFunc(userID, ip, ua, ttl)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) (*database.Session, error)); ok {
+		return returnFunc(userID, ip, ua, ttl, credentialEpoch)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration) *database.Session); ok {
-		r0 = returnFunc(userID, ip, ua, ttl)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) *database.Session); ok {
+		r0 = returnFunc(userID, ip, ua, ttl, credentialEpoch)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*database.Session)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration) error); ok {
-		r1 = returnFunc(userID, ip, ua, ttl)
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration, int64) error); ok {
+		r1 = returnFunc(userID, ip, ua, ttl, credentialEpoch)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -221,11 +221,12 @@ type MockUserStore_CreateSession_Call struct {
 //   - ip string
 //   - ua string
 //   - ttl time.Duration
-func (_e *MockUserStore_Expecter) CreateSession(userID any, ip any, ua any, ttl any) *MockUserStore_CreateSession_Call {
-	return &MockUserStore_CreateSession_Call{Call: _e.mock.On("CreateSession", userID, ip, ua, ttl)}
+//   - credentialEpoch int64
+func (_e *MockUserStore_Expecter) CreateSession(userID any, ip any, ua any, ttl any, credentialEpoch any) *MockUserStore_CreateSession_Call {
+	return &MockUserStore_CreateSession_Call{Call: _e.mock.On("CreateSession", userID, ip, ua, ttl, credentialEpoch)}
 }
 
-func (_c *MockUserStore_CreateSession_Call) Run(run func(userID string, ip string, ua string, ttl time.Duration)) *MockUserStore_CreateSession_Call {
+func (_c *MockUserStore_CreateSession_Call) Run(run func(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64)) *MockUserStore_CreateSession_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -243,11 +244,16 @@ func (_c *MockUserStore_CreateSession_Call) Run(run func(userID string, ip strin
 		if args[3] != nil {
 			arg3 = args[3].(time.Duration)
 		}
+		var arg4 int64
+		if args[4] != nil {
+			arg4 = args[4].(int64)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -258,7 +264,7 @@ func (_c *MockUserStore_CreateSession_Call) Return(session *database.Session, er
 	return _c
 }
 
-func (_c *MockUserStore_CreateSession_Call) RunAndReturn(run func(userID string, ip string, ua string, ttl time.Duration) (*database.Session, error)) *MockUserStore_CreateSession_Call {
+func (_c *MockUserStore_CreateSession_Call) RunAndReturn(run func(userID string, ip string, ua string, ttl time.Duration, credentialEpoch int64) (*database.Session, error)) *MockUserStore_CreateSession_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -493,6 +499,68 @@ func (_c *MockUserStore_ListActiveInvites_Call) RunAndReturn(run func() ([]datab
 	return _c
 }
 
+// ListUserSessions provides a mock function for the type MockUserStore
+func (_mock *MockUserStore) ListUserSessions(userID string) ([]database.Session, error) {
+	ret := _mock.Called(userID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListUserSessions")
+	}
+
+	var r0 []database.Session
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.Session, error)); ok {
+		return returnFunc(userID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.Session); ok {
+		r0 = returnFunc(userID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.Session)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(userID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockUserStore_ListUserSessions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListUserSessions'
+type MockUserStore_ListUserSessions_Call struct {
+	*mock.Call
+}
+
+// ListUserSessions is a helper method to define mock.On call
+//   - userID string
+func (_e *MockUserStore_Expecter) ListUserSessions(userID any) *MockUserStore_ListUserSessions_Call {
+	return &MockUserStore_ListUserSessions_Call{Call: _e.mock.On("ListUserSessions", userID)}
+}
+
+func (_c *MockUserStore_ListUserSessions_Call) Run(run func(userID string)) *MockUserStore_ListUserSessions_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockUserStore_ListUserSessions_Call) Return(sessions []database.Session, err error) *MockUserStore_ListUserSessions_Call {
+	_c.Call.Return(sessions, err)
+	return _c
+}
+
+func (_c *MockUserStore_ListUserSessions_Call) RunAndReturn(run func(userID string) ([]database.Session, error)) *MockUserStore_ListUserSessions_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListUsers provides a mock function for the type MockUserStore
 func (_mock *MockUserStore) ListUsers() ([]database.User, error) {
 	ret := _mock.Called()
@@ -544,6 +612,57 @@ func (_c *MockUserStore_ListUsers_Call) Return(users []database.User, err error)
 }
 
 func (_c *MockUserStore_ListUsers_Call) RunAndReturn(run func() ([]database.User, error)) *MockUserStore_ListUsers_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RevokeSession provides a mock function for the type MockUserStore
+func (_mock *MockUserStore) RevokeSession(id string) error {
+	ret := _mock.Called(id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RevokeSession")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
+		r0 = returnFunc(id)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockUserStore_RevokeSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RevokeSession'
+type MockUserStore_RevokeSession_Call struct {
+	*mock.Call
+}
+
+// RevokeSession is a helper method to define mock.On call
+//   - id string
+func (_e *MockUserStore_Expecter) RevokeSession(id any) *MockUserStore_RevokeSession_Call {
+	return &MockUserStore_RevokeSession_Call{Call: _e.mock.On("RevokeSession", id)}
+}
+
+func (_c *MockUserStore_RevokeSession_Call) Run(run func(id string)) *MockUserStore_RevokeSession_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockUserStore_RevokeSession_Call) Return(err error) *MockUserStore_RevokeSession_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockUserStore_RevokeSession_Call) RunAndReturn(run func(id string) error) *MockUserStore_RevokeSession_Call {
 	_c.Call.Return(run)
 	return _c
 }

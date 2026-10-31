@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package database
 
@@ -514,6 +514,16 @@ var markEmailVerifiedLockedHook func()
 // the old CredentialEpoch back.
 var userWriteMu sync.Mutex
 
+// sessionWriteMu serializes every read-modify-write of an existing sess: row:
+// RevokeSession (read, set Revoked, write) and the keepSessionID re-stamp in
+// mutateUserCredentials. Without it the two can interleave on one session, and
+// the re-stamp's write (built from a copy read before the revoke) would put
+// Revoked back to false: a lost update that resurrects a revoked session.
+// CreateSession only writes a brand-new id and DeleteExpiredSessions only deletes,
+// so neither needs it. Lock order: userWriteMu, then sessionWriteMu; nothing
+// takes them the other way round.
+var sessionWriteMu sync.Mutex
+
 // userWriteAfterReadHook, when set, runs inside every user rewrite between the
 // re-read and the write: the window userWriteMu exists to close. Tests use it to
 // force a competing writer into exactly that window, so a missing lock fails
@@ -722,7 +732,16 @@ func (p *PebbleStore) SetUserEmailAsAdmin(userID, email string) (string, error) 
 // write by returning an error. Each call bumps once, so N racing calls from the
 // same starting row end at N distinct epochs, and every session stamped with any
 // earlier one is refused.
-func (p *PebbleStore) mutateUserCredentials(userID string, fn func(*User) error) (*User, error) {
+//
+// keepSessionID, when not empty, names ONE web session of userID that survives
+// the bump: its CredentialEpoch is re-stamped to the new epoch in the SAME batch
+// as the user row, so no request can ever see the new epoch beside the old stamp
+// (a parallel request in that gap would be refused and revoke the caller's own
+// session). It is re-stamped only if it is a live session of userID that is
+// current under the epoch being replaced: an unknown, revoked, expired,
+// foreign or already-stale session is left alone, so the re-stamp can never
+// launder a session the old epoch had already killed.
+func (p *PebbleStore) mutateUserCredentials(userID, keepSessionID string, fn func(*User) error) (*User, error) {
 	userWriteMu.Lock()
 	defer userWriteMu.Unlock()
 	stored, err := p.GetUserByID(userID)
@@ -736,10 +755,39 @@ func (p *PebbleStore) mutateUserCredentials(userID string, fn func(*User) error)
 		return nil, err
 	}
 	runUserWriteAfterReadHook()
+	var keep *Session
+	if keepSessionID != "" {
+		sessionWriteMu.Lock() // held through the commit below: see sessionWriteMu
+		defer sessionWriteMu.Unlock()
+		s, err := p.GetSession(keepSessionID)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		if s != nil && s.UserID == userID && !s.Revoked && now.Before(s.ExpiresAt) && s.CredentialsCurrent(stored) {
+			keep = s
+		}
+	}
 	stored.CredentialEpoch++
 	stored.UpdatedAt = time.Now()
 	data, _ := json.Marshal(stored)
-	if err := p.db.Set([]byte("u:"+userID), data, pebble.Sync); err != nil {
+	if keep == nil {
+		if err := p.db.Set([]byte("u:"+userID), data, pebble.Sync); err != nil {
+			return nil, err
+		}
+		return stored, nil
+	}
+	keep.CredentialEpoch = stored.CredentialEpoch
+	sessData, _ := json.Marshal(keep)
+	b := p.db.NewBatch()
+	defer b.Close()
+	if err := b.Set([]byte("u:"+userID), data, nil); err != nil {
+		return nil, err
+	}
+	if err := b.Set([]byte("sess:"+keep.ID), sessData, nil); err != nil {
+		return nil, err
+	}
+	if err := b.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
 	return stored, nil
@@ -751,7 +799,7 @@ func (p *PebbleStore) mutateUserCredentials(userID string, fn func(*User) error)
 // AsCapability: it is deliberately not on Store (the Store width baseline only
 // goes down), and a store without it cannot change credentials at all.
 type UserCredentialWriter interface {
-	SetUserPassword(userID, expectedHash, algo, hash string) (*User, error)
+	SetUserPassword(userID, expectedHash, algo, hash, keepSessionID string) (*User, error)
 	SetUserStatus(userID, status string) (*User, error)
 	BumpUserCredentialEpoch(userID string) (*User, error)
 }
@@ -762,8 +810,14 @@ type UserCredentialWriter interface {
 // the caller verified the current password against, otherwise ErrUserStale. The
 // self-service change passes it; an admin reset, which verifies no password,
 // passes "".
-func (p *PebbleStore) SetUserPassword(userID, expectedHash, algo, hash string) (*User, error) {
-	return p.mutateUserCredentials(userID, func(u *User) error {
+//
+// A non-empty keepSessionID is the caller's own web session on a self-service
+// change: it is re-stamped with the new epoch in the same batch as the password
+// (see mutateUserCredentials), so the person who changed their password stays
+// signed in while every other web session and every ABS session of the account
+// dies. An admin reset passes "": the admin's session belongs to another user.
+func (p *PebbleStore) SetUserPassword(userID, expectedHash, algo, hash, keepSessionID string) (*User, error) {
+	return p.mutateUserCredentials(userID, keepSessionID, func(u *User) error {
 		if expectedHash != "" && u.PasswordHash != expectedHash {
 			return fmt.Errorf("%w: password of %s changed since it was verified", ErrUserStale, userID)
 		}
@@ -777,16 +831,17 @@ func (p *PebbleStore) SetUserPassword(userID, expectedHash, algo, hash string) (
 // a reactivated account starts with no live ABS session even if a cleanup
 // revoke failed somewhere along the way.
 func (p *PebbleStore) SetUserStatus(userID, status string) (*User, error) {
-	return p.mutateUserCredentials(userID, func(u *User) error {
+	return p.mutateUserCredentials(userID, "", func(u *User) error {
 		u.Status = status
 		return nil
 	})
 }
 
-// BumpUserCredentialEpoch ends every ABS session of userID without changing the
-// password or status (the admin reset link), returning the updated row.
+// BumpUserCredentialEpoch ends every ABS and web session of userID without
+// changing the password or status (the admin reset link), returning the updated
+// row.
 func (p *PebbleStore) BumpUserCredentialEpoch(userID string) (*User, error) {
-	return p.mutateUserCredentials(userID, func(*User) error { return nil })
+	return p.mutateUserCredentials(userID, "", func(*User) error { return nil })
 }
 
 // UserPasswordRehasher re-stores a verified password under a stronger algorithm
@@ -1587,19 +1642,25 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 }
 
 // Sessions
-func (p *PebbleStore) CreateSession(userID, ip, userAgent string, ttl time.Duration) (*Session, error) {
-	return p.CreateSessionWithOrigin(userID, ip, userAgent, ttl, "")
+//
+// credentialEpoch is the User.CredentialEpoch of the user record the caller
+// verified this sign-in against (password check, token redemption, OAuth
+// resolve): the caller's own copy, not a fresh read, so a credential change that
+// lands between the check and this call leaves the session stamped with the old
+// epoch and refused on its first use (Session.CredentialsCurrent).
+func (p *PebbleStore) CreateSession(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*Session, error) {
+	return p.CreateSessionWithOrigin(userID, ip, userAgent, ttl, "", credentialEpoch)
 }
 
 // CreateSessionWithOrigin is CreateSession recording the session's origin.
-func (p *PebbleStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error) {
+func (p *PebbleStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*Session, error) {
 	// The id is the session cookie's value: a credential, so not newULID.
 	id, err := newUnlinkedULID()
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	sess := &Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(ttl), IP: ip, UserAgent: userAgent, Revoked: false, Version: 1, Origin: origin}
+	sess := &Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(ttl), IP: ip, UserAgent: userAgent, Revoked: false, Version: 1, Origin: origin, CredentialEpoch: credentialEpoch}
 	data, _ := json.Marshal(sess)
 	b := p.db.NewBatch()
 	if err := b.Set([]byte("sess:"+id), data, nil); err != nil {
@@ -1633,6 +1694,8 @@ func (p *PebbleStore) GetSession(id string) (*Session, error) {
 }
 
 func (p *PebbleStore) RevokeSession(id string) error {
+	sessionWriteMu.Lock() // the read-modify-write must not interleave with a re-stamp
+	defer sessionWriteMu.Unlock()
 	s, err := p.GetSession(id)
 	if err != nil {
 		return err

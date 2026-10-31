@@ -1,7 +1,7 @@
 // file: internal/server/wire_catalog_review_gone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f249ef1-e42a-4424-9b7a-b8d1c8e263c2
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -86,7 +86,7 @@ func TestRetiredCatalogReviewRoutes_PermissionRunsBeforeGone(t *testing.T) {
 	session := func(name string, roles []string) string {
 		u, err := f.store.CreateUser(name, name+"@example.test", "bcrypt", "x", roles, "active")
 		require.NoError(t, err)
-		s, err := f.store.CreateSessionWithOrigin(u.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+		s, err := f.store.CreateSessionWithOrigin(u.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 		require.NoError(t, err)
 		return s.ID
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/auth_reset_password.go
-// version: 1.5.0
+// version: 1.6.1
 // guid: 6b2d94f1-7a08-4c53-9e16-3d8f05a2c761
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package server
 
@@ -62,33 +62,39 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 	}
 
 	// What this does: it signs the user out of every ABS (mobile) client and
-	// hands the admin a one-time login link so the user can get in and choose a
-	// new password. What it does NOT do: the old password keeps working until the
-	// user sets a new one, so this is not compromised-account handling (filed in
-	// todo.d as an owner decision).
+	// every web-UI session, and hands the admin a one-time login link so the user
+	// can get in and choose a new password. What it does NOT do: the old password
+	// keeps working until the user sets a new one, so this is not
+	// compromised-account handling (filed in todo.d as an owner decision).
 	//
-	// Signing the phones out is the CredentialEpoch bump (every ABS refresh and
-	// request checks it). ABS sessions slide with use and have no absolute cap by
-	// default, so this is what ends them. Fail closed: no link unless that write
-	// landed. BumpUserCredentialEpoch changes only the epoch, on the fresh row, so
-	// it cannot revert a status or password change that landed after our read.
-	// The revoke-all after it is cleanup.
+	// Signing the sessions out is the CredentialEpoch bump (every ABS refresh and
+	// request, and every web-session request, checks it). ABS sessions slide with
+	// use and have no absolute cap by default, and a web session lasts its TTL,
+	// so this is what ends them. Fail closed: no link unless that write landed.
+	// BumpUserCredentialEpoch changes only the epoch, on the fresh row, so it
+	// cannot revert a status or password change that landed after our read. The
+	// revokes after it are cleanup. The link, redeemed later, mints a session
+	// stamped with the epoch current at that moment, so it is valid.
 	creds := handlers.ResolveUserCredentialWriter(s.Ops())
 	if creds == nil {
 		httputil.RespondWithInternalError(c, "password resets are not supported by this store; no reset link was issued")
 		return
 	}
-	if _, err := creds.BumpUserCredentialEpoch(user.ID); err != nil {
+	bumped, err := creds.BumpUserCredentialEpoch(user.ID)
+	if err != nil {
 		if errors.Is(err, database.ErrUserNotFound) {
 			httputil.RespondWithNotFound(c, "user", id)
 			return
 		}
-		httputil.RespondWithInternalError(c, "could not sign the user out of their mobile apps; no reset link was issued, try again")
+		httputil.RespondWithInternalError(c, "could not sign the user out of their sessions; no reset link was issued, try again")
 		return
 	}
 	handlers.RevokeAllABSSessions(handlers.ResolveABSSessionRevoker(s.Ops()), user.ID, "password-reset-link")
+	handlers.RevokeStaleWebSessions(s.Ops(), user.ID, bumped.CredentialEpoch, "password-reset-link")
 
-	payload, ok := s.mintTempLoginPayload(c, user)
+	// Mint from the bumped row: the link carries the epoch the reset produced, so
+	// it is redeemable, while any later credential change kills it.
+	payload, ok := s.mintTempLoginPayload(c, bumped)
 	if !ok {
 		return
 	}

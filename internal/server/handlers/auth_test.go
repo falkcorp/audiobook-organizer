@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -139,7 +139,7 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 	// Login reports the user's effective permissions, resolved from the roles.
 	store.EXPECT().GetRoleByID("user").Return(nil, nil)
 	// A password sign-in records its origin: the session is an interactive login.
-	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).Return(session, nil)
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).Return(session, nil)
 
 	h := handlers.NewAuthHandler(store, true)
 	c, w := newAuthCtx("POST", "/auth/login", map[string]any{
@@ -228,7 +228,7 @@ func TestAuthHandler_Login_SoftCounterDoesNotLock(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil).Times(8) // 7 wrong + 1 right
 	// A password sign-in records its origin: the session is an interactive login.
-	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 
 	h := handlers.NewAuthHandler(store, true)
@@ -260,7 +260,7 @@ func TestAuthHandler_Login_DifferentIPNotThrottled(t *testing.T) {
 	store.EXPECT().GetUserByUsername("ghost").Return(nil, nil).Times(15) // attacker probes
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil).Times(1) // victim
 	// A password sign-in records its origin: the session is an interactive login.
-	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 
 	h := handlers.NewAuthHandler(store, true)
@@ -393,7 +393,7 @@ func loginAs(t *testing.T, store *handlersmocks.MockAuthStore, roles ...string) 
 		Roles: roles, Status: "active", CreatedAt: time.Now(),
 	}
 	store.EXPECT().GetUserByUsername("pat").Return(user, nil)
-	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).
 		Return(&database.Session{ID: "sess-1", UserID: "user-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 	h := handlers.NewAuthHandler(store, true)
 	c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "pat", "password": "password123"})

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -25,15 +25,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// UserStore is the narrow persistence interface required by UserHandler.
-type UserStore interface {
-	ListUsers() ([]database.User, error)
+// UserInviteStore is the invite half of UserStore: creating, reading, listing,
+// deleting and consuming invitations.
+type UserInviteStore interface {
 	CreateInvite(invite *database.Invite) (*database.Invite, error)
 	GetInvite(token string) (*database.Invite, error)
 	ListActiveInvites() ([]database.Invite, error)
 	DeleteInvite(token string) error
 	ConsumeInvite(token, algo, hash string) (*database.User, error)
-	CreateSession(userID, ip, ua string, ttl time.Duration) (*database.Session, error)
+}
+
+// UserStore is the narrow persistence interface required by UserHandler. Split
+// on 2026-10-30 (the interface-width ratchet, when the web-session cleanup
+// added two methods); the name is the composition of the pieces, so no consumer
+// moves and the method set is the old one plus WebSessionRevoker's two.
+type UserStore interface {
+	UserInviteStore
+	// WebSessionRevoker tidies a user's web sessions after a deactivation or
+	// reactivation (RevokeStaleWebSessions).
+	WebSessionRevoker
+	ListUsers() ([]database.User, error)
+	CreateSession(userID, ip, ua string, ttl time.Duration, credentialEpoch int64) (*database.Session, error)
 	GetUserByID(id string) (*database.User, error)
 }
 
@@ -362,7 +374,7 @@ func (h *UserHandler) AcceptInvite(c *gin.Context) {
 		return
 	}
 
-	sess, err := h.store.CreateSession(user.ID, c.ClientIP(), c.Request.UserAgent(), 30*24*time.Hour)
+	sess, err := h.store.CreateSession(user.ID, c.ClientIP(), c.Request.UserAgent(), 30*24*time.Hour, user.CredentialEpoch)
 	if err != nil {
 		httputil.InternalError(c, "create session", err)
 		return
@@ -412,6 +424,7 @@ func (h *UserHandler) DeactivateUser(c *gin.Context) {
 		return
 	}
 	RevokeAllABSSessions(h.absSessions, user.ID, "user-deactivated")
+	RevokeStaleWebSessions(h.store, user.ID, user.CredentialEpoch, "user-deactivated")
 	if h.revokeGuestAccess != nil {
 		h.revokeGuestAccess(user.ID, user.Email, "user deactivated")
 	}
@@ -523,6 +536,7 @@ func (h *UserHandler) ReactivateUser(c *gin.Context) {
 		return
 	}
 	RevokeAllABSSessions(h.absSessions, user.ID, "user-reactivated")
+	RevokeStaleWebSessions(h.store, user.ID, user.CredentialEpoch, "user-reactivated")
 	// Safe shape only — never echo the raw *database.User (leaks password hash, CRIT-2).
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
 }

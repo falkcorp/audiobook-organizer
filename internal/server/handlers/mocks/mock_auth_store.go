@@ -101,8 +101,8 @@ func (_c *MockAuthStore_CountUsers_Call) RunAndReturn(run func() (int, error)) *
 }
 
 // CreateSession provides a mock function for the type MockAuthStore
-func (_mock *MockAuthStore) CreateSession(userID string, ip string, userAgent string, ttl time.Duration) (*database.Session, error) {
-	ret := _mock.Called(userID, ip, userAgent, ttl)
+func (_mock *MockAuthStore) CreateSession(userID string, ip string, userAgent string, ttl time.Duration, credentialEpoch int64) (*database.Session, error) {
+	ret := _mock.Called(userID, ip, userAgent, ttl, credentialEpoch)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateSession")
@@ -110,18 +110,18 @@ func (_mock *MockAuthStore) CreateSession(userID string, ip string, userAgent st
 
 	var r0 *database.Session
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration) (*database.Session, error)); ok {
-		return returnFunc(userID, ip, userAgent, ttl)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) (*database.Session, error)); ok {
+		return returnFunc(userID, ip, userAgent, ttl, credentialEpoch)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration) *database.Session); ok {
-		r0 = returnFunc(userID, ip, userAgent, ttl)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, int64) *database.Session); ok {
+		r0 = returnFunc(userID, ip, userAgent, ttl, credentialEpoch)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*database.Session)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration) error); ok {
-		r1 = returnFunc(userID, ip, userAgent, ttl)
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration, int64) error); ok {
+		r1 = returnFunc(userID, ip, userAgent, ttl, credentialEpoch)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -138,11 +138,12 @@ type MockAuthStore_CreateSession_Call struct {
 //   - ip string
 //   - userAgent string
 //   - ttl time.Duration
-func (_e *MockAuthStore_Expecter) CreateSession(userID any, ip any, userAgent any, ttl any) *MockAuthStore_CreateSession_Call {
-	return &MockAuthStore_CreateSession_Call{Call: _e.mock.On("CreateSession", userID, ip, userAgent, ttl)}
+//   - credentialEpoch int64
+func (_e *MockAuthStore_Expecter) CreateSession(userID any, ip any, userAgent any, ttl any, credentialEpoch any) *MockAuthStore_CreateSession_Call {
+	return &MockAuthStore_CreateSession_Call{Call: _e.mock.On("CreateSession", userID, ip, userAgent, ttl, credentialEpoch)}
 }
 
-func (_c *MockAuthStore_CreateSession_Call) Run(run func(userID string, ip string, userAgent string, ttl time.Duration)) *MockAuthStore_CreateSession_Call {
+func (_c *MockAuthStore_CreateSession_Call) Run(run func(userID string, ip string, userAgent string, ttl time.Duration, credentialEpoch int64)) *MockAuthStore_CreateSession_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -160,11 +161,16 @@ func (_c *MockAuthStore_CreateSession_Call) Run(run func(userID string, ip strin
 		if args[3] != nil {
 			arg3 = args[3].(time.Duration)
 		}
+		var arg4 int64
+		if args[4] != nil {
+			arg4 = args[4].(int64)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -175,14 +181,14 @@ func (_c *MockAuthStore_CreateSession_Call) Return(session *database.Session, er
 	return _c
 }
 
-func (_c *MockAuthStore_CreateSession_Call) RunAndReturn(run func(userID string, ip string, userAgent string, ttl time.Duration) (*database.Session, error)) *MockAuthStore_CreateSession_Call {
+func (_c *MockAuthStore_CreateSession_Call) RunAndReturn(run func(userID string, ip string, userAgent string, ttl time.Duration, credentialEpoch int64) (*database.Session, error)) *MockAuthStore_CreateSession_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CreateSessionWithOrigin provides a mock function for the type MockAuthStore
-func (_mock *MockAuthStore) CreateSessionWithOrigin(userID string, ip string, userAgent string, ttl time.Duration, origin string) (*database.Session, error) {
-	ret := _mock.Called(userID, ip, userAgent, ttl, origin)
+func (_mock *MockAuthStore) CreateSessionWithOrigin(userID string, ip string, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*database.Session, error) {
+	ret := _mock.Called(userID, ip, userAgent, ttl, origin, credentialEpoch)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateSessionWithOrigin")
@@ -190,18 +196,18 @@ func (_mock *MockAuthStore) CreateSessionWithOrigin(userID string, ip string, us
 
 	var r0 *database.Session
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, string) (*database.Session, error)); ok {
-		return returnFunc(userID, ip, userAgent, ttl, origin)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, string, int64) (*database.Session, error)); ok {
+		return returnFunc(userID, ip, userAgent, ttl, origin, credentialEpoch)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, string) *database.Session); ok {
-		r0 = returnFunc(userID, ip, userAgent, ttl, origin)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, string, int64) *database.Session); ok {
+		r0 = returnFunc(userID, ip, userAgent, ttl, origin, credentialEpoch)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*database.Session)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration, string) error); ok {
-		r1 = returnFunc(userID, ip, userAgent, ttl, origin)
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration, string, int64) error); ok {
+		r1 = returnFunc(userID, ip, userAgent, ttl, origin, credentialEpoch)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -219,11 +225,12 @@ type MockAuthStore_CreateSessionWithOrigin_Call struct {
 //   - userAgent string
 //   - ttl time.Duration
 //   - origin string
-func (_e *MockAuthStore_Expecter) CreateSessionWithOrigin(userID any, ip any, userAgent any, ttl any, origin any) *MockAuthStore_CreateSessionWithOrigin_Call {
-	return &MockAuthStore_CreateSessionWithOrigin_Call{Call: _e.mock.On("CreateSessionWithOrigin", userID, ip, userAgent, ttl, origin)}
+//   - credentialEpoch int64
+func (_e *MockAuthStore_Expecter) CreateSessionWithOrigin(userID any, ip any, userAgent any, ttl any, origin any, credentialEpoch any) *MockAuthStore_CreateSessionWithOrigin_Call {
+	return &MockAuthStore_CreateSessionWithOrigin_Call{Call: _e.mock.On("CreateSessionWithOrigin", userID, ip, userAgent, ttl, origin, credentialEpoch)}
 }
 
-func (_c *MockAuthStore_CreateSessionWithOrigin_Call) Run(run func(userID string, ip string, userAgent string, ttl time.Duration, origin string)) *MockAuthStore_CreateSessionWithOrigin_Call {
+func (_c *MockAuthStore_CreateSessionWithOrigin_Call) Run(run func(userID string, ip string, userAgent string, ttl time.Duration, origin string, credentialEpoch int64)) *MockAuthStore_CreateSessionWithOrigin_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -245,12 +252,17 @@ func (_c *MockAuthStore_CreateSessionWithOrigin_Call) Run(run func(userID string
 		if args[4] != nil {
 			arg4 = args[4].(string)
 		}
+		var arg5 int64
+		if args[5] != nil {
+			arg5 = args[5].(int64)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
 			arg4,
+			arg5,
 		)
 	})
 	return _c
@@ -261,7 +273,7 @@ func (_c *MockAuthStore_CreateSessionWithOrigin_Call) Return(session *database.S
 	return _c
 }
 
-func (_c *MockAuthStore_CreateSessionWithOrigin_Call) RunAndReturn(run func(userID string, ip string, userAgent string, ttl time.Duration, origin string) (*database.Session, error)) *MockAuthStore_CreateSessionWithOrigin_Call {
+func (_c *MockAuthStore_CreateSessionWithOrigin_Call) RunAndReturn(run func(userID string, ip string, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*database.Session, error)) *MockAuthStore_CreateSessionWithOrigin_Call {
 	_c.Call.Return(run)
 	return _c
 }

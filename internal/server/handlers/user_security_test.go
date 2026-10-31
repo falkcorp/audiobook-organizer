@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_security_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f1c2a93-4d8e-4b6a-9c10-2e5b7a0d1f44
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -50,7 +50,7 @@ func TestAcceptInvite_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().ConsumeInvite("tok-1", absauth.AlgoArgon2id, hashOf("supersecret")).Return(user, nil)
-	store.EXPECT().CreateSession(user.ID, mock.Anything, mock.Anything, mock.Anything).
+	store.EXPECT().CreateSession(user.ID, mock.Anything, mock.Anything, mock.Anything, int64(0)).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 
 	h := handlers.NewUserHandler(store)
@@ -75,6 +75,8 @@ func TestDeactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().GetUserByID("u-123").Return(user, nil)
+	// The status change ends the account's web sessions as cleanup.
+	store.EXPECT().ListUserSessions("u-123").Return(nil, nil)
 	creds := statusSetterReturning(user)
 
 	h := handlers.NewUserHandler(struct {
@@ -93,6 +95,8 @@ func TestReactivateUser_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
 	store.EXPECT().GetUserByID("u-123").Return(user, nil)
+	// The status change ends the account's web sessions as cleanup.
+	store.EXPECT().ListUserSessions("u-123").Return(nil, nil)
 	creds := statusSetterReturning(user)
 
 	h := handlers.NewUserHandler(struct {
