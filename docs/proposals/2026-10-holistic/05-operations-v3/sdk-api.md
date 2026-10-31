@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/sdk-api.md -->
-<!-- version: 1.5.1 -->
+<!-- version: 1.6.0 -->
 <!-- guid: b4575f26-f7c3-4fb6-a442-b74a31581e88 -->
-<!-- last-edited: 2026-10-14 -->
+<!-- last-edited: 2026-10-30 -->
 
 # Operations v3 — SDK API sketch (`pkg/ops`)
 
@@ -597,6 +597,15 @@ const (
 	ResumeAsk
 )
 ```
+
+A run waiting under `ResumeAsk` takes one of three decisions: **Retry** (resume in full),
+**Discard** (delete the record, ledger and marks), or **Finish without resuming**. The third
+re-queues the run under the same op id with `RunRecord.FinishOnly` set
+(`state.EvDecideFinish`); its next attempt is dispatched with a fresh lease and fence, leases
+no chunks, never reads the source, and runs only the def's `Finish` over the stored ledger and
+marks, so `AfterApply` sees exactly the rows the earlier attempts recorded as applied. Only a
+native Batch or Fixer can take it. Rows a chunk applied but never completed carry a row
+marker and no ledger mark, so they are not in that set; Retry is the way to recover them.
 
 Differences from v2, each answering a finding:
 - A resume **keeps the op id** in every policy. v2 `ResumeRequeue` minted a new row and

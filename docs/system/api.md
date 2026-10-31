@@ -130,6 +130,7 @@ Registered fixers: `duplicate-copies`, `folder-books`, `fragment-consolidation`,
 | `GET` | `/api/v1/operations/v2/:id` | Poll operation status |
 | `DELETE` | `/api/v1/operations/v2/:id` | Cancel operation |
 | `POST` | `/api/v1/operations/v2/:id/retry` | Re-run a finished operation as a new run (202) |
+| `POST` | `/api/v1/operations/v2/:id/finish` | Finish without resuming: for an `interrupted_ask` run of a native Batch or Fixer, re-queue the same row to run only its Finish over the rows already applied (202, `mode: finish_only`; 409 when the row is not `interrupted_ask`, is still live, or its def has no Finish to run). The timeline's `can_finish` says which rows can take it |
 | `DELETE` | `/api/v1/operations/v2/:id/record` | Discard: delete the persisted record of a finished or interrupted run (204; 409 while queued/running) |
 
 Retired 2026-09-11: `DELETE /api/v1/operations/history?status=…` now answers 404.
