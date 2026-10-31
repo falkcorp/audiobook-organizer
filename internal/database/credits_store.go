@@ -1,5 +1,5 @@
 // file: internal/database/credits_store.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
 // last-edited: 2026-10-30
 
@@ -156,9 +156,11 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 	// A list the callback left as read is not staged: rewriting it would
 	// re-normalise legacy rows with tied positions (changing which author the
 	// organizer files the book under) and announce a credit change that did
-	// not happen. The tie-breaker is the row as fn left it: a callback that
-	// changes the primary author and the credits together orders them by the
-	// new one.
+	// not happen. A changed list is encoded with the book's AuthorID as fn
+	// left it as the tie-breaker. A list left as read is not re-encoded at
+	// all, so a callback that changes only the primary author (AuthorID) does
+	// not reorder the stored author rows; it must change the list too, or
+	// accept that the rows keep their stored order.
 	authorsChanged := !sameCreditRows(asRead.Authors, edit.Authors)
 	narratorsChanged := !sameCreditRows(asRead.Narrators, edit.Narrators)
 	var (
