@@ -1,7 +1,7 @@
 // file: internal/config/initconfig_reads_every_key_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9d3f6a21-5c87-4e0b-b2d4-8f1a7c6e0b39
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 // InitConfig builds AppConfig from a hand-written struct literal, and that
 // literal is the ONLY place a viper value (shipped default, config file, env)
@@ -418,5 +418,92 @@ func TestEveryViperDefaultHasAConfigField(t *testing.T) {
 		if !slices.Contains(all, k) {
 			t.Errorf("viperKeysReadOutsideConfig names %q, which viper no longer knows; remove it", k)
 		}
+	}
+}
+
+// resetZeroExemptions are keys whose shipped default is non-zero but whose
+// value after ResetToDefaults is deliberately something else, with the reason.
+var resetZeroExemptions = map[string]string{}
+
+// TestResetToDefaultsRestoresEveryDefaultedKey is the reset-side twin of the
+// tests above. ResetToDefaults used to be a second hand-written Config literal
+// that omitted 131 leaves, and FactoryReset persisted the result, so the stored
+// blob carried zero for every default it forgot. It now derives from the viper
+// defaults; this test enumerates every key that has a non-zero default and
+// requires its Config leaf to be non-zero after a reset, so a default that
+// cannot reach the reset result fails by name.
+func TestResetToDefaultsRestoresEveryDefaultedKey(t *testing.T) {
+	restoreAppConfig(t)
+	// The process-wide viper holds the registered defaults in a running server;
+	// applyEnvAuthoritativeConfig re-applies the env-only invitation keys (e.g.
+	// smtp_port) from it after the reset.
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	InitConfig()
+	// A running config with the boot-only sort indexes set, as in production:
+	// the reset carries them over rather than restoring the default.
+	Mutate(func(c *Config) { c.EnabledSortIndexes = []string{"year"} })
+
+	ResetToDefaults()
+	got := reflect.ValueOf(Snapshot())
+
+	v := viper.New()
+	registerConfigDefaults(noEnvRegistrar{v})
+	leaves, _ := configLeaves()
+	byKey := make(map[string]configLeaf, len(leaves))
+	for _, l := range leaves {
+		byKey[l.key] = l
+	}
+
+	checked := 0
+	var zero []string
+	for _, k := range v.AllKeys() {
+		l, ok := byKey[k]
+		if !ok {
+			continue // under a map/list leaf, or read outside Config
+		}
+		if rv := reflect.ValueOf(v.Get(k)); !rv.IsValid() || rv.IsZero() ||
+			((rv.Kind() == reflect.Slice || rv.Kind() == reflect.Map) && rv.Len() == 0) {
+			continue // a zero default: a zero field is correct
+		}
+		if _, ok := resetZeroExemptions[k]; ok {
+			continue
+		}
+		checked++
+		if got.FieldByIndex(l.index).IsZero() {
+			zero = append(zero, k)
+		}
+	}
+	if checked < 100 {
+		t.Fatalf("checked only %d defaulted keys; the enumeration is broken, not the config", checked)
+	}
+	sort.Strings(zero)
+	if len(zero) > 0 {
+		t.Errorf("%d key(s) have a non-zero default but are zero after ResetToDefaults:\n  %s",
+			len(zero), strings.Join(zero, "\n  "))
+	}
+	for k := range resetZeroExemptions {
+		if _, ok := byKey[k]; !ok {
+			t.Errorf("resetZeroExemptions names %q, which is not a Config leaf; remove it", k)
+		}
+	}
+}
+
+// TestResetToDefaultsIgnoresEnvironment pins the choice that a reset restores
+// the shipped defaults, not the process environment: a reset is "back to
+// factory", and an env override that happened to be set on the host must not
+// be baked into what the operator is told are defaults. (Settings the host
+// owns through the environment are re-applied by applyEnvAuthoritativeConfig.)
+func TestResetToDefaultsIgnoresEnvironment(t *testing.T) {
+	restoreAppConfig(t)
+	t.Setenv("FP_PARALLEL_WORKERS", "77")
+	t.Setenv("SCHEDULED_ASIN_BACKFILL_INTERVAL", "999")
+	ResetToDefaults()
+	c := Snapshot()
+	if c.FPParallelWorkers != 4 {
+		t.Errorf("FPParallelWorkers = %d, want the default 4 (environment must not apply)", c.FPParallelWorkers)
+	}
+	if c.Scheduled.ASINBackfill.Interval != 360 {
+		t.Errorf("asin_backfill interval = %d, want the default 360", c.Scheduled.ASINBackfill.Interval)
 	}
 }

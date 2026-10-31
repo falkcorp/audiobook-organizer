@@ -1,7 +1,7 @@
 // file: internal/config/viper_decode.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b431724a-2f0b-413b-8704-45a5807bee77
-// last-edited: 2026-10-20
+// last-edited: 2026-10-30
 
 package config
 
@@ -56,13 +56,13 @@ import (
 // rather than failing startup, the same rule as ParseWhisperEndpoints: the
 // stored blob, which normally owns these UI-managed settings, still loads on
 // top.
-func viperDecodeJSON[T any](key string) T {
+func viperDecodeJSON[T any](vp *viper.Viper, key string) T {
 	var out T
-	if !viper.IsSet(key) {
+	if !vp.IsSet(key) {
 		return out
 	}
 	var raw []byte
-	switch v := viper.Get(key).(type) {
+	switch v := vp.Get(key).(type) {
 	case string:
 		text := strings.TrimSpace(v)
 		if text == "" {
@@ -71,7 +71,7 @@ func viperDecodeJSON[T any](key string) T {
 		raw = []byte(text)
 	default:
 		val := any(v)
-		if fileVal, ok := configFileValue(key, v); ok {
+		if fileVal, ok := configFileValue(vp, key, v); ok {
 			val = fileVal
 		}
 		b, err := json.Marshal(val)
@@ -156,8 +156,8 @@ func boolToStringHook(from, to reflect.Type, data any) (any, error) {
 // not parse as YAML, map keys stay lower-cased and this logs a Warn when the
 // value holds a map, naming the key, so the operator knows to set it through
 // the settings API instead.
-func configFileValue(key string, viperVal any) (any, bool) {
-	path := viper.ConfigFileUsed()
+func configFileValue(vp *viper.Viper, key string, viperVal any) (any, bool) {
+	path := vp.ConfigFileUsed()
 	if path == "" {
 		return nil, false
 	}
@@ -356,10 +356,10 @@ func containsMap(v any) bool {
 // A JSON array that does not parse is logged at Error, naming the key, and
 // yields no entries: the field keeps its default. Guessing at a broken value
 // could protect the wrong paths; the log line is the operator's signal.
-func viperPathList(key string) []string {
-	s, isString := viper.Get(key).(string)
+func viperPathList(vp *viper.Viper, key string) []string {
+	s, isString := vp.Get(key).(string)
 	if !isString {
-		return cleanPathList(viper.GetStringSlice(key))
+		return cleanPathList(vp.GetStringSlice(key))
 	}
 	s = strings.TrimSpace(s)
 	if s == "" {
