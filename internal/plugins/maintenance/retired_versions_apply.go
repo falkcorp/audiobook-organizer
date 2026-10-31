@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -85,13 +85,18 @@ import (
 // shell and the row reports it. A retired version whose plan record cannot be
 // found moves no id, fail closed, and the row says so.
 //
-// WHAT IT DOES NOT DO YET. A shell an unreversed combine journal names as
-// absorbed (combine_undo_aware) is held, not retired: plan section 6.5 requires
-// the retire to be undone by undoing the combine, and that link is written by
-// repairs.Writer.RetireVersion (RetireSpec.CombineJournalID), which this
-// fixer does not call yet. The dedup auto-merge journals
-// (dedup:automerge:) are not read either; both are pre-conditions of turning the
-// flag on in production (docs/executive-summaries and the PR body say so).
+// THE COMBINE LINK. A shell an unreversed combine journal names as absorbed
+// (combine_undo_aware) is retired like any other, with that journal's id in
+// RetireSpec.CombineJournalID: repairs.Writer.RetireVersion writes the
+// merge:combine-retire link before its first change row and carries the id in
+// every book_file_retire row, so undoing the combine reverses the retire first
+// (plan section 6.5). The id is read from the under-lock re-check, not the
+// plan. One journal is linked; a shell NAMED BY MORE THAN ONE unreversed
+// journal is held (combine_undo_multi_journal, retry_later), because linking
+// one would leave the other combine's undo blind to the retire. The dedup
+// auto-merge journals (dedup:automerge:) are not read (todo.d / TODO.md
+// TODO-RETIRED-APPLY-PRECONDITIONS item 3), a pre-condition of turning the flag
+// on in production.
 
 // retiredVersionSource is BookVersion.Source of a version made by this fixer.
 const retiredVersionSource = "retired_book"
@@ -156,9 +161,13 @@ type retiredDetail struct {
 	targetMethod string
 	category     string
 	groupID      string
-	sharedWith   []string
-	sharedRows   int
-	itunesRows   int
+	// combineJournals are the unreversed combine journals that name the shell
+	// as absorbed (combine_undo_aware), sorted; Apply links the retire to the
+	// one of them.
+	combineJournals []string
+	sharedWith      []string
+	sharedRows      int
+	itunesRows      int
 
 	// done is a book whose rows are already retired (retCatAlreadyRetired or
 	// retCatTailPending): holder is where, versionIDs which versions hold them,
@@ -373,40 +382,26 @@ func (r *retiredRun) pendingTail(shellID string, planned map[string]bool) (retir
 	return t, nil
 }
 
-// retireRow is one book_file row of a retire: its id and the version it
-// carried before (the journal records it so an undo restores it exactly).
-type retireRow struct {
-	ID            string
-	PrevVersionID string
-}
-
-// retireWriter is the journaled write surface of one retire, and the seam PR 5
-// plugs into. Every method journals before it writes and writes nothing if the
-// journal row cannot be recorded. The fixer reaches the store only through it
-// for these six writes; tests wrap it to observe the order and the calls.
-//
-// The rows it journals are the undo package's own (undo.ChangeTypeBookVersionCreate,
-// ChangeTypeBookFileRetire, ChangeTypeRetiredVersionRehome, with RetirePlace
-// values and BookVersionField), so an op revert undoes them.
-//
-// TODO(retire plan 6.2): internal/repairs now has Writer.RetireVersion (which
-// also links a retire to the combine it absorbed, CombineJournalID) and
-// Writer.RehomeRetiredVersion. Moving journaledRetireWriter's
-// CreateRetiredVersion, RetireRows and RehomeVersion onto them, and passing the
-// combine journal id so combine_undo_aware rows stop being held, is the part-5
-// integration still to do; this interface does not change.
+// retireWriter is the journaled write surface of one retire, and the seam the
+// tests wrap to cut a retire off or observe its calls. Every method journals
+// before it writes and writes nothing if the journal row cannot be recorded.
+// The version, the rows and the re-home are repairs.Writer's own
+// (RetireVersion, RehomeRetiredVersion), so their journal rows are the undo
+// package's (undo.ChangeTypeBookVersionCreate, ChangeTypeBookFileRetire,
+// ChangeTypeRetiredVersionRehome) in the form an op revert undoes; the
+// external-id and merged-into steps are the fixer's, as the Writer's doc
+// leaves them to the caller.
 type retireWriter interface {
 	// RecordPlan journals the decision a run worked from (repair_plan_record,
 	// FieldName "row:<shellID>") on the holder, before the run's first write.
 	RecordPlan(holderID, shellID string, rec []byte) error
-	// CreateRetiredVersion journals and creates the retired version v on the
-	// holder. A version that an earlier, cut-off run of the same retire made
-	// is found, not made again; on a resume the journaled version replaces v.
-	CreateRetiredVersion(holderID string, v *database.BookVersion) error
-	// RetireRows journals one book_file_retire row per row, then re-keys all of
-	// them from shellID to holderID as retired rows of versionID in one atomic
-	// batch. Nothing is deleted.
-	RetireRows(shellID, holderID, versionID string, rows []retireRow) error
+	// RetireVersion journals and creates the retired version spec.VersionID on
+	// the holder (a version an earlier, cut-off run of the same retire made is
+	// found, not made again), then journals one book_file_retire row per file
+	// and re-keys all of them from the shell to the holder in one atomic batch.
+	// Nothing is deleted. A non-empty spec.CombineJournalID links the retire to
+	// that combine (repairs.RetireSpec).
+	RetireVersion(spec repairs.RetireSpec) error
 	// ReassignExternalID moves one external-id mapping from the shell to the
 	// holder (external_id_reassign).
 	ReassignExternalID(shellID, holderID string, m database.ExternalIDMapping) error
@@ -415,18 +410,7 @@ type retireWriter interface {
 	SetMergedInto(shellID, holderID string) (bool, error)
 	// RehomeVersion moves a retired version, and its retired rows, the shell
 	// holds onto the holder (retired_version_rehome).
-	RehomeVersion(versionID, shellID, holderID string) error
-}
-
-// retiredRowStore is the store surface the journaled adapter writes through,
-// resolved from the run's store with database.AsCapability (it is not on
-// database.Store, and a bare assertion would miss it behind the production
-// decorator).
-type retiredRowStore interface {
-	GetBookVersion(id string) (*database.BookVersion, error)
-	CreateBookVersion(v *database.BookVersion) (*database.BookVersion, error)
-	RetireBookFiles(moves []database.BookFileMove, holderID, versionID string) error
-	RehomeRetiredVersion(versionID, newHolderID string) error
+	RehomeVersion(versionID, holderID string) error
 }
 
 type retiredBookGetter interface {
@@ -437,11 +421,11 @@ type retiredExternalIDMover interface {
 	ReassignExternalID(source, externalID, newBookID string) error
 }
 
-// journaledRetireWriter is retireWriter over repairs.Writer's existing
-// journaling primitives (Journal, JournalStep, JournalSteps, Step).
+// journaledRetireWriter is retireWriter over repairs.Writer: its retire and
+// re-home methods, and its journaling primitives (Journal, JournalSteps, Step)
+// for the plan record, the external ids and the merged-into link.
 type journaledRetireWriter struct {
 	w     *repairs.Writer
-	rows  retiredRowStore
 	books retiredBookGetter
 	ext   retiredExternalIDMover
 }
@@ -451,76 +435,20 @@ func (f *retiredVersionsFixer) newJournaledRetireWriter(w *repairs.Writer) (reti
 	if ops == nil {
 		return nil, errors.New("database not initialized")
 	}
-	rows, ok := database.AsCapability[retiredRowStore](ops)
-	if !ok {
-		return nil, errors.New("the store cannot retire book_file rows (no RetiredBookFileWriter), so nothing is written")
+	// Before the plan record: a store the Writer cannot retire through is
+	// refused with nothing journaled.
+	if err := w.CheckRetireSupport(); err != nil {
+		return nil, err
 	}
-	return &journaledRetireWriter{w: w, rows: rows, books: ops, ext: ops}, nil
+	return &journaledRetireWriter{w: w, books: ops, ext: ops}, nil
 }
 
 func (a *journaledRetireWriter) RecordPlan(holderID, shellID string, rec []byte) error {
 	return a.w.Journal(holderID, undo.ChangeTypeRepairPlanRecord, "row:"+shellID, "", string(rec))
 }
 
-func (a *journaledRetireWriter) CreateRetiredVersion(holderID string, v *database.BookVersion) error {
-	field := undo.BookVersionField(v.ID)
-	// A resumed run reuses the version its cut-off run journaled: its RetiredAt
-	// is a clock reading, so a second candidate would journal a second,
-	// different row for the same version.
-	prev, ok, err := a.w.JournaledValue(holderID, undo.ChangeTypeBookVersionCreate, field)
-	if err != nil {
-		return err
-	}
-	if ok {
-		var jv database.BookVersion
-		if err := json.Unmarshal([]byte(prev), &jv); err != nil {
-			return fmt.Errorf("the journaled version %s is unreadable: %w", v.ID, err)
-		}
-		*v = jv
-	}
-	enc, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("encode version %s: %w", v.ID, err)
-	}
-	return a.w.JournalStep(holderID, repairs.UndoEntry{ChangeType: undo.ChangeTypeBookVersionCreate, Field: field, New: string(enc)}, func() error {
-		cur, err := a.rows.GetBookVersion(v.ID)
-		if err != nil {
-			return fmt.Errorf("read version %s: %w", v.ID, err)
-		}
-		if cur != nil {
-			if cur.Status == database.BookVersionStatusRetired && cur.BookID == holderID && cur.RetiredFromBookID == v.RetiredFromBookID {
-				return nil // made by an earlier run of this same retire
-			}
-			return fmt.Errorf("%w: version %s already exists and is not this retire's", repairs.ErrChangedSincePlan, v.ID)
-		}
-		_, err = a.rows.CreateBookVersion(v)
-		return err
-	})
-}
-
-func (a *journaledRetireWriter) RetireRows(shellID, holderID, versionID string, rows []retireRow) error {
-	steps := make([]repairs.BookStep, len(rows))
-	ids := make([]string, len(rows))
-	for i, r := range rows {
-		// The place values the undo's DecodeBookFileRetire reads (plan
-		// section 6.2): where the row stood, and where the retire put it.
-		old := undo.RetirePlace{BookID: shellID, VersionID: r.PrevVersionID}.Encode()
-		nw := undo.RetirePlace{BookID: holderID, VersionID: versionID}.Encode()
-		steps[i] = repairs.BookStep{BookID: holderID, Entry: repairs.UndoEntry{
-			ChangeType: undo.ChangeTypeBookFileRetire, Field: "book_file:" + r.ID, Old: old, New: nw}}
-		ids[i] = r.ID
-	}
-	return a.w.JournalSteps(steps, func() ([]bool, error) {
-		err := a.rows.RetireBookFiles([]database.BookFileMove{{FileIDs: ids, SourceBookID: shellID}}, holderID, versionID)
-		// A batch whose fsync failed was still applied: its journal rows must
-		// stand (voiding them would leave committed rows nothing can undo).
-		applied := err == nil || errors.Is(err, database.ErrBookFileDurabilityUnknown)
-		done := make([]bool, len(steps))
-		for i := range done {
-			done[i] = applied
-		}
-		return done, err
-	})
+func (a *journaledRetireWriter) RetireVersion(spec repairs.RetireSpec) error {
+	return a.w.RetireVersion(spec)
 }
 
 func (a *journaledRetireWriter) ReassignExternalID(shellID, holderID string, m database.ExternalIDMapping) error {
@@ -564,10 +492,8 @@ func (a *journaledRetireWriter) SetMergedInto(shellID, holderID string) (bool, e
 	return wrote && err == nil, err
 }
 
-func (a *journaledRetireWriter) RehomeVersion(versionID, shellID, holderID string) error {
-	return a.w.JournalStep(holderID, repairs.UndoEntry{ChangeType: undo.ChangeTypeRetiredVersionRehome, Field: undo.BookVersionField(versionID), Old: shellID, New: holderID}, func() error {
-		return a.rows.RehomeRetiredVersion(versionID, holderID)
-	})
+func (a *journaledRetireWriter) RehomeVersion(versionID, holderID string) error {
+	return a.w.RehomeRetiredVersion(versionID, holderID)
 }
 
 // retiredVersionID is the id of the version one apply op mints for one shell.
@@ -750,12 +676,12 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 	if w == nil {
 		return fmt.Errorf("%s: no writer", retiredVersionsFixerID)
 	}
-	if slices.Contains(fresh.Flags, retFlagCombineUndoAware) {
-		return fmt.Errorf("%w: row %s is combine_undo_aware and its retire cannot yet be undone with its combine", repairs.ErrRetryLater, fresh.RowID)
-	}
 	rw, err := f.retireWriterFor(w)
 	if err != nil {
-		return err
+		// The Writer's own refusal of a run that had no stand-down (the flag
+		// flipped as the run started) is the first thing the constructor can
+		// return now that it asks the Writer; classify it like any other.
+		return retiredApplyErr(err)
 	}
 	// Held for the whole row: a merge must not interleave with rows moving
 	// between books. Counted (LockMergeRMW), because this writes book_file
@@ -799,7 +725,7 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		if locked.Class != retCatTailPending || !ld.done || ld.holder != d.holder {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.Reason)
 		}
-		// A run cut off between RetireRows and recordApplied (or whose record
+		// A run cut off between RetireVersion and recordApplied (or whose record
 		// write failed) left these versions with no `applied` record, and the
 		// tail is the only thing that will ever visit them again. recordApplied
 		// is idempotent (RecordUnlessSeen), so a version that already has its
@@ -822,8 +748,10 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		}
 		return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
 	}
-	if slices.Contains(locked.Flags, retFlagCombineUndoAware) {
-		return fmt.Errorf("%w: row %s became combine_undo_aware; held", repairs.ErrRetryLater, fresh.RowID)
+	if len(ld.combineJournals) > 1 {
+		// Named by several unreversed combines: RetireSpec links one, and the
+		// others' undo would not find the retire. Held, as Replan holds it.
+		return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrRetryLater, combineMultiJournalWhy(ld.combineJournals))
 	}
 	return f.retire(ctx, w, rw, run, ld, locked)
 }
@@ -850,10 +778,8 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 		versionID = adopted.ID
 	}
 	fileIDs := make([]string, len(d.files))
-	rows := make([]retireRow, len(d.files))
 	for i := range d.files {
 		fileIDs[i] = d.files[i].ID
-		rows[i] = retireRow{ID: d.files[i].ID, PrevVersionID: d.files[i].VersionID}
 	}
 	sort.Strings(fileIDs)
 	// The external ids this retire will move, read now, under the merge lock and
@@ -890,27 +816,26 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	if err != nil {
 		return fmt.Errorf("encode the provenance of %s: %w", shell, err)
 	}
-	retiredAt := run.now.UTC().Truncate(time.Microsecond)
-	v := &database.BookVersion{
-		ID: versionID, BookID: holder, Status: database.BookVersionStatusRetired,
-		Format: dominantFormat(d.files), Source: retiredVersionSource, SourceOriginalPath: d.shell.FilePath,
-		RetiredFromBookID: shell, RetireOpID: w.OpID(), RetiredAt: &retiredAt, MetadataJSON: string(prov),
+	spec := repairs.RetireSpec{
+		Shell: shell, Holder: holder, VersionID: versionID, FileIDs: fileIDs,
+		Format: dominantFormat(d.files), Source: retiredVersionSource,
+		SourceOriginalPath: d.shell.FilePath, MetadataJSON: string(prov),
+		// The clock of the run, stamped once: a resumed run reuses the version
+		// the cut-off run journaled.
+		Now: run.now,
 	}
 	if d.shell.CreatedAt != nil {
-		v.IngestDate = d.shell.CreatedAt.UTC()
+		spec.IngestDate = d.shell.CreatedAt.UTC()
 	}
-	if adopted != nil {
-		// Made by an earlier run of this same op, whose journal already holds its
-		// create (see emptyRetiredVersion); the rows retired into it are
-		// journaled as usual.
-		v = adopted
-	} else if err := rw.CreateRetiredVersion(holder, v); err != nil {
-		return retiredApplyErr(err)
+	if len(d.combineJournals) == 1 {
+		spec.CombineJournalID = d.combineJournals[0]
 	}
-	// The commit point: one atomic batch. A refusal here wrote no row, so it is
-	// not partial.
+	// A version the cut-off run left (adopted above) is found by its id and
+	// verified by the Writer, not created again. The version and the rows are
+	// one call, so the rows are the commit point: a refusal before the batch
+	// wrote no row, so it is not partial.
 	steps := 0
-	if err := rw.RetireRows(shell, holder, v.ID, rows); err != nil {
+	if err := rw.RetireVersion(spec); err != nil {
 		if errors.Is(err, database.ErrBookFileDurabilityUnknown) {
 			// Applied, durability unknown: the rows are retired.
 			return fmt.Errorf("%w: the retire batch was applied but its fsync failed: %w", repairs.ErrPartiallyApplied, err)
@@ -920,7 +845,7 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	steps++
 	// The retire has committed: write its decision record. It is a label, so
 	// the tail below runs whether or not it lands.
-	f.recordApplied(w.Provenance(), w.OpID(), shell, holder, v.ID)
+	f.recordApplied(w.Provenance(), w.OpID(), shell, holder, versionID)
 	return f.finishRetire(ctx, rw, run, shell, holder, steps, planned)
 }
 
@@ -1092,7 +1017,7 @@ func (f *retiredVersionsFixer) finishRetire(ctx context.Context, rw retireWriter
 		if err := ctx.Err(); err != nil {
 			return partial(err)
 		}
-		if err := rw.RehomeVersion(vid, shell, holder); err != nil {
+		if err := rw.RehomeVersion(vid, holder); err != nil {
 			return partial(fmt.Errorf("re-home retired version %s onto %s: %w", vid, holder, err))
 		}
 		steps++

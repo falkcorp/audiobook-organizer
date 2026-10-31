@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_retire_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4146810-528b-4b28-ab80-cf4d4aa0bdf1
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 
 package repairs
 
@@ -98,6 +98,49 @@ func TestRetireVersion_JournalsVersionThenRowsThenWrites(t *testing.T) {
 	ver, err := fx.st.GetBookVersion("ver-syn-1")
 	require.NoError(t, err)
 	require.Equal(t, database.BookVersionStatusRetired, ver.Status)
+}
+
+// The provenance a caller hands in rides into the version, in the store and in
+// the journaled create row; a zero IngestDate is the retire time.
+func TestRetireVersion_CarriesProvenanceIntoTheVersion(t *testing.T) {
+	fx := newRetireFx(t)
+	w := NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, "op-prov")
+	spec := fx.spec()
+	spec.SourceOriginalPath = "/lib/syn/shell"
+	spec.MetadataJSON = `{"shell_title":"Synthetic Shell"}`
+	spec.IngestDate = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	require.NoError(t, w.RetireVersion(spec))
+
+	ver, err := fx.st.GetBookVersion(spec.VersionID)
+	require.NoError(t, err)
+	require.Equal(t, "/lib/syn/shell", ver.SourceOriginalPath)
+	require.JSONEq(t, `{"shell_title":"Synthetic Shell"}`, ver.MetadataJSON)
+	require.True(t, spec.IngestDate.Equal(ver.IngestDate), "the shell's own ingest time, not the retire time: %s", ver.IngestDate)
+	rows, err := fx.st.GetOperationChanges("op-prov")
+	require.NoError(t, err)
+	made, err := undo.DecodeBookVersionCreate(rows[0])
+	require.NoError(t, err)
+	require.Equal(t, ver.MetadataJSON, made.MetadataJSON, "the journal carries what the store holds")
+	require.Equal(t, "/lib/syn/shell", made.SourceOriginalPath)
+
+	// A zero IngestDate is the retire stamp.
+	fx2 := newRetireFx(t)
+	w2 := NewWriter(fx2.st, fx2.st, "fx", "bulk_update", "repairs-").WithJournal(fx2.st, fx2.st, "op-prov2")
+	require.NoError(t, w2.RetireVersion(fx2.spec()))
+	v2, err := fx2.st.GetBookVersion("ver-syn-1")
+	require.NoError(t, err)
+	require.True(t, fx2.spec().Now.Equal(v2.IngestDate))
+}
+
+// CheckRetireSupport answers before anything is journaled: a Writer over a
+// store that cannot retire is refused, one over the real store is not.
+func TestCheckRetireSupport(t *testing.T) {
+	fx := newRetireFx(t)
+	require.NoError(t, NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").WithJournal(fx.st, fx.st, "op-cs").CheckRetireSupport())
+	require.Error(t, NewWriter(fx.st, fx.st, "fx", "bulk_update", "repairs-").CheckRetireSupport(), "no book_file store wired")
+	rows, err := fx.st.GetOperationChanges("op-cs")
+	require.NoError(t, err)
+	require.Empty(t, rows, "the check journals nothing")
 }
 
 func TestRetireVersion_ResumeJournalsNothingTwice(t *testing.T) {

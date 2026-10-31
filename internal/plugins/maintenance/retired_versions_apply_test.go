@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -374,9 +374,9 @@ func TestRetiredApply_SiblingShellsAtOnePath(t *testing.T) {
 	require.Len(t, live, 1)
 }
 
-// A shell an unreversed combine names as absorbed is held (retry_later),
-// nothing written, until the combine-undo link exists.
-func TestRetiredApply_CombineUndoAwareRowIsHeld(t *testing.T) {
+// A shell an unreversed combine names as absorbed is no longer held: it is
+// retired in the same run as an ordinary shell, linked to its combine.
+func TestRetiredApply_CombineUndoAwareRowIsNoLongerHeld(t *testing.T) {
 	rf := newRetiredFixture(t)
 	rf.enableApply()
 	rf.live("primary", "g", rf.file("g/primary.mp3"))
@@ -389,12 +389,15 @@ func TestRetiredApply_CombineUndoAwareRowIsHeld(t *testing.T) {
 	require.Len(t, ids, 2)
 
 	out := rf.applyRows(rf.f, res, ids, false, "op-held")
-	require.Equal(t, 1, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
-	require.Equal(t, 1, out.RetryLater, "%v", out.ByOutcome)
-	require.Equal(t, repairs.OutcomeRetryLater, retiredOutcomeOf(out, rf.ids["absorbed"]).Outcome)
+	require.Equal(t, 2, out.Applied, "%v %+v", out.ByOutcome, out.Rows)
+	require.Zero(t, out.RetryLater, "%v", out.ByOutcome)
+	require.Equal(t, repairs.OutcomeApplied, retiredOutcomeOf(out, rf.ids["absorbed"]).Outcome)
 	files, err := rf.st.GetBookFiles(rf.ids["absorbed"])
 	require.NoError(t, err)
-	require.NotEmpty(t, files, "the held shell keeps its rows")
+	require.Empty(t, files, "the absorbed shell's rows are retired under the holder")
+	links, err := merge.ListCombineRetireLinks(rf.st, "J-held")
+	require.NoError(t, err)
+	require.Equal(t, []merge.CombineRetireLink{{ShellID: rf.ids["absorbed"], OpID: "op-held"}}, links, "only the absorbed shell is linked")
 }
 
 // A shell that itself holds a retired version (the chain case) hands that
