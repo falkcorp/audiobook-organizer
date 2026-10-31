@@ -1128,7 +1128,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **Remove hardcoded library paths from the transcode pass** `internal/remux/transcode.go` (`TranscodeMalformedFiles`, the `permanentlyUnfixable` list) pre-marks two absolute library file paths as permanently unfixable on every completed run. They are one install's real files in a public repo, and on any other install they mark paths that do not exist. This is production logic, not test data, so it needs a decision: drop the list (those two keys are already set on the install that needed them), or move it to configuration. Afterwards, check whether the paths should be scrubbed from history.
 
-- [ ] **05-PR5-FINISH-ON-DECLINE** Add a third decision, **Finish without
+- [x] **05-PR5-FINISH-ON-DECLINE** Add a third decision, **Finish without
       resuming**, next to Retry and Discard for a v3 run in
       `awaiting_decision` (owner decision 2026-10-13; a follow-up, not part
       of 05-PR5). Today a `ResumeAsk` run (the Fixer default) stopped by a
