@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.54.5
+// version: 1.55.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 //
 // Undo preflight. PreflightUndoConflictsFromChanges predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -585,7 +585,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
 		ChangeTypeBookFileMove, database.ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow,
-		ChangeTypeITunesPathClear:
+		ChangeTypeITunesPathClear, database.ChangeTypeBookFileModify, database.ChangeTypeBookAuthorsModify:
 		// A journaled step whose write never happened, or one already put
 		// back, is already restored.
 		return verdictOf(checkFsRegroupRow(store, c, stamps, plan))
@@ -749,6 +749,10 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		return checkFsRegroupRowCurrent(store, c, func(f *database.BookFile) error {
 			return CheckRepointCurrent(f, c)
 		})
+	case database.ChangeTypeBookFileModify:
+		return checkBookFileModifyRow(store, c)
+	case database.ChangeTypeBookAuthorsModify:
+		return checkBookAuthorsModifyRow(store, c, book)
 	case ChangeTypeBookMergedInto:
 		if err := CheckMergedIntoCurrent(book, c); err != nil {
 			return err
@@ -801,6 +805,68 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		// The revert hands the id back to c.OldValue: not while that book still
 		// holds retired rows once this operation's own retire rows are reverted.
 		return plan.PredictNotRetiredShellReceiver(store, c.OldValue, "give an external id back to")
+	}
+	return nil
+}
+
+type bookAuthorsReader interface {
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+}
+
+// checkBookFileModifyRow predicts the revert of a ChangeTypeBookFileModify
+// row: the row must still be on BookID and not retired, and the field must
+// still hold what the Writer wrote (CheckBookFileModifyCurrent). A store that
+// cannot read a row by id gets the book check only.
+func checkBookFileModifyRow(store ConflictChecker, c *database.OperationChange) error {
+	m, err := DecodeBookFileModify(c)
+	if err != nil {
+		return refuse(ReasonOldValueUnparsable, "%v", err)
+	}
+	r, ok := store.(bookFileByIDReader)
+	if !ok {
+		return nil
+	}
+	f, err := r.GetBookFileByID(c.BookID, m.FileID)
+	if err != nil {
+		return refuse(ReasonFieldUnreadable, "read book_file %s on %s: %v", m.FileID, c.BookID, err)
+	}
+	if f == nil {
+		return refuse(ReasonChangedSince, "book_file %s is no longer on book %s", m.FileID, c.BookID)
+	}
+	if f.Retired {
+		return RetiredRowRefusal(f)
+	}
+	return CheckBookFileModifyCurrent(f, m)
+}
+
+// checkBookAuthorsModifyRow predicts the revert of a ChangeTypeBookAuthorsModify
+// row: the credits must still be what the Writer wrote, and every author the
+// revert hands a credit back to must be a live row. A store that cannot read
+// credits gets the book check only.
+func checkBookAuthorsModifyRow(store ConflictChecker, c *database.OperationChange, book *database.Book) error {
+	m, err := DecodeBookAuthorsModify(c)
+	if err != nil {
+		return refuse(ReasonOldValueUnparsable, "%v", err)
+	}
+	r, ok := store.(bookAuthorsReader)
+	if !ok {
+		return nil
+	}
+	cur, err := r.GetBookAuthors(c.BookID)
+	if err != nil {
+		return refuse(ReasonFieldUnreadable, "read credits of %s: %v", c.BookID, err)
+	}
+	if err := CheckBookAuthorsModifyCurrent(c.BookID, cur, book.AuthorID, m); err != nil {
+		return err
+	}
+	if a, ok := store.(interface {
+		GetAuthorByID(id int) (*database.Author, error)
+	}); ok {
+		for _, id := range BookAuthorsModifyReturned(m) {
+			if err := CheckAuthorLive(a.GetAuthorByID, id, "book credits"); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

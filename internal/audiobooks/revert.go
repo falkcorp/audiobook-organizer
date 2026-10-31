@@ -1141,6 +1141,10 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertBookFileReassign(c, plan)
 	case database.ChangeTypeBookFileRepoint:
 		return rs.revertBookFileRepoint(c)
+	case database.ChangeTypeBookFileModify:
+		return rs.revertBookFileModify(c)
+	case database.ChangeTypeBookAuthorsModify:
+		return rs.revertBookAuthorsModify(c)
 	case undo.ChangeTypeBookFileTrack:
 		return rs.revertBookFileTrack(c)
 	case undo.ChangeTypeBookPathUpdate:
