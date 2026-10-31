@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.23 -->
+<!-- version: 10.78.24 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -1161,13 +1161,12 @@ into one of the curated sections below, is a normal direct edit.
       stale import violations, and no CI workflow runs it. 05-PR5 only added
       rule R21 (a `Deps` field typed `database.Store`).
 
-- [ ] **OPS-DIRTYSET-CAS** 02 PR 14: add the store primitive the v3 Batch
+- [x] **OPS-DIRTYSET-CAS** 02 PR 14: add the store primitive the v3 Batch
       runner's `ops.DirtySet` reader needs, `CompareAndDeleteRaw(key, expect)`
       on `*PebbleStore`, together with the marker that writes
       `<prefix><subjectID>` -> 8-byte big-endian epoch under the same lock.
-      05-PR5 shipped the reader side (`internal/operations/registry`
-      `dirtySetStore`); a run over a DirtySet refuses to start until the store
-      has it.
+      Done 2026-10-30: `internal/database/dirty_set.go` (`CompareAndDeleteRaw`,
+      `MarkDirty`); a registry run over a DirtySet now starts on `PebbleStore`.
 
 - [ ] **OPS-WRITER-CREDITS-TAGS-LOCKS** Add `ModifyCredits`, `ModifyTags` and
       `LockFields` to the v3 `ops.Writer` (`internal/operations/opswriter`)
