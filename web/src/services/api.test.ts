@@ -1,7 +1,7 @@
 // file: src/services/api.test.ts
-// version: 1.10.0
+// version: 1.10.1
 // guid: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-30
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -11,7 +11,6 @@ import {
   addImportPath,
   addImportPathDetailed,
   removeImportPath,
-  bulkFetchMetadata,
   batchWriteBackMetadata,
   batchFetchCandidates,
   getMaintenanceWindowStatus,
@@ -132,40 +131,6 @@ describe('api import paths', () => {
 
     await removeImportPath(4);
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/import-paths/4', expect.objectContaining({ method: 'DELETE' }));
-  });
-
-  it('bulkFetchMetadata posts book ids and returns response', async () => {
-    mockFetch.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          data: {
-            updated_count: 1,
-            total_count: 2,
-            results: [
-              {
-                book_id: 'id-1',
-                status: 'updated',
-                applied_fields: ['publisher'],
-                fetched_fields: ['publisher'],
-              },
-            ],
-            source: 'Open Library',
-          },
-        }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      )
-    );
-
-    const response = await bulkFetchMetadata(['id-1', 'id-2'], false);
-    expect(response.updated_count).toBe(1);
-    expect(response.total_count).toBe(2);
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/metadata/bulk-fetch', expect.objectContaining({
-      method: 'POST',
-      body: JSON.stringify({ book_ids: ['id-1', 'id-2'], only_missing: false }),
-    }));
   });
 
   it('batchWriteBackMetadata posts book ids and rename flag', async () => {

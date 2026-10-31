@@ -1,14 +1,14 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.7
+// version: 1.45.8
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
 // export / import, external metadata search, per-book fetch / search / apply /
 // mark-no-match / revert, metadata-rejections, copy-on-write version list /
-// prune, write-back, bulk fetch + bulk write-back enqueue, batch write-back
-// enqueue, the field-enumeration endpoint, and the rating PATCH (19 handlers
+// prune, write-back, bulk write-back enqueue, batch write-back
+// enqueue, the field-enumeration endpoint, and the rating PATCH (18 handlers
 // total). Behavior is preserved byte-for-byte (status codes, JSON shapes, error
 // strings, cache keys, op-enqueue payloads).
 //
@@ -26,8 +26,6 @@
 //   - enrichBook — wraps *Server.enrichBookForResponseSingle, whose concrete
 //     return type (enrichedBookResponse) is server-private (surfaced as any).
 //   - isProtectedPath — wraps *Server.isProtectedPath (server_middleware.go).
-//   - updateFetchedMetadataState — wraps *Server.updateFetchedMetadataState
-//     (server_metadata.go).
 //   - publishEvent — wraps *Server.publishEvent (the shared plugin event bus).
 //
 // As a result package metadatahandler never imports package server.
@@ -50,9 +48,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
-	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -66,8 +62,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
@@ -117,11 +111,6 @@ type Handler struct {
 	// by handleBulkWriteBack to skip write-back for protected paths.
 	isProtectedPath func(filePath string) bool
 
-	// updateFetchedMetadataState wraps *Server.updateFetchedMetadataState
-	// (server_metadata.go), used by bulkFetchMetadata to persist fetched-but-
-	// not-applied field values.
-	updateFetchedMetadataState func(bookID string, values map[string]any) error
-
 	// publishEvent wraps *Server.publishEvent (the shared plugin event bus), used
 	// by applyAudiobookMetadata.
 	publishEvent func(ctx context.Context, event plugin.Event)
@@ -141,19 +130,17 @@ func New(
 	listCache *cache.Cache[gin.H],
 	enrichBook func(book *database.Book) any,
 	isProtectedPath func(filePath string) bool,
-	updateFetchedMetadataState func(bookID string, values map[string]any) error,
 	publishEvent func(ctx context.Context, event plugin.Event),
 ) *Handler {
 	h := &Handler{
-		store:                      store,
-		metadataFetchService:       metadataFetchService,
-		opRegistry:                 opRegistry,
-		fileIOPool:                 fileIOPool,
-		listCache:                  listCache,
-		enrichBook:                 enrichBook,
-		isProtectedPath:            isProtectedPath,
-		updateFetchedMetadataState: updateFetchedMetadataState,
-		publishEvent:               publishEvent,
+		store:                store,
+		metadataFetchService: metadataFetchService,
+		opRegistry:           opRegistry,
+		fileIOPool:           fileIOPool,
+		listCache:            listCache,
+		enrichBook:           enrichBook,
+		isProtectedPath:      isProtectedPath,
+		publishEvent:         publishEvent,
 	}
 	h.browseSources = h.defaultBrowseSources
 	return h
@@ -162,66 +149,6 @@ func New(
 // ratingPatchRequest aliases the canonical type from internal/server/handlers
 // (no import cycle — handlers is a leaf package).
 type ratingPatchRequest = handlers.RatingPatchRequest
-
-// bulkFetchMetadataRequest mirrors the server-private request struct (server.go)
-// byte-for-byte so the JSON binding (including the `binding:"required"` tag and
-// the `only_missing,omitempty` shape) is identical.
-type bulkFetchMetadataRequest struct {
-	BookIDs     []string `json:"book_ids" binding:"required"`
-	OnlyMissing *bool    `json:"only_missing,omitempty"`
-}
-
-// bulkFetchMetadataResult mirrors the server-private result struct (server.go)
-// byte-for-byte so the serialized per-book result shape is identical.
-type bulkFetchMetadataResult struct {
-	BookID        string   `json:"book_id"`
-	Status        string   `json:"status"`
-	Message       string   `json:"message,omitempty"`
-	AppliedFields []string `json:"applied_fields,omitempty"`
-	FetchedFields []string `json:"fetched_fields,omitempty"`
-}
-
-// bulkFetchMetadataConcurrency bounds how many book IDs bulkFetchMetadataImpl
-// fetches from external metadata sources in parallel (CONC-12). This loop
-// runs inline on a user-facing HTTP request — not a background maintenance
-// job — and each iteration makes a network call to a rate-limited external
-// metadata source, so the pool is a small fixed constant (not
-// runtime.NumCPU()) to avoid starving the server and tripping the source's
-// rate limit on a "select all" bulk request with hundreds/thousands of IDs.
-const bulkFetchMetadataConcurrency = 4
-
-// bulkFetchNoopReporter is a tiny inert registry.Reporter adapter used only to
-// satisfy RunItems' Reporter parameter for bulkFetchMetadataImpl, which has no
-// backing async operation/run row — it is a synchronous HTTP request, not an
-// op-registry job. RunItems' concurrent path (runItemsPar) only ever calls
-// SetCurrentItem and UpdateProgress per item; the remaining methods are
-// unreachable from that path but are implemented as safe, nil-safe no-ops so
-// the type fully satisfies registry.Reporter.
-type bulkFetchNoopReporter struct{}
-
-func (bulkFetchNoopReporter) UpdateProgress(current, total int, message string) error {
-	return nil
-}
-
-func (bulkFetchNoopReporter) Log(level slog.Level, message string, attrs ...slog.Attr) error {
-	return nil
-}
-
-func (bulkFetchNoopReporter) Logger() *slog.Logger { return slog.Default() }
-
-func (bulkFetchNoopReporter) Checkpoint(state any) error { return nil }
-
-func (bulkFetchNoopReporter) IsCanceled() bool { return false }
-
-func (r bulkFetchNoopReporter) RunPhase(ctx context.Context, name string, fn func(context.Context, opsregistry.Reporter) error) error {
-	return fn(ctx, r)
-}
-
-func (bulkFetchNoopReporter) Trigger(ctx context.Context, eventName string, payload any) error {
-	return nil
-}
-
-func (bulkFetchNoopReporter) SetCurrentItem(label string) {}
 
 // bulkWriteBackOpParams mirrors the server-private op-param struct
 // (library_writeback_op.go) byte-for-byte so the JSON enqueued via
@@ -1050,516 +977,6 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 		"message":       msg,
 		"written_count": writtenCount,
 		"renamed":       renamed > 0,
-	})
-}
-
-// bulkFetchMetadata fetches external metadata for multiple audiobooks and applies
-// fields only when they are missing and not manually overridden or locked.
-//
-// Like batch-update it writes only the database (CommitCandidateApply, no
-// file work),
-// so it takes no scan lock: a running scan's merge keeps the fields this
-// writes (scanner.mergeScannedKeepingForeignEdits). It used to refuse with
-// 409 while any scan ran, and stop mid-run when its stand-down lease lapsed.
-func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
-	store := h.store
-	if store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	var req bulkFetchMetadataRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-	if len(req.BookIDs) == 0 {
-		httputil.RespondWithBadRequest(c, "book_ids is required")
-		return
-	}
-	// Fail-safe cap (internal/applycap): every id here ends in an UpdateBook,
-	// and with only_missing=false the fetched fields overwrite existing ones.
-	// Same file as the gated batch-update; it must not be the one that isn't.
-	if ex := applycap.Refuse("metadata/bulk-fetch", len(req.BookIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
-		httputil.RespondWithApplyCapExceeded(c, ex)
-		return
-	}
-
-	onlyMissing := true
-	if req.OnlyMissing != nil {
-		onlyMissing = *req.OnlyMissing
-	}
-
-	// results is pre-sized and written by index (results[i], not append) so
-	// the parallel pass below preserves the exact input order of req.BookIDs,
-	// matching the original serial loop's output byte-for-byte. updatedCount
-	// and the results slice are the shared mutable state across workers (per
-	// CONC-12); both are guarded by resultsMu via setResult.
-	results := make([]bulkFetchMetadataResult, len(req.BookIDs))
-	updatedCount := 0
-	var resultsMu sync.Mutex
-
-	setResult := func(i int, r bulkFetchMetadataResult) {
-		resultsMu.Lock()
-		results[i] = r
-		if r.Status == "updated" {
-			updatedCount++
-		}
-		resultsMu.Unlock()
-	}
-
-	// indices (not req.BookIDs directly) so each worker can write its result
-	// into the correct output slot via setResult(i, ...).
-	indices := make([]int, len(req.BookIDs))
-	for i := range indices {
-		indices[i] = i
-	}
-
-	// context.Background(), not c.Request.Context(): a client disconnect must
-	// not truncate the run and leave zero-value entries in results — the
-	// parallel pass must always run to completion, same as the serial loop
-	// did. Concurrency is a small fixed constant (bulkFetchMetadataConcurrency)
-	// because this is a request-scoped, network-bound, rate-limited fetch —
-	// not a CPU-bound background job.
-	_ = opsregistry.RunItems(context.Background(), bulkFetchNoopReporter{}, indices, func(_ context.Context, i int) error {
-		bookID := req.BookIDs[i]
-		result := bulkFetchMetadataResult{
-			BookID: bookID,
-			Status: "skipped",
-		}
-
-		book, err := store.GetBookByID(bookID)
-		if err != nil || book == nil {
-			result.Status = "not_found"
-			result.Message = "audiobook not found"
-			setResult(i, result)
-			return nil
-		}
-		// The row as read, for the history diff recorded after the write.
-		historyBefore, snapErr := database.SnapshotBook(book)
-		if snapErr != nil {
-			result.Status = "error"
-			result.Message = snapErr.Error()
-			setResult(i, result)
-			return nil
-		}
-		// The author join as it stood before this apply. Undo restores the
-		// author column and the join together; with the join unknown (nil)
-		// it refuses the author rather than put author_id back alone.
-		prevAuthors, prevAuthorsErr := metafetch.KnownBookAuthors(store.GetBookAuthors(bookID))
-		if prevAuthorsErr != nil {
-			prevAuthors = nil
-		}
-		// This path writes the author_id column, never the book_authors
-		// join, so the credits it records are the join unchanged
-		// (Before == After): undo then removes no credit and only puts the
-		// column back. Undo never writes this snapshot over the join.
-		var credits *metafetch.AuthorCredits
-		if prevAuthors != nil {
-			credits = &metafetch.AuthorCredits{Before: prevAuthors, After: prevAuthors}
-		}
-
-		if strings.TrimSpace(book.Title) == "" {
-			result.Message = "missing title"
-			setResult(i, result)
-			return nil
-		}
-
-		// The user's field locks, read through the guard every apply path shares
-		// (database.LockedUserFields). Fail closed: an unreadable lock set means
-		// this book is not written at all this round.
-		locked, err := database.LockedUserFields(store, bookID)
-		if err != nil {
-			result.Status = "error"
-			result.Message = "failed to load metadata field locks"
-			setResult(i, result)
-			return nil
-		}
-
-		// Delegate search to service using empty query (uses book's title).
-		// Service handles source chain, caching, and candidate scoring.
-		searchResp, searchErr := h.metadataFetchService.SearchMetadataForBookWithOptions(
-			bookID, "", "", "", "",
-			metafetch.SearchOptions{},
-		)
-		if searchErr != nil {
-			result.Status = "error"
-			result.Message = fmt.Sprintf("search failed: %v", searchErr)
-			setResult(i, result)
-			return nil
-		}
-		if searchResp == nil || len(searchResp.Results) == 0 {
-			result.Status = "not_found"
-			result.Message = "no metadata found from any source"
-			setResult(i, result)
-			return nil
-		}
-
-		// Pick the best match from the service's scored candidates (they are
-		// ranked best first) -- skipping review-only ones (Open Library,
-		// Google Books; owner decision 2026-10-06, "fetch but don't
-		// apply"): nobody picks the candidate here, so the best one a
-		// review-only source found is left for review and the best other
-		// one is applied, if there is one.
-		//
-		// A candidate the owner rejected for this book is skipped too: it is
-		// never applied, by any path. An unreadable rejection list leaves the
-		// book alone this round rather than reading as "nothing rejected".
-		// This read picks; the commit below (CommitCandidateApply) reads the
-		// rejections again under the book's write stripe, so a rejection
-		// made while this book's fields are assembled still refuses it.
-		rejected, rerr := metafetch.LoadRejectedCandidates(store, bookID)
-		if rerr != nil {
-			result.Status = "error"
-			result.Message = "failed to read owner rejections: " + rerr.Error()
-			setResult(i, result)
-			return nil
-		}
-		skippedRejected := 0
-		pick := slices.IndexFunc(searchResp.Results, func(c metafetch.MetadataCandidate) bool {
-			if metafetch.IsReviewOnlyCandidateSource(c.Source) {
-				return false
-			}
-			if rejected.HasCandidate(&c) {
-				skippedRejected++
-				return false
-			}
-			return true
-		})
-		if pick < 0 && skippedRejected > 0 {
-			result.Status = "owner_rejected"
-			result.Message = "every applicable candidate was rejected by the owner; not applied"
-			setResult(i, result)
-			return nil
-		}
-		if pick < 0 {
-			result.Status = "review_only"
-			result.Message = "only review-only sources (Open Library, Google Books, the local catalog) matched; not applied, left for review"
-			setResult(i, result)
-			return nil
-		}
-		candidate := searchResp.Results[pick]
-		// Convert MetadataCandidate to BookMetadata through the SAME conversion
-		// the single-book apply uses (metafetch.CandidateMetadata), so the two
-		// paths cannot disagree about which candidate fields exist. This used to
-		// be a hand-written literal that silently dropped ISBN10/ISBN13, genre,
-		// subtitle, page count and the year's print/release kind.
-		meta := metafetch.CandidateMetadata(candidate)
-		// Ratings are not apply fields in CandidateMetadata; bulk writes them.
-		// Performance/Story/NumReviews are not carried on a candidate.
-		meta.AudibleRatingOverall = candidate.AudibleRatingOverall
-		meta.AudibleRatingCount = candidate.AudibleRatingCount
-		meta.GoogleRatingAverage = candidate.GoogleRatingAverage
-		meta.GoogleRatingCount = candidate.GoogleRatingCount
-		sourceName := candidate.Source
-		fetchedValues := map[string]any{}
-		appliedFields := []string{}
-		fetchedFields := []string{}
-
-		addFetched := func(field string, value any) {
-			fetchedValues[field] = value
-			fetchedFields = append(fetchedFields, field)
-		}
-
-		shouldApply := func(field string, hasValue bool) bool {
-			if locked[field] {
-				return false
-			}
-			if onlyMissing && hasValue {
-				return false
-			}
-			return true
-		}
-
-		hasBookValue := func(field string) bool {
-			switch field {
-			case database.FieldKeyTitle:
-				return strings.TrimSpace(book.Title) != ""
-			case database.FieldKeyAuthorName:
-				return book.AuthorID != nil || book.Author != nil
-			case database.FieldKeyPublisher:
-				return book.Publisher != nil && strings.TrimSpace(*book.Publisher) != ""
-			case database.FieldKeyLanguage:
-				return book.Language != nil && strings.TrimSpace(*book.Language) != ""
-			case database.FieldKeyAudiobookReleaseYear:
-				return book.AudiobookReleaseYear != nil && *book.AudiobookReleaseYear != 0
-			case database.FieldKeyNarrator:
-				return book.Narrator != nil && strings.TrimSpace(*book.Narrator) != ""
-			case "print_year":
-				return book.PrintYear != nil && *book.PrintYear != 0
-			case database.FieldKeyGenre:
-				return book.Genre != nil && strings.TrimSpace(*book.Genre) != ""
-			case database.FieldKeyDescription:
-				return book.Description != nil && strings.TrimSpace(*book.Description) != ""
-			case "subtitle":
-				return book.Subtitle != nil && strings.TrimSpace(*book.Subtitle) != ""
-			case "page_count":
-				return book.PageCount != nil && *book.PageCount > 0
-			case database.FieldKeyISBN10:
-				return book.ISBN10 != nil && strings.TrimSpace(*book.ISBN10) != ""
-			case database.FieldKeyISBN13:
-				return book.ISBN13 != nil && strings.TrimSpace(*book.ISBN13) != ""
-			case "duration":
-				return book.Duration != nil && *book.Duration > 0
-			case "audible_rating_overall":
-				return book.AudibleRatingOverall != nil && *book.AudibleRatingOverall > 0
-			case "google_rating_average":
-				return book.GoogleRatingAverage != nil && *book.GoogleRatingAverage > 0
-			default:
-				return false
-			}
-		}
-
-		didUpdate := false
-
-		if meta.Title != "" && !metafetch.IsGarbageValue(meta.Title) {
-			addFetched(database.FieldKeyTitle, meta.Title)
-			if shouldApply(database.FieldKeyTitle, hasBookValue(database.FieldKeyTitle)) {
-				book.Title = meta.Title
-				appliedFields = append(appliedFields, database.FieldKeyTitle)
-				didUpdate = true
-			}
-		}
-
-		if meta.Author != "" && !metafetch.IsGarbageValue(meta.Author) {
-			addFetched(database.FieldKeyAuthorName, meta.Author)
-			// The shared creation gate runs before the lookup: a provider
-			// author that is junk ("Epigraph", "read by narrator") is no
-			// author, so the field is simply not applied -- the item still
-			// succeeds with every other field.
-			authorName, why := personname.PrepareAuthorNameForCreation(meta.Author)
-			if why != "" {
-				logger.New("metadata-apply").Info("book %s: provider author %q is not a plausible name (%s); not applying it",
-					logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(meta.Author), why)
-			}
-			if why == "" && shouldApply(database.FieldKeyAuthorName, hasBookValue(database.FieldKeyAuthorName)) {
-				author, err := store.GetAuthorByName(authorName)
-				if err != nil {
-					result.Status = "error"
-					result.Message = "failed to resolve author"
-					setResult(i, result)
-					return nil
-				}
-				if author == nil {
-					author, err = store.CreateAuthor(authorName)
-					if err != nil {
-						result.Status = "error"
-						result.Message = "failed to create author"
-						setResult(i, result)
-						return nil
-					}
-				}
-				book.AuthorID = &author.ID
-				appliedFields = append(appliedFields, database.FieldKeyAuthorName)
-				didUpdate = true
-			}
-		}
-
-		if meta.Publisher != "" && !metafetch.IsGarbageValue(meta.Publisher) {
-			addFetched(database.FieldKeyPublisher, meta.Publisher)
-			if shouldApply(database.FieldKeyPublisher, hasBookValue(database.FieldKeyPublisher)) {
-				book.Publisher = new(meta.Publisher)
-				appliedFields = append(appliedFields, database.FieldKeyPublisher)
-				didUpdate = true
-			}
-		}
-
-		if meta.Language != "" && !metafetch.IsGarbageValue(meta.Language) {
-			addFetched(database.FieldKeyLanguage, meta.Language)
-			if shouldApply(database.FieldKeyLanguage, hasBookValue(database.FieldKeyLanguage)) {
-				book.Language = new(meta.Language)
-				appliedFields = append(appliedFields, database.FieldKeyLanguage)
-				didUpdate = true
-			}
-		}
-
-		// Route the year by its source kind, as applyMetadataUnguarded does. A
-		// Google Books / Open Library / Hardcover year is the PRINT year; this
-		// branch used to write every year into AudiobookReleaseYear, so a 1937
-		// print year replaced an audiobook's release year and reached the file
-		// `year` tag on write-back.
-		if meta.PublishYear != 0 {
-			yearKey := "print_year"
-			if meta.PublishYearIsAudiobookRelease {
-				yearKey = database.FieldKeyAudiobookReleaseYear
-			}
-			addFetched(yearKey, meta.PublishYear)
-			if shouldApply(yearKey, hasBookValue(yearKey)) {
-				year := meta.PublishYear
-				if meta.PublishYearIsAudiobookRelease {
-					book.AudiobookReleaseYear = &year
-				} else {
-					book.PrintYear = &year
-				}
-				appliedFields = append(appliedFields, yearKey)
-				didUpdate = true
-			}
-		}
-
-		// Both ISBN columns: providers set ISBN10 and ISBN13 separately; the
-		// single ISBN is the length-classified fallback. This used to look only
-		// at the single ISBN, so a candidate carrying both filled one column.
-		isbnOf := func(explicit string, n int) string {
-			if explicit != "" {
-				return explicit
-			}
-			if len(meta.ISBN) == n {
-				return meta.ISBN
-			}
-			return ""
-		}
-		if isbn10 := isbnOf(meta.ISBN10, 10); isbn10 != "" {
-			addFetched(database.FieldKeyISBN10, isbn10)
-			if shouldApply(database.FieldKeyISBN10, hasBookValue(database.FieldKeyISBN10)) {
-				book.ISBN10 = new(isbn10)
-				appliedFields = append(appliedFields, database.FieldKeyISBN10)
-				didUpdate = true
-			}
-		}
-		if isbn13 := isbnOf(meta.ISBN13, 13); isbn13 != "" {
-			addFetched(database.FieldKeyISBN13, isbn13)
-			if shouldApply(database.FieldKeyISBN13, hasBookValue(database.FieldKeyISBN13)) {
-				book.ISBN13 = new(isbn13)
-				appliedFields = append(appliedFields, database.FieldKeyISBN13)
-				didUpdate = true
-			}
-		}
-
-		// Plain string/int fields the candidate carries and this path never
-		// wrote. Same only-missing and lock rules as every field above.
-		for _, f := range []struct {
-			key   string
-			value string
-			set   func(string)
-		}{
-			// Narrator: providers now route role-marked credits here instead of
-			// into the author string, so bulk must write it too.
-			{database.FieldKeyNarrator, meta.Narrator, func(v string) { book.Narrator = new(v) }},
-			{database.FieldKeyGenre, meta.Genre, func(v string) { book.Genre = new(v) }},
-			{database.FieldKeyDescription, meta.Description, func(v string) { book.Description = new(v) }},
-			{"subtitle", meta.Subtitle, func(v string) { book.Subtitle = new(v) }},
-		} {
-			if strings.TrimSpace(f.value) == "" || metafetch.IsGarbageValue(f.value) {
-				continue
-			}
-			addFetched(f.key, f.value)
-			if shouldApply(f.key, hasBookValue(f.key)) {
-				f.set(f.value)
-				appliedFields = append(appliedFields, f.key)
-				didUpdate = true
-			}
-		}
-		if meta.PageCount > 0 {
-			addFetched("page_count", meta.PageCount)
-			if shouldApply("page_count", hasBookValue("page_count")) {
-				pc := meta.PageCount
-				book.PageCount = &pc
-				appliedFields = append(appliedFields, "page_count")
-				didUpdate = true
-			}
-		}
-
-		if meta.DurationSec > 0 {
-			addFetched("duration", meta.DurationSec)
-			if shouldApply("duration", hasBookValue("duration")) {
-				dur := meta.DurationSec
-				book.Duration = &dur
-				appliedFields = append(appliedFields, "duration")
-				didUpdate = true
-			}
-		}
-
-		// Audible ratings — always overwrite (ratings update over time; newer > older).
-		if meta.AudibleRatingOverall > 0 {
-			addFetched("audible_rating_overall", meta.AudibleRatingOverall)
-			if shouldApply("audible_rating_overall", hasBookValue("audible_rating_overall")) {
-				v := meta.AudibleRatingOverall
-				book.AudibleRatingOverall = &v
-				v2 := meta.AudibleRatingPerformance
-				book.AudibleRatingPerformance = &v2
-				v3 := meta.AudibleRatingStory
-				book.AudibleRatingStory = &v3
-				cnt := meta.AudibleRatingCount
-				book.AudibleRatingCount = &cnt
-				r := meta.AudibleNumReviews
-				book.AudibleNumReviews = &r
-				appliedFields = append(appliedFields, "audible_ratings")
-				didUpdate = true
-			}
-		}
-
-		// Google Books rating.
-		if meta.GoogleRatingAverage > 0 {
-			addFetched("google_rating_average", meta.GoogleRatingAverage)
-			if shouldApply("google_rating_average", hasBookValue("google_rating_average")) {
-				v := meta.GoogleRatingAverage
-				book.GoogleRatingAverage = &v
-				cnt := meta.GoogleRatingCount
-				book.GoogleRatingCount = &cnt
-				appliedFields = append(appliedFields, "google_rating")
-				didUpdate = true
-			}
-		}
-
-		if len(fetchedValues) > 0 {
-			if err := h.updateFetchedMetadataState(bookID, fetchedValues); err != nil {
-				slog.Warn("bulkFetchMetadata failed to persist fetched metadata state for", "bookID", logger.SanitizeLogValue(bookID), "err", err)
-			}
-		}
-
-		if didUpdate {
-			// Write only the fields this apply changed, onto the row as it
-			// stands now, and record history from the committed row
-			// (metafetch CommitCandidateApply). A whole-row UpdateBook of the
-			// read taken before the provider search reverted any edit that
-			// committed during the search, and history was recorded from this
-			// in-memory book rather than the stored row. The commit re-checks
-			// the owner's rejections under the book's write stripe, the
-			// stripe a rejection is written under: a rejection made since the
-			// pick above refuses the write (owner_rejected), and an
-			// unreadable list refuses it too (error).
-			updated, commitErr := h.metadataFetchService.CommitCandidateApply(bookID, historyBefore, book, credits, &candidate)
-			if updated == nil {
-				switch {
-				case errors.Is(commitErr, metafetch.ErrOwnerRejectedNotApplied):
-					result.Status = "owner_rejected"
-					result.Message = "the owner rejected this candidate while it was being applied; not applied"
-				case errors.Is(commitErr, metafetch.ErrOwnerRejectionCheckFailed):
-					result.Status = "error"
-					result.Message = "failed to read owner rejections: " + commitErr.Error()
-				default:
-					result.Status = "error"
-					result.Message = fmt.Sprintf("failed to update book: %v", commitErr)
-				}
-				setResult(i, result)
-				return nil
-			}
-			if commitErr != nil {
-				// The write stands; its history did not land, so undo last
-				// apply refuses this apply. Say so in the result.
-				result.Message = commitErr.Error()
-			}
-			result.Status = "updated"
-
-			// System tag the source and language so the review UI
-			// and future upgrade jobs know where this came from.
-			h.metadataFetchService.ApplyMetadataSystemTags(bookID, sourceName, meta.Language)
-		} else if len(fetchedValues) > 0 {
-			result.Status = "fetched"
-		}
-
-		result.AppliedFields = appliedFields
-		result.FetchedFields = fetchedFields
-		setResult(i, result)
-		return nil
-	}, opsregistry.RunItemsOptions{
-		Concurrency: bulkFetchMetadataConcurrency,
-	})
-
-	httputil.RespondWithOK(c, gin.H{
-		"updated_count": updatedCount,
-		"total_count":   len(req.BookIDs),
-		"results":       results,
 	})
 }
 

@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -374,19 +374,6 @@ func (mfs *Service) markApplyIncomplete(bookID, batchID, source string) {
 	}); err != nil {
 		applyHistoryLog.Error("apply %s on %s: neither its history nor the incomplete marker was recorded; undo last apply may reach an older apply: %v", batchID, logger.SanitizeLogValue(bookID), err)
 	}
-}
-
-// KnownBookAuthors normalises a GetBookAuthors result for RecordApplyHistory,
-// where a nil join means "not known": a successful read of a book with no
-// credits becomes an empty, non-nil slice.
-func KnownBookAuthors(authors []database.BookAuthor, err error) ([]database.BookAuthor, error) {
-	if err != nil {
-		return nil, err
-	}
-	if authors == nil {
-		authors = []database.BookAuthor{}
-	}
-	return authors, nil
 }
 
 func (mfs *Service) authorName(id *int) string {

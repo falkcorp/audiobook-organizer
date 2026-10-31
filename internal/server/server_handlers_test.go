@@ -1,7 +1,7 @@
 // file: internal/server/server_handlers_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-10-17
+// last-edited: 2026-10-30
 
 package server
 
@@ -41,37 +41,6 @@ func TestAudiobookCountEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-// TestMetadataFetchAndUpdate tests fetching and updating metadata
-func TestMetadataFetchAndUpdate(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "book.m4b")
-	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
-
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Fetch Test Book",
-		FilePath: filePath,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Try to fetch metadata for this book
-	fetchReq := map[string]any{
-		"book_ids": []string{book.ID},
-	}
-	body, _ := json.Marshal(fetchReq)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/metadata/bulk-fetch", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	// Should return 200 or 202 (accepted)
-	assert.True(t, w.Code == 200 || w.Code == 202 || w.Code == 400)
 }
 
 // TestSearchAudiobooks tests searching audiobooks

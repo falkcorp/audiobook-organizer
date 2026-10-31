@@ -1,6 +1,6 @@
 // file: scripts/record_demo.js
-// version: 2.3.0
-// last-edited: 2026-08-23
+// version: 2.3.1
+// last-edited: 2026-10-30
 // Playwright script to automatically record end-to-end demo with video - Phase 2 (Interactive)
 //
 // Phase 2 Approach:
@@ -158,9 +158,12 @@ async function recordDemo() {
 
     // Fetch metadata via API (behind-the-scenes setup)
     console.log('Fetching metadata via API (behind-the-scenes setup)...');
-    await axiosInstance.post(`${BASE_URL}/api/v1/metadata/bulk-fetch`, {
-      book_ids: bookIds,
-      only_missing: false
+    // POST /metadata/bulk-fetch is retired (410); the gated path is the
+    // library.bulk-metadata-fetch operation (candidates are cached, then applied
+    // by metadata.batch-apply-cached through the apply gate).
+    await axiosInstance.post(`${BASE_URL}/api/v1/operations/v2`, {
+      def_id: 'library.bulk-metadata-fetch',
+      params: { selection: { book_ids: bookIds }, skip_cached: false }
     });
     console.log('✅ Metadata fetch completed');
 
