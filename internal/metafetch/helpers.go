@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.24.2
+// version: 1.24.3
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-29
+// last-edited: 2026-10-31
 
 package metafetch
 
@@ -264,9 +264,8 @@ type titleVariant struct {
 	// Anchor is the set of words a result's title must carry for the result
 	// to count (see keepAnchored). Every variant is anchored on BOTH search
 	// paths: the bulk walk caches and ledgers a hit unseen, and the
-	// interactive search shares its result path with POST
-	// /api/v1/metadata/bulk-fetch, which applies the first candidate with no
-	// score floor. Neither may be handed the series' other books as this one.
+	// interactive search shares its result path with it. Neither may be
+	// handed the series' other books as this one.
 	Anchor map[string]bool
 	// Exact additionally refuses a result whose title carries a significant
 	// word the anchor lacks. Set for a part-suffix stem ("Rogue Lawyer" from

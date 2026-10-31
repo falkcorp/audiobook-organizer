@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package metafetch
 
@@ -989,43 +989,6 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 		applyHistoryLog.Warn("undo: recording undo of %s.%s failed: %v", logger.SanitizeLogValue(bookID), field, err)
 	}
 	return res, nil
-}
-
-// CommitCandidateApply writes an apply of candidate's fields onto the row
-// as it stands under the book's write stripe (only the fields the apply
-// changed relative to before, via MergeBookChanges) and then records
-// history from the committed row. It is the commit for a caller that
-// assembles the fields itself (the bulk-fetch handler), so it does not
-// replace the whole row with a read taken before slow provider work.
-//
-// Under the stripe it re-reads the owner's rejections and refuses candidate
-// when the owner rejected it (OwnerRejectedNotAppliedError, matching
-// ErrOwnerRejectedNotApplied), or when they cannot be read
-// (ErrOwnerRejectionCheckFailed): RecordRejection writes under the same
-// stripe, so a rejection made after the caller picked candidate still wins,
-// as on every other apply path. There is no unguarded exported commit.
-// candidate is checked as the provider gave it (its title and identifiers),
-// before any field strip.
-//
-// A nil book means nothing was written. A non-nil book with an error means
-// the write committed and its history did not (ErrApplyHistoryIncomplete,
-// logged at Error): the batch is marked incomplete, so undo refuses it.
-//
-// credits is the author join the apply read and wrote under the store's
-// book_authors lock (guardedApply returns it); nil means unknown. History
-// is recorded under candidate.Source.
-func (mfs *Service) CommitCandidateApply(id string, before, book *database.Book, credits *AuthorCredits, candidate *MetadataCandidate) (*database.Book, error) {
-	if candidate == nil {
-		return nil, fmt.Errorf("commit apply of %s: no candidate", id)
-	}
-	ids := candidateIdentifiers(candidate)
-	guard := func(*database.Book) error {
-		if rErr := mfs.refuseOwnerRejected(id, candidate.Source, candidate.Title, ids); rErr != nil {
-			return fmt.Errorf("book %s: %w", id, rErr)
-		}
-		return nil
-	}
-	return mfs.commitApply(id, before, book, credits, candidate.Source, "", guard)
 }
 
 // commitApply is the shared commit, with an optional guard run on the fresh row

@@ -1,15 +1,13 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
 // mocks; the injected helper funcs (enrichBook, isProtectedPath,
 // publishEvent) are stub closures that record their
-// invocations or return canned payloads. Field locks are read from the store
-// mock through database.LockedUserFields (GetMetadataFieldStates +
-// GetUserPreference), the same guard every apply path uses. There is at least one
+// invocations or return canned payloads. There is at least one
 // test per public method (18 methods) covering happy paths and key branches.
 
 package metadatahandler_test

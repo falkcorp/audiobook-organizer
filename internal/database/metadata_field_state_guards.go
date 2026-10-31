@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_state_guards.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 34bc346c-8d4e-4097-89a5-810dc4e9807d
-// last-edited: 2026-10-03
+// last-edited: 2026-10-31
 
 package database
 
@@ -35,7 +35,7 @@ func (s MetadataFieldState) HasUserOverride() bool {
 // field. Weaker than HasUserOverride: a fetched value blocks title_repair,
 // which only ever wants to fix file-derived junk (the junk-title fixer reads
 // the fetched value as evidence instead, since 2026-10-03), but must NOT block
-// the bulk-fetch handler, whose entire job is to write a newly fetched value over an
+// a metadata apply, whose entire job is to write a newly fetched value over an
 // older one.
 func (s MetadataFieldState) HasProviderValue() bool {
 	return s.FetchedValue != nil
