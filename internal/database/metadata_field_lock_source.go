@@ -1,7 +1,7 @@
 // file: internal/database/metadata_field_lock_source.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: bee79451-3875-44ce-b66f-6dda1128e3ce
-// last-edited: 2026-10-03
+// last-edited: 2026-10-30
 
 package database
 
@@ -56,10 +56,10 @@ func (s MetadataFieldState) IsRepairLock() bool {
 // (metafetch.WithStateSnapshot) holds a book's stripe from its read through
 // its save, which rewrites every row and deletes the ones the change removed;
 // the Repairs lock write (repairs.Writer.LockFields), RecordUserOverrides,
-// ClaimRepairLocks and the revert's lock lift take the same stripe. A snapshot
+// ClaimRepairLocksLocked and the revert's lock lift take the same stripe. A snapshot
 // read outside it and saved later erased whatever landed in between: a
 // person's override, a clear, a repair lock. Striped by book id like the book
-// write stripes; no code path holds two at once.
+// write stripes; no code path holds two field-state stripes at once.
 //
 // LOCK ORDER: field-state stripe, then book write stripe -- never the other
 // way. The operation revert's metadata_update restore
@@ -70,16 +70,20 @@ func (s MetadataFieldState) IsRepairLock() bool {
 // the book change observer: with both kinds hashed into buckets, two
 // different books can share stripes, so a book->state path anywhere would
 // deadlock against the revert. Audited 2026-10-03: every caller of
-// RecordUserOverrides, ClaimRepairLocks, repairs.Writer.LockFields,
+// RecordUserOverrides, repairs.Writer.LockFields,
 // metafetch.WithStateSnapshot and the revert's lock lift runs after its book
 // write returns, and the observer (realtime.BookChangeCoalescer) only records
-// the id.
+// the id. The other holder that spans a book write is the hand-picked metadata
+// apply (metafetch.Service.commitApplyUnderStripe, 2026-10-30): it takes the
+// stripe BEFORE its ModifyBook -- the revert's order -- and runs
+// ClaimRepairLocksLocked straight after, so the repair lock it claims cannot
+// be lifted between its value write and its claim.
 var metadataStateLocks [256]sync.Mutex
 
 // LockMetadataState takes bookID's field-state stripe and returns its
 // release. Nothing slow may run under it: Pebble reads and writes only (the
-// operation revert's single-book ModifyBook is the one book write that does,
-// in the lock order above).
+// operation revert's single-book ModifyBook and the hand-picked apply's are the
+// book writes that run under it, in the lock order above).
 func LockMetadataState(bookID string) func() {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(bookID))
@@ -168,40 +172,67 @@ func ParseLegacyMetadataState(reader MetadataFieldStateReader, bookID string) (m
 	return entries, nil
 }
 
-// RepairLockClaimStore is what ClaimRepairLocks needs.
+// RepairLockClaimStore is what ClaimRepairLocksLocked needs: the rows, and the
+// pre-migration blob (a book still on it is migrated before its first row is
+// written).
 type RepairLockClaimStore interface {
-	GetMetadataFieldStates(bookID string) ([]MetadataFieldState, error)
-	UpsertMetadataFieldState(state *MetadataFieldState) error
+	LegacyMetadataStateStore
 }
 
-// ClaimRepairLocks turns the repair locks on keys into a person's locks
-// (LockSource cleared, the lock kept), under the book's field-state stripe.
-// A metadata apply a person picked by hand calls it for the repair-locked
-// fields it was allowed to write: the value is now the person's choice, so
-// reverting the repair must not lift the lock and let a rescan restore the
-// junk over it. A key whose row is not a repair lock is left alone.
-func ClaimRepairLocks(store RepairLockClaimStore, bookID string, keys []string) error {
+// ClaimRepairLocksLocked makes the lock on each of keys a person's (LockSource
+// cleared, the lock kept). A metadata apply a person picked by hand calls it
+// for the repair-locked fields it was allowed to write and did change: the
+// value is now the person's choice, so reverting the repair must not lift the
+// lock and let a rescan restore the junk over it.
+//
+// The CALLER HOLDS LockMetadataState(bookID) (the stripe is not reentrant):
+// metafetch's hand-picked apply holds it from before the book write through
+// this call, so a revert's lock lift (revertFieldLock, same stripe) lands
+// either before the whole apply or after the claim, never between the value
+// write and the claim. keys are fields the caller SAW repair-locked when it
+// read the locks, so each ends up locked as the person whatever the row says
+// now:
+//
+//   - still a repair lock (any repair source): LockSource is cleared;
+//   - already a person's lock, or carrying an override value: left alone;
+//   - gone -- no row, or a bare unlocked one: a revert lifted the repair's lock
+//     after the caller read it and before it took the stripe, so the lock is
+//     taken again as the person's (OverrideLocked, no LockSource).
+//
+// A lift by a person's own unlock landing in that same window is
+// indistinguishable from a revert's and is re-locked too; the window is the
+// length of one apply and the person just chose this value.
+func ClaimRepairLocksLocked(store RepairLockClaimStore, bookID string, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	unlock := LockMetadataState(bookID)
-	defer unlock()
+	if _, err := MigrateLegacyMetadataState(store, bookID); err != nil {
+		return fmt.Errorf("migrate metadata state for %s: %w", bookID, err)
+	}
 	rows, err := store.GetMetadataFieldStates(bookID)
 	if err != nil {
 		return fmt.Errorf("read field states of %s: %w", bookID, err)
 	}
-	want := map[string]bool{}
-	for _, k := range keys {
-		want[k] = true
+	byField := make(map[string]MetadataFieldState, len(rows))
+	for _, r := range rows {
+		byField[r.Field] = r
 	}
-	for i := range rows {
-		if !want[rows[i].Field] || !rows[i].IsRepairLock() {
-			continue
+	now := time.Now()
+	for _, k := range keys {
+		row, exists := byField[k]
+		switch {
+		case exists && row.IsRepairLock():
+			row.LockSource = ""
+		case exists && (row.OverrideLocked || row.OverrideValue != nil):
+			continue // a person's lock or override already
+		default:
+			row.BookID, row.Field, row.OverrideLocked, row.LockSource = bookID, k, true, ""
+			if !exists {
+				row.UpdatedAt = now
+			}
 		}
-		row := rows[i]
-		row.LockSource = ""
 		if err := store.UpsertMetadataFieldState(&row); err != nil {
-			return fmt.Errorf("claim the %s lock of %s: %w", row.Field, bookID, err)
+			return fmt.Errorf("claim the %s lock of %s: %w", k, bookID, err)
 		}
 	}
 	return nil
