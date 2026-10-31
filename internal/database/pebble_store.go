@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.237.1
+// version: 1.237.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package database
 
@@ -825,6 +825,7 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 			// the store buffering forever into a slice nobody drains.
 			defer store.endMemWarmupBuffering()
 
+			runWarmupStartHook()
 			slog.Info("memdb warmup starting (async)")
 			if warmErr := memStore.WarmFromPebble(warmupCtx, store); warmErr != nil {
 				slog.Warn("memdb warmup failed, will stay on Pebble for reads",
