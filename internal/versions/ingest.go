@@ -1,7 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 
@@ -171,7 +172,10 @@ func LockTorrent(hash string) (unlock func()) {
 // CreateIngestVersion creates a BookVersion for a newly-ingested file and
 // links it to the file's existing book_file row (see IngestVersionParams).
 // If the book already has an active version, the new one gets status=alt.
-// If no active version exists, the new one becomes active.
+// It also gets alt when a version swap of the book did not finish (a version
+// in swapping_out / swapping_in; see unfinishedSwapVersionIDs): such a book has
+// no active version, but ResumeVersionSwap needs it to stay that way. If no
+// active version exists and no swap is unfinished, the new one becomes active.
 //
 // It returns the version and whether the link landed (linked). linked=false
 // with a nil error means the version exists but no row points at it: the row
@@ -377,11 +381,35 @@ func CreateIngestVersion(store IngestStore, params IngestVersionParams) (*databa
 			}
 		}
 
-		// Determine status: active if no existing active, alt otherwise.
+		// Determine status: active if the book has no active version, alt
+		// otherwise. A book whose version swap did not finish has no active
+		// version either, but it is not a book without one: the swap's
+		// entering version is about to be the active one, and a second
+		// active version makes ResumeVersionSwap refuse. So an unfinished
+		// swap counts as "has an active version" here.
 		status := database.BookVersionStatusActive
-		existing, err := store.GetActiveVersionForBook(params.BookID)
-		if err == nil && existing != nil {
-			status = database.BookVersionStatusAlt
+		if !params.NewBook {
+			stuck, stuckErr := unfinishedSwapVersionIDs(store, params.BookID)
+			switch {
+			case stuckErr != nil:
+				// Cannot tell. The download is never held or refused over it,
+				// and alt is the status that cannot do harm: it displaces
+				// nothing and a swap promotes it on request, whereas a wrong
+				// active one can only be repaired by hand.
+				logger.New("versions").Warn("CreateIngestVersion: cannot read the versions of book %s to check for an unfinished swap; adding the new version as alt: %v",
+					logger.SanitizeLogValue(params.BookID), stuckErr)
+				status = database.BookVersionStatusAlt
+			case len(stuck) > 0:
+				logger.New("versions").Info("CreateIngestVersion: book %s has an unfinished version swap (versions %s); adding the new version as alt so the swap can be resumed",
+					logger.SanitizeLogValue(params.BookID), strings.Join(stuck, ", "))
+				status = database.BookVersionStatusAlt
+			}
+		}
+		if status == database.BookVersionStatusActive {
+			existing, err := store.GetActiveVersionForBook(params.BookID)
+			if err == nil && existing != nil {
+				status = database.BookVersionStatusAlt
+			}
 		}
 
 		newVer, err := store.CreateBookVersion(&database.BookVersion{
@@ -556,6 +584,33 @@ func refuseLink(params IngestVersionParams, fileID string, ver *database.BookVer
 		logger.SanitizeLogValue(fileID), logger.SanitizeLogValue(params.BookID), logger.SanitizeLogValue(ver.ID),
 		logger.SanitizeLogValue(why))
 	return ver, false, nil
+}
+
+// unfinishedSwapVersionIDs returns the ids of the book's versions that a
+// version swap left in swapping_out / swapping_in (RunVersionSwap returned
+// ErrSwapIncomplete, or the process died mid-swap), in store order. A book with
+// any has an unfinished swap: it has no active version only until
+// ResumeVersionSwap settles it. This is the one place the ingest path decides
+// that, so every choice of active-vs-alt for a NEW version goes through it.
+//
+// It reads the book's own versions (GetBookVersionsByBookID, which
+// CreateIngestVersion already holds for strandedVersion) and not the
+// library-wide ListSwappingBookVersions, so one ingest never scans every
+// version in the library.
+func unfinishedSwapVersionIDs(store interface {
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}, bookID string) ([]string, error) {
+	vers, err := store.GetBookVersionsByBookID(bookID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, v := range vers {
+		if isSwappingStatus(v.Status) {
+			ids = append(ids, v.ID)
+		}
+	}
+	return ids, nil
 }
 
 // strandedVersion returns the one version of params.BookID that an earlier
