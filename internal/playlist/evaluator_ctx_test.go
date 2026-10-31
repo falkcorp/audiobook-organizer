@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_ctx_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4f9a1d36-8c52-4e70-b3a9-6d0e8c2f7b14
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package playlist
 
@@ -95,7 +95,7 @@ func TestIsDefinitionError_SeparatesAStoredDefinitionFromEverythingElse(t *testi
 		"a query that does not parse":  {"title:(unclosed", ""},
 		"an empty query":               {"", ""},
 		"a per-user value":             {"read_status:completed", ""},
-		"a per-user shape":             {"read_status:finished OR title:b1", ""},
+		"a per-user value under an OR": {"read_status:completed OR title:b1", ""},
 		"a sort spec that is not JSON": {"title:b1 OR title:b2", "not json"},
 	} {
 		_, err := EvaluateSmartPlaylist(ctx, store, idx, tc.query, tc.sort, 0, "alice")

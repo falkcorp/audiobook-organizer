@@ -1,7 +1,7 @@
 // file: internal/server/handlers/playlists.go
-// version: 2.6.9
+// version: 2.6.10
 // guid: a7b8c9d0-e1f2-3456-abcd-456789012345
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -583,11 +583,11 @@ func validatePlaylistCreate(req *PlaylistCreateReq) error {
 }
 
 // validatePlaylistQuery reports why a smart playlist's query cannot be saved: it
-// does not parse, or it puts a per-user term (read_status, progress_pct,
-// last_played) where the evaluator cannot give it its boolean meaning (under an
-// OR with a sibling, or under a NOT over a group; search.CheckPerUserBoolean) or
-// with a value it cannot evaluate (a status that does not exist, a pattern, a
-// number or a date that does not parse; search.CheckPerUserValues).
+// does not parse, or it gives a per-user term (read_status, progress_pct,
+// last_played) a value the evaluator cannot judge (a status that does not exist,
+// a pattern, a number or a date that does not parse; search.CheckPerUserValues).
+// A per-user term under an OR or a NOT over a group is accepted: the evaluator
+// judges it against the viewer's own rows (search.MixedQuery).
 func validatePlaylistQuery(query string) error {
 	ast, err := search.ParseQuery(query)
 	if err != nil {

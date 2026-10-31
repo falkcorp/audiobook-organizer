@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections_values_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: c3a8e5d1-6b27-4f90-a1d4-52e7b09c6f38
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers_test
 
@@ -130,7 +130,7 @@ func TestCollections_AStoredValueTheEvaluatorRefusesReadsAsUnavailableWithGuidan
 		{"read_status:completed", "read_status must be one of"},
 		{"-read_status:completed", "read_status must be one of"},
 		{"progress_pct:>half", "progress_pct takes a number"},
-		{"read_status:finished OR title:Alpha", "cannot be combined"},
+		{"read_status:completed OR title:Alpha", "read_status must be one of"},
 		// A stored query that is not per-viewer serves its stored list and is judged when
 		// it is refreshed; one that is per-viewer is evaluated on every read, so a tag:
 		// term it cannot apply exactly reads as unavailable with the sentence from save.
@@ -294,7 +294,7 @@ func TestPlaylists_AnUnparsableRegexGetsTheRegexSentence(t *testing.T) {
 // the reason, and the list cached by the old evaluation is dropped (the ABS surface
 // serves that cache).
 func TestPlaylists_AStoredRefusedQueryReadsAsUnavailableAndClearsItsCache(t *testing.T) {
-	for _, q := range []string{"read_status:completed", "read_status:finished OR title:Alpha", "title:Alpha OR tag:noir"} {
+	for _, q := range []string{"read_status:completed", "read_status:completed OR title:Alpha", "title:Alpha OR tag:noir"} {
 		t.Run(q, func(t *testing.T) {
 			pl := &database.UserPlaylist{ID: "pl-1", Name: "No Man's Land", Type: database.UserPlaylistTypeSmart,
 				Query: q, CreatedByUserID: "alice", MaterializedBookIDs: []string{"b1", "b2"}, MaterializedTotal: 2}

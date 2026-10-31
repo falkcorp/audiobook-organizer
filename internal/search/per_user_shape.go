@@ -1,30 +1,22 @@
 // file: internal/search/per_user_shape.go
-// version: 1.0.1
+// version: 2.0.0
 // guid: eb623c78-1b62-4ff8-9a50-e192e62ee16b
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
-import "errors"
-
-// ErrPerUserBoolean is returned by CheckPerUserBoolean for a query the per-user
-// pass cannot evaluate as written. The message is shown to the person who typed the
-// query, so it says what to write instead.
-var ErrPerUserBoolean = errors.New(
-	"a per-user field (read_status, progress_pct, last_played) cannot be combined with other terms using OR, " +
-		"and cannot be negated as part of a group: those terms are always required together with the rest of the query. " +
-		"To match several states of one field, write read_status:(finished|in_progress)")
-
-// CheckPerUserBoolean refuses a query whose per-user terms sit somewhere the
-// translator cannot give them their boolean meaning.
+// perUserNeedsTree reports whether a query's per-user terms sit somewhere the flat
+// per-user list cannot give them their boolean meaning, so the query must be
+// translated with the viewer's rows (MixedQuery) instead of through TranslateAt.
 //
 // Per-user terms (read_status, progress_pct, last_played) are not sent to the
-// index: the translator peels them off into one flat list that is applied afterwards
+// index: TranslateAt peels them off into one flat list that is applied afterwards
 // as an AND over every term. That is right for a plain conjunction and for a term
 // negated on its own (-read_status:finished), and for one field's alternation
 // (read_status:(finished|in_progress)), which is one filter that ORs inside itself.
 // It is wrong in two shapes, and in both the wrong answer used to be returned
-// silently:
+// silently, and later refused with a 400 (search.CheckPerUserBoolean, removed
+// 2026-10-30):
 //
 //   - under an OR with a sibling: read_status:finished OR title:Hush was evaluated
 //     as read_status:finished AND title:Hush, so the OR's other side contributed
@@ -32,50 +24,49 @@ var ErrPerUserBoolean = errors.New(
 //   - under a NOT over a group: -(read_status:finished title:Hush) is "not both",
 //     but the translator negated each term on its own, answering "neither".
 //
-// Both are refused here instead, at create/update (HTTP 400) and again when a stored
-// query is evaluated, so a row saved before this check reads as unavailable rather
-// than as a wrong list. Real OR/NOT support needs the per-user pass to evaluate the
-// boolean tree itself; it is tracked in todo.d.
+// Both shapes are now answered correctly by MixedQuery, which turns each per-user
+// term into an index query over the viewer's rows and lets the index evaluate the
+// whole boolean tree. Every other shape keeps the flat path, byte for byte.
 //
-// A nil node and a query with no per-user term are always accepted.
-func CheckPerUserBoolean(n Node) error {
-	return checkPerUserShape(n, false)
+// A nil node and a query with no per-user term never need the tree.
+func perUserNeedsTree(n Node) bool {
+	return shapeNeedsTree(n, false)
 }
 
-// checkPerUserShape walks the tree carrying whether an odd number of NOTs sits
-// above n. The translator cancels two negations of a group, so -(-(a b)) is a
-// plain group and only an odd count makes a per-user term inside it unevaluable.
-func checkPerUserShape(n Node, negated bool) error {
+// shapeNeedsTree walks the tree carrying whether an odd number of NOTs sits above
+// n. The translator cancels two negations of a group, so -(-(a b)) is a plain group
+// and only an odd count makes a per-user term inside it inexpressible as a flat list.
+func shapeNeedsTree(n Node, negated bool) bool {
 	switch v := n.(type) {
 	case *AndNode:
 		if negated && containsPerUserTerm(v) {
-			return ErrPerUserBoolean
+			return true
 		}
 		for _, c := range v.Children {
-			if err := checkPerUserShape(c, negated); err != nil {
-				return err
+			if shapeNeedsTree(c, negated) {
+				return true
 			}
 		}
 	case *OrNode:
 		if negated && containsPerUserTerm(v) {
-			return ErrPerUserBoolean
+			return true
 		}
 		if len(v.Children) > 1 {
 			for _, c := range v.Children {
 				if containsPerUserTerm(c) {
-					return ErrPerUserBoolean
+					return true
 				}
 			}
 		}
 		for _, c := range v.Children {
-			if err := checkPerUserShape(c, negated); err != nil {
-				return err
+			if shapeNeedsTree(c, negated) {
+				return true
 			}
 		}
 	case *NotNode:
-		return checkPerUserShape(v.Child, !negated)
+		return shapeNeedsTree(v.Child, !negated)
 	}
-	return nil
+	return false
 }
 
 // containsPerUserTerm reports whether any term under n is a per-user field.

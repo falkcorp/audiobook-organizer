@@ -1,7 +1,7 @@
 // file: internal/search/per_user_term_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2c9a14-d5b7-4f83-a0e6-1b94c7d2f305
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
@@ -196,10 +196,6 @@ func TestPerUserQueryReason_DropsTheWrappersACallerAdds(t *testing.T) {
 	wrapped := errors.Join(errors.New("search"), inner)
 	if got := PerUserQueryReason(wrapped); got != inner.Error() {
 		t.Errorf("PerUserQueryReason(wrapped value error) = %q, want %q", got, inner.Error())
-	}
-	shape := CheckPerUserBoolean(mustParse(t, "read_status:finished OR title:Hush"))
-	if got := PerUserQueryReason(errors.Join(errors.New("query"), shape)); got != ErrPerUserBoolean.Error() {
-		t.Errorf("PerUserQueryReason(wrapped shape error) = %q", got)
 	}
 	if got := PerUserQueryReason(errors.New("boom")); got != "boom" {
 		t.Errorf("PerUserQueryReason(other) = %q", got)

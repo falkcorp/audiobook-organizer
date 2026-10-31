@@ -1,7 +1,7 @@
 // file: internal/playlist/evaluator_per_user_values_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d1f4b62-3a95-4c08-b6e1-90a5c2d8f314
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package playlist
 
@@ -49,9 +49,9 @@ func TestEvaluate_RefusesPerUserValuesTheMatcherCannotEvaluate(t *testing.T) {
 // index is still the retryable error.
 func TestEvaluate_AQueryRefusalComesBeforeTheIndexState(t *testing.T) {
 	store, _, _ := collectionFixture(t)
-	_, err := EvaluateSmartPlaylist(context.Background(), store, nil, "read_status:finished OR title:b1", "", 0, "alice")
+	_, err := EvaluateSmartPlaylist(context.Background(), store, nil, "read_status:completed OR title:b1", "", 0, "alice")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, search.ErrPerUserBoolean)
+	assert.True(t, search.IsPerUserQueryError(err), "the value refusal comes before the index is looked at: %v", err)
 	assert.NotErrorIs(t, err, ErrSearchIndexUnavailable)
 
 	_, err = EvaluateSmartPlaylist(context.Background(), store, nil, "read_status:completed", "", 0, "alice")

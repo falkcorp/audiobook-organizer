@@ -504,26 +504,15 @@ into one of the curated sections below, is a normal direct edit.
       state, which fails open. Decide what an unauthenticated Audiobookshelf caller should see
       when auth is off, then give both surfaces one resolver. Left from the PR 4155 review (N5).
 
-- [ ] **TODO-PERUSER-BOOLEAN** Support `OR` and grouped `NOT` over per-user terms
-      (`read_status`, `progress_pct`, `last_played`) instead of refusing them. Today
-      `search.CheckPerUserBoolean` refuses a per-user term under an `OR` with a sibling or under
-      a `NOT` over a group (HTTP 400 on dynamic collection and smart playlist create/update, and
-      `members_unavailable` for a stored row), because the translator flattens every per-user term
-      into one AND list applied after the index search. The real fix is for the per-user pass to
-      evaluate the boolean tree itself: have the translator return the tree with the per-user
-      leaves left as callbacks (or evaluate each leaf to a per-viewer id set and combine the sets
-      with the index's id set per node), then delete `CheckPerUserBoolean`. The library list search
-      (`internal/audiobooks/service_query.go`, `service_search_cache.go`) no longer answers these
-      shapes as an AND: `search=` refuses them with a 400 (`audiobooks.SearchPerUserProblem` in the
-      list handler, and `search.CheckPerUserTerms` in `searchWithBleve` and in both substring
-      fallbacks for every other caller), and the web search box, whose `field:value` terms travel
-      as `filters=` JSON that cannot hold an OR or a group, sends such a query whole as `search=`
-      (`serverQuery` in `web/src/utils/searchParser.ts`) so the server can refuse it. So the list
-      needs the same change: once the tree is evaluated, the box can send the filters again, and
-      the shape refusals there go with `CheckPerUserBoolean`. The value checks
-      (`search.CheckPerUserValues`, applied to `search=`, to `filters=` through
-      `search.PerUserFilterForTerm`, and to collections and playlists: statuses, numbers, dates,
-      no patterns, lowercase names, no empty list) stay. Left from the PR 4164 re-review (B-1, S-D).
+- [ ] **TODO-PERUSER-BOOLEAN** Residual of the `OR` / grouped `NOT` over per-user terms work.
+      The backend part is done (2026-10-30): `search.MixedQuery` evaluates a per-user term under
+      an `OR` with a sibling, or under a `NOT` over a group, against the viewer's own rows, in
+      the library list, dynamic collections and smart playlists, and `CheckPerUserBoolean` /
+      `ErrPerUserBoolean` are deleted. What is left: the web search box still sends such a query
+      whole as `search=` (`serverQuery` in `web/src/utils/searchParser.ts`) because its
+      `filters=` JSON cannot hold an `OR` or a group; it now works, but it is the only path that
+      cannot use the structured filters for these shapes, so decide whether to teach the box to
+      send them. The value checks (`search.CheckPerUserValues`) stay.
 
 - [ ] **Purge file journal follow-up (PR 4140 review, n6)** Every path check in the purge (journal path, `book_atpath` key, `BookFilesAtPath`) compares exact bytes, so a row naming the same file as `/lib//x`, in NFD instead of NFC, or in different case on a case-insensitive filesystem is not seen; storing and comparing `filepath.Clean` paths would remove the `//` and `./` forms. (The boot-time journal replay and the library-root readiness check that this item used to list as n5 landed in the same PR.)
 
@@ -832,7 +821,7 @@ into one of the curated sections below, is a normal direct edit.
       refuse a value that is not a single known status with a 400 that names the
       valid statuses.
 
-- [ ] **OR-WITH-PER-USER-ANDED** A query that ORs an indexed term with a per-user
+- [x] **OR-WITH-PER-USER-ANDED** A query that ORs an indexed term with a per-user
       term (`title:Alpha OR read_status:finished`) is evaluated as an AND.
       `translateOr` in `internal/search/bleve_translator.go` drops the per-user
       child (it returns no Bleve query for it) and appends it to the per-user filter

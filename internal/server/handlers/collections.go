@@ -1,7 +1,7 @@
 // file: internal/server/handlers/collections.go
-// version: 2.1.6
+// version: 2.1.7
 // guid: 3e81c47a-95d2-4b06-a1f8-6c025d9b7413
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package handlers
 
@@ -671,8 +671,9 @@ func (h *CollectionHandler) MaterializeCollection(c *gin.Context) {
 // searching: it parses and translates it, the same pair playlist.EvaluateSmartPlaylist
 // runs first, so every error EvaluateSmartPlaylist would return for the query's
 // text is returned here (an unsigned per-user date such as last_played:>30d, or a
-// per-user term under an OR or a grouped NOT, or one whose value is not a status,
-// a number or a date, among them). It does not need the search index, so it works while the index is closed
+// per-user term whose value is not a status, a number or a date, among them). A
+// per-user term under an OR or a grouped NOT is not an error: it is evaluated per
+// viewer. It does not need the search index, so it works while the index is closed
 // or rebuilding. It deliberately does not look at who is evaluating.
 func validateCollectionQuery(query string) error {
 	ast, err := search.ParseQuery(query)

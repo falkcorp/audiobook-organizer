@@ -1,7 +1,7 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.22.8 -->
+<!-- version: 1.23.0 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
-<!-- last-edited: 2026-10-29 -->
+<!-- last-edited: 2026-10-30 -->
 
 # HTTP API
 
@@ -249,11 +249,14 @@ be worked out has no books and no signal that says why (a list row has nowhere t
 the reason), the same as the collection list routes. `PUT /playlists/:id` checks the query only when it changed,
 so a rename that resends the stored query is not refused for it.
 
-The library list applies a per-user term as one flat `AND` after the index answers, so the
-same shapes and values are refused on both ways a query reaches it:
+A per-user term in the library list is judged against the caller's own state and combines
+with the other terms as written, `OR` and `NOT` over a group included (see
+`docs/search-syntax.md`). The values a per-user term can take are checked on both ways a
+query reaches the list:
 
-- `GET /audiobooks?search=` answers `400` `invalid search: <message>` for the shapes (an
-  `OR`, a group, or a `NOT` over a group, alongside a per-user term) and for the values.
+- `GET /audiobooks?search=` answers `400` `invalid search: <message>` for a value the matcher
+  cannot evaluate (a `read_status` that is not one of its four statuses, a pattern, a number
+  or date that does not parse), wherever the term sits in the query.
 - The `filters=` JSON, which is what the web search box sends for `field:value` terms,
   answers `400` `invalid filter value: <message>` for a value the matcher cannot evaluate:
   a `read_status` that is not one of its four statuses, a pattern on any per-user field, a

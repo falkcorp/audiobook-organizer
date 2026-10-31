@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_per_user_values_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2d8f4a67-b1c3-4e90-85a6-7c0e3d9f1b52
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobooks
 
@@ -93,13 +93,13 @@ func TestHasRelativeDateFilter_SeesAnAlternationOfRelativeDates(t *testing.T) {
 // NIT 8 (S-D): "every caller of the search" includes the two substring fallbacks
 // that take over while the index is nil or rebuilding. They do not evaluate
 // per-user terms, but a query the index path would refuse is refused there too,
-// not answered as plain text.
+// not answered as plain text. (An OR with a sibling, or a NOT over a group, is no
+// longer one of them: the index path evaluates it.)
 func TestSubstringFallbacksRefuseAPerUserTermTheIndexPathRefuses(t *testing.T) {
 	store := mocks.NewMockStore(t) // nothing may be searched for a refused query
 	svc := NewAudiobookService(store)
 	for _, q := range []string{
-		"read_status:finished OR title:Hush",
-		"-(read_status:finished title:Hush)",
+		"read_status:completed OR title:Hush",
 		"read_status:completed",
 		"READ_STATUS:finished",
 	} {
@@ -121,5 +121,7 @@ func TestSearchPerUserProblem_JudgesOnlyWhatParsesAndNamesAField(t *testing.T) {
 	assert.NoError(t, SearchPerUserProblem("The Long Halloween"))
 	assert.NoError(t, SearchPerUserProblem("title:Hush read_status:finished"))
 	assert.NoError(t, SearchPerUserProblem("title:(unclosed"), "a query the DSL parser rejects takes the substring fallback")
-	assert.Error(t, SearchPerUserProblem("read_status:finished OR title:Hush"))
+	assert.NoError(t, SearchPerUserProblem("read_status:finished OR title:Hush"), "an OR over a per-user term is evaluated")
+	assert.NoError(t, SearchPerUserProblem("-(read_status:finished title:Hush)"))
+	assert.Error(t, SearchPerUserProblem("read_status:completed OR title:Hush"), "its value is still checked")
 }

@@ -1,7 +1,7 @@
 // file: internal/search/tag_terms.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 0e6b3a91-52c8-4d7f-9a14-b8f2d5c7e613
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package search
 
@@ -217,10 +217,17 @@ var errTagUnsplit = &TagTermError{Reason: tagShapeReason}
 // Translation is a query translated for a search: the index query for everything
 // but the tag: terms, the per-user filters the caller applies afterwards, and the
 // tag names the caller applies exactly (ResolveTagIDs), ANDed with the rest.
+//
+// Mixed is set instead of Query and PerUser when a per-user term sits where the
+// flat list cannot give it its boolean meaning (under an OR with a sibling, or
+// under a NOT over a group). Query is then nil and the caller must take the
+// viewer's rows and ask Mixed.Query for the index query (see MixedQuery); it is
+// never nil-checked into "match everything".
 type Translation struct {
 	Query   query.Query
 	PerUser []PerUserFilter
 	Tags    []string
+	Mixed   *MixedQuery
 }
 
 // TranslateQuery is TranslateAt for a caller that can apply tag: terms: it splits
@@ -236,6 +243,13 @@ func TranslateQuery(node Node, now time.Time) (Translation, error) {
 	}
 	if len(tags) > 0 {
 		rest = dropStopwordRemainder(rest)
+	}
+	if perUserNeedsTree(rest) {
+		m, err := newMixedQuery(rest, now)
+		if err != nil {
+			return Translation{}, err
+		}
+		return Translation{Mixed: m, Tags: tags}, nil
 	}
 	q, perUser, err := TranslateAt(rest, now)
 	if err != nil {

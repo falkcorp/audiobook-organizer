@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/search_per_user_test.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 0d6f3a92-b814-4e57-9c20-a5e18d7b3f64
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobookshandler_test
 
@@ -14,17 +14,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// S-D: the library search applies read_status, progress_pct and last_played as one
-// flat AND after the index answers, so a query that puts one where that cannot give
-// it its meaning used to be answered as something else: read_status:finished OR
-// author:kyle returned the Selina Kyle books the viewer had finished, and
-// read_status:completed (not a status) matched nothing, or, negated, every book.
-// The list refuses it with a 400 that says what to write, as a collection or a
-// smart playlist does when it is saved.
+// S-D: a per-user term whose value the per-user pass cannot judge used to be answered
+// as something else: read_status:completed (not a status) matched nothing, or,
+// negated, every book. The list refuses it with a 400 that says what to write, as a
+// collection or a smart playlist does when it is saved. (A per-user term under an OR
+// or a NOT over a group was refused here too until 2026-10-30; it is evaluated now,
+// see TestListAudiobooks_SearchAcceptsTheWorkingPerUserSpellings.)
 func TestListAudiobooks_SearchRefusesAPerUserTermItCannotEvaluate(t *testing.T) {
 	for _, tc := range []struct{ search, want string }{
-		{"read_status:finished OR author:kyle", "cannot be combined"},
-		{"-(read_status:finished author:kyle)", "cannot be combined"},
+		{"read_status:completed OR author:kyle", "read_status must be one of"},
 		{"read_status:completed", "read_status must be one of"},
 		{"-read_status:completed", "read_status must be one of"},
 		{"read_status:fin*", "patterns"},
@@ -50,6 +48,8 @@ func TestListAudiobooks_SearchAcceptsTheWorkingPerUserSpellings(t *testing.T) {
 	for _, q := range []string{
 		"read_status:finished author:kyle",
 		"read_status:(finished|in_progress)",
+		"read_status:finished OR author:kyle",
+		"-(read_status:finished author:kyle)",
 		"-read_status:finished title:Hush",
 		"progress_pct:>50",
 		"last_played:>-30d",
@@ -124,7 +124,7 @@ func TestListAudiobooks_FiltersAcceptTheWorkingPerUserSpellings(t *testing.T) {
 // a stub service, so here only the status and the refusal text can be checked); a
 // field the index does not hold (metadata, review, has_duration) is refused with the
 // search parameter's own message, which points at filters= and so cannot be acted on
-// from the box; the per-user shapes are refused with their own message first; and a
+// from the box; a per-user term under an OR is evaluated, and a tag: term next to it is refused with the tag message; and a
 // query that writes a per-user term but does not parse is refused rather than
 // answered by a substring match that shows nothing.
 func TestListAudiobooks_SearchSentWholeByTheWebBoxMeetsTheOtherRulesOfSearch(t *testing.T) {
@@ -133,8 +133,8 @@ func TestListAudiobooks_SearchSentWholeByTheWebBoxMeetsTheOtherRulesOfSearch(t *
 		status int
 		want   string
 	}{
-		{"read_status:finished OR tag:noir", http.StatusBadRequest, "cannot be combined"},
-		{"read_status:finished OR duration:>20m", http.StatusBadRequest, "cannot be combined"},
+		{"read_status:finished OR tag:noir", http.StatusBadRequest, "tag: cannot be used inside an OR group"},
+		{"read_status:finished OR duration:>20m", http.StatusOK, ""},
 		{"(read_status:finished tag:noir)", http.StatusOK, ""},
 		{"read_status:finished AND tag:noir", http.StatusOK, ""},
 		// tag: is an exact filter, so it is refused where it cannot apply to the whole

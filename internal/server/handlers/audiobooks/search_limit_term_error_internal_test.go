@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/search_limit_term_error_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c1491fa-2613-4958-9d68-b036739e6106
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package audiobookshandler
 
@@ -27,9 +27,9 @@ import (
 // recognised. The tag: refusal is the newest of these and rides the same mapping.
 func TestRespondSearchLimit_AQueryTermTheServiceRefusedIsA400WithItsReason(t *testing.T) {
 	cases := map[string]string{
-		"tag under OR": "title:Hush OR tag:noir",
-		"tag negated":  "-tag:noir",
-		"per-user OR":  "read_status:finished OR author:Kyle",
+		"tag under OR":   "title:Hush OR tag:noir",
+		"tag negated":    "-tag:noir",
+		"per-user value": "read_status:completed OR author:Kyle",
 	}
 	for name, q := range cases {
 		t.Run(name, func(t *testing.T) {
