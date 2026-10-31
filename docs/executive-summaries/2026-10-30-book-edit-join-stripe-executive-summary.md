@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-30-book-edit-join-stripe-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 1c7f3b82-95ad-4e60-b2d4-0a8e61f7c539 -->
 <!-- last-edited: 2026-10-30 -->
 
@@ -15,9 +15,11 @@ its narrator list named someone else, or credits quietly reverted to an older
 state. Nothing reported an error.
 
 **What changed.** The book and both credit lists are now saved together as a
-single step while the book is held, so nothing else can slip in between. If the
-credits cannot be saved, the whole edit fails instead of leaving a half-saved
-book with a warning. A save that does not touch the credits (for example a title
+single step while the book is held, so the edit itself can no longer leave the
+book and its credits disagreeing. If the credits cannot be saved, or a narrator
+cannot be looked up or created, the whole edit fails instead of leaving a
+half-saved book with a warning. Some other background jobs still save a book
+and its credits in separate steps; moving them over is tracked as a follow-up. A save that does not touch the credits (for example a title
 change) no longer rewrites them, so the order of authors stays exactly as it was.
 
 **Why it mattered.** Credits decide where a book is filed and who is shown as its
