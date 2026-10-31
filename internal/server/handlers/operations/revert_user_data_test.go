@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/revert_user_data_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3b9f7d20-c4a1-4e58-9d62-8a1e5f0b7c36
-// last-edited: 2026-10-29
+// last-edited: 2026-10-30
 
 package operations_test
 
@@ -33,7 +33,7 @@ func TestRevertOperation_MergeWarningsThatNameAUserNeedUsersManage(t *testing.T)
 	result := func() *audiobooks.RevertResult {
 		return &audiobooks.RevertResult{
 			OperationID: "op-1", Total: 2, Restored: 2, PartiallyRestored: 1,
-			Kept: []string{namesUser, plain},
+			Kept: []audiobooks.RevertNote{{Text: namesUser, UserIDs: []string{"01INVENTEDUSER0000000000A"}}, {Text: plain}},
 		}
 	}
 	for name, tc := range map[string]struct {

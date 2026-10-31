@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 0c6e2f94-7b1d-4a58-9e3c-5d8a1f27b640
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 package merge
 
@@ -237,7 +237,7 @@ func TestCombineUndo_RoundTripRestoresExactly(t *testing.T) {
 	undo, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{f.absA, f.absB}, undo.RestoredBooks)
-	requireOnlyCreatedAuthorNote(t, undo.Warnings, "Jane Undo")
+	requireOnlyCreatedAuthorNote(t, WarningTexts(undo.Warnings), "Jane Undo")
 
 	for _, id := range all {
 		assert.Equal(t, preBooks[id], viewBook(t, store, id), "book %s restored exactly", id)
@@ -490,9 +490,9 @@ func TestCombineUndo_ReattachedRowWhoseOwnerWasPurgedGoesToTheAbsorbedBook(t *te
 	undone, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err, "a purged outside owner must not refuse the undo")
 	require.Len(t, undone.Warnings, 1)
-	assert.Contains(t, undone.Warnings[0], rowID)
-	assert.Contains(t, undone.Warnings[0], outside)
-	assert.Contains(t, undone.Warnings[0], virt, "the warning says where the row went")
+	assert.Contains(t, undone.Warnings[0].Text, rowID)
+	assert.Contains(t, undone.Warnings[0].Text, outside)
+	assert.Contains(t, undone.Warnings[0].Text, virt, "the warning says where the row went")
 
 	assert.NotContains(t, viewFiles(t, store, survivor), rowID, "the survivor does not keep the absorbed book's audio")
 	onVirt, ok := viewFiles(t, store, virt)[rowID]
@@ -578,8 +578,8 @@ func TestCombineUndo_SurvivorsReattachedRowWhoseOwnerWasPurgedStaysOnSurvivor(t 
 	undone, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
 	require.Len(t, undone.Warnings, 1)
-	assert.Contains(t, undone.Warnings[0], rowID)
-	assert.Contains(t, undone.Warnings[0], "left on survivor")
+	assert.Contains(t, undone.Warnings[0].Text, rowID)
+	assert.Contains(t, undone.Warnings[0].Text, "left on survivor")
 	assert.Contains(t, viewFiles(t, store, survivor), rowID, "the survivor's own file keeps its row")
 }
 
@@ -619,5 +619,5 @@ func TestCombineUndo_TrashedHoldersRowIsJournaledAndAPurgedHolderDoesNotRefuseTh
 	undone, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
 	require.Len(t, undone.Warnings, 1)
-	assert.Contains(t, undone.Warnings[0], rowID)
+	assert.Contains(t, undone.Warnings[0].Text, rowID)
 }

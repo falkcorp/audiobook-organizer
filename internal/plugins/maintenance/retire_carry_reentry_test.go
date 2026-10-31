@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_carry_reentry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91d4f2a6-0b7e-4c35-8a19-d6e2c70b4f83
-// last-edited: 2026-10-22
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -141,7 +141,7 @@ func TestRetireCarry_ASurvivorMovedByHandIsKeptAndReported(t *testing.T) {
 	require.Equal(t, []string{"a", "B", "c", "d", "S"}, c.members(), "B beside its neighbours, S where the owner put it")
 	require.Equal(t, 1, rr.ListsEditedByHand, "%+v", rr)
 	require.Len(t, rr.Kept, 1, "%+v", rr)
-	require.Contains(t, rr.Kept[0], "left where you placed it")
+	require.Contains(t, rr.Kept[0].Text, "left where you placed it")
 	require.Contains(t, rr.Summary(), "arranged by hand")
 }
 

@@ -1,7 +1,7 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package merge
 
@@ -272,7 +272,7 @@ func carryStateLocked(db UserProgressMerger, keepID, doomedID string) error {
 	}
 	warnings, rerr := RestoreFollowedProgress(db, keepID, doomedID, redirected, progress)
 	for _, w := range warnings {
-		mlog.Warn("carry before delete: %s", logger.SanitizeLogValue(w))
+		mlog.Warn("carry before delete: %s", logger.SanitizeLogValue(w.Text))
 	}
 	if rerr == nil {
 		// A one-shot put-back: no journal re-runs it, so its reconcile

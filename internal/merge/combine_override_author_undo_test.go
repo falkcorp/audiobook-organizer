@@ -1,7 +1,7 @@
 // file: internal/merge/combine_override_author_undo_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 7b2d94e1-5c63-4f08-a1d7-3e90c4b6a258
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -81,7 +81,7 @@ func TestUndoCombine_LeavesTheAuthorTheCombineCreatedAndWarns(t *testing.T) {
 
 	undo, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	joined := strings.Join(undo.Warnings, "\n")
+	joined := strings.Join(WarningTexts(undo.Warnings), "\n")
 	require.Contains(t, joined, uncreditedNote)
 	require.Contains(t, joined, "maintenance.purge-empty-authors")
 	require.Contains(t, joined, createdAuthorName)
@@ -122,7 +122,7 @@ func TestUndoCombine_CreatedAuthorStillCreditedGetsNoNote(t *testing.T) {
 
 			undo, err := ms.UndoCombine(res.JournalID)
 			require.NoError(t, err)
-			require.NotContains(t, strings.Join(undo.Warnings, "\n"), "purge-empty-authors")
+			require.NotContains(t, strings.Join(WarningTexts(undo.Warnings), "\n"), "purge-empty-authors")
 
 			requireAuthorLive(t, store, a.ID)
 			if tc.junction {
@@ -199,7 +199,7 @@ func TestUndoCombine_UncheckableCreditIsAWarning(t *testing.T) {
 
 	undo, err := NewService(creditCheckFailStore{store}).UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.Contains(t, strings.Join(undo.Warnings, "\n"), "could not be checked")
+	require.Contains(t, strings.Join(WarningTexts(undo.Warnings), "\n"), "could not be checked")
 	requireAuthorLive(t, store, a.ID)
 	authors, err := store.GetBookAuthors(keep)
 	require.NoError(t, err)

@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_replay_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9e3a6d12-7c48-4b05-a1f9-2d8e5b70c364
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package merge
 
@@ -214,7 +214,7 @@ func TestUndoCombine_ReplayKeepsALockSetAfterTheUndo(t *testing.T) {
 			re, err := ms.UndoCombine(res.JournalID)
 			require.NoError(t, err)
 			if rm.lostApplied {
-				require.Contains(t, strings.Join(re.Warnings, "\n"), "title lock on book "+keep+" was changed after the combine; left as it is")
+				require.Contains(t, strings.Join(WarningTexts(re.Warnings), "\n"), "title lock on book "+keep+" was changed after the combine; left as it is")
 			} else {
 				require.Empty(t, re.Warnings, "nothing was replayed")
 			}
@@ -232,7 +232,7 @@ func TestUndoCombine_KeepsALockChangedSinceTheCombine(t *testing.T) {
 
 	undo, err := ms.UndoCombine(res.JournalID)
 	require.NoError(t, err)
-	require.Contains(t, strings.Join(undo.Warnings, "\n"), "title lock on book "+keep+" was changed after the combine")
+	require.Contains(t, strings.Join(WarningTexts(undo.Warnings), "\n"), "title lock on book "+keep+" was changed after the combine")
 	require.Equal(t, "My Own Pick", lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)))
 	b, err := store.GetBookByID(keep)
 	require.NoError(t, err)
@@ -292,7 +292,7 @@ func TestUndoCombine_JournalWithoutLockAfterState(t *testing.T) {
 		require.NoError(t, database.RecordUserOverrides(store, keep, map[string]any{database.FieldKeyTitle: "My Own Pick"}))
 		undo, err := ms.UndoCombine(res.JournalID)
 		require.NoError(t, err)
-		require.Contains(t, strings.Join(undo.Warnings, "\n"), "was changed after the combine")
+		require.Contains(t, strings.Join(WarningTexts(undo.Warnings), "\n"), "was changed after the combine")
 		require.Equal(t, "My Own Pick", lockValue(t, lockOf(t, store, keep, database.FieldKeyTitle)))
 	})
 }
