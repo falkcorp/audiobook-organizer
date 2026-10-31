@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.24 -->
+<!-- version: 10.78.25 -->
 <!-- version: 10.78.23 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-31 -->
@@ -14,6 +14,26 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **04-P6b book-atpath-index-backfill resumable** Part 2 of 04-P6. `maintenance.book-atpath-index-backfill {"if_needed": true}` is still ResumeDrop with a 30 min timeout: a first build on a library with no `book_atpath:` sentinel is a full book scan, a timeout leaves the sentinel unset, and a library too large for it restarts the scan at every boot. Apply the same fix as the four ops of 04-P6 (`docs/decisions/2026-10-30-boot-ops-resumable-checkpoint.md`): ResumeRestart, a sorted book-ID cursor checkpointed through `registry.RunItems` (it already fans out per row), and a yield before the deadline (`registry.ErrContinueInPlace`). Open question for the owner from the same note: the transcode is still ResumeAsk, so a transcode that hits its 6 h timeout restarts from zero on the next boot; moving it to ResumeRestart would let it finish on any library at the cost of unattended re-encoding after a restart.
+
+- [ ] **CI-BACKLOG-ROUTER** Build a router that watches the Woodpecker queue
+      (`GET /api/queue/info` pending_count, plus `/api/agents` capacity and
+      `no_schedule`) and, when the backlog exceeds what the online agents can
+      drain in a set time, dispatches the queued heavy steps to GitHub-hosted
+      runners instead. Observed 2026-10-30 19:55: 328 steps pending, 5 slots
+      live (u0 1, u0-local 1, llm1 2, mac 1), u1's 10 slots paused by the
+      owner's schedule, 40 PRs waiting with nothing merging. Shape: the same
+      step definitions exist as GHA jobs already (`make ci-woodpecker` mirrors
+      them), so the router only needs to (1) read the backlog and the agent
+      window from `ci-agent-schedule.py`, (2) pick the pipelines whose PR has
+      no GHA run for the same step and `gh workflow run` the matching workflow
+      with the PR head SHA, (3) cancel or skip the Woodpecker duplicate so the
+      merge gate (`feedback_merge_gate_require_woodpecker_statuses`) still
+      sees a status, by posting the GHA result back as a commit status under
+      the Woodpecker context name or by teaching the gate to accept either.
+      Guard the GitHub minutes budget (cap per hour, owner-set) and never move
+      Mac-only steps (TagLib, decodes). Owner asked for this 2026-10-30.
 
 - [ ] **TODO-KEPT-SWEEP-APPLY** the kept-file sweep (`versions.SweepKeptFiles`, a step of
       `maintenance.trash-cleanup`) ships report-only. Read a night or two of its result
