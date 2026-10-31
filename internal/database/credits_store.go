@@ -1,7 +1,7 @@
 // file: internal/database/credits_store.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // The store side of credit lists (see credits.go and
@@ -152,22 +153,40 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 		return nil, BookCreditsEdit{}, err
 	}
 
-	// The tie-breaker is the row as fn left it: a callback that changes the
-	// primary author and the credits together orders them by the new one.
-	newAuthors, authorData, err := encodeBookAuthors(bookID, edit.Authors, fresh.AuthorID)
-	if err != nil {
-		return nil, BookCreditsEdit{}, err
+	// A list the callback left as read is not staged: rewriting it would
+	// re-normalise legacy rows with tied positions (changing which author the
+	// organizer files the book under) and announce a credit change that did
+	// not happen. The tie-breaker is the row as fn left it: a callback that
+	// changes the primary author and the credits together orders them by the
+	// new one.
+	authorsChanged := !sameCreditRows(asRead.Authors, edit.Authors)
+	narratorsChanged := !sameCreditRows(asRead.Narrators, edit.Narrators)
+	var (
+		newAuthors   = authors
+		newNarrators = narrators
+		authorData   []byte
+		narratorData []byte
+	)
+	if authorsChanged {
+		if newAuthors, authorData, err = encodeBookAuthors(bookID, edit.Authors, fresh.AuthorID); err != nil {
+			return nil, BookCreditsEdit{}, err
+		}
 	}
-	newNarrators, narratorData, err := encodeBookNarrators(bookID, edit.Narrators)
-	if err != nil {
-		return nil, BookCreditsEdit{}, err
+	if narratorsChanged {
+		if newNarrators, narratorData, err = encodeBookNarrators(bookID, edit.Narrators); err != nil {
+			return nil, BookCreditsEdit{}, err
+		}
 	}
 	stage := func(b *GatedBatch) error {
-		if err := b.Set(bookAuthorsKey(bookID), authorData, nil); err != nil {
-			return fmt.Errorf("stage book_authors:%s: %w", bookID, err)
+		if authorsChanged {
+			if err := b.Set(bookAuthorsKey(bookID), authorData, nil); err != nil {
+				return fmt.Errorf("stage book_authors:%s: %w", bookID, err)
+			}
 		}
-		if err := b.Set(bookNarratorsKey(bookID), narratorData, nil); err != nil {
-			return fmt.Errorf("stage book_narrators:%s: %w", bookID, err)
+		if narratorsChanged {
+			if err := b.Set(bookNarratorsKey(bookID), narratorData, nil); err != nil {
+				return fmt.Errorf("stage book_narrators:%s: %w", bookID, err)
+			}
 		}
 		return nil
 	}
@@ -175,9 +194,26 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 	if err != nil {
 		return nil, BookCreditsEdit{}, err
 	}
-	p.ReplaceBookAuthorsInMemDB(bookID, newAuthors)
-	p.ReplaceBookNarratorsInMemDB(bookID, newNarrators)
+	if authorsChanged || narratorsChanged {
+		// The row's own write-through bumped the library generation before
+		// the credits reached memdb; bump again after, so a list cached in
+		// between (an author: page) is not served under the new generation.
+		p.writeThroughThenBump(bookID, func() {
+			if authorsChanged {
+				p.ReplaceBookAuthorsInMemDB(bookID, newAuthors)
+			}
+			if narratorsChanged {
+				p.ReplaceBookNarratorsInMemDB(bookID, newNarrators)
+			}
+		})
+	}
 	return updated, BookCreditsEdit{Authors: newAuthors, Narrators: newNarrators}, nil
+}
+
+// sameCreditRows reports whether two credit lists hold the same rows in the
+// same order; nil and empty are the same list.
+func sameCreditRows[T comparable](a, b []T) bool {
+	return slices.Equal(a, b)
 }
 
 // GetBookCredits returns the resolved, position-ordered credit lists of every
