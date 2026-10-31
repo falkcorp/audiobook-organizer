@@ -1,7 +1,7 @@
 // file: internal/operations/opswriter/history.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 00dad0e6-6243-4100-875e-bbe6f68ba728
-// last-edited: 2026-10-14
+// last-edited: 2026-10-30
 
 package opswriter
 
@@ -22,8 +22,9 @@ import (
 // never landed. Book fields go to metadata history, as internal/repairs has
 // always recorded them, so "undo last apply" keeps working. Everything else a
 // Writer changes (book_file fields, a repoint, credits, an Effect) is an
-// operation change row (opchange:) under the run's op id; a repoint row uses
-// the change type the operation revert already reverses.
+// operation change row (opchange:) under the run's op id. All three row kinds
+// (a repoint, a book_file field edit, a credit-list edit) use change types the
+// operation revert reverses.
 
 // Change types of the operation change rows this package writes.
 const (
@@ -36,12 +37,14 @@ const (
 	// it). Same value as metafetch.ChangeTypeApplyOpJournaled.
 	ChangeTypeApplyOpJournaled = "apply_op_journaled"
 	// ChangeTypeBookFileModify is one book_file field a Writer changed
-	// (FieldName "file.<json field>:<file id>"). Record-only: the operation
-	// revert does not reverse it yet.
-	ChangeTypeBookFileModify = "book_file_modify"
+	// (FieldName "file.<json field>:<file id>"). The operation revert
+	// reverses it; the constant lives in database beside the other change
+	// types the revert owns (database.ChangeTypeBookFileModify).
+	ChangeTypeBookFileModify = database.ChangeTypeBookFileModify
 	// ChangeTypeBookAuthorsModify is a book's whole credit list before and
-	// after a ModifyBookAuthors. Record-only, like ChangeTypeBookFileModify.
-	ChangeTypeBookAuthorsModify = "book_authors_modify"
+	// after a ModifyBookAuthors. The operation revert reverses it
+	// (database.ChangeTypeBookAuthorsModify).
+	ChangeTypeBookAuthorsModify = database.ChangeTypeBookAuthorsModify
 	// ChangeTypeEffectPrefix prefixes an Effect's rows: "effect:<name>".
 	ChangeTypeEffectPrefix = "effect:"
 )
