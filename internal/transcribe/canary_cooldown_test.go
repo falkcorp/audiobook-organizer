@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_cooldown_test.go
 // version: 1.1.2
 // guid: 768f5a2c-e381-4b86-8e01-15df198a14cb
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package transcribe
 
