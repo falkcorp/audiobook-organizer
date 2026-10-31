@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_gone_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4a4124a6-9e47-439e-bf24-3e5da4f68289
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -72,7 +72,7 @@ func TestRetiredLibraryRoutes_GuardRunsFirst(t *testing.T) {
 	for _, role := range []string{auth.SeedRoleViewer, auth.SeedRoleEditor, auth.SeedRoleFPWorker} {
 		u, err := f.store.CreateUser("synthetic-"+role, role+"@example.test", "bcrypt", "x", []string{role}, "active")
 		require.NoError(t, err)
-		sess, err := f.store.CreateSessionWithOrigin(u.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+		sess, err := f.store.CreateSessionWithOrigin(u.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 		require.NoError(t, err)
 		for _, r := range retiredLibraryRoutes {
 			t.Run(role+" "+r.method+" "+r.path, func(t *testing.T) {

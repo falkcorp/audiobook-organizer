@@ -1,7 +1,7 @@
 // file: internal/server/gone_session_helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f7a2c19-6d83-4e50-b1a7-9c0e5d3f8a62
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -47,7 +47,7 @@ func (f *credGuardFixture) exactPermGoneSession(t *testing.T, name, perm string)
 
 func (f *credGuardFixture) sessionFor(t *testing.T, userID string) string {
 	t.Helper()
-	sess, err := f.store.CreateSessionWithOrigin(userID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := f.store.CreateSessionWithOrigin(userID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 	return sess.ID
 }

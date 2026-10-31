@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth_epoch_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: da259f0d-609e-4d78-8f4f-d1d0071a7291
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package database
 
@@ -63,7 +63,7 @@ func TestUpdateUser_StaleCopyCannotRevertStatusOrPassword(t *testing.T) {
 	if _, err := p.SetUserStatus(u.ID, "locked"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-new"); err != nil {
+	if _, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-new", ""); err != nil {
 		t.Fatal(err)
 	}
 	stale.Email = "edit@example.com" // an innocent edit on a copy from before both
@@ -123,8 +123,8 @@ func TestSetUserPassword_RacingChangesEndAtDistinctEpochs(t *testing.T) {
 	u := newEpochUser(t, p)
 	var second *User
 	var secondErr error
-	wait := interleave(t, func() { second, secondErr = p.SetUserPassword(u.ID, "", "bcrypt", "hash-b") })
-	first, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-a")
+	wait := interleave(t, func() { second, secondErr = p.SetUserPassword(u.ID, "", "bcrypt", "hash-b", "") })
+	first, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-a", "")
 	wait()
 	if err != nil || secondErr != nil {
 		t.Fatalf("errors: %v / %v", err, secondErr)
@@ -149,8 +149,8 @@ func TestSetUserPassword_SelfServiceIsCompareAndSwap(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
 	var secondErr error
-	wait := interleave(t, func() { _, secondErr = p.SetUserPassword(u.ID, "hash-old", "bcrypt", "hash-b") })
-	_, firstErr := p.SetUserPassword(u.ID, "hash-old", "bcrypt", "hash-a")
+	wait := interleave(t, func() { _, secondErr = p.SetUserPassword(u.ID, "hash-old", "bcrypt", "hash-b", "") })
+	_, firstErr := p.SetUserPassword(u.ID, "hash-old", "bcrypt", "hash-a", "")
 	wait()
 	if firstErr != nil {
 		t.Fatalf("the first change must land: %v", firstErr)
@@ -192,7 +192,7 @@ func TestRehashUserPassword_CannotOverwriteAConcurrentChange(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
 	var changeErr error
-	wait := interleave(t, func() { _, changeErr = p.SetUserPassword(u.ID, "", "bcrypt", "hash-new") })
+	wait := interleave(t, func() { _, changeErr = p.SetUserPassword(u.ID, "", "bcrypt", "hash-new", "") })
 	if _, err := p.RehashUserPassword(u.ID, "hash-old", "argon2id", "argon-of-old"); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestRehashUserPassword_IsConditional(t *testing.T) {
 	u := newEpochUser(t, p)
 	verified := mustGetUser(t, p, u.ID) // what the login checked the password against
 
-	if _, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-new"); err != nil {
+	if _, err := p.SetUserPassword(u.ID, "", "bcrypt", "hash-new", ""); err != nil {
 		t.Fatal(err)
 	}
 	wrote, err := p.RehashUserPassword(u.ID, verified.PasswordHash, "argon2id", "argon-of-old")

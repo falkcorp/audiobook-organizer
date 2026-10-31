@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_access_wiring_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 0c6b1f84-93d7-4e52-a8b0-d2f5e7a14c39
-// last-edited: 2026-10-28
+// last-edited: 2026-10-30
 
 // The generic operations routes as the server wires them, driven through the
 // real router: a Repairs operation's data (repairs.plan, repairs.apply) is
@@ -83,7 +83,7 @@ func newRepairsOpAccessFixture(t *testing.T) *repairsOpAccessFixture {
 	require.True(t, ok, "the test server runs on a PebbleStore")
 	vu, err := store.CreateUser("viewer", "viewer@x.test", "bcrypt", "hash", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	vs, err := store.CreateSession(vu.ID, "192.0.2.10", "test", time.Hour)
+	vs, err := store.CreateSession(vu.ID, "192.0.2.10", "test", time.Hour, 0)
 	require.NoError(t, err)
 
 	// A fixer whose only requirement is the lane's default permission.

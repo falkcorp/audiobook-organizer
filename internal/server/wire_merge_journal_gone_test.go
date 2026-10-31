@@ -1,7 +1,7 @@
 // file: internal/server/wire_merge_journal_gone_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f7287a40-9996-4784-8c46-4f09afcab92e
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package server
 
@@ -57,7 +57,7 @@ func TestRetiredMergeUndoRoutes_GuardsRunFirst(t *testing.T) {
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	for _, r := range retiredMergeUndoRoutes {
@@ -103,7 +103,7 @@ func TestRetiredMergeUndoRoutes_KeptJournalListsNotGone(t *testing.T) {
 	require.NoError(t, err)
 	noView, err := f.store.CreateUser("synthetic-no-view", "noview@example.test", "bcrypt", "x", []string{"synthetic-playlists-only"}, "active")
 	require.NoError(t, err)
-	noViewSess, err := f.store.CreateSessionWithOrigin(noView.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	noViewSess, err := f.store.CreateSessionWithOrigin(noView.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	kept := []struct{ pattern, path, seeded string }{

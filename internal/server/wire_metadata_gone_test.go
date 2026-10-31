@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_gone_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7e2c94d1-5b0a-4f38-9c6d-1a83f4e07b52
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -69,7 +69,7 @@ func TestRetiredMetadataRoutes_PermissionGuardRunsFirst(t *testing.T) {
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	for _, r := range retiredMetadataRoutes {

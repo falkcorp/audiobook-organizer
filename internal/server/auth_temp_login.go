@@ -1,7 +1,7 @@
 // file: internal/server/auth_temp_login.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e
-// last-edited: 2026-08-01
+// last-edited: 2026-10-30
 
 // Temp-login token: admin mints a short-lived single-use URL for a user.
 // User clicks the URL → server consumes the token → 24h session cookie
@@ -33,6 +33,12 @@ import (
 type tempLoginEntry struct {
 	UserID    string
 	ExpiresAt time.Time
+	// Epoch is the user's CredentialEpoch when the link was minted. The link is
+	// refused if the epoch has moved since: a password change, a reset or a
+	// deactivation after minting must also kill a link minted before it (the ABS
+	// OIDC pending code carries its epoch for the same reason). For a reset link
+	// the epoch is the one the reset's own bump produced, so the link stays valid.
+	Epoch int64
 }
 
 var (
@@ -121,7 +127,7 @@ func (s *Server) mintTempLoginPayload(c *gin.Context, user *database.User) (gin.
 
 	tempLoginMu.Lock()
 	purgeExpiredTempTokens()
-	tempLoginTokens[token] = tempLoginEntry{UserID: user.ID, ExpiresAt: expires}
+	tempLoginTokens[token] = tempLoginEntry{UserID: user.ID, ExpiresAt: expires, Epoch: user.CredentialEpoch}
 	tempLoginMu.Unlock()
 
 	// Build the login URL. If ExternalURL is configured, use it as the
@@ -190,12 +196,23 @@ func (s *Server) consumeTempLoginToken(c *gin.Context) {
 		c.Redirect(http.StatusSeeOther, "/login?error=account_inactive")
 		return
 	}
+	// The credentials changed after the link was minted: it was issued for a
+	// state of the account that no longer exists.
+	if user.CredentialEpoch != entry.Epoch {
+		c.Redirect(http.StatusSeeOther, "/login?error=invalid_or_expired_token")
+		return
+	}
 
 	session, err := s.Ops().CreateSession(
 		user.ID,
 		strings.TrimSpace(c.ClientIP()),
 		strings.TrimSpace(c.Request.UserAgent()),
 		handlers.DefaultSessionTTL,
+		// The epoch of the record read and checked active just above, not a fresh
+		// read: a credential change landing after it leaves this session with
+		// the old stamp, refused on first use. A link minted by a reset (which
+		// bumped the epoch first) therefore yields a session that is current.
+		user.CredentialEpoch,
 	)
 	if err != nil {
 		c.Redirect(http.StatusSeeOther, "/login?error=session_failed")

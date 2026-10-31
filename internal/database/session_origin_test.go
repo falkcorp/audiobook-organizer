@@ -1,7 +1,7 @@
 // file: internal/database/session_origin_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3c8e1a57-4b92-4d06-a7f3-6e2b9d0c5f18
-// last-edited: 2026-10-06
+// last-edited: 2026-10-30
 
 package database
 
@@ -25,7 +25,7 @@ func TestSessionOrigin_RoundTrip(t *testing.T) {
 		{"temp_login", false},
 		{"", false},
 	} {
-		s, err := store.CreateSessionWithOrigin("user-1", "192.0.2.1", "ua", time.Hour, tc.origin)
+		s, err := store.CreateSessionWithOrigin("user-1", "192.0.2.1", "ua", time.Hour, tc.origin, 0)
 		if err != nil {
 			t.Fatalf("create %q: %v", tc.origin, err)
 		}
@@ -37,7 +37,7 @@ func TestSessionOrigin_RoundTrip(t *testing.T) {
 			t.Errorf("origin %q: read origin %q interactive %v, want interactive %v", tc.origin, got.Origin, got.InteractiveLogin(), tc.interactive)
 		}
 	}
-	plain, err := store.CreateSession("user-1", "192.0.2.1", "ua", time.Hour)
+	plain, err := store.CreateSession("user-1", "192.0.2.1", "ua", time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

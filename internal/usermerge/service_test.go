@@ -1,7 +1,7 @@
 // file: internal/usermerge/service_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b17d4c90-3e62-4a85-9d0f-4c8a2e6b7153
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package usermerge
 
@@ -272,7 +272,7 @@ func TestApply_RefusesWithoutTheOwnerAcknowledgement(t *testing.T) {
 
 func TestApply_MovesEverythingAndLeavesNoLiveRowOfTheAbsorbedAccount(t *testing.T) {
 	f := newFixture(t)
-	sess, err := f.s.CreateSession(f.b.ID, "192.0.2.10", "test", time.Hour)
+	sess, err := f.s.CreateSession(f.b.ID, "192.0.2.10", "test", time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +506,7 @@ func TestUndo_EndsTheSurvivorsSessionsWhenSignInsMoveBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The survivor signs in after the merge, possibly through a re-linked identity.
-	sess, err := f.s.CreateSession(f.a.ID, "192.0.2.20", "test", time.Hour)
+	sess, err := f.s.CreateSession(f.a.ID, "192.0.2.20", "test", time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +535,7 @@ func TestUndo_LeavesTheSurvivorsSessionsAloneWhenNoCredentialMoved(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, _ := f.s.CreateSession(f.a.ID, "192.0.2.21", "test", time.Hour)
+	sess, _ := f.s.CreateSession(f.a.ID, "192.0.2.21", "test", time.Hour, 0)
 	if _, err := f.svc.Undo(context.Background(), UndoRequest{JournalID: j.ID}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestBuildPlan_Refusals(t *testing.T) {
 
 func TestBuildPlan_SurvivorWithNoSignInIsRefused(t *testing.T) {
 	f := newFixture(t)
-	if _, err := f.s.SetUserPassword(f.a.ID, "", "bcrypt", ""); err != nil {
+	if _, err := f.s.SetUserPassword(f.a.ID, "", "bcrypt", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"oauthid:idA", "idx:oauth:user:" + f.a.ID + ":idA", "oauthid:idB", "idx:oauth:user:" + f.b.ID + ":idB"} {

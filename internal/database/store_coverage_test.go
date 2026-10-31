@@ -1,7 +1,7 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.12.0
+// version: 2.12.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-12
+// last-edited: 2026-10-30
 
 // NOTE(fable5 T022): setupCoverageDB ported to PebbleStore; SQLiteStore
 // type assertions updated. Tests for SQLite-only methods (CountTableRows,
@@ -722,7 +722,7 @@ func TestCoverage_CountUsersAndExpiredSessions(t *testing.T) {
 	assert.Equal(t, 1, count)
 
 	// Create expired session
-	_, err = s.CreateSession(user.ID, "127.0.0.1", "TestAgent", -time.Hour)
+	_, err = s.CreateSession(user.ID, "127.0.0.1", "TestAgent", -time.Hour, 0)
 	require.NoError(t, err)
 
 	n, err := s.DeleteExpiredSessions(time.Now())

@@ -1,7 +1,7 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package server
 
@@ -391,7 +391,7 @@ func (f *failingUserWriteStore) BumpUserCredentialEpoch(string) (*database.User,
 
 // The rest of database.UserCredentialWriter, so AsCapability resolves this
 // wrapper's (failing) ops instead of looking through to the real store's.
-func (f *failingUserWriteStore) SetUserPassword(string, string, string, string) (*database.User, error) {
+func (f *failingUserWriteStore) SetUserPassword(string, string, string, string, string) (*database.User, error) {
 	return nil, errors.New("disk full")
 }
 

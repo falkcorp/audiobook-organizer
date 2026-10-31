@@ -1,7 +1,7 @@
 // file: internal/server/gone_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8a3d6f12-c405-4e97-b1d8-72f9e0a5c346
-// last-edited: 2026-10-14
+// last-edited: 2026-10-30
 
 package server
 
@@ -81,7 +81,7 @@ func TestWipeRoute_IsA410StubBehindAdminOnly(t *testing.T) {
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	body := map[string]any{"targets": []string{"all"}, "confirm": "WIPE", "dry_run": false}
@@ -122,7 +122,7 @@ func TestRepairMissingFilesResultRoute_IsA410StubNamingBothSuccessors(t *testing
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	const path = "/api/v1/maintenance/repair-missing-files/01SYNTHETICOPID0000000000"

@@ -85,7 +85,7 @@ func TestPebbleExtendedFeatures(t *testing.T) {
 	}
 
 	// ---- Sessions ----
-	sess, err := sqliteStore.CreateSession(user.ID, "127.0.0.1", "TestAgent/1.0", time.Hour)
+	sess, err := sqliteStore.CreateSession(user.ID, "127.0.0.1", "TestAgent/1.0", time.Hour, 0)
 	if err != nil || sess == nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -506,7 +506,7 @@ func exercisePebbleAdvanced(t *testing.T, store *PebbleStore) {
 		t.Fatalf("UpdateUser failed: %v", err)
 	}
 
-	sess, err := store.CreateSession(user.ID, "127.0.0.1", "agent", time.Minute)
+	sess, err := store.CreateSession(user.ID, "127.0.0.1", "agent", time.Minute, 0)
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}

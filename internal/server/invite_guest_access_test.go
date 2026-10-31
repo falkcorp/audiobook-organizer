@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package server
 
@@ -379,7 +379,7 @@ func TestUpdateMeRoute_AnyAddressAcceptedUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := store.CreateSession(me.ID, "127.0.0.1", "test", time.Hour)
+	sess, err := store.CreateSession(me.ID, "127.0.0.1", "test", time.Hour, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
