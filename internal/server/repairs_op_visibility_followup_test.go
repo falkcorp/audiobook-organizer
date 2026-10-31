@@ -1,7 +1,7 @@
 // file: internal/server/repairs_op_visibility_followup_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3e8a51c7-b240-4d96-9f1a-7c05d2e8b463
-// last-edited: 2026-10-25
+// last-edited: 2026-10-30
 
 // The operations v3 routes (/api/v3/ops) and the activity log as the server
 // wires them, driven through the real router: a Repairs run (repairs.plan,
@@ -827,7 +827,7 @@ func opsManagerToken(t *testing.T, f *repairsOpAccessFixture) string {
 	require.NoError(t, err)
 	u, err := store.CreateUser("opsmgr", "opsmgr@example.invalid", "bcrypt", "hash", []string{"role-ops-manager"}, "active")
 	require.NoError(t, err)
-	sess, err := store.CreateSession(u.ID, "192.0.2.11", "test", time.Hour)
+	sess, err := store.CreateSession(u.ID, "192.0.2.11", "test", time.Hour, 0)
 	require.NoError(t, err)
 	return sess.ID
 }

@@ -345,7 +345,7 @@ func TestMockStore_AllMethods(t *testing.T) {
 
 	// Test session methods
 	ttl := 24 * time.Hour
-	if session, err := mock.CreateSession("user-1", "127.0.0.1", "agent", ttl); err != nil || session != nil {
+	if session, err := mock.CreateSession("user-1", "127.0.0.1", "agent", ttl, 0); err != nil || session != nil {
 		t.Errorf("CreateSession() = %v, %v; want nil, nil", session, err)
 	}
 	if session, err := mock.GetSession("session-1"); err != nil || session != nil {

@@ -1,7 +1,7 @@
 // file: internal/database/iface_auth.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8be16e9f-22a9-45ca-a13c-1cca96721f90
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package database
 
@@ -68,10 +68,10 @@ type RoleStore interface {
 
 // SessionStore covers authenticated session CRUD.
 type SessionStore interface {
-	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
+	CreateSession(userID, ip, userAgent string, ttl time.Duration, credentialEpoch int64) (*Session, error)
 	// CreateSessionWithOrigin is CreateSession recording how the session
 	// was issued (Session.Origin, SessionOrigin*).
-	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error)
+	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*Session, error)
 	GetSession(id string) (*Session, error)
 	RevokeSession(id string) error
 	ListUserSessions(userID string) ([]Session, error)

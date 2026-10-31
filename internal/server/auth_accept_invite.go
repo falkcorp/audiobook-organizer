@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -85,7 +85,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 	s.recordAcceptDisplacement(req.Token, user.ID)
 	s.startGuestPolicySync(req.Token, user.ID)
 
-	sess, err := s.Ops().CreateSession(user.ID, requestClientIP(c), c.Request.UserAgent(), 30*24*time.Hour)
+	sess, err := s.Ops().CreateSession(user.ID, requestClientIP(c), c.Request.UserAgent(), 30*24*time.Hour, user.CredentialEpoch)
 	if err != nil {
 		httputil.InternalError(c, "create session", err)
 		return

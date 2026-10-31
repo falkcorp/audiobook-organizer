@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.129.4
+// version: 2.130.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-30
 
@@ -755,8 +755,12 @@ type User struct {
 	// window between verifying a password and writing a new one: a session minted
 	// with the old password in that window carries the old epoch and dies when the
 	// new one lands. Missing (pre-2026-10-19 rows) reads as 0, as does a missing
-	// stamp on a session, so nothing is signed out on deploy. Version is not
-	// reused for this: it is 1 on every row and no writer moves it.
+	// stamp on an ABS session, so nothing is signed out on deploy. Web sessions
+	// (Session.CredentialEpoch) are stamped and checked the same way since
+	// 2026-10-30; a web session with no stamp reads as 0 as well, so it is
+	// refused once its user's epoch is above 0 (one forced sign-in for users who
+	// changed credentials since 2026-10-19). Version is not reused for this: it
+	// is 1 on every row and no writer moves it.
 	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
 	// EmailSource records how Email got onto the account (EmailSource*
 	// constants), and so whether the address is verified: setup, admin,
@@ -1051,6 +1055,24 @@ type Session struct {
 	// temp-login link, an invite): such a session is NOT proof of the
 	// user's own interactive login (auth.MethodSessionDelegated).
 	Origin string `json:"origin,omitempty"`
+	// CredentialEpoch is the owning user's User.CredentialEpoch as of the sign-in
+	// that created this session, taken from the same user record the credential
+	// was verified against (never re-read at creation: a re-read would stamp a
+	// session minted with the old password, while a change was in flight, with
+	// the NEW epoch and let it through). It changes afterwards only through
+	// SetUserPassword's keepSessionID, which re-stamps the caller's own session
+	// in the same write as the password change. A missing stamp (every session
+	// before 2026-10-30) reads as 0, so it is current only for a user whose epoch
+	// is still 0 and is refused for any user who has changed credentials since
+	// 2026-10-19. Every request on the session is refused on a mismatch
+	// (Session.CredentialsCurrent).
+	CredentialEpoch int64 `json:"credential_epoch,omitempty"`
+}
+
+// CredentialsCurrent reports whether the session was issued under the user's
+// current credentials. A mismatch in either direction fails closed.
+func (s *Session) CredentialsCurrent(u *User) bool {
+	return s != nil && u != nil && s.CredentialEpoch == u.CredentialEpoch
 }
 
 // Session origins (Session.Origin).

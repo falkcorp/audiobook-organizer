@@ -1,7 +1,7 @@
 // file: internal/server/master_list_handler_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2f8b4c61-9d30-4a7e-8c15-6b0e3d9a7f24
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 
 package server
 
@@ -187,7 +187,7 @@ func TestMasterListUpload_AuthAndRole(t *testing.T) {
 	// A signed-in non-admin: 403.
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 	w = f.postMasterList(t, sess.ID, bytes.NewBufferString(masterListTestCSV), "text/csv", "")
 	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
@@ -379,7 +379,7 @@ func TestMasterListDeleteAndElsewhere_AdminOnlyAndScoped(t *testing.T) {
 	up := f.uploadMasterListID(t)
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	exp := time.Now().Add(time.Hour)
@@ -486,7 +486,7 @@ func TestMasterListDelete_AnyAdminMayDeleteAnyList(t *testing.T) {
 	f := setupCredGuardServer(t)
 	up := f.uploadMasterListID(t)
 
-	sess, err := f.store.CreateSessionWithOrigin(f.targetID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := f.store.CreateSessionWithOrigin(f.targetID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 	w := f.doMasterList(t, http.MethodDelete, "/api/v1/master-lists/"+up.List.ID, sess.ID)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

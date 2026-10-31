@@ -1,7 +1,7 @@
 // file: internal/server/middleware/worker_scope_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3491bedd-1c6e-45b4-afe0-973ac28648ba
-// last-edited: 2026-10-07
+// last-edited: 2026-10-30
 
 package middleware
 
@@ -43,7 +43,7 @@ func TestWorkerOnlyCredentials_ConfinedToWorkerAPI(t *testing.T) {
 		require.NoError(t, err)
 		return raw
 	}
-	sess, err := store.CreateSession(svc.ID, "192.0.2.10", "test", time.Hour)
+	sess, err := store.CreateSession(svc.ID, "192.0.2.10", "test", time.Hour, 0)
 	require.NoError(t, err)
 
 	r := gin.New()

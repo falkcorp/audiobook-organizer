@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4d8a2f63-7b19-4c50-a3e8-1f6c9b0d5e27
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package server
 
@@ -598,7 +598,7 @@ func TestGuestToken_AdminRoutesRefuseNonAdminSessionAndAdminAPIKey(t *testing.T)
 	g.srv.guestTokens.apiOverride, g.srv.guestTokens.policyOverride = &fakeTokenAPI{}, &fakeTokenPolicy{}
 	viewer, err := g.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	vs, err := g.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	vs, err := g.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	routes := []struct{ method, path string }{

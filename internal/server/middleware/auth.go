@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-10-24
+// last-edited: 2026-10-30
 
 package middleware
 
@@ -213,6 +213,22 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 		user, err := store.GetUserByID(session.UserID)
 		if err != nil || user == nil {
 			httputil.RespondWithUnauthorized(c, "invalid session user")
+			c.Abort()
+			return
+		}
+		// A password change, admin reset, reset link, deactivation or
+		// reactivation bumps User.CredentialEpoch in the same write as the change,
+		// and every web session is stamped with the epoch of the sign-in that
+		// created it. A mismatch (including a session minted with the old
+		// password while the change was in flight, and one with no stamp for a
+		// user whose epoch is above 0) is dead whether or not the follow-up
+		// revoke reached it, and is refused exactly like an expired session:
+		// revoked, 401 "session expired", the same body a client already handles.
+		// Checked before the status check so a pre-deactivation session reads as
+		// dead, not suspended.
+		if !session.CredentialsCurrent(user) {
+			_ = store.RevokeSession(token)
+			httputil.RespondWithUnauthorized(c, "session expired")
 			c.Abort()
 			return
 		}

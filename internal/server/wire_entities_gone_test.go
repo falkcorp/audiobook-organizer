@@ -1,7 +1,7 @@
 // file: internal/server/wire_entities_gone_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6d2a9c41-7b58-4e03-91f6-a4c8e2b05d37
-// last-edited: 2026-10-18
+// last-edited: 2026-10-30
 
 package server
 
@@ -74,7 +74,7 @@ func TestRetiredEntityRoutes_PermissionRunsBeforeGone(t *testing.T) {
 
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	viewerSess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	for _, r := range retiredEntityRoutes {
@@ -97,7 +97,7 @@ func TestRetiredEntityRoutes_PermissionRunsBeforeGone(t *testing.T) {
 	require.NoError(t, err)
 	scanOnly, err := f.store.CreateUser("synthetic-scan-only", "scanonly@example.test", "bcrypt", "x", []string{"synthetic-scan-only"}, "active")
 	require.NoError(t, err)
-	scanSess, err := f.store.CreateSessionWithOrigin(scanOnly.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	scanSess, err := f.store.CreateSessionWithOrigin(scanOnly.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 	for _, r := range retiredEntityRoutes {
 		t.Run("scan-only role gets 403 on "+r.method+" "+r.pattern, func(t *testing.T) {

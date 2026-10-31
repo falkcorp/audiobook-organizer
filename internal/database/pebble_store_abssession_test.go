@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_abssession_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: 5a3f8c21-9e04-4b7d-8c16-2f5b9d0e7a34
-// last-edited: 2026-10-03
+// last-edited: 2026-10-30
 
 package database
 
@@ -241,7 +241,7 @@ func TestABSSession_DeleteExpiredRemovesRecordAndIndexes(t *testing.T) {
 // sess: browser-session keyspace and vice versa.
 func TestABSSession_DoesNotCollideWithBrowserSessions(t *testing.T) {
 	store := newABSSessionStore(t)
-	browser, err := store.CreateSession("user-1", "10.0.0.1", "curl", time.Hour)
+	browser, err := store.CreateSession("user-1", "192.0.2.1", "curl", time.Hour, 0)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestABSSession_DoesNotCollideWithBrowserSessions(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("browser session lost: %v %+v", err, got)
 	}
-	if got.IP != "10.0.0.1" || got.UserAgent != "curl" {
+	if got.IP != "192.0.2.1" || got.UserAgent != "curl" {
 		t.Fatalf("browser session overwritten by ABS session: %+v", got)
 	}
 	sessions, err := store.ListUserSessions("user-1")
