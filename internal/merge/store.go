@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-10-23
+// last-edited: 2026-10-30
 
 package merge
 
@@ -190,6 +190,9 @@ type combineReverseMappingStore interface {
 	ReassignExternalID(source, externalID, newBookID string) error
 	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
 	DeleteMetadataFieldState(bookID, field string) error
+	// GetBookChanges reads the operation journal rows of a book, which the
+	// lock restore uses to tell whether a repair lock's operation was reverted.
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
 
 // Store is the whole merge surface, for Service and its constructor. Exported
