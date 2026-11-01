@@ -1,7 +1,7 @@
 // file: internal/server/admin_routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 77227bb9-356c-49c7-bb9b-98245ccb7bed
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package server
 
@@ -163,7 +163,7 @@ func (f *credGuardFixture) viewerSession(t *testing.T) string {
 	t.Helper()
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 	return sess.ID
 }
