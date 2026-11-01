@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_phase_summary_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1e7c40-9a3f-4d28-8e16-c47f0b93a2d5
-// last-edited: 2026-09-09
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -15,7 +15,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/stretchr/testify/require"
 )
 
 // The exact shape from the report: dozens of consecutive "AI Filename Parsing"
@@ -307,4 +309,113 @@ func (p *blockingFailParser) ParseBatch(_ context.Context, _ []string) ([]*ai.Pa
 	p.inFlight--
 	p.mu.Unlock()
 	return nil, errors.New("connection reset by peer")
+}
+
+// confByFileParser answers each filename with a title and the confidence mapped
+// to it.
+type confByFileParser map[string]string
+
+func (p confByFileParser) ParseBatch(_ context.Context, filenames []string) ([]*ai.ParsedMetadata, error) {
+	out := make([]*ai.ParsedMetadata, len(filenames))
+	for i, f := range filenames {
+		out[i] = &ai.ParsedMetadata{Title: "Year One", Confidence: p[f]}
+	}
+	return out, nil
+}
+
+// The probe from the 2026-09-09 report: three book IDs that do not exist. The
+// LLM answers all three, the saver resolves no row and returns ("", nil) for
+// each. The summary used to read "3/3 book(s) parsed ... 0 save failure(s)".
+func TestRunAIBatchPhase_NonexistentRowsAreDiscardedNotParsed(t *testing.T) {
+	store := aiSaveStore(t)
+	_ = store
+	books := []Book{
+		{FilePath: "/lib/gotham-1.m4b"}, {FilePath: "/lib/gotham-2.m4b"}, {FilePath: "/lib/gotham-3.m4b"},
+	}
+	cands := []int{0, 1, 2}
+	ids := map[string]string{
+		books[0].FilePath: "no-such-book-1", books[1].FilePath: "no-such-book-2", books[2].FilePath: "no-such-book-3",
+	}
+	save := func(ctx context.Context, b *Book) (string, error) {
+		return saveAIFieldsToPrimary(ctx, ids[b.FilePath], b)
+	}
+
+	s := runAIBatchPhase(context.Background(), confByFileParser{}, books, cands, logger.New("test"), save)
+
+	if s.BooksParsed != 0 || s.BooksDiscarded != 3 || s.SavesFailed != 0 {
+		t.Fatalf("parsed/discarded/saveFailed = %d/%d/%d, want 0/3/0", s.BooksParsed, s.BooksDiscarded, s.SavesFailed)
+	}
+	msg := s.String()
+	for _, want := range []string{"0/3 book(s) parsed", "3 discarded"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("summary %q lacks %q", msg, want)
+		}
+	}
+	if s.Failed() {
+		t.Error("a discard is not a failure: a row deleted or merged under the batch is legitimate")
+	}
+	if !s.Degraded() {
+		t.Error("a run that discarded rows must be Degraded so the operation logs it at warn level")
+	}
+	if len(s.Discarded) != 3 || len(s.FailureDetails()) != 3 {
+		t.Errorf("discarded books are not named: %v / %v", s.Discarded, s.FailureDetails())
+	}
+	if s.Confidence.Rated()+s.Confidence.Unrated != 0 {
+		t.Errorf("a discarded row has no saved confidence: %+v", s.Confidence)
+	}
+}
+
+func TestAIPhaseSummary_DegradedOnlyWhenDiscardedAndNotFailed(t *testing.T) {
+	if (AIPhaseSummary{BooksParsed: 5}).Degraded() {
+		t.Error("clean run is not degraded")
+	}
+	if !(AIPhaseSummary{BooksParsed: 4, BooksDiscarded: 1}).Degraded() {
+		t.Error("a discard must degrade the run")
+	}
+	if (AIPhaseSummary{BatchesFailed: 1, BooksDiscarded: 1}).Degraded() {
+		t.Error("a failed run reports as Failed, not Degraded")
+	}
+}
+
+// The confidence is read, tallied, and recorded on the change-history source; it
+// gates nothing (every row here is saved, low included).
+func TestRunAIBatchPhase_RecordsConfidenceAndTagsHistorySource(t *testing.T) {
+	store := aiSaveStore(t)
+	files := map[string]string{
+		"robin.m4b": "high", "joker.m4b": "medium", "bane.m4b": "low", "ivy.m4b": "LOW ", "penguin.m4b": "",
+	}
+	books := make([]Book, 0, len(files))
+	ids := map[string]string{}
+	parser := confByFileParser{}
+	for name, conf := range files {
+		row, err := store.CreateBook(&database.Book{FilePath: "/lib/" + name})
+		require.NoError(t, err)
+		ids[row.FilePath] = row.ID
+		parser[name] = conf
+		books = append(books, Book{FilePath: row.FilePath})
+	}
+	cands := make([]int, len(books))
+	for i := range cands {
+		cands[i] = i
+	}
+	save := func(ctx context.Context, b *Book) (string, error) {
+		return saveAIFieldsToPrimary(ctx, ids[b.FilePath], b)
+	}
+
+	s := runAIBatchPhase(context.Background(), parser, books, cands, logger.New("test"), save)
+
+	require.Equal(t, 5, s.BooksParsed, "low-confidence rows are still saved")
+	require.Equal(t, AIConfidenceCounts{High: 1, Medium: 1, Low: 2, Unrated: 1}, s.Confidence)
+	require.Contains(t, s.String(), "confidence high 1 / medium 1 / low 2 / unrated 1")
+
+	for name, conf := range files {
+		got, err := store.GetMetadataChangeHistory(ids["/lib/"+name], "title", 10)
+		require.NoError(t, err)
+		require.Len(t, got, 1, name)
+		want := "scan.ai-parse"
+		if c := strings.ToLower(strings.TrimSpace(conf)); c != "" {
+			want += ":" + c
+		}
+		require.Equal(t, want, got[0].Source, name)
+	}
 }

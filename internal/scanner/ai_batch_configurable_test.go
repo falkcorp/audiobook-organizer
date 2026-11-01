@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_configurable_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f3c1a94-2d58-4b07-9e61-8c05d7f2ab13
-// last-edited: 2026-09-09
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -113,7 +113,7 @@ func TestRunAIBatchPhase_TimeoutComesFromConfig(t *testing.T) {
 		books, cands := makeCandidates(4)
 		p := &ctxAwareParser{work: work}
 
-		s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), saveBookAndReportPath)
+		s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), noopSave)
 
 		if s.BatchesFailed != 0 {
 			t.Fatalf("BatchesFailed = %d, want 0: %s of work fits inside a 10s configured deadline, "+
@@ -233,7 +233,7 @@ func TestRunAIBatchPhase_WorkersComeFromConfig(t *testing.T) {
 		books, cands := makeCandidates(4)
 		p := newSerialBackendParser(work)
 
-		s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), saveBookAndReportPath)
+		s := runAIBatchPhase(context.Background(), p, books, cands, logger.New("test"), noopSave)
 
 		if p.concurrentCallers() != 1 {
 			t.Fatalf("concurrent callers = %d, want 1: the configured worker limit is not reaching SetLimit",
