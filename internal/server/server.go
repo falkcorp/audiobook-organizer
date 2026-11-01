@@ -184,6 +184,9 @@ type Server struct {
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind
+	// adminRoutes records every route registered through adminRoute /
+	// adminGroup ("METHOD /full/path"), for admin_routes_test.go.
+	adminRoutes map[string]adminRouteKind
 	// metadataCacheH is the metadata-cache handler, kept so the startup
 	// warmer can build its review snapshot (warmMetadataReviewSnapshot).
 	metadataCacheH *handlers.MetadataCacheHandler
