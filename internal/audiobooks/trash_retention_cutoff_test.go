@@ -1,11 +1,12 @@
 // file: internal/audiobooks/trash_retention_cutoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b6c0f78e-322e-4496-9828-229e17d721c4
 // last-edited: 2026-11-01
 
 package audiobooks
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -28,6 +29,22 @@ func TestTrashRetentionCutoff_IsFixedHoursAcrossDST(t *testing.T) {
 			if want := time.Duration(days) * 24 * time.Hour; got != want {
 				t.Errorf("%s, %d day(s): cutoff is %v before now, want %v", now.Format(time.DateOnly), days, got, want)
 			}
+		}
+	}
+}
+
+// A window too long for time.Duration must not wrap the cutoff into the
+// future; that would make every trashed book eligible for purge.
+func TestTrashRetentionCutoff_HugeWindowFailsClosed(t *testing.T) {
+	now := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
+	for _, days := range []int{106751, 106752, 999999, math.MaxInt} {
+		cut := trashRetentionCutoff(now, days)
+		if !cut.Before(now) {
+			t.Errorf("%d days: cutoff %v is not before now", days, cut)
+		}
+		trashed := now.Add(-time.Hour)
+		if !trashed.After(cut) {
+			t.Errorf("%d days: a book trashed an hour ago is past the cutoff %v", days, cut)
 		}
 	}
 }
