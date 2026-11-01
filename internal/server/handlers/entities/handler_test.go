@@ -1,7 +1,7 @@
 // file: internal/server/handlers/entities/handler_test.go
-// version: 1.14.0
+// version: 1.16.0
 // guid: 163bc668-0761-43eb-9d85-f4983e8b014b
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package entities_test
 
@@ -598,16 +598,66 @@ func TestDeleteAuthorAlias(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+// The route queues entities.author-reclassify and answers 202 with that op's id
+// (the one /operations/v2/:id resolves), in the shape POST /authors/merge uses. It
+// moves nothing itself: the mock store fails the test on any write.
 func TestReclassifyAuthorAsNarrator(t *testing.T) {
 	h, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.author-reclassify", entities.AuthorReclassifyOpParams{AuthorID: 5}).
+		Return("v2op-reclass", nil)
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	require.Equal(t, http.StatusAccepted, w.Code)
+
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "v2op-reclass", resp.Data.ID)
+	assert.Equal(t, "entities.author-reclassify", resp.Data.Type)
+	assert.Equal(t, "queued", resp.Data.Status)
+}
+
+func TestReclassifyAuthorAsNarrator_EnqueueFailureIs500(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.registry.EXPECT().EnqueueOp(mock.Anything, "entities.author-reclassify", mock.Anything).Return("", fmt.Errorf("queue full"))
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestReclassifyAuthorAsNarrator_MissingAuthorIs404AndQueuesNothing(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(nil, errString("missing"))
+	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestReclassifyAuthorAsNarrator_BadIDIs400(t *testing.T) {
+	h, _ := newHandler(t)
+	c, w := newCtx(http.MethodPost, "/authors/x/reclassify-as-narrator", "", idParam("x"))
+	h.ReclassifyAuthorAsNarrator(c)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// The body of the move is exercised directly: the op calls it.
+func TestReclassifyAuthorAsNarrator_NoBooksDeletesTheAuthor(t *testing.T) {
+	_, d := newHandler(t)
 	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
 	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
 	d.store.EXPECT().CreateNarrator("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
 	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
-	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
-	h.ReclassifyAuthorAsNarrator(c)
-	assert.Equal(t, http.StatusOK, w.Code)
+	out, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, out.NarratorID)
 }
 
 func TestResolveProductionAuthor_NotProduction(t *testing.T) {
@@ -1046,7 +1096,7 @@ func TestReclassifyAuthorAsNarrator_TombstonedIDIs404AndTouchesNothing(t *testin
 }
 
 func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
-	h, d := newHandler(t)
+	_, d := newHandler(t)
 	reclassified := 5
 
 	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
@@ -1074,9 +1124,8 @@ func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 
-	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
-	h.ReclassifyAuthorAsNarrator(c)
-	assert.Equal(t, http.StatusOK, w.Code)
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{})
+	require.NoError(t, err)
 
 	require.NotNil(t, *wrote, "the book row must be written; otherwise AuthorID still points at the deleted author")
 	require.NotNil(t, (*wrote).AuthorID, "a surviving author exists, so AuthorID must be repointed, not cleared")
@@ -1091,7 +1140,7 @@ func TestReclassifyAuthorAsNarrator_PromotesSurvivingAuthor(t *testing.T) {
 // index resolves -- never cleared (it used to be, which left the book
 // authorless) and never left naming the deleted row.
 func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives(t *testing.T) {
-	h, d := newHandler(t)
+	_, d := newHandler(t)
 	reclassified := 5
 
 	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
@@ -1119,9 +1168,8 @@ func TestReclassifyAuthorAsNarrator_FallsBackToUnknownAuthorWhenNoAuthorSurvives
 	d.store.EXPECT().SetBookNarrators("b1", mock.Anything).Return(nil)
 	d.store.EXPECT().DeleteAuthor(5).Return(nil)
 
-	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
-	h.ReclassifyAuthorAsNarrator(c)
-	assert.Equal(t, http.StatusOK, w.Code)
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{})
+	require.NoError(t, err)
 
 	require.NotNil(t, *wrote, "the book row must be written to drop the dangling pointer")
 	require.NotNil(t, (*wrote).AuthorID, "AuthorID must never be cleared")
@@ -1186,9 +1234,47 @@ func TestSplitCompositeAuthor_RefusesDeleteWhileStillLinked(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
-// Same gate on reclassify-as-narrator.
+// A lost scan stand-down lease stops the loop before any write and before the
+// delete: the mock has no GetBookAuthors / SetBookAuthors / DeleteAuthor expectation.
+func TestReclassifyAuthorAsNarrator_ALostLeaseStopsBeforeAnyWriteOrTheDelete(t *testing.T) {
+	_, d := newHandler(t)
+	reclassified := 5
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
+		Return([]database.BookCore{{ID: "b1", AuthorID: &reclassified}}, nil)
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{Lease: func() bool { return false }})
+	assert.ErrorIs(t, err, entities.ErrReclassifyLeaseLost)
+}
+
+// An author with no books never reaches the per-book lease check, so the
+// post-loop check is the only thing between a lost lease and DeleteAuthor.
+func TestReclassifyAuthorAsNarrator_ALostLeaseStopsTheDeleteOfABooklessAuthor(t *testing.T) {
+	_, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil)
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{Lease: func() bool { return false }})
+	assert.ErrorIs(t, err, entities.ErrReclassifyLeaseLost)
+}
+
+// The lease held through the loop but is gone right before the delete: the
+// verify ran, the delete did not (no DeleteAuthor expectation on the mock).
+func TestReclassifyAuthorAsNarrator_ALeaseLostAfterVerifyStopsTheDelete(t *testing.T) {
+	_, d := newHandler(t)
+	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
+	d.store.EXPECT().GetNarratorByName("Reader").Return(&database.Narrator{ID: 3, Name: "Reader"}, nil)
+	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).Return([]database.BookCore{}, nil).Twice()
+	calls := 0
+	lease := func() bool { calls++; return calls < 2 } // true before verify, false before delete
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{Lease: lease})
+	assert.ErrorIs(t, err, entities.ErrReclassifyLeaseLost)
+	assert.Equal(t, 2, calls)
+}
+
+// Same gate on the reclassify body (the op surfaces it as a failed run).
 func TestReclassifyAuthorAsNarrator_RefusesDeleteWhileStillLinked(t *testing.T) {
-	h, d := newHandler(t)
+	_, d := newHandler(t)
 	trashed := true
 	d.store.EXPECT().GetAuthorByID(5).Return(&database.Author{ID: 5, Name: "Reader"}, nil)
 	d.store.EXPECT().GetNarratorByName("Reader").Return(nil, errString("not found"))
@@ -1197,9 +1283,8 @@ func TestReclassifyAuthorAsNarrator_RefusesDeleteWhileStillLinked(t *testing.T) 
 	d.store.EXPECT().GetBooksByAuthorIDForRelinkCore(5).
 		Return([]database.BookCore{{ID: "b9", MarkedForDeletion: &trashed}}, nil)
 
-	c, w := newCtx(http.MethodPost, "/authors/5/reclassify-as-narrator", "", idParam("5"))
-	h.ReclassifyAuthorAsNarrator(c)
-	assert.Equal(t, http.StatusConflict, w.Code)
+	_, err := entities.ReclassifyAuthorAsNarrator(d.store, 5, entities.ReclassifyOptions{})
+	assert.ErrorIs(t, err, database.ErrAuthorStillLinked)
 }
 
 // A handler built without an operations registry answers 500 from the

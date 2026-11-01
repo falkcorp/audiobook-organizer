@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useAuthorsLane.test.ts
-// version: 1.2.0
+// version: 1.2.1
 // guid: a5d29e61-7c04-4b8f-93e2-1f6a80c4b573
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 /**
  * Tests for the Authors lane's data layer.
@@ -94,7 +94,7 @@ beforeEach(() => {
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.pollOperationV2).mockResolvedValue(settled());
   vi.mocked(api.mergeAuthors).mockImplementation(async (id: number) => op(`m${id}`));
-  vi.mocked(api.reclassifyAuthorAsNarrator).mockResolvedValue({ narrator_id: 1, books_updated: 1 });
+  vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id: number) => op(`r${id}`));
   vi.mocked(reads.fetchAuthorName).mockResolvedValue('');
   vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep: number) => op(`s${keep}`));
   vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: false });
@@ -227,7 +227,7 @@ describe('merging', () => {
     const calls: string[] = [];
     vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id) => {
       calls.push(`reclassify:${id}`);
-      return { narrator_id: 1, books_updated: 1 };
+      return op(`r${id}`);
     });
     vi.mocked(api.mergeAuthors).mockImplementation(async (keep, ids) => {
       calls.push(`merge:${keep}:${ids.join(',')}`);
@@ -747,7 +747,7 @@ describe('leaving the lane or unmounting', () => {
     serve([GROUP_A()]);
     const { result, rerender } = setup();
     await waitFor(() => expect(result.current.status).toBe('populated'));
-    const reclassify = deferred<{ narrator_id: number; books_updated: number }>();
+    const reclassify = deferred<api.Operation>();
     vi.mocked(api.reclassifyAuthorAsNarrator).mockReturnValue(reclassify.promise);
     act(() =>
       result.current.dispatch({
@@ -762,7 +762,7 @@ describe('leaving the lane or unmounting', () => {
     await waitFor(() => expect(api.reclassifyAuthorAsNarrator).toHaveBeenCalledTimes(1));
 
     rerender({ active: false });
-    await act(async () => reclassify.resolve({ narrator_id: 1, books_updated: 1 }));
+    await act(async () => reclassify.resolve(op('r101')));
     await waitFor(() => expect(result.current.pendingKeys.size).toBe(0));
     expect(api.mergeAuthors).not.toHaveBeenCalled();
     expect(toast).not.toHaveBeenCalled();
@@ -1068,6 +1068,54 @@ describe('a write that gets no answer', () => {
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('the other 1 were not sent'), 'warning');
     expect(result.current.bulk).toBeNull();
     expect(result.current.pendingKeys.size).toBe(0);
+  });
+});
+
+describe('narrator reclassification is an operation', () => {
+  it('waits for the reclassify operation to settle before the merge is sent, polling the id the route returned', async () => {
+    serve([GROUP_A()]);
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    const gate = deferred<api.OperationV2>();
+    vi.mocked(api.pollOperationV2).mockImplementation(async (id: string) =>
+      id === 'r101' ? gate.promise : settled()
+    );
+    act(() => result.current.dispatch(narrator(1, 101)));
+    act(() => result.current.dispatch(merge(1)));
+
+    await waitFor(() =>
+      expect(api.pollOperationV2).toHaveBeenCalledWith(
+        'r101',
+        undefined,
+        expect.any(Number),
+        expect.anything()
+      )
+    );
+    expect(
+      api.mergeAuthors,
+      'a 202 alone is not "reclassified": the merge waits for the op'
+    ).not.toHaveBeenCalled();
+
+    await act(async () => gate.resolve(settled()));
+    await waitFor(() => expect(api.mergeAuthors).toHaveBeenCalledWith(1, [102]));
+  });
+
+  it('counts a reclassify operation that FAILED as a failure, and the merge still goes', async () => {
+    serve([GROUP_A()]);
+    vi.mocked(api.pollOperationV2).mockImplementation(async (id: string) =>
+      id === 'r101' ? settled('failed', 'author-reclassify: author 101 was kept') : settled()
+    );
+    const { result } = setup();
+    await waitFor(() => expect(result.current.status).toBe('populated'));
+    act(() => result.current.dispatch(narrator(1, 101)));
+    act(() => result.current.dispatch(merge(1)));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Merged author(s) into "Author A" (1 narrator reclassification failed)',
+        'warning'
+      )
+    );
+    expect(api.mergeAuthors).toHaveBeenCalledWith(1, [102]);
   });
 });
 
@@ -1635,7 +1683,7 @@ describe('series merge', () => {
     const calls: string[] = [];
     vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id) => {
       calls.push(`reclassify:${id}`);
-      return { narrator_id: 1, books_updated: 1 };
+      return op(`r${id}`);
     });
     vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep, ids) => {
       calls.push(`merge:${keep}:${ids.join(',')}`);

@@ -97,6 +97,7 @@ deluge.link-backfill	preview
 deluge.path-update	preview
 deluge.protected-paths-sync	no-mode
 entities.author-merge	no-mode
+entities.author-reclassify	no-mode
 entities.resolve-production-author	no-mode
 entities.series-rename	no-mode
 itunes.clone-into-library	preview

@@ -1,7 +1,7 @@
 // file: web/src/components/review/AuthorsPanel.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: e3b70c58-1d92-4a6f-8c45-7f20b9d6a184
-// last-edited: 2026-10-13
+// last-edited: 2026-10-30
 
 /**
  * The Authors sub-view as a reviewer meets it: the hook and the panel together,
@@ -89,7 +89,7 @@ beforeEach(() => {
   vi.mocked(api.getDedupCandidates).mockResolvedValue({ candidates: [], total: 0 });
   vi.mocked(api.mergeAuthors).mockImplementation(async (id: number) => op(`m${id}`));
   vi.mocked(api.pollOperationV2).mockResolvedValue(done());
-  vi.mocked(api.reclassifyAuthorAsNarrator).mockResolvedValue({ narrator_id: 1, books_updated: 1 });
+  vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id: number) => op(`r${id}`));
   vi.mocked(reads.fetchAuthorName).mockResolvedValue('');
   vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep: number) => op(`s${keep}`));
   vi.mocked(reads.fetchSeriesGroups).mockResolvedValue({ groups: [], totalSeries: 0, needsRefresh: false });
@@ -926,7 +926,7 @@ describe('a series card', () => {
     const calls: string[] = [];
     vi.mocked(api.reclassifyAuthorAsNarrator).mockImplementation(async (id) => {
       calls.push(`reclassify:${id}`);
-      return { narrator_id: 1, books_updated: 1 };
+      return op(`r${id}`);
     });
     vi.mocked(api.mergeSeriesGroup).mockImplementation(async (keep, ids) => {
       calls.push(`merge:${keep}:${ids.join(',')}`);
