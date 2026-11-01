@@ -1,0 +1,3 @@
+### Fixed
+
+- Test flake: `TestSearchResultCache_RenamesAreReflected` failed on loaded CI shards with "index queue did not drain within timeout". `drainQueue` had its own 5 s deadline while `drainTB`, which the same fixtures use to seed, allows 60 s; a safe Bleve batch returns only after persistence, which can pass 5 s under `-race` on a busy runner. `drainQueue` now delegates to `drainTB`, and the timeout message reports `indexWorkerBusy`, the queue depth and the oldest in-flight Bleve write. No production code changed: the failure was in the setup wait, before any rename was made, so no stale-after-rename path was involved.

@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-10-20
+// last-edited: 2026-10-31
 
 package server
 
@@ -438,7 +438,11 @@ func TestSearchResultCache_ConcurrentReadsAndWrites(t *testing.T) {
 	}
 }
 
-// drainTB is drainQueue for benchmarks as well as tests.
+// drainTB waits for the index worker to commit everything enqueued so far. It
+// serves tests and benchmarks (drainQueue calls it). The signal is
+// indexWorkerBusy reaching zero, never a fixed sleep; the 60 s budget only
+// bounds a worker that is genuinely wedged, and the failure reports where it
+// is stuck instead of a bare timeout.
 func drainTB(tb testing.TB, srv *Server) {
 	tb.Helper()
 	deadline := time.Now().Add(60 * time.Second)
@@ -448,7 +452,9 @@ func drainTB(tb testing.TB, srv *Server) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	tb.Fatalf("index queue did not drain")
+	oldest, inflight := srv.searchIndex.OldestWrite()
+	tb.Fatalf("index queue did not drain within 60s: indexWorkerBusy=%d queued=%d oldest bleve write=%s (in flight %d)",
+		atomic.LoadInt32(&srv.indexWorkerBusy), len(srv.indexQueue), oldest, inflight)
 }
 
 // waitCacheIdle waits for every background search the result cache is
