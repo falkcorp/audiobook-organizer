@@ -1,7 +1,7 @@
 // file: internal/transcribe/gate_probe_cache_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4ebe594-0334-4c03-8714-f86dd60340ee
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package transcribe
 
@@ -221,8 +221,23 @@ func TestGateProbeCache_UnhealthyAnswersAreNotCached(t *testing.T) {
 	}
 }
 
+// gateProbes is how many /health requests the worker has received that came
+// from a pool gate. The worker cannot tell the callers of /health apart, and a
+// path batch makes two kinds: the gate's probe, which the cache may serve, and
+// the identity check made after every accepted response (verifyAfterResponse),
+// which must look at the worker as it is NOW (it exists to catch a port that
+// changed hands during the request) and is never cached. This worker answers
+// without busy_seconds, so no liveness poll runs, and a healthy one is probed
+// once per response and answers every POST with a response; the gate's share is
+// what is left after subtracting one probe per POST.
+func gateProbes(w *pathWorker) int64 {
+	return w.healthHits.Load() - int64(w.postCount())
+}
+
 // End to end through the path batch: the second batch of a run does not probe
-// the worker again.
+// the worker again at its gate. The post-response identity check of each batch
+// still reads /health, so the assertion is about gate probes (gateProbes), not
+// every request; counting all of them made this test fail every run.
 func TestTranscribeByPathBatch_ReusesGateProbeAcrossBatches(t *testing.T) {
 	clock := enableProbeCache(t)
 	w := newPathWorker(t, pathHealth(nil))
@@ -235,17 +250,16 @@ func TestTranscribeByPathBatch_ReusesGateProbeAcrossBatches(t *testing.T) {
 		}
 	}
 	run()
-	afterFirst := w.healthHits.Load()
-	if afterFirst == 0 {
-		t.Fatal("the first batch never probed /health")
+	if got := gateProbes(w); got != 1 {
+		t.Fatalf("the first batch's gate probed /health %d time(s), want 1", got)
 	}
 	run()
-	if got := w.healthHits.Load(); got != afterFirst {
-		t.Fatalf("second batch probed /health %d more time(s), want 0", got-afterFirst)
+	if got := gateProbes(w); got != 1 {
+		t.Fatalf("second batch's gate probed /health %d more time(s), want 0", got-1)
 	}
 	clock.Advance(gateProbeTTL + time.Second)
 	run()
-	if got := w.healthHits.Load(); got == afterFirst {
-		t.Fatal("a batch past the TTL did not probe /health")
+	if got := gateProbes(w); got != 2 {
+		t.Fatalf("a batch past the TTL: gate probes = %d in all, want 2", got)
 	}
 }

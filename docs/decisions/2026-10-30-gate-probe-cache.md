@@ -1,7 +1,7 @@
 <!-- file: docs/decisions/2026-10-30-gate-probe-cache.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: fe12c2e7-4850-4c0a-ba5a-26e2d2f8defe -->
-<!-- last-edited: 2026-10-30 -->
+<!-- last-edited: 2026-10-31 -->
 
 # Decision log: gate probe cache (TODO-FILE-INTRO-PROBE-PER-BATCH)
 
@@ -43,6 +43,15 @@ reprobe and `PathPipelineAvailable` (the once-per-run preflight) all exist to ta
 FRESH look; serving them a 30 s old answer would defeat them (and `markProbes` /
 `needsProbe` assume a probe happened after the mark). Only the entry gate repeats once
 per batch, so it is the only one that benefits.
+
+## Not cached: the post-response identity check
+
+A path batch still reads `/health` once per accepted response, from
+`verifyAfterResponse` (liveness.go), whatever the cache holds. That probe exists to
+catch a port that changed hands during the request, so it must see the worker as it
+is now; it is not a gate and is deliberately outside this cache. A test that counts
+`/health` requests must therefore count gate probes only (`gateProbes` in
+`gate_probe_cache_test.go`: requests minus one per POST).
 
 ## Rejected
 
