@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.12.6
+// version: 1.12.7
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-11-01
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -373,7 +374,15 @@ func purgeEligible(book *database.Book, now time.Time) bool {
 // days in now's zone, so across a DST change "1 day ago" was 23 or 25 hours,
 // and the purge, its preview, the trash list and the per-book eligibility
 // disagreed with a 24-hour reading of the setting twice a year.
+//
+// days*24h overflows time.Duration past ~106,751 days and would wrap the
+// cutoff into the future, purging everything; a window that long clamps to
+// the earliest representable cutoff instead, so nothing qualifies.
 func trashRetentionCutoff(now time.Time, days int) time.Time {
+	const maxDays = math.MaxInt64 / int64(24*time.Hour)
+	if int64(days) > maxDays {
+		return time.Time{}
+	}
 	return now.Add(-time.Duration(days) * 24 * time.Hour)
 }
 
