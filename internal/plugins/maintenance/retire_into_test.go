@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.13.3
+// version: 1.13.4
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-21
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -155,22 +155,34 @@ func TestFragmentFixer_DemoteOnlyFirstOpRevertsToOnePrimaryInEitherOrder(t *test
 	t.Parallel()
 	total := handOffProbeRenewals(t)
 	ran := 0
+	// cut builds a fixture whose op-apply was cut after k lease renewals; nil
+	// when the cut landed elsewhere than between the demote and the
+	// soft-delete. Whether it did is independent of the revert order, so the
+	// first order's fixture doubles as the probe and a k that misses costs one
+	// fixture, not two.
+	cut := func(k int) *fragFixture {
+		f := newFragFixture(t)
+		f.seed(t)
+		f.primaryFragG(t)
+		f.plan(t, "op-plan")
+		scan := f.scan()
+		scan.mu.Lock()
+		scan.renewsLeft = k
+		scan.mu.Unlock()
+		_, _ = f.applyErr(t, "op-plan", "op-apply", []string{"copy:" + f.ids["suns"]}, nil)
+		scan.mu.Lock()
+		scan.renewsLeft = -1
+		scan.mu.Unlock()
+		if !demoteOnly(t, f.s, "op-apply", f.ids["fragG"]) {
+			return nil
+		}
+		return f
+	}
 	for k := range total {
 		for _, order := range [][]string{{"op-apply", "op-retry"}, {"op-retry", "op-apply"}} {
-			f := newFragFixture(t)
-			f.seed(t)
-			f.primaryFragG(t)
-			f.plan(t, "op-plan")
-			scan := f.scan()
-			scan.mu.Lock()
-			scan.renewsLeft = k
-			scan.mu.Unlock()
-			_, _ = f.applyErr(t, "op-plan", "op-apply", []string{"copy:" + f.ids["suns"]}, nil)
-			scan.mu.Lock()
-			scan.renewsLeft = -1
-			scan.mu.Unlock()
-			if !demoteOnly(t, f.s, "op-apply", f.ids["fragG"]) {
-				continue // the cut landed elsewhere
+			f := cut(k)
+			if f == nil {
+				break // the cut landed elsewhere, for either order
 			}
 			t.Run(fmt.Sprintf("k%d_%s_first", k, order[0]), func(t *testing.T) {
 				ran++
