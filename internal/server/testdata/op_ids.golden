@@ -223,6 +223,7 @@ maintenance.split-joined-narrators
 maintenance.sweep-pebble-metrics-ttl
 maintenance.tag-backfill
 maintenance.temp-file-cleanup
+maintenance.throttle-reset
 maintenance.title-backfill
 maintenance.title-repair
 maintenance.tombstone-cleanup
