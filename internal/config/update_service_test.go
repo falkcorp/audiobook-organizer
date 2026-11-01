@@ -1,7 +1,7 @@
 // file: internal/config/update_service_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: e5f6g7h8-i9j0-k1l2-m3n4-o5p6q7r8s9t0
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 package config
 
@@ -155,7 +155,7 @@ func TestUpdateService_NestedTypoRejected(t *testing.T) {
 	}
 }
 
-// TestUpdateService_ReadOnlyAnnotationsIgnored proves the three keys GET
+// TestUpdateService_ReadOnlyAnnotationsIgnored proves the keys GET
 // /config adds (withEnvLocks) do not make a PUT of a GET response fail.
 func TestUpdateService_ReadOnlyAnnotationsIgnored(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
@@ -170,6 +170,9 @@ func TestUpdateService_ReadOnlyAnnotationsIgnored(t *testing.T) {
 		"root_dir":      "/annotated",
 		"env_locked":    []any{"database_path"},
 		"setting_locks": map[string]any{"database_path": "flag --db"},
+		// Served by GET /config for the Settings help text; a PUT of the GET
+		// response must not trip the unknown-key check on it.
+		"naming_pattern_tokens": []any{"{title}"},
 	})
 	if err != nil {
 		t.Fatalf("expected the read-only annotations to be ignored, got %v", err)

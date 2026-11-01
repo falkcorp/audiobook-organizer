@@ -1,7 +1,7 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.4.2
+// version: 1.5.0
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
-// last-edited: 2026-10-17
+// last-edited: 2026-10-30
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -32,7 +32,12 @@ import {
   Delete as DeleteIcon,
 } from '@mui/icons-material';
 import * as api from '../services/api';
-import { NAMING_PATTERN_HELP_TEXT, generatePatternExample } from '../utils/namingPatternPreview';
+import {
+  FALLBACK_NAMING_PATTERN_TOKENS,
+  generatePatternExample,
+  namingPatternHelpText,
+  unknownPatternTokens,
+} from '../utils/namingPatternPreview';
 
 // SettingsState is imported, not redeclared. This file used to carry its own
 // 44-field structural copy that had to be updated in lockstep with the real one;
@@ -61,6 +66,12 @@ interface SettingsGeneralProps {
   excludePatternError: string | null;
   handleAddExcludePattern: () => void;
   handleRemoveExcludePattern: (pattern: string) => void;
+  /**
+   * The placeholders the server's path builder resolves (GET /config
+   * `naming_pattern_tokens`). Absent while the config is loading; the static
+   * fallback list stands in until it arrives.
+   */
+  namingPatternTokens?: readonly string[];
   importPaths?: api.ImportPath[];
   scanStatuses?: Record<number, ScanStatus>;
   handleViewScanErrors?: (folder: api.ImportPath, status: ScanStatus) => void;
@@ -77,7 +88,28 @@ interface SettingsGeneralProps {
   handleRequestDeleteBackup: (backup: api.BackupInfo) => void;
 }
 
+/** Inline warning for brace tokens the server's path builder does not resolve. */
+export function UnknownTokenWarning({ tokens }: { tokens: readonly string[] }) {
+  if (tokens.length === 0) return null;
+  return (
+    <Alert severity="warning" sx={{ mt: 1 }} data-testid="unknown-pattern-tokens">
+      <Typography variant="caption">
+        Unknown placeholder{tokens.length > 1 ? 's' : ''}: {tokens.join(', ')}. Organizing a book
+        with this pattern will fail until {tokens.length > 1 ? 'they are' : 'it is'} removed.
+      </Typography>
+    </Alert>
+  );
+}
+
 export function SettingsGeneral(props: SettingsGeneralProps) {
+  const namingTokens = props.namingPatternTokens?.length
+    ? props.namingPatternTokens
+    : FALLBACK_NAMING_PATTERN_TOKENS;
+  const unknownFolderTokens = unknownPatternTokens(
+    props.settings.folderNamingPattern,
+    namingTokens
+  );
+  const unknownFileTokens = unknownPatternTokens(props.settings.fileNamingPattern, namingTokens);
   const exampleNoSeries = {
     title: 'To Kill a Mockingbird',
     author: 'Harper Lee',
@@ -85,14 +117,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
     series: '',
     series_number: '',
     print_year: 1960,
-    audiobook_release_year: 2014,
     year: 1960,
     publisher: 'Harper Audio',
     edition: 'Unabridged',
     language: 'English',
     isbn13: '9780061808128',
     isbn10: '0061808121',
-    track_number: 3,
+    track: 3,
     total_tracks: 50,
     bitrate: '320kbps',
     codec: 'AAC',
@@ -106,14 +137,13 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
     series: 'Nancy Drew Mystery Stories',
     series_number: '1',
     print_year: 1930,
-    audiobook_release_year: 2018,
     year: 1930,
     publisher: 'Listening Library',
     edition: 'Unabridged',
     language: 'English',
     isbn13: '9781524780123',
     isbn10: '1524780120',
-    track_number: 1,
+    track: 1,
     total_tracks: 12,
     bitrate: '128kbps',
     codec: 'MP3',
@@ -318,8 +348,9 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           label="Folder Naming Pattern"
           value={props.settings.folderNamingPattern}
           onChange={(e) => props.handleChange('folderNamingPattern', e.target.value)}
-          helperText={NAMING_PATTERN_HELP_TEXT}
+          helperText={namingPatternHelpText(namingTokens)}
         />
+        <UnknownTokenWarning tokens={unknownFolderTokens} />
         <Alert severity="info" sx={{ mt: 1, mb: 1 }}>
           <Typography variant="caption">
             <strong>Smart Path Handling:</strong> Empty fields (like {'{series}'}) are automatically
@@ -392,11 +423,12 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           value={props.settings.fileNamingPattern}
           onChange={(e) => props.handleChange('fileNamingPattern', e.target.value)}
           helperText={
-            'Pattern for individual audiobook files. All folder fields ' +
-            'plus {track_number}, {total_tracks}, {bitrate}, {codec}, ' +
-            '{quality} (parsed from media)'
+            'Pattern for individual audiobook files. Accepts the same placeholders as ' +
+            'the folder pattern, including {track}, {total_tracks}, {bitrate}, {codec} and ' +
+            '{quality} (parsed from media).'
           }
         />
+        <UnknownTokenWarning tokens={unknownFileTokens} />
         <Box
           sx={{
             mt: 1,
@@ -464,8 +496,8 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
             pattern contains "-", underscores if "_", otherwise spaces. Example: "Title -
             Narrator-03-of-50.mp3" or "Title Narrator 03 of 50.mp3"
             <br />
-            <strong>Override:</strong> Include {'{track_number}'} and {'{total_tracks}'} in your
-            pattern to control exact formatting. Example: "{'{title}'} - Part {'{track_number}'} of{' '}
+            <strong>Override:</strong> Include {'{track:02d}'} and {'{total_tracks}'} in your
+            pattern to control exact formatting. Example: "{'{title}'} - Part {'{track:02d}'} of{' '}
             {'{total_tracks}'}" → "To Kill a Mockingbird - Part 03 of 50.m4b"
           </Typography>
         </Alert>
@@ -689,10 +721,10 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           label="Create backups before modifying files"
         />
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 6 }}>
-          Before a single-book tag write (an edit, fetch or apply), the file&apos;s previous
-          version is kept beside it as a .bak-&lt;time&gt; file. Bulk operations keep none. Old
-          backups are removed after the backup retention period, but only inside the library folder:
-          a backup beside a file in an import path stays until you delete it.
+          Before a single-book tag write (an edit, fetch or apply), the file&apos;s previous version
+          is kept beside it as a .bak-&lt;time&gt; file. Bulk operations keep none. Old backups are
+          removed after the backup retention period, but only inside the library folder: a backup
+          beside a file in an import path stays until you delete it.
         </Typography>
       </Grid>
 

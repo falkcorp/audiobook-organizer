@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.66.0
+// version: 1.67.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-19
+// last-edited: 2026-10-30
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -213,6 +213,8 @@ export function Settings() {
   // Same keys as envLocked, mapped to WHAT locks each one, so a disabled control
   // can name the environment variable or the flag instead of just going grey.
   const [settingLocks, setSettingLocks] = useState<Record<string, string>>({});
+  // Server-reported (the path builder's own list); undefined until GET /config answers.
+  const [namingPatternTokens, setNamingPatternTokens] = useState<string[] | undefined>();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
@@ -463,6 +465,7 @@ export function Settings() {
       // be part of the dirty-check or the save payload.
       setEnvLocked(config.env_locked ?? []);
       setSettingLocks(config.setting_locks ?? {});
+      setNamingPatternTokens(config.naming_pattern_tokens);
       // Store masked key if present
       if (config.openai_api_key && config.openai_api_key.includes('***')) {
         setSavedApiKeyMask(config.openai_api_key);
@@ -762,9 +765,14 @@ export function Settings() {
           }
           label="Show advanced settings"
         />
-        <Typography variant="caption" color="text.secondary" component="div" sx={{ ml: 6, mt: -0.5 }}>
-          Shows expert tools, such as the Advanced sections of the Review page's Dedup and
-          Metadata menus. Saved in this browser.
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          component="div"
+          sx={{ ml: 6, mt: -0.5 }}
+        >
+          Shows expert tools, such as the Advanced sections of the Review page's Dedup and Metadata
+          menus. Saved in this browser.
         </Typography>
       </Box>
 
@@ -817,6 +825,7 @@ export function Settings() {
 
         <TabPanel value={tabValue} index={0}>
           <SettingsGeneral
+            namingPatternTokens={namingPatternTokens}
             settings={settings}
             setSettings={setSettings}
             libraryPathError={libraryPathError}
