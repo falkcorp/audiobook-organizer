@@ -1,6 +1,6 @@
 // file: internal/server/index_queue_test.go
-// version: 2.0.0
-// last-edited: 2026-10-13
+// version: 2.0.1
+// last-edited: 2026-10-31
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -9,31 +9,29 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 )
 
 // drainQueue blocks until the worker has processed every in-flight
-// request or the timeout fires. Test-only helper.
+// request, waiting up to drainTB's budget. Test-only helper.
 //
 // Correctness: enqueueIndex increments indexWorkerBusy before adding
 // to the channel; the worker decrements it after completing each item.
 // Checking busy == 0 is therefore race-free regardless of where the
 // worker is in its dequeue-process cycle.
+//
+// It used to carry its own 5 s deadline while drainTB, which the same fixtures
+// call to seed, allowed 60 s. A safe scorch batch returns only once persisted,
+// and under -race on a loaded CI shard that wait alone passed 5 s, so a single
+// document write after the seed failed "index queue did not drain within
+// timeout" (TestSearchResultCache_RenamesAreReflected/title/incremental, run
+// 41270758828). One waiter, one budget, one failure message.
 func drainQueue(t *testing.T, srv *Server) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if atomic.LoadInt32(&srv.indexWorkerBusy) == 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("index queue did not drain within timeout")
+	drainTB(t, srv)
 }
 
 func TestIndexQueue_CreateReindexes(t *testing.T) {
