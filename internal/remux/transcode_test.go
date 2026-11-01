@@ -1,7 +1,7 @@
 // file: internal/remux/transcode_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-15
+// last-edited: 2026-10-30
 
 package remux
 
@@ -172,5 +172,45 @@ func TestTranscodeFileTempFileCleanup(t *testing.T) {
 	tmpFile := testFile + ".remux.tmp"
 	if _, err := os.Stat(tmpFile); err == nil {
 		t.Errorf("TranscodeFile() left temp file behind: %s", tmpFile)
+	}
+}
+
+// "Permanently unfixable" is per-install state recorded by the pass itself
+// (TranscodeSkipKey settings), never a literal in the code. A completed run
+// over a library with no failing files must therefore leave no skip key
+// behind. Before 2026-10-30 every completed run pre-marked two paths from one
+// real install, so this fails if any file path is named in production code.
+func TestTranscodeMalformedFiles_MarksUnfixableOnlyFromRecordedState(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	root := t.TempDir()
+	withRemuxAppDirs(t, root, true)
+
+	// A recorded skip key is honored; nothing else may appear beside it.
+	recorded := filepath.Join(root, "Synthetic Author", "Gotham Reckoning", "book.m4b")
+	store := &MockStore{}
+	if err := store.SetSetting(TranscodeSkipKey(recorded), "true", "bool", false); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := NewTranscoder(store)
+	tr.SetProtectedChecker(prefixChecker{dir: filepath.Join(root, "unrelated")})
+	if err := tr.TranscodeMalformedFiles(context.Background(), nil); err != nil {
+		t.Fatalf("TranscodeMalformedFiles: %v", err)
+	}
+	if !doneFlagSet(store, TranscodeKey) {
+		t.Fatal("run did not complete; the test proves nothing")
+	}
+	var skipKeys []string
+	for k := range store.settings {
+		if strings.HasPrefix(k, "transcode_skip_") {
+			skipKeys = append(skipKeys, k)
+		}
+	}
+	if len(skipKeys) != 1 || skipKeys[0] != TranscodeSkipKey(recorded) {
+		t.Errorf("skip keys after a clean run = %v, want only the recorded %s", skipKeys, TranscodeSkipKey(recorded))
 	}
 }

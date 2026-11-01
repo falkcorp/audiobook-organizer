@@ -1,5 +1,5 @@
 // file: internal/remux/transcode.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-30
 
@@ -187,20 +187,6 @@ func (t *Transcoder) TranscodeMalformedFiles(ctx context.Context, progress func(
 	}
 	if !protectedListLoaded(t.protected) {
 		return fmt.Errorf("TranscodeMalformedFiles: %w", errProtectedListNotLoaded)
-	}
-
-	// Pre-mark files confirmed permanently unfixable by full transcode.
-	// These produce valid ffmpeg output but taglib still cannot parse them.
-	permanentlyUnfixable := []string{
-		"/mnt/bigdata/books/audiobook-organizer/David Petrie/Necrotic Apocalypse (7 book series)/Necrotic Apocalypse (7 book series)/Necrotic Apocalypse (7 book series) - David Petrie - read by narrator.m4b",
-		"/mnt/bigdata/books/audiobook-organizer/Eric Ugland/One More Last Time_ A LitRPG/GameLit Novel (The Good Guys/One More Last Time_ A LitRPG/GameLit Novel (The Good Guys, Book 1)/One More Last Time_ A LitRPG/GameLit Novel (The Good Guys, Book 1) - Eric Ugland - read by narrator.m4b",
-	}
-	for _, p := range permanentlyUnfixable {
-		k := TranscodeSkipKey(p)
-		if skip, _ := t.store.GetSetting(k); skip == nil {
-			_ = t.store.SetSetting(k, "true", "bool", false)
-			slog.Info("malformed M4B transcode pre-marked permanently unfixable", "path", p)
-		}
 	}
 
 	// Collect the candidates first; see RemuxMalformedFiles for why (progress
