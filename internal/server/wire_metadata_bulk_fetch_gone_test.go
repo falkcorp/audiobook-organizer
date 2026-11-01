@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_bulk_fetch_gone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e3d3179f-4937-488d-9b70-a58146a3b10f
-// last-edited: 2026-10-30
+// last-edited: 2026-10-31
 
 package server
 
@@ -76,7 +76,7 @@ func TestBulkFetchRoute_PermissionGuardRunsFirst(t *testing.T) {
 	f := setupCredGuardServer(t)
 	viewer, err := f.store.CreateUser("synthetic-viewer", "viewer@example.test", "bcrypt", "x", []string{auth.SeedRoleViewer}, "active")
 	require.NoError(t, err)
-	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword)
+	sess, err := f.store.CreateSessionWithOrigin(viewer.ID, "127.0.0.1", "test", time.Hour, database.SessionOriginPassword, 0)
 	require.NoError(t, err)
 
 	w := f.do(t, sess.ID, http.MethodPost, bulkFetchPath, map[string]any{"book_ids": []string{"b1"}})
