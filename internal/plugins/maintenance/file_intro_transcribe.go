@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-10-26
+// last-edited: 2026-10-30
 
 package maintenance
 
@@ -338,10 +338,15 @@ func selectFileIntroWork(cores []database.BookFileCore, opts fileIntroSelectOpts
 // fileIntroAccum is the run's counters, mutex-guarded because batches finish
 // concurrently, and the sink that persists them.
 type fileIntroAccum struct {
-	mu    sync.Mutex
-	stats database.FileIntroStats
-	sink  database.FileIntroStatsStore
-	log   *slog.Logger // reporter's logger; nil in tests that do not care
+	// writeMu orders the persisted snapshots: flush holds it across the copy
+	// AND the Put, so the snapshot written last is the one copied last. Lock
+	// order is always writeMu then mu; mu stays short-held (counter updates
+	// never wait on a sink write), and nothing under mu may call flush.
+	writeMu sync.Mutex
+	mu      sync.Mutex
+	stats   database.FileIntroStats
+	sink    database.FileIntroStatsStore
+	log     *slog.Logger // reporter's logger; nil in tests that do not care
 }
 
 func (a *fileIntroAccum) update(fn func(s *database.FileIntroStats)) {
@@ -357,10 +362,17 @@ func (a *fileIntroAccum) snapshot() database.FileIntroStats {
 }
 
 // flush persists the counters; best-effort, as the book op's is.
+//
+// The copy and the Put are one step under writeMu. Copying under mu alone and
+// writing after releasing it let two workers flushing at once land the older
+// snapshot last, so the persisted stats (and the status page reading them) went
+// backwards mid-run.
 func (a *fileIntroAccum) flush(done bool) {
 	if a.sink == nil {
 		return
 	}
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	a.mu.Lock()
 	a.stats.UpdatedAt = time.Now()
 	a.stats.Done = done

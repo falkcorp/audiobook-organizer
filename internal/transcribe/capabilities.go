@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.6.4
+// version: 2.7.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-10-27
+// last-edited: 2026-10-30
 
 package transcribe
 
@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // gpuDevices is an ALLOW-LIST of ctranslate2/mlx device strings that count as
@@ -169,15 +171,29 @@ func (r gpuRefusal) String() string {
 // place. Probes run concurrently: each carries a 3s timeout, and serialising
 // them would make a pool of five dead endpoints take 15s to reject.
 //
-// The results are NOT cached across calls. A box that gets fixed must become
-// eligible again without restarting the service, and this process restarts
-// rarely enough that a stale refusal would outlive the problem it describes.
+// gateEndpoints always probes: it is also the re-probe primitive (regate, the
+// lone-endpoint reprobe, PathPipelineAvailable), whose whole point is a fresh
+// look, so its results are never served from the probe cache. The one caller
+// that may reuse a recent probe is the first gate of a dispatch
+// (gateEndpointsCached), and then only within gateProbeTTL; see probeForGate.
 func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []string) ([]gatedEndpoint, []gpuRefusal) {
+	return gateEndpointsWith(ctx, endpoints, poolRequires, false)
+}
+
+// gateEndpointsCached is gateEndpoints for the first gate of a dispatch: a
+// /health answer probed less than gateProbeTTL ago, with no failure marked for
+// the endpoint since, is reused instead of probed again. A path batch of 8
+// files otherwise probed every endpoint once per 8 files for a whole library.
+func gateEndpointsCached(ctx context.Context, endpoints []Endpoint, poolRequires []string) ([]gatedEndpoint, []gpuRefusal) {
+	return gateEndpointsWith(ctx, endpoints, poolRequires, true)
+}
+
+func gateEndpointsWith(ctx context.Context, endpoints []Endpoint, poolRequires []string, cached bool) ([]gatedEndpoint, []gpuRefusal) {
 	probes := make([]gatedEndpoint, len(endpoints))
 	var wg sync.WaitGroup
 	for i, ep := range endpoints {
 		wg.Go(func() {
-			h, ok := probeRemoteHealth(ctx, ep.URL)
+			h, ok := probeForGate(ctx, ep.URL, cached)
 			probes[i] = gatedEndpoint{Endpoint: ep, Health: h, Probed: ok}
 		})
 	}
@@ -209,6 +225,94 @@ func gateEndpoints(ctx context.Context, endpoints []Endpoint, poolRequires []str
 		kept = append(kept, g)
 	}
 	return kept, refused
+}
+
+// gateProbeTTL is how long a clean /health answer may be reused by the first
+// gate of a dispatch (gateEndpointsCached). Zero disables the cache. A variable
+// only so a test can set it; production never writes it.
+var gateProbeTTL = 30 * time.Second
+
+// gateProbeNow is the cache's clock, injectable so a test can step past the TTL
+// without sleeping.
+var gateProbeNow = time.Now
+
+// cachedProbe is one endpoint's reusable /health answer. gen is the endpoint's
+// failure generation read BEFORE the probe was sent (endpointFailureGeneration):
+// an entry is served only while that generation is still current, so a failure
+// marked at any time after the probe started, including one that landed while
+// the probe was in flight, retires it. No hook in the failure path is needed.
+type cachedProbe struct {
+	h   remoteHealth
+	at  time.Time
+	gen uint64
+}
+
+var gateProbeCache = struct {
+	mu sync.Mutex
+	m  map[string]cachedProbe
+}{m: make(map[string]cachedProbe)}
+
+// probeForGate is probeRemoteHealth for the gate. With cached set it serves a
+// reusable answer for url, and stores the one it probes.
+//
+// What is reused is deliberately narrow, because the gate judges liveness from
+// /health (stuck, decoder fault, unreadable roots) and a stale verdict in
+// either direction costs a refusal or a wasted send:
+//   - only an answer that completed (a failed probe is never cached: a box that
+//     gets fixed becomes eligible on the next gate) and that is clean, meaning
+//     no decoder fault, not stuck, every mapped root readable (cleanHealth);
+//   - never while the endpoint is in a cooldown, when it was cached or now;
+//   - never after a failure has been marked for the endpoint since the probe
+//     began (the generation check above);
+//   - never past gateProbeTTL.
+func probeForGate(ctx context.Context, url string, cached bool) (remoteHealth, bool) {
+	if !cached || gateProbeTTL <= 0 {
+		return probeRemoteHealth(ctx, url)
+	}
+	gen := endpointFailureGeneration(url)
+	cooled := endpointInCooldown(url)
+	now := gateProbeNow()
+	if !cooled {
+		gateProbeCache.mu.Lock()
+		e, hit := gateProbeCache.m[url]
+		gateProbeCache.mu.Unlock()
+		if hit && e.gen == gen && now.Sub(e.at) < gateProbeTTL && now.Sub(e.at) >= 0 {
+			e.h.PathRoots = slices.Clone(e.h.PathRoots)
+			return e.h, true
+		}
+	}
+	h, ok := probeRemoteHealth(ctx, url)
+	if ok && !cooled && ctx.Err() == nil && cleanHealth(h) {
+		gateProbeCache.mu.Lock()
+		for u, e := range gateProbeCache.m {
+			if now.Sub(e.at) >= gateProbeTTL {
+				delete(gateProbeCache.m, u)
+			}
+		}
+		gateProbeCache.m[url] = cachedProbe{h: h, at: now, gen: gen}
+		gateProbeCache.mu.Unlock()
+	} else if !ok {
+		gateProbeCache.mu.Lock()
+		delete(gateProbeCache.m, url)
+		gateProbeCache.mu.Unlock()
+	}
+	return h, ok
+}
+
+// cleanHealth reports whether a completed /health answer carries none of the
+// conditions the gate refuses a worker for, which are the ones that clear by
+// themselves and so must not be remembered.
+func cleanHealth(h remoteHealth) bool {
+	g := gatedEndpoint{Health: h, Probed: true}
+	if stuckRefusal(g) != "" || childFaultRefusal(g) != "" {
+		return false
+	}
+	for _, r := range h.PathRoots {
+		if !r.Readable {
+			return false
+		}
+	}
+	return true
 }
 
 // refusalMachine is the identity (identityKey) a refusal records for g: empty
