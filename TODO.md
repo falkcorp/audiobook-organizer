@@ -1,12 +1,12 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.25 -->
+<!-- version: 10.78.26 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.25 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-31 -->
+<!-- last-edited: 2026-11-01 -->
 
 # Project TODO — live items only
 
@@ -18,6 +18,27 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-JOURNAL-WARNINGS-WORD-MATCH** The combine and sibling-move journal listings (`duplicates` handler, `warningsWithoutUsers` / `withoutUser`) still withhold a stored `Warnings` entry or `LastError` by `undo.NamesUser` (the word "user"). The journals persist `Warnings` as bare strings, so the revert report's fix (`merge.Warning.UserIDs`) does not reach them. Store the accounts with each journal warning, withhold by field, then delete `undo.NamesUser`.
+
+- [ ] **TODO-WHISPER-RESPONSE-ECHOES-MACHINE-ID** Make `scripts/whisper_mlx_server.py`
+      echo its `machine_id` in the body of every `/transcribe-batch`,
+      `/transcribe-path-batch` and `/transcribe` response, and have the
+      transcribe client compare it with the identity the dispatch froze for the
+      port (`frozenWorker.swappedTo`) before it accepts the answer. Today a port
+      handed to another machine (a tunnel coming back from another Mac) is
+      caught only by a `/health` read: the liveness poll every `livenessInterval`
+      while a request runs, and one probe after each successful response
+      (`verifyAfterResponse`, `internal/transcribe/liveness.go`). A swap between
+      the response being produced and that probe, or one the probe cannot read
+      (an unreadable probe withholds the answer, which costs a re-send), is the
+      residual; the identity inside the response itself closes it, because the
+      answer then names the machine that produced it. Bump the worker's script
+      version and `whisper_mlx_server.py`'s documented `/health` contract, keep
+      the client tolerant of an older worker that echoes nothing (it falls back
+      to the probe), and add a client test with a response whose echoed id
+      differs from the frozen one (answers withheld, no strike, port dropped,
+      journal entries invalidated as for `WorkerSwappedError`).
 
 - [ ] **04-P6b book-atpath-index-backfill resumable** Part 2 of 04-P6. `maintenance.book-atpath-index-backfill {"if_needed": true}` is still ResumeDrop with a 30 min timeout: a first build on a library with no `book_atpath:` sentinel is a full book scan, a timeout leaves the sentinel unset, and a library too large for it restarts the scan at every boot. Apply the same fix as the four ops of 04-P6 (`docs/decisions/2026-10-30-boot-ops-resumable-checkpoint.md`): ResumeRestart, a sorted book-ID cursor checkpointed through `registry.RunItems` (it already fans out per row), and a yield before the deadline (`registry.ErrContinueInPlace`). Open question for the owner from the same note: the transcode is still ResumeAsk, so a transcode that hits its 6 h timeout restarts from zero on the next boot; moving it to ResumeRestart would let it finish on any library at the cost of unattended re-encoding after a restart.
 
