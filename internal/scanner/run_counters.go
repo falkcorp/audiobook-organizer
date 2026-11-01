@@ -1,7 +1,7 @@
 // file: internal/scanner/run_counters.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9a4e1c7b-2d58-4f63-b8e0-5c1a7d3f9b26
-// last-edited: 2026-10-11
+// last-edited: 2026-10-30
 
 package scanner
 
@@ -31,6 +31,9 @@ type scanRunCounters struct {
 	// oversized directories that were refused rather than imported.
 	oversizedGroups atomic.Int64
 	oversizedFiles  atomic.Int64
+	// stateHeldForTrash: trashed books whose LibraryState the scan left alone
+	// although it derived a different one (scannerMayChangeLibraryState).
+	stateHeldForTrash atomic.Int64
 }
 
 type scanRunCountersKey struct{}
