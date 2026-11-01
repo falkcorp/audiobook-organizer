@@ -1,7 +1,7 @@
 // file: internal/database/narrator_credit_sync.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 77463a64-b525-48cd-ae77-98e41f13a135
-// last-edited: 2026-09-27
+// last-edited: 2026-10-30
 
 package database
 
@@ -16,9 +16,10 @@ import (
 var narratorSyncLog = logger.New("database.narrator-sync")
 
 // narratorCreditStore is the slice of the store the narrator junction sync
-// needs. CreateNarrator is resolve-or-create, so no separate lookup is needed.
+// needs. resolveNarratorFolded is resolve-or-create across spellings (exact
+// name, then fold key), so no separate lookup is needed.
 type narratorCreditStore interface {
-	CreateNarrator(name string) (*Narrator, error)
+	resolveNarratorFolded(name string) (*Narrator, error)
 	GetBookNarrators(bookID string) ([]BookNarrator, error)
 	SetBookNarrators(bookID string, narrators []BookNarrator) error
 	GetBookAuthors(bookID string) ([]BookAuthor, error)
@@ -35,7 +36,13 @@ func bookAuthorNames(s narratorCreditStore, bookID string, primary *int) ([]stri
 }
 
 // resolveNarratorCredit turns a credit into junction rows, creating narrator
-// entities as needed. The credit goes through util.CleanNarratorCredit first
+// entities as needed. A name resolves to an existing record when it matches by
+// exact normalized name or by fold key (util.FoldKey: case, accents,
+// punctuation, spacing), so a rescan that reads an unaccented tag back links to
+// the record "Renée Montoya" instead of minting "Renee Montoya", and the
+// record keeps its spelling. Several fold matches go to the exact match, else
+// the record with the most credits, and are logged at Warn. Only a name that
+// matches nothing creates a record. The credit goes through util.CleanNarratorCredit first
 // (owner rules 2026-09-23: drop translators/editors, strip "By:", drop the
 // book's own authors when a real narrator remains). Any verdict other than
 // NarratorCreditPeople returns no rows, and the caller leaves the junction
@@ -47,7 +54,7 @@ func resolveNarratorCredit(s narratorCreditStore, bookID, credit string, bookAut
 	}
 	var rows []BookNarrator
 	for _, name := range people {
-		n, err := s.CreateNarrator(name)
+		n, err := s.resolveNarratorFolded(name)
 		if err != nil {
 			return nil, verdict, fmt.Errorf("resolve narrator %q: %w", name, err)
 		}
