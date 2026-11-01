@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary_cooldown_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 768f5a2c-e381-4b86-8e01-15df198a14cb
-// last-edited: 2026-10-27
+// last-edited: 2026-10-31
 
 package transcribe
 
@@ -65,11 +65,17 @@ func (c *canaryRecorder) count() int {
 }
 
 func dispatchWith(ctx context.Context, p *faultPool, canary canaryFunc, n int) (map[string]BatchResult, error) {
+	return dispatchWithOpts(ctx, p, p.opts(canary), n)
+}
+
+// dispatchWithOpts is dispatchWith with the dispatch's options in hand, for a
+// test that hooks the gate (poolOptions.extraRefusal).
+func dispatchWithOpts(ctx context.Context, p *faultPool, opts poolOptions, n int) (map[string]BatchResult, error) {
 	jobs := make(map[string]string, n)
 	for _, id := range loopers(n, "chap") {
 		jobs[id] = "unused"
 	}
-	return dispatchPool(ctx, p.h.eps, nil, jobs, p.opts(canary), p.send)
+	return dispatchPool(ctx, p.h.eps, nil, jobs, opts, p.send)
 }
 
 func requireNoStrikes(t *testing.T, res map[string]BatchResult) {
