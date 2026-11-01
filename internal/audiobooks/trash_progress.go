@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.12.5
+// version: 1.12.6
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-28
+// last-edited: 2026-11-01
 
 package audiobooks
 
@@ -365,7 +365,16 @@ func purgeEligible(book *database.Book, now time.Time) bool {
 	if days <= 0 || at == nil {
 		return false
 	}
-	return at.Before(now.AddDate(0, 0, -days))
+	return at.Before(trashRetentionCutoff(now, days))
+}
+
+// trashRetentionCutoff is the instant a book must have been trashed before to
+// be older than days: exactly days*24h before now. AddDate counts calendar
+// days in now's zone, so across a DST change "1 day ago" was 23 or 25 hours,
+// and the purge, its preview, the trash list and the per-book eligibility
+// disagreed with a 24-hour reading of the setting twice a year.
+func trashRetentionCutoff(now time.Time, days int) time.Time {
+	return now.Add(-time.Duration(days) * 24 * time.Hour)
 }
 
 // progressSummary describes each user's state on bookID in a few words,
