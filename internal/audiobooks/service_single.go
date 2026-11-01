@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.27.12
+// version: 1.27.13
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-30
+// last-edited: 2026-11-01
 
 package audiobooks
 
@@ -264,7 +264,7 @@ func (svc *AudiobookService) GetSoftDeletedBooks(ctx context.Context, limit int,
 
 	var cutoff *time.Time
 	if olderThanDays != nil && *olderThanDays > 0 {
-		ts := time.Now().AddDate(0, 0, -*olderThanDays)
+		ts := trashRetentionCutoff(time.Now(), *olderThanDays)
 		cutoff = &ts
 	}
 
@@ -292,7 +292,7 @@ func (svc *AudiobookService) CountSoftDeletedBooks(ctx context.Context, olderTha
 	}
 	var cutoff *time.Time
 	if olderThanDays != nil && *olderThanDays > 0 {
-		ts := time.Now().AddDate(0, 0, -*olderThanDays)
+		ts := trashRetentionCutoff(time.Now(), *olderThanDays)
 		cutoff = &ts
 	}
 	if cs := database.AsSoftDeletedCountStore(svc.store); cs != nil {

@@ -1,0 +1,1 @@
+- Trash retention ("older than N days") is now exactly N×24 hours. It used calendar days, so on daylight-saving days the purge, its preview, the trash list and the per-book eligibility check used 23- or 25-hour days; this also turned CI red for every PR on 2026-11-01.

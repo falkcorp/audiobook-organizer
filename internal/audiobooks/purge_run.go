@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_run.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c9d2f87-6b13-4e50-a8d4-1f7e3a0c9b62
-// last-edited: 2026-10-28
+// last-edited: 2026-11-01
 
 package audiobooks
 
@@ -364,7 +364,7 @@ func (svc *AudiobookService) RunPurge(ctx context.Context, opts PurgeOptions) (*
 	started := svc.purgeNow()
 	var cutoff *time.Time
 	if opts.OlderThanDays != nil && *opts.OlderThanDays > 0 {
-		ts := started.AddDate(0, 0, -*opts.OlderThanDays)
+		ts := trashRetentionCutoff(started, *opts.OlderThanDays)
 		cutoff = &ts
 	}
 	// bound: the instant the books this pass may touch were trashed by. A
