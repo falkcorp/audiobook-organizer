@@ -209,7 +209,7 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 ### Authors
 | Method | Path | Handler |
 |--------|------|---------|
-| GET | `/authors` | `listAuthors` |
+| GET | `/authors` | `listAuthors` (optional `limit`, `offset`, `q`, `filter`, `sort`, `order`) |
 | GET | `/authors/with-counts` | `listAuthorsWithCounts` |
 | GET | `/authors/count` | `countAuthors` |
 | GET | `/authors/:id/books` | `getAuthorBooks` |
@@ -228,7 +228,7 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 ### Series
 | Method | Path | Handler |
 |--------|------|---------|
-| GET | `/series` | `listSeries` |
+| GET | `/series` | `listSeries` (optional `limit`, `offset`, `q`, `filter`, `sort`, `order`) |
 | GET | `/series/count` | `countSeries` |
 | GET | `/series/:id/books` | `getSeriesBooks` |
 | PATCH | `/series/:id` | `updateSeriesName` |
