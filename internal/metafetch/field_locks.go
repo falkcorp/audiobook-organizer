@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-10-10
+// last-edited: 2026-10-30
 
 package metafetch
 
@@ -174,7 +174,8 @@ func applyLocks(locks database.FieldLocks, handPicked bool) database.FieldLocks 
 // guardedApplyWith is guardedApply; handPicked says a person picked this
 // candidate (applyLocks). claimed lists the repair-locked keys the candidate
 // carries a value for, which a hand-picked apply may write: the caller hands
-// them to database.ClaimRepairLocks once the write commits.
+// the ones it changed to database.ClaimRepairLocksLocked in the commit's hold
+// of the book's field-state stripe (commitApplyUnderStripe).
 func (mfs *Service) guardedApplyWith(book *database.Book, meta metadata.BookMetadata, source string, handPicked bool) (metadata.BookMetadata, []string, *AuthorCredits, []string, error) {
 	if book == nil {
 		return meta, nil, nil, nil, fmt.Errorf("apply metadata: nil book")
@@ -238,4 +239,28 @@ func mergeSkipped(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// handPickedChangedLocks narrows claimed (the repair-locked keys a hand-picked
+// apply was allowed to write) to the ones this apply actually wrote, which
+// ClaimRepairLocksLocked then makes the person's lock. A key counts only when
+// the apply's own working copy (applied) differs from the row it read (before)
+// AND the committed row (committed) differs from it too: database.MergeBookChanges
+// copies only the fields the apply changed, so a field it left alone keeps
+// whatever a concurrent writer committed -- a revert that put the repair's old
+// value back would otherwise read as "changed" against before, and the lock
+// would be taken as the person's choice of a value they never picked. A
+// candidate that merely agrees with the repair changes nothing and leaves the
+// lock the repair's. author_name also counts when the apply changed the
+// author credits, which move no column on a book that already has a primary
+// author.
+func handPickedChangedLocks(claimed []string, before, applied, committed *database.Book, credits *AuthorCredits) []string {
+	var changed []string
+	for _, k := range claimed {
+		if (k == database.FieldKeyAuthorName && credits.Changed()) ||
+			(database.LockedColumnChanged(k, before, applied) && database.LockedColumnChanged(k, before, committed)) {
+			changed = append(changed, k)
+		}
+	}
+	return changed
 }
