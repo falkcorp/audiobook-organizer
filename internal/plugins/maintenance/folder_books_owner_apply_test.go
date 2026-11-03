@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_owner_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41e9b8-2d05-4f36-a8c1-5e3b9d0f6a24
 // last-edited: 2026-11-03
 
@@ -455,7 +455,7 @@ func TestFolderBooksOwner_SingleShelfRowIsMeasuredNotOffered(t *testing.T) {
 // A duplicate title that resolves to exactly one live book is owner-resolvable
 // (by a version link, owner rows only, Q2), but the apply cannot write that
 // link yet, so the row is not offered; plain rows keep the skip.
-func TestFolderBooksOwner_DuplicateTitleIsCarriedButNotOfferedYet(t *testing.T) {
+func TestFolderBooksOwner_DuplicateTitleIsCarriedAndLinkedByTheOwner(t *testing.T) {
 	seedTwin := func(t *testing.T, f *fragFixture, n int) {
 		author, err := f.s.GetAuthorByName("Alfred Pennyworth")
 		require.NoError(t, err)
@@ -476,16 +476,18 @@ func TestFolderBooksOwner_DuplicateTitleIsCarriedButNotOfferedYet(t *testing.T) 
 			seedTwin(t, f, tc.twins)
 			row := f.fbSingleRow(t, "op-plan")
 			require.Equal(t, fbSkipMixedShelf, row.Skipped)
-			require.False(t, row.OwnerApplicable)
+			// One twin is the owner's to link to; two are a hard hold.
+			require.Equal(t, tc.wantSingle, row.OwnerApplicable, "%s", row.SkipReason)
 			var st fbState
 			require.NoError(t, json.Unmarshal(row.State, &st))
 			require.Len(t, st.DupTitles, 1)
 			require.Equal(t, tc.wantSingle, st.DupSingle)
+			require.Equal(t, tc.wantSingle, len(st.Links) == 1)
 			// Replan carries the verdict, so Plan and Replan agree.
 			fresh, err := newFolderBooksFixer(f.p).Replan(context.Background(), nil, row, nil)
 			require.NoError(t, err)
 			require.Equal(t, row.Fingerprint, fresh.Fingerprint)
-			require.False(t, fresh.OwnerApplicable)
+			require.Equal(t, tc.wantSingle, fresh.OwnerApplicable)
 		})
 	}
 	t.Run("plain row keeps skipped_duplicate_title", func(t *testing.T) {
