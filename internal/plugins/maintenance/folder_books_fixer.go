@@ -259,8 +259,12 @@ func fbNorm(s string) string {
 }
 
 var (
-	fbLeadNumRe  = regexp.MustCompile(`^[\d\s\-_.]+`)
-	fbTailNumRe  = regexp.MustCompile(`[\s\-_]*\(?\d+\s*(?:of\s*\d+)?\)?\s*$`)
+	fbLeadNumRe = regexp.MustCompile(`^[\d\s\-_.]+`)
+	fbTailNumRe = regexp.MustCompile(`[\s\-_]*\(?\d+\s*(?:of\s*\d+)?\)?\s*$`)
+	// fbWordPartRe is a trailing part marker spelled in words or roman
+	// numerals ("Part II", "Volume Three", a bare " IV"). Evidence only
+	// (classify's flat works), never a group key.
+	fbWordPartRe = regexp.MustCompile(`(?i)(?:[\s\-_,:]*(?:part|pt|volume|vol|book|disc|cd)\.?\s+(?:[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|fifth)|\s+[ivx]{1,4})\s*$`)
 	fbPartTailRe = regexp.MustCompile(`(?i)\s*[-_]?\s*(?:part|pt|track|chapter|disc|cd)\s*\d+.*$`)
 	fbDigitsRe   = regexp.MustCompile(`^\d*$`)
 	fbOfNRe      = regexp.MustCompile(`(?i)\s*of\s*\d+\s*$`)
@@ -760,18 +764,7 @@ func (lib *fbLib) evaluate(id string) fbEval {
 	// is listed as mixed-shelf and never applied. A book that is no
 	// folder-book on its majority stays unflagged, so a real book with a
 	// copy on each shelf is not listed.
-	byShelf := map[string][]database.BookFileCore{}
-	for _, r := range rows {
-		s := lib.shelfOf(r.FilePath)
-		byShelf[s] = append(byShelf[s], r)
-	}
-	shelf := ""
-	for s, rs := range byShelf {
-		if len(rs) > len(byShelf[shelf]) || (len(rs) == len(byShelf[shelf]) && s < shelf) {
-			shelf = s
-		}
-	}
-	major := byShelf[shelf]
+	shelf, major, byShelf := lib.majorityShelf(rows)
 	if len(major) < fbMinFiles {
 		return ev
 	}
@@ -801,6 +794,37 @@ func (lib *fbLib) evaluate(id string) fbEval {
 		ev.Tier = fbTierMixedShelf
 	}
 	return ev
+}
+
+// majorityShelf splits rows by shelf (shelfOf) and names the largest shelf
+// (ties: the lexically smaller) and its rows. Plan (evaluate, whose Root is
+// commonDir of these rows) and Replan (fbMajorityRoot) must agree on it:
+// group keys, and so the ids of the books a cut-off apply created, derive
+// from that root.
+func (lib *fbLib) majorityShelf(rows []database.BookFileCore) (string, []database.BookFileCore, map[string][]database.BookFileCore) {
+	byShelf := map[string][]database.BookFileCore{}
+	for _, r := range rows {
+		s := lib.shelfOf(r.FilePath)
+		byShelf[s] = append(byShelf[s], r)
+	}
+	shelf, first := "", true
+	for s, rs := range byShelf {
+		if first || len(rs) > len(byShelf[shelf]) || (len(rs) == len(byShelf[shelf]) && s < shelf) {
+			shelf, first = s, false
+		}
+	}
+	return shelf, byShelf[shelf], byShelf
+}
+
+// fbMajorityRoot is the Root evaluate gives book id: the common folder of
+// its largest shelf's rows.
+func (lib *fbLib) fbMajorityRoot(id string) string {
+	_, major, _ := lib.majorityShelf(lib.files[id])
+	paths := make([]string, 0, len(major))
+	for _, r := range major {
+		paths = append(paths, r.FilePath)
+	}
+	return commonDir(paths)
 }
 
 // classify is evaluate's verdict on rows, all under shelf.
@@ -882,9 +906,15 @@ func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookF
 		if r.Duration < fbProperMinSec {
 			continue
 		}
+		_, label, dir := fbGroupKey(r.FilePath, ev.Root)
+		if dir != "" {
+			continue
+		}
 		longFiles++
-		if k, label, dir := fbGroupKey(r.FilePath, ev.Root); dir == "" && !fbDigitsRe.MatchString(fbNorm(label)) {
-			longStems[k] = true
+		// Word-numbered parts ("Part II", "Volume Three") are one work here;
+		// fbStem strips only digits.
+		if w := fbNorm(fbWordPartRe.ReplaceAllString(label, "")); w != "" && !fbDigitsRe.MatchString(w) {
+			longStems[w] = true
 		}
 	}
 	flatWorks := len(longStems) >= fbFlatWorksMin && longFiles*2 >= len(rows)
@@ -1406,6 +1436,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	var orphans []orphan
 	keyHeld := map[string]bool{} // a group key with a path a proper book holds
+	// strayMinor: files off the lead's shelf that no proper book or smaller
+	// folder-book holds (evaluate's gate counts any other holder, so it can
+	// pass a file this row would treat as an orphan of a root it is not under).
+	var strayMinor []string
 	fp := []string{"tier=" + lead.Tier, "members=" + strings.Join(members, ",")}
 	for _, p := range paths {
 		k, lbl, dir := fbGroupKey(p, lead.Root)
@@ -1485,6 +1519,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 					break
 				}
 			}
+		}
+		if cls != "held" && cls != "folder" && lib.shelfOf(p) != lead.Shelf {
+			strayMinor = append(strayMinor, p)
+			fp = append(fp, "m:"+p)
 		}
 		switch cls {
 		case "held":
@@ -1654,6 +1692,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	case lead.Tier == fbTierMixedShelf:
 		row.Skipped, row.SkipReason = fbSkipMixedShelf, "files on two shelves: the second shelf holds over "+
 			"a fifth of them, or some of them have no proper book; listed for review only"
+	case len(strayMinor) > 0:
+		row.Skipped = fbSkipMixedShelf
+		row.SkipReason = fmt.Sprintf("%d file(s) off the folder-book's shelf %s have no proper book or smaller "+
+			"folder-book holding them: %s", len(strayMinor), lead.Shelf, strings.Join(fbFirst(strayMinor, 5), "; "))
 	case !fbApplicableTier(lead.Tier):
 		row.Skipped, row.SkipReason = fbSkipDeep, "deep tier: listed for review only"
 	case lead.AtOrAbove && len(plan.Groups) > 0:
@@ -1813,7 +1855,10 @@ func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 	// resumed apply extends them (applyGroup), so the row must re-plan as it
 	// was planned.
 	if set := lib.sets[st.Members[0]]; set != nil {
-		root := commonDir(fbSetPaths(set))
+		// The same root Plan grouped with (evaluate's Root): for a
+		// mixed-shelf row commonDir of the whole set is a different folder,
+		// whose keys would name none of the created books.
+		root := lib.fbMajorityRoot(st.Members[0])
 		ours := map[string]bool{}
 		for p := range set {
 			k, _, _ := fbGroupKey(p, root)
