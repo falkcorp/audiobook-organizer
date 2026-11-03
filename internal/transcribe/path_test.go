@@ -1,7 +1,7 @@
 // file: internal/transcribe/path_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package transcribe
 
@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +32,14 @@ type pathWorker struct {
 	respond  func(key string, job map[string]any) map[string]any
 	canaries int // canary clips received on /transcribe, answered as a sound worker would
 
-	healthHits atomic.Int64 // GET /health requests received
+	// healthLog has one entry per GET /health received, in arrival order: the
+	// number of /transcribe-path-batch requests the worker had received when it
+	// arrived. A dispatch probes /health for two different reasons, and only one
+	// of them is the gate's: the gate asks before any work is sent, the
+	// post-response identity check (verifyAfterResponse) asks after a response.
+	// The log lets a test tell them apart (gateProbesSince) instead of counting
+	// both.
+	healthLog []int
 }
 
 func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
@@ -44,7 +50,9 @@ func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(rw http.ResponseWriter, _ *http.Request) {
-		w.healthHits.Add(1)
+		w.mu.Lock()
+		w.healthLog = append(w.healthLog, len(w.requests))
+		w.mu.Unlock()
 		_ = json.NewEncoder(rw).Encode(health)
 	})
 	mux.HandleFunc("POST /transcribe-path-batch", func(rw http.ResponseWriter, r *http.Request) {
@@ -74,6 +82,32 @@ func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
 	w.srv = httptest.NewServer(mux)
 	t.Cleanup(w.srv.Close)
 	return w
+}
+
+// healthMark is a point in a worker's history: how many /health requests and
+// how many path-batch requests it had received.
+type healthMark struct{ health, posts int }
+
+func (w *pathWorker) mark() healthMark {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return healthMark{health: len(w.healthLog), posts: len(w.requests)}
+}
+
+// gateProbesSince counts the /health requests received after m that arrived
+// before the worker was sent any work after m: the probes of a dispatch's gate.
+// The ones that arrive later are the dispatch checking, after a response, that
+// the same machine answered it, and are a different question from the gate's.
+func (w *pathWorker) gateProbesSince(m healthMark) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, posts := range w.healthLog[m.health:] {
+		if posts == m.posts {
+			n++
+		}
+	}
+	return n
 }
 
 func (w *pathWorker) postCount() int {

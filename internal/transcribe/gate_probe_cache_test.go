@@ -1,7 +1,7 @@
 // file: internal/transcribe/gate_probe_cache_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e4ebe594-0334-4c03-8714-f86dd60340ee
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package transcribe
 
@@ -222,30 +222,35 @@ func TestGateProbeCache_UnhealthyAnswersAreNotCached(t *testing.T) {
 }
 
 // End to end through the path batch: the second batch of a run does not probe
-// the worker again.
+// the worker again at its gate. Only the gate's probes are counted: after every
+// response a dispatch also asks /health whether the same machine answered
+// (verifyAfterResponse), which is not the gate and is not meant to be cached, so
+// the worker's raw /health total moves with each batch whatever the cache does.
 func TestTranscribeByPathBatch_ReusesGateProbeAcrossBatches(t *testing.T) {
 	clock := enableProbeCache(t)
 	w := newPathWorker(t, pathHealth(nil))
 	useEndpoints(t, 0, w.srv.URL)
 
-	run := func() {
+	// run sends one batch and returns how many times its gate probed /health.
+	run := func() int {
 		t.Helper()
+		start := w.mark()
 		if _, err := TranscribeByPathBatch(context.Background(), pathJobs(t, 2), BatchOptions{}); err != nil {
 			t.Fatal(err)
 		}
+		if w.postCount() == start.posts {
+			t.Fatal("the batch sent the worker no work")
+		}
+		return w.gateProbesSince(start)
 	}
-	run()
-	afterFirst := w.healthHits.Load()
-	if afterFirst == 0 {
-		t.Fatal("the first batch never probed /health")
+	if got := run(); got != 1 {
+		t.Fatalf("first batch's gate probed /health %d time(s), want 1", got)
 	}
-	run()
-	if got := w.healthHits.Load(); got != afterFirst {
-		t.Fatalf("second batch probed /health %d more time(s), want 0", got-afterFirst)
+	if got := run(); got != 0 {
+		t.Fatalf("second batch's gate probed /health %d time(s), want 0 (a clean answer within the TTL is reused)", got)
 	}
 	clock.Advance(gateProbeTTL + time.Second)
-	run()
-	if got := w.healthHits.Load(); got == afterFirst {
-		t.Fatal("a batch past the TTL did not probe /health")
+	if got := run(); got != 1 {
+		t.Fatalf("a batch past the TTL: gate probed /health %d time(s), want 1", got)
 	}
 }
