@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-24
+// last-edited: 2026-11-03
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -210,21 +210,24 @@ export function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
 }
 
 /**
- * The owner-apply confirm: names the book and how many fragment books the
- * one click retires, and says plainly that iTunes tracks those files, only
- * database rows change, and the parent is not written.
+ * The owner-apply confirm: names the book and quotes the row's own
+ * `owner_apply_reason` (what this one click writes, in the fixer's words), then
+ * says plainly that only database rows change and that the change is recorded
+ * under the owner's name and can be reverted. Fixer-agnostic: the reason is
+ * the fixer's, so this works for every fixer that marks owner rows.
  */
 export function repairOwnerApplyConfirmMessage(
   title: string,
   fixerTitle: string,
-  fragments: number
+  reason: string
 ): string {
-  const what = fragments === 1 ? '1 fragment book' : `${fragments} fragment books`;
+  const why = reason.trim();
   return (
-    `Apply "${title}" from "${fixerTitle}" as the owner, retiring ${what} into the parent? ` +
-    'iTunes tracks these files; only database rows change. ' +
-    'The parent, every file and iTunes are not written. The change is recorded in the ' +
-    "operation's history under your name and can be reverted from the operation."
+    `Apply "${title}" from "${fixerTitle}" as the owner?` +
+    (why ? ` ${why}${/[.!?]$/.test(why) ? '' : '.'}` : '') +
+    ' Only database rows change: no file is moved or written and iTunes is not written. ' +
+    "The change is recorded in the operation's history under your name and can be " +
+    'reverted from the operation.'
   );
 }
 
@@ -1026,7 +1029,7 @@ export function useRepairsLane(
           const msg = repairOwnerApplyConfirmMessage(
             action.title,
             fixerTitle(action.fixerId),
-            action.fragments
+            action.reason
           );
           if (!window.confirm(msg)) {
             return;
