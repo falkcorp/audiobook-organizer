@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-10-26
+// last-edited: 2026-11-03
 
 package reconcile
 
@@ -20,6 +20,7 @@ import (
 	"howett.net/plist"
 
 	"github.com/falkcorp/audiobook-organizer/internal/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -43,7 +44,7 @@ type resolverFailureCounters struct {
 	fpcalcFailed         atomic.Int64 // FileWholeFingerprint error/nil result
 	acoustidLookupFailed atomic.Int64 // ac.Lookup error or empty title
 	acoustidBelowFloor   atomic.Int64 // match scored under acoustIDHealMinScore, ignored
-	whisperFailed        atomic.Int64 // TranscribeFirst30s error/empty text
+	whisperFailed        atomic.Int64 // pool/ffmpeg error or empty text (no stored transcript to use)
 }
 
 // warnRateLimited logs msg at Warn on the first occurrence and every 100th
@@ -606,20 +607,68 @@ func resolveNotFoundByPID(store reconcileStore, pid string) string {
 	return bf.FilePath
 }
 
-// resolveAmbiguousByTranscription transcribes the first 30 seconds of each
-// candidate's first audio file and parses the "TITLE by AUTHOR. Read by
-// NARRATOR." announcement that every commercial audiobook opens with. The
-// candidate whose parsed title/author best matches the iTunes track Album/Artist
-// wins — this is definitive when all other layers have tied.
+// transcribeClipFn is the test seam over transcribe.TranscribeIntroClip (ffmpeg
+// plus one Whisper-pool request). Production code never reassigns it.
+var transcribeClipFn = transcribe.TranscribeIntroClip
+
+// storedIntroText returns the intro transcript the intro-transcribe ops already
+// stored for a candidate, so heal need not transcribe the audio again.
 //
-// Only called when there are ≤5 candidates (cost: ~5–15 s per candidate with a
-// local Whisper model; more candidates indicate a structural problem better
-// handled by the triage op).
+// Sources, in order: the first file's own row (valid only while its
+// IntroSourceHash still matches its FileHash, the ops' done marker, so a file
+// replaced since is not read), then the book-level transcript. The first usable
+// text wins.
 //
-// failures may be nil; when non-nil, Whisper transcription failures are
-// tallied and rate-limited-Warn logged instead of a silent `continue` — see
-// resolveAmbiguousByAcoustID's doc comment for why this matters (H3).
-func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
+// silent reports that the only thing stored was transcribe.SilenceSentinel. That
+// is an answer, not text: every retry of the intro op got zero characters from
+// the audio, so another 30 s attempt would come back empty too. The caller skips
+// the candidate without a pool call and without counting a failure.
+func storedIntroText(file *database.BookFile, book *database.Book) (text string, silent bool) {
+	check := func(p *string) bool {
+		if p == nil {
+			return false
+		}
+		t := strings.TrimSpace(*p)
+		switch t {
+		case "":
+			return false
+		case transcribe.SilenceSentinel:
+			silent = true
+			return false
+		}
+		text = t
+		return true
+	}
+	if file != nil && file.FileHash != "" && file.IntroSourceHash == file.FileHash && check(file.IntroTranscription) {
+		return text, false
+	}
+	if book != nil && check(book.IntroTranscription) {
+		return text, false
+	}
+	return "", silent
+}
+
+// resolveAmbiguousByTranscription reads the "TITLE by AUTHOR. Read by
+// NARRATOR." announcement that every commercial audiobook opens with, from each
+// candidate's first audio file, and picks the candidate whose parsed
+// title/author best matches the iTunes track Album/Artist. This is definitive
+// when all other layers have tied.
+//
+// The transcript comes from the intro the intro-transcribe ops already stored
+// (see storedIntroText). Only a candidate with none has its first 30 seconds cut
+// and sent to the self-hosted Whisper pool; heal never loads a model in this
+// process and never calls a paid API.
+//
+// Only called when there are <=5 candidates (more indicate a structural problem
+// better handled by the triage op).
+//
+// failures may be nil; when non-nil, pool/ffmpeg failures are tallied and
+// rate-limited-Warn logged instead of a silent `continue` (see
+// resolveAmbiguousByAcoustID's doc comment for why this matters, H3). A pool
+// outage lands here as a failure: the candidate is unscored and nothing is
+// stored. journal may be nil; when set it is the Whisper result journal the
+// intro ops share.
+func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, track iTunesTrack, candidates []string, failures *resolverFailureCounters, journal transcribe.ResultJournal) string {
 	if len(candidates) == 0 || len(candidates) > 5 {
 		return ""
 	}
@@ -637,24 +686,44 @@ func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, 
 		default:
 		}
 
-		// Find the first audio file of this candidate's book.
+		// Find the first audio file of this candidate's book, and the rows that
+		// may already hold its intro transcript.
 		firstFile := candidatePath
+		var firstRow *database.BookFile
+		var book *database.Book
 		if bf, err := store.GetBookFileByPath(candidatePath); err == nil && bf != nil && !bf.Retired {
+			if b, err := store.GetBookByID(bf.BookID); err == nil {
+				book = b
+			}
 			files, err := store.GetBookFiles(bf.BookID)
 			if err == nil && len(files) > 0 {
 				if f := pickFirstFile(files); f != "" {
 					firstFile = f
+					for i := range files {
+						if files[i].FilePath == f {
+							firstRow = &files[i]
+							break
+						}
+					}
 				}
 			}
 		}
 
-		text, err := transcribe.TranscribeFirst30s(ctx, firstFile)
-		if err != nil || text == "" {
-			if failures != nil {
-				n := failures.whisperFailed.Add(1)
-				warnRateLimited(n, "itunes-heal: transcription failed", "path", firstFile, "err", err)
-			}
+		text, silent := storedIntroText(firstRow, book)
+		if silent {
+			slog.Debug("itunes-heal: stored intro is the silence sentinel, candidate unscored", "path", firstFile)
 			continue
+		}
+		if text == "" {
+			var err error
+			text, err = transcribeClipFn(ctx, firstFile, journal)
+			if err != nil || text == "" {
+				if failures != nil {
+					n := failures.whisperFailed.Add(1)
+					warnRateLimited(n, "itunes-heal: transcription failed", "path", firstFile, "err", err)
+				}
+				continue
+			}
 		}
 
 		fields := transcribe.ParseAudiobookIntro(text)
@@ -813,6 +882,16 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 		ac = acoustid.NewClient(key)
 	}
 
+	// Whisper result journal shared with the intro-transcribe ops, so a clip heal
+	// sends is restart-safe like theirs. nil (no journal) when the store has no
+	// raw KV surface; heal then runs without it.
+	var whisperJournal transcribe.ResultJournal
+	if kv, ok := any(store).(resultjournal.KVStore); ok {
+		if j, jerr := resultjournal.New(kv, resultjournal.KindWhisperIntro); jerr == nil {
+			whisperJournal = j
+		}
+	}
+
 	log := reporter.Logger()
 	// The duplicate collapse journals its undo pointers under this run.
 	opID := registry.ReporterOpID(reporter)
@@ -955,7 +1034,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 			// candidate whose title/author best matches the iTunes track. Definitive
 			// but expensive; only runs for ≤5 still-ambiguous candidates.
 			if src == "" && len(candidates) > 0 && store != nil {
-				src = resolveAmbiguousByTranscription(ctx, store, t, candidates, &resolverFailures)
+				src = resolveAmbiguousByTranscription(ctx, store, t, candidates, &resolverFailures, whisperJournal)
 			}
 
 			// Layer 7: fuzzy album/artist path scan for zero-candidate not-found tracks.
