@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerswap_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c80f6dd-e49e-4cf4-acef-60b49489f7aa
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package transcribe
 
@@ -529,18 +529,29 @@ func healthDownDuringSecondPost(t *testing.T, srv *httptest.Server, post string,
 	})
 }
 
-// unverifiedWindow sets the timings of the tests below: the poll ticks every
-// 200 ms, so the second chunk's request (300 ms) sees one unreadable poll probe
-// (never the three that would end it as an outage), and the confirmation chunk 1
-// left is older than livenessInterval+healthProbeTimeout (210 ms) when chunk 2
-// is answered.
+// unverifiedWindow sets the timings of the tests below. Three constraints, all
+// relative to the poll interval I (livenessInterval) and the /health probe
+// timeout T (healthProbeTimeout):
+//
+//   - hold > I+T: the confirmation chunk 1 left is older than the evidence
+//     window (I+T) when chunk 2 is answered, so nothing vouches for the worker;
+//   - hold < 3*I: the poll sees one or two unreadable probes (at I and 2I) and
+//     never the three that would end the request as an outage;
+//   - T must be far above the loopback /health latency under -race on a loaded
+//     CI agent. It was 10 ms, which the setup probe, chunk 1's own verified
+//     probe and the poll's readable probes all share, so one slow loopback read
+//     failed "setup: health" or withheld chunk 1. The unreadable probes in the
+//     window are HTTP 500s answered at once, so a large T costs only the hold.
+//
+// I=300ms, T=250ms, hold=750ms leaves 200 ms on the first constraint and 150 ms
+// on the second.
 func unverifiedWindow(t *testing.T) time.Duration {
 	t.Helper()
-	shortLiveness(t, 200*time.Millisecond)
+	shortLiveness(t, 300*time.Millisecond)
 	old := healthProbeTimeout
-	healthProbeTimeout = 10 * time.Millisecond
+	healthProbeTimeout = 250 * time.Millisecond
 	t.Cleanup(func() { healthProbeTimeout = old })
-	return 300 * time.Millisecond
+	return 750 * time.Millisecond
 }
 
 // An upload send: chunk 1 is answered and verified, chunk 2 is answered but
