@@ -1,7 +1,7 @@
 // file: internal/database/change_type_class.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e1c4d52-93a8-4f60-b2d7-5a0e6c18f3b4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package database
 
@@ -74,6 +74,7 @@ var undoChangeTypeHoldsUserData = map[string]bool{
 	"ai_scan_result_applied":       false, // ChangeTypeAIScanResultApplied
 	"book_tag_add":                 false, // ChangeTypeBookTagAdd
 	"repair_book_create":           false, // ChangeTypeRepairBookCreate
+	"repair_version_group_join":    false, // ChangeTypeRepairVersionGroupJoin
 	"field_lock":                   false, // ChangeTypeFieldLock
 	"junk_author_credits":          false, // ChangeTypeJunkAuthorCredits
 	"junk_author_create":           false, // ChangeTypeJunkAuthorCreate

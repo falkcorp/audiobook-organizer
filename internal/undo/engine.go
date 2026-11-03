@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 //
 // Undo preflight. PreflightUndoConflictsFromChanges predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -183,6 +183,11 @@ func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*databas
 	// group lock): it has no way to know that will happen, so it counts
 	// those rows safe and the revert refuses them when it does.
 	restoresBook := map[string]bool{}
+	// hidesBook: books a repair_book_create row earlier in the order is
+	// predicted to hide (restore or already restored). The revert runs newest
+	// first, so a version join's revert finds the versions the same operation
+	// added to its group already hidden (VersionGroupJoinVerdict).
+	hidesBook := map[string]bool{}
 	recreatable := recreatableShells(store, restorable)
 	for _, c := range plan.Order {
 		if refusal := plan.Gate(c); refusal != nil {
@@ -196,11 +201,16 @@ func PreflightUndoConflictsFromChanges(store ConflictChecker, changes []*databas
 			v = rowVerdict{already: true}
 		case recreatable[c.BookID] && shellRowType(c.ChangeType):
 			v = recreatableShellVerdict(store, c)
+		case c.ChangeType == ChangeTypeRepairVersionGroupJoin:
+			v = versionGroupJoinVerdict(store, c, hidesBook)
 		default:
 			v = preflightRow(store, c, plan.Stamps, plan)
 		}
 		if c.ChangeType == ChangeTypeBookSoftDelete && v.refusal == nil && v.conflict == nil {
 			restoresBook[c.BookID] = true
+		}
+		if c.ChangeType == ChangeTypeRepairBookCreate && v.refusal == nil && v.conflict == nil {
+			hidesBook[c.BookID] = true
 		}
 		plan.Record(c, v.refusal)
 		switch {
@@ -591,6 +601,38 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(checkFsRegroupRow(store, c, stamps, plan))
 	}
 	return rowVerdict{}
+}
+
+// versionGroupMembersReader lists a version group's books (soft-deleted ones
+// included).
+type versionGroupMembersReader interface {
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+}
+
+// versionGroupJoinVerdict predicts the revert of a ChangeTypeRepairVersionGroupJoin
+// row (RevertService.revertRepairVersionGroupJoin): the joined book must be
+// readable and still what the join left (CheckVersionGroupJoinCurrent), with
+// no live member in the minted group but the versions the same operation
+// added, which hidesBook says an earlier row of the revert hides. A store
+// that cannot list a group refuses the row (fail closed), as the revert does.
+func versionGroupJoinVerdict(store ConflictChecker, c *database.OperationChange, hidesBook map[string]bool) rowVerdict {
+	_, now, err := DecodeVersionGroupJoin(c)
+	if err != nil {
+		return rowVerdict{refusal: refuse(ReasonOldValueUnparsable, "%v", err)}
+	}
+	book, refusal := CheckRestoreBook(store, c.BookID)
+	if refusal != nil {
+		return rowVerdict{refusal: refusal}
+	}
+	gr, ok := store.(versionGroupMembersReader)
+	if !ok {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot read version group %s", now.GroupID())}
+	}
+	members, err := gr.GetBooksByVersionGroup(now.GroupID())
+	if err != nil {
+		return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read version group %s: %v", now.GroupID(), err)}
+	}
+	return verdictOf(CheckVersionGroupJoinCurrent(book, members, hidesBook, c))
 }
 
 // masterListElsewhereVerdict predicts the revert of a

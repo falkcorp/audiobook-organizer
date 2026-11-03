@@ -1,7 +1,7 @@
 // file: internal/undo/book_create.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7f3a9c21-5e8b-4d06-a1c4-2b9e6d0f8a53
-// last-edited: 2026-10-01
+// last-edited: 2026-11-03
 
 package undo
 
@@ -21,6 +21,13 @@ import (
 // NewValue is RepairBookCreateValue JSON: the id and the title, author and
 // file_path the book was created with (an older row's NewValue is the bare id).
 //
+// A book created as a non-primary version of an existing book carries that
+// book's group in VersionGroupID (the folder-books fixer's owner apply, when
+// an orphan's title and author name a live book): it is born in the group, as
+// an explicit non-primary member. A book a later operation adopted (a cut-off
+// apply's hidden book, finished by a new operation) is journaled again with
+// AdoptedFrom naming the earlier operation, whose journal rows it keeps.
+//
 // Restorable. The revert SOFT-DELETES the created book; it never deletes it,
 // and it never deletes the book_file rows the fixer created on it (no repair
 // may delete a book_file row, and the purge refuses a book that still owns
@@ -39,6 +46,21 @@ type RepairBookCreateValue struct {
 	Title    string `json:"title"`
 	AuthorID *int   `json:"author_id,omitempty"`
 	FilePath string `json:"file_path"`
+	// VersionGroupID is the version group the book was created in as a
+	// non-primary member ("" for a book created outside any group).
+	VersionGroupID string `json:"version_group_id,omitempty"`
+	// AdoptedFrom is the operation that created the book, set on the row a
+	// later operation journals when it finishes a cut-off apply's book. Its
+	// journal rows (the book_file_create rows) are this book's too.
+	AdoptedFrom string `json:"adopted_from,omitempty"`
+}
+
+// SameBook reports whether v and o describe the same created book: id, title,
+// author, file_path and version group (AdoptedFrom is how it came to be
+// journaled, not what it is).
+func (v RepairBookCreateValue) SameBook(o RepairBookCreateValue) bool {
+	return v.ID == o.ID && v.Title == o.Title && v.FilePath == o.FilePath && v.VersionGroupID == o.VersionGroupID &&
+		(v.AuthorID == nil) == (o.AuthorID == nil) && (v.AuthorID == nil || *v.AuthorID == *o.AuthorID)
 }
 
 // Encode is the row's NewValue.
@@ -86,9 +108,12 @@ type RepairBookCreateStore interface {
 //     than the one journaled (organize or a repoint moved it). A journaled row
 //     that is not on the book is allowed: a cut-off apply journals before it
 //     creates, and a row reassigned away is no longer this book's to hide.
-//   - it joined a version group, carries an iTunes persistent id or any live
-//     external id, or its title, author or file_path differ from what the
-//     operation created (a user or another job made it theirs).
+//   - it is in a version group the operation did not create it in (any group
+//     for a row that names none), is no longer an explicit non-primary member
+//     of the one it was created in (crowned since), carries an iTunes
+//     persistent id or any live external id, or its title, author or file_path
+//     differ from what the operation created (a user or another job made it
+//     theirs).
 //   - anyone has listening progress on it.
 func CheckRepairBookCreate(store RepairBookCreateStore, c *database.OperationChange) error {
 	created, legacy, ok := ParseRepairBookCreateValue(c.BookID, c.NewValue)
@@ -105,8 +130,17 @@ func CheckRepairBookCreate(store RepairBookCreateStore, c *database.OperationCha
 	changed := func(format string, args ...any) error {
 		return &ReferentError{Reason: ReasonChangedSince, Detail: fmt.Sprintf("created book %s: ", c.BookID) + fmt.Sprintf(format, args...)}
 	}
-	if b.VersionGroupID != nil && *b.VersionGroupID != "" {
-		return changed("joined version group %s since", *b.VersionGroupID)
+	gid := ""
+	if b.VersionGroupID != nil {
+		gid = strings.TrimSpace(*b.VersionGroupID)
+	}
+	switch {
+	case created.VersionGroupID == "" && gid != "":
+		return changed("joined version group %s since", gid)
+	case created.VersionGroupID != "" && gid != created.VersionGroupID:
+		return changed("version group %q changed to %q since", created.VersionGroupID, gid)
+	case created.VersionGroupID != "" && (b.IsPrimaryVersion == nil || *b.IsPrimaryVersion):
+		return changed("was made primary of version group %s since", gid)
 	}
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
 		return changed("carries iTunes id %s since", *b.ITunesPersistentID)
@@ -142,14 +176,24 @@ func CheckRepairBookCreate(store RepairBookCreateStore, c *database.OperationCha
 	if has {
 		return changed("has listening progress")
 	}
-	changes, err := store.GetOperationChanges(c.OperationID)
-	if err != nil {
-		return &ReferentError{Reason: ReasonFieldUnreadable, Detail: fmt.Sprintf("read journal of %s: %v", c.OperationID, err)}
-	}
+	// The rows the book was given: this operation's journal, and the journal
+	// of every operation it adopted the book from (a cut-off apply's rows).
 	journaled := map[string]string{} // book_file id -> path
-	for _, oc := range changes {
-		if oc.BookID == c.BookID && oc.ChangeType == ChangeTypeBookFileCreate && strings.HasPrefix(oc.FieldName, "book_file:") {
-			journaled[strings.TrimPrefix(oc.FieldName, "book_file:")] = oc.NewValue
+	ops := []string{c.OperationID}
+	for seen, next := map[string]bool{c.OperationID: true}, created.AdoptedFrom; next != "" && !seen[next]; {
+		seen[next] = true
+		ops = append(ops, next)
+		next = adoptedFromOf(store, next, c.BookID)
+	}
+	for _, op := range ops {
+		changes, err := store.GetOperationChanges(op)
+		if err != nil {
+			return &ReferentError{Reason: ReasonFieldUnreadable, Detail: fmt.Sprintf("read journal of %s: %v", op, err)}
+		}
+		for _, oc := range changes {
+			if oc.BookID == c.BookID && oc.ChangeType == ChangeTypeBookFileCreate && strings.HasPrefix(oc.FieldName, "book_file:") {
+				journaled[strings.TrimPrefix(oc.FieldName, "book_file:")] = oc.NewValue
+			}
 		}
 	}
 	rows, err := store.GetBookFiles(c.BookID)
@@ -166,4 +210,24 @@ func CheckRepairBookCreate(store RepairBookCreateStore, c *database.OperationCha
 		}
 	}
 	return nil
+}
+
+// adoptedFromOf is the operation op itself adopted bookID from: the
+// AdoptedFrom of op's repair_book_create row for it ("" when op created the
+// book, or its journal cannot be read: the chain then ends, and a row of an
+// earlier operation reads as gained, which refuses).
+func adoptedFromOf(store RepairBookCreateStore, op, bookID string) string {
+	changes, err := store.GetOperationChanges(op)
+	if err != nil {
+		return ""
+	}
+	from := ""
+	for _, oc := range changes {
+		if oc.BookID == bookID && oc.ChangeType == ChangeTypeRepairBookCreate && !oc.Voided {
+			if v, _, ok := ParseRepairBookCreateValue(bookID, oc.NewValue); ok {
+				from = v.AdoptedFrom
+			}
+		}
+	}
+	return from
 }

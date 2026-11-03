@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package undo
 
@@ -793,6 +793,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	case ChangeTypeRepairBookCreate:
 		if _, _, ok := ParseRepairBookCreateValue(c.BookID, c.NewValue); !ok {
 			return ChangeTypeRepairBookCreate + ":(no book)"
+		}
+		return ""
+	case ChangeTypeRepairVersionGroupJoin:
+		if _, _, err := DecodeVersionGroupJoin(c); err != nil {
+			return ChangeTypeRepairVersionGroupJoin + ":(unparsable)"
 		}
 		return ""
 	case ChangeTypeAuthorMergeCredits:
