@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.24.0
+// version: 1.25.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-24
+// last-edited: 2026-11-03
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -799,7 +799,7 @@ describe('RepairsPanel — owner rows', () => {
     await expandRow(user, 'own');
     await expandRow(user, 'man');
     expect(within(own).getByText(/byte-identical to the parent file/)).toBeInTheDocument();
-    expect(within(own).getByText(/iTunes tracks these files; only database rows change/)).toBeInTheDocument();
+    expect(within(own).getByText(/Owner apply: only database rows change; no file is moved or written/)).toBeInTheDocument();
     expect(within(own).getByRole('button', { name: 'Apply (owner)' })).toBeInTheDocument();
     expect(within(own).queryByRole('checkbox')).not.toBeInTheDocument();
     const plain = screen.getByTestId('repairs-row-man');
@@ -865,9 +865,8 @@ describe('RepairsPanel — owner rows', () => {
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     const msg = confirmSpy.mock.calls[0][0] as string;
     expect(msg).toContain('"Many Parts"');
-    expect(msg).toContain('iTunes tracks these files; only database rows change');
-    expect(msg).toContain('retiring 1 fragment book into the parent');
-    expect(msg).toContain('The parent, every file and iTunes are not written');
+    expect(msg).toContain('byte-identical to the parent file (content hash); only database rows change.');
+    expect(msg).toContain('Only database rows change: no file is moved or written');
     await vi.waitFor(() =>
       expect(api.startRepairOwnerApply).toHaveBeenCalledWith('vg-primary', 'plan-1', 'own')
     );

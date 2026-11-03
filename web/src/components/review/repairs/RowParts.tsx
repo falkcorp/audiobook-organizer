@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RowParts.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 09def8d7-b23c-49be-80d7-cfdb4a959792
-// last-edited: 2026-10-22
+// last-edited: 2026-11-03
 
 /**
  * Pieces of a repairs row that every view renders the same way: its title
@@ -189,7 +189,7 @@ export function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsVie
       data-testid={`repairs-owner-${row.row_id}`}
     >
       <Typography variant="caption" component="div" sx={{ fontWeight: 600 }}>
-        Owner apply: iTunes tracks these files; only database rows change
+        Owner apply: only database rows change; no file is moved or written
       </Typography>
       {row.owner_apply_reason && (
         <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
@@ -216,7 +216,7 @@ export function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsVie
                 planOpId,
                 rowId: row.row_id,
                 title: row.title || row.book_ids[0] || row.row_id,
-                fragments: row.owner_writes?.length ?? 1,
+                reason: row.owner_apply_reason ?? '',
               })
             }
           >

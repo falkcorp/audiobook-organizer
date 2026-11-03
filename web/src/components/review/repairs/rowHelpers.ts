@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/rowHelpers.ts
-// version: 1.3.1
+// version: 1.4.0
 // guid: 21e5fc7d-cd22-4c0a-9773-b83015403a68
-// last-edited: 2026-10-23
+// last-edited: 2026-11-03
 
 /**
  * Pure helpers shared by the three repairs row views (Compact, Details,
@@ -129,6 +129,7 @@ export function classLabel(c: string): string {
 /** Display names of fixer row flags (Row.flags); an unknown flag shows as itself. */
 const FLAG_LABELS: Record<string, string> = {
   combine_undo_aware: 'From a combine that can still be undone',
+  single_shelf_owner_resolvable: 'One shelf, held only by owner-resolvable checks',
 };
 
 export function flagLabel(f: string): string {

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-24
+// last-edited: 2026-11-03
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -874,13 +874,24 @@ describe('useRepairsLane: canceled_skipped', () => {
 });
 
 describe('repairOwnerApplyConfirmMessage', () => {
-  it('says how many fragment books one click retires and that the parent is not written', () => {
-    const many = repairOwnerApplyConfirmMessage('Synthetic Book', 'Fragment consolidation', 300);
-    expect(many).toContain('retiring 300 fragment books into the parent');
-    expect(many).toContain('The parent, every file and iTunes are not written');
-    expect(many).toContain("operation's history under your name");
-    expect(repairOwnerApplyConfirmMessage('Synthetic Book', 'Fragment consolidation', 1)).toContain(
-      'retiring 1 fragment book into the parent'
+  it("quotes the row's own reason and says only database rows change", () => {
+    const msg = repairOwnerApplyConfirmMessage(
+      'Alfred Pennyworth',
+      'Folder books',
+      'creates 4 books from the files no book holds: Arkham Asylum, The Killing Joke'
     );
+    expect(msg).toContain('Apply "Alfred Pennyworth" from "Folder books" as the owner?');
+    expect(msg).toContain('creates 4 books from the files no book holds: Arkham Asylum, The Killing Joke.');
+    expect(msg).toContain('Only database rows change: no file is moved or written');
+    expect(msg).toContain("operation's history under your name");
+    expect(msg).toContain('reverted from the operation');
+  });
+
+  it('does not double a trailing full stop and copes with an empty reason', () => {
+    expect(repairOwnerApplyConfirmMessage('Synthetic Book', 'Fixer', 'one thing.')).toContain(
+      'one thing. Only database rows change'
+    );
+    const bare = repairOwnerApplyConfirmMessage('Synthetic Book', 'Fixer', '  ');
+    expect(bare).toContain('as the owner? Only database rows change');
   });
 });

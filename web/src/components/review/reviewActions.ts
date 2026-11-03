@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-10-13
+// last-edited: 2026-11-03
 //
 // Every action a reviewer can take, across every lane, as one discriminated
 // union.
@@ -137,7 +137,8 @@ export type RepairsAction =
   /**
    * The owner's own apply of ONE owner-applicable row (a skipped row the plan
    * marks `owner_applicable`): never part of a selection or "apply all".
-   * `title` names the book in the confirm, `fragments` how many it retires.
+   * `title` names the book in the confirm, `reason` is the row's own
+   * `owner_apply_reason`: what this one click writes, in the fixer's words.
    */
   | {
       lane: 'repairs';
@@ -146,8 +147,8 @@ export type RepairsAction =
       planOpId: string;
       rowId: string;
       title: string;
-      /** How many fragment books the row's apply retires (owner_writes). */
-      fragments: number;
+      /** The row's `owner_apply_reason`; empty when the plan gave none. */
+      reason: string;
     };
 
 /**
