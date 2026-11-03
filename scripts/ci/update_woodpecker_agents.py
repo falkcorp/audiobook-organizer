@@ -1,32 +1,41 @@
 #!/usr/bin/env python3
 # file: scripts/ci/update_woodpecker_agents.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 2de0d1a6-b52b-44d0-b941-2e05d9911c94
-# last-edited: 2026-10-20
+# last-edited: 2026-11-03
 """Upgrade the native woodpecker-agent binaries to the server's version.
 
 U1 and llm1 run the agent as a plain binary with the local backend (U1 under
 systemd, llm1 as a LaunchDaemon), not as a container, so an upgrade means
-swapping a binary. U0's agent is part of the server's swarm stack and is
+swapping a binary. The coordinator Mac's agent ("mac") is the same kind of
+binary but runs on the machine this script runs on, started by hand with
+run-agent.sh; it is handled through local commands, not ssh. It is not in the
+default host list: name it explicitly (`update_woodpecker_agents.py mac`). U0's agent is part of the server's swarm stack and is
 upgraded with that stack, not here (docs/ci/woodpecker.md, section 4).
 
 For each host, in order:
 
 1. Skip it if the server already reports the target version for that agent.
-2. Pause it (`no_schedule`) so the server hands it no new workflow, then wait
-   until its running tasks have finished. Restarting mid-workflow kills them.
+2. Record whether it was already paused, pause it (`no_schedule`) so the
+   server hands it no new workflow, then wait until its running tasks have
+   finished. Restarting mid-workflow kills them.
 3. Copy the release binary over (checked against the release's
    checksums.txt), keep the old one beside it as `woodpecker-agent.<old>`, and
    swap the new one in with an atomic rename.
 4. Restart: `systemctl restart` on U1; on llm1 kill the process and launchd's
-   KeepAlive starts the new binary (no sudo needed).
+   KeepAlive starts the new binary (no sudo needed); on mac kill the process,
+   wait for it to exit, and relaunch it detached via run-agent.sh.
 5. Pass only when the SERVER reports the new version with a fresh
    last_contact; a local `--version` does not prove the agent reconnected.
    On failure the old binary is restored and restarted. On llm1 a failure
    is usually macOS Local Network privacy: the binary is ad-hoc signed, so a
    new build is a new identity and may need the toggle in System Settings ->
    Privacy & Security -> Local Network again.
-6. Unpause, whatever happened.
+6. Put `no_schedule` back to the value recorded in step 2, whatever happened.
+   An agent that was paused before (U1 is paused outside its CI window by the
+   CI-window schedule launchd job) stays paused; one that was
+   running is resumed. A host skipped in step 1 never has its pause state
+   touched.
 
 The Woodpecker API is called through curl, not urllib: macOS Local Network
 privacy can block Python's own sockets to the LAN while curl and ssh work.
@@ -59,10 +68,14 @@ RELEASE_URL = "https://github.com/woodpecker-ci/woodpecker/releases/download/v{v
 @dataclass(frozen=True)
 class Host:
     agent: str  # the agent's name on the server (WOODPECKER_HOSTNAME)
-    ssh: str  # ssh destination; an alias from ~/.ssh/config or host name
+    ssh: str  # ssh destination; an alias from ~/.ssh/config or host name; "" = this machine
     platform: str  # release asset suffix, e.g. linux_amd64
     binary: str  # absolute path, or relative to the remote user's HOME
-    restart: str  # "systemd" or "launchd-keepalive"
+    restart: str  # "systemd", "launchd-keepalive" or "local-relaunch"
+
+    @property
+    def local(self) -> bool:
+        return not self.ssh
 
 
 HOSTS = {
@@ -76,7 +89,20 @@ HOSTS = {
         "ci/woodpecker/bin/woodpecker-agent",
         "launchd-keepalive",
     ),
+    # The coordinator Mac: this machine, no ssh. Not a launchd job; see restart().
+    "mac": Host(
+        "mac",
+        "",
+        "darwin_arm64",
+        "ci/woodpecker/bin/woodpecker-agent",
+        "local-relaunch",
+    ),
 }
+# What runs when no host is named. mac is opt-in: restarting it kills the agent
+# on the machine the operator is sitting at.
+DEFAULT_HOSTS = ["u1", "llm1"]
+MAC_RUN_AGENT = "~/ci/woodpecker/run-agent.sh"
+MAC_AGENT_LOG = "~/ci/woodpecker/agent.log"
 
 
 def log(msg: str) -> None:
@@ -143,16 +169,26 @@ class API:
 
 
 def ssh(host: Host, script: str, check: bool = True) -> str:
-    r = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host.ssh, script],
-        capture_output=True,
-        text=True,
-    )
+    """Run a shell script on the host: over ssh, or in a local shell for this machine."""
+    if host.local:
+        # A login-less bash on this machine; no ssh to localhost.
+        cmd, where = ["bash", "-c", script], "local"
+    else:
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host.ssh, script]
+        where = f"ssh {host.ssh}"
+    r = subprocess.run(cmd, capture_output=True, text=True)
     if check and r.returncode != 0:
-        raise RuntimeError(
-            f"ssh {host.ssh}: rc={r.returncode}: {(r.stdout + r.stderr).strip()[:400]}"
-        )
+        raise RuntimeError(f"{where}: rc={r.returncode}: {(r.stdout + r.stderr).strip()[:400]}")
     return r.stdout.strip()
+
+
+def copy_to(host: Host, src: Path, dest: str) -> None:
+    if host.local:
+        subprocess.run(["cp", str(src), dest], check=True)
+    else:
+        subprocess.run(
+            ["scp", "-q", "-o", "BatchMode=yes", str(src), f"{host.ssh}:{dest}"], check=True
+        )
 
 
 def fetch_binary(version: str, platform: str, workdir: Path) -> Path:
@@ -200,9 +236,36 @@ def wait_idle(api: API, agent_id: int, timeout: int) -> None:
         time.sleep(15)
 
 
+def relaunch_local(binary: str) -> None:
+    """Stop the locally-run agent, wait for it to exit, start it again detached.
+
+    The agent is not supervised: it is started by hand through run-agent.sh
+    (which execs the binary, so its command line is exactly the binary path).
+    The pattern is anchored so it cannot match this script, an editor with the
+    path open, or a `woodpecker-agent.<old>` backup.
+    """
+    pattern = f"^{binary}( |$)"
+    subprocess.run(["pkill", "-TERM", "-f", pattern], check=False)
+    deadline = time.time() + 60
+    while subprocess.run(["pgrep", "-f", pattern], capture_output=True).returncode == 0:
+        if time.time() > deadline:
+            raise RuntimeError(f"{binary} still running 60s after SIGTERM; not relaunching")
+        time.sleep(1)
+    # Own session, no inherited stdio: the agent must outlive this script.
+    subprocess.Popen(
+        ["bash", "-c", f"nohup {MAC_RUN_AGENT} >> {MAC_AGENT_LOG} 2>&1 &"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def restart(host: Host, binary: str) -> None:
     if host.restart == "systemd":
         ssh(host, "systemctl restart woodpecker-agent")
+    elif host.restart == "local-relaunch":
+        relaunch_local(binary)
     else:
         # The LaunchDaemon has KeepAlive: launchd starts the new binary once
         # the old process exits, so the CI user can do this without sudo.
@@ -238,13 +301,14 @@ def upgrade(api: API, host: Host, version: str, workdir: Path, args: argparse.Na
     b = shlex.quote(binary)
     backup = shlex.quote(f"{binary}.{current}")
     staged = shlex.quote(binary + ".new")
-    subprocess.run(
-        ["scp", "-q", "-o", "BatchMode=yes", str(new), f"{host.ssh}:{binary}.new"], check=True
-    )
+    copy_to(host, new, binary + ".new")
     got = ssh(host, f"{staged} --version").split()[-1]
     if got != version:
         raise RuntimeError(f"staged binary reports {got}, expected {version}")
 
+    # Restore this, not False, afterwards: U1 is paused outside its CI window
+    # by a launchd job and an upgrade must not turn it back on.
+    was_paused = bool(agent.get("no_schedule"))
     api.set_paused(agent, True)
     try:
         wait_idle(api, agent["id"], args.idle_timeout)
@@ -280,10 +344,11 @@ def upgrade(api: API, host: Host, version: str, workdir: Path, args: argparse.Na
         )
     finally:
         try:
-            api.set_paused(api.agent(host.agent), False)
+            api.set_paused(api.agent(host.agent), was_paused)
         except RuntimeError as e:
             log(
-                f"{host.agent}: COULD NOT UNPAUSE, it gets no work until no_schedule is cleared: {e}"
+                f"{host.agent}: COULD NOT RESTORE no_schedule={was_paused}, "
+                f"it is left paused and gets no work until that is fixed: {e}"
             )
 
 
@@ -294,8 +359,8 @@ def main() -> int:
     ap.add_argument(
         "hosts",
         nargs="*",
-        default=list(HOSTS),
-        help=f"agents to upgrade (default: {' '.join(HOSTS)})",
+        default=DEFAULT_HOSTS,
+        help=f"agents to upgrade (default: {' '.join(DEFAULT_HOSTS)}; also: mac)",
     )
     ap.add_argument("--version", help="target version (default: the server's own version)")
     ap.add_argument("--dry-run", action="store_true", help="report versions, change nothing")
