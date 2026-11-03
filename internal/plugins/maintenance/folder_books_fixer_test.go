@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-11-03
 
@@ -1334,4 +1334,73 @@ func TestFolderBooksFixer_SourceRowChangedBeforeReindex(t *testing.T) {
 			require.True(t, f.live(t, "fb"), "the row stopped before the retire")
 		})
 	}
+}
+
+func TestFBCoreTitle(t *testing.T) {
+	for in, want := range map[string]string{
+		"Hush_ The Batman Saga, Book":                "Hush",
+		"Hush: The Batman Saga, Book 2":              "Hush",
+		"Hush: The Batman Saga Book 2":               "Hush",
+		"The Batman Saga - 3 - Dark Victory":         "Dark Victory",
+		"The Batman Saga - 3.5 - Dark Victory":       "Dark Victory",
+		"The Batman Saga - 3 - Hush_ Saga, Book 3":   "Hush",
+		"The Long Halloween: Haunted Knight, Book 1": "The Long Halloween",
+		"Year One":              "Year One",
+		"Year One: Book One":    "Year One: Book One", // no series name: a real subtitle
+		"Hush: A Real Subtitle": "Hush: A Real Subtitle",
+		"Hush_Part":             "Hush_Part",
+		"12 - 3 -":              "12 - 3 -",
+	} {
+		require.Equal(t, want, fbCoreTitle(in), in)
+	}
+}
+
+// TestFolderBooksFixer_DupNowIgnoresSeriesSuffixes: a proposed title that only
+// differs from a live book's by series furniture is a duplicate, for the same
+// author, on either side; a different work or author is not.
+func TestFolderBooksFixer_DupNowIgnoresSeriesSuffixes(t *testing.T) {
+	f := newGlobalRootFragFixture(t)
+	selina, err := f.s.CreateAuthor("Selina Kyle")
+	require.NoError(t, err)
+	harvey, err := f.s.CreateAuthor("Harvey Dent")
+	require.NoError(t, err)
+	live := func(role, title string, a int) string {
+		id := f.fbBook(t, role, title, f.path("Elsewhere/"+role+".m4b"), 3600)
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.AuthorID = &a; return nil })
+		require.NoError(t, err)
+		return id
+	}
+	hush := live("hush", "Hush", selina.ID)
+	victory := live("victory", "Dark Victory", selina.ID)
+	halloween := live("halloween", "The Long Halloween: Haunted Knight, Book 1", selina.ID)
+	live("yearone", "Year One", harvey.ID)
+
+	fx := &folderBooksFixer{}
+	check := func(title string, author int) string {
+		why, err := fx.dupNow(f.s, nil, "", fbGroup{Title: title, AuthorID: &author})
+		require.NoError(t, err)
+		return why
+	}
+	require.Contains(t, check("Hush_ The Batman Saga, Book", selina.ID), hush)
+	require.Contains(t, check("The Batman Saga - 3 - Dark Victory", selina.ID), victory)
+	require.Contains(t, check("Dark Victory", selina.ID), victory)
+	require.Contains(t, check("The Long Halloween", selina.ID), halloween, "the live side is reduced to its core too")
+	require.Empty(t, check("Long Halloween", selina.ID), "a different work: no leading article")
+	require.Empty(t, check("Hush Hush", selina.ID))
+	require.Empty(t, check("Year One_ The Batman Saga, Book", selina.ID), "another author's Year One")
+}
+
+// TestFolderBooksFixer_PlanSkipsDupOfLiveBookWithSeriesSubtitle: the plan
+// itself (not just apply) skips a row whose new book is the core title of a
+// live book of the same author.
+func TestFolderBooksFixer_PlanSkipsDupOfLiveBookWithSeriesSubtitle(t *testing.T) {
+	f := newGlobalRootFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	head, err := f.s.GetBookByID(f.ids["fb"])
+	require.NoError(t, err)
+	id := f.fbBook(t, "other", "Sword: The Batman Saga, Book 1", f.path("Elsewhere/Sword.m4b"), 3600)
+	_, err = f.s.ModifyBook(id, func(b *database.Book) error { b.AuthorID = head.AuthorID; return nil })
+	require.NoError(t, err)
+	row := f.fbSingleRow(t, "op-plan")
+	require.Equal(t, fbSkipDupTitle, row.Skipped, row.SkipReason)
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.13.0
+// version: 2.14.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -257,6 +257,39 @@ func fbNorm(s string) string {
 	}
 	return b.String()
 }
+
+var (
+	// fbSeriesPrefixRe is a leading "<Series> - N - " prefix.
+	fbSeriesPrefixRe = regexp.MustCompile(`^.+?\s+-\s+\d+(?:\.\d+)?\s+-\s+(\S.*)$`)
+	// fbSubtitleRe splits "Title: Rest" ('_' being a filename-sanitised ':').
+	fbSubtitleRe = regexp.MustCompile(`^(.+?)(?:_|:)\s+(.+)$`)
+	// fbSeriesMarkerRe is a subtitle that only names a series position:
+	// "<Series>, Book", "<Series>, Book N", "<Series> Book N". It needs a
+	// series name before "Book", so a bare "Book One" subtitle is not one.
+	fbSeriesMarkerRe = regexp.MustCompile(`(?i)^\S.*?(?:,\s*book(?:\s+\d+)?|\s+book\s+\d+)$`)
+)
+
+// fbCoreTitle is the work's own title with series furniture removed: a
+// leading "<Series> - N - " prefix, and a ": <Series>, Book N" subtitle
+// (spelled with '_' in a filename). A title with neither is returned
+// unchanged, so a real subtitle ("Dune: Messiah") is kept.
+func fbCoreTitle(title string) string {
+	t := strings.TrimSpace(title)
+	if m := fbSeriesPrefixRe.FindStringSubmatch(t); m != nil {
+		t = m[1]
+	}
+	if m := fbSubtitleRe.FindStringSubmatch(t); m != nil && fbSeriesMarkerRe.MatchString(strings.TrimSpace(m[2])) {
+		t = strings.TrimSpace(m[1])
+	}
+	if fbNorm(t) == "" {
+		return title
+	}
+	return t
+}
+
+// fbCoreKey is fbNorm of the core title: what the duplicate check compares,
+// on both the proposed and the live side.
+func fbCoreKey(title string) string { return fbNorm(fbCoreTitle(title)) }
 
 var (
 	fbLeadNumRe = regexp.MustCompile(`^[\d\s\-_.]+`)
@@ -578,7 +611,7 @@ func (f *folderBooksFixer) loadFull(store OpsStore) (*fbLib, error) {
 		if !b.IsSoftDeleted() {
 			k := fbTitleKey(b.Title, b.AuthorID)
 			lib.titles[k] = append(lib.titles[k], b.ID)
-			lib.titlesAny[fbNorm(b.Title)] = append(lib.titlesAny[fbNorm(b.Title)], b.ID)
+			lib.titlesAny[fbCoreKey(b.Title)] = append(lib.titlesAny[fbCoreKey(b.Title)], b.ID)
 		}
 	}
 	// Rows whose book the listing left out (soft-deleted, or gone): their
@@ -602,7 +635,7 @@ func fbTitleKey(title string, author *int) string {
 	if author != nil {
 		a = *author
 	}
-	return fbNorm(title) + "|" + strconv.Itoa(a)
+	return fbCoreKey(title) + "|" + strconv.Itoa(a)
 }
 
 // loadPartial reads only what one row needs (Replan): its folder-books, every
@@ -1019,9 +1052,9 @@ type fbTitleCache struct {
 // live book with that key.
 type fbTitleIndex map[string][]string
 
-// titleIndex is titleIDs keyed by fbNorm, for folder-books' duplicate check.
+// titleIndex is titleIDs keyed by fbCoreKey, for folder-books' duplicate check.
 func (f *folderBooksFixer) titleIndex(store OpsStore, k string) ([]string, error) {
-	return f.titleIDs(store, "fbNorm", fbNorm, k)
+	return f.titleIDs(store, "fbCoreKey", fbCoreKey, k)
 }
 
 // titleIDs returns the live books whose key(title) is k, from an index of the
@@ -1563,7 +1596,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		if !ok {
 			i = len(plan.Groups)
 			gi[o.key] = i
-			plan.Groups = append(plan.Groups, fbGroup{Key: o.key, Title: o.lbl, Dir: o.dir, AuthorID: authorID})
+			plan.Groups = append(plan.Groups, fbGroup{Key: o.key, Title: fbCoreTitle(o.lbl), Dir: o.dir, AuthorID: authorID})
 		}
 		g := &plan.Groups[i]
 		g.Files = append(g.Files, fbNewFile{SrcBook: o.row.BookID, SrcRow: o.row.ID, Path: o.row.FilePath, Track: o.row.TrackNumber})
@@ -1610,7 +1643,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			// the created file_path is the work's book whatever its title.
 			var same []string
 			if g.AuthorID == nil {
-				same = lib.titlesAny[fbNorm(g.Title)]
+				same = lib.titlesAny[fbCoreKey(g.Title)]
 			} else {
 				same = append(append(same, lib.titles[fbTitleKey(g.Title, g.AuthorID)]...),
 					lib.titles[fbTitleKey(g.Title, nil)]...)
@@ -2159,7 +2192,7 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 			}
 		}
 	}
-	want := fbNorm(g.Title)
+	want := fbCoreKey(g.Title)
 	if g.AuthorID != nil {
 		books, err := store.GetBooksByAuthorIDWithRoleCore(*g.AuthorID)
 		if err != nil {
@@ -2167,7 +2200,7 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 		}
 		for i := range books {
 			b := books[i]
-			if b.IsSoftDeleted() || skip(b.ID) || fbNorm(b.Title) != want {
+			if b.IsSoftDeleted() || skip(b.ID) || fbCoreKey(b.Title) != want {
 				continue
 			}
 			return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
@@ -2189,7 +2222,7 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 		}
 		// Re-checked: the index is a snapshot, and the row may have been
 		// hidden or retitled by a writer the merge lock does not exclude.
-		if b == nil || b.IsSoftDeleted() || fbNorm(b.Title) != want {
+		if b == nil || b.IsSoftDeleted() || fbCoreKey(b.Title) != want {
 			continue
 		}
 		if g.AuthorID != nil && b.AuthorID != nil && *b.AuthorID != *g.AuthorID {
