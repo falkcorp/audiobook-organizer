@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.26 -->
+<!-- version: 10.78.27 -->
 <!-- version: 10.78.24 -->
 <!-- version: 10.78.23 -->
 <!-- version: 10.78.24 -->
@@ -7,7 +7,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-01 -->
+<!-- last-edited: 2026-11-03 -->
 
 # Project TODO — live items only
 
@@ -19,6 +19,15 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AI-SCAN-UNPICKABLE-KEEP-REREAD** A scan result whose keep author cannot be chosen (every author in it is gone) is re-evaluated on each read of the scan instead of being remembered, which costs one author lookup per id per read and no book-count load. Split out of AUTHOR-RECLASSIFY-ROUTE-UNDO: it needs a remembered state stored on the result, not a one-line change.
+- [ ] **AUTHOR-OPS-UNDO-BUTTON** The author ops are undoable through `POST /operations/:id/revert` (`entities.author-merge`, `entities.author-reclassify`, `ai.author-scan-apply`) but the web never offers it: `ActivityLog.tsx` shows Undo only on `organize_completed` / `metadata_applied` entries and the operations bell only on organize ops. Offer Undo (preflight first, as `openRevert` does) for these ops, and an Undo action on the Authors view's merge / reclassify result.
+
+- [ ] **LIBCOPY-CREDIT-SYNC-STRIPE** `internal/metafetch/service_apply.go` (the library-copy sync, around the `SetBookAuthors` / `SetBookNarrators` calls) commits the copy's row and then writes its author and narrator join rows as separate writes, and discards both errors (`_ =`). A concurrent edit of the copy can land between them and leave its author/narrator columns disagreeing with the join rows, and a failed join write is silent. Route it through `ModifyBookCredits` like the book edit does since #4332, and surface the error. Found by the #4332 review 2026-10-31.
+
+- [ ] **RUNITEMS-CANCEL-DISPATCH-BIAS** `registry.RunItems` parallel dispatcher: check `cancelCtx.Err()` before the `select` (Go picks randomly when ctx is done and a worker slot is free, so a cancelled run keeps dispatching items) and check ctx in `runOne` before `fn`. `acoustid.lsh-backfill` now guards itself per item; other `RunItems` ops (see `internal/operations/registry/run_items.go`) still start a few items after a cancel. Needs a decision on whether a cancelled-before-start item should count toward progress.
+
+- [ ] **TODO-RETIRED-FPIDX-PROD-REPAIR** Retired rows that were retired before the `fpidx:` owner rewrite landed still carry the shell book id in their `fpidx:` values. Nothing reads the value today (`LSHProbe` and `LookupAcoustIDCandidates` answer file ids from the key), so this is stored-data truth, not a visible bug. `dedup.lsh-index-build` does NOT repair them (it skips a file that already has an `fpidx_meta:` row); the repair is to rewrite the values of every retired row with a meta row to its `BookID` (scan `GetAllBookFilesCoreIncludingRetired`, filter `Retired`, then rewrite through the same member-list read as `stageLSHOwnerRewrite`). Only do it if a reader of the value is ever added, or fold it into a one-off op if retired rows exist in prod (count them first: `GetRetiredBookFiles` per holder, or a `Retired` filter over the book_file scan).
 
 - [ ] **TODO-JOURNAL-WARNINGS-WORD-MATCH** The combine and sibling-move journal listings (`duplicates` handler, `warningsWithoutUsers` / `withoutUser`) still withhold a stored `Warnings` entry or `LastError` by `undo.NamesUser` (the word "user"). The journals persist `Warnings` as bare strings, so the revert report's fix (`merge.Warning.UserIDs`) does not reach them. Store the accounts with each journal warning, withhold by field, then delete `undo.NamesUser`.
 
