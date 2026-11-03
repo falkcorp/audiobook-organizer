@@ -1,7 +1,7 @@
 // file: internal/repairs/owner.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7a3d5f81-2c94-4e0b-b6a7-1f8e3c2d9b54
-// last-edited: 2026-10-13
+// last-edited: 2026-11-03
 
 package repairs
 
@@ -17,10 +17,14 @@ import (
 
 // OWNER APPLY (owner decision 2026-10-06). Some rows a fixer lists as
 // manual-only are ones the owner may apply himself, by clicking Apply on the
-// row: the fragment-consolidation fixer's iTunes-tracked library copies proven
-// by content hash, written as database rows only. The fixer marks such a row
-// at plan time (Row.OwnerApplicable); the row stays skipped, so no bulk
-// selection, scheduled run or plain apply ever writes it.
+// row, after reading the row's preview (Row.OwnerApplyReason). The folder-books
+// fixer's mixed-shelf rows are the live case (owner decision 2026-11-03: every
+// hold on the row is one the owner may resolve); the fragment-consolidation
+// fixer's iTunes-tracked library copies were the first. The fixer marks such a
+// row at plan time (Row.OwnerApplicable); the row stays skipped, so no bulk
+// selection, scheduled run or plain apply ever writes it. A fixer that writes
+// such a row from Apply must also check the ctx marker (OwnerApplyFor, set by
+// the engine for the owner's one row) and its own re-plan under its lock.
 //
 // The only way in is a grant: the Repairs HTTP handler, for a request that
 // carries a verified Cloudflare Access JWT for the configured owner email
