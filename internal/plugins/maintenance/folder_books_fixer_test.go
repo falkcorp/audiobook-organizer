@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
 // last-edited: 2026-11-03
 
@@ -365,15 +365,13 @@ func TestFolderBooksFixer_GroupOfOnlyFolderBooksNeedsNoHeir(t *testing.T) {
 }
 
 // TestFolderBooksFixer_MissingOrphansBuildNothing: a file only the
-// folder-books hold, and only as Missing rows, gets no book; the row still
-// retires them.
+// folder-books hold, and that is gone from disk, gets no book; the row still
+// retires them. The rows still say present: the disk decides, not the flag.
 func TestFolderBooksFixer_MissingOrphansBuildNothing(t *testing.T) {
 	f := newGlobalRootFragFixture(t)
-	f.seedWolfe(t, fbITunes, "citadel")
-	for _, role := range []string{"fb", "fb2"} {
-		for _, i := range []int{7, 8} {
-			f.fbSetRow(t, role, i, func(r *database.BookFile) { r.Missing = true })
-		}
+	all := f.seedWolfe(t, fbITunes, "citadel")
+	for _, i := range []int{7, 8} {
+		require.NoError(t, os.Remove(all[i]))
 	}
 	row := f.fbSingleRow(t, "op-plan")
 	require.True(t, row.Applicable(), "%s %s", row.Skipped, row.SkipReason)

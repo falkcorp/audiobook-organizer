@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.14.0
+// version: 2.15.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -65,8 +65,15 @@
 //     deep-tier book counts. Nothing to do.
 //   - held by another folder-book row: an applicable folder-book with a
 //     smaller file set (ties: the lower row id) holds it too; that row owns it.
-//   - missing orphan: no other holder and every member row says Missing. No
-//     book is built from a missing row; the retired folder-book keeps it.
+//   - missing orphan: no outside live book holds it and the file is gone from
+//     disk (os.Stat says it does not exist; the DB's Missing flag is NOT
+//     consulted, it goes stale both ways). No book is built from a missing
+//     path; the retired folder-book keeps it. A file that IS on disk is an
+//     orphan whatever its row's flag says, and its new row is written present.
+//     A path is judged missing only when its shelf root still stats as a
+//     non-empty directory (an unmounted volume must not read as every file
+//     gone), and any stat error other than "does not exist" skips the row as
+//     unreadable.
 //   - orphan: grouped by work (fbGroupKey). Each group becomes ONE new book:
 //     title from its folder or stem, author the folder-book's when the folder
 //     is an author shelf, library_state the folder-book's, file_path the
@@ -124,6 +131,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1029,6 +1039,10 @@ type folderBooksFixer struct {
 	// now and newID replace time.Now and the ULID mint in tests.
 	now   func() time.Time
 	newID func() string
+	// stat and shelfPopulated replace os.Stat and fbShelfPopulated in tests
+	// (nil means the real ones). They decide which orphan paths are on disk.
+	stat           func(string) (os.FileInfo, error)
+	shelfPopulated func(dir string) error
 
 	commonMu    sync.Mutex
 	commonCache *fbCommon
@@ -1170,6 +1184,70 @@ func (c *fbTitleCache) move(id string, b *database.Book, key func(string) string
 
 func newFolderBooksFixer(p *Plugin) *folderBooksFixer {
 	return &folderBooksFixer{p: p, now: time.Now, newID: func() string { return ulid.Make().String() }}
+}
+
+// fbShelfPopulated is nil when dir is a directory with at least one entry.
+// An ENOENT on a file is trusted as "the file is gone" only under a shelf
+// root that passes this: an unmounted volume or an emptied mount point makes
+// every file under it vanish at once, and must not read as a library of
+// missing files.
+func fbShelfPopulated(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if _, err := d.Readdirnames(1); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s is empty", dir)
+		}
+		return err
+	}
+	return nil
+}
+
+// onDisk reports whether p exists, judged from the filesystem (never from a
+// book_file row's Missing flag). Only a clean "does not exist" under a
+// populated shelf root counts as gone; every other stat error, and an ENOENT
+// under a shelf that cannot be shown to be mounted, comes back as an error so
+// the row is skipped as unreadable instead of guessed at. shelves caches the
+// per-shelf verdict for one row build (one goroutine, so no lock).
+func (f *folderBooksFixer) onDisk(lib *fbLib, p string, shelves map[string]error) (bool, error) {
+	stat := f.stat
+	if stat == nil {
+		stat = os.Stat
+	}
+	_, err := stat(p)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	shelf := lib.shelfOf(p)
+	if shelf == "" {
+		return false, fmt.Errorf("%w (and %s is under no configured shelf, so an unmounted volume cannot be ruled out)", err, p)
+	}
+	verdict, seen := shelves[shelf]
+	if !seen {
+		check := f.shelfPopulated
+		if check == nil {
+			check = fbShelfPopulated
+		}
+		verdict = check(shelf)
+		shelves[shelf] = verdict
+	}
+	if verdict != nil {
+		return false, fmt.Errorf("%w (shelf root unusable: %v)", err, verdict)
+	}
+	return false, nil
 }
 
 var (
@@ -1453,7 +1531,8 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	sort.Strings(paths)
 	var held, byFolder, missingOrphans int
-	var resolved, onlyOurs []string
+	var resolved, onlyOurs, unreadable []string
+	shelfVerdict := map[string]error{} // onDisk's per-shelf cache for this row
 	type orphan struct {
 		row           database.BookFileCore
 		key, lbl, dir string
@@ -1482,17 +1561,16 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				cls = "folder"
 			}
 		}
-		// Missing is per row, so one copy's flag decides nothing. A path is
-		// missing only when EVERY live row at it says so; while another live
-		// holder (a larger folder-book) has a present row, that row is the
-		// copy a new book takes. A path left to another holder (held, folder)
-		// needs a present copy on a holder that outlives this row: a proper
-		// book, a deep-tier one, or the smaller folder-book that owns the
-		// path (it keeps it, or builds the new book from a present row).
-		// Otherwise retiring this row strands the file (fbSkipOnlyPresentCopy):
-		// the scanner ignores a path only soft-deleted books hold.
+		// A path left to another holder (held, folder) needs a present copy
+		// on a holder that outlives this row: a proper book, a deep-tier
+		// one, or the smaller folder-book that owns the path (it keeps it,
+		// or builds the new book from a present row). Otherwise retiring
+		// this row strands the file (fbSkipOnlyPresentCopy): the scanner
+		// ignores a path only soft-deleted books hold. That judgement reads
+		// the holders' rows; whether an ORPHAN path is missing is read from
+		// the disk below.
 		var other database.BookFileCore
-		anyPresent, keeperPresent := false, false
+		keeperPresent := false
 		for _, h := range lib.holders[p] {
 			if isMember[h] {
 				continue
@@ -1501,7 +1579,6 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			if !ok {
 				continue
 			}
-			anyPresent = true
 			if other.ID == "" && r.ID != "" {
 				other = r
 			}
@@ -1514,12 +1591,24 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				keeperPresent = true
 			}
 		}
-		allMissing := src[p].Missing && !anyPresent
-		if cls == "orphan" && allMissing {
-			cls = "missing"
-		}
-		if cls == "orphan" && src[p].Missing && other.ID != "" {
-			src[p] = other
+		// Whether a path no outside book holds still exists is a question for
+		// the disk: the Missing flag is stale in both directions (a deleted
+		// file keeps a present row, a restored one keeps the flag). Only
+		// these paths are statted, inside this row's own build (Plan's
+		// RunItems pool, or Replan's single row).
+		if cls == "orphan" {
+			present, err := f.onDisk(lib, p, shelfVerdict)
+			switch {
+			case err != nil:
+				unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, err))
+			case !present:
+				cls = "missing"
+			case src[p].Missing && other.ID != "":
+				// Present on disk but this row's copy is flagged: take a
+				// holder's row for it (applyGroup writes the new row present
+				// either way).
+				src[p] = other
+			}
 		}
 		// Only a present copy on the row's own folder-books can be stranded:
 		// when theirs is Missing too, retiring them loses nothing (a larger
@@ -1690,7 +1779,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		row.Evidence = append(row.Evidence, fmt.Sprintf("new book %q: %d file(s)", g.Title, len(g.Files)))
 	}
 	row.Reason = fmt.Sprintf("%s folder-book over %s: %d files, %d already held by proper books, %d held by a "+
-		"smaller folder-book, %d missing with no other holder (kept on the retired book), %d orphan file(s) into %d "+
+		"smaller folder-book, %d gone from disk with no other holder (kept on the retired book), %d orphan file(s) into %d "+
 		"new book(s)", lead.Tier, lead.Root, len(set), held, byFolder, missingOrphans, len(orphans), len(plan.Groups))
 	row.Detail = plan
 	row.Fingerprint = fragFingerprint(fp...)
@@ -1713,6 +1802,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	sort.Strings(row.BookIDs)
 
 	switch {
+	case len(unreadable) > 0:
+		row.Skipped = fbSkipUnreadable
+		row.SkipReason = fmt.Sprintf("%d file(s) could not be checked on disk, so the row cannot tell missing from "+
+			"present: %s", len(unreadable), strings.Join(fbFirst(unreadable, 5), "; "))
 	case lead.Tier == fbTierMixedShelf:
 		row.Skipped, row.SkipReason = fbSkipMixedShelf, "files on two shelves: the second shelf holds over "+
 			"a fifth of them, or some of them have no proper book; listed for review only"
@@ -2318,6 +2411,9 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		row.ID = f.newID()
 		row.BookID = target
 		row.ITunesPersistentID = "" // never moved: CreateBookFile would take the id off the source row
+		// The plan statted this path and found the file, whatever the source
+		// row's flag said: the new row is written present.
+		row.Missing = false
 		row.CreatedAt, row.UpdatedAt = time.Time{}, time.Time{}
 		if err := w.Journal(target, undo.ChangeTypeBookFileCreate, "book_file:"+row.ID, "", row.FilePath); err != nil {
 			return steps, err
