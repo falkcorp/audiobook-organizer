@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.98.1
+// version: 1.99.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package audiobooks
 
@@ -1191,6 +1191,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertAuthorReclassifyDelete(c)
 	case undo.ChangeTypeRepairBookCreate:
 		return rs.revertRepairBookCreate(c)
+	case undo.ChangeTypeRepairVersionGroupJoin:
+		return rs.revertRepairVersionGroupJoin(c)
 	case undo.ChangeTypeFieldLock:
 		return rs.revertFieldLock(c)
 	case undo.ChangeTypeBookTagAdd:
