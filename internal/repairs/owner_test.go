@@ -1,7 +1,7 @@
 // file: internal/repairs/owner_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
-// last-edited: 2026-10-13
+// last-edited: 2026-11-03
 
 package repairs
 
@@ -22,7 +22,12 @@ import (
 // ownerFixer lists "own" as an owner row (skipped, owner-applicable) and
 // "manual" as a plain manual row; "fix" is an ordinary applicable row. Its
 // Apply of "own" writes only under an owner approval naming the row.
-type ownerFixer struct{ s *memStore }
+type ownerFixer struct {
+	s *memStore
+	// marked records, per row, whether Replan or Apply saw the owner-apply
+	// marker on ctx for that row (OwnerApplyFor).
+	marked map[string]bool
+}
 
 func (f *ownerFixer) ID() string          { return "owner-fx" }
 func (f *ownerFixer) Title() string       { return "owner" }
@@ -44,11 +49,22 @@ func (f *ownerFixer) Plan(context.Context, json.RawMessage, registry.Reporter) (
 	return []Row{f.row("own"), f.row("manual"), f.row("fix")}, nil
 }
 
-func (f *ownerFixer) Replan(_ context.Context, _ json.RawMessage, planned Row, _ registry.Reporter) (Row, error) {
+func (f *ownerFixer) Replan(ctx context.Context, _ json.RawMessage, planned Row, _ registry.Reporter) (Row, error) {
+	f.note(ctx, planned.RowID, "replan")
 	return f.row(planned.RowID), nil
 }
 
+func (f *ownerFixer) note(ctx context.Context, row, stage string) {
+	if f.marked == nil {
+		f.marked = map[string]bool{}
+	}
+	if OwnerApplyFor(ctx, row) {
+		f.marked[stage+":"+row] = true
+	}
+}
+
 func (f *ownerFixer) Apply(ctx context.Context, w *Writer, fresh Row) error {
+	f.note(ctx, fresh.RowID, "apply")
 	_, err := w.Modify(fresh.RowID, func(b *database.Book) error {
 		b.Title += " (done)"
 		return nil
@@ -156,6 +172,40 @@ func TestRunApply_OwnerGrantAppliesOwnerRowWithAudit(t *testing.T) {
 	// The same token again (a retry, a copied param) finds nothing.
 	again := ResolveOwnerApproval(g, p, ownerWho)
 	require.NotEmpty(t, again.Refused)
+}
+
+// The owner's approval rides ctx into the fixer's Replan and Apply for the
+// owner's row alone: a plain row of the same run, and a plain apply, carry
+// none. A fixer that writes a held-back row only under OwnerApplyFor therefore
+// fails closed for anything but the owner's own click.
+func TestRunApply_OwnerMarkerIsOnCtxOnlyForTheOwnerRow(t *testing.T) {
+	t.Run("owner click", func(t *testing.T) {
+		_, f, plan, _, d := ownerSetup(t)
+		g := NewOwnerGrants()
+		p := ApplyParams{FixerID: f.ID(), PlanOpID: "op-plan", OwnerApplyRowIDs: []string{"own"}, OwnerGrant: grantFor(t, g, "own")}
+		d.Owner = ResolveOwnerApproval(g, p, ownerWho)
+		res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"fix"}, false, d, nopReporter{})
+		require.NoError(t, err)
+		require.Equal(t, 2, res.Applied, "%+v", res.Rows)
+		require.True(t, f.marked["replan:own"] && f.marked["apply:own"], "%v", f.marked)
+		require.False(t, f.marked["replan:fix"] || f.marked["apply:fix"], "a plain row of the same run is not the owner's: %v", f.marked)
+	})
+	t.Run("plain apply", func(t *testing.T) {
+		_, f, plan, _, d := ownerSetup(t)
+		res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"own", "manual", "fix"}, false, d, nopReporter{})
+		require.NoError(t, err)
+		require.Equal(t, 1, res.Applied)
+		require.Empty(t, f.marked, "nothing carries the marker without an owner grant")
+	})
+	t.Run("refused grant", func(t *testing.T) {
+		_, f, plan, _, d := ownerSetup(t)
+		g := NewOwnerGrants()
+		p := ApplyParams{FixerID: f.ID(), PlanOpID: "op-plan", OwnerApplyRowIDs: []string{"own"}, OwnerGrant: "deadbeef"}
+		d.Owner = ResolveOwnerApproval(g, p, ownerWho)
+		_, err := RunApply(context.Background(), f, plan, "op-plan", nil, false, d, nopReporter{})
+		require.NoError(t, err)
+		require.Empty(t, f.marked)
+	})
 }
 
 // Params alone (POST /operations/v2 written by hand, a forged token, a
