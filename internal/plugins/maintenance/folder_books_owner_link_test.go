@@ -498,6 +498,7 @@ func TestFolderBooksOwnerLink_ARevertedApplyIsNotOfferedAgain(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, res.Failed, "%+v", res)
 	again := f.fbPlan(t, fbFixerID, "op-plan-2")
+	require.Len(t, again.Rows, 1, "the folder-book is live again and still listed")
 	for _, r := range again.Rows {
 		require.False(t, r.OwnerApplicable, "a reverted apply is offered again: %s", r.OwnerApplyReason)
 	}
