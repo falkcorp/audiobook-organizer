@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.49.4
+# version: 2.50.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-30
+# last-edited: 2026-11-03
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -103,7 +103,7 @@ help:
 	@echo "  make run-api        - Backend-only build then serve (API endpoints only)"
 	@echo ""
 	@echo "Frontend:"
-	@echo "  make web-install    - Install npm dependencies"
+	@echo "  make web-install    - Install npm dependencies (exactly the lockfile, as CI)"
 	@echo "  make web-build      - Build frontend (outputs to web/dist)"
 	@echo "  make web-typecheck  - Type-check frontend (TypeScript 7; npm run typecheck:ts6 for TS 6)"
 	@echo "  make web-dev        - Start Vite dev server"
@@ -188,10 +188,14 @@ run-api: build-api
 
 # --- Frontend targets ---
 
-## web-install: Install npm dependencies
+## web-install: Install npm dependencies exactly as locked (npm ci, same as CI)
+# npm ci, not npm install: CI installs the lockfile as-is, and npm install
+# re-resolves it. A dependency bump whose lockfile CI accepted then broke every
+# deploy at this step (ERESOLVE, 2026-11-03). To add or bump a dependency, run
+# npm install <pkg> in web/ by hand and commit the lockfile.
 web-install:
 	@echo "📦 Installing frontend dependencies..."
-	@cd $(WEB_DIR) && npm install
+	@cd $(WEB_DIR) && npm ci --no-audit --no-fund
 	@echo "✅ Dependencies installed"
 
 ## web-build: Build frontend (produces web/dist for embedding)
