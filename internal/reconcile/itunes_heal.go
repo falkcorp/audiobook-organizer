@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -711,7 +712,7 @@ func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, 
 
 		text, silent := storedIntroText(firstRow, book)
 		if silent {
-			slog.Debug("itunes-heal: stored intro is the silence sentinel, candidate unscored", "path", firstFile)
+			pkgLog.Debug("itunes-heal: stored intro is the silence sentinel, candidate unscored: %s", logger.SanitizeLogValue(firstFile))
 			continue
 		}
 		if text == "" {
