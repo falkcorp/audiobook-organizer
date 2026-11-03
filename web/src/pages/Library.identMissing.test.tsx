@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.identMissing.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5933b47b-1eb7-4447-9cd1-6f441bc5d00e
-// last-edited: 2026-10-26
+// last-edited: 2026-11-03
 
 /**
  * Typing `ident:missing` in the Library search bar sends the ident field
@@ -109,7 +109,12 @@ describe('Library: ident:missing', () => {
     );
     await screen.findByText(PAGE[0].title);
 
-    await user.type(screen.getByPlaceholderText(/^Search audiobooks/), parity.search);
+    // One input event, not one per character: each keystroke re-renders the
+    // whole Library page, and 13 of them blew the 30 s test timeout on a
+    // loaded CI runner. The query reaching getBooks is what is under test,
+    // not keystroke-by-keystroke typing.
+    await user.click(screen.getByPlaceholderText(/^Search audiobooks/));
+    await user.paste(parity.search);
     await waitFor(
       () => {
         const last = vi.mocked(api.getBooks).mock.calls.at(-1);
