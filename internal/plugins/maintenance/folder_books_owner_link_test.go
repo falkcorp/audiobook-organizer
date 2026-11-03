@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_owner_link_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b8e2f41-9c07-4d6a-b3e5-1a7d40c92f68
 // last-edited: 2026-11-03
 
@@ -380,11 +380,11 @@ func TestFolderBooksOwnerLink_AnAdoptingApplyFinishesACutOffOne(t *testing.T) {
 		stage string
 		// when: "" crashes at the first call of the stage; "hidden" only while
 		// the linked group's book is the hidden one being made; "live" once
-		// that book has been un-hidden. A cut-off apply that already un-hid it
-		// is resumed in its own operation, not adopted (see
-		// ...AClaimStageCutOffResumesInItsOwnOperation).
+		// that book has been un-hidden (the claim stage: a live book, which a
+		// fresh plan must still see as the row's own and adopt). A resumed run
+		// never applies owner rows, so the next owner apply is a new operation.
 		when string
-	}{{"mint", ""}, {"book", "hidden"}, {"reindex", "hidden"}, {"row", "hidden"}} {
+	}{{"mint", ""}, {"book", "hidden"}, {"reindex", "hidden"}, {"row", "hidden"}, {"claim", "live"}} {
 		t.Run(tc.stage, func(t *testing.T) {
 			f, row, twin := linkRow(t, "")
 			before := undo.StateOfBook(f.fbGet(t, twin))
@@ -499,89 +499,51 @@ func TestFolderBooksOwnerLink_AnAdoptingApplyFinishesACutOffOne(t *testing.T) {
 	}
 }
 
-// A cut-off apply that already un-hid the linked book (the path-key claim
-// stage) has made a live, proper book, so a fresh plan reads its files as held
-// by it: no second book, no second join. The row is finished the way every
-// cut-off apply is, by running the same operation again, and then the one
-// operation holds the join and the create, so one revert undoes both.
-func TestFolderBooksOwnerLink_AClaimStageCutOffResumesInItsOwnOperation(t *testing.T) {
-	f, row, twin := linkRow(t, "")
-	before := undo.StateOfBook(f.fbGet(t, twin))
-	mint := fbMintID(row.RowID, twin)
+// A plain (no link) apply cut off at the claim stage leaves live books of its
+// own. The fresh plan sees them as the row's own, not as proper holders, so
+// its row is the one the apply will see, and the next apply adopts the books.
+func TestFolderBooksOwnerLink_APlainClaimStageCutOffIsAdoptedByAFreshPlan(t *testing.T) {
+	f := newGlobalRootFragFixture(t)
+	f.seedWolfe(t, fbITunes, "citadel")
+	row := f.fbSingleRow(t, "op-plan")
 	plan, ok := row.Detail.(*fbPlan)
 	require.True(t, ok)
-	linkedID := ""
-	for _, g := range plan.Groups {
-		if g.Title == "Arkham Asylum" {
-			linkedID = fbCreatedID(row.RowID, f.ids["fb"], g.Key)
+	require.NotEmpty(t, plan.Groups)
+	hit := false
+	fbCrashHook = func(stage string, n int) error {
+		if stage == "claim" && n == 1 && !hit {
+			hit = true
+			return fmt.Errorf("injected stop at claim")
 		}
-	}
-	require.NotEmpty(t, linkedID)
-	fired := false
-	fbCrashHook = func(stage string, _ int) error {
-		if fired || stage != "claim" {
-			return nil
-		}
-		if b, err := f.s.GetBookByID(linkedID); err != nil || b == nil || b.IsSoftDeleted() {
-			return nil // a book made for another group
-		}
-		fired = true
-		return fmt.Errorf("injected stop at %s", stage)
+		return nil
 	}
 	t.Cleanup(func() { fbCrashHook = nil })
-	cut := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
+	cut := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
 	fbCrashHook = nil
-	require.True(t, fired)
+	require.True(t, hit)
 	require.Zero(t, cut.Applied, "%+v", cut.Rows)
 	require.True(t, f.live(t, "fb"))
-	require.False(t, f.fbGet(t, linkedID).IsSoftDeleted(), "the cut-off apply had un-hidden it")
 
-	// A fresh plan does not offer the files again: the live book holds them.
-	again := f.fbPlan(t, fbFixerID, "op-plan-2")
-	for _, r := range again.Rows {
-		if r.OwnerApplicable {
-			require.Empty(t, fbRowState(t, r).Links, "a second link would make a second book")
-		}
-	}
-
-	out := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
+	again := f.fbSingleRow(t, "op-plan-2")
+	require.True(t, again.Applicable(), "%s: %s", again.Skipped, again.SkipReason)
+	out := f.fbApply(t, "op-plan-2", "op-apply-2", []string{again.RowID})
 	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 	require.False(t, f.live(t, "fb"))
-	b := f.linked(t)
-	require.Equal(t, linkedID, b.ID, "the resumed apply finished the same book")
-	require.Equal(t, mint, *b.VersionGroupID)
-	require.False(t, *b.IsPrimaryVersion)
-	live := 0
-	members, err := f.s.GetBooksByVersionGroup(mint)
+	changes, err := f.s.GetOperationChanges("op-apply-2")
 	require.NoError(t, err)
-	for _, m := range members {
-		if !m.IsSoftDeleted() {
-			live++
-		}
-	}
-	require.Equal(t, 2, live, "the target and exactly one new version")
-	changes, err := f.s.GetOperationChanges("op-owner")
-	require.NoError(t, err)
-	joins, creates := 0, 0
+	adopted := 0
 	for _, c := range changes {
-		switch {
-		case c.ChangeType == undo.ChangeTypeRepairVersionGroupJoin:
-			joins++
-		case c.ChangeType == undo.ChangeTypeRepairBookCreate && c.BookID == linkedID:
-			creates++
+		if c.ChangeType != undo.ChangeTypeRepairBookCreate {
+			continue
+		}
+		v, _, ok := undo.ParseRepairBookCreateValue(c.BookID, c.NewValue)
+		require.True(t, ok)
+		if v.AdoptedFrom == "op-apply" {
+			adopted++
+			require.False(t, f.fbGet(t, c.BookID).IsSoftDeleted())
 		}
 	}
-	require.Equal(t, 1, joins, "the mint is journaled once across the cut and the resume")
-	require.Equal(t, 1, creates)
-
-	pre, err := preflightUndoConflicts(f.s, "op-owner")
-	require.NoError(t, err)
-	require.Zero(t, preRefused(pre), "%+v", pre)
-	res, err := audiobooks.NewRevertService(f.s).RevertOperation("op-owner")
-	require.NoError(t, err)
-	require.Zero(t, res.Failed, "%+v", res)
-	require.Equal(t, before, undo.StateOfBook(f.fbGet(t, twin)), "the target's group state is back exactly")
-	require.True(t, f.fbGet(t, linkedID).IsSoftDeleted())
+	require.Equal(t, 1, adopted, "the live book of the cut-off apply is adopted, not duplicated")
 }
 
 // A hidden book whose creating operation was reverted is not adoptable: its

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.17.0
+// version: 2.18.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -264,6 +264,13 @@ const (
 	// of the orphans: that file was resolved once, and the scanner and the
 	// iTunes importer both refuse to bring it back. Never re-created here.
 	fbSkipResolved = "skipped_previously_resolved"
+	// fbSkipCutOffLive is never reported: buildRow's marker that a live book
+	// this row's own cut-off apply created (the path-key stage, after the
+	// un-hide and before the retire) holds the files. The shared library the
+	// plan evaluated counts it as a proper holder, which the row's own re-plan
+	// (Replan drops it) does not, so Plan re-plans such a row the way Apply
+	// will see it, and the next apply adopts the book.
+	fbSkipCutOffLive = "skipped_cut_off_apply"
 	// fbSkipOnlyPresentCopy: a file the row would leave to another holder
 	// (a proper book, or a smaller folder-book's row) has a present copy only
 	// on the row's own folder-books: every other live row at the path says
@@ -602,6 +609,8 @@ func (lib *fbLib) drop(ids map[string]bool) {
 	strip(lib.dead)
 	strip(lib.byVG)
 	strip(lib.byPath)
+	strip(lib.titles) // nil on a partial read: ranging a nil map is a no-op
+	strip(lib.titlesAny)
 	for id := range ids {
 		delete(lib.books, id)
 		delete(lib.files, id)
@@ -1551,6 +1560,18 @@ func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep re
 	if err := registry.RunItems(ctx, rep, fbIndexes(len(groups)), func(_ context.Context, i int) error {
 		defer built.Add(1)
 		rows[i] = f.buildRow(lib, store, ev, groups[i], nil)
+		if rows[i].Skipped == fbSkipCutOffLive {
+			// A live book of this row's own cut-off apply holds files the
+			// shared library counts as proper: plan the row as Apply will see
+			// it (planWithoutOwn drops those books), so the next apply adopts
+			// them.
+			re, rerr := f.planWithoutOwn(store, rows[i].RowID, groups[i])
+			if rerr != nil {
+				rows[i].SkipReason += fmt.Sprintf(" (and its re-plan failed: %v)", rerr)
+			} else {
+				rows[i] = re
+			}
+		}
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: runtime.NumCPU(),
@@ -1725,6 +1746,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	var orphans []orphan
 	var adoptCands []fbAdoptCand
+	var cutOff []string          // paths a live book of this row's own cut-off apply holds
 	keyHeld := map[string]bool{} // a group key with a path a proper book holds
 	// strayMinor: files off the lead's shelf that no proper book or smaller
 	// folder-book holds (evaluate's gate counts any other holder, so it can
@@ -1737,9 +1759,20 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		groupRoot := lib.groupRoot(p, lead.Shelf, lead.Root)
 		k, lbl, dir := fbGroupKey(p, groupRoot)
 		cls := "orphan"
+		ownID := fbCreatedID(row.RowID, members[0], k)
 		for _, h := range lib.holders[p] {
 			if isMember[h] {
 				continue
+			}
+			if h == ownID {
+				// The live book of this row's own cut-off apply.
+				op, live, err := f.openLiveCreate(store, h)
+				switch {
+				case err != nil:
+					unreadable = append(unreadable, fmt.Sprintf("%s (journal of book %s: %v)", p, h, err))
+				case live:
+					cutOff = append(cutOff, fmt.Sprintf("%s (book %s, operation %s)", p, h, op))
+				}
 			}
 			he, flagged := ev[h]
 			if !flagged || !fbApplicableTier(he.Tier) {
@@ -2146,6 +2179,12 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	// verdict that the majority shelf carries (D2): a deep row, or one with
 	// no 80% majority, stays listed.
 	mixedOK := fbApplicableTier(lead.BaseTier) && lead.MajorShare >= fbMajorityShelf
+	// First, so it is the row's Skipped whatever else blocks it: Plan re-plans
+	// a row marked this way (it is never a verdict).
+	if len(cutOff) > 0 {
+		block(fbSkipCutOffLive, fmt.Sprintf("an earlier apply of this row was cut off after it un-hid the book that holds: %s",
+			strings.Join(fbFirst(cutOff, 5), "; ")), false)
+	}
 	if len(unreadable) > 0 {
 		block(fbSkipUnreadable, fmt.Sprintf("%d file(s) could not be checked on disk, so the row cannot tell missing from "+
 			"present: %s", len(unreadable), strings.Join(fbFirst(unreadable, 5), "; ")), false)
@@ -2425,6 +2464,56 @@ func (f *folderBooksFixer) refusal(lib *fbLib, store OpsStore, members []string)
 	return "", ""
 }
 
+// fbDropOwn removes from lib the books rowID's own cut-off apply created
+// (fbCreatedID of each group key), so the row plans as the resumed apply sees
+// it. The same roots Plan grouped with (evaluate's Root, and groupRoot for a
+// path on another shelf): for a mixed-shelf row commonDir of the whole set is
+// a different folder, whose keys would name none of the created books.
+func fbDropOwn(lib *fbLib, rowID, leadID string) {
+	set := lib.sets[leadID]
+	if set == nil {
+		return
+	}
+	shelf, root := lib.fbMajority(leadID)
+	ours := map[string]bool{}
+	for p := range set {
+		k, _, _ := fbGroupKey(p, lib.groupRoot(p, shelf, root))
+		ours[fbCreatedID(rowID, leadID, k)] = true
+	}
+	lib.drop(ours)
+}
+
+// planWithoutOwn plans the row (members, rowID) over a library freshly loaded
+// in full and cleared of the row's own created books (fbDropOwn): what Replan
+// sees under the apply's lock, and what the shared Plan library cannot show
+// when a cut-off apply's book is already live and counted as a proper holder.
+// The row's links are found the way a first plan finds them (no carried state).
+func (f *folderBooksFixer) planWithoutOwn(store OpsStore, rowID string, members []string) (repairs.Row, error) {
+	lib, err := f.loadFull(store)
+	if err != nil {
+		return repairs.Row{}, err
+	}
+	fbDropOwn(lib, rowID, members[0])
+	ev := map[string]fbEval{}
+	for id, rows := range lib.files {
+		if len(rows) < fbMinFiles {
+			continue
+		}
+		if e := lib.evaluate(id); e.Tier != "" {
+			ev[id] = e
+		}
+	}
+	for _, m := range members {
+		if _, ok := ev[m]; !ok {
+			return repairs.Row{}, fmt.Errorf("book %s is no longer a folder-book once its own books are set aside", m)
+		}
+	}
+	if got := fbRowID(members); got != rowID {
+		return repairs.Row{}, fmt.Errorf("row id %s is not the members' %s", rowID, got)
+	}
+	return f.buildRow(lib, store, ev, members, nil), nil
+}
+
 // Replan re-reads only the row's neighbourhood (loadPartial) and rebuilds it.
 func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
 	var st fbState
@@ -2446,19 +2535,7 @@ func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 	// The books this row's own cut-off apply created are not holders: the
 	// resumed apply extends them (applyGroup), so the row must re-plan as it
 	// was planned.
-	if set := lib.sets[st.Members[0]]; set != nil {
-		// The same roots Plan grouped with (evaluate's Root, and groupRoot
-		// for a path on another shelf): for a mixed-shelf row commonDir of
-		// the whole set is a different folder, whose keys would name none of
-		// the created books.
-		shelf, root := lib.fbMajority(st.Members[0])
-		ours := map[string]bool{}
-		for p := range set {
-			k, _, _ := fbGroupKey(p, lib.groupRoot(p, shelf, root))
-			ours[fbCreatedID(planned.RowID, st.Members[0], k)] = true
-		}
-		lib.drop(ours)
-	}
+	fbDropOwn(lib, planned.RowID, st.Members[0])
 	gone := func(why string) repairs.Row {
 		r := planned
 		r.Fingerprint, r.Detail = "changed:"+why, nil
@@ -2988,6 +3065,25 @@ func (f *folderBooksFixer) adoptable(store OpsStore, want undo.RepairBookCreateV
 		return rows[0], nil
 	}
 	return nil, nil
+}
+
+// openLiveCreate: book id is live and has an open repair_book_create row of
+// this fixer, and the operation that journaled it: the end state of an apply
+// cut off between the un-hide and the retire. A hidden one is adopted (or
+// resolved) once the groups are built; a reverted create is not open.
+func (f *folderBooksFixer) openLiveCreate(store OpsStore, id string) (op string, live bool, err error) {
+	rows, err := f.openChanges(store, id, undo.ChangeTypeRepairBookCreate)
+	if err != nil || len(rows) == 0 {
+		return "", false, err
+	}
+	b, err := store.GetBookByID(id)
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", id, err)
+	}
+	if b == nil || b.IsSoftDeleted() {
+		return "", false, nil
+	}
+	return rows[0].OperationID, true, nil
 }
 
 // supersedeOpen hands the open rows of type changeType that operation fromOp
