@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: de3f610d-605b-4338-96c9-3316a2dcd8d4
-// last-edited: 2026-10-11
+// last-edited: 2026-11-03
 
 package metafetch
 
@@ -67,6 +67,14 @@ func fanoutHarness(t *testing.T, book *database.Book, providers ...metadata.Meta
 // turns it on after building the harness (readThroughHarness does).
 func fanoutHarnessFiles(t *testing.T, book *database.Book, files []database.BookFile, providers ...metadata.MetadataSource) *Service {
 	t.Helper()
+	// The throttle registry is process-global, so a hold another test in this
+	// binary installed (any asinLookupOverride returning a transport-shaped
+	// error records one) would otherwise gate this test's ASIN lookups and
+	// fail it with "provider is throttled" depending on test order. A fresh
+	// production process starts with only the stored holds; tests attach no
+	// store, so an empty registry is that invariant.
+	metadata.ResetThrottlesForTesting()
+	t.Cleanup(metadata.ResetThrottlesForTesting)
 	withSharedCache(t, false)
 	raw := map[string][]byte{}
 	var mu sync.Mutex
@@ -462,4 +470,22 @@ func TestNoSourceAnswered_AskedSourcesDecide(t *testing.T) {
 	assert.NoError(t, noSourceAnswered(&SearchMetadataResponse{SourcesAnswered: []string{"Audnexus (Audible)"}}),
 		"nobody asked: answered sources count as before")
 	assert.ErrorIs(t, noSourceAnswered(&SearchMetadataResponse{}), ErrNoSourceAnswered)
+}
+
+// A hold left behind by an earlier test in the same binary must not reach a
+// harness-built search: the harness starts from an empty registry, as a fresh
+// process with no stored holds does.
+func TestFanoutHarness_StartsWithoutLeftoverThrottles(t *testing.T) {
+	for _, id := range []string{metadata.SourceIDAudible, metadata.SourceIDAudnexus} {
+		_, held := metadata.DefaultThrottleRegistry().RecordFailure(id, &metadata.ProviderStatusError{Provider: id, Status: 503, Body: "down"})
+		require.True(t, held, "setup: a 503 installs a hold on %s", id)
+	}
+	own := "B000NOSUCH"
+	book := reacherBook(0)
+	book.ASIN = &own
+	svc := fanoutHarness(t, book, &fakeProvider{id: metadata.SourceIDAudible, name: "Audible"})
+	resp, err := svc.SearchMetadataForBookWithOptions("b1", reacherTitle, "Lee Child", "", "", SearchOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, resp.SourcesFailed)
+	assert.Contains(t, resp.SourcesAnswered, "Audible")
 }
