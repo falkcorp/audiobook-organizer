@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -80,10 +80,14 @@
 //     group's folder (a dir group, so a rescan of that folder finds this book
 //     at its path) or first file, and new book_file rows at the same paths
 //     copying track, size, hash and duration but never an iTunes persistent
-//     id. Books are created ONLY when every file of the group is under
-//     books/itunes/**, where organize never moves a file
+//     id. A plain apply creates books ONLY when every file of the group is
+//     under books/itunes/**, where organize never moves a file
 //     (organizer/inplace_ownership.go OutcomeFrozenITunes): a created book
-//     must never be moved. Elsewhere the row is skipped (needs a new book).
+//     must never be moved. Elsewhere the row is skipped (needs a new book);
+//     see OWNER APPLY for the one exception.
+//     A work on a shelf other than the folder-book's majority shelf is grouped
+//     under its own author folder on that shelf (lib.groupRoot), never under
+//     the majority shelf's root.
 //
 // Then every folder-book of the row is retired. When one is primary in a
 // version group, the group's heir is elected FIRST among the other members
@@ -93,14 +97,33 @@
 // stay on it: the purge refuses a book that owns rows, so it is hidden (ABS,
 // library, dedup, search, the fragment fixer's parent index) and never purged.
 //
-// SKIPPED rows (listed, never applied): deep; a work split between a proper
-// book and orphans (never a second partial book); an orphan group whose title
-// and author already name a live book (review it, never duplicate); a
-// fragmentary group shorter than the chapter-consolidation threshold; a new
-// book needed outside books/itunes/**; a primary folder-book with no heir in
-// its version group; an iTunes persistent id on the folder-book itself or
-// among its external ids; listening progress; Doctor Who / Big Finish /
-// Torchwood (framework guard).
+// SKIPPED rows (listed, never applied by a plain apply): deep; a work split
+// between a proper book and orphans (never a second partial book); an orphan
+// group whose title and author already name a live book (review it, never
+// duplicate); a fragmentary group shorter than the chapter-consolidation
+// threshold; a new book needed outside books/itunes/**; a primary folder-book
+// with no heir in its version group; an iTunes persistent id on the
+// folder-book itself or among its external ids; listening progress; Doctor Who
+// / Big Finish / Torchwood (framework guard).
+//
+// OWNER APPLY (owner decisions 2026-11-03). A row is checked against EVERY
+// reason it is held back (buildRow's fbBlock list; row.Skipped stays the first,
+// so a plain apply reports what it always did). The row is owner-applicable
+// when it is a mixed-shelf row (it has a mixed_shelf hold: files on a second
+// shelf), its base verdict is applicable (fbEval.BaseTier, kept when Tier is
+// overwritten with mixed-shelf), its majority shelf holds at least
+// fbMajorityShelf of the files, and EVERY hold is one the owner may resolve:
+// the second shelf itself, and a new book for files in the library folder
+// (never an import path; created library_state organized). Every other hold
+// (deep, root folder, too large, resolved, unclear, split, fragmentary, an
+// iTunes id, progress, no heir, a duplicate no link can resolve) stays hard.
+// The apply is the ordinary Apply, run only for the owner's own click on the
+// row (repairs.OwnerApplyFor on ctx, plus the plan under the lock still marking
+// it). A row that is not mixed-shelf but whose every hold is owner-resolvable
+// stays listed and carries fbFlagSingleShelfOwnerResolvable, which is how the
+// owner measures that population. A duplicate title that resolves to exactly
+// one live book is owner-resolvable only by a version link the apply cannot
+// write yet (fbLinkApplyReady): such a row is not offered.
 //
 // iTunes. The owner allowed this fixer, DATABASE ONLY, on books under
 // books/itunes/** (2026-10-01; ITunesDatabaseOnly opts it out of the
@@ -133,10 +156,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -225,6 +250,27 @@ const (
 	fbMaxNewBooks = 25
 	fbMaxRowFiles = 2000
 )
+
+const (
+	// fbFlagSingleShelfOwnerResolvable is the Row.Flags entry (so the plan's
+	// by_flag tally and the flag:<name> filter carry it) of a row held back
+	// only by blocks the owner could resolve that is NOT a mixed-shelf row.
+	// Owner decision 2026-11-03: such a row stays listed, never owner-applicable;
+	// the count measures how many it would have been.
+	fbFlagSingleShelfOwnerResolvable = "single_shelf_owner_resolvable"
+	// fbLibraryState is the library_state of a book created from files in the
+	// library folder (owner decision 2026-11-03): Audiobookshelf serves it at
+	// once. iTunes-shelf books keep the folder-book's state.
+	fbLibraryState = "organized"
+	// fbReasonBooks caps the new books fbOwnerReason lists.
+	fbReasonBooks = 20
+)
+
+// fbLinkApplyReady is false until the apply can link a new book into an
+// existing book's version group (the owner-only resolution of a duplicate
+// title). Until then a row whose only owner-resolvable block is such a
+// duplicate is not offered to the owner: its apply would refuse under the lock.
+const fbLinkApplyReady = false
 
 // Detection thresholds (the census's).
 const (
@@ -789,6 +835,16 @@ type fbEval struct {
 	Proper    int
 	Works     int
 	Evidence  []string
+	// BaseTier is classify's verdict on the majority shelf's files, kept when
+	// evaluate then overwrites Tier with fbTierMixedShelf, so a deep-tier row
+	// that is also mixed-shelf is never taken for an applicable one. Equal to
+	// Tier for every other row.
+	BaseTier string
+	// MajorShare is the share of the book's rows the majority shelf holds
+	// (1 when every file is on one shelf), MinorUnheld the files off that
+	// shelf that no other live book holds.
+	MajorShare  float64
+	MinorUnheld int
 }
 
 // evaluate classifies one live book.
@@ -813,6 +869,8 @@ func (lib *fbLib) evaluate(id string) fbEval {
 	}
 	ev = lib.classify(id, b, major, shelf)
 	ev.N = len(rows)
+	ev.BaseTier = ev.Tier
+	ev.MajorShare = float64(len(major)) / float64(len(rows))
 	if len(byShelf) == 1 || ev.Tier == "" {
 		return ev
 	}
@@ -831,6 +889,7 @@ func (lib *fbLib) evaluate(id string) fbEval {
 		}
 	}
 	minor := len(rows) - len(major)
+	ev.MinorUnheld = minor - minorHeld
 	ev.Evidence = append(ev.Evidence, fmt.Sprintf("%d of %d files on a second shelf, %d of them held by proper books",
 		minor, len(rows), minorHeld))
 	if float64(len(major)) < fbMajorityShelf*float64(len(rows)) || minorHeld < minor {
@@ -841,7 +900,7 @@ func (lib *fbLib) evaluate(id string) fbEval {
 
 // majorityShelf splits rows by shelf (shelfOf) and names the largest shelf
 // (ties: the lexically smaller) and its rows. Plan (evaluate, whose Root is
-// commonDir of these rows) and Replan (fbMajorityRoot) must agree on it:
+// commonDir of these rows) and Replan (fbMajority) must agree on it:
 // group keys, and so the ids of the books a cut-off apply created, derive
 // from that root.
 func (lib *fbLib) majorityShelf(rows []database.BookFileCore) (string, []database.BookFileCore, map[string][]database.BookFileCore) {
@@ -859,15 +918,41 @@ func (lib *fbLib) majorityShelf(rows []database.BookFileCore) (string, []databas
 	return shelf, byShelf[shelf], byShelf
 }
 
-// fbMajorityRoot is the Root evaluate gives book id: the common folder of
-// its largest shelf's rows.
-func (lib *fbLib) fbMajorityRoot(id string) string {
-	_, major, _ := lib.majorityShelf(lib.files[id])
+// fbMajority is the shelf and the Root evaluate gives book id: its largest
+// shelf and the common folder of that shelf's rows.
+func (lib *fbLib) fbMajority(id string) (shelf, root string) {
+	shelf, major, _ := lib.majorityShelf(lib.files[id])
 	paths := make([]string, 0, len(major))
 	for _, r := range major {
 		paths = append(paths, r.FilePath)
 	}
-	return commonDir(paths)
+	return shelf, commonDir(paths)
+}
+
+// groupRoot is the folder p's work group is keyed under (fbGroupKey) for a
+// row whose majority shelf is shelf and whose Root is root. Majority paths
+// keep root, so their keys, and the ids fbCreatedID derives from them, are
+// the ones every earlier plan used. A path on another shelf is keyed under its
+// own author folder there (the shelf's first path component), never under root
+// (a folder of the wrong shelf, which would turn every stem there into a
+// file-name group and fbCreatedPath into the first file). A file directly in
+// its shelf has no author folder: its group root is the shelf itself, and
+// buildRow refuses to create a book there. Plan (buildRow) and Replan (the
+// created-id drop) must both call this, the same invariant as fbMajority.
+func (lib *fbLib) groupRoot(p, shelf, root string) string {
+	ps := lib.shelfOf(p)
+	if ps == shelf || ps == "" {
+		return root
+	}
+	rel, err := filepath.Rel(ps, p)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return root
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) <= 1 {
+		return ps
+	}
+	return filepath.Join(ps, parts[0])
 }
 
 // classify is evaluate's verdict on rows, all under shelf.
@@ -1262,8 +1347,10 @@ func (f *folderBooksFixer) Description() string {
 		"book-file backfill attached every file in the folder). Apply gives each file no proper book holds a new " +
 		"book of its own (iTunes files only, grouped by folder or filename stem, same paths, nothing moved), then " +
 		"hides the folder-book (soft-deleted with its file rows kept; primacy handed to the real book first). " +
-		"Database only, including for iTunes books. Deep-tier, split, fragmentary and Doctor Who / Big Finish / " +
-		"Torchwood rows are listed only. Every step is undoable from the apply operation."
+		"Database only, including for iTunes books. A row whose files also sit on a second shelf (mixed-shelf) " +
+		"and whose only holds are ones the owner may resolve (a library-folder file needing a new book, created " +
+		"organized) is applied only by the owner's own click on that row. Deep-tier, split, fragmentary and " +
+		"Doctor Who / Big Finish / Torchwood rows are listed only. Every step is undoable from the apply operation."
 }
 
 // ITunesDatabaseOnly: the owner cleared this fixer (2026-10-01) to write the
@@ -1299,6 +1386,11 @@ func (f *folderBooksFixer) store() (OpsStore, FragmentRepairReader, error) {
 type fbState struct {
 	Members   []string `json:"members"`
 	DupTitles []string `json:"dup_titles,omitempty"`
+	// DupSingle: every duplicate in DupTitles is a title match that resolves
+	// to ONE live book (or one version group), the case an owner apply can
+	// resolve by linking the new book in (fbBlock.link). False when any
+	// duplicate is a book at the group's path or names several books.
+	DupSingle bool `json:"dup_single,omitempty"`
 }
 
 // fbNewFile is one book_file row a group copies.
@@ -1311,9 +1403,14 @@ type fbNewFile struct {
 // (fbCreatedPath).
 type fbGroup struct {
 	Key, Title, Dir, Path string
-	AuthorID              *int
-	Files                 []fbNewFile
-	Secs                  int
+	// Root is the folder the group was keyed under (lib.groupRoot) and State
+	// the library_state of the book it becomes: "organized" for a work in the
+	// library folder (owner decision 2026-11-03), the folder-book's own for
+	// iTunes files.
+	Root, State string
+	AuthorID    *int
+	Files       []fbNewFile
+	Secs        int
 }
 
 // fbPlan is Row.Detail.
@@ -1392,6 +1489,26 @@ func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep re
 		Label:       func(_, total int) string { return fmt.Sprintf("Folder-book rows %d/%d", built.Load(), total) },
 	}); err != nil {
 		return nil, fmt.Errorf("%s: rows: %w", fbFixerID, err)
+	}
+	// After the pool, in one sequential pass: the owner measurement of
+	// 2026-11-03. The rows carry fbFlagSingleShelfOwnerResolvable, so the
+	// plan's by_flag tally holds the same count and pages the rows.
+	owner, singleShelf, applicable := 0, 0, 0
+	for i := range rows {
+		switch {
+		case rows[i].Applicable():
+			applicable++
+		case rows[i].OwnerApplicable:
+			owner++
+		}
+		if slices.Contains(rows[i].Flags, fbFlagSingleShelfOwnerResolvable) {
+			singleShelf++
+		}
+	}
+	if rep != nil {
+		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("%s: %d row(s): %d applicable, %d owner-applicable (mixed-shelf, before the "+
+			"framework guards), %d single_shelf_owner_resolvable (every hold the owner could resolve, but not mixed-shelf: "+
+			"listed, never owner-applicable)", fbFixerID, len(rows), applicable, owner, singleShelf))
 	}
 	return rows, nil
 }
@@ -1531,11 +1648,11 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	sort.Strings(paths)
 	var held, byFolder, missingOrphans int
-	var resolved, onlyOurs, unreadable []string
+	var resolved, onlyOurs, unreadable, missingPaths []string
 	shelfVerdict := map[string]error{} // onDisk's per-shelf cache for this row
 	type orphan struct {
-		row           database.BookFileCore
-		key, lbl, dir string
+		row                 database.BookFileCore
+		key, lbl, dir, root string
 	}
 	var orphans []orphan
 	keyHeld := map[string]bool{} // a group key with a path a proper book holds
@@ -1545,7 +1662,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	var strayMinor []string
 	fp := []string{"tier=" + lead.Tier, "members=" + strings.Join(members, ",")}
 	for _, p := range paths {
-		k, lbl, dir := fbGroupKey(p, lead.Root)
+		// A path on the lead's shelf is keyed under the lead's Root; one on
+		// another shelf under its own author folder there (groupRoot).
+		groupRoot := lib.groupRoot(p, lead.Shelf, lead.Root)
+		k, lbl, dir := fbGroupKey(p, groupRoot)
 		cls := "orphan"
 		for _, h := range lib.holders[p] {
 			if isMember[h] {
@@ -1644,8 +1764,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			byFolder++
 		case "missing":
 			missingOrphans++
+			missingPaths = append(missingPaths, p)
 		default:
-			orphans = append(orphans, orphan{row: src[p], key: k, lbl: lbl, dir: dir})
+			orphans = append(orphans, orphan{row: src[p], key: k, lbl: lbl, dir: dir, root: groupRoot})
 		}
 		// held and held-by-folder fingerprint alike: a sibling row applying
 		// moves a path from one to the other without changing this row.
@@ -1685,18 +1806,24 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		if !ok {
 			i = len(plan.Groups)
 			gi[o.key] = i
-			plan.Groups = append(plan.Groups, fbGroup{Key: o.key, Title: fbCoreTitle(o.lbl), Dir: o.dir, AuthorID: authorID})
+			plan.Groups = append(plan.Groups, fbGroup{Key: o.key, Title: fbCoreTitle(o.lbl), Dir: o.dir, Root: o.root,
+				AuthorID: authorID})
 		}
 		g := &plan.Groups[i]
 		g.Files = append(g.Files, fbNewFile{SrcBook: o.row.BookID, SrcRow: o.row.ID, Path: o.row.FilePath, Track: o.row.TrackNumber})
 		g.Secs += o.row.Duration
 	}
 	var fragmentary, split, outside, unclear []string
+	// outsideHard counts the outside groups no owner click may create: any
+	// that is not wholly in the library folder (fbInLibrary).
+	outsideHard := 0
 	seenTitle := map[string]bool{}
 	dup := []string{}
+	dupSingle := false
 	if carried != nil {
-		dup = carried.DupTitles
+		dup, dupSingle = carried.DupTitles, carried.DupSingle
 	}
+	dupHard := false // a duplicate no single link target can resolve
 	for i := range plan.Groups {
 		g := &plan.Groups[i]
 		sort.SliceStable(g.Files, func(a, b int) bool {
@@ -1705,12 +1832,24 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			}
 			return g.Files[a].Path < g.Files[b].Path
 		})
-		g.Path = fbCreatedPath(*g, lead.Root)
+		g.Path = fbCreatedPath(*g, g.Root)
+		g.State = plan.State
+		inLib := lib.inLibrary(g)
+		if inLib {
+			g.State = fbLibraryState
+		}
 		name := fmt.Sprintf("%q (%d file(s))", g.Title, len(g.Files))
 		if keyHeld[g.Key] {
 			split = append(split, name)
 		}
-		underShelf := g.Dir != "" && filepath.Dir(g.Dir) == lead.Shelf
+		gShelf := lib.shelfOf(g.Files[0].Path)
+		underShelf := g.Dir != "" && filepath.Dir(g.Dir) == gShelf
+		// A work whose files sit directly in a shelf other than the lead's has
+		// no author folder to key under (groupRoot): the grouping cannot tell
+		// where one work ends, and no book is made from it.
+		if g.Root != lead.Root && g.Root == gShelf {
+			underShelf = true
+		}
 		if t := fbNorm(g.Title); fbUnclearTitle(g.Title) || seenTitle[t] || underShelf || lib.authorNorm[t] {
 			unclear = append(unclear, name)
 		} else {
@@ -1722,6 +1861,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		for _, nf := range g.Files {
 			if !pathutil.UnderFrozenITunesTree(nf.Path) {
 				outside = append(outside, name)
+				if !inLib {
+					outsideHard++
+				}
 				break
 			}
 		}
@@ -1737,10 +1879,32 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				same = append(append(same, lib.titles[fbTitleKey(g.Title, g.AuthorID)]...),
 					lib.titles[fbTitleKey(g.Title, nil)]...)
 			}
+			// The link targets the title matches collapse to: a version
+			// group is one target however many members match, an ungrouped
+			// book is its own. A flagged folder-book is never a target.
+			targets := map[string]bool{}
+			flagged := false
+			named := ""
 			for _, id := range same {
-				if !isMember[id] {
-					dup = append(dup, fmt.Sprintf("%q is already book %s", g.Title, id))
-					break
+				if isMember[id] {
+					continue
+				}
+				if named == "" {
+					named = id
+				}
+				if _, ok := ev[id]; ok {
+					flagged = true
+				}
+				key := id
+				if vg := lib.books[id].VersionGroupID; vg != nil && *vg != "" {
+					key = "vg:" + *vg
+				}
+				targets[key] = true
+			}
+			if named != "" {
+				dup = append(dup, fmt.Sprintf("%q is already book %s", g.Title, named))
+				if flagged || len(targets) != 1 {
+					dupHard = true
 				}
 			}
 			for _, at := range []string{g.Dir, g.Path} {
@@ -1750,17 +1914,24 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 				for _, id := range lib.byPath[at] {
 					if !isMember[id] {
 						dup = append(dup, fmt.Sprintf("%q: book %s already sits at %s", g.Title, id, at))
+						dupHard = true
 						break
 					}
 				}
 			}
 		}
-		fp = append(fp, fmt.Sprintf("g:%s|%s|%s|%s|%d", g.Key, g.Title, g.Dir, g.Path, len(g.Files)))
+		fp = append(fp, fmt.Sprintf("g:%s|%s|%s|%s|%d|%s", g.Key, g.Title, g.Dir, g.Path, len(g.Files), g.State))
 		if a := g.AuthorID; a != nil {
 			fp = append(fp, "a:"+strconv.Itoa(*a))
 		}
 	}
-	st, err := json.Marshal(fbState{Members: members, DupTitles: dup})
+	if carried == nil {
+		dupSingle = len(dup) > 0 && !dupHard
+	}
+	if lead.BaseTier != lead.Tier {
+		fp = append(fp, "base="+lead.BaseTier)
+	}
+	st, err := json.Marshal(fbState{Members: members, DupTitles: dup, DupSingle: dupSingle})
 	if err != nil {
 		row.Skipped, row.SkipReason = fbSkipUnreadable, fmt.Sprintf("encode the row's state: %v", err)
 		// Unique per row like every other fingerprint, never a shared constant.
@@ -1801,65 +1972,209 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	}
 	sort.Strings(row.BookIDs)
 
-	switch {
-	case len(unreadable) > 0:
-		row.Skipped = fbSkipUnreadable
-		row.SkipReason = fmt.Sprintf("%d file(s) could not be checked on disk, so the row cannot tell missing from "+
-			"present: %s", len(unreadable), strings.Join(fbFirst(unreadable, 5), "; "))
-	case lead.Tier == fbTierMixedShelf:
-		row.Skipped, row.SkipReason = fbSkipMixedShelf, "files on two shelves: the second shelf holds over "+
-			"a fifth of them, or some of them have no proper book; listed for review only"
-	case len(strayMinor) > 0:
-		row.Skipped = fbSkipMixedShelf
-		row.SkipReason = fmt.Sprintf("%d file(s) off the folder-book's shelf %s have no proper book or smaller "+
-			"folder-book holding them: %s", len(strayMinor), lead.Shelf, strings.Join(fbFirst(strayMinor, 5), "; "))
-	case !fbApplicableTier(lead.Tier):
-		row.Skipped, row.SkipReason = fbSkipDeep, "deep tier: listed for review only"
-	case lead.AtOrAbove && len(plan.Groups) > 0:
-		row.Skipped = fbSkipRootFolder
-		row.SkipReason = fmt.Sprintf("the folder-book's folder %s is a library, import or iTunes media root; its %d "+
-			"orphan group(s) would become books from across the whole root", lead.Root, len(plan.Groups))
-	case len(plan.Groups) > fbMaxNewBooks || len(set) > fbMaxRowFiles:
-		row.Skipped = fbSkipTooLarge
-		row.SkipReason = fmt.Sprintf("%d new book(s) over %d files exceeds the per-row cap (%d books, %d files)",
-			len(plan.Groups), len(set), fbMaxNewBooks, fbMaxRowFiles)
-	case len(onlyOurs) > 0:
-		row.Skipped = fbSkipOnlyPresentCopy
-		row.SkipReason = fmt.Sprintf("%d file(s) another live book holds have a present copy only on this row's "+
+	// Every reason the row is held back, in the order the first one wins
+	// (row.Skipped stays what a plain apply has always reported). Each says
+	// whether the owner's own click may resolve it (fbBlock).
+	var blocks []fbBlock
+	block := func(kind, why string, ownerOK bool) {
+		blocks = append(blocks, fbBlock{kind: kind, why: why, ownerOK: ownerOK})
+	}
+	// The second shelf is the owner's to resolve only on an applicable base
+	// verdict that the majority shelf carries (D2): a deep row, or one with
+	// no 80% majority, stays listed.
+	mixedOK := fbApplicableTier(lead.BaseTier) && lead.MajorShare >= fbMajorityShelf
+	if len(unreadable) > 0 {
+		block(fbSkipUnreadable, fmt.Sprintf("%d file(s) could not be checked on disk, so the row cannot tell missing from "+
+			"present: %s", len(unreadable), strings.Join(fbFirst(unreadable, 5), "; ")), false)
+	}
+	if lead.Tier == fbTierMixedShelf {
+		block(fbSkipMixedShelf, "files on two shelves: the second shelf holds over "+
+			"a fifth of them, or some of them have no proper book; listed for review only", mixedOK)
+	}
+	if len(strayMinor) > 0 {
+		block(fbSkipMixedShelf, fmt.Sprintf("%d file(s) off the folder-book's shelf %s have no proper book or smaller "+
+			"folder-book holding them: %s", len(strayMinor), lead.Shelf, strings.Join(fbFirst(strayMinor, 5), "; ")), mixedOK)
+	}
+	if !fbApplicableTier(lead.BaseTier) {
+		block(fbSkipDeep, "deep tier: listed for review only", false)
+	}
+	if lead.AtOrAbove && len(plan.Groups) > 0 {
+		block(fbSkipRootFolder, fmt.Sprintf("the folder-book's folder %s is a library, import or iTunes media root; its %d "+
+			"orphan group(s) would become books from across the whole root", lead.Root, len(plan.Groups)), false)
+	}
+	if len(plan.Groups) > fbMaxNewBooks || len(set) > fbMaxRowFiles {
+		block(fbSkipTooLarge, fmt.Sprintf("%d new book(s) over %d files exceeds the per-row cap (%d books, %d files)",
+			len(plan.Groups), len(set), fbMaxNewBooks, fbMaxRowFiles), false)
+	}
+	if len(onlyOurs) > 0 {
+		block(fbSkipOnlyPresentCopy, fmt.Sprintf("%d file(s) another live book holds have a present copy only on this row's "+
 			"folder-books (every other live row there says Missing); retiring would strand them: %s",
-			len(onlyOurs), strings.Join(fbFirst(onlyOurs, 5), "; "))
-	case len(resolved) > 0:
-		row.Skipped = fbSkipResolved
-		row.SkipReason = fmt.Sprintf("%d orphan file(s) are held by a soft-deleted book (merged away, deleted, or "+
-			"created and reverted): %s", len(resolved), strings.Join(fbFirst(resolved, 5), "; "))
-	case len(unclear) > 0:
-		row.Skipped = fbSkipUnclearWork
-		row.SkipReason = fmt.Sprintf("%d orphan group(s) are titled with no work's name (a number, a disc marker, a "+
-			"generic title) or repeat another group's title: %s", len(unclear), strings.Join(fbFirst(unclear, 5), "; "))
-	case len(split) > 0:
-		row.Skipped = fbSkipSplitWork
-		row.SkipReason = fmt.Sprintf("%d work(s) are partly held by a proper book and partly orphaned; a new book "+
-			"would be a second, partial copy: %s", len(split), strings.Join(fbFirst(split, 5), "; "))
-	case len(dup) > 0:
-		row.Skipped = fbSkipDupTitle
-		row.SkipReason = fmt.Sprintf("a new book's title and author already name a live book: %s",
-			strings.Join(fbFirst(dup, 5), "; "))
-	case len(fragmentary) > 0:
-		row.Skipped = fbSkipFragmentary
-		row.SkipReason = fmt.Sprintf("%d orphan group(s) shorter than the chapter-consolidation threshold would become "+
-			"chapter-sized books: %s", len(fragmentary), strings.Join(fbFirst(fragmentary, 5), "; "))
-	case len(outside) > 0:
-		row.Skipped = fbSkipNeedsNewBook
-		row.SkipReason = fmt.Sprintf("%d new book(s) needed for files outside books/itunes/**, where organize could "+
-			"later move a created book: %s", len(outside), strings.Join(fbFirst(outside, 5), "; "))
-	default:
+			len(onlyOurs), strings.Join(fbFirst(onlyOurs, 5), "; ")), false)
+	}
+	if len(resolved) > 0 {
+		block(fbSkipResolved, fmt.Sprintf("%d orphan file(s) are held by a soft-deleted book (merged away, deleted, or "+
+			"created and reverted): %s", len(resolved), strings.Join(fbFirst(resolved, 5), "; ")), false)
+	}
+	if len(unclear) > 0 {
+		block(fbSkipUnclearWork, fmt.Sprintf("%d orphan group(s) are titled with no work's name (a number, a disc marker, a "+
+			"generic title) or repeat another group's title: %s", len(unclear), strings.Join(fbFirst(unclear, 5), "; ")), false)
+	}
+	if len(split) > 0 {
+		block(fbSkipSplitWork, fmt.Sprintf("%d work(s) are partly held by a proper book and partly orphaned; a new book "+
+			"would be a second, partial copy: %s", len(split), strings.Join(fbFirst(split, 5), "; ")), false)
+	}
+	if len(dup) > 0 {
+		blocks = append(blocks, fbBlock{kind: fbSkipDupTitle, ownerOK: dupSingle, link: true,
+			why: fmt.Sprintf("a new book's title and author already name a live book: %s", strings.Join(fbFirst(dup, 5), "; "))})
+	}
+	if len(fragmentary) > 0 {
+		block(fbSkipFragmentary, fmt.Sprintf("%d orphan group(s) shorter than the chapter-consolidation threshold would become "+
+			"chapter-sized books: %s", len(fragmentary), strings.Join(fbFirst(fragmentary, 5), "; ")), false)
+	}
+	if len(outside) > 0 {
+		block(fbSkipNeedsNewBook, fmt.Sprintf("%d new book(s) needed for files outside books/itunes/**, where organize could "+
+			"later move a created book: %s", len(outside), strings.Join(fbFirst(outside, 5), "; ")), outsideHard == 0)
+	}
+	// The framework-independent refusals (an iTunes id, listening progress,
+	// no heir) always hold. They are read only while no hard block is there
+	// already: their store reads cannot change a row's skip kind (the first
+	// block wins), only whether an owner click may resolve what is left.
+	if fbAllOwnerOK(blocks) {
 		if kind, why := f.refusal(lib, store, members); kind != "" {
-			row.Skipped, row.SkipReason = kind, why
+			block(kind, why, false)
 		} else if why := lib.noHeir(members); why != "" {
-			row.Skipped, row.SkipReason = fbSkipNoHeir, why
+			block(fbSkipNoHeir, why, false)
 		}
 	}
+	if len(blocks) > 0 {
+		row.Skipped, row.SkipReason = blocks[0].kind, blocks[0].why
+	}
+	resolvable := len(blocks) > 0 && fbAllOwnerOK(blocks)
+	switch {
+	case !resolvable:
+	case !fbHasKind(blocks, fbSkipMixedShelf):
+		// Owner decision 2026-11-03: only mixed-shelf rows are the owner's.
+		// Rows whose every block the owner could resolve but that sit on one
+		// shelf stay listed; the flag counts them (Plan reports the total),
+		// so the population is measured before anyone widens the rule.
+		row.Flags = append(row.Flags, fbFlagSingleShelfOwnerResolvable)
+	case fbLinkPending(blocks):
+		// The owner could resolve it, but only by linking the new book into
+		// an existing version group, which the apply cannot do yet.
+	default:
+		row.OwnerApplicable = true
+		row.OwnerApplyReason = fbOwnerReason(lead, len(set), held, byFolder, missingPaths, plan, blocks, members)
+		row.OwnerWrites = append([]string(nil), row.BookIDs...)
+	}
 	return row
+}
+
+// fbBlock is one reason a row is held back from a plain apply.
+type fbBlock struct {
+	kind, why string
+	// ownerOK: the owner's own click may resolve it, after reading the row's
+	// preview. Every block not marked so is a hard one that stops the row.
+	ownerOK bool
+	// link: resolving it needs the new book linked into an existing book's
+	// version group, which the apply does not do yet (fbLinkApplyReady).
+	link bool
+}
+
+func fbAllOwnerOK(blocks []fbBlock) bool {
+	for _, b := range blocks {
+		if !b.ownerOK {
+			return false
+		}
+	}
+	return true
+}
+
+func fbHasKind(blocks []fbBlock, kind string) bool {
+	for _, b := range blocks {
+		if b.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// fbLinkPending: some block can be resolved only by a version link the apply
+// cannot write yet.
+func fbLinkPending(blocks []fbBlock) bool {
+	if fbLinkApplyReady {
+		return false
+	}
+	for _, b := range blocks {
+		if b.link {
+			return true
+		}
+	}
+	return false
+}
+
+// inLibrary: every file of g sits directly on the library folder shelf (the
+// configured RootDir), the one place organize may later move a created book
+// and Audiobookshelf serves it. Not "under RootDir": an iTunes folder or an
+// import path nested below it is its own shelf (shelfOf is the deepest).
+func (lib *fbLib) inLibrary(g *fbGroup) bool {
+	root := config.AppConfig.RootDir
+	if root == "" || len(g.Files) == 0 {
+		return false
+	}
+	root = filepath.Clean(root)
+	for _, nf := range g.Files {
+		if lib.shelfOf(nf.Path) != root {
+			return false
+		}
+	}
+	return g.Path != "" && pathutil.IsWithin(g.Path, root)
+}
+
+// fbOwnerReason is the preview the owner reads before clicking Apply (owner):
+// what the row is, what each kind of file becomes, and which holds the click
+// resolves. Missing files and new books are listed (capped), held files
+// counted.
+func fbOwnerReason(lead fbEval, files, held, byFolder int, missing []string, plan *fbPlan, blocks []fbBlock, members []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Owner apply of a mixed-shelf folder-book row over %s (%d file(s)): database only, no file moves "+
+		"and no iTunes id changes. %d file(s) already held by proper books stay with them", lead.Root, files, held)
+	if byFolder > 0 {
+		fmt.Fprintf(&b, "; %d held by a smaller folder-book row stay with it", byFolder)
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(&b, "; %d gone from disk stay on the retired book and build nothing (%s)", len(missing),
+			strings.Join(fbFirst(missing, 5), ", "))
+	}
+	b.WriteString(". ")
+	if len(plan.Groups) == 0 {
+		b.WriteString("No new book is created. ")
+	} else {
+		fmt.Fprintf(&b, "%d new book(s) are created from the files nothing holds: ", len(plan.Groups))
+		var parts []string
+		for i, g := range plan.Groups {
+			if i == fbReasonBooks {
+				parts = append(parts, fmt.Sprintf("and %d more", len(plan.Groups)-i))
+				break
+			}
+			paths := make([]string, len(g.Files))
+			for j, nf := range g.Files {
+				paths[j] = nf.Path
+			}
+			parts = append(parts, fmt.Sprintf("%q, library_state %s, %d file(s) (%s)", g.Title, g.State, len(g.Files),
+				strings.Join(fbFirst(paths, 3), ", ")))
+		}
+		b.WriteString(strings.Join(parts, "; "))
+		b.WriteString(". ")
+	}
+	fmt.Fprintf(&b, "Then folder-book(s) %s are retired (hidden, file rows kept). Held back from a plain apply by: ",
+		strings.Join(members, ", "))
+	var why []string
+	for _, bl := range blocks {
+		why = append(why, bl.kind)
+	}
+	b.WriteString(strings.Join(why, ", "))
+	b.WriteString(". Every write is journaled and reverts from the operation.")
+	return b.String()
 }
 
 // noHeir names a primary member whose version group has other live members
@@ -1972,13 +2287,14 @@ func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 	// resumed apply extends them (applyGroup), so the row must re-plan as it
 	// was planned.
 	if set := lib.sets[st.Members[0]]; set != nil {
-		// The same root Plan grouped with (evaluate's Root): for a
-		// mixed-shelf row commonDir of the whole set is a different folder,
-		// whose keys would name none of the created books.
-		root := lib.fbMajorityRoot(st.Members[0])
+		// The same roots Plan grouped with (evaluate's Root, and groupRoot
+		// for a path on another shelf): for a mixed-shelf row commonDir of
+		// the whole set is a different folder, whose keys would name none of
+		// the created books.
+		shelf, root := lib.fbMajority(st.Members[0])
 		ours := map[string]bool{}
 		for p := range set {
-			k, _, _ := fbGroupKey(p, root)
+			k, _, _ := fbGroupKey(p, lib.groupRoot(p, shelf, root))
 			ours[fbCreatedID(planned.RowID, st.Members[0], k)] = true
 		}
 		lib.drop(ours)
@@ -2043,7 +2359,12 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	if err != nil {
 		return err
 	}
-	if locked.Fingerprint != fresh.Fingerprint || !locked.Applicable() {
+	// A row held back from a plain apply is written only for the owner's own
+	// click: the engine put the marker on ctx for exactly this row, and the
+	// plan under the lock still offers it to the owner. Fails closed: a plain
+	// apply carries no marker.
+	ownerRow := repairs.OwnerApplyFor(ctx, locked.RowID) && locked.OwnerApplicable
+	if locked.Fingerprint != fresh.Fingerprint || (!locked.Applicable() && !ownerRow) {
 		why := locked.Reason
 		if !locked.Applicable() {
 			why = locked.SkipReason
@@ -2361,7 +2682,10 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 			return steps, err
 		}
 		w.Touch()
-		state := plan.State
+		state := g.State
+		if state == "" {
+			state = plan.State
+		}
 		hidden := true
 		at := f.now().UTC()
 		nb := &database.Book{ID: target, Title: g.Title, AuthorID: g.AuthorID, FilePath: path, LibraryState: &state,
