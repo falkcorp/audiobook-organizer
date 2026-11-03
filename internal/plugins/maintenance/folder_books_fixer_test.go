@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.7.3
+// version: 1.8.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
-// last-edited: 2026-10-25
+// last-edited: 2026-11-03
 
 package maintenance
 
@@ -522,6 +522,113 @@ func TestFolderBooksFixer_DetectionPositives(t *testing.T) {
 	require.False(t, fbApplicableTier(ev.Tier), "a folder naming no known author is not an author shelf")
 	ev = fbUnitLib([]string{"/lib"}, nil, "Audiobooks", paths("/lib"), 7200).evaluate("b")
 	require.Equal(t, fbTierShelf, ev.Tier, "the library root itself")
+}
+
+// TestFolderBooksFixer_FlatWholeBooks: an author folder of whole books stored
+// flat, one file each, under distinct names (the 2026-11-02 author-folder row:
+// 34 files, ~485 h) is a shelf. Distinct short names stay chapters.
+func TestFolderBooksFixer_FlatWholeBooks(t *testing.T) {
+	dir := "/media/iTunes Media/Audiobooks/Bruce Wayne"
+	works := []string{dir + "/Year One.m4b", dir + "/The Long Halloween.m4b", dir + "/Hush.m4b",
+		dir + "/The Killing Joke.m4b", dir + "/Dark Victory.m4b"}
+	authors := []string{"Bruce Wayne"}
+
+	ev := fbUnitLib([]string{"/lib"}, authors, "Bruce Wayne", works, 11*3600).evaluate("b")
+	require.Equal(t, fbTierShelf, ev.Tier, "flat whole books: %v", ev.Evidence)
+
+	ev = fbUnitLib([]string{"/lib"}, authors, "Bruce Wayne", works, 40*60).evaluate("b")
+	require.False(t, fbApplicableTier(ev.Tier), "40-minute files under distinct names are chapters: %v", ev.Evidence)
+
+	parts := []string{dir + "/The Long Halloween Part 1.m4b", dir + "/The Long Halloween Part 2.m4b",
+		dir + "/The Long Halloween Part 3.m4b", dir + "/The Long Halloween Part 4.m4b", dir + "/The Long Halloween Part 5.m4b"}
+	ev = fbUnitLib([]string{"/lib"}, authors, "Bruce Wayne", parts, 11*3600).evaluate("b")
+	require.False(t, fbApplicableTier(ev.Tier), "one long work in parts is one book: %v", ev.Evidence)
+
+	// Long files are a minority: most files are chapter-sized, so the long
+	// ones are not evidence of separate works.
+	mixed := append([]string{}, works[:3]...)
+	for i := 1; i <= 5; i++ {
+		mixed = append(mixed, fmt.Sprintf("%s/Chapter %d - Gotham.m4b", dir, i))
+	}
+	lib := newFBLib()
+	lib.shelves = []string{"/lib"}
+	lib.authors[1] = "Bruce Wayne"
+	lib.authorNorm[fbNorm("Bruce Wayne")] = true
+	var rows []database.BookFileCore
+	for i, p := range mixed {
+		d := 40 * 60
+		if i < 3 {
+			d = 4 * 3600
+		}
+		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: d})
+	}
+	lib.add(database.BookCore{ID: "b", Title: "The Dark Knight"}, rows)
+	lib.finish()
+	ev = lib.evaluate("b")
+	require.False(t, fbApplicableTier(ev.Tier), "three long files among chapters: %v", ev.Evidence)
+}
+
+// fbMixedLib is a folder-book whose files sit mostly under one shelf with the
+// rest under another; held marks which minority files a proper book holds.
+func fbMixedLib(major, minor []string, held map[string]bool) *fbLib {
+	lib := newFBLib()
+	lib.shelves = []string{"/lib"}
+	lib.authors[1] = "Bruce Wayne"
+	lib.authorNorm[fbNorm("Bruce Wayne")] = true
+	var rows []database.BookFileCore
+	for i, p := range append(append([]string{}, major...), minor...) {
+		rows = append(rows, database.BookFileCore{ID: fmt.Sprint(i), BookID: "b", FilePath: p, Duration: 11 * 3600})
+	}
+	lib.add(database.BookCore{ID: "b", Title: "Bruce Wayne"}, rows)
+	n := 0
+	for _, p := range minor {
+		if held[p] {
+			n++
+			id := fmt.Sprint("proper", n)
+			lib.add(database.BookCore{ID: id, Title: filepath.Base(p)},
+				[]database.BookFileCore{{ID: id + "-f", BookID: id, FilePath: p, Duration: 11 * 3600}})
+		}
+	}
+	lib.finish()
+	return lib
+}
+
+// TestFolderBooksFixer_MixedShelves: a folder-book with a few files on a
+// second shelf is judged on its majority shelf when every other file has a
+// proper book; otherwise it is listed (skipped_mixed_shelf), never silent.
+func TestFolderBooksFixer_MixedShelves(t *testing.T) {
+	dir := "/media/iTunes Media/Audiobooks/Bruce Wayne"
+	var major []string
+	for _, w := range []string{"Year One", "The Long Halloween", "Hush", "The Killing Joke", "Dark Victory",
+		"Knightfall", "No Mans Land", "Batman RIP", "Court of Owls"} {
+		major = append(major, dir+"/"+w+".m4b")
+	}
+	minor := []string{"/lib/Bruce Wayne/Arkham Asylum/Arkham Asylum.m4a"}
+
+	ev := fbMixedLib(major, minor, map[string]bool{minor[0]: true}).evaluate("b")
+	require.Equal(t, fbTierShelf, ev.Tier, "held minority: %v", ev.Evidence)
+	require.Equal(t, dir, ev.Root, "root comes from the majority shelf")
+	require.Equal(t, 10, ev.N)
+
+	ev = fbMixedLib(major, minor, nil).evaluate("b")
+	require.Equal(t, fbTierMixedShelf, ev.Tier, "orphan minority: %v", ev.Evidence)
+	require.False(t, fbApplicableTier(ev.Tier))
+
+	// Two even halves: no majority shelf, so it is listed, not applied.
+	half := []string{"/lib/Bruce Wayne/A/A.m4a", "/lib/Bruce Wayne/B/B.m4a", "/lib/Bruce Wayne/C/C.m4a",
+		"/lib/Bruce Wayne/D/D.m4a", "/lib/Bruce Wayne/E/E.m4a"}
+	held := map[string]bool{}
+	for _, p := range half {
+		held[p] = true
+	}
+	ev = fbMixedLib(major[:5], half, held).evaluate("b")
+	require.Equal(t, fbTierMixedShelf, ev.Tier, "no 80%% majority: %v", ev.Evidence)
+
+	// A mixed-shelf book that is not a folder-book on its majority stays
+	// unflagged: a real book with a copy on each shelf is not listed.
+	ev = fbMixedLib([]string{dir + "/Hush/01.mp3", dir + "/Hush/02.mp3", dir + "/Hush/03.mp3", dir + "/Hush/04.mp3"},
+		[]string{"/lib/Bruce Wayne/Hush/Hush.m4b"}, nil).evaluate("b")
+	require.Equal(t, "", ev.Tier, "%v", ev.Evidence)
 }
 
 func filepath0(paths []string) string { return paths[0] }
