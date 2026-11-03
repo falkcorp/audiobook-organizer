@@ -1,5 +1,5 @@
 // file: internal/transcribe/canary_memory_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5b0f7c1e-2d64-4f0b-9a57-3c8e1d6a9b42
 // last-edited: 2026-11-03
 
@@ -915,6 +915,42 @@ func TestSingle_ACancelAfterTheGateReturnsTheCancellationAndSendsNothing(t *test
 				t.Errorf("canaries = %v, sends = %d: a cancelled op asks and sends nothing", rec.asked, len(p.sendLog()))
 			}
 			requireNoStrikes(t, res)
+		})
+	}
+}
+
+// N-f: an op already cancelled when the dispatch starts (as one cancelled during
+// the gate's probes is) returns the cancellation, with the canary unasked and no
+// job sent. The cut-short probe left the port's identity unresolved, so the
+// machine was not recognised as remembered: the dispatch sent every job to the
+// machine that had failed the clip and ended with a nil error.
+func TestSingle_ACancelBeforeTheCooldownWaitReturnsTheCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		cooldown bool
+	}{
+		{"machine in cooldown", true},
+		{"machine out of cooldown", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortenPacing(t, 10*time.Millisecond, time.Minute)
+			p := rememberedMachine(t, 1)
+			if tc.cooldown {
+				markEndpointFailure(p.h.eps[0].URL)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			rec := &canaryRecorder{}
+			res, err := dispatchWith(ctx, p, rec.fn, 8)
+			if !errors.Is(err, context.Canceled) || IsPoolUnavailable(err) {
+				t.Fatalf("err = %v, want the cancellation", err)
+			}
+			if rec.count() != 0 || len(p.sendLog()) != 0 || len(res) != 0 {
+				t.Errorf("canaries = %v, sends = %d, results = %d: nothing may be asked or sent", rec.asked, len(p.sendLog()), len(res))
+			}
+			if !failedCanaryBefore(batKey) {
+				t.Error("a cancelled dispatch is no verdict: the machine must stay remembered")
+			}
 		})
 	}
 }
