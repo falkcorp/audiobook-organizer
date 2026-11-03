@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -113,17 +113,43 @@
 // shelf), its base verdict is applicable (fbEval.BaseTier, kept when Tier is
 // overwritten with mixed-shelf), its majority shelf holds at least
 // fbMajorityShelf of the files, and EVERY hold is one the owner may resolve:
-// the second shelf itself, and a new book for files in the library folder
-// (never an import path; created library_state organized). Every other hold
+// the second shelf itself, a new book for files in the library folder (never
+// an import path; created library_state organized), and a duplicate title that
+// resolves to exactly one live book (a version link, below). Every other hold
 // (deep, root folder, too large, resolved, unclear, split, fragmentary, an
 // iTunes id, progress, no heir, a duplicate no link can resolve) stays hard.
 // The apply is the ordinary Apply, run only for the owner's own click on the
 // row (repairs.OwnerApplyFor on ctx, plus the plan under the lock still marking
 // it). A row that is not mixed-shelf but whose every hold is owner-resolvable
 // stays listed and carries fbFlagSingleShelfOwnerResolvable, which is how the
-// owner measures that population. A duplicate title that resolves to exactly
-// one live book is owner-resolvable only by a version link the apply cannot
-// write yet (fbLinkApplyReady): such a row is not offered.
+// owner measures that population.
+//
+// VERSION LINK (owner decision 2026-11-03, owner rows only). An orphan group
+// whose core title and author (the same author id; an authorless group or
+// book never links) name exactly one live book, or exactly one version group,
+// is created as a NON-PRIMARY member of that book's group instead of a
+// duplicate book. A target with no group gets a group minted first (an id
+// derived from the row, fbLink.Mint) and becomes its explicit primary
+// (repair_version_group_join, journaled on the target before it writes); the
+// new book is born hidden in the group as an explicit non-primary member and
+// un-hidden last. The target's own group, its other members and its primary
+// are never written. A plain apply never links: its row keeps
+// skipped_duplicate_title, and its evidence names the would-be target.
+// Plan and Replan both render the link's fingerprint from the target as THEY
+// read it (live, core title, author, current group), so a target retitled,
+// moved to another group or deleted since the plan changes the row; apply
+// re-checks all of it again under the merge lock (linkNow) and the group lock.
+//
+// ADOPTION. An owner row never resumes (a cut-off apply cannot be continued
+// in the same operation), and the books a cut-off apply created are hidden
+// ones that a fresh plan would read as "previously resolved" for good. A
+// hidden book with this row's own created id is therefore ADOPTED by the next
+// apply when this fixer's journal shows an un-reverted repair_book_create row
+// for exactly that book (id, title, author, file_path and version group): the
+// new operation journals the create again with AdoptedFrom, supersedes the
+// old row (so reverting the old operation cannot hide the book twice), and
+// finishes the rows and the un-hide. A book whose create was reverted stays
+// resolved.
 //
 // iTunes. The owner allowed this fixer, DATABASE ONLY, on books under
 // books/itunes/** (2026-10-01; ITunesDatabaseOnly opts it out of the
@@ -136,8 +162,11 @@
 // a live primary book holds (itunes/cleanup_merged.go PathHeldSkipped).
 //
 // UNDO. Every write is journaled first: repair_book_create (revert
-// soft-deletes the created book, refused when its rows moved or it joined a
-// version group), book_file_create (record-only), book_primary_demote,
+// soft-deletes the created book, refused when its rows moved, it joined a
+// version group other than the one it was created in, or it was crowned),
+// repair_version_group_join (a mint; revert puts the target's group and
+// primary flag back exactly, refused when the target changed or another live
+// book joined the group), book_file_create (record-only), book_primary_demote,
 // book_primary_handoff, book_path_update, book_soft_delete.
 //
 // CONCURRENCY. Plan evaluates candidates and builds rows on bounded RunItems
@@ -265,12 +294,6 @@ const (
 	// fbReasonBooks caps the new books fbOwnerReason lists.
 	fbReasonBooks = 20
 )
-
-// fbLinkApplyReady is false until the apply can link a new book into an
-// existing book's version group (the owner-only resolution of a duplicate
-// title). Until then a row whose only owner-resolvable block is such a
-// duplicate is not offered to the owner: its apply would refuse under the lock.
-const fbLinkApplyReady = false
 
 // Detection thresholds (the census's).
 const (
@@ -698,7 +721,7 @@ func fbTitleKey(title string, author *int) string {
 // live book holding one of their paths, for each such book that is itself a
 // candidate the holders of ITS paths (its P count), and the version groups of
 // the folder-books. Point reads only.
-func (f *folderBooksFixer) loadPartial(store OpsStore, hist FragmentRepairReader, members []string) (*fbLib, error) {
+func (f *folderBooksFixer) loadPartial(store OpsStore, hist FragmentRepairReader, members []string, extra ...string) (*fbLib, error) {
 	lib := newFBLib()
 	seen := map[string]bool{}
 	load := func(id string) error {
@@ -790,6 +813,13 @@ func (f *folderBooksFixer) loadPartial(store OpsStore, hist FragmentRepairReader
 			if err := load(group[i].ID); err != nil {
 				return nil, err
 			}
+		}
+	}
+	// The books a plan links its new books to (fbLink.Target): read for the
+	// fingerprint and the guards, never holders of the row's paths.
+	for _, id := range extra {
+		if err := load(id); err != nil {
+			return nil, err
 		}
 	}
 	lib.finish()
@@ -1349,7 +1379,9 @@ func (f *folderBooksFixer) Description() string {
 		"hides the folder-book (soft-deleted with its file rows kept; primacy handed to the real book first). " +
 		"Database only, including for iTunes books. A row whose files also sit on a second shelf (mixed-shelf) " +
 		"and whose only holds are ones the owner may resolve (a library-folder file needing a new book, created " +
-		"organized) is applied only by the owner's own click on that row. Deep-tier, split, fragmentary and " +
+		"organized; or a title and author that already name ONE live book or version group, the new book " +
+		"then joining that group as a non-primary version) is applied only by the owner's own click on that row. " +
+		"Deep-tier, split, fragmentary and " +
 		"Doctor Who / Big Finish / Torchwood rows are listed only. Every step is undoable from the apply operation."
 }
 
@@ -1388,9 +1420,34 @@ type fbState struct {
 	DupTitles []string `json:"dup_titles,omitempty"`
 	// DupSingle: every duplicate in DupTitles is a title match that resolves
 	// to ONE live book (or one version group), the case an owner apply can
-	// resolve by linking the new book in (fbBlock.link). False when any
+	// resolve by linking the new book in (fbLink). False when any
 	// duplicate is a book at the group's path or names several books.
 	DupSingle bool `json:"dup_single,omitempty"`
+	// Links is each orphan group's version-link target (fbLink), the verdict
+	// only a full read can make; present exactly when DupSingle is.
+	Links []fbLink `json:"links,omitempty"`
+}
+
+// fbLink says an orphan group becomes a non-primary version of a live book
+// that already is the work: owner rows only (Q2). Target is a live book in
+// the group (the smallest id of the matching members); Group is the version
+// group it is in at plan time, or "" when it is in none, in which case Mint is
+// the id of the group the apply puts it in as the primary (deterministic from
+// the row and the target, so a re-plan and an adopting apply agree).
+type fbLink struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Target string `json:"target"`
+	Group  string `json:"group,omitempty"`
+	Mint   string `json:"mint,omitempty"`
+}
+
+// GroupID is the group the new book joins.
+func (l fbLink) GroupID() string {
+	if l.Group != "" {
+		return l.Group
+	}
+	return l.Mint
 }
 
 // fbNewFile is one book_file row a group copies.
@@ -1418,6 +1475,18 @@ type fbPlan struct {
 	Members []string // the row's folder-books
 	State   string   // library_state for created books
 	Groups  []fbGroup
+	// Links holds the version links (owner rows only), at most one per group.
+	Links []fbLink
+}
+
+// link is the version link of the group with key, nil for a new book.
+func (p *fbPlan) link(key string) *fbLink {
+	for i := range p.Links {
+		if p.Links[i].Key == key {
+			return &p.Links[i]
+		}
+	}
+	return nil
 }
 
 // Plan evaluates every candidate on a bounded pool and builds one row per
@@ -1655,6 +1724,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		key, lbl, dir, root string
 	}
 	var orphans []orphan
+	var adoptCands []fbAdoptCand
 	keyHeld := map[string]bool{} // a group key with a path a proper book holds
 	// strayMinor: files off the lead's shelf that no proper book or smaller
 	// folder-book holds (evaluate's gate counts any other holder, so it can
@@ -1746,11 +1816,19 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		}
 		if cls == "orphan" {
 			for _, h := range lib.dead[p] {
-				if !isMember[h] {
-					resolved = append(resolved, fmt.Sprintf("%s (book %s)", p, h))
-					fp = append(fp, "r:"+p+"|"+h)
-					break
+				if isMember[h] {
+					continue
 				}
+				if h == fbCreatedID(row.RowID, members[0], k) {
+					// The hidden book of a cut-off apply of THIS row: resolved
+					// only if it cannot be adopted (decided once the groups
+					// are built, f.adoptable).
+					adoptCands = append(adoptCands, fbAdoptCand{id: h, key: k, path: p})
+					continue
+				}
+				resolved = append(resolved, fmt.Sprintf("%s (book %s)", p, h))
+				fp = append(fp, "r:"+p+"|"+h)
+				break
 			}
 		}
 		if cls != "held" && cls != "folder" && lib.shelfOf(p) != lead.Shelf {
@@ -1820,8 +1898,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	seenTitle := map[string]bool{}
 	dup := []string{}
 	dupSingle := false
+	var links []fbLink
 	if carried != nil {
-		dup, dupSingle = carried.DupTitles, carried.DupSingle
+		dup, dupSingle, links = append(dup, carried.DupTitles...), carried.DupSingle, carried.Links
 	}
 	dupHard := false // a duplicate no single link target can resolve
 	for i := range plan.Groups {
@@ -1885,10 +1964,12 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			targets := map[string]bool{}
 			flagged := false
 			named := ""
+			var matches []string
 			for _, id := range same {
 				if isMember[id] {
 					continue
 				}
+				matches = append(matches, id)
 				if named == "" {
 					named = id
 				}
@@ -1903,8 +1984,10 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			}
 			if named != "" {
 				dup = append(dup, fmt.Sprintf("%q is already book %s", g.Title, named))
-				if flagged || len(targets) != 1 {
+				if l, ok := fbPlanLink(lib, row.RowID, members[0], g, matches); !ok || flagged || len(targets) != 1 {
 					dupHard = true
+				} else {
+					links = append(links, l)
 				}
 			}
 			for _, at := range []string{g.Dir, g.Path} {
@@ -1925,13 +2008,71 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			fp = append(fp, "a:"+strconv.Itoa(*a))
 		}
 	}
+	groupIdx := map[string]int{}
+	for i := range plan.Groups {
+		groupIdx[plan.Groups[i].Key] = i
+	}
+	// Each link, as this read sees its target. Plan and Replan render the
+	// entry from lib alike, so a target changed since the plan changes the
+	// fingerprint (the carried verdict alone could never show it).
+	var linkFP []string
+	var kept []fbLink
+	for _, l := range links {
+		gi, ok := groupIdx[l.Key]
+		if !ok {
+			continue // its group is gone: the groups' fingerprint has changed
+		}
+		entry, why := fbLinkState(lib, plan.Groups[gi], l)
+		linkFP = append(linkFP, entry)
+		if why != "" {
+			dup = append(dup, why)
+			dupHard = true
+			continue
+		}
+		kept = append(kept, l)
+	}
 	if carried == nil {
 		dupSingle = len(dup) > 0 && !dupHard
+	} else {
+		// A carried verdict stands only while every link it named still holds
+		// (a state from before links existed names none: refused).
+		dupSingle = carried.DupSingle && !dupHard && len(kept) > 0 && len(kept) == len(carried.Links)
+	}
+	if dupSingle {
+		plan.Links = kept
+		fp = append(fp, linkFP...)
+	}
+	// A hidden book of this row's cut-off apply is adopted by the next apply
+	// when this fixer's journal says it created exactly that book; else its
+	// files were resolved once (a reverted apply stays skipped_previously_resolved).
+	adoptSeen := map[string]bool{}
+	for _, c := range adoptCands {
+		if adoptSeen[c.id] {
+			continue
+		}
+		adoptSeen[c.id] = true
+		var prev *database.OperationChange
+		var aerr error
+		if gi, ok := groupIdx[c.key]; ok {
+			var lk *fbLink
+			if dupSingle {
+				lk = plan.link(c.key)
+			}
+			prev, aerr = f.adoptable(store, fbCreateValue(c.id, plan.Groups[gi], lk))
+		}
+		switch {
+		case aerr != nil:
+			unreadable = append(unreadable, fmt.Sprintf("%s (adoption of book %s: %v)", c.path, c.id, aerr))
+			fp = append(fp, "r:"+c.path+"|"+c.id)
+		case prev == nil:
+			resolved = append(resolved, fmt.Sprintf("%s (book %s)", c.path, c.id))
+			fp = append(fp, "r:"+c.path+"|"+c.id)
+		}
 	}
 	if lead.BaseTier != lead.Tier {
 		fp = append(fp, "base="+lead.BaseTier)
 	}
-	st, err := json.Marshal(fbState{Members: members, DupTitles: dup, DupSingle: dupSingle})
+	st, err := json.Marshal(fbState{Members: members, DupTitles: dup, DupSingle: dupSingle, Links: plan.Links})
 	if err != nil {
 		row.Skipped, row.SkipReason = fbSkipUnreadable, fmt.Sprintf("encode the row's state: %v", err)
 		// Unique per row like every other fingerprint, never a shared constant.
@@ -1942,6 +2083,20 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	row.Proposed = map[string]string{"held": strconv.Itoa(held), "held_by_folder_row": strconv.Itoa(byFolder),
 		"missing_orphans": strconv.Itoa(missingOrphans), "new_books": strconv.Itoa(len(plan.Groups)),
 		"retire": strings.Join(members, ",")}
+	if len(plan.Links) > 0 {
+		minted := map[string]bool{}
+		for _, l := range plan.Links {
+			if l.Group == "" {
+				minted[l.Mint] = true
+			}
+		}
+		row.Proposed["linked_versions"] = strconv.Itoa(len(plan.Links))
+		row.Proposed["minted_groups"] = strconv.Itoa(len(minted))
+		for _, l := range plan.Links {
+			row.Evidence = append(row.Evidence, fmt.Sprintf("%q names live book %s (%s): an owner apply adds the new book "+
+				"there as a non-primary version; a plain apply skips it", l.Title, l.Target, fbLinkGroupText(l)))
+		}
+	}
 	for i, g := range plan.Groups {
 		if i == 20 {
 			row.Evidence = append(row.Evidence, fmt.Sprintf("... and %d more new books", len(plan.Groups)-20))
@@ -1968,6 +2123,14 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 					row.BookIDs = append(row.BookIDs, id)
 				}
 			}
+		}
+	}
+	// A link's target is written too when it has no group yet (the mint), and
+	// the guards read it.
+	for _, l := range plan.Links {
+		if !inRow[l.Target] {
+			inRow[l.Target] = true
+			row.BookIDs = append(row.BookIDs, l.Target)
 		}
 	}
 	sort.Strings(row.BookIDs)
@@ -2024,8 +2187,8 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 			"would be a second, partial copy: %s", len(split), strings.Join(fbFirst(split, 5), "; ")), false)
 	}
 	if len(dup) > 0 {
-		blocks = append(blocks, fbBlock{kind: fbSkipDupTitle, ownerOK: dupSingle, link: true,
-			why: fmt.Sprintf("a new book's title and author already name a live book: %s", strings.Join(fbFirst(dup, 5), "; "))})
+		block(fbSkipDupTitle, fmt.Sprintf("a new book's title and author already name a live book: %s",
+			strings.Join(fbFirst(dup, 5), "; ")), dupSingle)
 	}
 	if len(fragmentary) > 0 {
 		block(fbSkipFragmentary, fmt.Sprintf("%d orphan group(s) shorter than the chapter-consolidation threshold would become "+
@@ -2058,9 +2221,6 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 		// shelf stay listed; the flag counts them (Plan reports the total),
 		// so the population is measured before anyone widens the rule.
 		row.Flags = append(row.Flags, fbFlagSingleShelfOwnerResolvable)
-	case fbLinkPending(blocks):
-		// The owner could resolve it, but only by linking the new book into
-		// an existing version group, which the apply cannot do yet.
 	default:
 		row.OwnerApplicable = true
 		row.OwnerApplyReason = fbOwnerReason(lead, len(set), held, byFolder, missingPaths, plan, blocks, members)
@@ -2075,9 +2235,6 @@ type fbBlock struct {
 	// ownerOK: the owner's own click may resolve it, after reading the row's
 	// preview. Every block not marked so is a hard one that stops the row.
 	ownerOK bool
-	// link: resolving it needs the new book linked into an existing book's
-	// version group, which the apply does not do yet (fbLinkApplyReady).
-	link bool
 }
 
 func fbAllOwnerOK(blocks []fbBlock) bool {
@@ -2092,20 +2249,6 @@ func fbAllOwnerOK(blocks []fbBlock) bool {
 func fbHasKind(blocks []fbBlock, kind string) bool {
 	for _, b := range blocks {
 		if b.kind == kind {
-			return true
-		}
-	}
-	return false
-}
-
-// fbLinkPending: some block can be resolved only by a version link the apply
-// cannot write yet.
-func fbLinkPending(blocks []fbBlock) bool {
-	if fbLinkApplyReady {
-		return false
-	}
-	for _, b := range blocks {
-		if b.link {
 			return true
 		}
 	}
@@ -2165,6 +2308,19 @@ func fbOwnerReason(lead fbEval, files, held, byFolder int, missing []string, pla
 		}
 		b.WriteString(strings.Join(parts, "; "))
 		b.WriteString(". ")
+	}
+	if len(plan.Links) > 0 {
+		minted := map[string]bool{}
+		var parts []string
+		for _, l := range plan.Links {
+			if l.Mint != "" {
+				minted[l.Mint] = true
+			}
+			parts = append(parts, fmt.Sprintf("%q joins live book %s %s", l.Title, l.Target, fbLinkGroupText(l)))
+		}
+		fmt.Fprintf(&b, "%d new book(s) are linked as non-primary versions of a live book that already is the work "+
+			"(%d new version group(s) made, the live book their primary; a plain apply skips these): %s. ",
+			len(plan.Links), len(minted), strings.Join(fbFirst(parts, fbReasonBooks), "; "))
 	}
 	fmt.Fprintf(&b, "Then folder-book(s) %s are retired (hidden, file rows kept). Held back from a plain apply by: ",
 		strings.Join(members, ", "))
@@ -2279,7 +2435,11 @@ func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	lib, err := f.loadPartial(store, hist, st.Members)
+	var targets []string
+	for _, l := range st.Links {
+		targets = append(targets, l.Target)
+	}
+	lib, err := f.loadPartial(store, hist, st.Members, targets...)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -2375,8 +2535,13 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	if !ok {
 		return fmt.Errorf("%s: row %s carries no plan", fbFixerID, locked.RowID)
 	}
+	if len(plan.Links) > 0 && !ownerRow {
+		// A version link is the owner's alone (Q2): a plain apply never joins a group.
+		return fmt.Errorf("%w: under the merge lock: the row links new books into version groups and needs the owner's apply",
+			repairs.ErrChangedSincePlan)
+	}
 	for _, g := range plan.Groups {
-		if why, err := f.dupNow(store, plan.Members, fbCreatedID(locked.RowID, plan.Members[0], g.Key), g); err != nil {
+		if why, err := f.dupNow(store, plan.Members, fbCreatedID(locked.RowID, plan.Members[0], g.Key), g, plan.link(g.Key)); err != nil {
 			return err
 		} else if why != "" {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
@@ -2396,6 +2561,13 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	for _, g := range plan.Groups {
 		if err := ctx.Err(); err != nil {
 			return partial(err)
+		}
+		if lk := plan.link(g.Key); lk != nil {
+			did, err := f.joinTarget(store, w, g, *lk)
+			steps += did
+			if err != nil {
+				return partial(err)
+			}
 		}
 		did, err := f.applyGroup(store, w, plan, locked.RowID, g)
 		steps += did
@@ -2590,8 +2762,20 @@ func wroteFalseOf(res versionprimary.HandoffResult, id string) bool {
 // library per page and matches authors and narrators too, so a short title
 // ("It") meant hundreds of full scans under the lock, and its raw-substring
 // candidates missed fbNorm-equal titles spelled with other punctuation.
-func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string, g fbGroup) (string, error) {
+func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string, g fbGroup, lk *fbLink) (string, error) {
 	skip := func(id string) bool { return id == ours || contains(members, id) }
+	// The book a link names, or any member of the group it joins (the target
+	// once minted, or a sibling version), is the work the new book is a
+	// version of: the match the link resolves, not a duplicate.
+	linked := func(id string, vg *string) bool {
+		if lk == nil {
+			return false
+		}
+		if id == lk.Target {
+			return true
+		}
+		return vg != nil && strings.TrimSpace(*vg) != "" && strings.TrimSpace(*vg) == lk.GroupID()
+	}
 	for _, at := range []string{g.Dir, g.Path} {
 		if at == "" {
 			continue
@@ -2614,7 +2798,7 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 		}
 		for i := range books {
 			b := books[i]
-			if b.IsSoftDeleted() || skip(b.ID) || fbCoreKey(b.Title) != want {
+			if b.IsSoftDeleted() || skip(b.ID) || fbCoreKey(b.Title) != want || linked(b.ID, b.VersionGroupID) {
 				continue
 			}
 			return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
@@ -2642,9 +2826,283 @@ func (f *folderBooksFixer) dupNow(store OpsStore, members []string, ours string,
 		if g.AuthorID != nil && b.AuthorID != nil && *b.AuthorID != *g.AuthorID {
 			continue
 		}
+		if linked(b.ID, b.VersionGroupID) {
+			continue
+		}
 		return fmt.Sprintf("%q is already book %s", g.Title, b.ID), nil
 	}
 	return "", nil
+}
+
+// fbAdoptCand is a path whose only other holder is the hidden book this row's
+// own earlier apply created (fbCreatedID): adoptable when that apply's journal
+// says it created exactly the book this plan would.
+type fbAdoptCand struct{ id, key, path string }
+
+// fbJoinField is the field name of a repair_version_group_join row.
+const fbJoinField = "version_group_id"
+
+// fbGroupOf is b's version group, trimmed; "" for none.
+func fbGroupOf(vg *string) string {
+	if vg == nil {
+		return ""
+	}
+	return strings.TrimSpace(*vg)
+}
+
+// fbMintID is the id of the version group an owner apply of row rowID makes
+// for the ungrouped link target: a ULID carrying the target's timestamp, its
+// entropy taken from the row and the target, so a resumed apply, a re-plan and
+// an adopting operation all name the same group.
+func fbMintID(rowID, target string) string {
+	var ms uint64
+	if u, err := ulid.Parse(target); err == nil {
+		ms = u.Time()
+	}
+	h := sha256.Sum256([]byte(rowID + "\x00mint\x00" + target))
+	id, err := ulid.New(ms, bytes.NewReader(h[:]))
+	if err != nil {
+		return "fbg" + hex.EncodeToString(h[:12]) // unreachable: 32 bytes of entropy
+	}
+	return id.String()
+}
+
+// fbPlanLink decides whether orphan group g, whose core title matches the live
+// books matches, is a version of them. Strictly: the group and EVERY match
+// carry the same author (an authorless group or match stays a hard duplicate,
+// because the title alone does not say it is the same work). The caller has
+// already required the matches to collapse to one version group or one
+// ungrouped book and none of them to be a flagged folder-book.
+func fbPlanLink(lib *fbLib, rowID, leadID string, g *fbGroup, matches []string) (fbLink, bool) {
+	if g.AuthorID == nil || len(matches) == 0 {
+		return fbLink{}, false
+	}
+	target := ""
+	for _, id := range matches {
+		b, ok := lib.books[id]
+		if !ok || b.AuthorID == nil || *b.AuthorID != *g.AuthorID {
+			return fbLink{}, false
+		}
+		if target == "" || id < target {
+			target = id
+		}
+	}
+	l := fbLink{Key: g.Key, Title: g.Title, Target: target}
+	mint := fbMintID(rowID, target)
+	switch vg := fbGroupOf(lib.books[target].VersionGroupID); vg {
+	case "", mint:
+		// No group yet, or the one an earlier cut-off apply of this row
+		// minted for it: either way this apply owns the mint.
+		l.Mint = mint
+	default:
+		l.Group = vg
+	}
+	return l, true
+}
+
+// fbLinkState renders link l as lib sees its target, for the fingerprint, and
+// says why the link no longer holds ("" while it does): the target must still
+// be a live book of the group's work, in the group the plan saw. A target in
+// the group this row minted for it counts as ungrouped (a resumed apply).
+func fbLinkState(lib *fbLib, g fbGroup, l fbLink) (entry, why string) {
+	b, ok := lib.books[l.Target]
+	if !ok {
+		return fmt.Sprintf("l:%s|%s|gone", l.Key, l.Target),
+			fmt.Sprintf("%q: link target %s is no longer a live book", g.Title, l.Target)
+	}
+	grp := fbGroupOf(b.VersionGroupID)
+	if l.Mint != "" && grp == l.Mint {
+		grp = ""
+	}
+	author := -1
+	if b.AuthorID != nil {
+		author = *b.AuthorID
+	}
+	entry = fmt.Sprintf("l:%s|%s|%s|%s|%d", l.Key, l.Target, grp, fbCoreKey(b.Title), author)
+	switch {
+	case fbCoreKey(b.Title) != fbCoreKey(g.Title):
+		why = fmt.Sprintf("%q: link target %s is now titled %q", g.Title, l.Target, b.Title)
+	case g.AuthorID == nil || b.AuthorID == nil || *b.AuthorID != *g.AuthorID:
+		why = fmt.Sprintf("%q: link target %s now has another author", g.Title, l.Target)
+	case grp != l.Group:
+		why = fmt.Sprintf("%q: link target %s is now in version group %q, not %q", g.Title, l.Target, grp, l.Group)
+	}
+	return entry, why
+}
+
+// fbLinkGroupText says where link l puts the new book, for the preview.
+func fbLinkGroupText(l fbLink) string {
+	if l.Group != "" {
+		return "in version group " + l.Group
+	}
+	return "in no version group: it becomes the primary of a new one"
+}
+
+// fbCreateValue is the repair_book_create value of the book created for group
+// g under id (lk is its version link, nil for a plain new book).
+func fbCreateValue(id string, g fbGroup, lk *fbLink) undo.RepairBookCreateValue {
+	v := undo.RepairBookCreateValue{ID: id, Title: g.Title, AuthorID: g.AuthorID, FilePath: g.Path}
+	if lk != nil {
+		v.VersionGroupID = lk.GroupID()
+	}
+	return v
+}
+
+// openChanges are the rows of book id's journal that are this fixer's, of the
+// given type, not reverted and not voided, newest first.
+func (f *folderBooksFixer) openChanges(store OpsStore, id, changeType string) ([]*database.OperationChange, error) {
+	all, err := store.GetBookChanges(id)
+	if err != nil {
+		return nil, fmt.Errorf("journal of book %s: %w", id, err)
+	}
+	var out []*database.OperationChange
+	for _, c := range all {
+		if c != nil && c.ChangeType == changeType && c.Source == fbFixerID && c.RevertedAt == nil && !c.Voided {
+			out = append(out, c)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedSeq != out[j].CreatedSeq {
+			return out[i].CreatedSeq > out[j].CreatedSeq
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+// adoptable is the journal row of an earlier operation of THIS fixer that
+// created exactly the book want (same id, title, author, file_path and
+// version group) and has not been reverted: a hidden book a cut-off apply
+// left is finished by the next operation only on that evidence. nil when
+// nothing says so (a reverted apply, another fixer's book, a different plan).
+func (f *folderBooksFixer) adoptable(store OpsStore, want undo.RepairBookCreateValue) (*database.OperationChange, error) {
+	rows, err := f.openChanges(store, want.ID, undo.ChangeTypeRepairBookCreate)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	// Only the newest open row speaks for the book.
+	if v, _, ok := undo.ParseRepairBookCreateValue(want.ID, rows[0].NewValue); ok && v.SameBook(want) {
+		return rows[0], nil
+	}
+	return nil, nil
+}
+
+// supersedeOpen hands the open rows of type changeType that operation fromOp
+// journaled on book id to the writer's operation (SupersedeChanges): this
+// operation has journaled the same changes and owns them now. Idempotent.
+func (f *folderBooksFixer) supersedeOpen(store OpsStore, w *repairs.Writer, id, changeType, fromOp string) error {
+	rows, err := f.openChanges(store, id, changeType)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for _, c := range rows {
+		if c.OperationID == fromOp {
+			ids = append(ids, c.ID)
+		}
+	}
+	if err := w.SupersedeChanges(fromOp, ids); err != nil {
+		return fmt.Errorf("hand over operation %s's %s rows on %s: %w", fromOp, changeType, id, err)
+	}
+	return nil
+}
+
+// joinTarget makes the link target ready for the new book to join its group:
+// a target in a group needs nothing (the group is verified); an ungrouped one
+// is put into the minted group as that group's explicit primary, journaled
+// first (repair_version_group_join) so the revert, which hides the created
+// book before it un-mints, restores the old group state exactly. A target an
+// earlier cut-off operation of this fixer already minted is adopted: this
+// operation journals the same join and takes over the old row.
+func (f *folderBooksFixer) joinTarget(store OpsStore, w *repairs.Writer, g fbGroup, lk fbLink) (int, error) {
+	stale := func(format string, a ...any) error {
+		return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, fmt.Sprintf(format, a...))
+	}
+	if lk.Mint != "" {
+		// The no-group stripe and the new group's: a book moves from none into one.
+		defer versionprimary.LockGroups("", lk.Mint)()
+	}
+	b, err := store.GetBookByID(lk.Target)
+	if err != nil {
+		return 0, fmt.Errorf("read link target %s: %w", lk.Target, err)
+	}
+	switch {
+	case b == nil || b.IsSoftDeleted():
+		return 0, stale("link target %s of %q is gone", lk.Target, g.Title)
+	case fbCoreKey(b.Title) != fbCoreKey(g.Title) || g.AuthorID == nil || b.AuthorID == nil || *b.AuthorID != *g.AuthorID:
+		return 0, stale("link target %s is no longer the work %q", lk.Target, g.Title)
+	}
+	cur := fbGroupOf(b.VersionGroupID)
+	if lk.Mint == "" {
+		if cur != lk.Group {
+			return 0, stale("link target %s is now in version group %q, not %q", lk.Target, cur, lk.Group)
+		}
+		return 0, nil
+	}
+	switch cur {
+	case "":
+		old := undo.StateOfBook(b)
+		yes := true
+		now := undo.VersionGroupState{Group: &lk.Mint, Primary: &yes}
+		oldV, err := old.Encode()
+		if err != nil {
+			return 0, err
+		}
+		newV, err := now.Encode()
+		if err != nil {
+			return 0, err
+		}
+		err = w.JournalStep(lk.Target, repairs.UndoEntry{ChangeType: undo.ChangeTypeRepairVersionGroupJoin,
+			Field: fbJoinField, Old: oldV, New: newV}, func() error {
+			_, err := w.Modify(lk.Target, func(cb *database.Book) error {
+				if err := versionprimary.CheckMembership(cb, ""); err != nil {
+					return fmt.Errorf("%w: %v", repairs.ErrChangedSincePlan, err)
+				}
+				if !undo.StateOfBook(cb).Same(old) {
+					return fmt.Errorf("%w: link target %s changed its primary flag since it was read", repairs.ErrChangedSincePlan, lk.Target)
+				}
+				now.Apply(cb)
+				return nil
+			})
+			return err
+		})
+		if err != nil {
+			return 0, fmt.Errorf("put %s into version group %s: %w", lk.Target, lk.Mint, err)
+		}
+		if fbCrashHook != nil {
+			if err := fbCrashHook("mint", 0); err != nil {
+				return 1, err
+			}
+		}
+		return 1, nil
+	case lk.Mint:
+		if _, ours, err := w.JournaledValue(lk.Target, undo.ChangeTypeRepairVersionGroupJoin, fbJoinField); err != nil {
+			return 0, err
+		} else if ours {
+			return 0, nil // this operation minted it before it was cut off
+		}
+		prior, err := f.openChanges(store, lk.Target, undo.ChangeTypeRepairVersionGroupJoin)
+		if err != nil {
+			return 0, err
+		}
+		for _, c := range prior {
+			if _, now, derr := undo.DecodeVersionGroupJoin(c); derr == nil && now.GroupID() == lk.Mint && c.OperationID != w.OpID() {
+				if err := w.Journal(lk.Target, undo.ChangeTypeRepairVersionGroupJoin, c.FieldName, c.OldValue, c.NewValue); err != nil {
+					return 0, err
+				}
+				if err := f.supersedeOpen(store, w, lk.Target, undo.ChangeTypeRepairVersionGroupJoin, c.OperationID); err != nil {
+					return 0, err
+				}
+				return 0, nil
+			}
+		}
+		return 0, stale("link target %s is in version group %s, which no open operation of this fixer made", lk.Target, lk.Mint)
+	default:
+		return 0, stale("link target %s is now in version group %q, not none", lk.Target, cur)
+	}
 }
 
 // applyGroup creates (or, on a resumed apply, finishes) one orphan group's
@@ -2662,20 +3120,67 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 	if path == "" {
 		return steps, fmt.Errorf("%s: group %q carries no file_path", fbFixerID, g.Title)
 	}
-	val, err := undo.RepairBookCreateValue{ID: target, Title: g.Title, AuthorID: g.AuthorID, FilePath: path}.Encode()
+	lk := plan.link(g.Key)
+	want := fbCreateValue(target, g, lk)
+	val, err := want.Encode()
 	if err != nil {
 		return steps, err
+	}
+	gid := ""
+	if lk != nil {
+		gid = lk.GroupID()
+		// The group's stripe is held from the create to the un-hide, so no
+		// reader of the group sees the new member half-made. Merge lock
+		// first (Apply holds it), then this, then each book write lock; it is
+		// released before the hand-off (Crown takes the stripe itself).
+		defer versionprimary.LockGroups(gid)()
 	}
 	cur, err := store.GetBookByID(target)
 	if err != nil {
 		return steps, fmt.Errorf("read %s: %w", target, err)
 	}
 	if cur != nil {
-		if _, ours, err := w.JournaledValue(target, undo.ChangeTypeRepairBookCreate, "book"); err != nil {
+		if lk != nil {
+			if err := fbCheckJoined(cur, gid); err != nil {
+				return steps, fmt.Errorf("%w: created book %s: %v", repairs.ErrChangedSincePlan, target, err)
+			}
+		}
+		prior, ours, err := w.JournaledValue(target, undo.ChangeTypeRepairBookCreate, "book")
+		if err != nil {
 			return steps, err
-		} else if !ours {
-			return steps, fmt.Errorf("%w: book %s for %q exists and this operation did not create it",
-				repairs.ErrChangedSincePlan, target, g.Title)
+		}
+		if ours {
+			// Resumed. An operation that adopted the book may have been cut
+			// off before it handed over the earlier operation's row: finish it.
+			if v, _, ok := undo.ParseRepairBookCreateValue(target, prior); ok && v.AdoptedFrom != "" {
+				if err := f.supersedeOpen(store, w, target, undo.ChangeTypeRepairBookCreate, v.AdoptedFrom); err != nil {
+					return steps, err
+				}
+			}
+		} else {
+			// A hidden book from an earlier operation: finished only when
+			// that operation's un-reverted journal says it created exactly
+			// this book (adoptable). Journal first, then take over its row.
+			old, err := f.adoptable(store, want)
+			if err != nil {
+				return steps, err
+			}
+			if old == nil {
+				return steps, fmt.Errorf("%w: book %s for %q exists and no un-reverted operation of this fixer created it",
+					repairs.ErrChangedSincePlan, target, g.Title)
+			}
+			adopted := want
+			adopted.AdoptedFrom = old.OperationID
+			av, err := adopted.Encode()
+			if err != nil {
+				return steps, err
+			}
+			if err := w.Journal(target, undo.ChangeTypeRepairBookCreate, "book", "", av); err != nil {
+				return steps, err
+			}
+			if err := f.supersedeOpen(store, w, target, undo.ChangeTypeRepairBookCreate, old.OperationID); err != nil {
+				return steps, err
+			}
 		}
 	} else {
 		if err := w.Journal(target, undo.ChangeTypeRepairBookCreate, "book", "", val); err != nil {
@@ -2690,6 +3195,11 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		at := f.now().UTC()
 		nb := &database.Book{ID: target, Title: g.Title, AuthorID: g.AuthorID, FilePath: path, LibraryState: &state,
 			MarkedForDeletion: &hidden, MarkedForDeletionAt: &at}
+		if lk != nil {
+			// A non-primary version of the link target's group, explicit.
+			vg, notPrimary := gid, false
+			nb.VersionGroupID, nb.IsPrimaryVersion = &vg, &notPrimary
+		}
 		if _, err := store.CreateBook(nb); err != nil {
 			return steps, fmt.Errorf("create book %q: %w", g.Title, err)
 		}
@@ -2782,6 +3292,11 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 	}
 	// Last: un-hide. The create row's revert hides it again.
 	if _, err := w.Modify(target, func(b *database.Book) error {
+		if lk != nil {
+			if err := fbCheckJoined(b, gid); err != nil {
+				return fmt.Errorf("%w: created book %s: %v", repairs.ErrChangedSincePlan, target, err)
+			}
+		}
 		if !b.IsSoftDeleted() {
 			return database.ErrSkipBookWrite
 		}
@@ -2821,6 +3336,18 @@ func (f *folderBooksFixer) applyGroup(store OpsStore, w *repairs.Writer, plan *f
 		}
 	}
 	return steps, nil
+}
+
+// fbCheckJoined: b is in version group gid as an explicit non-primary member,
+// what a linked book is created as and must still be when it is un-hidden.
+func fbCheckJoined(b *database.Book, gid string) error {
+	if err := versionprimary.CheckMembership(b, gid); err != nil {
+		return err
+	}
+	if b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
+		return fmt.Errorf("book %s is no longer a non-primary member of version group %s", b.ID, gid)
+	}
+	return nil
 }
 
 // errFBRowMoved: a row re-indexed by fbKeepAt no longer names its path.

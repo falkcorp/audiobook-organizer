@@ -1157,7 +1157,7 @@ func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *test
 	idx, err := fx.titleIndex(f.s, "it")
 	require.NoError(t, err)
 	require.Len(t, idx, 250)
-	why, err := fx.dupNow(f.s, nil, "", g)
+	why, err := fx.dupNow(f.s, nil, "", g, nil)
 	require.NoError(t, err)
 	require.Empty(t, why, "another author's same-title books are not duplicates")
 
@@ -1165,7 +1165,7 @@ func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *test
 	idx, err = fx.titleIndex(f.s, "it")
 	require.NoError(t, err)
 	require.Len(t, idx, 251, "the create moved the generation: the index caught up")
-	why, err = fx.dupNow(f.s, nil, "", g)
+	why, err = fx.dupNow(f.s, nil, "", g, nil)
 	require.NoError(t, err)
 	require.Contains(t, why, late, "an authorless fbNorm-equal title after 250 other candidates")
 }
@@ -1375,7 +1375,7 @@ func TestFolderBooksFixer_DupNowIgnoresSeriesSuffixes(t *testing.T) {
 
 	fx := &folderBooksFixer{}
 	check := func(title string, author int) string {
-		why, err := fx.dupNow(f.s, nil, "", fbGroup{Title: title, AuthorID: &author})
+		why, err := fx.dupNow(f.s, nil, "", fbGroup{Title: title, AuthorID: &author}, nil)
 		require.NoError(t, err)
 		return why
 	}
