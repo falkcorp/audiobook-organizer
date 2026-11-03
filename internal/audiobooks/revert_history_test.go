@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
-// last-edited: 2026-10-28
+// last-edited: 2026-11-03
 
 package audiobooks
 
@@ -174,6 +174,18 @@ func TestRevertHistory_EverySiteRecords(t *testing.T) {
 			require.NoError(t, rs.revertRepairBookCreate(&database.OperationChange{ID: "rc1", OperationID: opID, BookID: bk.ID,
 				ChangeType: undo.ChangeTypeRepairBookCreate, NewValue: bk.ID}))
 			return bk.ID, []string{"marked_for_deletion", "marked_for_deletion_at"}
+		}},
+		{"repair_version_group_join", func(t *testing.T, s *database.PebbleStore, rs *RevertService, opID string) (string, []string) {
+			gid, yes := "vg-gotham", true
+			bk, err := s.CreateBook(&database.Book{Title: "B", FilePath: "/x/b", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+			require.NoError(t, err)
+			now, err := undo.VersionGroupState{Group: &gid, Primary: &yes}.Encode()
+			require.NoError(t, err)
+			old, err := undo.VersionGroupState{}.Encode()
+			require.NoError(t, err)
+			require.NoError(t, rs.revertRepairVersionGroupJoin(&database.OperationChange{ID: "vj1", OperationID: opID, BookID: bk.ID,
+				ChangeType: undo.ChangeTypeRepairVersionGroupJoin, FieldName: "version_group_id", OldValue: old, NewValue: now}))
+			return bk.ID, []string{"version_group_id", "is_primary_version"}
 		}},
 		{"settle crown", func(t *testing.T, s *database.PebbleStore, rs *RevertService, opID string) (string, []string) {
 			gid, no, yes := "vg-crown", false, true
