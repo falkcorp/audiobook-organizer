@@ -1331,15 +1331,6 @@ func fbDupGroups(lib *fbLib, ev map[string]fbEval) [][]string {
 
 func fbRowID(members []string) string { return "folder:" + members[0] }
 
-func fbSetPaths(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for p := range set {
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // fbCreatedID is the id of the book row rowID creates for group key: a ULID
 // with the lead folder-book's timestamp and entropy from the row and key, so
 // a resumed apply finds the book its cut-off run created (and a Replan can
