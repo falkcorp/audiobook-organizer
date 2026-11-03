@@ -1,6 +1,6 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
 <!-- version: 1.0.0 -->
-<!-- guid:  -->
+<!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-03 -->
 
 # Platform-core planning operation — state
