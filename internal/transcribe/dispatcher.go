@@ -1,5 +1,5 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
 // last-edited: 2026-11-03
 
@@ -303,6 +303,15 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 		if err := sleepCtx(ctx, min(poolPaceInterval, time.Until(paceUntil))); err != nil {
 			return nil, classifyTransport(endpointURLs(endpoints), err)
 		}
+	}
+	if ctx.Err() != nil {
+		// Cancelled during the gate. Its probes were cut short, so nothing was
+		// learned about any port: a remembered machine's identity (and so its
+		// canary-failure memory) is not resolved, and an empty gate says nothing
+		// about the pool. Going on would send the jobs to a machine that failed
+		// the canary clip, unasked, and end with a nil error, or call the
+		// cancellation an outage (ErrPoolUnavailable).
+		return nil, classifyTransport(endpointURLs(endpoints), ctx.Err())
 	}
 	for _, r := range refused {
 		if r.Stuck {
@@ -2285,6 +2294,10 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 		// for, bounded by the pacing allowance, and a cooldown that outlasts
 		// the allowance is no verdict. Probed again after a wait, and a port
 		// that is refused by then is judged as the gate judges it.
+		//
+		// Entered even when ctx is cancelled by now: the loops below skip, and the
+		// check after them returns the cancellation. Skipping the whole block on
+		// a cancelled ctx would send the jobs to the remembered machine unasked.
 		waited := false
 		start := time.Now()
 		for ctx.Err() == nil && endpointInCooldown(url) {
