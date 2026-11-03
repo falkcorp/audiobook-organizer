@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
-// last-edited: 2026-10-06
+// last-edited: 2026-11-03
 
 // Repairs-lane fixer "folder-books": retire book rows that are really whole
 // author, series or library folders, and give each file only such a row held a
@@ -14,9 +14,11 @@
 //
 // DETECTION (ported from the census's fold_final.py, tightened after the
 // 2026-10-01 adversarial review). A candidate is a live book with at least
-// fbMinFiles book_file rows whose files all sit under ONE shelf (config
-// RootDir, an import path, or an iTunes Media/Audiobooks folder). From its
-// rows:
+// fbMinFiles book_file rows under ONE shelf (config RootDir, an import path,
+// or an iTunes Media/Audiobooks folder). Rows on several shelves are judged on
+// the largest shelf's rows; that verdict is applicable only when those are 80%
+// of the rows and every other file has a proper book, else the row is listed
+// as mixed-shelf (skipped_mixed_shelf). From its rows:
 //
 //   - D: the rows' durations sum to at least 80h.
 //   - P: other live books holding a strict subset of its paths, each with two
@@ -27,7 +29,9 @@
 //     parent), or flat files whose filename stems repeat (two stems with two
 //     or more files each). Distinct stems alone are NOT evidence: a book's
 //     chapter files are commonly named after their chapters ("01 - An
-//     Unexpected Party.mp3").
+//     Unexpected Party.mp3"). Duration is: three or more flat files of 3h+
+//     under distinct stems, at least half the rows, are whole books stored
+//     flat (2026-11-02: an author folder of 34 one-file books, ~485h).
 //   - an author folder: the common root sits directly under the shelf AND its
 //     name is an author's (the book's own author or any author row). A book
 //     folder directly under an import path ("Dune/", "The Hobbit/") is not.
@@ -152,6 +156,9 @@ const (
 	fbTierShelf      = "shelf"
 	fbTierAuthorCopy = "author-copy"
 	fbTierDeep       = "deep"
+	// fbTierMixedShelf: a folder-book on its largest shelf whose other files
+	// are too many, or not all held by proper books (evaluate). Listed only.
+	fbTierMixedShelf = "mixed-shelf"
 )
 
 // Skip kinds this fixer sets itself (the framework adds the guard kinds).
@@ -181,6 +188,9 @@ const (
 	// one row would create a book per orphan album of the whole library.
 	// Such a row only applies when it creates nothing (it only retires).
 	fbSkipRootFolder = "skipped_root_folder"
+	// fbSkipMixedShelf: the folder-book's files sit on two shelves and the
+	// verdict on its largest shelf cannot stand for the rest (fbTierMixedShelf).
+	fbSkipMixedShelf = "skipped_mixed_shelf"
 	// fbSkipTooLarge: the row would create more than fbMaxNewBooks books or
 	// spans more than fbMaxRowFiles files, too much for one row under one
 	// merge-lock hold; review it by hand.
@@ -216,6 +226,12 @@ const (
 	// figure) a real book whose chapters an old scan imported one book each
 	// ("Metro 2033": eleven one-hour chapter books) read as a shelf of works.
 	fbProperMinSec = 3 * 3600
+	// fbFlatWorksMin: flat files of fbProperMinSec or more under this many
+	// distinct stems are separate works (classify).
+	fbFlatWorksMin = 3
+	// fbMajorityShelf: the share of a mixed-shelf book's rows its largest
+	// shelf must hold for the verdict on them to be applicable (evaluate).
+	fbMajorityShelf = 0.8
 )
 
 // fbGeneric are titles that name no work (normalized by fbNorm).
@@ -736,23 +752,72 @@ func (lib *fbLib) evaluate(id string) fbEval {
 	if !ok || len(rows) < fbMinFiles {
 		return ev
 	}
-	ev.N = len(rows)
-	paths := make([]string, 0, len(rows))
+	// Files on two shelves (2026-11-02: an author folder-book with 32 iTunes files and 2
+	// in the library folder) are judged on the largest shelf's files. That
+	// verdict stands only when those are at least fbMajorityShelf of the rows
+	// and every other file has a live proper book of its own, so the apply
+	// finds each one held and strands nothing. Otherwise a folder-book verdict
+	// is listed as mixed-shelf and never applied. A book that is no
+	// folder-book on its majority stays unflagged, so a real book with a
+	// copy on each shelf is not listed.
+	byShelf := map[string][]database.BookFileCore{}
+	for _, r := range rows {
+		s := lib.shelfOf(r.FilePath)
+		byShelf[s] = append(byShelf[s], r)
+	}
 	shelf := ""
+	for s, rs := range byShelf {
+		if len(rs) > len(byShelf[shelf]) || (len(rs) == len(byShelf[shelf]) && s < shelf) {
+			shelf = s
+		}
+	}
+	major := byShelf[shelf]
+	if len(major) < fbMinFiles {
+		return ev
+	}
+	ev = lib.classify(id, b, major, shelf)
+	ev.N = len(rows)
+	if len(byShelf) == 1 || ev.Tier == "" {
+		return ev
+	}
+	minorHeld := 0
+	for s, rs := range byShelf {
+		if s == shelf {
+			continue
+		}
+		for _, r := range rs {
+			for _, h := range lib.holders[r.FilePath] {
+				if h != id {
+					minorHeld++
+					break
+				}
+			}
+		}
+	}
+	minor := len(rows) - len(major)
+	ev.Evidence = append(ev.Evidence, fmt.Sprintf("%d of %d files on a second shelf, %d of them held by proper books",
+		minor, len(rows), minorHeld))
+	if float64(len(major)) < fbMajorityShelf*float64(len(rows)) || minorHeld < minor {
+		ev.Tier = fbTierMixedShelf
+	}
+	return ev
+}
+
+// classify is evaluate's verdict on rows, all under shelf.
+func (lib *fbLib) classify(id string, b database.BookCore, rows []database.BookFileCore, shelf string) fbEval {
+	ev := fbEval{ID: id, N: len(rows)}
+	paths := make([]string, 0, len(rows))
 	var secs int64
-	for i, r := range rows {
+	for _, r := range rows {
 		paths = append(paths, r.FilePath)
 		secs += int64(r.Duration)
-		s := lib.shelfOf(r.FilePath)
-		if i == 0 {
-			shelf = s
-		} else if s != shelf {
-			return ev // files span two shelves: not a folder of one tree
-		}
 	}
 	ev.Hours = float64(secs) / 3600
 	ev.Root = commonDir(paths)
-	set := lib.sets[id]
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		set[p] = true
+	}
 	t := fbNorm(b.Title)
 
 	// P: other books holding a strict subset under a different title.
@@ -806,7 +871,24 @@ func (lib *fbLib) evaluate(id string) fbEval {
 			repeated++
 		}
 	}
-	multi := dirs >= 2 || repeated >= 2 || (dirs >= 1 && repeated >= 1)
+	// Flat whole books: fbFlatWorksMin or more flat files under distinct
+	// stems each run at least fbProperMinSec, and such files are at least
+	// half the rows. Distinct names alone stay chapters ("01 - An Unexpected
+	// Party"); a chapter file does not run three hours, and a few long files
+	// among many short ones are not evidence either.
+	longStems := map[string]bool{}
+	longFiles := 0
+	for _, r := range rows {
+		if r.Duration < fbProperMinSec {
+			continue
+		}
+		longFiles++
+		if k, label, dir := fbGroupKey(r.FilePath, ev.Root); dir == "" && !fbDigitsRe.MatchString(fbNorm(label)) {
+			longStems[k] = true
+		}
+	}
+	flatWorks := len(longStems) >= fbFlatWorksMin && longFiles*2 >= len(rows)
+	multi := dirs >= 2 || repeated >= 2 || (dirs >= 1 && repeated >= 1) || flatWorks
 
 	atOrAbove := shelf != "" && (ev.Root == shelf || pathutil.IsWithin(shelf, ev.Root))
 	ev.Shelf, ev.AtOrAbove = shelf, atOrAbove
@@ -849,6 +931,7 @@ func (lib *fbLib) evaluate(id string) fbEval {
 	addEv(fmt.Sprintf("%d other books hold strict subsets of its files", ev.Proper), ev.Proper >= 2)
 	addEv("generic title", generic)
 	addEv(fmt.Sprintf("files are %d works (%d folders)", ev.Works, dirs), multi)
+	addEv(fmt.Sprintf("%d flat files of %dh or more under distinct names", len(longStems), fbProperMinSec/3600), flatWorks)
 	addEv(fmt.Sprintf("its folder %q is an author's", ev.Author), authorFolder)
 	addEv("the folder is a library root or above one", atOrAbove)
 	switch {
@@ -1568,6 +1651,9 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	sort.Strings(row.BookIDs)
 
 	switch {
+	case lead.Tier == fbTierMixedShelf:
+		row.Skipped, row.SkipReason = fbSkipMixedShelf, "files on two shelves: the second shelf holds over "+
+			"a fifth of them, or some of them have no proper book; listed for review only"
 	case !fbApplicableTier(lead.Tier):
 		row.Skipped, row.SkipReason = fbSkipDeep, "deep tier: listed for review only"
 	case lead.AtOrAbove && len(plan.Groups) > 0:
