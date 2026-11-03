@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b4e1d27-5f90-4c63-a2d8-e07c91b3f5a4
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package maintenance
 
@@ -54,6 +54,14 @@ import (
 // It never writes a book_file: row. Idempotent, so ResumeRestart. The index
 // holds a whole segment string per key, so it is read in pages and each page is
 // judged on a worker pool sized to the CPUs (one row read per key).
+//
+// RESUME. The index is paged by a key cursor, so after each page is judged (and,
+// live, deleted) the run checkpoints the cursor and the running counts
+// (acoustIDRepairParams). A restart merges that checkpoint into the params and
+// continues at the next page instead of re-judging every key from the first one
+// (one row read each); the final report still counts the whole run, not only the
+// part after the restart. A page cut mid-way is judged again, which is safe: a
+// delete judges its keys again under the index mutex and removes only orphans.
 const bookFileAcoustIDIndexRepairID = "maintenance.bookfile-acoustid-index-repair"
 
 const (
@@ -102,6 +110,32 @@ func (p *Plugin) bookFileAcoustIDIndexRepairDef() sdk.OperationDef {
 	}
 }
 
+// acoustIDRepairParams is the op's params and its checkpoint. The registry
+// merges a checkpoint's JSON over the params on resume, so a checkpoint carries
+// the mode too (dry_run) and a resumed run cannot fall back to the preview
+// default or to the other mode.
+type acoustIDRepairParams struct {
+	opmode.DryRunParams
+	// ResumeAfter is the scan cursor of the first page not yet handled; empty
+	// starts at the first key.
+	ResumeAfter string `json:"resume_after,omitempty"`
+	// Done is what the pages before ResumeAfter found, so the report counts the
+	// whole run across restarts.
+	Done *acoustIDRepairDone `json:"done,omitempty"`
+}
+
+// acoustIDRepairDone is the tally of the pages a checkpoint covers.
+type acoustIDRepairDone struct {
+	Scanned      int64    `json:"scanned"`
+	Live         int64    `json:"live"`
+	LacksSeg     int64    `json:"lacks_seg"`
+	RowGone      int64    `json:"row_gone"`
+	Malformed    int64    `json:"malformed"`
+	Deleted      int64    `json:"deleted"`
+	KeptAtDelete int64    `json:"kept_at_delete"`
+	Samples      []string `json:"samples,omitempty"`
+}
+
 // acoustIDRepairTally is the run's counters. The worker goroutines judge
 // concurrently, so every counter is atomic; the samples have their own mutex.
 type acoustIDRepairTally struct {
@@ -124,10 +158,45 @@ func (t *acoustIDRepairTally) sample(e database.BookFileAcoustIDEntry, v databas
 	}
 }
 
+// done snapshots the tally for a checkpoint. It is called between pages, when
+// no worker is running, but takes the samples lock anyway.
+func (t *acoustIDRepairTally) done() *acoustIDRepairDone {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return &acoustIDRepairDone{
+		Scanned: t.scanned.Load(), Live: t.live.Load(), LacksSeg: t.lacksSeg.Load(),
+		RowGone: t.rowGone.Load(), Malformed: t.malformed.Load(), Deleted: t.deleted.Load(),
+		KeptAtDelete: t.keptAtDelete.Load(), Samples: append([]string(nil), t.samples...),
+	}
+}
+
+// restore seeds the tally from a checkpoint's counts.
+func (t *acoustIDRepairTally) restore(d *acoustIDRepairDone) {
+	if d == nil {
+		return
+	}
+	t.scanned.Store(d.Scanned)
+	t.live.Store(d.Live)
+	t.lacksSeg.Store(d.LacksSeg)
+	t.rowGone.Store(d.RowGone)
+	t.malformed.Store(d.Malformed)
+	t.deleted.Store(d.Deleted)
+	t.keptAtDelete.Store(d.KeptAtDelete)
+	t.mu.Lock()
+	t.samples = append([]string(nil), d.Samples...)
+	t.mu.Unlock()
+}
+
 func (t *acoustIDRepairTally) orphans() int64 { return t.lacksSeg.Load() + t.rowGone.Load() }
 
 func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	dryRun, err := opmode.ParseDryRun(bookFileAcoustIDIndexRepairID, raw)
+	var params acoustIDRepairParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return fmt.Errorf("%s: invalid params: %w", bookFileAcoustIDIndexRepairID, err)
+		}
+	}
+	dryRun, err := opmode.ResolveDryRun(bookFileAcoustIDIndexRepairID, params.DryRun, params.DryRunCamel)
 	if err != nil {
 		return err
 	}
@@ -147,7 +216,11 @@ func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.Ra
 	_ = reporter.UpdateProgress(0, 0, "book_file_acoustid: index: "+verb)
 
 	var tally acoustIDRepairTally
-	after := ""
+	tally.restore(params.Done)
+	after := params.ResumeAfter
+	if after != "" {
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("resuming after a restart: %d keys already handled", tally.scanned.Load()))
+	}
 	for {
 		page, next, err := repairer.ScanBookFileAcoustIDIndex(after, acoustIDRepairPage)
 		if err != nil {
@@ -168,6 +241,13 @@ func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.Ra
 			break
 		}
 		after = next
+		// The page is fully judged (and deleted, live). Persist the cursor and
+		// the counts; a failed save costs only a re-judged page on restart.
+		params.ResumeAfter, params.Done = after, tally.done()
+		if err := reporter.Checkpoint(params); err != nil {
+			_ = reporter.Log(slog.LevelWarn, "Could not save the resume point; a restart would redo more",
+				slog.String("error", err.Error()))
+		}
 	}
 
 	for _, s := range tally.samples {

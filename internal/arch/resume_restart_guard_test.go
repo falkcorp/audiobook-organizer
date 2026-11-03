@@ -1,7 +1,7 @@
 // file: internal/arch/resume_restart_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 87f31afd-8f18-4eed-8095-a44c9e9c30bf
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package arch
 
@@ -238,6 +238,13 @@ var restartWithoutCheckpoint = map[string]string{
 	"internal/plugins/deluge/link_backfill.go linkBackfillOpID":                                       "a linked row is skipped as already_linked; the run is bounded by limit and reports next_start_after",
 	"internal/server/identification_advance_op.go identificationAdvanceOpID":                          "the dirty set IS the resume state: a processed book's mark is gone, so a restart finds only what is still owed",
 	"internal/server/purge_soft_deleted_op.go purgeSoftDeletedOpID":                                   "the next run reclassifies the trash; a purged book is gone from it",
+
+	// Store-anchored: the resume point is a cursor the op's own store keeps.
+	"internal/plugins/maintenance/opchange_book_index.go opChangeBookIndexRebuildID": "the resume point lives in the store, not the registry: " +
+		"the backfill and verify cursors (opChangeByBookCursorKey and the verify cursor, pebble_store_opchange_index.go) are written in the same " +
+		"commits as the index keys, so a restart or an ErrContinueInPlace yield re-enters Run and EnsureOpChangeByBookIndexWith continues from " +
+		"them (ResumeRestart is required for the yield). A registry checkpoint would only duplicate that cursor. A forced rebuild (dry_run=false) " +
+		"cut by a restart starts over, and the boot ensure resumes its cursor and verifies before trusting; it only writes index keys",
 
 	// Ledger-anchored: the operation's own result rows say what is done.
 	"internal/server/metadata_ops.go library.bulk-metadata-fetch": "books with an OperationResult row under the fetch chain's ledger key are skipped on resume (metadata_ops.go runBulkMetadataFetchAll)",
