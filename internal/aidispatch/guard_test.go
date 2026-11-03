@@ -1,7 +1,7 @@
 // file: internal/aidispatch/guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 978462ae-b706-482d-b878-4b12387747d8
-// last-edited: 2026-09-13
+// last-edited: 2026-11-03
 
 package aidispatch
 
@@ -84,13 +84,12 @@ var guardAllowlist = map[string]string{
 	"internal/server/handlers/aibackends/aibackends.go": "PR 2: /api/tags probe moves to the status API",
 
 	// Whisper transports (PR 3).
-	"internal/transcribe/remote.go":  "PR 3: /transcribe and /transcribe-batch",
-	"internal/transcribe/whisper.go": "PR 3: whisper-1 cloud fallback for the intro clip",
+	"internal/transcribe/remote.go": "PR 3: /transcribe and /transcribe-batch",
 }
 
 // guardAllowlistCeiling may only go DOWN. Raising it to fit a new entry is the
 // exact change this test exists to stop.
-const guardAllowlistCeiling = 15
+const guardAllowlistCeiling = 14
 
 // guardExemptDirs are permanent exemptions, not ratchet entries.
 // internal/aidispatch is the dispatcher itself: classify.go imports openai-go
