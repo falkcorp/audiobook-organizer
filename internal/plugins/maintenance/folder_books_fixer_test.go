@@ -543,6 +543,20 @@ func TestFolderBooksFixer_FlatWholeBooks(t *testing.T) {
 		dir + "/The Long Halloween Part 3.m4b", dir + "/The Long Halloween Part 4.m4b", dir + "/The Long Halloween Part 5.m4b"}
 	ev = fbUnitLib([]string{"/lib"}, authors, "Bruce Wayne", parts, 11*3600).evaluate("b")
 	require.False(t, fbApplicableTier(ev.Tier), "one long work in parts is one book: %v", ev.Evidence)
+	for _, marker := range []string{"Part %s", "Volume %s"} {
+		var words []string
+		for _, w := range []string{"One", "Two", "Three", "Four", "Five"} {
+			words = append(words, dir+"/The Long Halloween "+fmt.Sprintf(marker, w)+".m4b")
+		}
+		ev = fbUnitLib([]string{"/lib"}, authors, "Bruce Wayne", words, 11*3600).evaluate("b")
+		require.False(t, fbApplicableTier(ev.Tier), "%s: word-numbered parts are one book: %v", marker, ev.Evidence)
+	}
+	var roman []string
+	for _, w := range []string{"I", "II", "III", "IV", "V"} {
+		roman = append(roman, dir+"/Knightfall "+w+".m4b")
+	}
+	ev = fbUnitLib([]string{"/lib"}, authors, "Bruce Wayne", roman, 11*3600).evaluate("b")
+	require.False(t, fbApplicableTier(ev.Tier), "roman-numbered parts are one book: %v", ev.Evidence)
 
 	// Long files are a minority: most files are chapter-sized, so the long
 	// ones are not evidence of separate works.
@@ -784,6 +798,89 @@ func TestFolderBooksFixer_ResumeAfterCrash(t *testing.T) {
 				rows, err := f.s.GetBookFiles(id)
 				require.NoError(t, err)
 				require.Len(t, rows, 2, "no row created twice")
+			}
+		})
+	}
+}
+
+// fbSeedMinor adds one file on a second shelf (the library root, outside
+// iTunes) to both Wolfe folder-books; heldBy, when set, is a proper book
+// holding it.
+func (f *fragFixture) fbSeedMinor(t *testing.T, heldBy bool) string {
+	t.Helper()
+	p := f.file(t, "library/Gene Wolfe/Arkham Asylum/01.mp3", 10)
+	for _, role := range []string{"fb", "fb2"} {
+		f.row(t, role+"-minor", f.ids[role], p, "", 190, 1200, 10)
+	}
+	if heldBy {
+		f.fbBook(t, "arkham", "Arkham Asylum", f.path("library/Gene Wolfe/Arkham Asylum"), 3600, p)
+	}
+	return p
+}
+
+// TestFolderBooksFixer_MixedShelfRowPlansAndResumes: a folder-book with one
+// file on a second shelf that a proper book holds plans on its majority
+// shelf, and a cut-off apply resumes into the same book: Replan groups with
+// the same root as Plan (2026-11-03 review blocker). Without a holder the row
+// is skipped_mixed_shelf.
+func TestFolderBooksFixer_MixedShelfRowPlansAndResumes(t *testing.T) {
+	t.Run("orphan minor is listed", func(t *testing.T) {
+		f := newGlobalRootFragFixture(t)
+		f.seedWolfe(t, fbITunes, "citadel")
+		f.fbSeedMinor(t, false)
+		row := f.fbSingleRow(t, "op-plan")
+		require.Equal(t, fbSkipMixedShelf, row.Skipped, "%s", row.SkipReason)
+	})
+	// The stop lands in the group of a file directly in the author folder:
+	// only a flat file's key depends on the root (a stem under the majority
+	// root, the folder itself under the whole set's).
+	for _, stop := range []struct {
+		stage string
+		n     int
+	}{{"book", 0}, {"row", 1}} {
+		t.Run(fmt.Sprintf("resume-%s-%d", stop.stage, stop.n), func(t *testing.T) {
+			f := newGlobalRootFragFixture(t)
+			f.seedWolfe(t, fbITunes, "citadel")
+			f.fbSeedMinor(t, true)
+			flat := f.file(t, filepath.Join(fbITunes, "Gene Wolfe", "Year One.mp3"), 10)
+			for _, role := range []string{"fb", "fb2"} {
+				f.row(t, role+"-flat", f.ids[role], flat, "", 191, 3600, 11)
+			}
+			row := f.fbSingleRow(t, "op-plan")
+			require.Empty(t, row.Skipped, "%s", row.SkipReason)
+			books := 0
+			fbCrashHook = func(stage string, n int) error {
+				if stage == "book" {
+					books++
+				}
+				// Sword's group is first (dir: sorts before stem:); stop
+				// in the second, the flat file's.
+				if books == 2 && stage == stop.stage && n == stop.n {
+					return fmt.Errorf("injected stop at %s %d", stage, n)
+				}
+				return nil
+			}
+			t.Cleanup(func() { fbCrashHook = nil })
+			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.Equal(t, 0, out.Applied, "%+v", out.Rows)
+			fbCrashHook = nil
+
+			out = f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			require.False(t, f.live(t, "fb"))
+			owners, err := f.s.BookFilesAtPath(flat)
+			require.NoError(t, err)
+			others := map[string]bool{}
+			for _, o := range owners {
+				if o.BookID != f.ids["fb"] && o.BookID != f.ids["fb2"] {
+					others[o.BookID] = true
+				}
+			}
+			require.Len(t, others, 1, "one created book holds the flat file")
+			for id := range others {
+				b, err := f.s.GetBookByID(id)
+				require.NoError(t, err)
+				require.False(t, b.IsSoftDeleted(), "the resumed apply un-hid it")
 			}
 		})
 	}
