@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package maintenance
 
@@ -138,7 +138,10 @@ func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 		// verify cursors), so a restart or a yield needs no registry checkpoint.
 		// A forced rebuild (dry_run=false) interrupted by a restart starts over
 		// from the first row, as an operator's re-run would; the boot ensure
-		// resumes the cursor it left.
+		// resumes the cursor it left. Because the cursors are the store's, Run
+		// never calls reporter.Checkpoint; internal/arch's
+		// restartWithoutCheckpoint names this def with that reason, and
+		// TestResumeRestartDefsCheckpoint fails if either side changes.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.opchange-book-index",

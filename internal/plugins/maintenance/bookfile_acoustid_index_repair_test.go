@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f9a6c42-d718-4e05-b2a3-6e1c80d4f957
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package maintenance
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -182,6 +183,114 @@ func TestBookFileAcoustIDIndexRepair_CancelledRunDeletesNothingMore(t *testing.T
 	for _, seg := range []string{"seg-riddler", "seg-gone", "seg-joker", "seg-broken"} {
 		if !f.has(t, seg) {
 			t.Fatalf("a run cancelled before it started deleted %s", seg)
+		}
+	}
+}
+
+// acoustIDCheckpointSpy keeps the last checkpoint the op wrote and, once armed,
+// cancels the run's context at the first one: a restart at a page boundary.
+type acoustIDCheckpointSpy struct {
+	p6AttrReporter
+	cancel func()
+	state  []byte
+}
+
+func (r *acoustIDCheckpointSpy) Checkpoint(state any) error {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	r.state = b
+	if r.cancel != nil {
+		r.cancel()
+	}
+	return nil
+}
+
+// A run cut after its first page checkpoints the scan cursor and counts. The
+// resumed run (the checkpoint merged over the original params, as the registry
+// does) continues at the next page: a key the first run already passed is not
+// judged again, and the final report counts the whole run, not just the tail.
+func TestBookFileAcoustIDIndexRepair_ResumedRunContinuesFromTheCheckpoint(t *testing.T) {
+	f := newAcoustIDRepairFixture(t)
+	book, err := f.inner.CreateBook(&database.Book{Title: "Arkham Knight", FilePath: "/lib/arkham-knight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := &database.BookFile{BookID: book.ID, FilePath: "/lib/arkham-knight/01.mp3"}
+	if err := f.inner.CreateBookFile(bare); err != nil {
+		t.Fatal(err)
+	}
+	const extra = acoustIDRepairPage + 150
+	bulkKey := func(i int) string { return fmt.Sprintf("seg-bulk-%05d", i) }
+	for i := range extra {
+		if err := f.inner.SetRaw(acoustIDKeyPrefix+bulkKey(i), []byte(book.ID+":"+bare.ID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	params := []byte(`{"dry_run":false}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := &acoustIDCheckpointSpy{cancel: cancel}
+	if err := f.p.runBookFileAcoustIDIndexRepair(ctx, params, first); err == nil {
+		t.Fatal("the run cut after its first page must return the context error")
+	}
+	if first.state == nil {
+		t.Fatal("the first page was handled but no checkpoint was written")
+	}
+	var cp acoustIDRepairParams
+	if err := json.Unmarshal(first.state, &cp); err != nil {
+		t.Fatal(err)
+	}
+	if cp.ResumeAfter == "" || cp.Done == nil || cp.Done.Scanned != acoustIDRepairPage {
+		t.Fatalf("checkpoint = %+v (done %+v), want a cursor and %d keys scanned", cp, cp.Done, acoustIDRepairPage)
+	}
+	if cp.DryRun == nil || *cp.DryRun {
+		t.Fatalf("the checkpoint must carry dry_run=false, got %v", cp.DryRun)
+	}
+	if f.has(t, bulkKey(0)) {
+		t.Fatal("the first page's orphans should be deleted before the checkpoint")
+	}
+
+	// Put an orphan back among the keys the first run already passed. A run that
+	// starts over would judge and delete it; one that resumes never looks at it.
+	if err := f.inner.SetRaw(acoustIDKeyPrefix+bulkKey(0), []byte(book.ID+":"+bare.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	merged := map[string]any{}
+	for _, b := range [][]byte{params, first.state} {
+		over := map[string]any{}
+		if err := json.Unmarshal(b, &over); err != nil {
+			t.Fatal(err)
+		}
+		maps.Copy(merged, over)
+	}
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := &acoustIDCheckpointSpy{}
+	if err := f.p.runBookFileAcoustIDIndexRepair(context.Background(), raw, second); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if !f.has(t, bulkKey(0)) {
+		t.Fatal("the resumed run started over: it judged a key before the checkpoint's cursor")
+	}
+	if f.has(t, bulkKey(extra-1)) || f.has(t, "seg-riddler") || f.has(t, "seg-gone") {
+		t.Fatal("the resumed run left an orphan after the cursor")
+	}
+	if !f.has(t, "seg-joker") || !f.has(t, "seg-broken") {
+		t.Fatal("the resumed run deleted a live or malformed key")
+	}
+	// Totals span both runs: every original key scanned once, every orphan deleted once.
+	joined := joinLines(&second.p6AttrReporter)
+	for _, want := range []string{
+		fmt.Sprintf("%d keys", extra+4), fmt.Sprintf("%d orphans", extra+2), fmt.Sprintf("%d deleted", extra+2),
+		"resuming after a restart",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("resumed report missing %q; log:\n%s", want, joined)
 		}
 	}
 }
