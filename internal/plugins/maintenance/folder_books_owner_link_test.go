@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_owner_link_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e2f41-9c07-4d6a-b3e5-1a7d40c92f68
 // last-edited: 2026-11-03
 
@@ -283,6 +283,7 @@ func TestFolderBooksOwnerLink_ARetargetedLinkFailsTheFingerprint(t *testing.T) {
 
 			out := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
 			require.Zero(t, out.Applied, "%+v", out.Rows)
+			require.Equal(t, "changed_since_plan", fbOutcome(out, row.RowID).Outcome, "%+v", out.Rows)
 			require.True(t, f.live(t, "fb"))
 			require.Nil(t, f.liveAtDir(t, filepath.Join("Alfred Pennyworth", "Arkham Asylum")), "nothing was created")
 		})
@@ -377,9 +378,13 @@ func TestFolderBooksOwnerLink_GroupOfTheFolderBookItself(t *testing.T) {
 func TestFolderBooksOwnerLink_AnAdoptingApplyFinishesACutOffOne(t *testing.T) {
 	for _, tc := range []struct {
 		stage string
-		// only crash when the linked group's book is the one being made.
-		hiddenLinked bool
-	}{{"mint", false}, {"book", true}, {"reindex", true}, {"row", true}} {
+		// when: "" crashes at the first call of the stage; "hidden" only while
+		// the linked group's book is the hidden one being made; "live" once
+		// that book has been un-hidden. A cut-off apply that already un-hid it
+		// is resumed in its own operation, not adopted (see
+		// ...AClaimStageCutOffResumesInItsOwnOperation).
+		when string
+	}{{"mint", ""}, {"book", "hidden"}, {"reindex", "hidden"}, {"row", "hidden"}} {
 		t.Run(tc.stage, func(t *testing.T) {
 			f, row, twin := linkRow(t, "")
 			before := undo.StateOfBook(f.fbGet(t, twin))
@@ -395,14 +400,20 @@ func TestFolderBooksOwnerLink_AnAdoptingApplyFinishesACutOffOne(t *testing.T) {
 				}
 			}
 			require.NotEmpty(t, linkedID)
-			hidden := func() bool {
+			now := func() string {
 				b, err := f.s.GetBookByID(linkedID)
 				require.NoError(t, err)
-				return b != nil && b.IsSoftDeleted()
+				switch {
+				case b == nil:
+					return "none"
+				case b.IsSoftDeleted():
+					return "hidden"
+				}
+				return "live"
 			}
 			fired := false
 			fbCrashHook = func(stage string, _ int) error {
-				if !fired && stage == tc.stage && (!tc.hiddenLinked || hidden()) {
+				if !fired && stage == tc.stage && (tc.when == "" || now() == tc.when) {
 					fired = true
 					return fmt.Errorf("injected stop at %s", stage)
 				}
@@ -488,6 +499,91 @@ func TestFolderBooksOwnerLink_AnAdoptingApplyFinishesACutOffOne(t *testing.T) {
 	}
 }
 
+// A cut-off apply that already un-hid the linked book (the path-key claim
+// stage) has made a live, proper book, so a fresh plan reads its files as held
+// by it: no second book, no second join. The row is finished the way every
+// cut-off apply is, by running the same operation again, and then the one
+// operation holds the join and the create, so one revert undoes both.
+func TestFolderBooksOwnerLink_AClaimStageCutOffResumesInItsOwnOperation(t *testing.T) {
+	f, row, twin := linkRow(t, "")
+	before := undo.StateOfBook(f.fbGet(t, twin))
+	mint := fbMintID(row.RowID, twin)
+	plan, ok := row.Detail.(*fbPlan)
+	require.True(t, ok)
+	linkedID := ""
+	for _, g := range plan.Groups {
+		if g.Title == "Arkham Asylum" {
+			linkedID = fbCreatedID(row.RowID, f.ids["fb"], g.Key)
+		}
+	}
+	require.NotEmpty(t, linkedID)
+	fired := false
+	fbCrashHook = func(stage string, _ int) error {
+		if fired || stage != "claim" {
+			return nil
+		}
+		if b, err := f.s.GetBookByID(linkedID); err != nil || b == nil || b.IsSoftDeleted() {
+			return nil // a book made for another group
+		}
+		fired = true
+		return fmt.Errorf("injected stop at %s", stage)
+	}
+	t.Cleanup(func() { fbCrashHook = nil })
+	cut := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
+	fbCrashHook = nil
+	require.True(t, fired)
+	require.Zero(t, cut.Applied, "%+v", cut.Rows)
+	require.True(t, f.live(t, "fb"))
+	require.False(t, f.fbGet(t, linkedID).IsSoftDeleted(), "the cut-off apply had un-hidden it")
+
+	// A fresh plan does not offer the files again: the live book holds them.
+	again := f.fbPlan(t, fbFixerID, "op-plan-2")
+	for _, r := range again.Rows {
+		if r.OwnerApplicable {
+			require.Empty(t, fbRowState(t, r).Links, "a second link would make a second book")
+		}
+	}
+
+	out := f.fbOwnerApply(t, "op-plan", "op-owner", []string{row.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.False(t, f.live(t, "fb"))
+	b := f.linked(t)
+	require.Equal(t, linkedID, b.ID, "the resumed apply finished the same book")
+	require.Equal(t, mint, *b.VersionGroupID)
+	require.False(t, *b.IsPrimaryVersion)
+	live := 0
+	members, err := f.s.GetBooksByVersionGroup(mint)
+	require.NoError(t, err)
+	for _, m := range members {
+		if !m.IsSoftDeleted() {
+			live++
+		}
+	}
+	require.Equal(t, 2, live, "the target and exactly one new version")
+	changes, err := f.s.GetOperationChanges("op-owner")
+	require.NoError(t, err)
+	joins, creates := 0, 0
+	for _, c := range changes {
+		switch {
+		case c.ChangeType == undo.ChangeTypeRepairVersionGroupJoin:
+			joins++
+		case c.ChangeType == undo.ChangeTypeRepairBookCreate && c.BookID == linkedID:
+			creates++
+		}
+	}
+	require.Equal(t, 1, joins, "the mint is journaled once across the cut and the resume")
+	require.Equal(t, 1, creates)
+
+	pre, err := preflightUndoConflicts(f.s, "op-owner")
+	require.NoError(t, err)
+	require.Zero(t, preRefused(pre), "%+v", pre)
+	res, err := audiobooks.NewRevertService(f.s).RevertOperation("op-owner")
+	require.NoError(t, err)
+	require.Zero(t, res.Failed, "%+v", res)
+	require.Equal(t, before, undo.StateOfBook(f.fbGet(t, twin)), "the target's group state is back exactly")
+	require.True(t, f.fbGet(t, linkedID).IsSoftDeleted())
+}
+
 // A hidden book whose creating operation was reverted is not adoptable: its
 // files stay "previously resolved", for a link row exactly as for any other.
 func TestFolderBooksOwnerLink_ARevertedApplyIsNotOfferedAgain(t *testing.T) {
@@ -503,6 +599,9 @@ func TestFolderBooksOwnerLink_ARevertedApplyIsNotOfferedAgain(t *testing.T) {
 		require.False(t, r.OwnerApplicable, "a reverted apply is offered again: %s", r.OwnerApplyReason)
 	}
 	require.Zero(t, again.OwnerApplicable)
+	st := fbRowState(t, again.Rows[0])
+	require.Len(t, st.Links, 1, "the row still carries the link the owner asked for")
+	require.True(t, st.DupSingle)
 }
 
 // preRefused counts the rows the preflight says the revert would refuse.
