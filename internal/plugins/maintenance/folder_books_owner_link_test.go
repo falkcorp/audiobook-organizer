@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_owner_link_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b8e2f41-9c07-4d6a-b3e5-1a7d40c92f68
 // last-edited: 2026-11-03
 
@@ -504,8 +504,9 @@ func TestFolderBooksOwnerLink_AnAdoptingApplyFinishesACutOffOne(t *testing.T) {
 // its row is the one the apply will see, and the next apply adopts the books.
 func TestFolderBooksOwnerLink_APlainClaimStageCutOffIsAdoptedByAFreshPlan(t *testing.T) {
 	f := newGlobalRootFragFixture(t)
-	f.seedWolfe(t, fbITunes, "citadel")
+	f.seedOwnerRow(t, ownerShelf{base: fbITunes})
 	row := f.fbSingleRow(t, "op-plan")
+	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
 	plan, ok := row.Detail.(*fbPlan)
 	require.True(t, ok)
 	require.NotEmpty(t, plan.Groups)
@@ -544,6 +545,55 @@ func TestFolderBooksOwnerLink_APlainClaimStageCutOffIsAdoptedByAFreshPlan(t *tes
 		}
 	}
 	require.Equal(t, 1, adopted, "the live book of the cut-off apply is adopted, not duplicated")
+}
+
+// A live book of a claim-stage cut is adopted only on the same evidence as a
+// hidden one: the journal says the cut-off operation created exactly the book
+// the re-plan would. A target that moved to another group since the cut makes
+// the re-plan a different book, so the row is not offered, and an apply of it
+// writes nothing (it would otherwise refuse after creating earlier groups).
+func TestFolderBooksOwnerLink_AClaimStageCutOffWhoseTargetMovedIsNotOffered(t *testing.T) {
+	f, row, twin := linkRow(t, "")
+	plan, ok := row.Detail.(*fbPlan)
+	require.True(t, ok)
+	linkedID := ""
+	for _, g := range plan.Groups {
+		if g.Title == "Arkham Asylum" {
+			linkedID = fbCreatedID(row.RowID, f.ids["fb"], g.Key)
+		}
+	}
+	require.NotEmpty(t, linkedID)
+	fired := false
+	fbCrashHook = func(stage string, _ int) error {
+		if fired || stage != "claim" {
+			return nil
+		}
+		if b, err := f.s.GetBookByID(linkedID); err != nil || b == nil || b.IsSoftDeleted() {
+			return nil
+		}
+		fired = true
+		return fmt.Errorf("injected stop at %s", stage)
+	}
+	t.Cleanup(func() { fbCrashHook = nil })
+	cut := f.fbOwnerApply(t, "op-plan", "op-owner-1", []string{row.RowID})
+	fbCrashHook = nil
+	require.True(t, fired)
+	require.Zero(t, cut.Applied, "%+v", cut.Rows)
+
+	f.setVG(t, twin, "vg-elsewhere", true)
+	again := f.fbSingleRow(t, "op-plan-2")
+	require.False(t, again.Applicable(), "%s", again.Reason)
+	require.False(t, again.OwnerApplicable)
+	require.Equal(t, fbSkipCutOffLive, again.Skipped, "%s", again.SkipReason)
+
+	out := f.fbOwnerApply(t, "op-plan-2", "op-owner-2", []string{again.RowID})
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.True(t, f.live(t, "fb"))
+	changes, err := f.s.GetOperationChanges("op-owner-2")
+	require.NoError(t, err)
+	for _, c := range changes {
+		require.NotEqual(t, undo.ChangeTypeRepairBookCreate, c.ChangeType, "the refused row wrote a book")
+	}
 }
 
 // A hidden book whose creating operation was reverted is not adoptable: its

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.18.0
+// version: 2.19.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-11-03
 
@@ -200,6 +200,7 @@ import (
 	"unicode"
 
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -264,12 +265,14 @@ const (
 	// of the orphans: that file was resolved once, and the scanner and the
 	// iTunes importer both refuse to bring it back. Never re-created here.
 	fbSkipResolved = "skipped_previously_resolved"
-	// fbSkipCutOffLive is never reported: buildRow's marker that a live book
-	// this row's own cut-off apply created (the path-key stage, after the
-	// un-hide and before the retire) holds the files. The shared library the
-	// plan evaluated counts it as a proper holder, which the row's own re-plan
-	// (Replan drops it) does not, so Plan re-plans such a row the way Apply
-	// will see it, and the next apply adopts the book.
+	// fbSkipCutOffLive: buildRow's marker that a live book this row's own
+	// cut-off apply created (the path-key stage, after the un-hide and before
+	// the retire) holds the files. The shared library the plan evaluated counts
+	// it as a proper holder, which the row's own re-plan (Replan drops it) does
+	// not, so Plan re-plans such a row the way Apply will see it
+	// (planWithoutOwn) and the next apply adopts the book. The marker is
+	// reported only when that re-plan cannot offer the row (the live book was
+	// changed since the cut, or the re-plan failed).
 	fbSkipCutOffLive = "skipped_cut_off_apply"
 	// fbSkipOnlyPresentCopy: a file the row would leave to another holder
 	// (a proper book, or a smaller folder-book's row) has a present copy only
@@ -1565,7 +1568,7 @@ func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep re
 			// shared library counts as proper: plan the row as Apply will see
 			// it (planWithoutOwn drops those books), so the next apply adopts
 			// them.
-			re, rerr := f.planWithoutOwn(store, rows[i].RowID, groups[i])
+			re, rerr := f.planWithoutOwn(ctx, store, rows[i].RowID, groups[i])
 			if rerr != nil {
 				rows[i].SkipReason += fmt.Sprintf(" (and its re-plan failed: %v)", rerr)
 			} else {
@@ -2469,10 +2472,10 @@ func (f *folderBooksFixer) refusal(lib *fbLib, store OpsStore, members []string)
 // it. The same roots Plan grouped with (evaluate's Root, and groupRoot for a
 // path on another shelf): for a mixed-shelf row commonDir of the whole set is
 // a different folder, whose keys would name none of the created books.
-func fbDropOwn(lib *fbLib, rowID, leadID string) {
+func fbDropOwn(lib *fbLib, rowID, leadID string) map[string]bool {
 	set := lib.sets[leadID]
 	if set == nil {
-		return
+		return nil
 	}
 	shelf, root := lib.fbMajority(leadID)
 	ours := map[string]bool{}
@@ -2481,6 +2484,7 @@ func fbDropOwn(lib *fbLib, rowID, leadID string) {
 		ours[fbCreatedID(rowID, leadID, k)] = true
 	}
 	lib.drop(ours)
+	return ours
 }
 
 // planWithoutOwn plans the row (members, rowID) over a library freshly loaded
@@ -2488,20 +2492,24 @@ func fbDropOwn(lib *fbLib, rowID, leadID string) {
 // sees under the apply's lock, and what the shared Plan library cannot show
 // when a cut-off apply's book is already live and counted as a proper holder.
 // The row's links are found the way a first plan finds them (no carried state).
-func (f *folderBooksFixer) planWithoutOwn(store OpsStore, rowID string, members []string) (repairs.Row, error) {
+//
+// It costs a second full read and a second evaluation pass of the library for
+// each such row; the pass runs on every core, and the case is a row cut off
+// in the one step between the un-hide and the retire.
+//
+// An error means the row cannot be offered: a live book of the cut-off apply
+// that the next apply would not adopt (the hidden-book check, adoptable, for
+// a book already live) would make the apply refuse the row after earlier
+// groups were written.
+func (f *folderBooksFixer) planWithoutOwn(ctx context.Context, store OpsStore, rowID string, members []string) (repairs.Row, error) {
 	lib, err := f.loadFull(store)
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	fbDropOwn(lib, rowID, members[0])
-	ev := map[string]fbEval{}
-	for id, rows := range lib.files {
-		if len(rows) < fbMinFiles {
-			continue
-		}
-		if e := lib.evaluate(id); e.Tier != "" {
-			ev[id] = e
-		}
+	ours := fbDropOwn(lib, rowID, members[0])
+	ev, err := fbEvaluateAll(ctx, lib)
+	if err != nil {
+		return repairs.Row{}, err
 	}
 	for _, m := range members {
 		if _, ok := ev[m]; !ok {
@@ -2511,7 +2519,73 @@ func (f *folderBooksFixer) planWithoutOwn(store OpsStore, rowID string, members 
 	if got := fbRowID(members); got != rowID {
 		return repairs.Row{}, fmt.Errorf("row id %s is not the members' %s", rowID, got)
 	}
-	return f.buildRow(lib, store, ev, members, nil), nil
+	row := f.buildRow(lib, store, ev, members, nil)
+	if !row.Applicable() && !row.OwnerApplicable {
+		return row, nil
+	}
+	plan, ok := row.Detail.(*fbPlan)
+	if !ok {
+		return repairs.Row{}, fmt.Errorf("row %s carries no plan", rowID)
+	}
+	byID := map[string]fbGroup{}
+	for _, g := range plan.Groups {
+		byID[fbCreatedID(rowID, members[0], g.Key)] = g
+	}
+	for id := range ours {
+		b, err := store.GetBookByID(id)
+		if err != nil {
+			return repairs.Row{}, fmt.Errorf("read %s: %w", id, err)
+		}
+		if b == nil || b.IsSoftDeleted() {
+			continue // hidden: adoptCands decided it while the row was built
+		}
+		g, ok := byID[id]
+		if !ok {
+			return repairs.Row{}, fmt.Errorf("live book %s of the cut-off apply names no group of the re-plan", id)
+		}
+		prev, err := f.adoptable(store, fbCreateValue(id, g, plan.link(g.Key)))
+		if err != nil {
+			return repairs.Row{}, err
+		}
+		if prev == nil {
+			return repairs.Row{}, fmt.Errorf("live book %s is not what the re-plan would create, or no un-reverted operation of this fixer created it", id)
+		}
+	}
+	return row, nil
+}
+
+// fbEvaluateAll evaluates every book of lib that can hold a folder-book's
+// files, on every core (each worker writes only its own slot; lib is read-only).
+func fbEvaluateAll(ctx context.Context, lib *fbLib) (map[string]fbEval, error) {
+	var ids []string
+	for id, rows := range lib.files {
+		if len(rows) >= fbMinFiles {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	evals := make([]fbEval, len(ids))
+	var g errgroup.Group
+	g.SetLimit(runtime.NumCPU())
+	for i := range ids {
+		g.Go(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			evals[i] = lib.evaluate(ids[i])
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	ev := map[string]fbEval{}
+	for _, e := range evals {
+		if e.Tier != "" {
+			ev[e.ID] = e
+		}
+	}
+	return ev, nil
 }
 
 // Replan re-reads only the row's neighbourhood (loadPartial) and rebuilds it.
