@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-29
+// last-edited: 2026-11-03
 
 package repairs
 
@@ -792,6 +792,9 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	out := RowResult{RowID: planned.RowID}
 	if owner {
 		out.OwnerUserID = deps.Owner.UserID
+		// The owner's approval is on ctx for the fixer's Replan and Apply,
+		// for this row alone (OwnerApplyFor).
+		ctx = WithOwnerApply(ctx, planned.RowID)
 	}
 	abort := func() RowResult {
 		out.Outcome = OutcomeAborted
