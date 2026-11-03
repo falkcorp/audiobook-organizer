@@ -14,9 +14,13 @@
   group and primary flag back exactly as they were, and refuses, leaving
   everything as it is, if the live book or the new version was changed since
   (crowned, moved to another group, or joined by another book).
-- An owner apply that was cut off partway leaves a hidden book behind. The next
-  apply of the row now finishes that book instead of refusing the row, but only
-  when the earlier operation's record says it created exactly that book. A
-  reverted apply is never finished this way and its files stay "previously
-  resolved". Reverting the earlier operation afterwards does nothing a second
-  time.
+- An owner apply that was cut off partway leaves a book behind, hidden or, if
+  it got as far as the last step before retiring the folder-book, already
+  visible. The next apply of the row now finishes that book instead of refusing
+  the row or making a second one, but only when the earlier operation's record
+  says it created exactly that book. A plan made while the visible book exists
+  now treats the row as the apply will see it (the same re-plan the apply does
+  under its lock), so the row stays offered to the owner and is not refused as
+  changed since it was planned. A reverted apply is never finished this way and
+  its files stay "previously resolved". Reverting the earlier operation
+  afterwards does nothing a second time.
