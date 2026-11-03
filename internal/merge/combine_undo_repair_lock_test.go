@@ -1,7 +1,7 @@
 // file: internal/merge/combine_undo_repair_lock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 69231be7-4f65-4f30-89ff-e01c12a59008
-// last-edited: 2026-10-30
+// last-edited: 2026-11-03
 
 package merge
 
@@ -97,10 +97,10 @@ func TestRestoreOverrideLocks_KeepsAStandingRepairLock(t *testing.T) {
 	require.Equal(t, database.RepairLockSource(op), got.LockSource)
 }
 
-// A restore racing ClaimRepairLocks on one book ends as exactly one complete
+// A restore racing ClaimRepairLocksLocked on one book ends as exactly one complete
 // write: the claimed lock (a person's, no source) when the claim ran second,
 // the restored repair lock when it ran first. Run with -race.
-func TestRestoreOverrideLocks_StripeAgainstClaimRepairLocks(t *testing.T) {
+func TestRestoreOverrideLocks_StripeAgainstClaimRepairLocksLocked(t *testing.T) {
 	store := setupTestStore(t)
 	svc := NewService(store)
 	for i := 0; i < 50; i++ {
@@ -115,7 +115,11 @@ func TestRestoreOverrideLocks_StripeAgainstClaimRepairLocks(t *testing.T) {
 		go func() { defer wg.Done(); _, restoreErr = svc.restoreOverrideLocks(book, o) }()
 		go func() {
 			defer wg.Done()
-			claimErr = database.ClaimRepairLocks(store, book, []string{database.FieldKeyTitle})
+			// The caller holds the field-state stripe, as metafetch's hand-picked
+			// apply does from its book write through the claim.
+			unlock := database.LockMetadataState(book)
+			defer unlock()
+			claimErr = database.ClaimRepairLocksLocked(store, book, []string{database.FieldKeyTitle})
 		}()
 		wg.Wait()
 		require.NoError(t, restoreErr)
