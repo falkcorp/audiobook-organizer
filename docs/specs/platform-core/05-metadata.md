@@ -147,7 +147,7 @@ type Env struct {
 	HTTP    HTTP                         // instance-scoped; implemented by *providerhttp.Client (M2)
 	Gate    Gate                         // same gate without HTTP, for SMTP/subprocess adapters
 	Secrets SecretReader                 // reads only the refs declared in this instance's Settings
-	Paths   library.PathMapper           // per-instance remote→local mapping (05-library); zero value = identity
+	Paths   library.PathMapper           // 05-library; adapters pass source "<kind>:<instance>" (e.g. "download:qbt-main")
 	Now     func() time.Time             // clock; fake in coretest
 }
 
@@ -337,11 +337,9 @@ var (
 Registration (the integration-facing slice of `module.Registrar`, which [06-app-sdk](06-app-sdk.md) owns):
 
 ```go
-// in package module
-type Registrar interface {
-	// ...routes, tasks, migrations, permissions, settings, events, UI (06)...
-	Adapter(d integrations.Descriptor) error // ID prefix must equal the module ID, or "core" for app.Options.Adapters
-}
+// in package module (06-app-sdk §6.4.3 owns the type; problems accumulate in r.Err()).
+// Adapter IDs must carry the module's prefix; "core.*" only via app.Options.Adapters.
+func (r *Registrar) Adapter(d ...integrations.Descriptor)
 
 // in package app: core adapters are opt-in per binary (03 §3.7 "the adapters it enables").
 app.New(ctx, app.Options{
@@ -444,7 +442,15 @@ archtest `IntegrationsDescriptorCallers` (only kind packages call `NewDescriptor
 
 1. `config.Schema`, `secrets.Ref`/`secrets.Value` and `UserID` are owned by 05-config / 05-authn; this file
    uses those names and changes import paths, not shapes, if they land elsewhere.
-2. A sixth kind (media-server sync: Plex/Jellyfin/ABS outbound) is not specified; `plugin.MediaPlayer`
+2. **Shape of `module.Adapter` (06-app-sdk §6.4.3).** The 06 draft has kind packages return
+   `module.Adapter{Capability, Kind, Factory any}` (e.g. `metadata.AdapterOf[Q, R]`). That makes
+   `integrations/*` import `module`, which is above them in R4, and moves the type check to a runtime
+   assertion. This file's shape avoids both: kind packages return `integrations.Descriptor` (type safety via
+   the unexported build func) and `Registrar.Adapter` accepts it (or `module.Adapter` wraps it). To be
+   reconciled with 06.
+3. `events.EntityRef{Module, Kind, ID}` (02 decision 6) is used by 05-download and 05-notify; its home
+   package is not fixed yet (05-rbac has `audit.Target` with the same shape). Same shape wherever it lands.
+4. A sixth kind (media-server sync: Plex/Jellyfin/ABS outbound) is not specified; `plugin.MediaPlayer`
    is deleted rather than carried forward because it has zero implementors (`internal/plugin/plugin.go:76-81`).
 
 ---
@@ -733,7 +739,7 @@ type Result[R any] struct {
 
 type ChainOptions[Q any] struct {
 	Instances   func() []integrations.Ref // ordered; default: enabled metadata instances whose adapter is Provider[Q,R], by Priority
-	Parallelism tasks.Parallelism         // required (R7 type); network-bound: e.g. tasks.Fixed(4, "provider fan-out")
+	Parallelism tasks.Parallelism         // required (R7 type); network-bound: e.g. tasks.Fixed(4)
 	PerProvider time.Duration             // per-provider deadline inside the call; default 20s
 	Mode        ChainMode                 // FirstHit (stop at first provider with results, in priority order) | All
 	Cache       *Cache[Q]                 // optional
