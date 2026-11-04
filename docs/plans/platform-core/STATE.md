@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.31.0 -->
+<!-- version: 1.32.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -45,6 +45,10 @@ No backward compatibility: data formats, storage layouts, key names, HTTP paths,
 ## Owner decision D11 (2026-11-04)
 
 No soaks: at most an optional 1-day smoke run. Optimise for the shortest path to the finished extraction (a complete product fixed forward over a long staged project). Fewer, larger releases are fine. Safety kept: backup before migration, restore as rollback, the test suites.
+
+## Owner decision D12 (2026-11-04)
+
+F1: auto-update paused from the first R2 flip until R2 ships, so R2 is one cutover release. F2: API keys and ABS phone-app sessions survive the cutover; web sessions and one-time tokens reset; task and log history kept. F3: the only frozen external contract is the Audiobookshelf-compatible API (verified: unprefixed root routes mounted by `internal/server/wire_abs_routes.go`; the ABS handlers contain no webhook code); everything else may change. F4: the pre-migration checkpoint auto-deletes after 7 days. Releases: R0 hotfixes, R1 core runtime, R2 cutover, R3 cleanup. The spec is being revised by nine parallel revisers on disjoint files.
 
 ## Blockers
 
