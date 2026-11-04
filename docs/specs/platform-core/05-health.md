@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -177,7 +177,7 @@ component `core.startup.<token>` with `StatusDegraded`.
 | `GET /api/core/v1/system/info` | `core:system.manage` (SEC-8) | 200 | `sysinfo.Info` |
 | `GET /api/core/v1/system/status` | `core:system.status` (readiness tokens only; seeded to editor/viewer if the shell shows a status banner, 05-rbac) | 200 | `{ready, not_ready[]}` — the `/readyz` body, authenticated |
 | `POST /api/core/v1/diagnostics` | `core:system.manage` | 202 + run ref | starts `core.diagnostics.export` |
-| `GET /api/core/v1/diagnostics/{run}` | the run's actor or `core:admin` | 200 zip / 404 / 410 expired | bundle |
+| `GET /api/core/v1/diagnostics/{run}` | route `Perm` `core:system.manage` with `Guards.Interactive`; the handler **also** requires that the caller is the run's actor or holds `core:admin` (SEC2-13) | 200 zip / 403 / 404 / 410 expired | bundle, re-filtered at download time (5H.3.5) |
 
 **Status topic.** `health` declares `core.system.status-changed.v1` in the one catalog
 ([05-events](05-events.md)): bus only, `Realtime{Coalesce: 1s}`, `Permission` `core:system.status`
@@ -186,6 +186,20 @@ component `core.startup.<token>` with `StatusDegraded`.
 tokens — never `Detail`, durations, versions or counts. It is published when `Ready()` or the set of
 not-ready tokens changes, and once with `ready:false` when shutdown starts; the shell's status banner
 and the legacy stream A `system.status` projection read it ([05-realtime](05-realtime.md) §4.7).
+
+**Probe paths are exact (FE2-6).** The liveness path is `/livez` everywhere (05-http-api uses the same
+name). `/livez` and `/readyz` are `Router.Infra` exact patterns, and their first segments, with
+`health` and `metrics`, are in `Router.NonSPA()` ([05-http-api](05-http-api.md) §4.10), so a variant
+such as `/livez/`, `/READYZ` or `/health/` gets a 404, never `200 text/html` that a monitor would read
+as healthy (today's `nonSPASegments` rule, `internal/server/spa_fallback.go:74-83`).
+
+**Auth-off reach (SEC2-21).** `GET /api/core/v1/health`, `/system/info` and the diagnostics routes need
+`core:system.manage`, which is `AuthRequired` (05-rbac §6.1), so with auth off they answer 401 where
+HEAD's `settings.manage` routes passed every request through (`wire_admin_role.go:18-22`). This is a
+deliberate tightening — detail text, versions, host data and bundles stay behind a credential (SEC-8)
+— recorded in 09 §9.2.6 and excluded from the auth-off half of `TestLegacyRoleReachUnchanged`. The
+token-only `GET /api/core/v1/system/status` (`core:system.status`, not `AuthRequired`) and the public
+probes keep their auth-off reach.
 
 Unauthenticated bodies follow today's rule (`handler.go:223-228`): booleans, fixed tokens,
 milliseconds — never error text, versions, counts or paths. ABO's `/health` shape (`status`,
@@ -196,13 +210,47 @@ registry ([09-abo-on-core](09-abo-on-core.md)), so core carries no audiobook fie
 
 ### 5H.3.4 Supervisor signals
 
-The kernel uses `core/internal/sdnotify` (from `internal/sdnotify`): `READY=1` once listeners are up
-and startup completed — **not** after module warm-up (current deliberate choice,
-`server_lifecycle.go:335-339`); `STATUS=` with the not-ready tokens while not ready; `WATCHDOG=1` at
-half of `WATCHDOG_USEC` when the unit sets `WatchdogSec`, driven by the same heartbeat as `/livez`
-(new: today there is no watchdog ping); `STOPPING=1` at shutdown start; `EXTEND_TIMEOUT_USEC` only
-through the tasks executor's bounded extension, and only when `NOTIFY_SOCKET` is set
-([05-tasks](05-tasks.md) 5T.4); Docker and launchd have no equivalent.
+The kernel uses `core/internal/sdnotify` (from `internal/sdnotify`) through one `health.Supervisor`
+per `App`: `READY=1` once listeners are up and startup completed — **not** after module warm-up
+(current deliberate choice, `server_lifecycle.go:335-339`); `STATUS=` with the not-ready tokens while
+not ready; `WATCHDOG=1` at half of `WATCHDOG_USEC` when the unit sets `WatchdogSec`, driven by the
+same heartbeat as `/livez` (new: today there is no watchdog ping); `STOPPING=1` at shutdown start.
+
+`EXTEND_TIMEOUT_USEC` has exactly **two** uses (OPS2-17), both only when `NOTIFY_SOCKET` is set (Docker
+and launchd have no equivalent):
+
+1. **Startup steps** — kept from HEAD (`internal/database/startup_notify.go:15-27`,
+   `internal/sdnotify/sdnotify.go:46-53`, `internal/search/register.go:55`), which the committed unit
+   relies on (`deploy/audiobook-organizer.service:26-31`: `TimeoutStartSec=300` sits above the measured
+   warm-up, and long steps push it out). Right before a startup step that makes real progress — store
+   open (WAL replay), each migration step or chunk group of 05-storage §5S.3.5 ("Systemd budget"),
+   the pre-migration checkpoint, a mirror rebuild, and a search-index open (05-indexer) — the step calls
+   `Supervisor.ExtendStart(step)`, which extends the start deadline to at least
+   `StartupStepBudget` (10 min, HEAD's value) from that moment. It is called per step, **never from a
+   timer**, so a step that hangs is still killed when its own budget runs out. Lower layers do not import
+   `health`: the kernel hands storage and the indexer `ExtendStart` as a plain `func(step string)`.
+2. **Stop** — the tasks executor's one bounded extension for an in-flight `Uninterruptible` run
+   ([05-tasks](05-tasks.md) 5T.4), at most `core.tasks.shutdown_extend_max` beyond the stop budget.
+
+A deploy or rollback script must therefore not treat a long, extending start as a failure: 09 S0
+makes `scripts/deploy-wait-ready.sh` keep polling while the unit is `activating` and bound only the
+time after `READY=1` with `DEPLOY_READY_TIMEOUT`.
+
+```go
+// Supervisor is the kernel's supervisor-signal handle (one per App, R5).
+type Supervisor struct{ /* unexported */ }
+
+// StartupStepBudget is the start time one progressing startup step asks for.
+const StartupStepBudget = 10 * time.Minute
+
+// ExtendStart: startup use (1). No-op without NOTIFY_SOCKET; a failure is
+// logged and never fails startup.
+func (s *Supervisor) ExtendStart(step string)
+
+// ExtendStop: stop use (2); granted at most once per shutdown, capped by
+// core.tasks.shutdown_extend_max; false when not under systemd.
+func (s *Supervisor) ExtendStop(d time.Duration) bool
+```
 
 ### 5H.3.5 Diagnostics bundle
 
@@ -228,7 +276,7 @@ func WriteJSONL[T any](w Writer, name string, items iter.Seq[T]) error
 // carried into the task (the run outlives the request: current ExportOptions rule).
 type Viewer struct {
 	ActorID string
-	Can     func(rbac.Scope) bool
+	Can     func(rbac.Permission) bool
 }
 
 // Contributor is registered by a module (Registrar.Diagnostics, an addition to 06).
@@ -239,6 +287,15 @@ type Contributor interface {
 
 (The `Writer` interface has `JSON` and `File`; generic JSONL is the free function `WriteJSONL`
 because Go methods cannot have type parameters.)
+
+**Download authorizes the credential, not only the user (SEC2-13).** The start-time `Viewer` decides
+what the bundle may contain; the download re-checks the presenting credential. The route needs
+`core:system.manage` with an interactive method (so a scrape key scoped `core:metrics.read`, a
+delegated temp-login session or any non-interactive key of the actor gets 403), and the handler also
+requires the run's actor or `core:admin`. The `core.manifest` section records each section's `Perm`,
+and the handler streams the zip with every section directory omitted whose `Perm` the **download-time**
+checker does not satisfy — the effective view is start-time `Viewer` ∩ download-time checker — so an
+admin demoted after the run started cannot fetch what they could no longer read.
 
 Core sections:
 
@@ -269,7 +326,8 @@ Generation is the core task `core.diagnostics.export`: Shape Task, `ReadOnly`, `
 core:system.manage`. The zip is written through an `os.Root` opened on
 `core.diagnostics.dir` (no path escapes), named `<run-id>.zip`, deleted after
 `core.diagnostics.retention` by the task `core.diagnostics.prune`
-(`Schedule: tasks.ScheduleFromConfig("core.schedules.diagnostics.prune")`, default every 1 h; SIMP-6).
+(`Schedule: tasks.ScheduleFromConfig("core.diagnostics.schedules.prune")`, default every 1 h; the key
+lives in the owner's own namespace, 05-tasks 5T.3.8, R2-7).
 
 ### 5H.3.6 sysinfo
 
@@ -310,11 +368,18 @@ Platform files `memory_{linux,darwin,windows}.go` and `uptime_{linux,darwin,wind
 
 ## 5H.4 Lifecycle and stop budget
 
-1. `app.New`: kernel creates the `Registry` and `Startup`; core and module components/steps register.
+The boot phases are defined once, in [06](06-app-sdk.md) §6.5.1 (R2-8), and the start/stop order in
+06 §6.5.2. `health` writes nothing to storage during boot.
+
+1. `app.New`: the kernel creates the `Supervisor` before the first phase (so storage open and every
+   migration step of P2/P4 can call `ExtendStart`), and the `Registry` and `Startup` in P5; core and
+   module components/steps register in P6–P7.
 2. `App.Run`: startup steps run in table order; listeners open; `READY=1`; checks start (one
    goroutine per component with a `Probe`, each on its own interval with jitter; push-only
    components cost nothing). Probes and the heartbeat are in-process ticks, not tasks (05-tasks
-   5T.3.8 lists them): their intervals are below the scheduler's 1-minute poll.
+   5T.3.8 lists them): their intervals are below the scheduler's 1-minute poll. Module checks call
+   module code, so they start only after module hooks have started and stop before module hooks stop
+   (06 §6.5.2 lists them among the core components that invoke module callbacks; COR2-15).
 3. Shutdown: readiness flips to not-ready **first** (load balancers and the SPA reconnect logic
    see 503 before connections drop), `STOPPING=1`, then the kernel runs the stop order of
    [06](06-app-sdk.md) §6.5.2 (COR-8) with deadlines carved from **one** budget.
@@ -325,7 +390,7 @@ replaced by this key and the phase slices below (a hook's stop gets the hooks ph
 
 | Phase (06 order) | Budget | Today |
 |---|---|---|
-| total `core.shutdown.budget` | 25 s | phases unbounded as a sum (up to 45 s) |
+| total `core.shutdown.budget` | 25 s; **8 s** when `sysinfo.Info.Container` is set and no layer sets the key (Docker's default grace is 10 s; OPS2-23) | phases unbounded as a sum (up to 45 s) |
 | listeners / HTTP drain | `min(core.shutdown.http_drain=10s, remaining)` | 30 s (`server_lifecycle.go:582`) — a behaviour change 09 S2 must list |
 | scheduler stop, tasks drain | `min(core.tasks.shutdown_drain=10s, remaining)` | 10 s (`:611`) |
 | `Bus.Close` | `min(core.events.close_drain=2s, remaining)` | — |
@@ -337,11 +402,18 @@ supervisor waits at least 30 s before SIGKILL. That is not true today for the co
 (5H.2): the committed systemd unit sets no `TimeoutStopSec`, Docker's default grace is 10 s with no
 `stop_grace_period` in compose, and the launchd plist sets no `ExitTimeOut`. The stage that moves
 the lifecycle into the kernel (09 S2) therefore ships `TimeoutStopSec=30` in the committed unit,
-`stop_grace_period: 30s` in `docker-compose.yml`, `ExitTimeOut` 30 in the plist, and a documented
-`docker run --stop-timeout 30`; an operator who cannot raise the supervisor's timeout lowers
-`core.shutdown.budget` below it. Done-check for that stage: `systemctl stop` during a running task
-stamps it `interrupted` within the budget, and the journal shows no SIGKILL. The only way past the
-budget is the tasks executor's one bounded `EXTEND_TIMEOUT_USEC` under systemd (5H.3.4).
+`stop_grace_period: 30s` in `docker-compose.yml` together with `ABO_CORE_SHUTDOWN_BUDGET=25s` (the
+`<APP>_CORE_SHUTDOWN_BUDGET` variable, 05-config §1.3.6; without it a container keeps the 8 s default,
+because an image cannot carry a stop timeout and plain `docker run` grants 10 s), `ExitTimeOut` 30 in
+the plist, and a documented `docker run --stop-timeout 30`; an operator who cannot raise the
+supervisor's timeout lowers `core.shutdown.budget` below it. The same unit sets `KillMode=mixed`:
+under the default control-group mode systemd sends SIGTERM to every process of the unit at once, so
+subprocess-mode runs (own process group, `internal/operations/registry/subprocess.go:225,328`) would
+die at t = 0 instead of being stamped by the executor (OPS2-23). Done-check for that stage:
+`systemctl stop` during a running task — in-process and subprocess mode — stamps it `interrupted`
+within the budget, and the journal shows no SIGKILL. The only way past the **stop** budget is the tasks
+executor's one bounded `ExtendStop` under systemd (5H.3.4 use 2); the startup extensions of use 1
+concern the start timeout only.
 
 ## 5H.5 Error semantics
 
@@ -357,6 +429,9 @@ budget is the tasks executor's one bounded `EXTEND_TIMEOUT_USEC` under systemd (
 | Diagnostics redactor error | closed per value (`<redacted:error>`) | never leak on error |
 | Diagnostics section error | open: section replaced by an error note in the manifest; bundle continues | partial bundle beats none |
 | Bundle download by another actor | closed: 404 | bundles contain the requester's view |
+| Bundle download by the actor's narrow key, delegated session or non-interactive method | closed: 403 | the credential, not only the user, is authorized (SEC2-13) |
+| Section whose `Perm` the download-time checker no longer satisfies | closed per section: omitted from the streamed zip, listed as omitted | demotion after the run started (SEC2-13) |
+| `ExtendStart` / `ExtendStop` notify write fails | open: logged, startup/shutdown continue | a supervisor signal must never fail the process (HEAD rule) |
 | sysinfo platform call fails | open: field zero | informational |
 
 ## 5H.6 Concurrency contract
@@ -370,19 +445,21 @@ internally.
 
 ## 5H.7 Config keys
 
-| Key | Type | Default | Hot reload |
-|---|---|---|---|
-| `core.health.check_interval` | duration | 30s | yes |
-| `core.health.check_timeout` | duration | 5s | yes |
-| `core.health.live_stall` | duration | 60s | yes |
-| `core.shutdown.budget` | duration | 25s (must stay below the supervisor's stop timeout, 5H.4) | yes |
-| `core.shutdown.http_drain` | duration | 10s | yes |
-| `core.schedules.diagnostics.prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes |
-| `core.diagnostics.dir` | path | `<data-dir>/diagnostics` | no |
-| `core.diagnostics.retention` | duration | 24h | yes |
-| `core.diagnostics.log_lines` | int | 5000 | yes |
-| `core.diagnostics.task_runs` | int | 200 | yes |
-| `core.diagnostics.max_file_bytes` | int | 64 MiB | yes |
+`Protection` levels are 05-config's (§1.3.1; SEC2-8); `—` means `ProtectNone`.
+
+| Key | Type | Default | Hot reload | Protection |
+|---|---|---|---|---|
+| `core.health.check_interval` | duration | 30s | yes | — |
+| `core.health.check_timeout` | duration | 5s | yes | — |
+| `core.health.live_stall` | duration | 60s | yes | — |
+| `core.shutdown.budget` | duration | 25s; 8s in a container when unset (must stay below the supervisor's stop timeout, 5H.4) | **no** (restart-bound; the same value in 06, OPS2-23) | — |
+| `core.shutdown.http_drain` | duration | 10s | yes | — |
+| `core.diagnostics.schedules.prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes | — |
+| `core.diagnostics.dir` | path | `<data-dir>/diagnostics` | no | `ProtectAdmin` (a server path, 05-config `FieldServerPath`) |
+| `core.diagnostics.retention` | duration | 24h | yes | — |
+| `core.diagnostics.log_lines` | int | 5000 | yes | — |
+| `core.diagnostics.task_runs` | int | 200 | yes | — |
+| `core.diagnostics.max_file_bytes` | int | 64 MiB | yes | — |
 
 ## 5H.8 Metrics
 
@@ -404,6 +481,7 @@ internally.
 | Test | Proves |
 |---|---|
 | `TestReadyz_CriticalDownIs503_LivezStays200` | probe split |
+| `TestProbes_VariantsAreNotSPA` (`/livez/`, `/READYZ`, `/health/`, `/metrics/` → 404, never `text/html`) | FE2-6 |
 | `TestReadyz_FlipsBeforeHTTPDrain` | drain order |
 | `TestProbes_BodyHasOnlyTokens` (fuzz Reason/Detail with secrets and paths) | no leak |
 | `TestCheck_PanicAndTimeoutBecomeDown` (synctest) | isolation |
@@ -414,6 +492,9 @@ internally.
 | `TestDiagnostics_SecretsNeverSerialised` (config with secret refs; scan zip bytes for the secret values) | typed redaction |
 | `TestDiagnostics_PatternRedaction` (URLs with credentials, bearer headers, invite paths) | pattern redaction |
 | `TestDiagnostics_ViewerFiltersSections`, `TestDiagnostics_DownloadOtherActor404` | permission |
+| `TestDiagnostics_NarrowKeyOfActor403`, `TestDiagnostics_DemotedActor403` (role removed after start: affected sections omitted or 403) | SEC2-13 |
+| `TestStartup_ExtendPerStepNeverTimer` (fake notify socket: one `EXTEND_TIMEOUT_USEC` per progressing step, none while a step hangs) and the 09 S0 done-check "a 12-minute fake migration under the unit is not killed" | OPS2-17 |
+| `TestStopBudget_ContainerDefault8s` | OPS2-23 |
 | `TestDiagnostics_PathsConfinedToRoot` | `os.Root` |
 | `TestNoGlobals_Health` (R5 AST) | no globals |
 
@@ -474,3 +555,16 @@ Integration pass (cross-cluster requests, 2026-11-04):
 - integration pass: R-G request (COR-21) — `health.Reporters` (module handle, `ErrNotOwned`) defined for `module.Deps.Health`.
 - integration pass: R-D request (SEC-8) — `core.system.status-changed.v1` declared here with permission `core:system.status` and a token-only payload, as 05-realtime §4.7 consumes it.
 - integration pass: Open items 4 and 5 closed (06 §6.5.2; 05-rbac `core:system.status`).
+
+Round 2:
+
+- COR2-14 / SEC2-25 — `Viewer.Can` takes `rbac.Permission` (no `rbac.Scope`).
+- COR2-15 (reference) — module health checks start after and stop before module hooks (06 §6.5.2).
+- FE2-6 — one liveness path `/livez`; probe first segments plus `health`/`metrics` are non-SPA; variant test.
+- OPS2-17 — `EXTEND_TIMEOUT_USEC` has two uses: per-step startup extension (HEAD's 10 min, never on a timer, `Supervisor.ExtendStart` passed to storage/indexer as a func) and the executor's stop extension; deploy-wait note.
+- OPS2-23 — `core.shutdown.budget` restart-bound; `KillMode=mixed` in the S2 unit and subprocess-mode stop check; 8 s container default with `ABO_CORE_SHUTDOWN_BUDGET=25s` in compose.
+- R2-7 — diagnostics prune schedule key `core.diagnostics.schedules.prune` in the owner's namespace.
+- R2-8 — lifecycle references 06 §6.5.1; `Supervisor` exists before P2.
+- SEC2-8 — Protection column in 5H.7 (`core.diagnostics.dir` is `ProtectAdmin`).
+- SEC2-13 — diagnostics download: `core:system.manage` + interactive, actor-or-admin, sections re-filtered at download time; tests.
+- SEC2-21 — auth-off tightening of health/info/diagnostics stated, recorded in 09 §9.2.6.

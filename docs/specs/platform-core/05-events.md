@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -67,7 +67,7 @@ package events // github.com/falkcorp/mediacore/events
 // Topic names a typed event stream. Name grammar (03 §3.6):
 //   "<moduleID>.<noun>.<verb-past>.v<N>", segments [a-z][a-z0-9-]*, N >= 1;
 //   <noun> may carry one qualifier segment ("download.grab").
-// e.g. "books.book.imported.v1", "core.task.run-changed.v1", "core.download.grab.added.v1".
+// e.g. "books.book.imported.v1", "core.task.run-changed.v1", "core.integration.health.changed.v1".
 // A Topic value is inert until its owner declares it.
 type Topic[T any] struct{ name string }
 
@@ -82,20 +82,33 @@ func (t Topic[T]) Spec(s TopicSpec) TopicSpec
 type TopicSpec struct {
 	Name       string
 	Schema     json.RawMessage  // payload JSON Schema; the versioned contract raw subscribers and raw consumers validate against
-	Permission rbac.Requirement // who may observe it on any surface (realtime, notify routing, HTTP); zero value rejected
+	Permission rbac.Requirement // who may observe it on any surface (realtime, notify rules, HTTP); zero value rejected
 	Visible    VisibleFunc      // optional per-envelope filter on top of Permission (e.g. a task definition's View)
+	Redact     RedactFunc       // optional per-subscriber payload reduction, applied after Visible (COR2-2)
 	Durable    *Durable         // non-nil: an outbox topic (5E.4); nil: bus only
-	Notify     *NotifyMeta      // non-nil: offered to notification routing (meaning owned by 05-notify)
+	Notify     *NotifyMeta      // non-nil: may be emitted as a notification (meaning owned by 05-notify)
 	Realtime   *RealtimeMeta    // non-nil: exposed as a realtime stream (meaning owned by 05-realtime)
 }
 
 type VisibleFunc func(ctx context.Context, who rbac.Checker, e RawEnvelope) bool
 
+// RedactFunc reduces a payload for one subscriber, e.g. blanks user-identifying
+// text the subscriber may not read. Only the topic's owner sets it, in the
+// catalog entry, so the one declaration carries it (SIMP-5): every realtime
+// surface (native streams and legacy projections, 05-realtime) applies it after
+// Visible, and an owner's HTTP read model of the same data calls the same
+// function (05-tasks RedactRunView). 05-realtime's RedactFunc is this type.
+type RedactFunc func(who rbac.Checker, payload json.RawMessage) json.RawMessage
+
 type Durable struct {
 	Partitions int // ordering domains; default 16; fixed for the topic's lifetime
 }
 
-// Plain data, so events imports neither notify nor realtime.
+// Plain data, so events imports neither notify nor realtime. NotifyMeta alone
+// produces no notification (COR2-3): it marks the topic as notifiable, and the
+// owner emits each notification through 05-notify's outbox-backed Publish
+// (modules: module.Deps.Notify; core: the owning service), staged in the same
+// batch as the state change. No bus subscriber routes notifications.
 type NotifyMeta struct {
 	Title           string
 	DefaultSeverity string // "info" | "warning" | "error"
@@ -115,20 +128,32 @@ type Catalog interface {
 
 Kernel validation at registration (boot fails): bad name grammar; a name declared twice; a topic
 outside the declaring module's namespace; a zero `Permission`; a `Permission` naming another
-module's scope (05-rbac R3 rule); `Realtime` or `Notify` on a topic whose `Schema` is empty.
+module's scope (05-rbac R3 rule); `Realtime` or `Notify` on a topic whose `Schema` is empty;
+`Realtime` on a `Durable` topic, rejected with "Realtime on a Durable topic: declare a companion bus
+topic" — durable messages never reach the bus the realtime hub subscribes to, so such an entry would
+boot and stream nothing (COR2-17; 05-download's `core.download.item.changed.v1` is that companion).
 
 **Core topics** (declared by core; payload types live in core, so any module may consume them typed):
 
 | Topic | Owner | Channel | Permission / visibility |
 |---|---|---|---|
-| `core.task.run-changed.v1` | 05-tasks | bus, `Realtime{Coalesce}` | `AnyAuthenticated` + `Visible` = the definition's `Perms.View` (COR-20: a books-only user sees live progress for the runs REST shows) |
-| `core.task.log-appended.v1` | 05-tasks | bus, `Realtime` | as above |
-| `core.task.finished.v1` | 05-tasks | bus, `Notify` (outcome in payload) | as above |
-| `core.update.found.v1` | 05-updater | bus, `Notify` | `core:system.manage` |
-| `core.download.grab.added.v1`, `core.download.grab.failed.v1`, `core.download.item.changed.v1` | [05-download](05-download.md) (payloads and producer there) | as 05-download declares (`Durable` where a consumer's correctness depends on it) | as 05-download declares |
+| `core.task.run-changed.v1` | 05-tasks | bus, `Realtime{Coalesce}` | `AnyAuthenticated` + `Visible` = the definition's `Perms.View` (COR-20: a books-only user sees live progress for the runs REST shows) + `Redact` = `tasks.RedactRunView` (blanks the current-item label without `core:users.view`, COR2-2) |
+| `core.task.log-appended.v1` | 05-tasks | bus, `Realtime` | `AnyAuthenticated` + `Visible` as above |
+| `core.task.finished.v1` | 05-tasks | bus + `Notify` (outcome in payload); the notification is staged by the executor's kernel-wired `OnTerminal` hook through 05-notify `Publish` in the terminal batch (05-tasks 5T.4) | as `run-changed` |
+| `core.update.found.v1` | 05-updater | bus + `Notify`; the check run stages the notification through `Publish` (05-updater 5U.4) | `core:system.manage` |
 
-Other core topics (`core.rbac.changed.v1`, backup, integration health, auth) are declared by their
-owning files in the same catalog with the same rules.
+Other core topics (`core.rbac.changed.v1`, backup, `core.integration.health.changed.v1`, auth) are
+declared by their owning files in the same catalog with the same rules.
+
+**Deferred-build topics** (declared only by the deferred download build, [05-download](05-download.md)
+§4.5 phase 2, which owns payloads, producer and channel; phase 1 declares none of them, so no topic
+picker offers a topic without a producer; SIMP2-10, COR2-19):
+
+| Topic | Channel (05-download) |
+|---|---|
+| `core.download.grab.added.v1`, `core.download.grab.failed.v1` | outbox (`Durable`) |
+| `core.download.item.completed.v1`, `core.download.item.failed.v1`, `core.download.item.removed.v1` | outbox (`Durable`) |
+| `core.download.item.changed.v1` | bus, notify-only (the realtime companion of the durable item topics) |
 
 ### 5E.3.2 Bus
 
@@ -206,8 +231,9 @@ func (b *Bus) Close(ctx context.Context) error // stop accepting, drain queues u
 ```
 
 Subscription names are `<moduleID>.<name>` and unique per bus (kernel-checked); they are the
-`subscriber` metric label. Core subscribers (the realtime hub, notify routing) are declared by the
-kernel before `Open` the same way.
+`subscriber` metric label. Core subscribers (the realtime hub) are declared by the kernel before
+`Open` the same way. Notification delivery is **not** a bus subscriber: it is outbox-backed from
+`notify.Publish` onward (05-notify §4; COR2-3), because the bus may drop.
 
 ## 5E.4 Go API — `outbox`
 
@@ -261,9 +287,15 @@ type RawMessage struct {
 }
 
 // Handler is a consumer declaration, registered in Register through
-// Registrar.OutboxHandler (06 §6.4.3), never at runtime. Consumer names are
-// "<moduleID>.<name>" and are also listed in the module manifest
+// Registrar.OutboxHandler (06 §6.4.3), never at runtime. Module consumer names
+// are "<moduleID>.<name>" and are also listed in the module manifest
 // (Manifest.OutboxConsumers) so they are known while the module is disabled.
+// Core consumer names are "core.<name>" and are listed in the kernel's static
+// core consumer list (kernel/catalog: core.notify.deliver and, in the deferred
+// acquire build, core.acquire.download-events); a core consumer whose name is
+// not on that list fails boot (COR2-4). acquire's import is not a core consumer:
+// it is a module kind <module>.acquire.import that core.acquire.download-events
+// stages with Tx.StartRun (COR2-11).
 type Handler struct{ /* unexported */ }
 
 // --- Module consumers: always a task run (COR-9, 05-tasks 5T.3.12) ---
@@ -272,13 +304,17 @@ type Handler struct{ /* unexported */ }
 // the consumer's module), staged in the same batch as the cursor advance with
 // IdempotencyKey "<consumer>:<topic>:<seq>". This is how event-triggered tasks
 // are declared (it replaces OperationDef.Triggers). Typed form: own and core.* topics.
+// opts must contain exactly one of Live() or Preview(): the mode of every run
+// it starts (the outbox form of 05-tasks rule D8; COR2-5). Registration fails
+// otherwise, so an outbox-triggered writer can never default to Preview.
 func ConsumeIntoTask[T any](t Topic[T], consumer string, kind tasks.Kind,
-	params func(Message[T]) (any, tasks.ModeRequest, error), opts ...ConsumerOption) Handler
+	params func(Message[T]) (any, error), opts ...ConsumerOption) Handler
 
 // ConsumeIntoTaskRaw consumes ANOTHER module's durable topic by name without
 // importing it (R3, COR-11); the payload is validated against the declared schema.
+// Same mode rule as ConsumeIntoTask.
 func ConsumeIntoTaskRaw(topic, consumer string, kind tasks.Kind,
-	params func(RawMessage) (any, tasks.ModeRequest, error), opts ...ConsumerOption) Handler
+	params func(RawMessage) (any, error), opts ...ConsumerOption) Handler
 
 // --- Core consumers only (archtest.OutboxModuleConsumersAreTasks flags these in module packages) ---
 
@@ -286,10 +322,29 @@ func ConsumeIntoTaskRaw(topic, consumer string, kind tasks.Kind,
 // must be idempotent (keyed on IdempotencyKey), and must not write module entities.
 type HandlerFunc[T any] func(ctx context.Context, m Message[T]) error
 
+// Tx is a core TxHandlerFunc's view of the relay batch (COR2-10). The relay
+// opens the batch, the handler stages its writes and runs, and the relay
+// commits them together with the cursor advance: effectively once.
+type Tx struct{ /* unexported */ }
+
+// Batch is the relay batch; the handler stages writes to its OWN core keyspace
+// only (bound through storage.Batch.Bind, 05-storage §5S.3.2).
+func (tx *Tx) Batch() *storage.Batch
+
+// StartRun stages a run of any registered kind -- core, or a module kind built
+// for core to start, such as <module>.acquire.import (05-tasks 5T.3.12, COR2-11)
+// -- in the relay batch through Executor.StartIn, with Trigger Outbox and
+// IdempotencyKey "<consumer>:<topic>:<seq>". req.Mode must be ModeLive or
+// ModePreview (unset: tasks.ErrModeUnset, a programming error that dead-letters).
+// The run carries its own kind's Effects, Subjects and ref locks, so module
+// writes still pass G8.
+func (tx *Tx) StartRun(kind tasks.Kind, req tasks.StartRequest) (tasks.RunRef, error)
+
 // TxHandlerFunc is for core consumers whose effect is a write to their own
-// core keyspace: the relay opens b, the handler stages its writes, and the
-// relay commits them together with the cursor advance — effectively once.
-type TxHandlerFunc[T any] func(ctx context.Context, b *storage.Batch, m Message[T]) error
+// core keyspace and/or a run to stage (e.g. acquire applies a tracked-download
+// transition and, for ImportPending, stages the import run in the same batch,
+// so the run can never start before the transition commits; COR2-10).
+type TxHandlerFunc[T any] func(ctx context.Context, tx *Tx, m Message[T]) error
 
 func Consume[T any](t Topic[T], consumer string, h HandlerFunc[T], opts ...ConsumerOption) Handler
 func ConsumeTx[T any](t Topic[T], consumer string, h TxHandlerFunc[T], opts ...ConsumerOption) Handler
@@ -301,6 +356,20 @@ func Unordered() ConsumerOption                     // no per-key head-of-line b
 func MaxAttempts(n int) ConsumerOption              // default core.outbox.max_attempts (20)
 func Backoff(min, max time.Duration) ConsumerOption // default 1s .. 5m, full jitter
 func FromBeginning() ConsumerOption                 // a NEW consumer starts at the oldest retained message instead of "now"
+
+// Live / Preview set the mode of the runs a ConsumeIntoTask[Raw] starts;
+// exactly one is required there and neither is accepted on other forms.
+func Live() ConsumerOption
+func Preview() ConsumerOption
+
+// Where filters any consumer form (COR2-10): a message for which f returns
+// false is acked (cursor advanced in the relay batch) without running the
+// handler or starting a run, and counted as filtered. It is how a consumer
+// keeps only messages it owns, e.g. Where(func(m Message[download.ItemEvent]) bool
+// { return m.Payload.Owner == "core.acquire" }). Where[T] on a consumer of a
+// different payload type fails registration; raw consumers use WhereRaw.
+func Where[T any](f func(Message[T]) bool) ConsumerOption
+func WhereRaw(f func(RawMessage) bool) ConsumerOption
 
 var (
 	ErrUnknownTopic = errors.New("outbox: topic not declared")
@@ -360,28 +429,36 @@ Storage (`c/outbox/` core keyspace):
 | Commit-ordered intake (COR-10) | The relay is the single writer of `m/` and `seq/`. It scans `in/<topic>/` and, in one batch per topic chunk, deletes the intake rows, writes them to `m/<topic>/<pp>/<seq>` with consecutive seqs, and advances `seq/<topic>`. The batch goes through the relay run's fenced write path, and `seq/<topic>` lies in a `Serialized` sub-prefix of `c/outbox/` and is read with `Batch.GetForUpdate` (an `Expect` precondition checked at commit, 05-storage §5S.3.2, DATA-13), so a zombie relay whose read went stale fails its commit and can never number a message twice. |
 | No reissue (DATA-19, consumer side) | A seq and the high-water mark that covers it commit in the same batch; a crash before that commit leaves the intake rows in place to be sequenced again, and nothing after it needs redoing. There is no lease and no shared `storage.Sequence`. |
 | No horizon, no global stall (COR-10) | Only committed messages receive a seq, so a cursor can never skip one and no relay waits for an unresolved batch. A long-open or leaked producer batch (error path, panic, a large migration step) delays only its own messages. Topics are sequenced independently, so one topic's backlog never holds another's. |
-| Intake latency | `Stage` nudges the relay (in memory); the relay scans intake after the nudge and at least every `core.outbox.intake_poll` (1 s; an in-process tick, 05-tasks 5T.3.8). An empty prefix costs one seek. |
+| Intake latency | `Stage` nudges the relay (in memory); the relay scans intake after the nudge and at least every `core.outbox.intake_poll` (1 s). The scan loop runs **inside** the relay's task run and is that run's progress heartbeat (5E.5.3); it is not a separate in-process component (COR2-5). An empty prefix costs one seek. |
 | Partitioning / order | `partition = fnv1a32(key) % partitions`. Messages of one key are sequenced in intake order; rows taken in one scan are ordered by their stage-time ULID. Two batches that stage the same key **concurrently** have no defined order between their state changes either, so a producer needing strict per-key order serialises those writes (for example under the entity's ref lock, 05-tasks 5T.3.4). Per (consumer, partition), messages are delivered one at a time in seq order. A failing head message blocks later messages of that partition for that consumer (head-of-line) — the cost of per-key order. `Unordered()` consumers skip HOL blocking and process a partition with up to `core.outbox.unordered_parallelism` in flight. |
 | At-least-once | A message is redelivered until its consumer acks (handler returned nil and the cursor write committed). Crash after a core handler's external effect but before the ack → redelivery; handlers dedupe on `IdempotencyKey`. `ConsumeTx` and `ConsumeIntoTask[Raw]` commit effect (or the run's queue row) + cursor in one batch: effectively once. |
 | Retry | Exponential backoff with full jitter between `Backoff(min,max)`; `ErrPermanent`, `ErrSchema` or `MaxAttempts` reached → dead letter, cursor advances, `core.outbox` health component Degraded while any dead letter exists. |
 | Idempotency at enqueue | Only for explicit `IdempotencyKey`: at intake, a second message with the same key within the TTL is dropped (its intake row deleted, the first message stands), counted. |
-| Retention (COR-12) | A message is deleted when every consumer **declared** for its topic — in the manifests of enabled **and disabled** modules (`Manifest.OutboxConsumers`, 06) — has a persisted cursor past it. A disabled module's consumers therefore keep their messages: not delivered, not dropped, until the module is re-enabled (delivery resumes from the persisted cursor) or an operator purges that consumer's backlog (5E.11, audited). A declared consumer that has never run holds no messages; its cursor is created at first registration ("now", or the oldest retained message with `FromBeginning()`). `core.outbox.orphan_retention` (7 d) applies only to cursors of consumer names that no manifest in the build declares any more, and to topics with no declared consumer; those messages are then dropped with a counted metric (fail-open: a removed consumer must not grow the store forever). Dead letters stay until an operator retries or discards them. |
+| Retention (COR-12, COR2-4) | A message is deleted when every consumer in its topic's **declared-consumer set** has a persisted cursor past it. That set is the union of (a) `Manifest.OutboxConsumers` of every manifest in the build, enabled **and disabled** (06), and (b) the kernel's static core consumer list (`kernel/catalog`, 5E.4): core consumers (`core.notify.deliver`, `core.acquire.download-events`) are registered by the kernel, not by a manifest, and still hold their messages until acked. A disabled module's consumers therefore keep their messages: not delivered, not dropped, until the module is re-enabled (delivery resumes from the persisted cursor) or an operator purges that consumer's backlog (5E.11, audited). A declared consumer that has never run holds no messages; its cursor is created at first registration ("now", or the oldest retained message with `FromBeginning()`). A topic whose declared-consumer set is **empty** is never "acked by everyone" vacuously: its messages are kept for `core.outbox.orphan_retention` (7 d). Apart from that, `orphan_retention` applies only to cursors of consumer names in **neither** set (a consumer removed from the build); those messages are then dropped with a counted metric (fail-open: a removed consumer must not grow the store forever). Dead letters stay until an operator retries or discards them. |
 | New consumer | Starts at "now" (cursor = current topic high-water mark) unless `FromBeginning()`. |
 
 ### 5E.5.3 The relay is a core task
 
-The relay is the task kind `core.outbox.relay` ([05-tasks](05-tasks.md)): Shape Task,
-`Resume: ResumeFromZero` (all progress lives in intake rows and cursors, so restarting from zero is
-exact), `ConcurrencyKey: core.outbox.relay`, `Priority: tasks.PrioritySystem` (reserved system
-workers, so a saturated executor cannot starve it), `Schedule: tasks.Every(time.Minute).OnStart()` —
-core plumbing, deliberately not an operator schedule key (05-tasks 5T.3.8) — which folds into the
-active run, so it only *ensures* the relay is running. Effects: `ReadOnly` plus
-`Writes(tasks.Res("core","outbox"))`; outbox-triggered runs are staged through the kernel-internal
-`Executor.StartIn` (05-tasks 5T.3.12), so the relay never writes module entities. One run drains for
-at most `core.outbox.relay_rotate` (1 h) and then succeeds, so history shows bounded runs and a wedged
-consumer cannot keep one run alive forever. A `Stage` nudge wakes the running relay; with no relay
-running it starts one (rate-limited to 1/s). Per-consumer delivery inside the run uses
-`tasks.RunItems` over (consumer, partition) pairs with
+The relay is the task kind `core.outbox.relay` ([05-tasks](05-tasks.md)); its definition registers
+and delivers as written (COR2-5):
+
+| Field | Value | Why |
+|---|---|---|
+| Shape | Task | one long-lived run that drains, then rotates |
+| `Effects` | `tasks.Writes(tasks.Res("core","outbox"))` — one constructor; there is no `ReadOnly` part | the intake batches go through the run's fenced `Writer`, so `rc.Writer()` must be non-nil |
+| `Resume` | `ResumeFromZero` | all progress lives in intake rows and cursors, so restarting from zero is exact |
+| `ConcurrencyKey` | `core.outbox.relay` | one relay at a time |
+| `Priority` | `tasks.PrioritySystem` | reserved system workers, so a saturated executor cannot starve it |
+| `Schedule` | `tasks.Every(time.Minute).OnStart().Live()` | `Every` is reserved for this kind (05-tasks 5T.3.8); `.Live()` satisfies the scheduled-writer rule D8; the tick folds into the active run, so it only *ensures* the relay is running; deliberately not an operator schedule key |
+| `Timeout` | `core.outbox.relay_rotate` + 5 min, fixed at registration | the run ends **successfully** at `relay_rotate`; the timeout is only a backstop and a rotation never ends `timed_out` |
+| Progress | every intake scan (at least each `intake_poll`) and every delivered message reports progress | an idle relay heartbeats, so the watchdog's `stuck`/`never_reported` strikes never fire on a healthy idle relay |
+| Mode of a nudge start | `ModeLive` | a `Stage` nudge with no relay running starts one (rate-limited to 1/s) through `Executor.Start` with `Mode: ModeLive`; the Preview default for writers never applies |
+
+Outbox-triggered runs are staged through the kernel-internal `Executor.StartIn` (05-tasks 5T.3.12), so
+the relay never writes module entities. One run drains for at most `core.outbox.relay_rotate` (1 h) and
+then succeeds, so history shows bounded runs and a wedged consumer cannot keep one run alive forever.
+A `Stage` nudge wakes the running relay. Per-consumer delivery inside the run uses `tasks.RunItems`
+over (consumer, partition) pairs with
 `tasks.Fixed(min(partitions, core.outbox.relay_workers), "outbox relay workers")`; each core handler
 call runs under `core.outbox.handler_timeout`. An admin can cancel the run; the next schedule tick
 restarts it. The operator dial `core.outbox.relay_enabled=false` (OPS-17) makes each relay run exit
@@ -400,15 +477,18 @@ module packages call no `outbox.Consume`/`ConsumeTx`/`ConsumeRaw`.
 
 ## 5E.6 Lifecycle
 
-The start and stop order is defined once, in [06-app-sdk](06-app-sdk.md) §6.5.2 (COR-8). What
-`events` and `outbox` do at each step:
+The boot phases are defined once, in [06-app-sdk](06-app-sdk.md) §6.5.1 (R2-8), and the start and
+stop order once, in 06 §6.5.2 (COR-8). The relay writes nothing before it starts at 06 §6.5.2 step
+(6), well after the pre-migration checkpoint; a `Stage` inside a migration batch is that batch's own
+write. What `events` and `outbox` do at each step:
 
-- `app.New` (`Register`): the kernel builds the `Catalog`, `Bus` and `Outbox`; modules declare topics
+- `app.New` (06 P5–P7): the kernel builds the `Catalog`, `Bus` and `Outbox` (P5); modules declare topics
   (`Registrar.Topics`), bus subscriptions (`Registrar.Subscribe`) and outbox consumers
-  (`Registrar.OutboxHandler`). The kernel validates names, uniqueness, ownership, raw targets, that
-  every consumer name is listed in the module's `Manifest.OutboxConsumers`, and that every
-  `ConsumeIntoTask` kind belongs to the consumer's module. Errors fail boot. The sets are frozen when
-  `Register` returns.
+  (`Registrar.OutboxHandler`) in P6, consumed in P7. The kernel validates names, uniqueness, ownership,
+  raw targets, that every module consumer name is listed in the module's `Manifest.OutboxConsumers` and
+  every core consumer name in the static core consumer list, that every `ConsumeIntoTask` kind belongs to
+  the consumer's module and carries exactly one of `Live()`/`Preview()`, and that `Where[T]` matches the
+  consumer's payload type. Errors fail boot. The sets are frozen when `Register` returns.
 - `App.Run`: core services → module hooks → module workers → **`Bus.Open`** (subscription goroutines
   start; no handler runs earlier) → executor (resume-sweep events are delivered) → scheduler (the relay
   starts from its `OnStart`) → listeners.
@@ -424,7 +504,9 @@ The start and stop order is defined once, in [06-app-sdk](06-app-sdk.md) §6.5.2
 | Error path | Fail | Why |
 |---|---|---|
 | Undeclared, foreign or durable topic at `Publish` | open: dropped, counted, logged once | notify-only; never break the publisher |
-| Invalid catalog entry, duplicate topic or subscriber, undeclared consumer name, foreign `ConsumeIntoTask` kind at registration | closed: boot fails | programmer error, caught by `coretest` |
+| Invalid catalog entry (incl. `Realtime` on a `Durable` topic), duplicate topic or subscriber, undeclared consumer name (module: not in its manifest; core: not in the static core list), foreign `ConsumeIntoTask` kind, `ConsumeIntoTask` without exactly one of `Live()`/`Preview()`, `Where[T]` of the wrong payload type, at registration | closed: boot fails | programmer error, caught by `coretest` |
+| Message rejected by the consumer's `Where` | open: acked without effect, counted (`filtered_total`) | the consumer does not own it (COR2-10) |
+| `Tx.StartRun` with an unset mode | closed for that message: `tasks.ErrModeUnset` dead-letters it | a run's mode is never defaulted for outbox triggers (COR2-5) |
 | Raw subscription or raw consumer of a topic no module declares | closed: boot fails; of a **disabled** module's topic: open (WARN, receives nothing) | G1 |
 | Subscriber queue full | open: drop + metric | notify-only |
 | Handler panic | open: recovered, counted, subscription continues | isolation |
@@ -438,7 +520,7 @@ The start and stop order is defined once, in [06-app-sdk](06-app-sdk.md) §6.5.2
 | Intake batch fails or loses its conditional write | open: intake rows stay; next scan retries | single-writer sequencing |
 | Relay run canceled/crashed, or relay disabled | open: next schedule tick restarts it (or the dial is turned back on); no data lost | durability is in storage |
 | Disabled module's consumer | open: messages retained, shown as backlog; never dropped by `orphan_retention` | COR-12 |
-| Message older than `orphan_retention` with no declared consumer | open: dropped, counted | bounded storage |
+| Message older than `orphan_retention` on a topic with an empty declared-consumer set, or held only by a removed consumer name | open: dropped, counted | bounded storage; core consumers count as declared (COR2-4) |
 
 ## 5E.8 Concurrency contract
 
@@ -459,7 +541,7 @@ The start and stop order is defined once, in [06-app-sdk](06-app-sdk.md) §6.5.2
 | `core.outbox.max_attempts` | int | 20 | yes |
 | `core.outbox.backoff_min` / `backoff_max` | duration | 1s / 5m | yes |
 | `core.outbox.relay_workers` | int | 4 | yes (next run) |
-| `core.outbox.relay_rotate` | duration | 1h | yes (next run) |
+| `core.outbox.relay_rotate` | duration | 1h | no (restart: it also sets the relay definition's `Timeout` = rotate + 5 min at registration, 5E.5.3) |
 | `core.outbox.relay_enabled` | bool | true (OPS-17 operational dial) | yes |
 | `core.outbox.handler_timeout` | duration | 30s | yes |
 | `core.outbox.intake_poll` | duration | 1s | yes |
@@ -487,6 +569,7 @@ The start and stop order is defined once, in [06-app-sdk](06-app-sdk.md) §6.5.2
 | `mediacore_outbox_pending` | gauge | `consumer`, `state` (`enabled`, `disabled`) |
 | `mediacore_outbox_lag_seconds` | gauge | `consumer` (age of the oldest unacked message) |
 | `mediacore_outbox_idempotent_drops_total` | counter | `topic` |
+| `mediacore_outbox_filtered_total` | counter | `topic`, `consumer` (messages acked by a `Where` filter) |
 | `mediacore_outbox_orphans_dropped_total` | counter | `topic` |
 
 `topic`, `subscriber` and `consumer` are closed sets (declared at boot, disabled modules' consumer
@@ -507,6 +590,9 @@ names included), so cardinality is bounded.
 |---|---|
 | `TestTopicName_Grammar`, `TestCatalog_RejectsDuplicateZeroPermissionForeignScope` | naming, one catalog |
 | `TestCatalog_NotifyAndRealtimeReadNoSecondDeclaration` | SIMP-5 |
+| `TestCatalog_RejectsRealtimeOnDurable` | COR2-17 |
+| `TestCatalog_RedactAppliedOnEverySurface` (`core.task.run-changed.v1`: native stream, projection, `GET /runs` blank `Current` without `core:users.view`) | COR2-2 |
+| `TestNotifyMetaAloneProducesNoNotification` (a `Notify` topic published on the bus only → nothing staged for `core.notify.deliver`) | COR2-3 |
 | `TestBus_SlowSubscriberDropsAndCounts`, `TestBus_DropOldestKeepsNewest` | bounded queue, drop metric |
 | `TestBus_PanicIsolated_SubscriptionSurvives` | panic isolation |
 | `TestBus_HandlerContextIsBusNotPublisher` (publisher ctx canceled before delivery) | Q1 decision honoured |
@@ -530,6 +616,11 @@ names included), so cardinality is bounded.
 | `TestOutbox_ConsumeIntoTaskRawWithoutImport` | COR-11 |
 | `TestArchtest_ModuleConsumeFlagged` | COR-9 |
 | `TestOutbox_DisabledConsumerRetainsUntilReenableOrPurge` (another consumer acks; orphan window passes; nothing deleted) | COR-12 |
+| `TestCoreOnlyTopicRetainedUntilAck` (`core.notify.deliver.v1` with only its core consumer `core.notify.deliver`: a retention sweep and the orphan window pass before the consumer runs; nothing deleted until its cursor passes) | COR2-4 |
+| `TestOutbox_WhereAcksUnmatchedWithoutRun`, `TestOutbox_WhereWrongTypeRefused` | COR2-10 |
+| `TestOutbox_TxStartRunSameBatchAsTransition` (crash injection: transition and run both or neither; the run never sees the pre-transition state) | COR2-10 |
+| `TestOutbox_ConsumeIntoTaskRequiresMode` (no `Live()`/`Preview()` → boot fails; `Live()` → the run is Live) | COR2-5 |
+| `TestRelay_DefinitionRegistersAndDeliversLive` (the definition passes 05-tasks registration; a nudge start and a schedule start both write; a 1 h rotation ends `succeeded`, never `timed_out`; an idle relay collects no watchdog strike) | COR2-5 |
 | `TestOutbox_RelayRestartsAfterCancel`, `TestOutbox_RelayDisabledDegradedNoLoss` | relay as task, dial |
 | `TestNoGlobals_EventsOutbox` (R5 AST) | no globals |
 
@@ -540,15 +631,17 @@ names included), so cardinality is bounded.
 | `internal/plugin.EventBus` + 12 `EventType`s (`internal/plugin/events.go:18-31`) | `events.Bus` + `books` topics: `books.book.imported.v1`, `books.book.deleted.v1`, `books.metadata.applied.v1`, `books.tags.written.v1`, `books.file.organized.v1`, `books.dedup.detected.v1`, `books.dedup.merged.v1`, `books.cover.changed.v1`, `books.read-status.changed.v1`, `books.scan.completed.v1`, `books.book.quarantined.v1`, `books.book.unquarantined.v1`, each with a typed payload struct replacing `BookID`/`Data map[string]any` and one catalog entry carrying its permission |
 | `plugin.EventPublisher` (11 publisher files) | `events.Publish(d.Events, ctx, books.TopicX, id, payload)` through the module's `Deps.Events` |
 | `internal/dedup/lifecycle.go:94` subscriber | `events.On` declared in `books`' `Register` |
-| webhook plugin (`internal/plugins/webhook/plugin.go:79`) | a [05-notify](05-notify.md) webhook adapter (core consumer) reading the catalog's `Notify` topics |
-| `internal/operations/registry.EventHub` + `op.*` names | core topics `core.task.run-changed.v1` (merges `op.created`, `op.updated`, `op.current_item`, `op.terminal`), `core.task.log-appended.v1` (`op.log`) and `core.task.finished.v1`; published by the executor after each commit; realtime bridges the first two one-to-one, and its legacy projections map them back to the old frame names ([05-realtime](05-realtime.md)) |
+| webhook plugin (`internal/plugins/webhook/plugin.go:79`) | a [05-notify](05-notify.md) webhook channel adapter. `books` emits each of the 12 legacy event types as a notification through `Deps.Notify` (`notify.Publish`, staged in the batch of the state change; its topics carry `Notify` metadata), and the kernel's core consumer `core.notify.deliver` delivers it to the webhook instance; no bus subscriber is involved (COR2-3) |
+| `internal/operations/registry.EventHub` + `op.*` names | core topics `core.task.run-changed.v1` (merges `op.created`, `op.updated`, `op.current_item`, `op.terminal`), `core.task.log-appended.v1` (`op.log`) and `core.task.finished.v1`; published by the executor after each commit; realtime bridges the first two one-to-one, and its legacy projections map them back to the old frame names ([05-realtime](05-realtime.md)). Between the executor's move (09 S5) and the projections (09 S6) the executor **also** publishes every run change onto the legacy `registry.EventHub` under the `op.*` names, so streams A/B keep live progress (05-tasks 5T.4 step 3; FE2-3) |
 | `realtime.EventHub` `Send*` helpers (3 call sites outside the package) and `BookChangeCoalescer` | publishes of typed topics; the SSE hub ([05-realtime](05-realtime.md)) is a core subscriber; book-change coalescing becomes a `Coalesce` subscription or `RealtimeMeta.Coalesce` inside `books` |
 | `OperationDef.Triggers` (1 dead declaration) | `outbox.ConsumeIntoTask`: `books` stages the durable topic `books.book.relocated.v1` in the same batch that moves a book, and a books consumer starts `books.deluge.path-update` (or the 05-download successor) with the book ID — this makes the relocation follow-up durable for the first time |
 | direct `EnqueueOp` from handlers after a state change | case by case: `outbox.ConsumeIntoTask` where the follow-up is correctness-critical (inventory in [09-abo-on-core](09-abo-on-core.md)) |
 
 Order: (1) land `events`/`outbox` in core; (2) bridge — the plugin `EventBus` becomes a thin adapter
 publishing onto `events.Bus` so publishers move file by file; (3) executor publishes `core.task.*`
-and the realtime hub subscribes; (4) remove `internal/plugin` events and `registry.EventHub`.
+(and, until the projections land, the legacy `op.*` events onto `registry.EventHub`) and the realtime
+hub subscribes; (4) remove `internal/plugin` events and `registry.EventHub` once the legacy projections
+serve streams A/B (09 S6).
 
 ## 5E.14 Open items
 
@@ -592,3 +685,17 @@ Integration pass (cross-cluster requests, 2026-11-04):
 - integration pass: R-G request (COR-21) — `events.Scope` (module-bound publisher, `Bus.Scope(moduleID)`, kernel-only) is `module.Deps.Events`; `Publish` takes the sealed `Publisher` interface so core keeps `*Bus`.
 - integration pass: R-B request (COR-10, DATA-13) — commit-ordered intake was already specified; the high-water-mark write now names 05-storage's real primitive (`Serialized` + `GetForUpdate`/`Expect`) instead of the non-existent `SetIfUnchanged`/`Keyspace.Lock`.
 - integration pass: Open items 2, 4 and 5 closed (06 v1.1.0, 05-rbac `OnChange`, 05-storage DATA-13); objection on the topic qualifier removed (03 v1.4.0).
+
+Round 2:
+
+- COR2-2 — `TopicSpec.Redact` (`RedactFunc`, owned here); `core.task.run-changed.v1` carries `tasks.RedactRunView`.
+- COR2-3 — "notify routing" removed from core bus subscribers; `NotifyMeta` alone produces no notification; core `Notify` topics name who stages the notification.
+- COR2-3 (R-F) — webhook migration row: books emits through `Deps.Notify`, delivered by `core.notify.deliver`.
+- COR2-4 — retention's declared-consumer set includes the kernel's static core consumer list (`core.notify.deliver`, `core.acquire.download-events`); empty sets keep messages for `orphan_retention`; `TestCoreOnlyTopicRetainedUntilAck`.
+- COR2-5 — relay definition specified field by field (single `Writes` effect, `.Live()` schedule, `Timeout` = rotate + 5 min, scan heartbeat, Live nudge); `ConsumeIntoTask[Raw]` requires `Live()`/`Preview()`; intake scan is inside the relay run.
+- COR2-10 — `Where`/`WhereRaw` filter on every consumer form; `TxHandlerFunc` takes `*Tx` with `Batch()` and `StartRun`.
+- COR2-11 — `Tx.StartRun` stages module kinds built for core (e.g. `<module>.acquire.import`), so module writes keep their own effects.
+- COR2-17 — `Realtime` on a `Durable` topic rejected at registration.
+- COR2-19 / SIMP2-10 — download topics moved to a deferred-build sub-table listing all six; grammar example replaced by a built topic.
+- FE2-3 — legacy `registry.EventHub` publishing kept between S5 and S6.
+- R2-8 — lifecycle references 06 §6.5.1 for boot phases; the relay writes nothing before 06 §6.5.2 step (6).
