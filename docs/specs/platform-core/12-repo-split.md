@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.12.3 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -38,7 +38,7 @@ wiring (`GO_MODULE_DIRS := . core` and the per-target classification, 03 §3.2 i
 | Dependency updates: Dependabot for gomod and npm (free, already configured), each for one directory | `.github/dependabot.yml:59-60` (gomod, `directory: /`), `:69-70` (npm, `directory: /web`, majors blocked) |
 | Shared CI backbone in an org repo | reusable workflows from `falkcorp/github-common`, ref pinned in `.github/ghcommon-ref.txt` (`raw/14-build-ci.md` §6, §10 item 4) |
 | Toolchain drift guard knows only the root `go.mod` and the root `Makefile` pin; it reads no `tools/*/go.mod` | `scripts/check_toolchain_versions.py:44-46` (tier 3: "`go.mod` — the `go` directive is a minimum"), `:329-351` (reads `go.mod` only) |
-| Licence | `LICENSE` is PolyForm Noncommercial 1.0.0 (first line) |
+| Licence | `LICENSE` is PolyForm Noncommercial 1.0.0 (first line); `README.md` "License" says commercial use needs a separate licence from the author. No source file carries a per-file licence line (the file headers are `file`/`version`/`guid`/`last-edited` only), so the repo's `LICENSE` is the only licence statement |
 
 ## 12.3 Split trigger and readiness criteria
 
@@ -428,16 +428,11 @@ No goreleaser: core ships no binary. Steps (a `make release VERSION=vX.Y.Z` targ
 3. `git tag -a vX.Y.Z -m "mediacore vX.Y.Z"` on the merge commit (signed if the owner's key is configured);
    `git push origin vX.Y.Z`.
 4. Warm and verify the proxy: `GOPROXY=https://proxy.golang.org GOTOOLCHAIN="$(make -s print-toolchain)" go list -m github.com/falkcorp/mediacore@vX.Y.Z`.
-   (If the repo is private: apps set `GOPRIVATE=github.com/falkcorp/*` and authenticate with a GitHub
-   token; the proxy step is skipped. Both are free.)
 5. GitHub release with the changelog section as body (`gh release create vX.Y.Z --notes-file …`).
-6. Publish npm packages at `X.Y.Z`: public repo → the npm registry (free for public packages). A private
-   repo has no token-free option (FE5-16): GitHub Release tarballs of a private repo need an authenticated
-   download, the same cost that rejected GitHub Packages — every machine and CI job needs an `.npmrc` with a
-   fine-grained read token — and an exact `"X.Y.Z"` specifier cannot name a tarball, so apps pin tarball
-   URLs that `check_mediacore_lockstep.py` parses for `X.Y.Z` and that Dependabot's npm updater does not
-   bump (07 §7.17). A public core repo is therefore the precondition of the token-free npm path (14 Q-B). `npm publish $WS --access …`
-   (07 §7.3.2's order, as in SC8; hello's web package is private).
+6. Publish npm packages at `X.Y.Z` to the npm registry (free for public packages; the core repo is
+   public, D13): `npm publish $WS --access public` (07 §7.3.2's order, as in SC8; hello's web package is
+   private and never published). The public repo is what keeps this path token-free (FE5-16): no `.npmrc`
+   read token, exact `"X.Y.Z"` specifiers that Dependabot bumps (07 §7.17).
 7. Dispatch the downstream matrix (§12.7) against the tag.
 8. Dependabot in each app repo opens the bump PRs (§12.6).
 
@@ -451,10 +446,8 @@ require github.com/falkcorp/mediacore vX.Y.Z      // no replace
 "dependencies": { "@mediacore/shell": "X.Y.Z", "@mediacore/api-client": "X.Y.Z", "@mediacore/ui-kit": "X.Y.Z" }
 ```
 
-Exact npm versions (no `^`), from the npm registry for a public core repo (07 §7.17 states the same
-mechanism), because the Go side and the npm side must move together. For a private core repo the
-dependencies are tarball URLs fetched with a read token on every machine, and npm bumps are manual
-(§12.5 step 6; FE5-16). Before the split ABO's `web/` uses `file:` dependencies on
+Exact npm versions (no `^`), from the npm registry (the core repo is public, D13; 07 §7.17 states the same
+mechanism), because the Go side and the npm side must move together. Before the split ABO's `web/` uses `file:` dependencies on
 `core/web/packages/*`; there is no root npm workspace.
 
 Updates come from **Dependabot** (already configured here, free):
@@ -498,9 +491,8 @@ core as a member (03 §3.2 item 1).
 All jobs use the reusable workflows in `falkcorp/github-common` (`raw/14-build-ci.md` §10 item 4), so the
 matrix logic exists once. Cost note: the downstream matrix multiplies core PR minutes by the number of
 apps; it runs `-short` only, which on ABO is the ~8-minute budget measured in `Makefile:292-299`
-(`raw/14-build-ci.md` §2). Public repos have unlimited free Actions minutes; private repos use the free
-monthly allowance — if that becomes binding, the matrix moves to the self-hosted Woodpecker agents
-already used by ABO (`raw/14-build-ci.md` §7), which costs nothing extra.
+(`raw/14-build-ci.md` §2). The core repo is public (D13), and public repos have unlimited free Actions
+minutes, so the matrix costs nothing.
 
 ## 12.8 History preservation and cutover
 
@@ -618,9 +610,14 @@ Precondition: T and SC1–SC10 hold, recorded in `split-readiness.md`.
    fixed-sample history assertion on the output, which must pass (on a failure the cutover stops at this step and
    nothing has been pushed: fix the path file or the sample's generator, re-run from a fresh clone); delete tags;
    scan; build; test.
-4. **Create** `falkcorp/mediacore` (`gh repo create falkcorp/mediacore --private|--public`), set branch
+4. **Create** `falkcorp/mediacore` (`gh repo create falkcorp/mediacore --public`, D13), set branch
    protection, add `core-ci.yml`, `downstream.yml`, `dependabot.yml`, `CODEOWNERS`, the
-   reusable-workflow ref, `LICENSE` (§12.10 item 1). Push **only** `main`, with an explicit refspec:
+   reusable-workflow ref. The **relicensing** lands here, before the first push (§12.10 item 1, D13/D14):
+   the filtered tree's `LICENSE` is replaced by the Apache-2.0 text, a `NOTICE` names the owner as
+   copyright holder, and every moved file's header gains `SPDX-License-Identifier: Apache-2.0` (at HEAD no
+   file carries a licence line, §12.2, so this is the only header change). `core-ci.yml` fails a core file
+   without that line. That commit's message records the relicensing from PolyForm Noncommercial
+   1.0.0. Push **only** `main`, with an explicit refspec:
    `git push origin refs/heads/main:refs/heads/main` (never `--tags` or `--mirror`).
 5. **Tag** the first version (§12.4.2) and run the release process (§12.5) including npm publish.
    Precondition: `git ls-remote --tags origin` prints nothing.
@@ -640,13 +637,17 @@ Precondition: T and SC1–SC10 hold, recorded in `split-readiness.md`.
      `COPY core/web/…`.
    - Root `internal/arch` keeps calling `archtest` — now from the versioned module.
    - Add a guard that fails if a `core/` directory reappears.
+   - ABO's commercial-licensing notice (D14): add `COMMERCIAL.md` (commercial use of ABO needs a paid
+     licence from the owner; contact through the GitHub repository, an issue or the owner's profile; no
+     email address in the repo), linked from `README.md`'s "License" section and from a line under
+     `LICENSE`'s title. ABO's own `LICENSE` stays PolyForm Noncommercial 1.0.0.
 7. **Verify ABO**: `make ci`, e2e, `binary-smoke.yml`, `docker build .`; `go version -m ./audiobook-organizer | grep mediacore`
    shows `vX.Y.Z` with a checksum (no `=>` replacement); `go install github.com/falkcorp/audiobook-organizer@<new tag>`
    from outside the repo works again, because the root `go.mod` now has neither `replace` nor `exclude`
    (the cost accepted in 03 §3.2 item 5 is removed; X4).
 8. **Verify "version pin only"** (SC3's post-split form): `core_consumer_smoke.py --version vX.Y.Z`
    generates the unrelated-path smoke module with a plain `require … vX.Y.Z` and no `replace`, and builds
-   it against the proxy (or with `GOPRIVATE`).
+   it against the proxy.
 9. **Unfreeze.** All core changes now go to `falkcorp/mediacore`; ABO picks them up through Dependabot.
 10. **Docs**: ABO `CLAUDE.md`, `AGENTS.md`, and this spec's README get a pointer to the new repo, and
     `CLAUDE.md`'s `go.work` guidance is rewritten for the post-split layout: from this step the local,
@@ -667,14 +668,21 @@ and after (03 §3.2 item 2), so a rollback is a `replace` line plus a directory,
 
 ## 12.10 Open items
 
-1. **Licence of the core repo.** History carries PolyForm Noncommercial 1.0.0 (`LICENSE`), which costs
-   nothing and so meets D9 ("nothing paid"; ADV-9). Whether core keeps it or is relicensed (e.g. Apache-2.0)
-   is an optional reuse decision, wanted only if third parties should reuse core; it is needed before step 4,
-   and relicensing requires the copyright holder's consent for all contributions in the rewritten history,
-   confirmed over the full, not the shallow, history. [14-risks-open-questions](14-risks-open-questions.md) Q-A.
-2. **Public or private core repo.** Decides proxy vs `GOPRIVATE`, npm registry vs token-authenticated
-   GitHub Release tarballs with URL specifiers (§12.5 step 6), and the Actions-minutes note in §12.7. Free
-   either way (D9), but only the public repo keeps npm installs token-free. 14 Q-B.
+1. **Licences — decided (D13, D14).** mediacore is licensed **Apache-2.0** (D13, Q-A). The code that moves
+   into mediacore is relicensed from PolyForm Noncommercial 1.0.0 to Apache-2.0 at the split, in the cutover
+   step that creates the mediacore repo (§12.8.2 step 4), where each moved file's licence header changes. No
+   contributor consent is needed: the owner is the sole copyright holder, the history holding only the
+   owner's commits and bot or AI commits (D14). ABO keeps its current licence, **PolyForm Noncommercial
+   1.0.0** (`LICENSE` already says so), and after the split adds a commercial-licensing notice,
+   `COMMERCIAL.md`, linked from `README.md` and `LICENSE`: commercial use of ABO needs a paid licence from
+   the owner, with contact through the GitHub repository (an issue or the owner's profile) and no email
+   address in the repo (§12.8.2 step 6; D14). Consequence: mediacore under Apache-2.0 lets anyone,
+   companies included, build commercial apps on the engine; the payment requirement covers ABO only.
+   Both licences cost nothing, so D9 ("nothing paid") holds. [14-risks-open-questions](14-risks-open-questions.md) Q-A.
+2. **Public core repo — decided (D13, Q-B).** `falkcorp/mediacore` is public and its module path is
+   `github.com/falkcorp/mediacore`. Versions resolve through the public proxy (no `GOPRIVATE`), npm
+   packages go to the npm registry with no read token (§12.5 step 6, §12.6), and Actions minutes are free
+   (§12.7). 14 Q-B.
 3. Thresholds in SC1 (3 checkpoints, 6 weeks) and SC5 (70 %/60 %) are proposals; the owner may tune them
    before R1 wires the readiness report, not after. 14 Q-G.
 
@@ -817,3 +825,5 @@ Plan-phase consistency:
 - PC-10 — §12.6 and §12.8.2 step 10: a local `go.work` is allowed only after step 10 rewrites CLAUDE.md's `go.work` guidance; until then CLAUDE.md forbids `go work init` in a checkout.
 
 - D10–D12 revision (2026-11-04): §12.4.4 (hardening cutovers H1–H3) deleted; the hardened design lands directly in R2. `legacy/` removed from SC1's definition, the apidiff filter, its fixture test, the post-split override, SC5's coverage exclusion, §12.4.1 and release step 1; §12.4.2's legacy-member lifetime and the pointer to ABO's compatibility window deleted (no window, D10). SC1 counts checkpoints from R2's and names the store interfaces with their importers. Stage references re-keyed to the releases R0–R3 (S0, S1, S2, S2b → R1; S9's hello web build → the shell's landing, 07 §7.19 step 4). Consistency pass: UI-0 re-keyed to release R1's `core/web` PR (07 §7.19 step 2); the toolchain release-age rule named as 13 §13.6 states it. Final consistency sweep: the `core/web` workspace tests run from release R1's PR that creates `core/web` (07 §7.19 step 2), not from the deleted UI-0 stage.
+
+Round 13 (2026-11-04): D13, D14. §12.10 items 1–2 decided: mediacore is Apache-2.0 and public at `github.com/falkcorp/mediacore`; the moved code is relicensed from PolyForm Noncommercial 1.0.0 in §12.8.2 step 4 (sole copyright holder, no contributor consent), each moved file gaining an SPDX line; ABO keeps PolyForm Noncommercial 1.0.0 and adds `COMMERCIAL.md` (§12.8.2 step 6). The private-repo branches of §12.5 steps 4 and 6, §12.6, §12.7 and §12.8.2 steps 4 and 8 deleted. §12.2's licence row records that no file carries a licence line.
