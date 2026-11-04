@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metadata.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 0d8ae2ec-73b0-4d41-b6e5-1531122e991c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -538,8 +538,9 @@ func (r *Registry) Config(ref Ref) (InstanceConfig, bool)        // effective vi
 // legacy instance store (ABO), these rules keep HEAD's auth-off rule
 // (R10-10, SEC10-3): HEAD's fields are FieldUnprotected and every write
 // passes while auth is off (internal/config/update_service.go:781,
-// protected_fields.go:137-165 @748fd787a), so for a legacy-backed instance
-// (AI endpoint rows, metadata sources, webhooks and the legacy singletons)
+// protected_fields.go:137-165 @748fd787a), so for every legacy-backed
+// instance (the AI endpoint rows, the metadata sources, the webhooks and
+// every legacy singleton, ai/openai and download/deluge included)
 // the auth-disabled principal passes the ProtectAdmin check above after the
 // owner-trust-root check, as 05-config's HEADAuthOffWritable rule does for
 // the same fields on the legacy config alias. It is honoured only while the
@@ -905,8 +906,8 @@ HTTP surface (mounted by core `httpapi`; schemas in [05-http-api](05-http-api.md
      refused (403, nothing written) rather than routed to the native store. The same holds for a later change to a
      field that selects which secret is sent (`auth_ref`, a metadata source's credential keys, the family-level
      webhook secret; M1.3 `Put`), and for a `Test` whose body does either (M1.3 `Test`; R10-10, SEC10-2). With
-     authentication off, an ABO operator still creates and edits AI endpoints, metadata sources and webhooks in
-     Settings, as at HEAD: the auth-disabled principal passes the check for a legacy-backed instance (M1.3 `Put`,
+     authentication off, an ABO operator still creates and edits AI endpoints, metadata sources and webhooks, and
+     edits every legacy singleton (`ai/openai`, `download/deluge`, …), in Settings, as at HEAD: the auth-disabled principal passes the check for a legacy-backed instance (M1.3 `Put`,
      HEAD's auth-off rule; R10-10, SEC10-3).
 
    A row whose adapter is not registered (module disabled, binary without the adapter) is **kept** and
@@ -1081,8 +1082,8 @@ refused, nothing staged; `storage.LocksHeld(b, l)`, R10-4),
 key; cell `LegacyBackedBodyLocalNotInherited`: a body that changes the URL to a private host gets no `Local=true`
 reach; an interactive admin's `Test` with the stored URL succeeds and sends the key),
 `TestAuthOff_LegacyBackedIntegrationWritableAsHEAD` (ABO with auth off: the auth-disabled principal creates an
-`ai_endpoints` row, a metadata source and a webhook, and edits a URL, through `Put`, `Test` and the legacy config
-alias, as at HEAD; on `hello`, which has no legacy store, the auth-disabled principal's `Put` that sets `Local` is
+`ai_endpoints` row, a metadata source and a webhook, and edits a URL and a credential of each of them and of the
+legacy singletons `ai/openai` and `download/deluge`, through `Put`, `Test` and the legacy config alias, as at HEAD; on `hello`, which has no legacy store, the auth-disabled principal's `Put` that sets `Local` is
 still refused; R10-10, SEC10-3),
 `TestLegacyBacked_NativeOnlyFieldRefused` (`Local=false` or an unheld `Limits` field: 422 `ErrFieldNotStorable`),
 `TestLegacyBacked_OperatorSecretServedAsHEAD` (env `OPENAI_API_KEY` beside an admin-stored non-default URL, and an
@@ -1928,3 +1929,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
   - DATA10-3 — M1.3 `Put`, M1.4 step 2a, M1.6: the legacy config alias splits each request (one-batch sentence deleted); the writer mutex is taken before `CommitLocked`, never in a `stage`; gate mutexes never inside a hold; no `stage` calls a books method that takes a HEAD mutex; `TestRegistryPut_RacesLegacyConfigAlias`.
   - COR10-5 — M1.3, M1.4 step 2a and step 4, M1.9: the Registry never calls `WriteLocks`; the kernel resolves `legacy.LockConfigSettings` at P4c and hands it `SettingsLocks`.
   - COR10-10 — M1.4 step 2a: the legacy instance store is built once per App, not per process.
+  - integration pass (round 10): M1.3 `Put` comment, M1.4 step 2a and `TestAuthOff_LegacyBackedIntegrationWritableAsHEAD`: auth-off HEAD parity covers every legacy-backed instance, `ai/openai` and `download/deluge` included (LEAD).

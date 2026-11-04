@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1004,7 +1004,7 @@ type Stager interface {
 	// WriteLocks (COR10-5). The lock is held from before stage's first store
 	// read until the commit returns, re-taken on every attempt, and
 	// CommitLocked marks the attempt's batch with the hold, which the run
-	// store's staging methods check with storage.LocksHeld(b) (R10-4).
+	// store's staging methods check with storage.LocksHeld(b, l) (R10-4).
 	// WriteRuns is not re-entrant: called from inside another WriteRuns'
 	// stage it returns ErrWriteRunsNested and runs nothing. A nested
 	// CommitLocked would join the held lock (05-storage), but its separate
@@ -1441,8 +1441,10 @@ var ErrScheduleTickRefused = errors.New("legacy: schedule tick for a kind the ca
 // ErrRunsNotLocked: a run-store write staged into a batch that no
 // CommitLocked hold of the run store's lock has marked
 // (storage.LocksHeld(b, l) false; R10-4), a programming error the
-// conformance suite catches (R9-1; 5T.3.13 below).
-var ErrRunsNotLocked = errors.New("legacy: run write staged outside the run lock")
+// conformance suite catches (R9-1; 5T.3.13 below). It wraps
+// storage.ErrNotLocked, as every owner's not-locked refusal does (05-storage
+// §5S.3.2 item 5).
+var ErrRunsNotLocked = fmt.Errorf("legacy: run write staged outside the run lock: %w", storage.ErrNotLocked)
 
 // LockRuns is the run store's one lock name of legacy.WriteLock (R9-1;
 // WriteLock itself, WriteLocks(names []string) []storage.Lock, is declared
@@ -1498,10 +1500,11 @@ DATA10-3, R10-4) and
 - **Core-side mutexes order before the hold (DATA10-3).** The executor's in-process locks — the per-run
   writer (5T.7), the progress lock (5T.3.2) and the dispatcher's and ref-lock tables — are taken before
   `WriteRuns` or after it returns, never inside a `stage`: they are "outer" locks in 05-storage §5S.3.2's
-  rank table, below every `CommitLocked` lock, so no hold waits on one.
-- **One instance per process.** A lock serialises nothing if two instances each hold their own mutex. The
+  rank table — the dispatcher mutex rank 50, the ref-lock table 60, the per-run writer 70, the progress
+  lock 80 — below every `CommitLocked` lock (100 and up), so no hold waits on one.
+- **One instance per App.** A lock serialises nothing if two instances each hold their own mutex. The
   kernel calls `legacy.Stores.Tasks` once at P4c, and every other ABO user of the ops families uses that
-  same instance (5T.6.2 "One store instance per process"; `TestLegacyStoresAreSingletons`).
+  same instance (5T.6.2 "One store instance per App"; COR10-10; `TestLegacyStoresAreSingletons`).
 
 Its conformance case follows the one-legacy-suite-per-store-interface pattern (03 §3.3, SIMP6-6):
 `legacytest.TasksRunStoreSuite(t, newStores, plantStale)` runs a case per capability the
@@ -1731,10 +1734,10 @@ lock for tens of megabytes of writes would stall every other operation write (`:
 `legacy.ErrRunsNotLocked`, and takes no commit stripe (the row families are plain ownership claims). No other
 books run-store write is lock-free. `TestLegacyReplaceRowsTakesNoRunLock` proves it.
 
-**One store instance per process (R9-1, DATA9-2).** HEAD's `opsMu` is a field of `*PebbleStore`
+**One store instance per App (R9-1, DATA9-2, COR10-10).** HEAD's `opsMu` is a field of `*PebbleStore`
 (`internal/database/pebble_store.go:226-244`), so it serialises only the writers of one instance; two
 instances would each hold their own and serialise nothing. The kernel calls `legacy.Stores.Tasks` exactly
-once per process, at P4c, and books' constructor memoises: it returns the same taskstore instance, with
+once per App (two apps in one binary are two kernels), at P4c, and books' constructor memoises: it returns the same taskstore instance, with
 its one `opsMu` and its per-instance state (`opsV2TimelineTrusted` included), to every caller, and books
 wires every other ABO user of the ops families to that instance: opsbridge, `childop` and the books
 ticker with its `ClockStore` writes. Books' legacy steps run in P4b, single-threaded and before any other
@@ -2204,8 +2207,8 @@ HEAD's exporter renders them).
 **Histogram boundaries (MOD10-6).** `le` is a label value, so the two histograms HEAD pins keep HEAD's
 bucket lists: the executor declares them as the default boundaries of `ops.run.duration`
 (`0.1 … 86400`, `views.go:42`) and `ops.schedule_lag` (`1 … 86400`, `views.go:58`) through `Scope.View`, as
-plain numbers, so no ABO name enters core. An app's `metrics.Options.HistogramBuckets` entry for the same
-instrument, installed when `metrics.New` builds the `MeterProvider` (05-metrics §3), overrides them; ABO
+plain numbers, so no ABO name enters core. An app's `app.Options.MetricViews` entry for the same
+instrument (`metrics.Options.MetricViews`), installed when `metrics.New` builds the `MeterProvider` (05-metrics §3), overrides them; ABO
 passes `telemetry.HistogramBuckets()`, whose two entries equal them. `TestHistogramBucketsPinned` and
 `histogram_buckets.golden` (05-metrics §6) are part of the T0+T1 done-check, so `le` changes for neither
 family at S5. `ref_lock_wait`, a new family, takes 05-metrics' default for a core histogram.
@@ -2522,3 +2525,4 @@ Round 10:
 - COR10-5 — 5T.3.10 and 5T.3.13: the kernel calls `WriteLocks([]string{legacy.LockRuns})` at P4c and hands the executor `RunLocks []storage.Lock`; the executor never imports `legacy`, names a lock or calls `WriteLocks`.
 - MOD10-6 — 5T.11: `ops.run.duration` and `ops.schedule_lag` default boundaries are HEAD's lists (`views.go:42,58`), overridable by `metrics.Options.HistogramBuckets`; `TestHistogramBucketsPinned` in the T0+T1 done-check.
 - R10-8 (consistency with 05-updater) — 5T.6.2 and T8 row: the S8 updater's floor check is 05-updater 5U.4 step 3.
+- integration pass (round 10): `WriteRuns` comment: `storage.LocksHeld(b, l)`; `legacy.ErrRunsNotLocked` wraps `storage.ErrNotLocked`; 5T.3.13 cites the executor's outer-lock ranks 50–80; one store instance per App (COR10-10); 5T.11 boundaries overridable through `app.Options.MetricViews`. Already as requested: the "(core aliases, no native path…)" row is gone; HEAD's buckets are the executor's defaults; 5T.8.1 names the T6 PR.

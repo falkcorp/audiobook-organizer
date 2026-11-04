@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -757,18 +757,19 @@ builds one store instance per family (05-library, DATA9-2).
   because `sync.Mutex` is not re-entrant: the hold is the batch's. `storage.CommitLocked` marks the batch it
   commits with the locks it holds, and each staging method checks the batch it was handed with
   `storage.LocksHeld(b, l)` for each lock of its write, so the frozen `auth.Store` signatures need no `ctx`.
-  A write staged into a batch whose hold does not include its lock is refused, a programming error that
+  A write staged into a batch whose hold does not include its lock is refused with an error that wraps
+  `storage.ErrNotLocked` (`errors.Is`; 05-storage §5S.3.2 item 5), a programming error that
   `legacytest.AuthStoreSuite` catches; that includes a write staged inside a hold into another batch that
   would commit after the hold ends. No `stage` function calls a books method that takes a HEAD mutex of a
   family the hold covers (`MarkInviteEmailSent`, `RecordInviteGuestPolicy`, `RehashUserPassword`), which
   would deadlock on itself where `ErrLockOrder` cannot see it (DATA10-3). Auth never nests `CommitLocked`:
   one call builds one batch.
-- **One instance per process.** HEAD's writers that still commit their own batch — gin through S4 r1,
+- **One instance per App (COR10-10).** HEAD's writers that still commit their own batch — gin through S4 r1,
   and from S4 r2 books' invite delivery (`MarkInviteEmailSent`, `RecordInviteGuestPolicy`), guest tokens
   and the ABS password rehash — keep taking the same mutexes, and serialise with core's commits only if
   both use one set of mutexes. `apiKeyMu`, `inviteMu` and `counterMu` are fields of `PebbleStore`
   (`pebble_store.go:226-244`), so the kernel builds **exactly one** instance of each legacy store
-  family per process and hands it to every user: every P4c `legacy.Stores` constructor and books' P6
+  family per App (two apps in one binary are two kernels) and hands it to every user: every P4c `legacy.Stores` constructor and books' P6
   store return views over one `*PebbleStore` (06 §6.11.6; `TestLegacyStoresAreSingletons`). The
   pre-swap store of `RestoreDeps.Previous` is a different, read-only store and takes no lock.
 - **Native store.** `core/internal/authstore` implements no `WriteLock`; its `Expect` and
@@ -1445,7 +1446,7 @@ it in the legacy code.
    ledger's `backends` record fails boot with `ErrLegacyStoreMissing` (05-storage); because books
    supplies its store in every S4 release, a rollback from S4 r2 to r1 never meets a missing grant
    (DATA4-2). A store constructor writes nothing (DATA4-10), and the kernel builds the legacy store
-   once per process and hands the same instance to every user (§3.4, R9-1). Its capabilities
+   once per App and hands the same instance to every user (§3.4, R9-1). Its capabilities
    (`legacy.AuthReconciler`, `legacy.AuthAtomWriter`, `legacy.WriteLock`, §3.4) are detected only by
    `auth`, through its
    unexported mirrors over the store built here; the kernel asserts only the capabilities 03 §3.3 lists
@@ -1518,7 +1519,7 @@ it in the legacy code.
 | Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head, lineage), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every session and invite deleted, every active or disabled key `needs_confirmation` (on ABO HEAD's `"inactive"`), every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5, A-2 |
 | Staged restore (a pre-swap store exists), with or without journal coverage | the pre-swap store's restrictions win over the restored rows (§4.14 step 3; a key keeps the most restrictive of its two statuses); its own swap appends no `gap` line, so its coverage holds | closed | SEC5-10, SEC6-4, DATA6-2, SEC7-8 |
 | A key's last-use write races a revoke or status change | native store: the touch's `Expect` conflicts and the touch is dropped; ABO's store: both commit inside `storage.CommitLocked` holding `apiKeyMu` (early fix 6); the revoke stands either way | closed | SEC6-3, resolutions R6-5, R9-1 |
-| ABO's store asked to stage an identity write into a batch whose `CommitLocked` hold lacks the write's lock (`storage.LocksHeld(b, l)` false), a batch built inside another hold included | refused, nothing staged; `legacytest.AuthStoreSuite` fails in CI | closed | a mutex released before the commit protects nothing (R9-1, COR9-1, R10-4) |
+| ABO's store asked to stage an identity write into a batch whose `CommitLocked` hold lacks the write's lock (`storage.LocksHeld(b, l)` false), a batch built inside another hold included | refused with an error wrapping `storage.ErrNotLocked`, nothing staged; `legacytest.AuthStoreSuite` fails in CI | closed | a mutex released before the commit protects nothing (R9-1, COR9-1, R10-4) |
 | A `LastSeen` flush for a session that was logged out or revoked | `TouchSession` stages nothing; the session stays deleted | closed | DATA6-8 |
 | Bootstrap token wrong/expired/spent | 401 `bootstrap_invalid`, uniform message | closed | |
 | Bootstrap file write fails at start | log error, bootstrap unavailable this run; setup still requires token → operator restarts after fixing perms | closed | |
@@ -1642,7 +1643,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestRestoredLegacyKey_ReenabledKeepsLegacySemantics` | (ABO) an empty-scope `abk_` key and an admin's `["settings.manage"]` `abk_` key, a nil-coverage restore: both are HEAD's `"inactive"`, never `"revoked"`, and refused; re-enabled by the owner or an admin, each has the same legacy-route and op-start reach as before the restore, the empty-scope key `LegacyFullScope` again (resolution A-2) |
 | `TestLegacyRevokeRacesTouch_NeverUnrevokes` | (ABO, `legacytest.AuthStoreSuite` through `auth.Service` over books' store, `synctest`) a revoke and a `TouchAPIKey` racing on one key, each built and committed inside `storage.CommitLocked` with `legacy.LockAPIKeys`: the key ends `revoked` in every interleaving, including the touch read before the revoke commits (SEC6-3, R6-5, R9-1; one name with early fix 6's hotfix test, §11.1) |
 | `TestLegacyUserDeactivateRacesPasswordChange` | (ABO, `legacytest.AuthStoreSuite`, `synctest`) a deactivation and a password change of one user, each staged from a row read before the other commits: the user ends inactive with the new password, never `active` again (DATA9-1, R9-1) |
-| `TestLegacyStagedIdentityWriteOutsideLockRefused` | (ABO, `legacytest.AuthStoreSuite`) each staging method called with a batch no `CommitLocked` holds its lock on → refused (`storage.LocksHeld(b, l)`), nothing staged; a write staged inside a hold into a second batch, committed after the hold, → refused; a staging method takes no mutex itself (R9-1, R10-4) |
+| `TestLegacyStagedIdentityWriteOutsideLockRefused` | (ABO, `legacytest.AuthStoreSuite`) each staging method called with a batch no `CommitLocked` holds its lock on → refused (`storage.LocksHeld(b, l)` false; `errors.Is(err, storage.ErrNotLocked)`), nothing staged; a write staged inside a hold into a second batch, committed after the hold, → refused the same way; a staging method takes no mutex itself (R9-1, R10-4) |
 | `TestLegacyStoresAreSingletons` | (ABO, with 06) the P4c constructors and books' P6 store share one `*PebbleStore`, so `apiKeyMu`, `inviteMu` and `counterMu` have one owner; books' invite-delivery write and core's invite accept serialise (DATA9-2, R9-1) |
 | `TestLegacyAPIKeyCreate_EmptyEffectiveKeyCannotMint` | (ABO; legacy in ABO's current code, early fix 2, then core) a key of a demoted owner and an admin-made key for a viewer, each with an empty effective set, create a key → 403, nothing written (SEC9-5) |
 | `TestKeyLastUseNeverRevertsRevoke` / `TestLastSeenFlushNeverResurrectsRevokedSession` | (`authtest.StoreSuite`, `synctest`) a coalesced key touch after a revoke leaves the key revoked; a `LastSeen` flush after a logout or an admin revoke re-creates no session (DATA6-8) |
@@ -2203,3 +2204,4 @@ Round 10:
 - SEC10-5 — §4.11: one `HEADAuthOffWritable` predicate (legacy config store supplied and the value in a `LegacyBlob` field or `legacy.SecretsStore` row, 05-config §1.3.1); the gate keys lose it together.
 - SEC10-6 — §11.2 H3 row: the Basic gate keys keep the rule until their settings cutover, which precedes or ships with H3.
 - SEC10-7 — §11.2: H1 deletes existing sessions, invites and one-time tokens rather than rehashing them; "re-issue API keys" dropped; one release-note text per cutover, owned by 09 §9.13.
+- integration pass (round 10): §3.4 staging bullet, §6 error row and `TestLegacyStagedIdentityWriteOutsideLockRefused`: the not-locked refusal wraps `storage.ErrNotLocked` (R-B); §3.4 and §5: one legacy store instance per App, not per process (COR10-10).

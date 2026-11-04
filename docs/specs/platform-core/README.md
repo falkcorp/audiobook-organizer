@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/README.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 4c00242a-5629-4c0e-b66f-e81b2fb9fa7a -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -47,10 +47,12 @@ The design they fix, in brief:
 - **Boot and operations safety:** HEAD's routes register with a same-owner collision rule (A-1); legacy env names
   decode with HEAD's semantics (A-7); one crash matrix covers the whole boot (A-8), as the public kit
   `coretest/crashmatrix` that ABO also runs over its own boot (R9-7); 14-day soaks are owner checkpoints in
-  `ci/soak.txt`, bound to the soaked binary; every PR that ships behaviour in a stage carries a `Stage-Release:
-  <stage> <n|flip>` trailer, required on any PR that touches a not-yet-flipped stage's packages, and the gate
-  admits it only after the predecessor release's soak, counted from the release's first PR (A-9, R9-8, R10-7;
-  OPS10-11);
+  `ci/soak.txt`, one row per landing of a release, bound to the soaked binary, which must be built at or after
+  that landing commit, so a re-landed release soaks afresh; every commit of a PR that touches a non-doc file
+  carries a `Stage-Release:` trailer — `<stage> <n|flip>` when it ships stage behaviour, required on any PR that
+  touches a not-yet-flipped stage's packages, and `none` otherwise (feature work included) — and the gate admits
+  a stage trailer, and every flip, only after the predecessor release's 14-day soak row (09 §9.2.1; A-9, R9-8,
+  R10-7; OPS10-11);
   every done-check names its environment (R9-9); `staging-scrub` needs a staging marker (A-10); concurrent feature
   work has move windows (A-11).
 - A factory reset only stages, as a kind of the one journaled swap (R7-2, R8-1); the native factory-reset route
@@ -250,3 +252,4 @@ Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispos
 
 - R10-1…R10-11 — status line: round 10 (52 findings) dispositioned and applied; design summary: operations routes stay books' (R10-1), ambient scopes never reach a confined key (R10-2), otelgin stays HEAD's recorder with `app.Options.MetricViews` (R10-3), the hold on the batch and one total lock order (R10-4), the gap-fill write inside the hold (R10-5), vet and guards on any tree and the fixed-sample history assertion (R10-9).
 - OPS10-11, R10-7 — soak bullet aligned with 09 §9.2.1: the trailer covers every stage (`<stage> <n|flip>`), is required on not-yet-flipped packages, and soaks count from the release's first PR.
+- integration pass (round 10): soak bullet matches 09 §9.2.1: every commit of a non-doc PR carries a `Stage-Release:` trailer (`none` allowed), soak rows per landing commit, R10-7's soak rules.

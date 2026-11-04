@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1194,7 +1194,7 @@ value; `Pending` shows the stored value; `KeyState.Pending` drives a "restart re
 | `Apply` missing permission / protection | refuse `ErrForbidden` / `*ProtectedError` | fail-closed security |
 | `Apply` validation failure | refuse `ErrInvalid` with `*FieldError`s | nothing partially applied |
 | `Committer.Commit` fails (incl. a render conflict after `storage.RetryOnConflict`'s attempts) | fail-closed: nothing published, generation unchanged, boot record restored | durable-before-visible; the blob is never half-written |
-| A books legacy store write (`OverrideStore.Stage`, `SecretsStore.Write`, an instance or rule write) staged into a batch that carries no `CommitLocked` hold of `LockConfigSettings` (`storage.LocksHeld(b, l)` false) | fail-closed: refused, nothing staged | a commit outside `configBlobSaveMu` is the race R9-1 closed; the check is on the batch, so a write staged into another batch inside a hold is refused too (R10-4) |
+| A books legacy store write (`OverrideStore.Stage`, `SecretsStore.Write`, an instance or rule write) staged into a batch that carries no `CommitLocked` hold of `LockConfigSettings` (`storage.LocksHeld(b, l)` false) | fail-closed: refused with an error wrapping `storage.ErrNotLocked`, nothing staged | a commit outside `configBlobSaveMu` is the race R9-1 closed; the check is on the batch, so a write staged into another batch inside a hold is refused too (R10-4) |
 | `AfterCommit` hook error | committed; `Result.PostCommit` set | hooks cannot veto; caller must know (ABO contract `update_service.go:30-48`) |
 | `OnChange` fn panics | fail-open: recovered, logged, metric; others continue | one subscriber must not break config |
 | `Ref.Resolve` on unset secret | `secrets.ErrNotSet` to the consumer | consumer decides (e.g. provider disabled) |
@@ -1992,6 +1992,12 @@ exceeds 0; H3 raises `books` only and lifts nothing (DATA10-7). Every release fr
 before the cutover declares both owners, so every older build refuses a store a cutover stamped, through boot and
 `CheckReader` (`TestHardeningCutoverRefusedByEveryOlderRelease`, 09 §9.13).
 
+**Release notes (SEC10-7).** 09 §9.13 owns one release-note text per cutover; this file quotes them verbatim.
+
+- H1 (identity, 05-authn §11.2, listed here for completeness): "Backups made before this release still contain sign-in tokens. They no longer work against this server, but restoring such a backup brings them back until they expire; delete those backups or take new ones."
+- H2: "Backups made before this release still contain plaintext third-party secrets. Delete them or take new ones; if the backup directory may have been exposed, rotate those secrets."
+- H3: "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart."
+
 - **H2 — secrets cutover** (09 §9.13). This file decides the four encrypted rows (DATA9-8): the books store's
   plaintext blob secrets **and** the four encrypted rows move into `c/secrets/`, encrypted with the keyring (key IDs,
   AAD), and their legacy copies and gap-fill file keys are removed; the `legacy.SecretsStore` capability goes with
@@ -2011,8 +2017,8 @@ before the cutover declares both owners, so every older build refuses a store a 
   and is a test, not a live-key read: `TestH2_NoPlaintextSecretOnDisk` plants a canary secret **before** a fixture
   upgrade, a restore and a reset, so retained checkpoints and set-asides hold it, runs the cutover and scans the DB
   directory, `.mediacore-checkpoints/`, `.mediacore-restore/` beside the DB and every recorded beside-itself
-  destination, `<state_dir>/restore/` and the gap-fill file. Its release note is 09 §9.13's H2 note, the one text,
-  owned there and not restated here (SEC10-7).
+  destination, `<state_dir>/restore/` and the gap-fill file. Its release note is 09 §9.13's H2 text, quoted
+  verbatim above (SEC10-7).
 - **H3 — auth-precedence cutover** (09 §9.13). One H3, stated the same in 05-authn §11.2 and 09 §9.13 (SEC9-7,
   cross-cluster): H3 moves **only auth-enable precedence**, and only in the enabling direction. An operator value
   that enables auth (`ENABLE_AUTH=true`, `enable_auth: true` in the operator file) beats a stored `false`; a value
@@ -2267,7 +2273,7 @@ type legacyStore interface {
 	// Write joins b with an in-place write of a kept name in the app's own form: a plaintext copy as its blob field,
 	// an encrypted one in the app's own cipher (clear = empty the field or delete the row). It refuses, staging
 	// nothing, when b carries no CommitLocked hold of the store's LockConfigSettings lock (storage.LocksHeld(b, l);
-	// R10-4, COR10-2). Secondary copies are rewritten by the post-commit step Write registers on b, which
+	// R10-4, COR10-2), with an error wrapping storage.ErrNotLocked. Secondary copies are rewritten by the post-commit step Write registers on b, which
 	// CommitLocked runs inside the hold, rendered from the rows (R10-5); a clear also removes its secondary copy
 	// before Write returns, so a failed removal fails the write (05-config §1.12.2).
 	Write(b *storage.Batch, n Name, v Value, clear bool) error
@@ -2907,3 +2913,4 @@ Round 10:
 - SEC10-11 — §1.3.3 `AttachReport.DeployDefaults`, §1.3.5, §1.11: a shipped deploy file's always-set name at that file's default is reported at info, not as a shadow.
 - OPS10-11 — §2.4: `set-install-id` lands at 09 S3 (the dangling "§9.4 row 17" citation).
 - Header — 03 reference v1.14.0.
+- integration pass (round 10): §1.12.5 quotes 09 §9.13's H1–H3 release notes verbatim (R-H) and the H2 bullet cites them instead of declining to restate; `SecretsStore.Write` and the §1.5 not-locked row wrap `storage.ErrNotLocked` (R-B). Already as requested: kept-name `secrets.(*Store)` `Put`/`Delete` commit through `CommitLocked` with `Options.SettingsLocks`; the post-commit hook is `storage.OnCommitted`. Not renamed: `config.Handle.AfterCommit` is config's own subscriber hook, not storage's post-commit hook, which the LEAD decision names.

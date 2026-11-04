@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -372,7 +372,7 @@ func (tx *Tx) Batch() *storage.Batch
 // relay never names a lock, 05-tasks 5T.3.13) from the store's first read
 // through the commit, as HEAD's own run writes do, and marks the relay batch
 // with that hold, which the run store's staging methods check with
-// storage.LocksHeld(b) (05-tasks 5T.6.2, A-3; R10-4).
+// storage.LocksHeld(b, l) (05-tasks 5T.6.2, A-3; R10-4).
 // The handler never calls WriteRuns itself (ErrWriteRunsNested). Only if
 // WriteRuns gives up is the message redelivered. A module kind's
 // run is stamped with that module's system actor, as Stager does (SEC2-15).
@@ -795,3 +795,4 @@ Round 9:
 Round 10:
 
 - R10-4 / COR10-5 (consistency with 05-tasks and 05-storage) — `Tx.StartRun`: the relay commits under the run locks the kernel resolved for the run store at P4c, never a lock name of its own, and the hold is marked on the relay batch, which the run store checks with `storage.LocksHeld(b)`.
+- integration pass (round 10): `Tx.StartRun` comment: `storage.LocksHeld(b, l)` (two arguments, 05-storage).

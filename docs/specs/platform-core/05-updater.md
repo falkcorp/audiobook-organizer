@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-updater.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 87f3821c-d9b3-427d-b91f-dad6de16aef8 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -312,8 +312,10 @@ at HEAD. The maintenance-window step 1 and the separate ticker are deleted. The 
 pipeline as 09 S0 hotfixes it** (R10-8, OPS10-6): HEAD's raw-asset download and rename swap
 (`internal/updater/updater.go:214-280`), with the hotfix's semver rule, `.prev` slot, level and floor
 checks and exit 75. There is no archive, no checksum file, no pre-update backup and no container step,
-because neither HEAD nor the hotfix has one; each is a deferred-build member (5U.3). Steps, each a
-`rc.Phase`:
+because neither HEAD nor the hotfix has one; each is a deferred-build member (5U.3), as is the exec-mode restart.
+The moved pipeline makes **exactly two additions** to HEAD's (lead decision, 09 S8): the `core.updater.max_download`
+cap on the download (step 2) and the `--version-json` self-test of the new binary (step 3); everything else is as
+HEAD, with the hotfix's checks. Steps, each a `rc.Phase`:
 
 1. Preconditions: current build is versioned; target newer than current, except
    that on a local build (`LocalBuild`) apply runs only for the version the operator names explicitly;
@@ -703,3 +705,4 @@ Round 9:
 Round 10:
 
 - R10-8 / OPS10-6 — §5U.4 apply restated as HEAD's pipeline as the S0 hotfix leaves it, five steps: preconditions; HEAD's raw asset (`RawBinary`, `audiobook-organizer-<GOOS>-<GOARCH>`) streamed straight into `<exe>.new` with HEAD's user agent (`<BinaryName>/<version>`) and a `max_download` cap; the hotfix's self-test, level and floor checks (now step 3); the `.prev` swap; the exit-75 restart. Archive download, checksums and member extraction (`GoreleaserArchive`, `Deps.StateDir`), the pre-update backup (`Deps.Backup`, `require_backup`), the container refusal and the exec-mode restart (`restart_mode`) moved to the deferred-build table with their tests, error rows, metric outcomes and keys; the layer list drops `backup`; manual rollback keeps the replaced binary as `<exe>.rolled-back`, `make rollback`'s name; `TestRawBinary_MatchesHEAD`, `TestApply_RawAssetNoBackup` (in the S8 done-check) and `TestApply_FailedDownloadDeletesNew` added.
+- integration pass (round 10): §5U.4 intro: the moved pipeline makes exactly two additions to HEAD's, the `max_download` cap and the `--version-json` self-test; the exec-mode restart is deferred-build (LEAD, 09 S8).

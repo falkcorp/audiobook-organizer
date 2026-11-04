@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.12.0 -->
+<!-- version: 1.12.1 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -1610,7 +1610,7 @@ so that older text resolves.
 | `legacy.Covering` | `storage.Covering` | this file (below) | S7 |
 | `legacy.IntegrationsCoverID`, `legacy.ProviderHTTPCoverID` | `integrations.CoverID`, `providerhttp.CoverID` | [05-metadata](05-metadata.md) | S7 |
 | `legacy.ConfigOpener` with its argument type `legacy.ConfigOpenEnv` (S2b, COR6-8); `legacy.ConfigExternalWriter` (deleted in the S3 PR, SIMP5-5) | `config.LegacyOpener` and `config.OpenEnv`; `config.ExternalWriter` | [05-config](05-config.md) §1.3.3 | S2 (`ConfigExternalWriter`); S2b (`ConfigOpener`, `ConfigOpenEnv`) |
-| `legacy.ConfigSecrets`, `legacy.ConfigCommitObserver`, `legacy.SecretsStore` | `config.LegacySecrets`, `config.CommitObserver`, `secrets.LegacyStore` | [05-config](05-config.md) | S3 |
+| `legacy.ConfigSecrets`, `legacy.SecretsStore` | `config.LegacySecrets`, `secrets.LegacyStore` (the former `config.CommitObserver`, later `legacy.ConfigCommitObserver`, is deleted: the gap-fill write is a `storage.OnCommitted` step, R10-5) | [05-config](05-config.md) | S3 |
 | `legacy.AuthReconciler` | `auth.Reconciler` | [05-authn](05-authn.md) §3.4 | S4 |
 | `legacy.RBACAtomWriter` | `rbac.LegacyAtomWriter` | [05-rbac](05-rbac.md) §3.4 | S4 |
 | `legacy.WriteLock` (one capability on every legacy store whose pre-core code relies on an in-process mutex; called only by the kernel at P4c, which hands owners owner-typed lock values; consumed through `storage.CommitLocked`, R9-1, COR10-5) | — (round 8's run-store-only lock capability, generalised) | this file (below; §5S.3.2, whose one lock-rank table ranks every lock); each store's locks are its owner spec's ([05-authn](05-authn.md) §3.4, [05-tasks](05-tasks.md) 5T.3.13, [05-config](05-config.md), [05-metadata](05-metadata.md), [05-notify](05-notify.md)) | S3 (config store), S4 (identity store), S5 (run store), S7 (integration-instance and notify-rule stores) |
@@ -3502,3 +3502,4 @@ Round 10 (`docs/plans/platform-core/reviews/spec-round-10-*.md`, dispositions bi
 - COR10-10 — the one list gains `legacy.StateFiles` and the six identity lock names; §6.4.6 citations → §6.4.5; the lower-layer row names `config` as L3; "one instance per App".
 - SEC10-9 — §5S.4 offline-open users: the complete `app.OfflineCommands` list with each command's open mode (`export-keyring` opens no store).
 - OPS10-3 (R10-7) — §5S.9.4: the `S2br1`/`S2br2` soak rows pass on no violation newer than `<since>`; retention unchanged.
+- integration pass (round 10): §5S.3.11 one list: `legacy.ConfigCommitObserver` removed (05-config deleted it; the gap-fill write is a `storage.OnCommitted` step, R10-5).

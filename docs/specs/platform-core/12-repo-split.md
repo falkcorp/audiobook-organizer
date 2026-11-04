@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/12-repo-split.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: eb47baa1-640b-4c96-96cc-f6b2bdeaa57e -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -449,8 +449,11 @@ its rollback floor):
   checkpoint (R10-11, DATA10-6; 05-storage §5S.3.13 owns the list of what a cutover clears).
 - **What is not.** Archives taken before the cutover still hold the old representation. The done-checks say so
   plainly. API keys are stored as SHA-256 hashes at HEAD, so an old archive exposes no usable key; the release note,
-  whose one text per cutover 09 §9.13 owns and every other file quotes, tells the operator to rotate third-party
-  secrets if old archives are a concern (SEC10-7).
+  whose one text per cutover 09 §9.13 owns and every other file quotes, says what an old archive still holds
+  (SEC10-7). Quoted verbatim from 09 §9.13:
+  - **H1:** "Backups made before this release still contain sign-in tokens. They no longer work against this server, but restoring such a backup brings them back until they expire; delete those backups or take new ones."
+  - **H2:** "Backups made before this release still contain plaintext third-party secrets. Delete them or take new ones; if the backup directory may have been exposed, rotate those secrets."
+  - **H3:** "With authentication off, Settings can no longer turn it on; set `ENABLE_AUTH=true` or `ABO_CORE_AUTH_MODE=required` and restart."
 
 They are not split criteria: neither T nor SC1–SC10 waits on them, and each may run before or after the split.
 A cutover that runs after the split is an ABO change to its legacy store implementations plus native
@@ -849,3 +852,4 @@ Round 10 (dispositions in `docs/plans/platform-core/reviews/spec-round-10-dispos
 - SEC10-5, SEC10-6 — §12.4.4 H3 row: the Basic gate keys keep HEAD's auth-off rule until the settings cutover, which precedes or ships with H3, and lose it together.
 - DATA10-7 — §12.4.4 "Level": the first cutover that raises `core` lifts `{core, 0}`.
 - R10-11 (DATA10-6) — §12.4.4 "What is deleted": every pre-cutover checkpoint and old Pebble file, not only the attempt's.
+- integration pass (round 10): §12.4.4 quotes 09 §9.13's H1–H3 release notes verbatim (R-H).

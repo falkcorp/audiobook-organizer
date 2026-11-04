@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.11.1 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -229,7 +229,7 @@ emitters:
    `MeterProvider`, as at HEAD, which is the served Provider at every stage (the S1 façade's until S2 r3, then the
    App's through `app.InstallProcessDefaults`, §6). It is the **sole** recorder of every request that reaches gin,
    with gin's `c.FullPath()` as `http_route` (no route for gin's `NoRoute`, as at HEAD). So nothing has to carry a
-   route out of gin: `httpapi.ReportLegacyRoute` is deleted.
+   route out of gin, and no route-report hook exists.
 2. **Core's stage 2** (05-http-api §4.2) records, with its own three semconv instruments and HEAD's attribute set,
    only requests to core and module routes, and never a request the legacy mount records: native and `Infra`
    routes record their pattern with method and host stripped; an `Alias` of a HEAD route records HEAD's gin template
@@ -642,7 +642,7 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 | `audiobook_organizer_ops_abandoned_calls` (label `source`) | ABO's shrunk `opsmetrics` for **both** HEAD sources until T6; then books' own observable on its own scope for both `source` values (`repairs_resolver`, `retired_versions_stat`; `internal/opsmetrics/opsmetrics.go:370-371` @748fd787a). The owner changes in **exactly one** PR, the T6 sub-batch PR that converts `retired_versions_fixer.go`: it creates books' observable for both sources and deletes `opsmetrics`' instrument, so no stage has two owners (`ErrFamilyTaken`); T3's repairs conversion keeps reporting through `opsmetrics.RegisterAbandoned` until then (05-tasks 5T.8.1, 5T.11 own the table; MOD10-7) | T6 | (b) |
 | `ai_dispatch_*`, `ai_*` (unprefixed) | ABO's recorder around the AI calls books makes and over the core `ai` subsystem's public API; [05-ai](05-ai.md) names the recorder of each family. `MetricNamespace` does not touch them: the recorder creates the instruments `ai_dispatch.*` and `ai.*` under exactly HEAD's names (`internal/aidispatch/metrics.go:54-66`, `meter.go:20-37`) on the App's `MeterProvider`, outside any `Scope`, so the namespace is never prepended and the families stay byte-identical; the core `ai` subsystem's own families are `<namespace>_ai_*` beside them, and `ErrFamilyTaken` still guards every name | S7 | (b) |
 | `audiobook_organizer_process_memory_alloc_bytes`, `_process_goroutines` | books' status worker, as at HEAD (`internal/server/server_lifecycle.go:432-433`); the gauges move to `Provider.Registerer()` with the other legacy families (item 2) | S8 | unchanged |
-| `http_server_*` (semconv) | **not moved for HEAD's routes (R10-3):** the legacy mount's `otelgin`, configured as at HEAD (tracer off), records every request that reaches gin with HEAD's `http_route`, `server_address`, scope and buckets; core's stage 2 records only core and module routes (an alias of a HEAD route with HEAD's gin template) and, under core's scope with no route, a legacy-path request a core stage answers before the mount, the one recorded change (§3). One owner per series; `httpapi.ReportLegacyRoute` is deleted; `otelgin` stays (13 §13.5.1) | S2 (stage 2 lands); per alias PR (a HEAD route's series moves to core with its values) | (b) |
+| `http_server_*` (semconv) | **not moved for HEAD's routes (R10-3):** the legacy mount's `otelgin`, configured as at HEAD (tracer off), records every request that reaches gin with HEAD's `http_route`, `server_address`, scope and buckets; core's stage 2 records only core and module routes (an alias of a HEAD route with HEAD's gin template) and, under core's scope with no route, a legacy-path request a core stage answers before the mount, the one recorded change (§3). One owner per series, disjoint by `http_route` (no scope label is served, `WithoutScopeInfo`); no route-report hook; `otelgin` stays (13 §13.5.1) | S2 (stage 2 lands); per alias PR (a HEAD route's series moves to core with its values) | (b) |
 | every other `audiobook_organizer_<x>` (books, search index, catalog, cache, ABS, review, fixer, metadata fetch, …) | books, unchanged | — | — |
 
    A family under rule (b) is recorded from the PR that moves its HEAD emitter, so the seeded test's golden shows
@@ -671,12 +671,10 @@ asserts the kernel-emitted families in core as well (§6, OPS8-10).
 
 ## Objections to 03
 
-One open (R10-3 wording). 03 v1.14.0 §3.6 "Metric name" says the two `http_server_*` scopes "are told apart by
-`otel_scope_name`, as at HEAD". HEAD exports no scope label: its exporter uses `WithoutScopeInfo`
-(`internal/telemetry/telemetry.go:446-447` @748fd787a) and its contract test fails on any `otel_scope_` label
-(`internal/telemetry/contract/series_contract_test.go:727-728`), and M6 keeps every label set. The scopes are told
-apart in OTel (OTLP push, the Provider's owner record), and on `/metrics` the series are disjoint by label values
-(§3). 03 should say that. Otherwise as before: 03 v1.11 §3.6 "Metric name" adopts this file's namespace rule (`<MetricNamespace>_<subsystem>_*`,
+None open. The round-10 wording objection is resolved in 03 v1.14.1 (integration pass, round 10): 03 §3.6 "Metric
+name" now says HEAD's exporter drops scope information (`WithoutScopeInfo`, `internal/telemetry/telemetry.go:446-447`
+@748fd787a), so the two `http_server_*` recorders are not told apart by scope label and their series stay
+disjoint by `http_route`, a pre-mount refusal carrying none (09 §9.2.7, §9.2.1 row 12). Earlier: 03 v1.11 §3.6 "Metric name" adopts this file's namespace rule (`<MetricNamespace>_<subsystem>_*`,
 `app.Options.MetricNamespace`, default `mediacore`; A-5) and leaves to this file how each moved series keeps its
 exact name (§13 item 3). The module rule (`app.Options.MetricPrefix`, default `AppID`, ABO `audiobook_organizer`,
 counted over the modules the app ships, SIMP2-13) and the semantic-convention names are as 03 states; the app ID
@@ -782,3 +780,4 @@ Round 10:
 - COR10-8 / R10-2 — M5, §6, §6 stage table, §13 item 5: one `Router.Infra(path, "core:metrics.read", h)` mount on every app; ABO's non-confined principals hold the scope through `LegacyAmbientScopes`, confined ones never.
 - Objections — new open objection: 03 §3.6's "told apart by `otel_scope_name`, as at HEAD" contradicts HEAD's `WithoutScopeInfo`.
 - Header — 03 reference v1.14.0.
+- integration pass (round 10): objection to 03 resolved (03 v1.14.1 §3.6 matches `WithoutScopeInfo`); §3 rule 1 and §13 `http_server_*` row name no route-report identifier. Already as requested: §13 and 5T.8.1 name the T6 PR in which `ops_abandoned_calls` changes owner for both books sources; `app.Options.MetricViews`, `ServiceName`, `ServedMeterProvider`.
