@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -7,9 +7,9 @@
 
 Evidence commit `748fd787a`. Raw inputs: [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §6, §7, §9;
 [`raw/09-http-api.md`](../../plans/platform-core/raw/09-http-api.md) (infra routes); [`raw/11-integrations.md`](../../plans/platform-core/raw/11-integrations.md) (aidispatch health).
-Layer 3 (R4). `health` (root package) imports only `log`, `metrics`, `config`; `health/diagnostics`
-imports `tasks` (the bundle is a task) — same layer, no cycle, because `tasks` imports only the
-`health` root (for readiness signals), never `health/diagnostics`.
+Layer **L4** (03 R4 v1.2.0). `health` (root package) imports only `log`, `metrics` (L0), `config`
+(L3) and `lifecycle` (L0); `health/diagnostics` imports `tasks` (the bundle is a task) — same layer,
+no cycle, because `tasks` imports only the `health` root (for readiness signals), never `health/diagnostics`.
 
 ## 5H.1 Purpose & scope
 
@@ -41,7 +41,7 @@ Out of scope: metrics exposition ([05-metrics](05-metrics.md)), log redaction ru
 | `DashboardService.GetHealthCheckResponse` has no non-test caller and would echo `dbErr.Error()` | `internal/sysinfo/dashboard_service.go:79-101`; grep |
 | Diagnostics export: AI-oriented ZIP of books, authors, series, iTunes albums, logs, operations; per-viewer row filters via `ExportOptions` ("the zero value keeps everything whole") | `internal/diagnostics/service.go:138-150,166`; system info section `:89-99,294-310` |
 | Export runs as v2 op `diagnostics.export` with a 5-minute default watchdog the export used to exceed | `internal/server/diagnostics_ops.go:30-40`; comment `service.go:155-163` |
-| Stop budget: unit `TimeoutStopSec` 30 s, but HTTP drain alone may take 30 s, then the ops drain 10 s and activity flush 5 s | `server_lifecycle.go:176-178,582,611` — the phases can sum to 45 s, past the unit's limit |
+| Stop budget: the code assumes a unit `TimeoutStopSec` of 30 s (`server_lifecycle.go:174-178` comment), but the committed unit sets **none**, so systemd's default applies; only `deploy/local.conf.example:33` sets 30. `docker-compose.yml` sets no `stop_grace_period` (Docker's default is 10 s) and the launchd plist sets no `ExitTimeOut`. HTTP drain alone may take 30 s, then the ops drain 10 s and activity flush 5 s | `deploy/audiobook-organizer.service`; `deploy/local.conf.example:30-33`; `docker-compose.yml`; `deploy/com.audiobook-organizer.plist`; `server_lifecycle.go:582,611,178` — the phases can sum to 45 s |
 
 ## 5H.3 Go API
 
@@ -137,7 +137,7 @@ const (
 	Degraded                      // error logged, Token recorded, startup continues
 )
 
-type Step struct {
+type StartupStep struct {
 	Name   string    // literal used at the Run call site
 	Class  StepClass
 	Token  string    // fixed token for Degraded steps; empty for Fatal
@@ -145,7 +145,7 @@ type Step struct {
 }
 
 // Startup is the successor of internal/startup: a per-App table (core rows
-// + module rows from Registrar.StartupSteps, an addition to 06) instead of a package var.
+// + module rows from Registrar.StartupSteps, 06 §6.4.3) instead of a package var.
 type Startup struct{ /* unexported */ }
 
 func (s *Startup) Run(ctx context.Context, name string, fn func(context.Context) error) error // unknown name -> error (fail-closed)
@@ -162,16 +162,18 @@ component `core.startup.<token>` with `StatusDegraded`.
 |---|---|---|---|
 | `GET /livez` | `rbac.Public` | 200 while the kernel heartbeat goroutine ticked within `core.health.live_stall`; 503 otherwise | `{"live":true}` |
 | `GET /readyz` | `rbac.Public` | 200 iff startup complete **and** not shutting down **and** every Readiness component Up/Degraded **and** no Critical component Down; else 503 | `{"ready":false,"not_ready":["core.storage:warming"]}` — tokens only |
-| `GET /api/core/v1/health` | `core:system.view` | 200 | full `Snapshot` with redacted `Detail`, check durations, versions |
-| `GET /api/core/v1/system/info` | `core:system.view` | 200 | `sysinfo.Info` |
+| `GET /api/core/v1/health` | `core:system.manage` (SEC-8: detail text, durations and versions are operator data; today's `/system/status` needs `settings.manage`, `wire_system_routes.go:28`) | 200 | full `Snapshot` with redacted `Detail`, check durations, versions |
+| `GET /api/core/v1/system/info` | `core:system.manage` (SEC-8) | 200 | `sysinfo.Info` |
+| `GET /api/core/v1/system/status` | `core:system.status` (readiness tokens only; seeded to editor/viewer if the shell shows a status banner, 05-rbac) | 200 | `{ready, not_ready[]}` — the `/readyz` body, authenticated |
 | `POST /api/core/v1/diagnostics` | `core:system.manage` | 202 + run ref | starts `core.diagnostics.export` |
 | `GET /api/core/v1/diagnostics/{run}` | the run's actor or `core:admin` | 200 zip / 404 / 410 expired | bundle |
 
 Unauthenticated bodies follow today's rule (`handler.go:223-228`): booleans, fixed tokens,
 milliseconds — never error text, versions, counts or paths. ABO's `/health` shape (`status`,
-`ready`, `memdb_ready`, `warmup_ms`, `degraded`, always 200) is served by the **books** module's
-compatibility layer reading this registry ([09-abo-on-core](09-abo-on-core.md)), so core carries
-no audiobook field.
+`ready`, `memdb_ready`, `warmup_ms`, `degraded`, always 200) is **permanent**, not a compat-window
+alias: deploy and rollback scripts wait on its `"ready":true` (`scripts/deploy-wait-ready.sh`), and
+09 keeps `/health` for good (OPS-27). It is served by the **books** module's layer reading this
+registry ([09-abo-on-core](09-abo-on-core.md)), so core carries no audiobook field.
 
 ### 5H.3.4 Supervisor signals
 
@@ -180,7 +182,8 @@ and startup completed — **not** after module warm-up (current deliberate choic
 `server_lifecycle.go:335-339`); `STATUS=` with the not-ready tokens while not ready; `WATCHDOG=1` at
 half of `WATCHDOG_USEC` when the unit sets `WatchdogSec`, driven by the same heartbeat as `/livez`
 (new: today there is no watchdog ping); `STOPPING=1` at shutdown start; `EXTEND_TIMEOUT_USEC` only
-through the tasks executor's bounded extension ([05-tasks](05-tasks.md) 5T.4).
+through the tasks executor's bounded extension, and only when `NOTIFY_SOCKET` is set
+([05-tasks](05-tasks.md) 5T.4); Docker and launchd have no equivalent.
 
 ### 5H.3.5 Diagnostics bundle
 
@@ -246,7 +249,8 @@ Generation is the core task `core.diagnostics.export`: Shape Task, `ReadOnly`, `
 `Timeout: 30m`, progress per section (the watchdog lesson of `service.go:155-163`), `Perms.Start:
 core:system.manage`. The zip is written through an `os.Root` opened on
 `core.diagnostics.dir` (no path escapes), named `<run-id>.zip`, deleted after
-`core.diagnostics.retention` by the scheduled `core.diagnostics.prune`.
+`core.diagnostics.retention` by the task `core.diagnostics.prune`
+(`Schedule: tasks.ScheduleFromConfig("core.schedules.diagnostics.prune")`, default every 1 h; SIMP-6).
 
 ### 5H.3.6 sysinfo
 
@@ -290,18 +294,35 @@ Platform files `memory_{linux,darwin,windows}.go` and `uptime_{linux,darwin,wind
 1. `app.New`: kernel creates the `Registry` and `Startup`; core and module components/steps register.
 2. `App.Run`: startup steps run in table order; listeners open; `READY=1`; checks start (one
    goroutine per component with a `Probe`, each on its own interval with jitter; push-only
-   components cost nothing).
+   components cost nothing). Probes and the heartbeat are in-process ticks, not tasks (05-tasks
+   5T.3.8 lists them): their intervals are below the scheduler's 1-minute poll.
 3. Shutdown: readiness flips to not-ready **first** (load balancers and the SPA reconnect logic
-   see 503 before connections drop), `STOPPING=1`, then the kernel runs the phases below with
-   deadlines carved from one budget.
+   see 503 before connections drop), `STOPPING=1`, then the kernel runs the stop order of
+   [06](06-app-sdk.md) §6.5.2 (COR-8) with deadlines carved from **one** budget.
 
-| Phase (order) | Budget | Today |
+**One budget key (OPS-13).** `core.shutdown.budget` is the only total; it is defined here and 06
+references it. 06's `core.lifecycle.shutdown_budget` and per-hook `core.lifecycle.stop_timeout` are
+replaced by this key and the phase slices below (a hook's stop gets the hooks phase's remaining time).
+
+| Phase (06 order) | Budget | Today |
 |---|---|---|
-| total `core.shutdown.budget` | 25 s (leaves 5 s of the unit's 30 s `TimeoutStopSec`) | phases unbounded as a sum (up to 45 s) |
-| HTTP drain | `min(core.shutdown.http_drain=10s, remaining)` | 30 s (`server_lifecycle.go:582`) |
-| tasks drain | `min(core.tasks.shutdown_drain=10s, remaining)` | 10 s (`:611`) |
-| events close | `min(core.events.close_drain=2s, remaining)` | — |
-| module stops, storage close | remainder | activity flush 5 s (`:178`) |
+| total `core.shutdown.budget` | 25 s | phases unbounded as a sum (up to 45 s) |
+| listeners / HTTP drain | `min(core.shutdown.http_drain=10s, remaining)` | 30 s (`server_lifecycle.go:582`) — a behaviour change 09 S2 must list |
+| scheduler stop, tasks drain | `min(core.tasks.shutdown_drain=10s, remaining)` | 10 s (`:611`) |
+| `Bus.Close` | `min(core.events.close_drain=2s, remaining)` | — |
+| workers, module hooks, realtime | remainder, split in that order | activity flush 5 s (`:178`) |
+| storage close | always runs, after the cap if need be (Pebble's WAL keeps committed batches) | — |
+
+**The budget must fit the supervisor's stop timeout (OPS-13).** The 25 s default assumes the
+supervisor waits at least 30 s before SIGKILL. That is not true today for the committed artefacts
+(5H.2): the committed systemd unit sets no `TimeoutStopSec`, Docker's default grace is 10 s with no
+`stop_grace_period` in compose, and the launchd plist sets no `ExitTimeOut`. The stage that moves
+the lifecycle into the kernel (09 S2) therefore ships `TimeoutStopSec=30` in the committed unit,
+`stop_grace_period: 30s` in `docker-compose.yml`, `ExitTimeOut` 30 in the plist, and a documented
+`docker run --stop-timeout 30`; an operator who cannot raise the supervisor's timeout lowers
+`core.shutdown.budget` below it. Done-check for that stage: `systemctl stop` during a running task
+stamps it `interrupted` within the budget, and the journal shows no SIGKILL. The only way past the
+budget is the tasks executor's one bounded `EXTEND_TIMEOUT_USEC` under systemd (5H.3.4).
 
 ## 5H.5 Error semantics
 
@@ -323,9 +344,10 @@ Platform files `memory_{linux,darwin,windows}.go` and `uptime_{linux,darwin,wind
 
 `Registry`, `Reporter`, `Startup` are goroutine-safe; `Snapshot`/`Ready` are lock-free reads of an
 atomically swapped state. Checks run on per-component goroutines (bounded by the static component
-set), never concurrently with themselves; a check's context is canceled on its timeout and on
-shutdown. Diagnostics run inside one task with sections written sequentially (the zip writer is
-not concurrent); section producers may use `tasks.RunItems` internally.
+set; kernel `lifecycle.Component`s, not tasks), never concurrently with themselves; a check's context
+is canceled on its timeout and on shutdown. Diagnostics run inside one task with sections written
+sequentially (the zip writer is not concurrent); section producers may use `tasks.RunItems`
+internally.
 
 ## 5H.7 Config keys
 
@@ -334,8 +356,9 @@ not concurrent); section producers may use `tasks.RunItems` internally.
 | `core.health.check_interval` | duration | 30s | yes |
 | `core.health.check_timeout` | duration | 5s | yes |
 | `core.health.live_stall` | duration | 60s | yes |
-| `core.shutdown.budget` | duration | 25s | yes |
+| `core.shutdown.budget` | duration | 25s (must stay below the supervisor's stop timeout, 5H.4) | yes |
 | `core.shutdown.http_drain` | duration | 10s | yes |
+| `core.schedules.diagnostics.prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes |
 | `core.diagnostics.dir` | path | `<data-dir>/diagnostics` | no |
 | `core.diagnostics.retention` | duration | 24h | yes |
 | `core.diagnostics.log_lines` | int | 5000 | yes |
@@ -380,7 +403,7 @@ not concurrent); section producers may use `tasks.RunItems` internally.
 | ABO today | Becomes |
 |---|---|
 | `internal/startup` (`Table` var, `Steps`) | `health.Startup`; core rows (store, telemetry→metrics, secure state dir, key guard, encryption→secrets, config load/validate, registration gates, http) in core; `searchindex` (token `search_index`) becomes a `books` Degraded step |
-| `handlers/system.HealthCheck` and the three `/health` routes | core `/livez`, `/readyz`; ABO `/health` shape served by the `books` compat layer from the registry for the compat window |
+| `handlers/system.HealthCheck` and the three `/health` routes | core `/livez`, `/readyz`; ABO `/health` shape served permanently by the `books` layer from the registry (OPS-27) |
 | `CountAuthors` store probe | `core.storage` check (engine ping) |
 | memdb warm-up readiness | component `books.memdb` (push) |
 | `plugin.Registry.HealthCheckAll` + `/system/status` `plugin_health` | adapter components; `/system/status` stays a `books` route (it is mostly library data) and reads component states |
@@ -400,14 +423,30 @@ not concurrent); section producers may use `tasks.RunItems` internally.
 2. Ring-buffer size and format for `core.logs` depend on [05-logging](05-logging.md).
 3. Whether `/metrics` stays unauthenticated is decided in [05-metrics](05-metrics.md); `core.metrics`
    section in bundles is unaffected.
-4. [06-app-sdk](06-app-sdk.md) §6.4.3 must add `Registrar.StartupSteps` and `Registrar.Diagnostics`;
-   `Registrar.Health(c ...health.Check)` and `Deps.Health health.Reporter` already match this file.
+4. [06-app-sdk](06-app-sdk.md) §6.5.2 must reference `core.shutdown.budget` and drop
+   `core.lifecycle.shutdown_budget`/`stop_timeout` (OPS-13); 06 already has `Registrar.StartupSteps`
+   and `Registrar.Diagnostics` (type name `health.StartupStep`, used here).
+5. [05-rbac](05-rbac.md) must define `core:system.status` if the shell's status banner needs it (SEC-8).
 
 ## Out-of-scope defects found
 
-1. Shutdown phases can exceed the unit's stop timeout: HTTP drain up to 30 s (`server_lifecycle.go:582`)
-   followed by the ops drain up to 10 s (`:611`) and the activity flush 5 s (`:178`), against
-   `TimeoutStopSec` 30 s (`:176`). A slow HTTP drain therefore leads to SIGKILL before the ops registry
-   stamps interrupted runs. Fixed by design in 5H.4; also fixable in ABO alone by carving one budget.
+1. Shutdown phases can exceed the supervisor's stop timeout: HTTP drain up to 30 s (`server_lifecycle.go:582`)
+   followed by the ops drain up to 10 s (`:611`) and the activity flush 5 s (`:178`), while the
+   committed unit sets no `TimeoutStopSec`, Docker's default grace is 10 s and compose sets none. The
+   code comment (`server_lifecycle.go:174-177`) assumes 30 s, which only `deploy/local.conf.example:33`
+   provides. A slow HTTP drain can lead to SIGKILL before the ops registry stamps interrupted runs.
+   Fixed by design in 5H.4; also fixable in ABO alone by carving one budget and shipping the timeouts.
 2. `/system/status` returns plugin health as raw `err.Error()` strings (`handlers/system/handler.go:288-298`);
    authenticated, but inconsistent with the token-only rule used for `/health`.
+
+## Review history
+
+Round 1 findings applied to this file (v1.1.0):
+
+- COR-8 — shutdown phases follow 06 §6.5.2's single order, with `Bus.Close` after the tasks drain.
+- COR-19 — layer stated as L4.
+- OPS-13 — premise corrected (committed unit, compose and plist set no stop timeout); one budget key defined here; supervisor timeouts and done-check required of 09 S2; HTTP drain change flagged.
+- OPS-27 — ABO `/health` shape is permanent, not a compat-window alias.
+- SEC-8 — detailed health and system info require `core:system.manage`; token-only `core:system.status` route.
+- SIMP-6 — diagnostics prune scheduled through `ScheduleFromConfig`; probes and heartbeat stated as in-process ticks.
+- COR-16 (alignment) — `Step` renamed `StartupStep` to match 06.
