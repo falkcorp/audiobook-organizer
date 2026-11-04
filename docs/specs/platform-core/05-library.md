@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -11,8 +11,9 @@ Evidence commit `748fd787a`; every `path:line` below is at that commit. Raw inpu
 [`raw/08-prior-art.md`](../../plans/platform-core/raw/08-prior-art.md) §1 ("storage roots, path
 mapping, safe moves/copies, hashing, quarantine, disk checks, import observation") and §4 (Q4),
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md). Names and rules are
-from [03-architecture](03-architecture.md) (`library` is layer 3, R4). Records this package persists
-use [05-storage](05-storage.md) keyspace `c/library/`.
+from [03-architecture](03-architecture.md) (`library` is **L4**, R4). Records this package persists
+use [05-storage](05-storage.md) keyspace `c/library/`. Modules reach it only through the module-scoped
+handle `library.Scope` (`module.Deps.Library`, [06](06-app-sdk.md)), which carries the module's owner.
 
 ## 5L.0 Decisions in one table
 
@@ -135,7 +136,9 @@ func (p Path) Dir() Path
 func (p Path) Base() string
 func (p Path) String() string // "root:rel", for logs
 
-// Manager is the core service handed to modules (module.Deps.Library).
+// Manager is the core service. Core subsystems and the kernel hold it; a
+// module never does — it receives a Scope (below). Mutating calls name the
+// caller explicitly here; Scope supplies it implicitly.
 type Manager interface {
 	Root(id RootID) (*Root, error)
 	Roots(filter RootFilter) []*Root
@@ -147,12 +150,50 @@ type Manager interface {
 	// symlink resolution (pathutil.JoinRoot semantics, root.go:79-110).
 	Abs(p Path) (string, error)
 
+	Transfer(ctx context.Context, caller storage.Owner, src, dst Path, opts TransferOptions) (TransferResult, error)
+	// TransferIn performs the same transfer, but the step that finishes its
+	// journal row (step 6 of the algorithm) is staged into the caller's batch b
+	// instead of committing on its own, so "file moved" and the caller's rows
+	// ("history written", "item imported") become durable in ONE commit
+	// (COR-4). library binds its own c/library/ keyspace to b (participant
+	// binding, 05-storage §5S.3.2); the caller commits b.
+	TransferIn(ctx context.Context, b *storage.Batch, caller storage.Owner, src, dst Path, opts TransferOptions) (TransferResult, error)
+	Hash(ctx context.Context, p Path) (Digest, error)
+	Quarantine(ctx context.Context, caller storage.Owner, p Path, reason string) (QuarantineID, error)
+	Release(ctx context.Context, caller storage.Owner, id QuarantineID, to *Path) (Path, error)
+	Watch(ctx context.Context, id RootID, opts WatchOptions) (iter.Seq[[]Event], error)
+	Mapper() PathMapper
+}
+
+// Scope is the module-scoped handle (module.Deps.Library, 06 §6.4.4, COR-21).
+// The kernel builds one per module with that module's owner bound in, so a
+// module cannot act as another owner and "a RoleLibrary root is written by
+// its owner only" has an enforcement point the caller cannot spoof.
+type Scope interface {
+	Owner() storage.Owner
+	Roots(filter RootFilter) []*Root // roots the module owns or may read
+	FS(id RootID) (RootFS, error)    // = Root.FS(Owner()): read-only unless the module may write the root
+	Resolve(abs string) (Path, error)
+	Abs(p Path) (string, error)
 	Transfer(ctx context.Context, src, dst Path, opts TransferOptions) (TransferResult, error)
+	TransferIn(ctx context.Context, b *storage.Batch, src, dst Path, opts TransferOptions) (TransferResult, error)
 	Hash(ctx context.Context, p Path) (Digest, error)
 	Quarantine(ctx context.Context, p Path, reason string) (QuarantineID, error)
 	Release(ctx context.Context, id QuarantineID, to *Path) (Path, error)
 	Watch(ctx context.Context, id RootID, opts WatchOptions) (iter.Seq[[]Event], error)
 	Mapper() PathMapper
+	// PendingTransfers lists this owner's TransferIn journal rows whose file
+	// operation finished but whose caller batch never committed (a crash
+	// between the two); the module reconciles each one idempotently.
+	PendingTransfers(ctx context.Context) ([]TransferRecord, error)
+}
+
+type TransferRecord struct {
+	ID       string
+	Src, Dst Path
+	Did      TransferMode
+	SHA256   string
+	At       time.Time
 }
 
 type RootFilter struct{ Owner storage.Owner; Role Role; Readable bool }
@@ -319,12 +360,12 @@ Transfer algorithm (each step journaled in `c/library/transfer/<id>`):
 | 3 | Copy path: write to `<dst dir>/.mediacore-tmp-<id>` with `CreateExclusive`, `PermPolicy` mode, stream with hashing, `File.Sync`. |
 | 4 | Verify (size, or SHA-256 of the written bytes vs the source digest computed while reading). Publish with `Link(tmp, final)` (fs.ErrExist if someone created `final` meanwhile) then remove tmp; `SyncDir(dst dir)`. |
 | 5 | `Move` across devices: only now remove the source, `SyncDir(src dir)`. |
-| 6 | Journal row deleted in the same batch that records the caller's own outcome when the caller passes a batch (`TransferIn(b, …)` variant), so "file moved" and "row updated" cannot disagree after a crash. |
+| 6 | `Transfer`: the journal row is deleted in its own commit. `TransferIn`: the row is marked `done` (its own commit, after step 5), and its **delete is staged into the caller's batch** `b`, so the caller's rows and the end of the journal commit together. A crash after step 5 but before `b` commits leaves a `done` row and no caller rows: boot recovery never undoes it, and `Scope.PendingTransfers` reports it to the owning module, which re-runs its own write idempotently (an import keyed by its own ID and the destination digest finds the file already in place). A `b` that is discarded instead of committed has the same outcome. |
 
-Boot recovery (`core.library.transfer-recover`, a task run once at start): each unfinished journal
-row is completed or rolled back from its last durable step (temp removed; a verified destination
-whose source still exists after a cross-device move gets the source removed only if the source
-digest still matches).
+Boot recovery (`core.library.transfer-recover`, a task triggered once at start through its `Schedule`'s `OnStart()`, 05-tasks):
+each unfinished journal row is completed or rolled back from its last durable step (temp removed; a
+verified destination whose source still exists after a cross-device move gets the source removed only
+if the source digest still matches). `done` rows of `TransferIn` are left for `PendingTransfers`.
 
 ### 5L.3.4 Hashing
 
@@ -340,9 +381,9 @@ type Digest struct {
 // algorithms (filehash.BookFileHash) stay in the module and use RootFS.Open.
 ```
 
-Library-scale hashing (backfills) runs as `tasks` work with `tasks.Parallelism` (R7), I/O-bound
-default `min(4, NumCPU)` per root device, so two roots on two disks hash in parallel and one disk is
-not thrashed.
+Library-scale hashing (backfills) runs as `tasks` work with a declared `tasks.Parallelism` (R7):
+`tasks.Fixed(min(4, NumCPU), "disk-bound: per root device")` per root device, so two roots on two
+disks hash in parallel and one disk is not thrashed.
 
 ### 5L.3.5 Quarantine
 
@@ -370,7 +411,9 @@ The books module keeps its book-level policy (`internal/quarantine/service.go:12
 path-history resumption, author/title folder naming) and calls the primitive per file set;
 `RootSpec.Quarantine = ".failed"` keeps today's on-disk location. The same primitive is the
 Sonarr/Radarr "recycle bin" for TV/Movies deletes (`raw/16-arr-domain-research.md` row 11), with
-`core.library.quarantine.retention` as its cleanup age.
+`core.library.quarantine.retention` as its cleanup age, applied by task `core.library.quarantine-prune`
+(`Schedule: tasks.ScheduleFromConfig("core.library.quarantine.prune_schedule")`, SIMP-6; no bespoke
+timer; a no-op while the retention is 0).
 
 ### 5L.3.6 Path mapping
 
@@ -446,7 +489,7 @@ reconciles watched roots whenever the registry changes, without a restart (kept 
 |---|---|
 | Every root has exactly one owner (a module ID or `core`). | registration |
 | Roots of **different** owners may not overlap: neither resolved path may be inside the other, compared after `EvalSymlinks` *and* by device+inode of the root directory (catches bind mounts). Same-owner nesting is allowed only if the outer root lists the inner as excluded (its walkers skip it). | registration → `ErrRootOverlap`; boot re-check (a mount can change) → root disabled + health `critical` |
-| Write: owner only. Read: owner + `ReadShares`. `RoleExternal`: nobody writes. | `Root.FS(caller)` |
+| Write: owner only. Read: owner + `ReadShares`. `RoleExternal`: nobody writes. | `Scope.FS` / `Scope.Transfer` with the owner bound by the kernel (COR-21); `Root.FS(caller)` is reachable only by core holders of `Manager` |
 | `RoleDownload` roots are core-owned; every module with the download capability may read and move **out**, never write in. TV and Movies in one binary therefore share download roots but never library roots. | `Transfer` step 0 |
 | A disabled module's roots: retained, unwatched, no transfers or quarantine (G1). | kernel enablement |
 | The app's own data dir (DB, indexes, backups) may not be inside any root unless excluded via `AppDir`; registration warns and walkers skip it (successor of `appdirs`). | registration |
@@ -464,8 +507,10 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 3. Each root: resolve path, overlap check, sentinel check (`SentinelBootstrap` may create it),
    `os.OpenRoot`. A root that fails is **disabled** (health `critical`, transfers refused), the
    app still boots.
-4. Transfer recovery task runs; watchers start with the task executor.
-5. Shutdown: watchers stop (ctx), in-flight transfers finish their current step or roll back via
+4. The kernel builds one `library.Scope` per enabled module (owner bound in) for `module.Deps.Library`.
+5. Transfer recovery task runs; watchers (one per watched root, a `lifecycle.Component`; poll fallback
+   ticks are in-process, not task schedules, SIMP-6) start with the task executor.
+6. Shutdown: watchers stop (ctx), in-flight transfers finish their current step or roll back via
    the journal at next boot; `os.Root` handles close last.
 
 ## 5L.5 Error semantics
@@ -517,6 +562,7 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 | `core.library.free_space.warn_percent` | int | 10 | yes |
 | `core.library.free_space.default_min_bytes` | int64 | 5 GiB | yes |
 | `core.library.quarantine.retention` | duration | 0 (keep until purged) | yes |
+| `core.library.quarantine.prune_schedule` | schedule (`tasks.ScheduleFromConfig`) | daily | yes |
 
 ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `import_path:` rows →
 `import-<id>` roots; `protected_paths` → `RoleExternal` roots or oracle entries;
@@ -565,6 +611,8 @@ ABO compatibility (09 owns aliases): `root_dir` → root `books-library`; `impor
 | `TestQuarantineReleaseRoundTrip` | no clobber on release; record lifecycle |
 | `TestHashSameDescriptorSizeAndDigest` | size and digest describe the same bytes |
 | `TestDisabledModuleRootsInert` | G1 |
+| `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
+| `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
 
 ## 5L.10 Migration from ABO
 
@@ -620,3 +668,13 @@ None.
 |---|---|
 | The watcher drops fsnotify errors (including queue overflow) after logging, so lost events never trigger a rescan; a failed `Add` on a subdirectory is only a warning, leaving it silently unwatched. | `internal/watcher/watcher.go:155-160,178-183` |
 | `quarantine.moveNoClobber` and `organizer.safeRename` use Lstat-then-rename with a TOCTOU window although `versions.renameNoReplace` already has the atomic kernel form. | `internal/quarantine/service.go:853-870`; `internal/organizer/saferename.go:34-48`; `internal/versions/rename_noreplace.go:16-22` |
+
+## Review history
+
+Round-1 findings applied to this file (`docs/plans/platform-core/reviews/spec-round-1-*.md`):
+
+- COR-4 — `TransferIn(b, …)` on `Manager` and `Scope`; step 6 stages the journal end into the caller's batch; `PendingTransfers` for the crash window (request from R-F).
+- COR-21 — `library.Scope`, the module-scoped handle with the owner bound by the kernel; `Manager` calls name the caller (request from R-G).
+- COR-19 — `library` is L4.
+- SIMP-6 — quarantine prune is a `tasks.ScheduleFromConfig` task; transfer recovery runs once at start; watcher polling is an in-process component.
+- R7 / SIMP-17 — hashing backfills declare `tasks.Fixed(n, reason)`.
