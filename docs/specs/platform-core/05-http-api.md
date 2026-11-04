@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,7 +9,7 @@ Evidence commit `748fd787a`. Raw inputs: [`raw/09-http-api.md`](../../plans/plat
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md),
 [`raw/13-frontend.md`](../../plans/platform-core/raw/13-frontend.md) §8,
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md).
-Names, layers (L0–L9) and rules R1–R8 are from [03-architecture](03-architecture.md) v1.2.0; identity is
+Names, layers (L0–L9) and rules R1–R8 are from [03-architecture](03-architecture.md) v1.15.0; identity is
 in [05-authn](05-authn.md), permissions and audit in [05-rbac](05-rbac.md), streams in
 [05-realtime](05-realtime.md), and the releases R0–R3 in [09-abo-on-core](09-abo-on-core.md).
 
@@ -449,6 +449,7 @@ type Deps struct {
 
 func (r *Router) ModuleGroup(moduleID string) *Group    // /api/<id>/v1
 func (r *Router) CoreGroup() *Group                     // /api/core/v1; used only by core/internal/<capability>http, uihttp included (03 §3.3, COR2-19)
+func (r *Router) CoreFixedGroup(base string) *Group     // a core group at a path a kept contract fixes (below); core/internal/authhttp only, from F4
 func (r *Router) Infra(pattern string, perm rbac.Requirement, h http.Handler) // /livez, /readyz, /metrics; non-Public perms are enforced (§4.2, SEC2-14)
 func (r *Router) MountLegacy(m LegacyMount) error       // §8.2
 func (r *Router) SPA(h http.Handler, o SPAOptions) error // §4.10; ErrPrefixCollision while a legacy mount ServesSPA
@@ -501,8 +502,18 @@ type RouteInfo struct {
 }
 ```
 
+**One core path outside `/api/core/v1` (03 §3.8 kept contracts).** HEAD's OAuth/OIDC callback
+`GET /api/v1/auth/oauth/{provider}/callback` keeps its path, so no identity provider needs its redirect URI
+re-registered; from F4 core serves it (05-authn §4.13). The kernel calls `CoreFixedGroup` once, with the
+callback base the app configures (ABO: `/api/v1/auth/oauth`; 05-authn names the option; an app that sets none
+keeps its callback under `/api/core/v1`, so core holds no app path, rule R1), and `core/internal/authhttp`
+registers the callback on it. Its routes run the whole core chain like `CoreGroup()`'s and record
+`RouteInfo.Owner` `core`. The base is core's exact claim nested inside books' `/api/v1/` legacy prefix:
+`ServeMux` specificity sends its paths to core, `ErrShadow` still applies, and `Build` fails with
+`ErrPrefixCollision` while any manifest route lies under it, so F4 deletes HEAD's gin callback in the same PR.
+
 **App root segments: two inputs with different meanings (FE2-11, 03 §3.6).** ABO's ABS-compatible
-routes, a fixed contract that books mounts (D12 F3, §4.6), occupy two different kinds of segment.
+routes, a fixed contract that books mounts (D12 (c), §4.6), occupy two different kinds of segment.
 `app.Options.ReservedAPINamespaces` holds second segments under `/api` (ABO's `/api/libraries`, …):
 reserved module IDs only, known at P1. `LegacyMount.TopSegments` holds the mount's top-level server
 paths (ABO's `ping`, `status`, `logout`, `socket.io`, `public`): reserved module IDs **and** `NonSPA`.
@@ -548,7 +559,8 @@ the API-stability gate.
 | `/api/<moduleID>/v1/…` | module | e.g. `/api/books/v1/books/{id}` (03 §3.6) |
 | `/api/<moduleID>/v{N}/…` | module | a new major only for breaking changes; the old major is deleted in a later release (§4.6) |
 | `/livez`, `/readyz` (Public), `/metrics` (`core:metrics.read`, which ABO's identity migration stores on every principal that is not `Confined()`, 05-rbac §6) | core infra | payloads in 05-health / 05-metrics; probe names as 05-health defines them (FE2-6) |
-| `/api/v1/…`, `/health`, `/api/health`, the ABS-compatible root routes (§4.6); until their R2 flips also `/api/v3/ops/…`, `/api/events` and `/auth/temp-login` | `books` legacy mount (**permanent**, §8) | gin routes from the manifest. Each R2 flip deletes the gin routes its native core routes replace (identity, settings, tasks, events, …; §8.1), with no alias; the SPA and the first-party callers switch in the same release |
+| `/api/v1/…`, `/health`, the ABS-compatible root routes (§4.6); until their R2 flips also `/auth/temp-login` (F4), `/api/v3/ops/…` (F5), `/api/events` (F6) and `/api/health` (F8) | `books` legacy mount (**permanent**, §8) | gin routes from the manifest. Each R2 flip deletes the gin routes its native core routes replace (identity, settings, tasks, events, …; §8.1), with no alias; the SPA, the first-party callers and the deploy files that call them switch in the same PR |
+| `/api/v1/auth/oauth/{provider}/callback`, from F4 | core (`CoreFixedGroup`, §3.5) | HEAD's OAuth/OIDC callback path, kept so no identity provider is re-registered (03 §3.8) |
 | `/api/v3/…` (or `/<moduleID>/api/v3/…`) | *arr facade owner (`tv`/`movies`) | §4.9; deferred-build (§3.6) |
 | `/` | the `books` legacy mount (`ServesSPA`) **until ABO adopts the shell build**; then `core/ui` | §4.10; never both (FE-1) |
 
@@ -575,16 +587,16 @@ Public infra probes (`/livez`, `/readyz`) stay Public and `RateExempt`:
 | 1 | Request ID: generate ULID, keep a well-formed inbound `X-Request-ID` (`^[A-Za-z0-9._-]{1,64}$`) as `client_request_id`; echo `X-Request-ID` | all | new |
 | 2 | Tracing (`otelhttp`, span name = `r.Pattern`). **Span attributes carry the redacted URL** (SEC-22): `url.path`, `url.query` and `url.full` are written after `log.Redactor` (05-logging) applies its query list `log.DefaultRedactQuery()` (which is ⊇ HEAD's `credentialQueryKeys`, including `code`, `code_verifier`, `refresh_token` and `secret`, `internal/server/middleware/log_redact.go:26-37`; this file does not restate the list, SEC2-18) and its `log.DefaultPathRules()` (the books legacy invite path `/invite/{token}`, SEC2-6; both are functions returning fresh copies, MOD5-5). If `otelhttp` cannot be configured to emit only redacted values, stage 2 starts the server span itself with semconv attributes; `TestTrace_NoApikeyInSpanAttributes` decides. **HTTP metrics: one recorder for every request (D10).** `otelhttp` gets a no-op meter provider (spans only). Stage 2 creates `http.server.request.duration`, `http.server.request.body.size` and `http.server.response.body.size` **once, at `Build`**, with the `go.opentelemetry.io/otel/semconv/v1.43.0/httpconv` constructors, on core's `httpapi` meter of the App's `MeterProvider` (`Deps.MeterProvider`, 05-metrics §3), and records **every** request with them: native, `Infra`, SPA and legacy mount alike, gin's `NoRoute` and the legacy `/` fallback included. The duration histogram carries the semconv bucket boundaries (`0.005 … 10` s) as explicit advice at creation. Attributes: the normalised method, `http.response.status_code` and `server.port` (integers), `Options.ServerName` as `server.address` (never the request's `Host`, so no client can mint a series), and `http.route`. It reads the route, and names the span, after the handler returns, from one per-request carrier that it owns and puts in the context before the mux, so a later stage that clones the request (`r.WithContext`) cannot lose it. The handler wrapper of each registered route writes its pattern into the carrier, method and host stripped, before the route's own stages run: a native or `Infra` route its pattern (`/api/core/v1/tasks/runs/{id}`, semconv `http.route`), a legacy manifest route its mux pattern (`/api/v1/books/{id}`; a generalised pattern of §4.8 records the generalised pattern). A request answered before a route's wrapper ran (stage 6's preflight answer, a stage 7 refusal and the other stages before routing, fixed by `TestChain_OrderGolden`), a request the router answers with no route (an unclean `/api/` path, the legacy `/api/` redirect, an unmatched path, the `/` owner's `NonSPA` 404) and the `/` owner's pages record **no** `http.route`; a refusal by stages 10–13 records its route. `http_route` values are therefore mux patterns (`{id}`), not HEAD's gin templates (`:id`), a change D10 allows and no shipped dashboard or rule reads (05-metrics §13). `TestStage2_RecordsEveryRequest`, `TestStage2_RouteSurvivesRequestClone` and `TestStage2_ServerAddressIgnoresHost` decide (§12) | all | `tracingMiddleware`'s spans incl. invite-path redaction, `internal/server/server.go:1672`, `internal/server/middleware/trace_redact.go`; gin's `otelgin`, removed from the engine in R1 (13 §13.5.1) |
 | 3 | Recovery: panic → problem 500 `internal`, stack logged redacted, span marked error, `mediacore_http_panics_total` | all | `RedactingRecovery`, `internal/server/server.go:704` |
-| 4 | Access log (`slog`, the same 05-logging redaction as stage 2, skip streams — including HEAD's `SkipPaths` for the two operations streams, `server.go:696`, COR3-6). Before `audit` exists (until the R2 identity flip) the stage 7 and stage 13 refusals are written here with the structured attribute `security_event` (SEC2-20) | all | `gin.LoggerWithConfig`, `internal/server/server.go:695` |
+| 4 | Access log (`slog`, the same 05-logging redaction as stage 2, skip streams — including HEAD's `SkipPaths` for the two operations streams, `server.go:696`, COR3-6). Before `audit` exists (until the identity flip F4) the stage 7 and stage 13 refusals are written here with the structured attribute `security_event` (SEC2-20) | all | `gin.LoggerWithConfig`, `internal/server/server.go:695` |
 | 5 | Security headers (nosniff, frame, referrer, permissions policy; HSTS only when `r.TLS != nil` or a trusted proxy says https). **CSP on every response (FE-4, FE2-1):** when the handler has not set `Content-Security-Policy` by the time headers are written, stage 5 writes the owner's policy — the SPA handler's from `core/ui`; for the legacy mount, `LegacyMount.DefaultCSP(r)`, a function evaluated **per response** (ABO passes today's `contentSecurityPolicy()`, `csp.go:95-106,129-138`: `script-src 'self'` plus the SHA-256 of `index.html`'s inline theme script, and `connect-src 'self' https://<Access team host>` so `apiFetch` still recognises a Cloudflare Access expiry redirect, `csp.go:34-46`); otherwise `default-src 'none'; frame-ancestors 'self'`. **`Reporting-Endpoints: csp="<owner's report URL>"`** with every CSP (legacy mount: `/api/v1/csp-report`, as `server_middleware.go:109` sets it today; `ui`: `/api/core/v1/ui/csp-report`), so Chromium, which prefers `report-to`, keeps reporting. **`X-App-Build: <UI build id>`** on every response from R1 — legacy mount, native, infra, 404, 405 and 410 included (FE2-5, OPS2-13). **One source, the embedded bundle (FE3-2, FE4-1, R5-7):** the app's npm build script itself (`npm run build`, through its Vite config; after the shell flip the `@mediacore/shell/vite` preset) generates the UI build ID and embeds it as `<meta name="mediacore-build">` in `index.html`, so every build path — `make build`, the Docker stages, goreleaser, a bare `npm run build` — stamps it with no variable to carry and no side script (07 §7.6.3, FE5-1). The UI build ID is a reload discriminator, **never the binary's identity**: updater, storage and backup identify a binary by `app.BinaryID` (06 §6.4.5: the app version plus the executable's SHA-256), which stage 5 never writes (FE5-3). No Go build step receives a UI build ID: stage 5 writes the ID of the bundle the `/` owner embeds — after the shell flip `ui.Bundle.BuildID()` (07), before it the mount's `LegacyMount.BuildID` (ABO fills it from its embedded `web/dist/index.html`) — otherwise `dev`. Every build path (make, Docker, goreleaser) therefore serves the value its own bundle carries, a server whose header disagrees with its bundle cannot be built, and there is no boot-time build-ID check. `""` or `dev` (API-only and dev builds) means "unknown", which clients never treat as a mismatch. A missing `X-App-Build` counts as a mismatch only on a response that carries a `Reporting-Endpoints` header naming a `csp` group (FE4-3): HEAD sets that header on every response (`internal/server/server_middleware.go:102-109`) and stage 5 writes it with every CSP from R1, while a proxy's 502 or an Access interstitial carries neither (07 §7.5.2). `X-Request-ID` is no discriminator: HEAD never writes it, and every build that writes it also writes `X-App-Build` | all | `internal/server/server_middleware.go:102-118` |
 | 6 | CORS (explicit allowlist, same-origin always) | all | `internal/server/server_middleware.go:56-97` |
-| 7 | **Cross-origin protection (SEC-10, FE-5):** `net/http.CrossOriginProtection` (stdlib since Go 1.25; the toolchain pin is 1.27) on unsafe methods: refuse when `Sec-Fetch-Site` is present and not `same-origin`/`none`, or, without it, when `Origin` is present and does not match the host; trusted origins = `core.http.cors.allowed_origins`; refusal 403 `cross_origin_rejected`, audited from the R2 identity flip (before it, access log `security_event`, SEC2-20). **No credential type is exempt** (FE2-23): non-browser clients pass because they send neither `Sec-Fetch-Site` nor `Origin`, not because of the credential they carry; a browser attaches cached HTTP Basic credentials cross-site exactly like cookies, so Basic is never a bypass, and a browser cannot attach `Authorization`/`X-Api-Key` cross-origin without a CORS preflight that stage 6 refuses for unlisted origins. **Host-rewriting proxies:** over plain HTTP browsers send no `Sec-Fetch-Site`, so the `Origin` comparison decides; when the TCP peer is a `TrustedProxies` member, its `X-Forwarded-Host` replaces `r.Host` for that comparison (a proxy that rewrites `Host`, nginx's default, otherwise refuses every UI POST); from any other peer `X-Forwarded-Host` is ignored. Operators behind a proxy that sends neither may list the public origin in `core.http.cors.allowed_origins`; the first refusal raises a health warning naming that key. Applies to the legacy mount too (today's only defence there is `SameSite=Strict`, which is site-scoped and does not stop a sibling app). A development proxy that rewrites `Host` (Vite `changeOrigin: true`) must rewrite `Origin` to the target origin as well, or every dev POST over a LAN address is refused (07 §7.10, FE3-19) | all | new (supersedes per-handler checks such as `repairs/handler.go:27-28`) |
-| 8 | Optional perimeter gate (HTTP Basic, off by default). Exempt **per route, never per mount** (SEC-14), with HEAD's exempt set exactly (`basicauth.go:34,40-46,69`; COR4-9): Public infra probes; legacy routes with `OwnAuth` (§8.2; accepted only for registered auth methods, SEC2-17); legacy routes with `LegacyRoute.BasicExempt` (generated from HEAD's two health paths, `/api/health` and `/api/v1/health`, which monitors call); and, on the `/` owner, the paths its `LegacyMount.BasicExemptAssets` predicate matches (HEAD's static-asset rule: the `/assets/` prefix, `/favicon.ico` and the `.js`, `.css`, `.png`, `.svg`, `.woff2` suffixes; after the shell flip the same predicate arrives as `SPAOptions.BasicExemptAssets` when the kernel mounts the shell with `Router.SPA`, §3.5, 07 §7.6.1, FE5-10). Everything else, including the ABS routes that run no ABS authenticator, stays behind it, as `basicauth.go:51-70` does. The gate compares the presented username and password with `core.http.basic_gate.username` and `.password`, each in constant time, as HEAD does (`basicauth.go:80-84`; §10, SEC6-9). **No password, no entry (resolution R5-1(c), SEC5-4, DATA5-12):** when `core.http.basic_gate.enabled` is true and `core.http.basic_gate.password` is unset (`ErrNotSet`), cleared, empty or unreadable (`ErrKeyUnavailable`), every non-exempt request gets 401, health reports `degraded` (`basic_gate_no_password`) and the startup log names the key; a presented empty password never matches. An operator value locks the password like any key (§10), so a password set in the environment is used however the stored row reads, which is also early fix 5's recovery from a lock-out (OPS9-7). HEAD's comparison ported as it is would admit `<username>:` (`basicauth.go:81-87`) — HEAD's key-regeneration delete path and a partial reset both produce that state (`TestBasicGate_EmptyPasswordRefuses`) | all | `internal/server/middleware/basicauth.go:24` |
+| 7 | **Cross-origin protection (SEC-10, FE-5):** `net/http.CrossOriginProtection` (stdlib since Go 1.25; the toolchain pin is 1.27) on unsafe methods: refuse when `Sec-Fetch-Site` is present and not `same-origin`/`none`, or, without it, when `Origin` is present and does not match the host; trusted origins = `core.http.cors.allowed_origins`; refusal 403 `cross_origin_rejected`, audited from the identity flip F4 (before it, access log `security_event`, SEC2-20). **No credential type is exempt** (FE2-23): non-browser clients pass because they send neither `Sec-Fetch-Site` nor `Origin`, not because of the credential they carry; a browser attaches cached HTTP Basic credentials cross-site exactly like cookies, so Basic is never a bypass, and a browser cannot attach `Authorization`/`X-Api-Key` cross-origin without a CORS preflight that stage 6 refuses for unlisted origins. **Host-rewriting proxies:** over plain HTTP browsers send no `Sec-Fetch-Site`, so the `Origin` comparison decides; when the TCP peer is a `TrustedProxies` member, its `X-Forwarded-Host` replaces `r.Host` for that comparison (a proxy that rewrites `Host`, nginx's default, otherwise refuses every UI POST); from any other peer `X-Forwarded-Host` is ignored. Operators behind a proxy that sends neither may list the public origin in `core.http.cors.allowed_origins`; the first refusal raises a health warning naming that key. Applies to the legacy mount too (today's only defence there is `SameSite=Strict`, which is site-scoped and does not stop a sibling app). A development proxy that rewrites `Host` (Vite `changeOrigin: true`) must rewrite `Origin` to the target origin as well, or every dev POST over a LAN address is refused (07 §7.10, FE3-19) | all | new (supersedes per-handler checks such as `repairs/handler.go:27-28`) |
+| 8 | Optional perimeter gate (HTTP Basic, off by default). Exempt **per route, never per mount** (SEC-14), with HEAD's exempt set (`basicauth.go:34,40-46,69`; COR4-9): Public infra probes; legacy routes with `OwnAuth` (§8.2; accepted only for registered auth methods, SEC2-17); legacy routes with `LegacyRoute.BasicExempt` (HEAD's two health paths, `/api/health` and `/api/v1/health`, which monitors call; from F8, which deletes them (05-health §5H.3.3), `/health`, the path their callers switch to, which serves the same handler, so the exemption exposes nothing new); and, on the `/` owner, the paths its `LegacyMount.BasicExemptAssets` predicate matches (HEAD's static-asset rule: the `/assets/` prefix, `/favicon.ico` and the `.js`, `.css`, `.png`, `.svg`, `.woff2` suffixes; after the shell flip F9 the same predicate arrives as `SPAOptions.BasicExemptAssets` when the kernel mounts the shell with `Router.SPA`, §3.5, 07 §7.6.1, FE5-10). Everything else, including the ABS routes that run no ABS authenticator, stays behind it, as `basicauth.go:51-70` does. The gate compares the presented username and password with `core.http.basic_gate.username` and `.password`, each in constant time, as HEAD does (`basicauth.go:80-84`; §10, SEC6-9). **No password, no entry (resolution R5-1(c), SEC5-4, DATA5-12):** when `core.http.basic_gate.enabled` is true and `core.http.basic_gate.password` is unset (`ErrNotSet`), cleared, empty or unreadable (`ErrKeyUnavailable`), every non-exempt request gets 401, health reports `degraded` (`basic_gate_no_password`) and the startup log names the key; a presented empty password never matches. An operator value locks the password like any key (§10), so a password set in the environment is used however the stored row reads, which is also early fix 5's recovery from a lock-out (OPS9-7). HEAD's comparison ported as it is would admit `<username>:` (`basicauth.go:81-87`) — HEAD's key-regeneration delete path and a partial reset both produce that state (`TestBasicGate_EmptyPasswordRefuses`) | all | `internal/server/middleware/basicauth.go:24` |
 | 9 | Compression (gzip; skipped for `HandleRaw` streams, `/metrics`, every response whose `Content-Type` is `text/event-stream`, and every legacy route with `LegacyRoute.NoCompress` — HEAD's exclusions `/api/events`, `/metrics`, `/api/v1/auth/accept-invite` and `^/api/v1/operations/v2/[^/]+/logs/download$`, `internal/server/server.go:1590-1606`, whose last entry prevents double-gzipped log files, COR3-6). The compressing writer implements `Unwrap` and `Flush`, so `http.ResponseController` reaches the connection | all | `compressionMiddleware`, `internal/server/server.go:725` |
 | 10 | Per-client rate limit (token bucket per client address from stage 0, `ClientAddrFrom`; class from `Route.RateClass` or `LegacyRoute.RateClass`) | routes | `internal/server/middleware/ratelimit.go:96` |
 | 11 | Body limit (`MaxBody`; for legacy routes an outer cap of `core.http.body.upload_max_bytes`, gin keeps its per-group limits) | routes | `internal/server/middleware/request_size.go:77` |
 | 12 | Authenticate: `auth.Service.Middleware` (05-authn §4.2): binds a principal or records an `auth.Failure`; **stops at the first authenticator that returns anything other than `ErrNoCredential`**; writes no response except 503 `auth_unavailable` (SEC-12) | routes, except `OwnAuth` legacy routes and, in R1 (`LegacyAuthGin`), the whole legacy mount (§8.1) | `RequireAuth` step 3–6 + `cfMW` (`raw/10` §2.2) |
-| 13 | Authorize: recorded failure → on non-Public routes 401 with the failure code; on Public routes the cookie rule of 05-authn §4.3 (anonymous + cookie cleared; an invalid Bearer/API key is still 401). No principal on non-Public → 401 `authentication_required`. `Guards`. `Perm` via the principal's checker (confinement and `Sensitive` included, 05-rbac §4.4, §4.10; a legacy route's requirement from books' atom table, §8.3, 05-rbac §6, COR5-4) → 403 problem with `required_permission`. (The facade-key clause is a deferred-build member, §3.6.) Denial → `audit` (coalesced) from the R2 identity flip | routes, same exceptions as 12 | `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner`, `abortWorkerOnlyOutsideWorkerAPI` (whose ABS half is kept in the bridge, §8.3) |
+| 13 | Authorize: recorded failure → on non-Public routes 401 with the failure code; on Public routes the cookie rule of 05-authn §4.3 (anonymous + cookie cleared; an invalid Bearer/API key is still 401). No principal on non-Public → 401 `authentication_required`. `Guards`. `Perm` via the principal's checker (confinement and `Sensitive` included, 05-rbac §4.4, §4.10; a legacy route's requirement from books' atom table, §8.3, 05-rbac §6, COR5-4) → 403 problem with `required_permission`. (The facade-key clause is a deferred-build member, §3.6.) Denial → `audit` (coalesced) from the identity flip F4 | routes, same exceptions as 12 | `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner`, `abortWorkerOnlyOutsideWorkerAPI` (whose ABS half is kept in the bridge, §8.3) |
 | 14 | Handler (`Handle` decode → validate → fn → encode; or the gin engine for legacy routes, behind the pattern check of §8.2) | route | — |
 
 Stages 12–13 being **inside** the module's `Group` is what fixes G8: there is no group without
@@ -657,13 +669,14 @@ side-effect route that needs idempotency adds it then, in its owner.
   deprecated or answers 410 for it (D10).
 - **No aliases (D10).** A path that changes is deleted and registered under its new pattern in one
   PR, and the SPA, the first-party scripts and the agent skills that call it switch in the same
-  release (09). Core's own routes exist only under `/api/core/v1`: each R2 flip deletes the gin
-  routes that its native routes replace (§8.1).
+  PR (09). Core's own routes exist only under `/api/core/v1`, except the OAuth/OIDC callback, which
+  keeps HEAD's path (§3.5 `CoreFixedGroup`); each R2 flip deletes the gin routes that its native routes
+  replace (§8.1).
 - **Books legacy routes** stay gin routes under the permanent legacy mount (§8); `/api/v1/…` is a
   permanent `books` prefix. A books group rewritten natively moves to `/api/books/v1/…` and its gin
   routes are deleted in the same PR. HEAD's existing `gone()` stubs are books' gin code and stay
   there (`internal/server/gone.go:15-40`); core has no `Gone`.
-- **The ABS-compatible root routes are a fixed contract that books mounts (D12 F3).** `/ping`,
+- **The ABS-compatible root routes are a fixed contract that books mounts (D12 (c)).** `/ping`,
   `/status`, `/login`, `/logout`, `/auth/refresh`, `/auth/openid*`, `/api/authorize`, `/api/me*`,
   `/api/libraries*`, `/api/items*`, `/api/session*`, `/public/session/{id}/track/{index}`,
   `/api/playlists*`, `/api/collections*` and the authors, series and narrators routes keep their
@@ -745,11 +758,12 @@ routes run `ABSRequireAuth` with `loginCeiling` and no route permission. The rul
 feed, `wire_library_routes.go:48`; the undo changes and result handlers, `wire_operations_routes.go:103,110`;
 the metadata batch-candidate page, `server_lifecycle.go:1952` @748fd787a) and HEAD's
 `GET /api/v1/operations/v2/{id}`; the ABS one is part of the fixed ABS contract (§4.6). Both fold as
-above from R1. The R2 tasks flip deletes the `/api/v1/operations*` routes that native task routes
-replace (05-tasks lists them; the Activity page moves to the native routes in the same release).
+above from R1. The tasks flip F5 deletes the `/api/v1/operations*` routes that native task routes
+replace (05-tasks §5T.3.10 lists them; the Activity page moves to the native routes in that PR and polls
+`GET /api/core/v1/tasks/runs` until the events flip F6).
 Whatever stays re-folds by rules 1–6 in that PR with no special case, and a route left with no
 conflicting partner registers as its own pattern. No core route can join a books component: core's
-patterns lie under `/api/core/`.
+patterns lie under `/api/core/`, and the one fixed callback path (§3.5) conflicts with no books route.
 
 ### 4.9 Prefix claims and the `/api/v3` reservation
 
@@ -763,17 +777,19 @@ yielding (SIMP-22, as 06 §6.4.2 states it).
 
 **Patterns stay inside their owner's claims (SEC3-8).** ServeMux panics only on *conflicting*
 patterns; a strictly more specific one wins silently, so a claim alone does not stop one owner from
-capturing another's requests (a legacy manifest route at `GET /api/core/v1/auth/oidc/google/callback`
-would receive the OIDC `code` and `state`). `Build` therefore fails with `ErrOutsideClaim` when a
+capturing another's requests (a legacy manifest route at `POST /api/core/v1/auth/login` would receive
+core's sign-in bodies). `Build` therefore fails with `ErrOutsideClaim` when a
 legacy manifest route is outside its mount owner's `LegacyPrefixes` (a native route cannot be: its
 pattern is relative to its `Group`), and with `ErrShadow` when any route of one owner is strictly more
 specific than a route of another owner over the same path set. There is no exemption. The two
 fallbacks are not subtree claims: `/` (the SPA fallback, §4.10) and the legacy `/api/` redirect
-handler (item 3), both matched last by `ServeMux` specificity.
+handler (item 3), both matched last by `ServeMux` specificity. The one exception to the overlap rule is a `CoreFixedGroup`
+base, an exact core claim nested inside a legacy prefix, which `Build` refuses while any manifest route
+lies under it (§3.5).
 
 **`/api/v3` is reserved for *arr facades**, whose clients call `<base>/api/v3/…` (`raw/16` §5.1).
 ABO's HEAD `/api/v3/ops/*` (12 routes, `internal/server/server_lifecycle.go:2127-2135`) is HEAD's task
-API: in R1 books still claims `/api/v3/` for it, and the R2 tasks flip deletes it with the other routes
+API: in R1 books still claims `/api/v3/` for it, and the tasks flip F5 deletes it with the other routes
 that native task routes replace (05-tasks), dropping that claim in the same PR. ABO ships no facade, so
 nothing collides in either release.
 
@@ -800,7 +816,7 @@ nothing collides in either release.
   `Router.NonSPA()` **before** it calls gin, so a path core added to the non-SPA set (core's `/livez`,
   `/readyz` and their case or slash variants) gets the router's problem 404 instead of gin's
   `NoRoute` page while gin's static `nonSPASegments` list still lacks it — one predicate serves both
-  owners (FE3-13). When ABO adopts the shell build (07; the shell flip, in R2 if it is ready, else R3),
+  owners (FE3-13). When ABO adopts the shell build (07; the shell flip F9, in R2 if it is ready, else R3),
   the same PR drops `ServesSPA`, deletes gin's `NoRoute`/`setupStaticFiles`, and the kernel calls
   `Router.SPA(ui.Handler(...), SPAOptions{BasicExemptAssets: ui.BasicExemptAssets})` (FE5-10). No `/` pattern is reserved by `httpapi` itself.
 - **Place in the chain.** The `/` owner (SPA handler or the legacy `ServesSPA` fallback) runs stages
@@ -833,12 +849,12 @@ nothing collides in either release.
 
 ## 5. Lifecycle
 
-1. `app.New` builds `httpapi.Router` after `auth`, `rbac` and `audit` exist (R4 order; in R1 none of
-   them, §3).
+1. `app.New` builds `httpapi.Router` after `auth`, `rbac` and `audit` exist (rule R4's order; in release R1
+   none of them, §3).
 2. Core's capability routes are registered on `CoreGroup()` by one package per capability,
    `core/internal/<capability>http` (`authhttp`, `rbachttp`, `audithttp`, `taskhttp`, `eventhttp`,
-   `confighttp`, `backuphttp`, `updaterhttp`, `healthhttp`, `libraryhttp`, `storagehttp` (from the R2
-   identity flip: `POST /api/core/v1/system/factory-reset`. Its confirmation contract is the one
+   `confighttp`, `backuphttp`, `updaterhttp`, `healthhttp`, `libraryhttp`, `storagehttp` (from the
+   identity flip F4: `POST /api/core/v1/system/factory-reset`. Its confirmation contract is the one
    `storage.ResetRequest` that 05-storage owns (resolution R9-6): the request carries `{kind, confirm:
    "RESET", delete_library_files?, library_root?, library_file_count?}`; a missing or wrong `confirm`
    answers 422 `confirm_required`, and when `delete_library_files` is true but `library_root` or
@@ -848,7 +864,8 @@ nothing collides in either release.
    storagehttp-local `Stager.StageReset` (never `*storage.Admin`, COR8-2) and `kernel.stageReset`;
    05-rbac §6.2 states the route's guards and wire shape. HEAD's two gin reset routes,
    `POST /api/v1/system/factory-reset` (`ResetFactory`) and `POST /api/v1/system/reset`
-   (`ResetStore`), are deleted in the same PR, and the SPA calls the native route),
+   (`ResetStore`), are deleted in release R1, whose factory reset is offline only (`storage reset`,
+   05-storage §5S.3.15) while the SPA hides its reset control; from F4 the SPA calls the native route),
    `modulehttp` for
    `GET /api/core/v1/modules` (the kernel passes it a read-only `ModulesView` — catalog snapshot,
    `restart_required`, the `ui_build_id` source: the served **shell** bundle's ID,
@@ -858,8 +875,9 @@ nothing collides in either release.
    imports nothing above L6, FE3-16), and
    `uihttp` for `ui/diagnostics` and `ui/csp-report`, so `ui` registers nothing on `CoreGroup` itself; layer L6,
    imported only by `kernel`, 03 §3.3, COR-18, COR2-19); each module's `Register(r module.Registrar)`
-   receives `r.HTTP() *httpapi.Group` and, for ABO, calls `MountLegacy`. Registration only
-   **records**; nothing touches the mux.
+   receives `r.HTTP() *httpapi.Group` and, for ABO, calls `MountLegacy`. From F4 `authhttp` also
+   registers the OIDC callback on `CoreFixedGroup` (§3.5). Registration only **records**; nothing touches
+   the mux.
 3. Kernel calls `Router.Build()`: validates every route (permission present and in catalog, scope
    namespace rule from 05-rbac §4.9, binding tags, schema generation, snake_case names, the legacy
    manifest against the gin engine, `LegacyAuthGin` and `OwnAuth` admission of §8.2, claims,
@@ -882,7 +900,7 @@ nothing collides in either release.
 |---|---|---|---|
 | Route without `Perm` | boot error `ErrNoPermission` | closed | R6 |
 | Route `Perm` scope unknown / foreign namespace | boot error | closed | prevents typos and cross-module escalation (05-rbac §4.9) |
-| Pattern conflict that the collision rule of §4.8 cannot resolve (a cross-owner component, members with different requirements or shapes, a generalised pattern that conflicts again) / duplicate / prefix collision / two owners of `/` | boot error `ErrPatternConflict` / `ErrDuplicateRoute` / `ErrPrefixCollision` | closed | silent shadowing is worse than not starting; a resolvable same-owner set registers as one generalised pattern (A-1) |
+| Pattern conflict that the collision rule of §4.8 cannot resolve (a cross-owner component, members with different requirements or shapes, a generalised pattern that conflicts again) / duplicate / prefix collision (a `CoreFixedGroup` base with a manifest route under it included) / two owners of `/` | boot error `ErrPatternConflict` / `ErrDuplicateRoute` / `ErrPrefixCollision` | closed | silent shadowing is worse than not starting; a resolvable same-owner set registers as one generalised pattern (A-1) |
 | Native JSON property not snake_case | boot error `ErrJSONName` | closed | one wire convention (FE-12) |
 | Legacy route missing from the manifest or without a permission | boot error `ErrLegacyManifest` | closed | R6 over the running table (SEC-13) |
 | `LegacyAuthGin` mount not named by `app.Options.LegacyAuthGinUntil`; `OwnAuth` route naming no auth method its module registered | boot error `ErrLegacyAuthGin` / `ErrOwnAuthMethod` | closed | no module skips stages 8, 12, 13 by self-declaration (SEC2-17) |
@@ -902,7 +920,7 @@ nothing collides in either release.
 | Authentication store read error | 503 `auth_unavailable` (not 401) | closed | never treat "can't check" as "anonymous ok"; today returns 500 (`middleware/auth.go:163-167`) |
 | Presented credential refused | 401 with the failure code (Public route: cookie-only failures proceed anonymous, 05-authn §4.3) | closed | SEC-11, SEC-12 |
 | No principal on non-Public route | 401 `authentication_required` | closed | |
-| Missing scope / confined principal | 403 + audit denial (access log `security_event` until the R2 identity flip) | closed | |
+| Missing scope / confined principal | 403 + audit denial (access log `security_event` until the identity flip F4) | closed | |
 | Audit write for a denial fails | request still 403; `mediacore_audit_dropped_total` | open (audit) / closed (request) | the denial is enforced regardless |
 | Cursor invalid or filter mismatch | 400 `invalid_cursor` | closed | |
 | Response encode error after headers sent | log + abort connection | — | nothing else possible |
@@ -928,8 +946,8 @@ types:
   `core.http.openapi.public=true` makes it Public) and emitted at build time by the app binary's
   `openapi` subcommand (06-app-sdk) into `api/openapi/<owner>.json`, committed — **except `core`**:
   apps never emit the core document; `core.json` is emitted only by `core/examples/hello`'s `openapi`
-  subcommand, from R1, into `core/openapi/core.json` (outside any npm package, which R1's UI-0 work
-  creates later), and UI-0's api-client generator reads it from there (07 §7.8, 06 `Description.Core`;
+  subcommand, from R1, into `core/openapi/core.json` (outside any npm package, which R1's front-end work, 07 §7.19 steps 1–3,
+  creates later), and that work's api-client generator reads it from there (07 §7.8, 06 `Description.Core`;
   FE2-24, MOD3-4). A freshness gate
   (`make openapi-check`, modelled on `scripts/ci/check_generated_types.sh:1-22`) and the `oasdiff`
   breaking gate (§4.6) run in `make ci`.
@@ -950,7 +968,7 @@ no in-house Go TypeScript emitter in this design.
 - `@mediacore/api-client` = generated `paths` for core + `createCoreClient({ buildId, shell })` built on
   `openapi-fetch` with middleware ported from `apiFetch`: `credentials: 'include'`, timeout
   (`ApiTimeoutError`), SSO bounce detection (`ApiAuthRedirectError`), `X-Request-ID` surfacing,
-  the stale-build rule of 07 §7.5.2. From UI-0 the runtime exports `checkBuild(response, opts):
+  the stale-build rule of 07 §7.5.2. From release R1 (07 §7.19 steps 1–3) the runtime exports `checkBuild(response, opts):
   StaleReason | null`, `checkModules(body, response, opts): StaleReason | null`,
   `onStaleBuild(listener): Unsubscribe` and `getStaleReasons(): readonly StaleReason[]`, and ABO's
   `apiFetch` calls `checkBuild`, so legacy and native calls run one implementation (FE4-9, FE7-5).
@@ -969,17 +987,17 @@ no in-house Go TypeScript emitter in this design.
   is the caller's own flag. **Both options are required (FE7-5)**, so an omitted `buildId` cannot
   disable the check silently: `createCoreClient(opts: { buildId: string; shell: boolean })` stores both
   for the runtime's middleware; ABO's `apiFetch` calls `checkBuild(response, { buildId:
-  readPageBuildId(), shell: false })`; ABO's pre-shell client for generated operations (from the R2 identity flip until the shell flip) is one
-  `createCoreClient({ buildId: readPageBuildId(), shell: false })` in `web/src/api/core.ts` from UI-0;
+  readPageBuildId(), shell: false })`; ABO's pre-shell client for generated operations (from the identity flip F4 until the shell flip F9) is one
+  `createCoreClient({ buildId: readPageBuildId(), shell: false })` in `web/src/api/core.ts`, created in release R1;
   `createShell` passes `{ buildId: readPageBuildId(), shell: true }`; and module clients come from
   `createModuleClient<Paths>(coreClient)`, which inherits both values. `checkBuild` and `checkModules`
   return the stale reason or `null`. **Detections replay on subscribe (FE8-3).** The runtime keeps the
   reasons already detected on this page load (`getStaleReasons()`), and `onStaleBuild` calls a new
   listener at once for each of them; "once" is per listener per reason. A banner that mounts after the
   page's first stale response (the auth probe, `/auth/status`, `/me`) is still notified. So ABO's
-  reload banner (from UI-0) and the shell banner (after the shell flip) subscribe to one signal that native and legacy
-  calls both raise. 07 §7.5.2 owns the banners and 09 assigns ABO's banner component (R1), which before
-  UI-0 is fed by `apiFetch`'s own rule. `buildId.test.ts` asserts that a stale response on a native call
+  reload banner (from release R1) and the shell banner (after the shell flip F9) subscribe to one signal that native and legacy
+  calls both raise. 07 §7.5.2 owns the banners and 09 assigns ABO's banner component (R1), which, until R1's
+  api-client work lands, is fed by `apiFetch`'s own rule. `buildId.test.ts` asserts that a stale response on a native call
   and one on a legacy call notify the same listener, that a listener subscribed after a stale response
   is notified once, and that the case-2 path detects `legacy-spa` without consuming the body its caller
   reads. No `core/web` package reads `import.meta.env.MEDIACORE_*` except
@@ -997,7 +1015,7 @@ no in-house Go TypeScript emitter in this design.
   `web/src/generated/ops.ts`, `tools/cmd/opsgen/main.go:6,28` @748fd787a) keeps its HEAD input
   `internal/operations/state` and its freshness gate unchanged until its last importer goes native.
   `ops.ts` is imported by `web/src/services/api.ts` and `web/src/utils/operationPolling.ts`
-  (`operationPolling.ts` has 5 non-test importers @748fd787a); the R2 tasks flip moves the Activity
+  (`operationPolling.ts` has 5 non-test importers @748fd787a); the tasks flip F5 moves the Activity
   page and those callers to the generated task client, and `opsgen` and `ops.ts` are deleted in
   the PR that removes the last importer (07 §7.8 owns the order, FE4-7, FE8-6). The golden contract test
   (`internal/wirecontract/contract_test.go`) is generalized for native routes:
@@ -1011,16 +1029,21 @@ no in-house Go TypeScript emitter in this design.
 
 Cross-cutting resolution 2: ABO's gin router is mounted permanently, behind core's perimeter, with
 gin's own auth chain unchanged inside it; the auth engine behind that chain swaps once, in the R2
-identity flip (OPS-11). There is no gin-retirement stage and no alias stage: each R2 flip deletes the
-gin routes its native routes replace, and the SPA and first-party callers switch in the same release
-(§4.6, 09).
+identity flip F4 (OPS-11). There is no gin-retirement stage and no alias stage: each R2 flip deletes the
+gin routes its native routes replace, and the SPA, the first-party callers and the deploy files switch in
+the same PR (§4.6, 09). The flip labels are 03 §3.8's: F3 config, F4 identity, F5 tasks, F6 events,
+F7 integrations, F8 backup, health and metrics, F9 the shell.
 
 | Release (flip) | What changes in HTTP | Who authenticates / authorizes the legacy mount | Rollback |
 |---|---|---|---|
-| R1 | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is a mux pattern**, its own or, for a conflicting same-owner set, one generalised pattern (§4.8 collision rule, resolution A-1; `TestLegacyManifest_RegistersAsMuxPatterns` runs on the real engine, ABS on and off). The perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, gzip with HEAD's per-path exclusions, tracing and HTTP metrics (stage 2 records every request; `otelgin` leaves the engine, 13 §13.5.1), the `/api` rate limiter with per-route `RateClass`), **except the Basic gate (stage 8), which stays in gin until the R2 config flip**, because core reads its keys only through core config; stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter values are plain options in R1:** ABO's `main` reads its effective config at boot (UI-saved blob values included) and passes the listener and perimeter values (`core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list, trusted proxies) as `app.Options`, so a value saved only in the UI reaches stages 0, 6 and 10; an edit through `PUT /api/v1/config` takes effect at the next restart until the config flip makes the keys hot-reloadable core keys, an R1 release-note line (`TestPerimeterHonoursBlobOnlyValues`). Cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold from R1), and **every `s.perm(atom)` route's `Perm` records the native requirement books' atom table gives the atom** (§8.3, 05-rbac §6; COR6-1): the reviewed manifest is final from R1, stage 13 starts enforcing it at the identity flip, and `Build` checks its scopes against the catalog from then (`TestManifest_SPermRoutesCarryAtomRequirement`). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until the identity flip, and its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | binary swap to R0; no user data changed |
-| R2, config flip | The Basic gate (stage 8) moves from gin into the core perimeter with HEAD's exempt set (`OwnAuth`, `BasicExempt`, `BasicExemptAssets`; SEC-14, COR4-9) and refuses an enabled gate with no password (§4.2 stage 8, R5-1(c)); stage 8 reads `core.http.basic_gate.*` through core config (§10), whose migration has moved HEAD's values, the password re-encrypted into core secrets (05-config §1.12.2); `basicauth.go` is deleted from gin in the same PR (04 §7). The perimeter keys become hot-reloadable core keys | gin only, as R1 | R2 rollback (below) |
-| R2, identity flip | `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards`, for an `s.perm(atom)` route the atom-table requirement recorded since R1, over the native scopes the identity migration stored on every role and key (05-authn §4.4, 05-rbac §6); the legacy `/metrics` entry carries `core:metrics.read`, which that migration stores on every principal that is not `Confined()` (05-rbac §6); inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes and the settings routes (`/api/core/v1/settings`, `/settings/schema`, 05-config §1.3.4; FE3-11) go native under `/api/core/v1`, and the gin identity and settings routes they replace are deleted in the same PR, `PUT /api/v1/auth/me/password` with `user_id` included (SEC2-5); `GET /auth/temp-login` and the `/invite/<token>` link form are replaced by 05-authn's link forms, and the one-time tokens minted before the flip are reset (D12 F2), so no redirect route exists; the core factory-reset route lands in `internal/storagehttp` and HEAD's two gin reset routes are deleted (§5); `client_trust.go`'s Access-assertion branch moves into ABO's `internal/cfaccess` authenticator; stage 7 and stage 13 refusals are audited from here | core; gin bridge | R2 rollback (below) |
-| R2, tasks / events / integrations / metrics flips | each core subsystem's routes go native in its flip, and the gin routes they replace are deleted in the same PR: the tasks flip deletes the `/api/v1/operations*` and `/api/v3/ops/*` routes native task routes replace (05-tasks lists them; §4.8, §4.9), the events flip deletes the three legacy event streams, `/api/events` included, as the SPA's realtime client moves to `/api/core/v1/events` (05-realtime), and the metrics flip replaces the legacy `/metrics` route with the kernel's `Infra` mount (05-metrics §6) | core | R2 rollback (below) |
+| R1 | `core/httpapi` exists; ABO's `main` builds `app.New(opts, books.Module())` with `app.Options.LegacyAuthGinUntil: "books"`; `books` calls `MountLegacy(Auth: LegacyAuthGin)` with the whole gin engine; **every manifest route is a mux pattern**, its own or, for a conflicting same-owner set, one generalised pattern (§4.8 collision rule, resolution A-1; `TestLegacyManifest_RegistersAsMuxPatterns` runs on the real engine, ABS on and off). The perimeter moves to core stages 0–11 and is removed from gin in the same PR (logger, recovery, security headers with `DefaultCSP` = today's per-response `contentSecurityPolicy()` and `Reporting-Endpoints` (FE2-1), CORS, gzip with HEAD's per-path exclusions, tracing and HTTP metrics (stage 2 records every request; `otelgin` leaves the engine, 13 §13.5.1), the `/api` rate limiter with per-route `RateClass`), **except the Basic gate (stage 8), which stays in gin until the config flip F3**, because core reads its keys only through core config; stage 5 emits `X-App-Build` on every response (FE2-5, OPS2-13). **Perimeter values are plain options in R1:** ABO's `main` reads its effective config at boot (UI-saved blob values included) and passes the listener and perimeter values (`core.http.rate_limit.*` = `enable_rate_limit`/`api_rate_limit_per_minute`, CORS origins, peer allow-list, trusted proxies) as `app.Options`, so a value saved only in the UI reaches stages 0, 6 and 10; an edit through `PUT /api/v1/config` takes effect at the next restart until F3 makes the keys hot-reloadable core keys, an R1 release-note line (`TestPerimeterHonoursBlobOnlyValues`). **The factory reset is offline only in R1** (`storage reset`, 05-storage §5S.3.15): HEAD's two gin reset routes are deleted, the SPA hides its reset control, and the core route arrives at F4 (§5), an R1 release-note line. Cross-origin protection (stage 7) is new, and its refusals go to the access log as `security_event` until `audit` exists (SEC2-20); the 36 permission-less routes are annotated `AnyAuthenticated` in the manifest (R6 must hold from R1), and **every `s.perm(atom)` route's `Perm` records the native requirement books' atom table gives the atom** (§8.3, 05-rbac §6; COR6-1): the reviewed manifest is final from R1, stage 13 starts enforcing it at F4, and `Build` checks its scopes against the catalog from then (`TestManifest_SPermRoutesCarryAtomRequirement`). **Client address (SEC2-19):** stage 0 resolves it and publishes it (`ClientAddrFrom`); ABO's `client_trust.go` stays in ABO until F4, and its `trustedClientIP` (used by the bootstrap, invite and ABS limiters, `bootstrap_rate_limit.go:207`, `invite_rate_limit.go:405`, `client_trust.go:600`) starts from that value and keeps only its "local peer + verified Access assertion" branch on top | gin only (CF binder, `RequireAuth`, `s.perm`, `RequireAdmin`, `credGuard`, `RequireOwner` unchanged); core stages 12–13 off for the mount | binary swap to R0; no user data changed |
+| R2, F3 (config) | The Basic gate (stage 8) moves from gin into the core perimeter with HEAD's exempt set (`OwnAuth`, `BasicExempt`, `BasicExemptAssets`; SEC-14, COR4-9) and refuses an enabled gate with no password (§4.2 stage 8, R5-1(c)); stage 8 reads `core.http.basic_gate.*` through core config (§10), whose migration M2 has moved HEAD's values, the password re-encrypted into core secrets (05-config §1.12.2), and `core.http.basic_gate.enabled` is `FailClosed` (§10); `basicauth.go` is deleted from gin in the same PR (04 §7), and the deploy files pass the canonical Basic-gate names only when set (05-config §1.12.4). The perimeter keys become hot-reloadable core keys | gin only, as R1 | R2 rollback (below) |
+| R2, F4 (identity) | `LegacyAuth` switches to `LegacyAuthCore`, and the same PR removes `LegacyAuthGinUntil` from `app.Options` (an archtest fails if it is still present, SEC2-17): stage 12 binds the core principal and stage 13 enforces each manifest route's `Perm`/`Guards`, for an `s.perm(atom)` route the atom-table requirement recorded since R1, over the native scopes the identity migration stored on every role and key (05-authn §4.4, 05-rbac §6); the legacy `/metrics` entry carries `core:metrics.read`, which that migration stores on every principal that is not `Confined()` (05-rbac §6); inside gin the auth middleware becomes the bridge of §8.3 (it never authenticates; its authorization adapters still enforce through `rbac.Require`); core auth/users/roles/keys/sessions routes and the settings routes (`/api/core/v1/settings`, `/settings/schema`, 05-config §1.3.4; FE3-11) go native under `/api/core/v1`, and the gin identity and settings routes they replace are deleted in the same PR, `PUT /api/v1/auth/me/password` with `user_id` included (SEC2-5); `GET /auth/temp-login` and the `/invite/<token>` link form are replaced by 05-authn's link forms, and the one-time tokens minted before the flip are reset (D12 (b)), so no redirect route exists; HEAD's OAuth/OIDC callback path is served by core on `CoreFixedGroup` and its gin route is deleted (§3.5); the core factory-reset route lands in `internal/storagehttp` and the SPA's reset control returns on it (§5); the SPA's identity calls, the `server-bootstrap` skill and `scripts/` switch in the same PR; `client_trust.go`'s Access-assertion branch moves into ABO's `internal/cfaccess` authenticator; stage 7 and stage 13 refusals are audited from here | core; gin bridge | R2 rollback (below) |
+| R2, F5 (tasks) | the native task routes (05-tasks §5T.3.10); the gin routes they replace are deleted in the same PR: the `/api/v1/operations*` task routes, `/api/v3/ops/*` with books' `/api/v3/` claim (§4.9) and the two operation streams (`/api/v1/operations/events`, `/api/v3/ops/events`); the Activity page moves to the native routes and polls `GET /api/core/v1/tasks/runs` until F6; §4.8's books component re-folds | core | R2 rollback (below) |
+| R2, F6 (events) | `/api/core/v1/events` (05-realtime); `/api/events` is deleted as the SPA's realtime client, the Activity page's included, moves to it | core | R2 rollback (below) |
+| R2, F7 (integrations) | the unauthenticated `/api/v1/plugins` mount (G8) is deleted with `internal/plugin` (§8.4) | core | R2 rollback (below) |
+| R2, F8 (backup, health, metrics) | the kernel's `Infra` mount replaces the legacy `/metrics` route (05-metrics §6); `/api/health` and `/api/v1/health` are deleted (05-health §5H.3.3) and `BasicExempt` moves to `/health` (§4.2 stage 8); the Dockerfile `HEALTHCHECK`, `scripts/deploy-wait-ready.sh` and the other callers switch in the same PR | core | R2 rollback (below) |
+| F9 (shell; R2 if ready, else R3) | the mount drops `ServesSPA`, gin's `NoRoute`/`setupStaticFiles` are deleted and the kernel mounts the shell with `Router.SPA` (§4.10) | core | per release |
 | any later | a books route group moves to `/api/books/v1` **only when rewritten for its own reasons** (SIMP-2); its gin routes are deleted in the same PR | core | per release |
 
 **R2 rollback** is the release's one-way rule (09): restore the pre-migration checkpoint or the off-host
@@ -1030,15 +1053,16 @@ The R1 done-check in 09 covers the perimeter move: CSP header goldens per owner 
 response carries the inline-script hash and the configured Access team host, and
 `Reporting-Endpoints`), `X-App-Build` on every response class in the perimeter goldens, the
 rate-limit class golden, the cross-origin test, the bootstrap, invite and ABS limiter tests unchanged
-(SEC2-19), the ABS conformance suite and `TestStage2_RecordsEveryRequest`. The config flip covers the
-Basic gate's move: its exempt set equals HEAD's (`TestBasicGate_ExemptSetEqualsHEAD`), the gate
-enabled only in the stored settings turns stage 8 on also with compose's `BASIC_AUTH_ENABLED=false`
-in the environment (`TestBasicGate_MoreRestrictiveWins`), and an enabled gate with no password
-refuses (`TestBasicGate_EmptyPasswordRefuses`). The identity flip carries the identity cutover
-oracle `TestLegacyRoleReachUnchanged` (every manifest route × the 4 seed roles, 572 routes at
-`748fd787a`, a count the test generates at the flip's base commit, ADV-11; plus scoped keys,
-auth-off and a custom-role half over random native roles, SEC4-2): allow and deny on the migrated
-fixture equal HEAD's, and the test stays as the regression test of books' atom table (05-rbac §12).
+(SEC2-19), the ABS conformance suite and `TestStage2_RecordsEveryRequest`. F3 covers the
+Basic gate's move: its exempt set is the reviewed golden, HEAD's set until F8
+(`TestBasicGate_ExemptSetGolden`), the gate enabled only in the stored settings turns stage 8 on also with
+an operator `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false` (`TestBasicGate_MoreRestrictiveWins`), and an enabled
+gate with no password refuses (`TestBasicGate_EmptyPasswordRefuses`). F4 carries the reach oracle
+`TestIdentityCutover_ReachOracle` (05-rbac §12 owns it; every manifest route, 572 at `748fd787a`, a count
+the test generates at the flip's base commit, ADV-11, × every principal kind 05-rbac §12 lists, plus a
+custom-role half over random native roles, SEC4-2): allow and deny on the migrated fixture equal HEAD's,
+an all-atom or admin key keeping its whole reach, task-run approval included (05-rbac §6.3), and the test
+stays as the regression test of books' atom table.
 
 ### 8.2 `MountLegacy` contract
 
@@ -1060,11 +1084,11 @@ type LegacyMount struct {
 
 type LegacyRoute struct {
 	Method, GinPath string
-	Perm            rbac.Requirement // s.perm atom: the native requirement books' atom table gives it (§8.3, 05-rbac §6), recorded from R1 (COR6-1), enforced from the R2 identity flip. Admin kind: 05-rbac §6.2; Delegated when OwnAuth
+	Perm            rbac.Requirement // s.perm atom: the native requirement books' atom table gives it (§8.3, 05-rbac §6), recorded from R1 (COR6-1), enforced from F4. Admin kind: 05-rbac §6.2; Delegated when OwnAuth
 	Guards          Guards           // from credRoute / RequireOwner recording
 	Public          bool             // on the reviewed list of 15 (raw/09 §2.4)
 	OwnAuth         bool             // the route's gin chain runs the ABS authenticator (ABSRequireAuth); stages 8 (Basic), 12, 13 skip it (SEC-14)
-	BasicExempt     bool             // stage 8 skips it: HEAD's two health paths, /api/health and /api/v1/health (basicauth.go:34, COR4-9); TestBasicGate_ExemptSetEqualsHEAD
+	BasicExempt     bool             // stage 8 skips it: HEAD's two health paths /api/health and /api/v1/health (basicauth.go:34, COR4-9), and /health from F8, which deletes those two; TestBasicGate_ExemptSetGolden
 	AuthMethod      string           // required iff OwnAuth: the auth method ("books.abs") the owner registered (SEC2-17)
 	RateClass       RateClass        // RateDefault iff the gin chain includes the API rate limiter today, else RateExempt
 	NoCompress      bool             // stage 9 skips it: HEAD's compressionMiddleware exclusions (§4.2 stage 9, COR3-6); TestCompressionExclusionsEqualHEAD
@@ -1075,7 +1099,7 @@ type LegacyRoute struct {
 **Admission (SEC2-17).** `MountLegacy` is a permanent public API, so its two ways of skipping core
 stages are admitted by the kernel, not self-declared. `Auth: LegacyAuthGin` (stages 12–13 off for the
 whole mount) is accepted only while the compile-time `app.Options.LegacyAuthGinUntil` names the
-mount's owner (ABO sets `"books"` in R1 and removes it in the R2 identity flip; an archtest fails if the
+mount's owner (ABO sets `"books"` in R1 and removes it at F4; an archtest fails if the
 field is set after it), else `ErrLegacyAuthGin`. `OwnAuth: true` (skips stages 8, 12, 13) is accepted
 only when `AuthMethod` names an auth method the same module registered with `Registrar.AuthMethod`
 (05-authn §3.3), else `ErrOwnAuthMethod`. `Registrar.AuthMethod` is an R1 member that only records the
@@ -1097,7 +1121,7 @@ only when `AuthMethod` names an auth method the same module registered with `Reg
   entry or one of its members, so the route stages 8, 10 and 13 judged is the route gin runs (SEC2-22,
   §4.8). The wrapper puts the matched pattern in the request context, where the post-match check reads
   it as `httpapi.MatchedPattern(ctx)` (§3.5), and writes it into stage 2's route carrier like every
-  route wrapper (§4.2 stage 2). From the R2 identity flip, stage 13 enforces its `Perm` and `Guards`,
+  route wrapper (§4.2 stage 2). From F4, stage 13 enforces its `Perm` and `Guards`,
   so the manifest is the running chain, not documentation, and `archtest.RoutesHavePermissions`
   checks what is served. A request matching no manifest route never reaches gin's `NoRoute`, except
   through the `ServesSPA` `/` fallback; under a legacy prefix it gets 404 in the legacy error shape.
@@ -1108,7 +1132,7 @@ only when `AuthMethod` names an auth method the same module registered with `Reg
   (`AnyAuthenticated` or the narrower scope 05-rbac §6.1 assigns) — written down and reviewed
   instead of implicit.
 
-### 8.3 Bridge contract (from the R2 identity flip)
+### 8.3 Bridge contract (from the identity flip F4)
 
 Inside gin, the auth chain keeps its positions; each element becomes an adapter over the core
 decision already taken by stages 12–13. The bridge never **authenticates**, but it is not read-only
@@ -1124,7 +1148,7 @@ SEC4-4), plus a read-side entry for the in-handler sites HEAD judged by their re
 native scopes on roles and keys by the same table. The manifest `Perm` of an `s.perm` route is
 that table's entry, so stage 13, the adapter and the migrated grants all read one mapping.
 
-| Legacy behaviour | Anchor | From the R2 identity flip |
+| Legacy behaviour | Anchor | From F4 |
 |---|---|---|
 | `RequireAuth` (store nil → pass; session/key lookup) | `middleware/auth.go:152-262` | `legacyauth.FromCorePrincipal`: reads the `auth.Principal` bound by stage 12 and fills the legacy context values (`auth.WithUser`, `WithPermissions` with the atoms whose table requirement the principal's checker satisfies — none for the auth-disabled principal, as HEAD binds none with auth off, SEC5-9 — `WithMethod`); never authenticates; a missing principal on a non-Public route is a defensive 401 (stage 13 already answered) |
 | zero users → pass everything | `middleware/auth.go:165-169` | gone: stage 13 allows only Public + setup/bootstrap (05-authn §4.2) |
@@ -1136,7 +1160,7 @@ that table's entry, so stage 13, the adapter and the migrated grants all read on
 | `credGuard` | `credential_routes.go:79-87` (a pass-through with auth off) | `Guards.Interactive` at stage 13; gin adapter checks `Principal.Method.MayChangeCredentials()`. The auth-disabled principal is refused, an auth-off tightening with an R2 release-note line (05-authn §4.11, 05-rbac §4.11, SEC5-8) |
 | `RequireOwner` | `owner_guard.go:51-89` | `Guards.Owner` at stage 13 |
 | user/credential handlers acting on other users | `auth_reset_password.go:18-60` | call `auth.Service` methods that enforce dominance (05-rbac §4.7 rule 5) |
-| ABS `ABSRequireAuth` | `middleware/absauth.go:621` | inside gin for `OwnAuth` routes; resolves through `auth.Service.PrincipalFor`, whose direct API-key path applies stage 12's status, expiry and purpose rules (05-authn §4.10). **Then** the adapter calls `auth.Service.CheckCredentialFor(p, route.Perm)`, which refuses (ABS JSON 403) a principal with `Perms.Confined()` (an `fp-worker` key or a worker user's ABS login) unless the route's manifest `Perm` names one of its scopes, so `TestLegacyRoleReachUnchanged`'s `fp-worker` cells pass on the ABS surface (SEC2-4). ABS's JWT secret value and its auth semantics are unchanged (D12 F3) |
+| ABS `ABSRequireAuth` | `middleware/absauth.go:621` | inside gin for `OwnAuth` routes; resolves through `auth.Service.PrincipalFor`, whose direct API-key path applies stage 12's status, expiry and purpose rules (05-authn §4.10). **Then** the adapter calls `auth.Service.CheckCredentialFor(p, route.Perm)`, which refuses (ABS JSON 403) a principal with `Perms.Confined()` (an `fp-worker` key or a worker user's ABS login) unless the route's manifest `Perm` names one of its scopes, so `TestIdentityCutover_ReachOracle`'s `fp-worker` cells pass on the ABS surface (SEC2-4). ABS's JWT secret value and its auth semantics are unchanged (D12 (c)) |
 
 ### 8.4 File mapping
 
@@ -1146,19 +1170,19 @@ that table's entry, so stage 13, the adapter and the migrated grants all read on
 | `internal/server/server_lifecycle.go:1693-1698` `s.perm` | manifest `Perm` + `rbac.Require` adapter over books' atom table (§8.3) |
 | `internal/server/server_lifecycle.go:1710-2135` `setupRoutes` | `books` module `Register` + `MountLegacy` (permanent) |
 | `internal/server/peer_allowlist.go` | `core/internal/httpmw/peer.go` (stage 0) + `TrustedPeer` (§3.5), in R1 |
-| `internal/server/client_trust.go` | stays in ABO until the R2 identity flip, reading `httpapi.ClientAddrFrom` from R1; at the flip its Access-assertion branch moves into ABO's `internal/cfaccess` and the rest is deleted (SEC2-19) |
+| `internal/server/client_trust.go` | stays in ABO until F4, reading `httpapi.ClientAddrFrom` from R1; at the flip its Access-assertion branch moves into ABO's `internal/cfaccess` and the rest is deleted (SEC2-19) |
 | `internal/server/server_middleware.go:56-118` CORS + headers | stages 5–6 |
-| `internal/server/csp.go` (`contentSecurityPolicy()`, team-host pointer) | stays in ABO until the shell flip as `LegacyMount.DefaultCSP` (it hashes ABO's embedded `index.html` and reads the deployment's Access host, `csp.go:34-46,95-106,129-138`); at the shell flip the policy builder (`cspBase`) is `core/ui`'s and the Access host becomes ABO's `ConnectSrcFrom` (FE3-4, FE3-10) |
-| `internal/server/csp_report.go` | `core/internal/uihttp` (`/api/core/v1/ui/csp-report`) at the R2 identity flip; gin's `/api/v1/csp-report` stays the legacy mount's `CSPReport` until the shell flip, then its handler is deleted |
-| `internal/server/static_embed.go` | `core/ui` at the shell flip |
+| `internal/server/csp.go` (`contentSecurityPolicy()`, team-host pointer) | stays in ABO until the shell flip F9 as `LegacyMount.DefaultCSP` (it hashes ABO's embedded `index.html` and reads the deployment's Access host, `csp.go:34-46,95-106,129-138`); at the shell flip the policy builder (`cspBase`) is `core/ui`'s and the Access host becomes ABO's `ConnectSrcFrom` (FE3-4, FE3-10) |
+| `internal/server/csp_report.go` | `core/internal/uihttp` (`/api/core/v1/ui/csp-report`) at F4; gin's `/api/v1/csp-report` stays the legacy mount's `CSPReport` until the shell flip, then its handler is deleted |
+| `internal/server/static_embed.go` | `core/ui` at the shell flip F9 |
 | `internal/server/middleware/ratelimit.go`, `request_size.go` | stages 10–11 |
-| `internal/server/middleware/basicauth.go` | stage 8 with per-route exemption, at the R2 config flip (it stays in gin in R1) |
+| `internal/server/middleware/basicauth.go` | stage 8 with per-route exemption, at F3 (it stays in gin in R1) |
 | `internal/server/gone.go` | stays in gin for HEAD's existing stubs; core has no `Gone` (§4.6) |
 | `internal/httputil/respond.go`, `types.go`, `parse.go` | `httpapi.Problem`, `Page[T]` for native routes; the legacy shape stays for gin and the router's legacy-prefix 404 |
 | `internal/httputil/rangeserve.go` | stays app-side helper used via `HandleRaw` (already `net/http`) |
-| `internal/plugin/router.go`, `internal/server/plugins_init.go:42` | deleted in the R2 integrations flip with `internal/plugin` (N4; 04 §8.3); replaced by the module `Group` |
+| `internal/plugin/router.go`, `internal/server/plugins_init.go:42` | deleted at F7 with `internal/plugin` (N4; 04 §8.3); replaced by the module `Group` |
 | `tygo.yaml`, `tools/cmd/opsgen`, `internal/wirecontract` | kept for legacy-mount types (`opsgen` keeps its HEAD input until its last importer goes native, §7); native routes use OpenAPI + `coretest.ContractGoldens` (§7) |
-| `web/src/services/api.ts` (8,747 lines), `web/src/utils/apiFetch.ts` | calls to native routes use `@mediacore/api-client` / the generated `web/src/modules/books/api/` directory; calls to legacy routes keep `apiFetch`, which calls the runtime's `checkBuild(response, { buildId: readPageBuildId(), shell: false })` from UI-0 (§7, FE4-9, FE6-1, FE7-5) |
+| `web/src/services/api.ts` (8,747 lines), `web/src/utils/apiFetch.ts` | calls to native routes use `@mediacore/api-client` / the generated `web/src/modules/books/api/` directory; calls to legacy routes keep `apiFetch`, which calls the runtime's `checkBuild(response, { buildId: readPageBuildId(), shell: false })` from release R1 (§7, FE4-9, FE6-1, FE7-5) |
 
 ## 9. Concurrency contract
 
@@ -1181,9 +1205,13 @@ that table's entry, so stage 13, the adapter and the migrated grants all read on
 
 `Protection` levels are defined by 05-config; `admin` = `ProtectAdmin` (requires `core:admin` and an
 interactive method). Keys that decide who reaches the server or which client address is believed are
-`admin` (SEC-6). Precedence is 05-config §1.3.5's: an operator value (file or env) locks its key, and
-for the Basic-gate keys, which are security keys, the more restrictive of the operator and the stored
-value wins and the conflict is reported (startup log and health).
+`admin` (SEC-6). Precedence is 05-config §1.3.5's: an operator value (file, env or flag) locks its key.
+**`core.http.basic_gate.enabled` is `FailClosed`:** `httpapi`'s section declares
+`config.FailClosed("core.http.basic_gate.enabled", json.RawMessage("true"), json.RawMessage("false"))`
+(05-config §1.3.1), so enabled beats disabled across the operator and stored values, and a stored `true`
+that beats an operator `false` is reported (`AttachReport.FailClosed`, one startup warning, health
+`config_fail_closed_override`). It is this file's only `FailClosed` key: the username and the password are
+locked by an operator value like any key (05-config refuses `FailClosed` on a string or secret key).
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
@@ -1198,9 +1226,9 @@ value wins and the conflict is reported (startup log and health).
 | `core.http.rate_limit.per_minute` | int | 100 | yes | none |
 | `core.http.rate_limit.burst` | int | `max(per_minute/5, 10)` | yes | none |
 | `core.http.rate_limit.max_clients` | int | 10000 | no | none |
-| `core.http.basic_gate.enabled` | bool; enabled beats disabled across operator and stored values, so compose's always-set `BASIC_AUTH_ENABLED=false` cannot switch off a gate enabled in the UI (R5-1(a), OPS5-1) | false | yes | admin |
+| `core.http.basic_gate.enabled` | bool, `FailClosed` (above): a stale operator `false` cannot switch off a gate enabled in Settings, and compose passes the variable only when it is set (05-config §1.12.4; R5-1(a), OPS5-1) | false | yes | admin |
 | `core.http.basic_gate.username` | string. Stage 8 compares it in constant time (SEC6-9). An enabled gate with an empty username keeps HEAD's behaviour (HEAD's default is `""`, `internal/config/config.go:2806`, and its gate then admits `:<password>`): the password is the secret, and refusing an empty username would lock out every deployment that set only a password, with no security gain; an empty **password** is what stage 8 refuses | `""` | yes | admin |
-| `core.http.basic_gate.password` | secret (one canonical name, SEC4-10); core reads it from the R2 config flip, when the gate moves (in R1 gin reads it itself). The config migration re-encrypts HEAD's encrypted row into core secrets (05-config §1.12.2). Enabled with this unset, empty or unreadable → stage 8 refuses (R5-1(c)). An operator value locks it like any key, so a password set in the environment is used however the stored row reads, which is also early fix 5's recovery from a lock-out (05-authn §11.1 item 5, OPS9-7) | — | yes | admin |
+| `core.http.basic_gate.password` | secret (one canonical name, SEC4-10); core reads it from the config flip F3, when the gate moves (in R1 gin reads it itself). The config migration M2 re-encrypts HEAD's encrypted row into core secrets (05-config §1.12.2). Enabled with this unset, empty or unreadable → stage 8 refuses (R5-1(c)). An operator value locks it like any key, so a password set in the environment is used however the stored row reads, which is also early fix 5's recovery from a lock-out (05-authn §11.1 item 5, OPS9-7) | — | yes | admin |
 | `core.http.openapi.public` | bool | false | yes | admin |
 | `core.http.read_header_timeout` / `idle_timeout` | duration | 15s / 120s | no | none |
 
@@ -1208,8 +1236,8 @@ ABO's HEAD names (`json_body_limit_mb`, `upload_body_limit_mb`, `enable_rate_lim
 `api_rate_limit_per_minute`, `basic_auth_enabled`, `basic_auth_username`, `basic_auth_password`,
 `allowed_peer_cidrs`; `internal/config/config.go:1554-1559,1578,1719`) and the env name
 `TUNNEL_CONNECTOR_ADDRS` (→ `core.http.trusted_proxies`, zone semantics kept, `client_trust.go:133-201`)
-are rows of 05-config's generated rename table (§1.12.4), which gives each its canonical key and env
-name. The R2 config migration moves stored values to these keys and imports the operator file's
+are rows of 05-config's generated rename table (§1.12.3), which gives each its canonical key and env
+name. M2 (F3) moves stored values to these keys and imports the operator file's
 values once; there are no aliases, and boot refuses while a retired name of an `admin` or secret key
 is set, naming the canonical one. HEAD keeps `allowed_peer_cidrs` and
 `tunnel_connector_addrs` out of the settings blob and its API cannot set them; core stores them like
@@ -1251,14 +1279,14 @@ follow.
 | `TestChain_OrderGolden` | recorded stage order equals §4.2 table |
 | `TestCSRF_CookieBodilessPOSTFromSiblingOriginRefused` | cookie session, `Sec-Fetch-Site: same-site` POST → 403 `cross_origin_rejected`; same-origin and header-less clients pass (SEC-10, FE-5); a cross-site POST carrying Basic credentials is refused too (FE2-23) |
 | `TestCrossOrigin_TrustedProxyForwardedHost` | plain-HTTP POST with `Origin` = public host, `Host` rewritten by a `TrustedProxies` peer with `X-Forwarded-Host` → allowed; the same `X-Forwarded-Host` from an untrusted peer → refused (FE2-23) |
-| `TestBasicGate_ExemptSetEqualsHEAD` | golden of HEAD's exempt set (`basicauth.go:34,40-46,69`): the `OwnAuth` ABS routes, `/api/health` and `/api/v1/health` (`BasicExempt`), and the static-asset prefix/suffix rule on the `/` owner (`BasicExemptAssets`); `/ping`, `/status`, `/login` stay gated (SEC-14, COR4-9) |
-| `TestBasicGate_EmptyPasswordRefuses` | from the R2 config flip: with `core.http.basic_gate.enabled` true and the password unset, cleared, empty or unreadable, every non-exempt request → 401 (also `<username>:`), health `basic_gate_no_password`, the startup log names the key; the exempt set still passes; a password given as an operator value admits whatever the stored row holds (R5-1(c), SEC5-4, DATA5-12, OPS9-7) |
-| `TestBasicGate_MoreRestrictiveWins` | from the R2 config flip: operator `false` with stored `true`, and operator `true` with stored `false`, both turn stage 8 on, and the conflict is in the startup log and health (OPS5-1) |
-| `TestBasicGate_UsernameCompared` | from the R2 config flip: a wrong username with the right password → 401; with `core.http.basic_gate.username` empty and a password set, `:<password>` passes as at HEAD (SEC6-9) |
+| `TestBasicGate_ExemptSetGolden` | the reviewed golden of stage 8's exempt set, HEAD's (`basicauth.go:34,40-46,69`) until F8: the `OwnAuth` ABS routes, `/api/health` and `/api/v1/health` (`BasicExempt`), and the static-asset prefix/suffix rule on the `/` owner (`BasicExemptAssets`); from F8 `/health` is `BasicExempt` in place of the two deleted paths; `/ping`, `/status`, `/login` stay gated (SEC-14, COR4-9) |
+| `TestBasicGate_EmptyPasswordRefuses` | from F3: with `core.http.basic_gate.enabled` true and the password unset, cleared, empty or unreadable, every non-exempt request → 401 (also `<username>:`), health `basic_gate_no_password`, the startup log names the key; the exempt set still passes; a password given as an operator value admits whatever the stored row holds (R5-1(c), SEC5-4, DATA5-12, OPS9-7) |
+| `TestBasicGate_MoreRestrictiveWins` | from F3 (`FailClosed`, §10): operator `false` with stored `true`, and operator `true` with stored `false`, both turn stage 8 on; the first is reported in `AttachReport.FailClosed`, the startup log and health `config_fail_closed_override` (OPS5-1) |
+| `TestBasicGate_UsernameCompared` | from F3: a wrong username with the right password → 401; with `core.http.basic_gate.username` empty and a password set, `:<password>` passes as at HEAD (SEC6-9) |
 | `TestCSP_DefaultPerOwner` | SPA, legacy `DefaultCSP(r)`, native default; a handler-set CSP is kept (FE-4); the legacy SPA response carries the inline-script hash, the configured Access team host and `Reporting-Endpoints` (FE2-1) |
 | `TestPerimeter_XAppBuildOnEveryResponse` | legacy, native, infra, 404, 405 and legacy 410 responses all carry `X-App-Build` (FE2-5, OPS2-13) |
 | `TestInfra_MetricsRequiresScope` | (native role store) `/metrics` without a credential → 401, with a key lacking `core:metrics.read` → 403; `/livez`, `/readyz` stay Public (SEC2-14) |
-| `TestMetricsScrape_MigratedReach` | (ABO, migrated fixture, from the R2 identity flip) on the legacy `/metrics` entry and, from the metrics flip, on the `Infra` mount: an `editor` session, a migrated full-scope key and a migrated key scoped `["library.view"]` → 200 (the identity migration stored `core:metrics.read` on them, 05-rbac §6), an `fp-worker` user's key and an admin-owned key scoped `["fingerprint.worker"]` → 403 (confined principals never get it, SEC10-1, R10-2), no credential → 401 |
+| `TestMetricsScrape_MigratedReach` | (ABO, migrated fixture, from F4) on the legacy `/metrics` entry and, from F8, on the `Infra` mount: an `editor` session, a migrated full-scope key and a migrated key scoped `["library.view"]` → 200 (the identity migration stored `core:metrics.read` on them, 05-rbac §6), an `fp-worker` user's key and an admin-owned key scoped `["fingerprint.worker"]` → 403 (confined principals never get it, SEC10-1, R10-2), no credential → 401 |
 | `TestClientIP_ZonedConnectorTrusted` | zoned link-local connector peer: header believed, peer admitted (SEC-18) |
 | `TestTrace_NoApikeyInSpanAttributes` | every `log.DefaultRedactQuery()` value (`apikey`, `token`, `code`, `code_verifier`, `refresh_token`, …) absent from span attributes and the access log (SEC-22, SEC2-18; the list's superset-of-HEAD test is `TestRedactQuery_SupersetOfHEAD` in 05-logging) |
 | `TestAccessLog_NoInviteToken` | no one-time token in the access log, journal or span attributes (SEC-21) |
@@ -1271,7 +1299,7 @@ follow.
 | `TestUnclean_PathNotRedirectedByMux` | `//ping` is not 301-redirected; the `/` owner decides |
 | `TestSPA_NotRateLimitedAndPublic` | 200 cold-load requests to `/` owner are not 429; `RouteInfo{Kind: SPA}` present (FE-25) |
 | `TestSPA_SingleOwnerOfRoot` | legacy `ServesSPA` + `Router.SPA` → `ErrPrefixCollision` (FE-1) |
-| `TestBasicGate_SPAOptionsExemptAssets` | from the shell flip: `Router.SPA(h, SPAOptions{BasicExemptAssets: ui.BasicExemptAssets})` exempts exactly HEAD's asset set on the shell; `TestBasicGate_ExemptSetEqualsHEAD` repeated in the shell-flip PR passes (FE5-10) |
+| `TestBasicGate_SPAOptionsExemptAssets` | from the shell flip F9: `Router.SPA(h, SPAOptions{BasicExemptAssets: ui.BasicExemptAssets})` exempts exactly HEAD's asset set on the shell; `TestBasicGate_ExemptSetGolden` repeated in the shell-flip PR passes (FE5-10) |
 | `TestNonSPA_PredicateCoversClaims` | `/socket.io`, `/API/V1/x`, `POST /library`, `/health/`, `/HEALTH`, `/metrics/`, `/livez/` never reach the SPA handler; `/assets/x.js` and `GET /login` do (FE-3, FE2-6) |
 | `TestNonSPA_LegacyFallbackConsultsPredicate` | with the legacy mount owning `/`, `/livez/` and `/READYZ` get problem 404, never gin's `NoRoute` page (FE3-13) |
 | `TestMethodNotAllowed_HasAllow` | 405 + `Allow` |
@@ -1279,10 +1307,11 @@ follow.
 | `TestDecode_StrictUnknownField` | 400 `unknown_field` on a route not marked `Lenient` |
 | `TestPage_OffsetDefaultHasTotal` / `TestCursor_FilterMismatch` | SIMP-8 |
 | `TestTaskStart_IdempotencyKeyReplaysRunView` | a repeated `Idempotency-Key` on task start → 200, the existing `RunView`, `Idempotent-Replayed: true` (SIMP2-8; store in 05-tasks) |
-| `TestOutsideClaim_Refused` / `TestBuild_CrossOwnerShadowRefused` | a legacy route outside its mount's `LegacyPrefixes` (for example at `GET /api/core/v1/auth/oidc/google/callback`) → `ErrOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow` (SEC3-8) |
+| `TestOutsideClaim_Refused` / `TestBuild_CrossOwnerShadowRefused` | a legacy route outside its mount's `LegacyPrefixes` (for example at `POST /api/core/v1/auth/login`) → `ErrOutsideClaim`; one owner's pattern strictly more specific than another's → `ErrShadow` (SEC3-8) |
+| `TestCoreFixedGroup_OIDCCallback` | from F4: `GET /api/v1/auth/oauth/{provider}/callback` reaches core's callback through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`); with no base configured the callback is only under `/api/core/v1`; a manifest route under the base → `ErrPrefixCollision` (§3.5, 03 §3.8) |
 | `TestPublicRoutesGolden` / `TestBuild_PublicNotInManifestRefused` | the reviewed set of every `Public` route, native and legacy; a module native route with `rbac.Public` absent from `Manifest.PublicRoutes` → `ErrPublicNotAllowed` (COR3-3) |
 | `TestCompressionExclusionsEqualHEAD` | golden from HEAD's `compressionMiddleware` lists: the legacy exclusions that still exist carry `NoCompress`; `text/event-stream` responses are never gzipped; the log download is gzipped once (COR3-6) |
-| `TestPerimeterHonoursBlobOnlyValues` | R1: rate limit disabled only in ABO's settings blob → stage 10 off from boot; R2 (config flip on): the migrated stored value keeps stage 10 off and a runtime edit applies without restart (COR3-1) |
+| `TestPerimeterHonoursBlobOnlyValues` | release R1: rate limit disabled only in ABO's settings blob → stage 10 off from boot; from F3: the migrated stored value keeps stage 10 off and a runtime edit applies without restart (COR3-1) |
 | `TestBuildID_HeaderEqualsEmbeddedMeta` | for a `make build`, a Docker build and a goreleaser build, `X-App-Build` equals the embedded `index.html` meta value, which for every `embed_frontend` artefact is neither `""` nor `dev`; no Go build step is passed a UI build ID, and `X-App-Build` never equals `app.BinaryID` (FE3-2, FE4-1, FE5-1, FE5-3) |
 | `TestOpenAPI_UsesConfigOverrides` | a `config.Duration` field renders as `string/duration`, the same schema as in the settings schema (SIMP3-1) |
 | `TestRequestID_GeneratedAndPropagated` | header, problem, slog record, audit record carry the same id |
@@ -1291,7 +1320,7 @@ follow.
 | `TestOpenAPI_BreakingGate` | a fixture document with a removed field fails the `oasdiff breaking` step; the same change under a new major passes (§4.6) |
 | `TestContractGoldens_ValidateAgainstSchema` | every example matches its schema |
 | `archtest.RoutesHavePermissions` | over native + legacy manifest + SPA/infra set (R6) |
-| `TestManifest_SPermRoutesCarryAtomRequirement` | from R1: every manifest entry recorded from an `s.perm(atom)` gin route has `Perm` equal to books' atom-table entry for the atom, built with no catalog; from the identity flip `Build` refuses an entry whose scopes are not in the catalog (COR6-1) |
+| `TestManifest_SPermRoutesCarryAtomRequirement` | from R1: every manifest entry recorded from an `s.perm(atom)` gin route has `Perm` equal to books' atom-table entry for the atom, built with no catalog; from F4 `Build` refuses an entry whose scopes are not in the catalog (COR6-1) |
 | `TestLegacyManifest_MatchesGinRoutes` / `TestLegacyManifest_RegistersAsMuxPatterns` | `ErrLegacyManifest` on drift; from R1, over `(*gin.Engine).Routes()` of the real engine built with ABS on and with ABS off (never a fixture): every gin route is a mux pattern or a member of one generalised pattern, `Build` raises no conflict, the generalised patterns and kept routes of §4.8 that the build holds are present, and for each conflicting pair Go's overlap example is routed by the mux to a pattern holding gin's route (SEC-13, resolution A-1) |
 | `TestCollisionRule_RefusesUnmergeableSets` | fixtures: a component spanning two owners (rule 1, A-1), members differing in `Perm`, `Guards`, `RateClass`, `OwnAuth`, `BasicExempt` or `NoCompress`, members of different segment counts, a kept route not strictly more specific than the generalised pattern, and a generalised pattern that conflicts with another route → `ErrPatternConflict` naming the routes (A-1) |
 | `TestLegacyMount_GeneralisedPatternAcceptsAnyMember` | over books' gin engine, for every generalised pattern the build holds (in R1 HEAD's two, §4.8): each member reaches its gin handler; a path the pattern matches and no member does (`/api/v1/operations/x/y`) → 404 in the legacy shape with no handler run; the kept route wins its overlap (`/api/v1/operations/v2/activity` reaches `GetOperationV2` while that route exists) (A-1, SEC2-22) |
@@ -1300,9 +1329,9 @@ follow.
 | `TestStage2_ServerAddressIgnoresHost` | two requests to one route with different `Host` headers produce one `server_address` value, `Options.ServerName` (MOD10-2) |
 | `TestLegacyMount_MuxAndGinAgreeOnEncodedSlash` | a request with `%2F` in a segment whose gin match differs from its mux pattern → 404, no gin handler runs (SEC2-22) |
 | `TestOwnAuthRoutesGolden` / `TestLegacyAuthGin_RefusedWithoutOption` | the reviewed `OwnAuth` set; `LegacyAuthGin` without `LegacyAuthGinUntil`, and `OwnAuth` without a registered auth method → boot errors (SEC2-17) |
-| `TestLegacyRoleReachUnchanged` (the identity cutover oracle, 05-rbac §12) | on the identity flip PR, over the fixture written by the R0 binary and migrated: every manifest route (572 at `748fd787a`; the count is generated at the flip's base commit, ADV-11) × 4 seed roles, scoped API keys, auth-off mode (`settings.manage` routes 200; in-handler `deny` sites deny; the recorded tightenings of 05-rbac §4.11 asserted refused; COR5-4, SEC5-8, SEC5-9) allow and deny exactly as HEAD did; custom-role half: for random native roles, stage 13 admits a legacy route only if the route's successor admits (SEC4-2). It stays as the regression test of books' atom table |
+| `TestIdentityCutover_ReachOracle` (the reach oracle; 05-rbac §12 owns it) | on the F4 PR, over the fixture written by the R0 binary and migrated: every manifest route (572 at `748fd787a`; the count is generated at the flip's base commit, ADV-11) × every principal kind of 05-rbac §12 (seed-role sessions, scoped API keys, auth-off mode: `settings.manage` routes 200, in-handler `deny` sites deny, the recorded tightenings of 05-rbac §4.11 asserted refused; COR5-4, SEC5-8, SEC5-9) allow and deny exactly as HEAD did, an all-atom or admin key keeping its whole reach, task-run approval included; custom-role half: for random native roles, stage 13 admits a legacy route only if the route's successor admits (SEC4-2). It stays as the regression test of books' atom table |
 | `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` | every manifest route gated by `settings.manage` or `users.manage` carries the atom table's full-reach entry; a custom role holding the four `settings.manage` expansion scopes gets 403 on backup restore, backup create, logs, tool install and plugin settings (R4-3, SEC4-2) |
-| `TestCoreRoutesReplaceGin` | after each R2 flip, on the real engine: no gin route remains at a path the flip's native routes replace (the flip's generated list), and after the tasks flip no route lies under `/api/v3/` (§4.6, §4.9, D10) |
+| `TestCoreRoutesReplaceGin` | after each R2 flip, on the real engine: no gin route remains at a path the flip's native routes replace (the flip's generated list), and after F5 no route lies under `/api/v3/` (§4.6, §4.9, D10) |
 
 ## 13. Open items
 
@@ -1317,7 +1346,7 @@ follow.
 5. A per-principal rate limiter (deferred, SIMP-8): add only if `mediacore_http_rate_limited_total`
    or the access log shows abuse from authenticated principals behind one address.
 
-(v1.2.0's item 6, the stage that ships `@mediacore/api-client`, is closed: R1's UI-0 work ships it, 09.)
+(v1.2.0's item 6, the stage that ships `@mediacore/api-client`, is closed: release R1's front-end work, 07 §7.19 steps 1–3, ships it, 09 §9.4.)
 
 ## Objections to 03
 
@@ -1559,4 +1588,4 @@ Plan-phase consistency:
 - PC-15 — §4.6: the `all=true` admin list is `GET /api/core/v1/api-keys` (05-authn §4.13), selected only for `core:users.manage`; §12 `TestAlias_ListAllKeysNeedsUsersManage`.
 - PC-16 — §8.1 and §12: the Basic-password rollback cell uses 05-config §1.12.2's names, `TestRollback_BasicGateNeverOpenOnPrev` and `TestRollback_BasicGateClearedStaysClosed`; `TestBasicGate_PasswordReadInPlaceAcrossRollback` retired.
 
-- D10–D12 revision (2026-11-04): aliases and retirement deleted: `Alias`, `LegacyPath`, `Gone`, `Route.Deprecated`, `Deps.Compat`, the compat import, `ErrAliasTarget`, `Problem.Successor`, `legacy_field_unsupported`, deprecation headers and the compat counter (§1, §3, §3.1, §3.3, §3.4, §3.5, §6, §7, §11); §4.6 is versioning only (`oasdiff` gate kept, no aliases, ABS root routes a fixed contract mounted by books, D12 F3); otelgin co-recording, `r.Pattern` clearing, `HTTPMetricsScope`/`InstrumentScope` and `MetricViews` deleted: stage 2 records every request, gin's included, on core's `httpapi` meter (`Deps.MeterProvider`), and `MatchedPattern` stays for the post-match check only (§1.1, §3.5, §4.2 stage 2, §8.2); §4.8 collision rule kept, "The operations component" special case deleted; §4.9 is the `/api/v3` reservation (HEAD's `/api/v3/ops` deleted by the R2 tasks flip), `ErrAliasOutsideClaim` renamed `ErrOutsideClaim`; §8.1 re-keyed to R1 and the R2 flips (gin routes deleted as native routes replace them, no redirect routes, rollback = restore); §8.3 bridge over books' atom table (no `LegacyAtom`, `LegacyCheck`, `LegacyReach` or legacy stores); §10 without `BelowStored`, file-only legacy keys and rollback text (operator lock, more restrictive Basic-gate value wins, rename table); §11 semconv families for every request, duplicate and gone counters deleted; §12 alias, rollback, otelgin and HEAD-series tests deleted, `TestStage2_RecordsEveryRequest`, `TestBasicGate_MoreRestrictiveWins`, `TestMetricsScrape_MigratedReach`, `TestOpenAPI_BreakingGate`, `TestCoreRoutesReplaceGin` added; stage references S0–S10/UI-0 re-keyed to R0–R3.
+- D10–D12 revision (2026-11-04): aliases and retirement deleted: `Alias`, `LegacyPath`, `Gone`, `Route.Deprecated`, `Deps.Compat`, the compat import, `ErrAliasTarget`, `Problem.Successor`, `legacy_field_unsupported`, deprecation headers and the compat counter (§1, §3, §3.1, §3.3, §3.4, §3.5, §6, §7, §11); §4.6 is versioning only (`oasdiff` gate kept, no aliases, ABS root routes a fixed contract mounted by books, D12 F3); otelgin co-recording, `r.Pattern` clearing, `HTTPMetricsScope`/`InstrumentScope` and `MetricViews` deleted: stage 2 records every request, gin's included, on core's `httpapi` meter (`Deps.MeterProvider`), and `MatchedPattern` stays for the post-match check only (§1.1, §3.5, §4.2 stage 2, §8.2); §4.8 collision rule kept, "The operations component" special case deleted; §4.9 is the `/api/v3` reservation (HEAD's `/api/v3/ops` deleted by the R2 tasks flip), `ErrAliasOutsideClaim` renamed `ErrOutsideClaim`; §8.1 re-keyed to R1 and the R2 flips (gin routes deleted as native routes replace them, no redirect routes, rollback = restore); §8.3 bridge over books' atom table (no `LegacyAtom`, `LegacyCheck`, `LegacyReach` or legacy stores); §10 without `BelowStored`, file-only legacy keys and rollback text (operator lock, more restrictive Basic-gate value wins, rename table); §11 semconv families for every request, duplicate and gone counters deleted; §12 alias, rollback, otelgin and HEAD-series tests deleted, `TestStage2_RecordsEveryRequest`, `TestBasicGate_MoreRestrictiveWins`, `TestMetricsScrape_MigratedReach`, `TestOpenAPI_BreakingGate`, `TestCoreRoutesReplaceGin` added; stage references S0–S10/UI-0 re-keyed to R0–R3. Consistency pass: flips labelled F3–F9 and D12's answers cited as D12 (a)–(d); the OIDC callback keeps HEAD's path on the new `Router.CoreFixedGroup`; `core.http.basic_gate.enabled` declared `FailClosed`; the R1 factory reset is offline only; F5/F6 route deletions split as 05-tasks has them; `BasicExempt` moves to `/health` at F8 and the golden is renamed `TestBasicGate_ExemptSetGolden`; the reach oracle is `TestIdentityCutover_ReachOracle`; the rename table is 05-config §1.12.3.
