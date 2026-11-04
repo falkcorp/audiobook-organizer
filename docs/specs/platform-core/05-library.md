@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-library.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: dafe380b-f703-41cb-99d0-2b2ba32f70e5 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -124,22 +124,6 @@ type RootSpec struct {
 	Quarantine  string        // rel dir; default ".mediacore/quarantine"; books keeps ".failed"
 	AppDir      string        // rel dir for app state; default ".mediacore"
 	Aliases     []Alias       // display renderings for remote clients (ABO PathAlias); never used for I/O
-	// Legacy is set only on a root that an app's legacy.LibraryRootSource serves, nil
-	// for every config-entry root, so the native contract carries no legacy
-	// field (03 §3.3 "Legacy-only identifiers", SIMP6-7). Never persisted in
-	// core.library.roots.
-	Legacy      *RootSpecLegacyState `json:"-"`
-}
-
-// RootSpecLegacyState is the legacy-only state of a source-served root
-// (03 §3.3's <Type>LegacyState rule; SIMP7-8). Field classes of its extension
-// record (05-storage §5S.3.11): the sentinel identity Derived (stale →
-// SentinelBootstrap, so the next mount check re-proves the volume); Watch,
-// Quarantine, AppDir, MinFree Independent. It has no Widening field (read
-// shares, its only candidate, are deferred, §5L.13), so it is never suspended
-// (DATA5-4, SIMP7-2, SIMP8-5); a Suspended member is a deferred-build member.
-type RootSpecLegacyState struct {
-	Ext storage.ExtState // ExtCurrent or ExtStale; orphans are swept, never returned
 }
 
 type Alias struct{ Windows, UNC, SMBURL string }
@@ -150,8 +134,9 @@ const ( WatchInvalid WatchMode = iota; WatchAuto; WatchNotify; WatchPoll; WatchO
 type SentinelMode uint8
 const (
 	SentinelInvalid  SentinelMode = iota
-	SentinelRequired  // new roots: .mediacore/root.json must exist and match
-	SentinelBootstrap // legacy roots: created on the first boot where the heuristic passes, then Required
+	SentinelRequired  // new roots: .mediacore/root.json must exist and name this install and root ID
+	SentinelBootstrap // legacy-served roots: created when the heuristic passes; a present sentinel must
+	                  // match, an absent one leaves the decision to the heuristic (§5L.10)
 )
 
 // Path is the only way modules name a file. JSON: {"root":"books-library","rel":"Author/Title/01.m4b"}.
@@ -276,6 +261,10 @@ var (
 	ErrNotMounted      = errors.New("library: root sentinel missing or mismatched (not mounted, or the wrong volume)")
 	ErrRootOverlap     = errors.New("library: root overlaps a root of another owner")
 	ErrUnknownRoot     = errors.New("library: unknown root")
+	// ErrRootFieldFixed: a change to a field the root's stored form has no
+	// place for (a legacy-served root's Watch, Sentinel, Quarantine, AppDir or
+	// MinFree, §5L.10); nothing is staged.
+	ErrRootFieldFixed  = errors.New("library: the root's stored form fixes this field")
 )
 ```
 
@@ -295,9 +284,8 @@ app owns in the same row (books: scan statistics) are never written by these met
 may read a root, and no S0–S10 app has two modules: ABO ships one (03 R3), the TV and Movies proofs are
 single-module apps, and `examples/hello` reads no one else's roots. `RootSpec` therefore has no
 `ReadShares` field; it, its read clause and its refusal on a legacy-served root (whose row has no place for
-shares) land together with the first app that shares a root (§5L.13). The root's extension record has no
-Widening field and is never suspended (DATA5-4); suspension and re-confirmation of a root are
-deferred-build members too.
+shares) land together with the first app that shares a root (§5L.13). A legacy-served root keeps nothing
+beside its legacy row (A-2).
 
 ```go
 package legacy
@@ -307,8 +295,8 @@ package legacy
 // implementation, so the whole interface is legacy-only (SIMP6-3); the name
 // carries its former package's name (03 §3.3 naming rule, SIMP7-8).
 type LibraryRootSource interface {
-	// List returns the source's roots, each with Legacy set from its extension
-	// record. Orphaned records are swept, never returned.
+	// List returns the source's roots; each field the legacy row has no place
+	// for carries the source's fixed value (§5L.10).
 	List(ctx context.Context) ([]library.RootSpec, error)
 	// Covers is the routing predicate (Covering's shape, a member here because
 	// the interface is legacy-only). id is LibraryCoverID(role, rootID): the
@@ -317,16 +305,16 @@ type LibraryRootSource interface {
 	// previous build keeps seeing every root it can store. Every other root is
 	// a config entry.
 	Covers(id string) bool
-	// Create allocates the legacy ID, writes the legacy row, its index rows and
-	// the extension record in b, and returns the root's ID.
+	// Create allocates the legacy ID, writes the legacy row and its index rows
+	// in b, and returns the root's ID; a spec whose fixed fields differ from the
+	// source's values is refused with library.ErrRootFieldFixed.
 	Create(ctx context.Context, b *storage.Batch, spec library.RootSpec) (library.RootID, error)
 	// Update rewrites only library's fields of the row, with an Expect on the
-	// bytes it read (the row's claim is CheckedWrites), plus the extension record
-	// (legacy.Extension.Put with the record it read).
+	// bytes it read (a voluntary compare-and-set in the row's Serialized claim;
+	// storage enforces none, A-3); a change to a fixed field is refused with
+	// library.ErrRootFieldFixed, nothing staged.
 	Update(ctx context.Context, b *storage.Batch, spec library.RootSpec) error
-	// Delete deletes the row, its index rows and, through the conditional
-	// legacy.Extension.Delete with the record it read, the extension record
-	// (R7-3, DATA7-8).
+	// Delete deletes the row and its index rows.
 	Delete(ctx context.Context, b *storage.Batch, id library.RootID) error
 }
 
@@ -338,8 +326,7 @@ type LibraryRootSource interface {
 func LibraryCoverID(r library.Role, id library.RootID) string
 ```
 
-No root record has a Widening field, so books' source keeps no Widening record and implements no
-`legacy.ExtConfirmer` (SIMP7-2; the root confirmer is deferred, §5L.13). Conformance:
+Conformance:
 `legacytest.LibraryRootSourceSuite` (05-storage §5S.3.11; the suite name follows the
 `legacytest.<Pkg><Interface>Suite` rule, SIMP7-8), which runs the `Covers` cases;
 core runs it against a fixture source, ABO against books' source with HEAD fixtures.
@@ -631,10 +618,9 @@ quarantine purge), `core:library.browse` (directory picker; replaces `BrowseDire
 
 1. After storage migrations the kernel loads the roots and mappings from their stored forms (R4-1,
    §5L.10): the roots of the app's `legacy.LibraryRootSource`, if one is supplied (for ABO, books' import roots and
-   its library root, each with its extension record), and every other root and mapping from
-   `core.library.roots` / `core.library.mappings` (stored through config's store). A source-served root
-   whose extension record is stale has its sentinel identity reset to bootstrap (Derived) and keeps its
-   Independent fields; it is never suspended, having no Widening field (SIMP7-2, SIMP8-5). A new root goes to the source when its `Covers`
+   its library root, each with the source's fixed values for the fields its row has no place for), and every
+   other root and mapping from `core.library.roots` / `core.library.mappings` (stored through config's
+   store). A new root goes to the source when its `Covers`
    accepts `LibraryCoverID(role, "")`, else to `core.library.roots` (written through `config.Store`); an
    existing root is updated or deleted where it lives (`Covers(LibraryCoverID(role, id))`), and the root
    list merges both. The `backends` ledger records `legacy+native` while a source is supplied, else `native`
@@ -735,6 +721,9 @@ this build changed.
 
 `root` cardinality = number of configured roots (operator-bounded, tens).
 
+Names are shown with the default namespace `mediacore`; core takes the namespace as an `app.Options` value
+and ABO passes its own (A-5, 05-metrics), so no ABO series is renamed.
+
 ## 5L.9 Tests
 
 | Test | Proves |
@@ -762,11 +751,11 @@ this build changed.
 | `TestDisabledModuleRootsInert` | G1 |
 | `TestTransferInCommitsWithCallerBatch` | `TransferIn` + caller rows land in one commit; `CrashClone` before the commit leaves a `done` row reported by `PendingTransfers`, never undone |
 | `TestScopeCannotActAsAnotherOwner` | a module's `Scope` cannot write another owner's root or quarantine its files |
-| `TestImportRootsStayLegacyFormat` (ABO, books' `legacy.LibraryRootSource` under `legacytest.LibraryRootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both commit with `Expect`, DATA4-4); books' in-memory root table shows the edit without a restart; native-only fields only in books' extension family (R4-1) |
-| `TestRootExtensionStaleAfterPrevWrite` | a root the previous release renamed: the sentinel back to bootstrap, `Watch`/`Quarantine`/`AppDir`/`MinFree` kept, the record never suspended; a root it deleted: the extension record swept through the conditional `legacy.Extension.Delete` (DATA4-8, DATA7-8) |
+| `TestImportRootsStayLegacyFormat` (ABO, books' `legacy.LibraryRootSource` under `legacytest.LibraryRootSourceSuite`) | an import root added, renamed or disabled on this build is an `import_path:` row (with its path index row and an ID from `counter:import_path`) that the previous release's store code lists unchanged; `LastScan`/`BookCount` written by a concurrent scan survive a library edit **and** a library edit survives a concurrent scan's statistics write (both stage `Expect` voluntarily, DATA4-4, A-3); books' in-memory root table shows the edit without a restart; a change to a fixed field is refused with `ErrRootFieldFixed`, and nothing is written outside books' claims (A-2) |
+| `TestLegacyRootSentinelBootstrap` | a legacy-served root: the heuristic passes and the sentinel is created; a later mount whose sentinel names another root or install refuses destructive ops; a root whose path the previous release changed is decided by the heuristic until its new volume gets a sentinel; nothing is stored beside the `import_path:` row (A-2) |
 | `TestLibraryNewRejectsWrongLegacySource` | `library.New` with an `Options.LegacySource` that does not satisfy library's mirror returns `storage.ErrLegacyStoreType`; nil means no source (R7-7, SIMP7-4) |
 | `TestConfigEntryRoots_RoundTrip` | without a root source, every root and mapping round-trips through `core.library.roots`/`mappings` (SIMP4-3, SIMP7-8: the native roots are config entries, not a store) |
-| `TestRootRouting_CoversDecides` | with books' source: a new import root lands in the source (`Covers("import/")`), a new download root in `core.library.roots`; updates and deletes reach the half that holds the root; the root list merges both; a source-served root carries `RootSpec.Legacy`, a config-entry root none; books' source passes `legacytest.LibraryRootSourceSuite`; library's mirror test (`legacy_mirror_test.go` in `package library_test`: both-way assignability and the `LibraryCoverID` table) passes (SIMP5-1, SIMP5-4, SIMP6-3, SIMP6-5, SIMP7-1) |
+| `TestRootRouting_CoversDecides` | with books' source: a new import root lands in the source (`Covers("import/")`), a new download root in `core.library.roots`; updates and deletes reach the half that holds the root; the root list merges both; books' source passes `legacytest.LibraryRootSourceSuite`; library's mirror test (`legacy_mirror_test.go` in `package library_test`: both-way assignability and the `LibraryCoverID` table) passes (SIMP5-1, SIMP5-4, SIMP6-3, SIMP6-5, SIMP7-1) |
 | `TestLibraryErrorsPassKeyNameGate` (ABO, a case of `TestCoreHoldsNoAppKeyNames`) | the `"library: …"` sentinels pass the key-name gate; a `"library:" + id` literal fails it (MOD5-3) |
 
 ## 5L.10 Migration from ABO
@@ -785,24 +774,23 @@ this build changed.
 | `internal/diskstats` | `Root.Usage` (moved into core as an internal package) |
 | `deluge.ProtectedPathCache` | a `ProtectionOracle` implemented by the Deluge adapter (05-download); static `protected_paths` → `RoleExternal` roots |
 | `itunes.path_mappings`, `WHISPER_PATH_MAP`, fingerprint worker wire format | `PathMapper` sources `itunes`, `worker:whisper`, `worker:fingerprint` |
-| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | **stay in ABO** as books' legacy implementation of `legacy.LibraryRootSource` (R4-1, SIMP4-2, SIMP6-3), over books' own `import_path:<id>` + `import_path:path:<path>` rows and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`; 05-storage §5S.9.1 row 19: the rows `Serialized` and `CheckedWrites`, the counter `Serialized`). It writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON` through books' repository layer, so books' in-memory `import_paths` table (`pebble_store_importpaths.go:21-26`, `memdb_schema.go:19`) stays current; it writes only library's fields, with an `Expect` on the bytes it read, and the path index row in the same batch. Books' own writers of the same row — the scanner (`internal/scanner/service.go:677`), autoscan (`internal/server/folder_autoscan_op.go:147`) and the filesystem handlers (`internal/server/handlers/filesystem.go:247,319`), which today write back the whole struct read earlier (`pebble_store_importpaths.go:187-231`) — become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only `LastScan`/`BookCount` (DATA4-4). `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
+| `ImportPathStore` methods minus `CountBooksByPathPrefix` (`internal/database/pebble_store_importpaths.go`; 04's `database.Store` split table: `ImportPathStore` → `library`) | **stay in ABO** as books' legacy implementation of `legacy.LibraryRootSource` (R4-1, SIMP4-2, SIMP6-3), over books' own `import_path:<id>` + `import_path:path:<path>` rows and the ID counter `counter:import_path` (`pebble_store_importpaths.go:138-185` allocates through `nextID("import_path")`; 05-storage §5S.9.1 row 19: the rows and the counter `Serialized`, no blind-write check, A-3). It writes HEAD's `ImportPath` JSON (`internal/database/store.go:596-604`) with `codec.LegacyJSON` through books' repository layer, so books' in-memory `import_paths` table (`pebble_store_importpaths.go:21-26`, `memdb_schema.go:19`) stays current; it writes only library's fields, with an `Expect` on the bytes it read, and the path index row in the same batch. Books' own writers of the same row — the scanner (`internal/scanner/service.go:677`), autoscan (`internal/server/folder_autoscan_op.go:147`) and the filesystem handlers (`internal/server/handlers/filesystem.go:247,319`), which today write back the whole struct read earlier (`pebble_store_importpaths.go:187-231`) — become a field-merge `GetForUpdate` + `RetryOnConflict` that updates only `LastScan`/`BookCount` (DATA4-4). `Enabled` stays books' scan switch, which library shows as a registered root with watching off |
 | `pending_file_op:` (`file_io_pool.go:31`) | stays a books family with its books writer: it is books' per-book file I/O job pool (tag and metadata writes), not a transfer journal, so nothing is drained or moved. Core transfers journal only in the core-only `c/library/transfer/`, which no older build reads: a rollback right after a crash mid-transfer leaves that one transfer's recovery to the next boot of this build (R3-1) |
 | `filehash.BookFileHash` | stays books (identity algorithm), reads through `RootFS` |
 
 **Stored data (R3-1, R4-1).** During the extraction a root keeps one stored format, written by books'
 code. ABO's books root (`root_dir`, its quota keys and `path_aliases`) is a config value read and
 written in place by books' legacy config store (05-config C4); books' `legacy.LibraryRootSource` lists it beside the
-import roots (read-only there: its path changes only through config) so that both kinds have one home
-for native-only fields. A field `RootSpec` has that the legacy form has no place for (`Watch`, the
-sentinel identity, `Quarantine`, `AppDir`, and `MinFree` of an import root) is an
-**extension record** in books' extension family (05-storage §5S.3.11), keyed by the root's legacy key
-(for the books root, the `root_dir` entry), never holding a field the legacy form holds, and carrying
-the hash of the legacy fields it depends on (path, name, enabled; `root_dir`). An older build ignores
-it. If an older build renamed or edited the root while rolled back, the record is stale on
-roll-forward: the sentinel identity (Derived) falls back to bootstrap and the Independent fields are
-kept; the record has no Widening field, so it is never suspended (DATA5-4); if it deleted the root, the
-record is an orphan and books' source sweeps it with the conditional `legacy.Extension.Delete` (DATA4-8,
-SIMP4-9, DATA7-8). A root with no legacy home at all
+import roots (read-only there: its path changes only through config). A legacy-served root keeps exactly
+HEAD's fields and **nothing beside them** (A-2): there is no record that an older build could leave stale. A
+field `RootSpec` has that the legacy form has no place for is **fixed** by the source — books: `Watch`
+= `WatchAuto` while HEAD's `Enabled` is set and `WatchOff` otherwise, `Sentinel` = `SentinelBootstrap`,
+`Quarantine` = `.failed`, `AppDir` = `.mediacore`, `MinFree` = 0 (HEAD has no floor) — and a change to one is
+refused with `ErrRootFieldFixed`. The sentinel of a legacy-served root therefore stays in bootstrap mode: it
+is created when HEAD's heuristic passes, a present sentinel must name this install and root, and an absent
+one leaves the decision to the heuristic, which is HEAD's behaviour (`libroot.go:25-59`) and no regression;
+`SentinelRequired` for these roots, and editable values for the fixed fields, come with the roots' cutover.
+A root with no legacy home at all
 (download and external roots, another module's roots) is a `core.library.roots` entry. Moving ABO's
 roots to a native keyspace is a later cutover (05-storage §5S.3.13), not part of the extraction.
 
@@ -835,17 +823,15 @@ driver exists, `library` ships only the local one and modules cannot register dr
 
 ## 5L.13 Deferred-build members
 
-Read shares, and with them root suspension and re-confirmation, have no S0–S10 consumer: a share names a
-second module, no S0–S10 app has two, and the root record's only Widening field would be `ReadShares`
-(SIMP7-2, SIMP8-5; 03 §3.4). They land with **the first app with two modules that shares a root**,
-additively, together with the refusal of shares on a legacy-served root (whose row has no place for them). Per 03 §3.4 the first
-column holds only package-qualified Go identifiers, which `archtest.DeferredMembersAbsent` checks are
-absent from non-test `core/` files; the PR that builds one deletes its entry.
+Read shares have no S0–S10 consumer: a share names a second module and no S0–S10 app has two (SIMP7-2,
+SIMP8-5; 03 §3.4). They land with **the first app with two modules that shares a root**, additively,
+together with the refusal of shares on a legacy-served root (whose row has no place for them). The first
+column holds package-qualified Go identifiers and the second everything else; the table is planning
+information, which nothing checks in CI (A-4), and the PR that builds a member deletes its entry.
 
 | Member | Also deferred (not checked) |
 |---|---|
-| `library.RootSpec.ReadShares` | the read clause "owner + `ReadShares`" (§5L.3.8); the field in the `core.library.roots` entries; the sentinel and both refusals of shares on a legacy-served root (in library and in the source) with their test and `legacytest.LibraryRootSourceSuite` case; `ReadShares` as a Widening field of the root extension record |
-| `library.RootSpecLegacyState.Suspended` | books' root `legacy.ExtConfirmer` (`id = string(RootID)`); the route `POST /api/core/v1/library/roots/{id}/confirm` (`core:library.manage`, interactive, audited); the health token `library_root_extension_suspended`; the `ExtConfirmer` case of `legacytest.LibraryRootSourceSuite`; the `ReadShares` half of `TestRootExtensionStaleAfterPrevWrite` |
+| `library.RootSpec.ReadShares` | the read clause "owner + `ReadShares`" (§5L.3.8); the field in the `core.library.roots` entries; the sentinel and both refusals of shares on a legacy-served root (in library and in the source) with their test and `legacytest.LibraryRootSourceSuite` case |
 
 ## 5L.14 Objections to 03
 
@@ -919,3 +905,10 @@ Round 7:
 Round 8:
 
 - SIMP8-5 — `RootSpec.ReadShares` moved to the §5L.13 deferred table with its read clause, the `core.library.roots` field, the legacy-root refusals, the sentinel `ErrLegacyRootShares`, `TestLegacyRootRefusesReadShares` and the suite case (all deleted from the body); D-L1, §5L.3.1, §5L.3.8, §5L.4, §5L.10 reworded.
+
+Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`, 2026-11-04):
+
+- A-2 / ADV-3 — `RootSpec.Legacy` and `RootSpecLegacyState` deleted with the root extension record; a legacy-served root keeps only HEAD's fields, the others fixed by the source (`ErrRootFieldFixed`); its sentinel stays in bootstrap mode; `LibraryRootSource` comments, §5L.4 step 1, §5L.10 stored-data paragraph, tests (`TestLegacyRootSentinelBootstrap`), and the root-suspension deferred row deleted.
+- A-3 / ADV-S2 — the source's and books' writers' `Expect` on `import_path:` is a voluntary compare-and-set; no `CheckedWrites`.
+- A-4 / ADV-S3 — §5L.13 no longer cites `archtest.DeferredMembersAbsent`.
+- A-5 / ADV-S4 — §5L.8 namespace note.
