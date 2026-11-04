@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/03-architecture.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8af6d935-7143-4d06-8562-b04a18504d81 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -37,11 +37,18 @@ core/go.mod:        module github.com/falkcorp/mediacore
 
 Why this mechanism, and why this path:
 
-1. **`go.work` is not used, in any form.** The repo documents that workspace mode breaks the build
-   (`CLAUDE.md`, "Do NOT run `go work init .`"). The result of re-testing that claim at HEAD, and
-   of building and vetting the chosen mechanism, is recorded in
-   [`raw/00-baseline-build.md`](../../plans/platform-core/raw/00-baseline-build.md); §3.2.1 below
-   summarizes it. The design does not depend on `go.work` being fixed.
+1. **The build never depends on `go.work`.** Re-tested at HEAD (`raw/00-baseline-build.md` E1):
+   `go work init .` fails with `ambiguous import` exactly as `CLAUDE.md` says. Root cause (E7): the
+   single stale requirement `github.com/cockroachdb/errors@v1.14.0` → monolithic
+   `google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1`, which module-graph pruning hides
+   in single-module mode and workspace mode loads. v1.14.0 is the latest release, so there is no
+   upstream fix. One line in the root `go.mod`,
+   `exclude google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1`, makes workspace mode
+   build and vet green with no `go.sum` change (E8, E9, E10). Therefore: `require` + `replace` is the
+   mechanism (it works with no workspace, E2c); the `exclude` line lands in wave 0 so that a
+   developer-local, **uncommitted** `go.work` (`use . ./core`) is safe for gopls; `go.work` stays
+   gitignored and no Makefile target or CI job uses it. The `exclude` is re-checked (and deleted)
+   whenever `cockroachdb/errors` is bumped.
 2. **The future path from day one.** Because every import already says `github.com/falkcorp/mediacore/...`,
    the repo split (§12) is a directory move plus deleting one `replace` line — no import rewrite in
    any app. The alternative (`github.com/falkcorp/audiobook-organizer/core`) would force a codemod
@@ -66,10 +73,19 @@ Summarized from `raw/00-baseline-build.md`; that file has exact commands and out
 
 | Experiment | Toolchain | `go build ./...` | `go vet ./...` |
 |---|---|---|---|
-| E0 control, HEAD unmodified | go1.27.0 (auto), go1.27.2 (pin), go1.27.3 (latest) | see raw file | see raw file |
-| E1 `go work init .` at HEAD | go1.27.2 | see raw file | — |
-| E2 nested `core/` + `require`/`replace`, `internal/telemetry` (pulls otel+grpc+genproto) and `internal/keyedmutex` moved into core | go1.27.2 | see raw file | see raw file |
-| E3 E2 plus `go.work use . ./core` | go1.27.2 | see raw file | — |
+| E0 control, HEAD unmodified | go1.27.0 (auto), go1.27.2 (pin), go1.27.3 (latest) | 0 / 0 / 0 | 0 / 0 / 0 |
+| E1 `go work init .` at HEAD | go1.27.2 | **1** (`ambiguous import`, genproto) | — |
+| E8 HEAD + root `exclude` of monolithic genproto | go1.27.2 | 0 | 0 |
+| E9 E8 + `go work init .` | go1.27.2 | 0 | 0 |
+| E2c nested `core/` (`internal/keyedmutex`, `internal/telemetry` minus `contract/`) + `require`/`replace` — in `core/` | go1.27.2 | 0 | 0 |
+| E2c — in root | go1.27.2 | 0 | 0 (`-mod=readonly` build also 0) |
+| E10 E2c + exclude + `go.work use . ./core` | go1.27.2 | 0 | 0 |
+| E4 E2 + unmodified `internal/arch` layering test | go1.27.2 | test **fails**: stale `layerOf` entries (predicted, §3.5.1) | — |
+
+Hazards the experiments exposed, each turned into a rule or plan task: core `go mod tidy` silently
+adds the app module from the proxy if any core file — even a test — imports app code (R1(a));
+repo-walking ratchet tests break when moved (they stay in the root); `./...` from the root does not
+reach `core/` (item 4 above); the layering guard must be redesigned before the first move.
 
 ## 3.3 Core package tree
 

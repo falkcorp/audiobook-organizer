@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/02-decision-record.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cd524ddf-51e6-46ad-b7fe-f6fc8b6d9dc9 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -47,7 +47,7 @@ one program. Everything else is re-examined against that.
 
 | # | Decision | Source |
 |---|---|---|
-| N1 | Core is a nested Go module `github.com/falkcorp/mediacore` at `core/`, wired by `require` + `replace`; **no `go.work`**. The path is the post-split path. | D3; §03 §3.2; `raw/00-baseline-build.md` |
+| N1 | Core is a nested Go module `github.com/falkcorp/mediacore` at `core/`, wired by `require` + `replace`; the build never depends on `go.work` (a root `go.mod` `exclude` of the stale monolithic genproto makes an uncommitted developer `go.work` safe). The path is the post-split path. | D3; §03 §3.2; `raw/00-baseline-build.md` E1–E10 |
 | N2 | Core moves to its own repository only when the measurable criteria in §12 hold. | D3 |
 | N3 | Native API under `/api/core/v1` and `/api/<module>/v1`; an optional per-app *arr-v3 facade through `core/arrfacade`; no commitment to full Sonarr/Radarr parity or database import. | D2 |
 | N4 | Composition is explicit: `app.New(opts, modules...)`. No `init()` registration and no process-global registries in core (rule R5). `internal/serviceregistry`, `internal/plugin` and `pkg/plugin/sdk` are retired in favour of `module.Registrar`. | §2.4 hypothesis verified, `raw/07-plugin-registry-sdk.md` |
