@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -368,8 +368,11 @@ func (tx *Tx) Batch() *storage.Batch
 // relay batch commits, and a conflict fails the whole batch, cursor advance
 // included, so nothing is half-applied, and is rebuilt and recommitted while
 // the run is still absent; on books' legacy store CommitLocked holds the run
-// store's legacy.WriteLock (HEAD's opsMu) from the store's first read
-// through the commit, as HEAD's own run writes do (05-tasks 5T.6.2, A-3).
+// locks the kernel resolved for the run store at P4c (HEAD's opsMu; the
+// relay never names a lock, 05-tasks 5T.3.13) from the store's first read
+// through the commit, as HEAD's own run writes do, and marks the relay batch
+// with that hold, which the run store's staging methods check with
+// storage.LocksHeld(b) (05-tasks 5T.6.2, A-3; R10-4).
 // The handler never calls WriteRuns itself (ErrWriteRunsNested). Only if
 // WriteRuns gives up is the message redelivered. A module kind's
 // run is stamped with that module's system actor, as Stager does (SEC2-15).
@@ -788,3 +791,7 @@ Advisor (2026-11-04):
 Round 9:
 
 - R9-1 — `Tx` and `Tx.StartRun`: the relay's `WriteRuns` call opens the relay batch (`open`) and runs the handler and the cursor advance (`stage`), and `WriteRuns` commits it through `storage.CommitLocked`, holding the run store's `legacy.WriteLock` (was `legacy.TasksWriteLock`) on books' store; a handler never nests `WriteRuns` (`ErrWriteRunsNested`).
+
+Round 10:
+
+- R10-4 / COR10-5 (consistency with 05-tasks and 05-storage) — `Tx.StartRun`: the relay commits under the run locks the kernel resolved for the run store at P4c, never a lock name of its own, and the hold is marked on the relay batch, which the run store checks with `storage.LocksHeld(b)`.

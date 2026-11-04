@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-health.md -->
-<!-- version: 1.11.0 -->
+<!-- version: 1.12.0 -->
 <!-- guid: 182e343b-a8da-4dd5-8327-3939173ed75c -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -150,10 +150,12 @@ the gate answers 401 on every non-exempt route and health reports `degraded` wit
 S3 core's stage 8 ([05-http-api](05-http-api.md) §4.2, resolution R5-1(c), SEC5-4), before S3 ABO's
 hotfixed gate (05-authn §11.1 early fix 5) through HEAD's `degraded` token list
 (`internal/server/handlers/system/handler.go:222-275`), which keeps serving until this file's
-readiness core lands (5H.10). Two tokens that first exist at S4 r2 travel the same way (SEC7-12):
+readiness core lands (5H.10). `legacy_config_keys` (below), which first exists at S3, when `config` moves, travels
+the same way from S3 (09 §9.2.5, OPS-27e). Two tokens that first exist at S4 r2 travel the same way (SEC7-12):
 `auth_disabled_remote` (warn: auth mode `disabled` while remote-reachable, 05-authn §4.11, SEC4-8) and
 `config_legacy_name_shadowed` (below). From S4 r2 until S8, when `Snapshot` over every core component
-and `/api/core/v1/health` land (5H.10), HEAD's `degraded` token list carries both, through the same
+and `/api/core/v1/health` land (5H.10), HEAD's `degraded` token list carries both (and `legacy_config_keys`
+from S3), through the same
 fixed-token source it merges today (`getDegraded`, `handler.go:258-264`), so the release-note promise of
 a health token and banner holds from the release that introduces them, not only as a log line; from S8
 the permanent `/health` shape reads them from the registry like every other token. An enabled gate with an empty **username** raises no token: it keeps HEAD's
@@ -162,10 +164,13 @@ behaviour (05-http-api §10, SEC6-9), so there is no `basic_gate_no_username`.
 **Advisory tokens owned by other files.** Health has three statuses, so a token another file calls `warn` is a
 `Reason` on a `StatusDegraded` result (readiness unaffected: Degraded passes it), and one it calls `info` is a
 `Reason` on a `StatusUp` result (no probe or readiness effect; shown on the authenticated endpoints and the
-token-only route). Two such tokens: `config_legacy_name_shadowed` on `core.config` (warn: a legacy name of a
-`ProtectAdmin`+ key is set and differs from the stored value, which stays effective, HEAD's precedence; 05-config
-§1.3.5 "Shadowed legacy names", SEC6-1), and `revocation_journal_colocated` on `core.backup` (info: the revocation
-journal shares the store's filesystem device, so a whole-volume snapshot rollback would revert both; 05-backup
+token-only route). Three such tokens: `legacy_config_keys` on `core.config` (warn: a legacy YAML key is set
+during the compatibility window W; the Settings banner and `config check` name the keys; 09 §9.2.5, OPS-27e),
+`config_legacy_name_shadowed` on `core.config` (warn: a legacy name of a `ProtectAdmin`+ key is set and differs
+from the stored value, which stays effective, HEAD's precedence; 05-config §1.3.5 "Shadowed legacy names",
+SEC6-1; a name a shipped deploy file sets unconditionally, at that file's default value, raises no token and is
+reported at info in `AttachReport`, so a default compose install is not Degraded for ever, SEC10-11), and
+`revocation_journal_colocated` on `core.backup` (info: the revocation journal shares the store's filesystem device, so a whole-volume snapshot rollback would revert both; 05-backup
 §5B.3.6 "Where", SEC6-10). One reason an integration instance component
 (`core.integrations.<capability>.<instance>`) reports on a `StatusDegraded` result is
 `operator_secret_withheld`, and only on a **native-backed** install (hello, TV, Movies), whose instances keep
@@ -175,6 +180,16 @@ operator value (or the adapter default, when there is none) nor the instance's `
 result names the withheld fields, never their values (05-metadata M1.4 step 2; SEC7-3, R8-5, SEC8-2). A
 legacy-backed instance (ABO) keeps HEAD's behaviour, has no `OperatorSecretOrigin` and never reports the token
 (A-2).
+
+**Tokens a healthy host is expected to show: the soak allow-list (R10-7, OPS10-3).** A host that follows 09
+§9.2.1's rollback advice keeps its legacy names while it may roll back, so it reports the advisory tokens above for
+the whole of W, and an integration instance is Degraded whenever its provider is down. The soak gate (09 §9.2.1
+owns it and the committed, owner-edited allow-list `ci/soak_health_allow.txt`) therefore reads health **at record
+time**, not over the soak, and passes when no Critical component is Down and no token is outside the allow-list.
+The tokens this file states that the list must hold are `auto_update_paused` (05-updater), `legacy_config_keys`,
+`config_legacy_name_shadowed`, `auth_disabled_remote` and `revocation_journal_colocated`, plus the reasons of the
+`core.integrations.<capability>.<instance>` components. A token added later that a healthy host can show is added
+to that list in the PR that introduces it.
 
 **Factory-reset tokens (R8-1).** A factory reset is the `KindReset` swap of storage's one restore slot
 (05-storage §5S.3.15), so a reset staged or in flight is reported with the swap's own reasons, never a
@@ -528,8 +543,9 @@ die at t = 0 instead of being stamped by the executor (OPS2-23). Done-check for 
 `systemctl stop` during a running task — in-process and subprocess mode — stamps it `interrupted`
 within the budget, and the journal shows no SIGKILL. It needs systemd running the committed unit, which
 neither Docker nor the `--network none` staging container provides by default, so it runs, with the S0
-"12-minute fake migration under the unit is not killed" check of 5H.9, in the systemd-enabled
-`--network none` CI container that 09 §9.3 defines for the four unit checks (R9-9, OPS9-6). The only way past the **stop** budget is the tasks
+"12-minute fake migration under the unit is not killed" check of 5H.9, in 09's `unit-lifecycle` job, whose
+environment (systemd as PID 1, no network for the fixture store), privileges, image preparation and triggers 09
+§9.3 owns (R9-9, OPS9-6, OPS10-7). The only way past the **stop** budget is the tasks
 executor's one bounded `ExtendStop` under systemd (5H.3.4 use 2); the startup extensions of use 1
 concern the start timeout only.
 
@@ -615,7 +631,7 @@ series is renamed or aliased.
 | `TestDiagnostics_PatternRedaction` (URLs with credentials, bearer headers, invite paths) | pattern redaction |
 | `TestDiagnostics_ViewerFiltersSections`, `TestDiagnostics_DownloadOtherActor404` | permission |
 | `TestDiagnostics_NarrowKeyOfActor403`, `TestDiagnostics_DemotedActor403` (role removed after start: affected sections omitted or 403) | SEC2-13 |
-| `TestStartup_ExtendPerStepNeverTimer` (fake notify socket: one `EXTEND_TIMEOUT_USEC` per progressing step, none while a step hangs) and the 09 S0 done-check "a 12-minute fake migration under the unit is not killed" (in the systemd-enabled `--network none` CI container, 5H.4; R9-9) | OPS2-17, OPS9-6 |
+| `TestStartup_ExtendPerStepNeverTimer` (fake notify socket: one `EXTEND_TIMEOUT_USEC` per progressing step, none while a step hangs) and the 09 S0 done-check "a 12-minute fake migration under the unit is not killed" (in 09's `unit-lifecycle` job, 5H.4; R9-9, OPS10-7) | OPS2-17, OPS9-6 |
 | `TestStopBudget_ContainerDefault8s` | OPS2-23 |
 | `TestDiagnostics_PathsConfinedToRoot` | `os.Root` |
 | `TestNoGlobals_Health` (R5 AST) | no globals |
@@ -764,3 +780,9 @@ Round 9:
 - OPS9-11 — 5H.4: the S2 committed unit ships `TimeoutStopSec=60`, compose `stop_grace_period: 60s`, the plist `ExitTimeOut` 60 and `docker run --stop-timeout 60`, sized for the slowest build that may run under them after a rollback (HEAD's 30 s drain plus store close); core's budget stays 25 s.
 - R9-9 / OPS9-6 — 5H.4 and 5H.9: the S2 `systemctl stop` done-check and the S0 12-minute migration check run in the systemd-enabled `--network none` CI container 09 §9.3 defines.
 - R9-6 / R9-7 / DATA9-4 — 5H.3.1 `factory_reset_failed`: the move-back precedes `rejected`; a reset journal at `set_aside_started` or later is resumed forward, never rejected for expiry or by another build, so the failure rule is the token's only source; `inflight.json` timing raises no health token.
+
+Round 10:
+
+- R10-7 / OPS10-3 — 5H.3.1: `legacy_config_keys` stated as an advisory token on `core.config` (warn, for the whole of W from S3, carried by HEAD's `degraded` list until S8; advisory tokens now three); new paragraph "the soak allow-list": the soak gate reads health at record time (no Critical component Down, no token outside 09's committed `ci/soak_health_allow.txt`), and the list holds `auto_update_paused`, `legacy_config_keys`, `config_legacy_name_shadowed`, `auth_disabled_remote`, `revocation_journal_colocated` and the `core.integrations.*` reasons.
+- SEC10-11 (consistency with 05-config) — 5H.3.1: a name a shipped deploy file sets unconditionally, at that file's default, raises no `config_legacy_name_shadowed` token and is reported at info.
+- OPS10-7 (consistency with 09) — 5H.4 and 5H.9: the stop and 12-minute checks run in 09's `unit-lifecycle` job, whose environment, privileges and triggers 09 §9.3 owns, instead of naming a container this file does not own.
