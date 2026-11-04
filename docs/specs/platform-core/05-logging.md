@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-logging.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: b62e0a52-4f32-4aeb-8bb9-4429ec976537 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -9,7 +9,7 @@ Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §3, §8, §9;
 [`raw/10-auth-rbac.md`](../../plans/platform-core/raw/10-auth-rbac.md) §6–7;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (`go-logr/logr` v1.4.4).
-Normative: [03-architecture](03-architecture.md) v1.4.0 R4 (`log` is in **L0** with `entity`, `lifecycle`,
+Normative: [03-architecture](03-architecture.md) v1.5.1 R4 (`log` is in **L0** with `entity`, `lifecycle`,
 `version`, `metrics`; the journal implementation `core/internal/logjournal` imports `storage` and `tasks`, so by
 R4's bridge rule it sits at **L4** and only the kernel imports it), R5 (no `slog.SetDefault` in core; R5 binds
 core only, and ABO's logger shim is an allowed books-module value), §3.6 naming. Config
@@ -333,10 +333,25 @@ type Schedules struct { // section core.log.schedules
   provider error text, and with auth off any peer that reaches the port would read them. It is recorded in
   09 §9.2.6 as an exception to the auth-off reach invariant, and the alias is excluded from the auth-off half of
   `TestLegacyRoleReachUnchanged` (SEC2-21).
-- Legacy rows: ABO's `syslog:` family is **read in place** by the query adapter and ages out under the same
-  retention (90 days by ABO default); no copy migration. Its owner and claim mode (read plus retention deletes,
-  while the previous build may still write it) are recorded once in [05-storage](05-storage.md) §5S.9.1; this
-  file does not restate them.
+- Legacy rows (R3-1): ABO's `syslog:` family (`syslog:<RFC3339Nano>:<source>`,
+  `internal/database/pebble_store_activity.go:20-37`) stays a **books** family and is **read in place**; there is
+  no copy, no adopt step (`core/log#1` is deleted), no claim hand-over and no level step, so no `Floor` and no
+  rollback floor come from logging (DATA3-14). `logjournal` reaches it through one explicit, logged storage
+  grant ([05-storage](05-storage.md) §5S.9.1 row 14): read, plus `Delete` for retention, never `Set`. A
+  books-supplied `ReadAdapter` decodes the rows into `Record`s for the query route, so core holds no ABO row
+  shape (R1). New records go only to `c/log/journal/` (a core-only family). Retention: the prune task also
+  deletes aged `syslog:` rows through the grant, by `core.log.journal.retention_days`, in bounded chunks as HEAD
+  does (`pebble_store_activity.go:428-434`); HEAD's own `syslog:` pruner stops in the release where the journal
+  becomes the only writer (§11), so each row has one pruner. **Rollback:** an older build sees its `syslog:` rows
+  but not journal records written after the upgrade; rows an older build writes during a rollback are read by
+  the query adapter after roll-forward.
+- User data in system log lines: HEAD serves the system activity log (`syslog:` rows) to `settings.manage` but
+  drops lines that name another user's data, and blanks their user ID, unless the caller also holds
+  `users.manage` (`activity.NamesOthersUserLog`, `internal/server/handlers/system/handler.go:444-458`). The query
+  route and the live tail keep that rule for legacy and native records alike: a record the books-registered
+  predicate classifies as naming another user's data (registered next to its `PathRule`s, [06](06-app-sdk.md))
+  is returned only to principals that also hold `core:users.view`, the read-side successor of that gate
+  ([05-rbac](05-rbac.md) §6.1); otherwise it is omitted and `user_id` is blanked.
 
 ## 6. Error semantics
 
@@ -418,7 +433,8 @@ These are recorded by a kernel-side bridge (`log` cannot import `metrics`, R4): 
 | `TestTwoAppsIsolated` | two `Logging` instances, distinct outputs and levels |
 | `TestLevelTraceRendering` | `TRACE` label; trace gated below debug |
 | `TestInstallProcessDefaults_RestoreAndExclusive` | restore works; second install errors; OTel sink drops values |
-| `TestJournal_BatchAndRetention` / `TestJournal_ReadsLegacySyslog` | batching bounds; prune; legacy rows returned by query |
+| `TestJournal_BatchAndRetention` / `TestJournal_ReadsLegacySyslog` | batching bounds; prune of journal records and of aged `syslog:` rows through the grant (no `Set` possible); legacy rows returned by query; no `core/log` adopt step or level stamp exists |
+| `TestJournal_OtherUsersLinesNeedUsersView` | a `core:system.manage` principal without `core:users.view` gets neither legacy nor native records the books predicate flags, and sees `user_id` blank; with `core:users.view` it gets both (HEAD fixture) |
 | `TestJournal_PruneScheduleKeyDeclared` | `core.log.schedules.journal_prune` is declared with type `tasks.ScheduleConfig` in `logjournal.Schedules` and accepted by `ScheduleFromConfig` at registration |
 | `TestJournal_RequiresSystemManage` | `core:system.view`-only principal gets 403 on the query route and no `core.log.recorded.v1` events |
 | `TestRotatingFile_RotatesAndCaps` | size rotation, `max_files` respected, `os.Root` confinement |
@@ -433,7 +449,9 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
    `slog.Default()`, `logger.go:107`) now reach the App pipeline, including its redaction. Delete
    `setupFileLogging` (`cmd/root.go:698-723`), the second `slog.SetDefault` and `log.SetOutput(aw)`
    (`server.go:1134-1155`), and the activity `Writer`'s line parsing (`internal/activity/writer.go:149-215`) —
-   replaced by the journal. ABO's compat file output: `core.log.output=file`, `core.log.file.path` set by the books
+   replaced by the journal. In the same release ABO's `StandardLogger` stops writing `syslog:` rows and HEAD's
+   `syslog:` pruner (`internal/logger/retention.go:41`) stops pruning them; the journal prune task takes over
+   (§5); `operationlog:` pruning stays with [05-tasks](05-tasks.md). ABO's compat file output: `core.log.output=file`, `core.log.file.path` set by the books
    module's defaults to keep a file under the state dir (path change release-noted; the old cwd-relative path is
    not reproduced).
 2. **Stage 2 (required; small) — shim.** `internal/logger` becomes the books-side shim
@@ -447,9 +465,14 @@ call sites to injected loggers is an optional ratchet, not an extraction stage.
    Packages switch to injected `*slog.Logger` (`module.Deps.Log`, constructor params) when touched; at zero,
    `InstallProcessDefaults` stays only for third-party libraries that log via the default. Listed in the 11 §11.5
    checklist with the config façade removal (prerequisite only for multi-module binaries).
-4. `internal/telemetry/sdklog.go` and `errorhandler.go` move into `app` (process-defaults helper);
-   `InitOTEL`'s automatic install (`telemetry.go:49`) is deleted.
-5. `log_level` / `--log-level` map to `core.log.level`, which now actually sets the handler level (today it
+4. `internal/telemetry/sdklog.go` and `errorhandler.go` stay in ABO's thin `internal/telemetry` façade, which
+   installs them, until `app.InstallProcessDefaults` exists at S2; they then move into `app` and
+   `InitOTEL`'s automatic install (`telemetry.go:49`) is deleted with the façade (03 R5, MOD3-3;
+   [05-metrics](05-metrics.md) §13).
+5. `internal/logger/logtest` moves into `coretest` as a capture handler the test injects (it hands the test a
+   `*slog.Logger`); it never calls `slog.SetDefault` (`logtest.go:83` today), so core tests stay parallel-safe.
+   A helper that sets the process default for ABO code stays in ABO (03 R5, MOD3-3).
+6. `log_level` / `--log-level` map to `core.log.level`, which now actually sets the handler level (today it
    does not, §2). `log_retention_days` maps to `core.log.journal.retention_days` (alias, 05-config §1.12.3) with
    the `Convert` of §8, because ABO's `0` means "default" and the core key's `0` means "keep".
 
@@ -499,3 +522,9 @@ Round 2:
 Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): Round-1 history line no longer writes a non-conforming `ScheduleFromConfig("…")` literal (05-tasks doc-lint).
+
+Round 3:
+
+- R3-1 / DATA3-14 — §5 "Legacy rows": `syslog:` stays a books family read in place through a logged grant (read and retention delete); `core/log#1` adopt step deleted, so logging contributes no level step or rollback floor; legacy prune moves to the journal prune task; rollback visibility stated; §11 step 1; test.
+- R3-1 (activity read in place) — §5: HEAD's other-user-data filter on system log lines kept for legacy and native records (`core:users.view`); test.
+- MOD3-3 — §11 steps 4–5: SDK logger and error handler stay in ABO's telemetry façade until S2; `logtest` becomes an injected capture handler in `coretest`, never `slog.SetDefault`.

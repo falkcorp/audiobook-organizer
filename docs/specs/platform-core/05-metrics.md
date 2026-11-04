@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-metrics.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 5cdf765d-aec1-4ed7-981a-e2e698afde61 -->
 <!-- last-edited: 2026-11-04 -->
 
@@ -8,7 +8,7 @@
 Evidence commit `748fd787a` (all `path:line` anchors). Raw inputs:
 [`raw/12-cross-cutting.md`](../../plans/platform-core/raw/12-cross-cutting.md) §4, §9;
 [`raw/15-dependencies.md`](../../plans/platform-core/raw/15-dependencies.md) (OTel v1.47.0, exporter
-v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.4.0 R4 (`metrics` is in
+v0.69.0, client_golang v1.25.0). Normative: [03-architecture](03-architecture.md) v1.5.1 R4 (`metrics` is in
 **L0** with `entity`, `lifecycle`, `version`, `log`), R5 (no `prometheus.DefaultRegisterer`, no `otel.Set*Provider`; R5
 binds core only), §3.6 (`mediacore_<subsystem>_*`; module series `<MetricPrefix>_*` for an app that ships one module
 and `<MetricPrefix>_<moduleID>_*` otherwise (decided by the modules compiled in, not by enablement, §4), `MetricPrefix` = `app.Options.MetricPrefix`; semantic-convention names
@@ -128,7 +128,9 @@ func (s *Scope) View(instrument string, buckets ...float64) sdkmetric.View // hi
 // Legacy aliases for series that moved into a core subsystem. Applied at gather time by Handler: matching
 // families are copied under the old name with label renames, value maps and an optional label filter.
 // No instrument is recorded twice. Never used for module (books) series (M6). An Alias carries no class
-// and no dates: its gate and removal dates come from its ledger row (09 §9.2.9, SIMP2-12).
+// and no dates: its gate and removal dates come from its ledger row (09 §9.2.9, SIMP2-12). The aliases name
+// an app's legacy families, so the app supplies them (app.Options.MetricAliases; core holds no ABO name, R1)
+// and their rows are in the app's ledger (app.Options.CompatLedger, SIMP3-3).
 type Alias struct {
 	New         string                           // Prometheus family name as exported now
 	Old         string                           // legacy family name
@@ -136,7 +138,7 @@ type Alias struct {
 	DropLabels  []string                         // labels removed after filtering
 	LabelRename map[string]string                // new label -> old label
 	ValueMap    func(label, value string) string // e.g. task kind "books.library-scan" -> def_id "library-scan"
-	Ledger      string                           // the 09 §9.2.9 ledger row this alias belongs to
+	Ledger      string                           // its row in the app's ledger (app.Options.CompatLedger, 09 §9.2.9)
 }
 
 func (p *Provider) AddAliases(a ...Alias) error
@@ -238,8 +240,10 @@ registries are never merged. `/metrics` itself is a permanent path (09 §9.6 row
    hard way, `telemetry.go:52-58`): health token `metrics_otlp_disabled` / `tracing_disabled`.
 2. Every component receives a `*Scope` (`module.Deps.Metrics` for modules, [06-app-sdk](06-app-sdk.md); core
    services through their constructors). Instruments are created at construction; a naming error fails boot.
-3. The kernel installs legacy aliases for core-subsystem renames (§13) before listeners open, and registers each
-   with `compat` against its 09 ledger row (`compat` is L4; the kernel does the wiring).
+3. The kernel installs the app's legacy aliases for core-subsystem renames (`app.Options.MetricAliases`, §13)
+   before listeners open, and registers each with `compat` against its row in the app's ledger
+   (`app.Options.CompatLedger`; `compat` is L4; the kernel does the wiring). A row missing from the ledger fails
+   registration (`ErrNoLedgerRow`, 09 §9.2.9).
 4. `App.Run` shutdown: `Provider.Shutdown` after the HTTP server stops and before logging closes; it flushes
    the last OTLP batch within the shutdown budget.
 
@@ -265,7 +269,9 @@ registries are never merged. `/metrics` itself is a permanent path (09 §9.6 row
 guarantees). Observable-gauge callbacks must be non-blocking and bounded (read an atomic or a snapshot; never
 I/O) — ABO's in-flight gauge callback pattern (`opsmetrics.go:440`) is the model. The redacting span exporter is
 stateless (the `Redactor` is immutable). `Shutdown` is idempotent and bounded by `ctx`. No goroutines except the
-SDK's periodic reader and batch span processor, both stopped by `Shutdown`.
+SDK's periodic reader (every `core.metrics.otlp.interval`) and batch span processor, both stopped by `Shutdown`.
+They are library-internal timers, not durable work, so they are not tasks ([05-tasks](05-tasks.md) §5T.3.8
+"What is not a task", SIMP3-9).
 
 ## 10. Config keys
 
@@ -325,9 +331,17 @@ its 74 `audiobook_organizer_*` lines change only where §13 retires or moves a s
 
 ## 13. Migration from ABO
 
-1. **Injection first.** `internal/telemetry`'s mechanism (`InitOTEL`, views, endpoint validation, resource,
-   error handler) moves into `core/metrics` (03 §3.2.1 E2 already moves the package for the build experiment);
-   process-global installs move to `app.InstallProcessDefaults` ([05-logging](05-logging.md) §3). The three
+1. **Injection first, installs last (MOD3-3).** At S1 `internal/telemetry`'s mechanism (provider construction,
+   views, endpoint validation, resource) moves into `core/metrics`, which only **returns** providers (R5). The
+   process-global installs (`otel.SetTracerProvider`, `telemetry.go:287`; `otel.SetMeterProvider`, `:461`;
+   `otel.SetErrorHandler`, `errorhandler.go:121`; `otel.SetLogger`, `sdklog.go:39`; the default-registry
+   Prometheus exporter) stay in a thin ABO façade at the old `internal/telemetry` path, which installs the core
+   providers, so the six ABO packages that still create instruments through the globals
+   (`internal/ai/telemetry.go`, `internal/aidispatch/metrics.go`, `internal/database/memdb_metrics.go`,
+   `internal/dedup/engine.go`, `internal/operations/registry/worker.go`, `internal/opsmetrics/opsmetrics.go`)
+   keep their series and S1's series golden holds. At S2 `app.InstallProcessDefaults`
+   ([05-logging](05-logging.md) §3) takes the installs over and the façade is deleted; 04 lists this as a
+   re-implementation, not a verbatim move. The three
    `otel.Tracer` package vars, `otel.GetMeterProvider()` calls and `opsmetrics.Default()` become injected
    scopes; `opsmetrics` becomes core `tasks` instrumentation ([05-tasks](05-tasks.md)) on scope
    `mediacore.tasks`. `cache.go:99` and `cache_snapshotter.go:24` take `Provider.Gatherer()`.
@@ -356,8 +370,14 @@ its 74 `audiobook_organizer_*` lines change only where §13 retires or moves a s
    untouched. `deploy/prometheus/recording-rules.yml` gains a generated `audiobook_organizer_compat` block mapping
    new → old for the renamed core series only, for operators with external dashboards beyond the window (the file
    already uses this technique, `recording-rules.yml:14-19`).
-5. ABO's `/metrics` behaviour (any authenticated credential) is preserved by granting `core:metrics.read` to
-   all three ABO seed roles in the role mapping ([09-abo-on-core](09-abo-on-core.md), [05-rbac](05-rbac.md)).
+5. ABO's `/metrics` behaviour (any authenticated credential) is kept for signed-in roles: `admin` holds
+   `core:metrics.read` through `core:admin`, and [05-rbac](05-rbac.md) §4.8 seeds it to `editor` and `viewer`.
+   It is **never** seeded to `fp-worker` or any role holding a `Confining` scope, which would stop being
+   confined (SEC-3, SEC3-13); a fingerprint worker has no scrape access. Under R3-1 the seed is stored
+   additively as a namespaced string in the legacy role rows, which older builds ignore. One behaviour change,
+   recorded in 09 §9.2.6: an API key with explicit scopes reads `/metrics` only if its scopes include
+   `core:metrics.read`; existing keys are never widened to include it (HEAD lets any credential scrape,
+   `internal/server/server_lifecycle.go:1735-1747`).
 
 ## 14. Open items
 
@@ -401,3 +421,11 @@ Round 2:
 Integration pass (round 2, 2026-11-04):
 
 - integration pass (round 2): SIMP2-13 objection to 03 §3.6 closed (03 says "ships").
+
+Round 3:
+
+- MOD3-3 — §13 item 1: S1 moves construction only; the global installs stay in ABO's `internal/telemetry` façade until `app.InstallProcessDefaults` at S2; the six global-reading ABO packages named.
+- SEC3-13 — §13 item 5: `core:metrics.read` via `core:admin`, seeded to `editor` and `viewer` only, never to `fp-worker` or a `Confining` role; scoped-key change recorded for 09 §9.2.6.
+- SIMP3-3 — §3 `Alias`, §7 step 3: aliases supplied by the app (`app.Options.MetricAliases`) with rows in the app's ledger (`app.Options.CompatLedger`).
+- SIMP3-9 — §9: periodic reader and batch span processor named as library-internal timers, not tasks.
+- R3-1 — §13 item 5: the role seed is stored additively in the legacy role rows; no other change (this file stores no data).
